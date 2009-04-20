@@ -1,0 +1,3 @@
+include jeeves/config/deployment.ini_tmpl
+recursive-include jeeves/public *
+recursive-include jeeves/templates *
