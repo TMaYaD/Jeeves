@@ -35,12 +35,21 @@ dev = [
     "mypy>=1.10.0",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["Depends", "fastapi.Depends", "fastapi.params.Depends"]
 
 [tool.mypy]
 python_version = "3.12"
