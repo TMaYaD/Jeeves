@@ -1,0 +1,66 @@
+version: "3.9"
+
+# Local development stack:
+#   postgres   — primary datastore
+#   electric   — Electric SQL sync layer (Postgres → clients)
+#   backend    — FastAPI service
+#   redis      — Celery broker
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jeeves
+      POSTGRES_PASSWORD: jeeves
+      POSTGRES_DB: jeeves
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Electric SQL requires logical replication
+    command: >
+      postgres
+        -c wal_level=logical
+        -c max_wal_senders=10
+        -c max_replication_slots=10
+
+  electric:
+    image: electricsql/electric:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: "postgresql://jeeves:jeeves@postgres:5432/jeeves?sslmode=disable"
+      ELECTRIC_WRITE_TO_PG_MODE: "direct_writes"
+      AUTH_MODE: "insecure"  # Replace with JWT auth in production
+    ports:
+      - "3000:3000"
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - electric
+      - redis
+    environment:
+      JEEVES_DATABASE_URL: "postgresql+asyncpg://jeeves:jeeves@postgres:5432/jeeves"
+      JEEVES_ELECTRIC_URL: "http://electric:3000"
+      JEEVES_REDIS_URL: "redis://redis:6379/0"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
