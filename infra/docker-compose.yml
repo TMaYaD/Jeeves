@@ -33,7 +33,8 @@ services:
     environment:
       DATABASE_URL: "postgresql://jeeves:jeeves@postgres:5432/jeeves?sslmode=disable"
       ELECTRIC_WRITE_TO_PG_MODE: "direct_writes"
-      AUTH_MODE: "insecure"  # Replace with JWT auth in production
+      AUTH_MODE: "jwt"
+      AUTH_JWT_KEY: "${JEEVES_SECRET_KEY}"  # same key the backend uses to sign tokens
     ports:
       - "3000:3000"
 

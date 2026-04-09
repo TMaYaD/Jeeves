@@ -31,6 +31,9 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    env:
+      JEEVES_SECRET_KEY: ci-test-secret-not-for-production
+      JEEVES_DATABASE_URL: postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves_test
 
     services:
       postgres:
@@ -55,8 +58,4 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       - run: alembic upgrade head
-        env:
-          JEEVES_DATABASE_URL: postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves_test
       - run: pytest --cov=app --cov-report=term-missing
-        env:
-          JEEVES_DATABASE_URL: postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves_test
