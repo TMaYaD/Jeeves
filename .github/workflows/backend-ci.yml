@@ -1,0 +1,62 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**"]
+  pull_request:
+    branches: [main]
+    paths: ["backend/**"]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install ruff mypy
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jeeves
+          POSTGRES_PASSWORD: jeeves
+          POSTGRES_DB: jeeves_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: alembic upgrade head
+        env:
+          JEEVES_DATABASE_URL: postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves_test
+      - run: pytest --cov=app --cov-report=term-missing
+        env:
+          JEEVES_DATABASE_URL: postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves_test
