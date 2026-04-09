@@ -4,9 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, todos, ai
+from app.api import ai, health, todos
 from app.database import engine
-from app.models import *  # noqa: F401, F403 — ensure all models are registered
+from app.models import *  # noqa: F401, F403  -- ensure all models are registered
 
 
 @asynccontextmanager

@@ -25,9 +25,7 @@ class LocationService {
     final hasPermission = await requestPermissions();
     if (!hasPermission) return null;
     return Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-      ),
+      desiredAccuracy: LocationAccuracy.high,
     );
   }
 

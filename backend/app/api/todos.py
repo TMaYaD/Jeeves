@@ -74,9 +74,7 @@ async def get_todo(todo_id: str, db: AsyncSession = Depends(get_db)) -> Todo:
 
 
 @router.patch("/{todo_id}", response_model=TodoOut)
-async def update_todo(
-    todo_id: str, body: TodoUpdate, db: AsyncSession = Depends(get_db)
-) -> Todo:
+async def update_todo(todo_id: str, body: TodoUpdate, db: AsyncSession = Depends(get_db)) -> Todo:
     todo = await db.get(Todo, todo_id)
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
