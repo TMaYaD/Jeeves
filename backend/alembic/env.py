@@ -6,9 +6,10 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import app.auth.models  # noqa: F401  -- register all models
+import app.todos.models  # noqa: F401
 from alembic import context
 from app.database import Base
-from app.models import *  # noqa: F401, F403  -- register all models
 
 config = context.config
 if config.config_file_name is not None:

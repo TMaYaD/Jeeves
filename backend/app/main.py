@@ -4,10 +4,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import ai, health, sessions, todos, users
+# Ensure all models are registered with SQLAlchemy metadata.
+import app.auth.models  # noqa: F401
+import app.todos.models  # noqa: F401
+from app.ai import routes as ai_routes
+from app.auth import routes as auth_routes
 from app.config import settings
 from app.database import engine
-from app.models import *  # noqa: F401, F403  -- ensure all models are registered
+from app.health import routes as health_routes
+from app.todos import routes as todo_routes
 
 
 @asynccontextmanager
@@ -32,8 +37,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(health.router)
-app.include_router(users.router)
-app.include_router(sessions.router)
-app.include_router(todos.router)
-app.include_router(ai.router)
+app.include_router(health_routes.router)
+app.include_router(auth_routes.router)
+app.include_router(todo_routes.router)
+app.include_router(ai_routes.router)
