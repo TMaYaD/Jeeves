@@ -1,0 +1,72 @@
+#!/bin/sh
+
+# Redirect output to stderr.
+exec 1>&2
+
+echo 'Running pre-commit hooks...'
+
+# Check if backend files changed
+if git diff --cached --name-only | grep -q "^backend/"; then
+    echo "=> 🐍 Backend files modified. Running checks..."
+    
+    cd backend || exit 1
+    
+    # We assume 'ruff' and 'mypy' and 'pytest' are installed in the active environment 
+    # or available globally.
+    
+    echo ">> Running ruff check..."
+    ruff check .
+    if [ $? -ne 0 ]; then
+        echo "❌ ruff check failed! Please fix linting errors."
+        exit 1
+    fi
+
+    echo ">> Running ruff format --check..."
+    ruff format --check .
+    if [ $? -ne 0 ]; then
+        echo "❌ ruff format failed! Run 'ruff format .' to fix formatting."
+        exit 1
+    fi
+
+    echo ">> Running mypy..."
+    mypy app
+    if [ $? -ne 0 ]; then
+        echo "❌ mypy failed! Please fix type errors."
+        exit 1
+    fi
+
+    echo ">> Running pytest..."
+    pytest
+    if [ $? -ne 0 ]; then
+        echo "❌ pytest failed! Please fix failing tests."
+        exit 1
+    fi
+    
+    cd ..
+fi
+
+# Check if Flutter app files changed
+if git diff --cached --name-only | grep -q "^app/"; then
+    echo "=> 🐦 Flutter app files modified. Running checks..."
+    
+    cd app || exit 1
+    
+    echo ">> Running flutter analyze..."
+    flutter analyze
+    if [ $? -ne 0 ]; then
+        echo "❌ flutter analyze failed! Please fix dart warnings/errors."
+        exit 1
+    fi
+
+    echo ">> Running flutter test..."
+    flutter test
+    if [ $? -ne 0 ]; then
+        echo "❌ flutter test failed! Please fix failing tests."
+        exit 1
+    fi
+    
+    cd ..
+fi
+
+echo "✅ All pre-commit checks passed!"
+exit 0

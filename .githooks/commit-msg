@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# Regex to check for conventional commits
+commit_regex='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_-]+\))?: .+'
+
+if ! grep -iqE "$commit_regex" "$1"; then
+    echo "❌ Error: Commit message does not follow Conventional Commits format."
+    echo "Expected format: type(scope): subject"
+    echo "Examples: "
+    echo "  feat: add user login"
+    echo "  fix(api): resolve null pointer exception"
+    exit 1
+fi
