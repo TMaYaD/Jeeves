@@ -4,7 +4,7 @@ import os
 
 os.environ.setdefault("JEEVES_SECRET_KEY", "test-secret-key")
 
-from jose import jwt
+import jwt
 
 from app.auth.hashing import hash_password, verify_password
 from app.auth.tokens import create_access_token
