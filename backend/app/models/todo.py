@@ -6,7 +6,7 @@ the Electric client.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -26,8 +26,10 @@ class TodoList(Base):
     color: Mapped[str | None] = mapped_column(String(20))
     icon_name: Mapped[str | None] = mapped_column(String(100))
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
     todos: Mapped[list["Todo"]] = relationship("Todo", back_populates="list")
 
@@ -41,11 +43,12 @@ class Todo(Base):
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
     priority: Mapped[int | None] = mapped_column(Integer)
     due_date: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     list_id: Mapped[str | None] = mapped_column(ForeignKey("todo_lists.id"))
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
     list: Mapped[TodoList | None] = relationship("TodoList", back_populates="todos")
     reminders: Mapped[list["Reminder"]] = relationship("Reminder", back_populates="todo")
@@ -65,7 +68,7 @@ class Reminder(Base):
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     on_arrival: Mapped[bool] = mapped_column(Boolean, default=False)
     on_departure: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
     todo: Mapped[Todo] = relationship("Todo", back_populates="reminders")
 
@@ -79,7 +82,7 @@ class Location(Base):
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     radius_meters: Mapped[float] = mapped_column(Float, default=100.0)
     address: Mapped[str | None] = mapped_column(String(500))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
     todos: Mapped[list[Todo]] = relationship("Todo", back_populates="location")
 

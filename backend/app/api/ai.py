@@ -7,10 +7,12 @@ asynchronously when the response arrives.
 """
 
 import anthropic
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.auth.dependencies import get_current_user
 from app.config import settings
+from app.models.user import User
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -46,7 +48,9 @@ Return only the JSON object, no explanation."""
 
 
 @router.post("/parse", response_model=ParseResponse)
-async def parse_natural_language(body: ParseRequest) -> ParseResponse:
+async def parse_natural_language(
+    body: ParseRequest, _: User = Depends(get_current_user)
+) -> ParseResponse:
     client = _get_client()
     message = await client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -62,12 +66,14 @@ async def parse_natural_language(body: ParseRequest) -> ParseResponse:
 
 
 @router.get("/suggestions/{todo_id}")
-async def get_suggestions(todo_id: str) -> dict[str, list[str]]:
+async def get_suggestions(
+    todo_id: str, _: User = Depends(get_current_user)
+) -> dict[str, list[str]]:
     # TODO: fetch todo from DB, build prompt, return suggestions
     return {"suggestions": []}
 
 
 @router.get("/summarize/{list_id}")
-async def summarize_list(list_id: str) -> dict[str, str]:
+async def summarize_list(list_id: str, _: User = Depends(get_current_user)) -> dict[str, str]:
     # TODO: fetch todos in list, summarize
     return {"summary": ""}
