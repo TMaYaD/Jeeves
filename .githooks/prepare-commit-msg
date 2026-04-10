@@ -1,0 +1,40 @@
+#!/bin/sh
+
+# prepare-commit-msg hook
+# Appends an issue identifier from the current branch name to the commit message.
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+
+# Guard clause: Exit if the commit has a predefined source other than a regular '-m' message
+if [ -n "$COMMIT_SOURCE" ] && [ "$COMMIT_SOURCE" != "message" ]; then
+    exit 0
+fi
+
+BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# Identify issue numbers like '123' from 'feature/123-add-login' or 'JVS-123'
+ISSUE_ID=$(echo "$BRANCH_NAME" | grep -oE '([a-zA-Z]+-[0-9]+|[0-9]+)' | head -n 1)
+
+# Guard clause: Exit if no issue ID found in branch name
+if [ -z "$ISSUE_ID" ]; then
+    exit 0
+fi
+
+# Guard clause: Exit if the commit message already contains this issue ID
+if grep -q "$ISSUE_ID" "$COMMIT_MSG_FILE"; then
+    exit 0
+fi
+
+# Append the issue ID to the end of the first line
+# Using temporary file for safety across sed implementations
+TMP_FILE=$(mktemp)
+
+# Extract first line, append issue ID
+FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
+echo "$FIRST_LINE (#$ISSUE_ID)" > "$TMP_FILE"
+
+# Append the rest of the file
+tail -n +2 "$COMMIT_MSG_FILE" >> "$TMP_FILE"
+
+mv "$TMP_FILE" "$COMMIT_MSG_FILE"

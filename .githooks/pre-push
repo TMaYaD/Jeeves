@@ -1,0 +1,27 @@
+#!/bin/sh
+
+# Redirect output to stderr.
+exec 1>&2
+
+echo 'Running pre-push hooks...'
+
+# Example: Run slower e2e tests or integration tests before pushing
+# Or check branch name policies
+
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+
+if [ "$current_branch" = "master" ] || [ "$current_branch" = "main" ]; then
+    echo "❌ Direct pushes to $current_branch are not allowed. Please use PRs!"
+    exit 1
+fi
+
+# Here you might want to run heavier tests for the backend
+# echo "Running backend slow tests..."
+# cd backend && pytest -m "slow"
+# if [ $? -ne 0 ]; then
+#     echo "❌ Backend slow tests failed!"
+#     exit 1
+# fi
+
+echo "✅ All pre-push checks passed!"
+exit 0
