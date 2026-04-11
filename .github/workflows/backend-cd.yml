@@ -1,0 +1,45 @@
+name: Backend CD
+
+on:
+  workflow_run:
+    workflows: ["Backend CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to Dokku
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Check for backend changes
+        id: backend-changes
+        run: |
+          if git diff --name-only HEAD^ HEAD | grep -q '^backend/'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up SSH
+        if: steps.backend-changes.outputs.changed == 'true'
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DOKKU_SSH_PRIVATE_KEY }}
+
+      - name: Add Dokku host to known hosts
+        if: steps.backend-changes.outputs.changed == 'true'
+        run: ssh-keyscan -H jeeves.loonyb.in >> ~/.ssh/known_hosts
+
+      - name: Deploy backend subtree to Dokku
+        if: steps.backend-changes.outputs.changed == 'true'
+        run: |
+          git remote add dokku ssh://dokku@jeeves.loonyb.in/jeeves
+          git subtree split --prefix=backend -b deploy-backend
+          git push dokku deploy-backend:main --force
