@@ -1,0 +1,201 @@
+name: App CD
+
+on:
+  workflow_run:
+    workflows: ["Flutter CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  version:
+    name: Compute Version
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      pubspec_version: ${{ steps.compute.outputs.pubspec_version }}
+      tag: ${{ steps.compute.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute dev version
+        id: compute
+        run: |
+          # Find the last semver release tag (exact vX.Y.Z, no pre-release suffix)
+          LAST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -1)
+
+          if [ -z "$LAST_TAG" ]; then
+            BASE_VERSION="0.0.0"
+            LOG_RANGE="HEAD"
+          else
+            BASE_VERSION="${LAST_TAG#v}"
+            LOG_RANGE="${LAST_TAG}..HEAD"
+          fi
+
+          # Determine version bump from conventional commit messages
+          BUMP="patch"
+          while IFS= read -r msg; do
+            [ -z "$msg" ] && continue
+            if echo "$msg" | grep -qE '^[a-z]+(\(.+\))?!:' \
+               || echo "$msg" | grep -q 'BREAKING CHANGE'; then
+              BUMP="major"
+              break
+            elif echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
+              [ "$BUMP" != "major" ] && BUMP="minor"
+            fi
+          done < <(git log "$LOG_RANGE" --format="%s" 2>/dev/null || true)
+
+          # Apply bump to base version
+          MAJOR=$(echo "$BASE_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$BASE_VERSION" | cut -d. -f2)
+          PATCH=$(echo "$BASE_VERSION" | cut -d. -f3)
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+          NEXT="${MAJOR}.${MINOR}.${PATCH}"
+
+          # Distance from last release and current short hash
+          if [ -z "$LAST_TAG" ]; then
+            DIST=$(git rev-list --count HEAD)
+          else
+            DIST=$(git rev-list --count "${LAST_TAG}..HEAD")
+          fi
+          HASH=$(git rev-parse --short HEAD)
+
+          # Full version for release notes (semver-ish with hash in build metadata)
+          VERSION="${NEXT}-dev.${DIST}+${HASH}"
+          # Git-safe tag (+ is not valid in git tag names)
+          TAG="v${NEXT}-dev.${DIST}"
+          # pubspec.yaml: Dart allows pre-release; build number must be integer
+          PUBSPEC_VERSION="${NEXT}-dev.${DIST}+${DIST}"
+
+          echo "version=${VERSION}"         >> "$GITHUB_OUTPUT"
+          echo "pubspec_version=${PUBSPEC_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"                 >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION} (tag: ${TAG}, pubspec: ${PUBSPEC_VERSION})"
+
+  build-android:
+    name: Build Android
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.x"
+          channel: stable
+          cache: true
+
+      - name: Stamp version into pubspec.yaml
+        run: |
+          sed -i "s/^version: .*/version: ${{ needs.version.outputs.pubspec_version }}/" pubspec.yaml
+
+      - run: flutter pub get
+      - run: flutter pub run build_runner build --delete-conflicting-outputs
+      - run: flutter build apk --release
+      - run: flutter build appbundle --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: |
+            app/build/app/outputs/flutter-apk/app-release.apk
+            app/build/app/outputs/bundle/release/app-release.aab
+
+  build-web:
+    name: Build Web
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.x"
+          channel: stable
+          cache: true
+
+      - name: Stamp version into pubspec.yaml
+        run: |
+          sed -i "s/^version: .*/version: ${{ needs.version.outputs.pubspec_version }}/" pubspec.yaml
+
+      - run: flutter pub get
+      - run: flutter pub run build_runner build --delete-conflicting-outputs
+      - run: flutter build web --release
+
+      - name: Archive web build
+        run: tar -czf "../jeeves-web-${{ needs.version.outputs.version }}.tar.gz" web/
+        working-directory: app/build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-artifact
+          path: app/jeeves-web-${{ needs.version.outputs.version }}.tar.gz
+
+  publish:
+    name: Publish Dev Release
+    needs: [version, build-android, build-web]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-artifacts
+          path: artifacts/android
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-artifact
+          path: artifacts/web
+
+      - name: Rename artifacts with version
+        run: |
+          mv artifacts/android/app-release.apk \
+            "artifacts/android/jeeves-${{ needs.version.outputs.version }}.apk"
+          mv artifacts/android/app-release.aab \
+            "artifacts/android/jeeves-${{ needs.version.outputs.version }}.aab"
+
+      - name: Publish pre-release to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.version.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "Dev ${{ needs.version.outputs.version }}" \
+            --notes "## Dev build
+
+          Automated development build — not for production use.
+
+          | Field   | Value |
+          |---------|-------|
+          | Version | \`${{ needs.version.outputs.version }}\` |
+          | Branch  | \`${{ github.event.workflow_run.head_branch }}\` |
+          | Commit  | ${{ github.event.workflow_run.head_sha }} |
+
+          ### Artifacts
+          - **APK** — sideloadable Android package
+          - **AAB** — Android App Bundle (Play Store format)
+          - **Web** — self-hostable Flutter web build" \
+            --prerelease \
+            "artifacts/android/jeeves-${{ needs.version.outputs.version }}.apk" \
+            "artifacts/android/jeeves-${{ needs.version.outputs.version }}.aab" \
+            "artifacts/web/jeeves-web-${{ needs.version.outputs.version }}.tar.gz"
