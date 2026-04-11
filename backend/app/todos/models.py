@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models.
+"""SQLAlchemy ORM models for the todos feature.
 
 Electric SQL requires standard Postgres tables — no exotic types that would
 break replication. UUIDs are stored as TEXT for maximum compatibility with

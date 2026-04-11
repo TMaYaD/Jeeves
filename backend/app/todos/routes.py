@@ -5,48 +5,17 @@ auth-gated mutations, and operations that require server-side logic
 (e.g. recurrence expansion, AI-assisted parsing).
 """
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.auth.models import User
 from app.database import get_db
-from app.models.todo import Todo
-from app.models.user import User
+from app.todos.models import Todo
+from app.todos.schemas import TodoCreate, TodoOut, TodoUpdate
 
 router = APIRouter(prefix="/todos", tags=["todos"])
-
-
-class TodoCreate(BaseModel):
-    title: str
-    notes: str | None = None
-    list_id: str | None = None
-    due_date: str | None = None
-    priority: int | None = None
-
-
-class TodoUpdate(BaseModel):
-    title: str | None = None
-    notes: str | None = None
-    completed: bool | None = None
-    due_date: str | None = None
-    priority: int | None = None
-
-
-class TodoOut(BaseModel):
-    id: str
-    title: str
-    notes: str | None
-    completed: bool
-    priority: int | None
-    list_id: str | None
-    due_date: datetime | None
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 @router.get("/", response_model=list[TodoOut])
@@ -117,3 +86,20 @@ async def delete_todo(
         raise HTTPException(status_code=404, detail="Todo not found")
     await db.delete(todo)
     await db.commit()
+
+
+# ── Sub-resources ─────────────────────────────────────────────────────────────
+
+
+@router.get("/{todo_id}/suggestions")
+async def get_suggestions(
+    todo_id: str, _: User = Depends(get_current_user)
+) -> dict[str, list[str]]:
+    # TODO: fetch todo from DB, build prompt, return suggestions
+    return {"suggestions": []}
+
+
+@router.get("/lists/{list_id}/summary")
+async def summarize_list(list_id: str, _: User = Depends(get_current_user)) -> dict[str, str]:
+    # TODO: fetch todos in list, summarize
+    return {"summary": ""}

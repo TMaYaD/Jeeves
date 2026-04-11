@@ -6,13 +6,15 @@ the client can submit a task optimistically and apply AI suggestions
 asynchronously when the response arrives.
 """
 
+import json
+
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_user
+from app.auth.models import User
 from app.config import settings
-from app.models.user import User
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -58,22 +60,6 @@ async def parse_natural_language(
         system=_PARSE_SYSTEM,
         messages=[{"role": "user", "content": body.input}],
     )
-    import json
-
     text = message.content[0].text  # type: ignore[union-attr]
     data = json.loads(text)
     return ParseResponse(**data)
-
-
-@router.get("/suggestions/{todo_id}")
-async def get_suggestions(
-    todo_id: str, _: User = Depends(get_current_user)
-) -> dict[str, list[str]]:
-    # TODO: fetch todo from DB, build prompt, return suggestions
-    return {"suggestions": []}
-
-
-@router.get("/summarize/{list_id}")
-async def summarize_list(list_id: str, _: User = Depends(get_current_user)) -> dict[str, str]:
-    # TODO: fetch todos in list, summarize
-    return {"summary": ""}
