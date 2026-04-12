@@ -33,4 +33,4 @@ class Settings(BaseSettings):
     firebase_credentials_path: str = ""
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]  # secret_key loaded from env
