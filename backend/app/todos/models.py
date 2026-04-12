@@ -18,20 +18,24 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
-class TodoList(Base):
-    __tablename__ = "todo_lists"
+class Tag(Base):
+    __tablename__ = "tags"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     color: Mapped[str | None] = mapped_column(String(20))
-    icon_name: Mapped[str | None] = mapped_column(String(100))
-    is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime)
-
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
-    todos: Mapped[list["Todo"]] = relationship("Todo", back_populates="list")
+    todos: Mapped[list["Todo"]] = relationship("Todo", secondary="todo_tags", back_populates="tags")
+
+
+class TodoTag(Base):
+    __tablename__ = "todo_tags"
+
+    todo_id: Mapped[str] = mapped_column(
+        ForeignKey("todos.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
 
 
 class Todo(Base):
@@ -46,11 +50,11 @@ class Todo(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
-    list_id: Mapped[str | None] = mapped_column(ForeignKey("todo_lists.id"))
+    state: Mapped[str] = mapped_column(String(50), default="inbox")
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
-    list: Mapped[TodoList | None] = relationship("TodoList", back_populates="todos")
+    tags: Mapped[list["Tag"]] = relationship("Tag", secondary="todo_tags", back_populates="todos")
     reminders: Mapped[list["Reminder"]] = relationship("Reminder", back_populates="todo")
     recurrence_rule: Mapped["RecurrenceRule | None"] = relationship(
         "RecurrenceRule", back_populates="todo", uselist=False
