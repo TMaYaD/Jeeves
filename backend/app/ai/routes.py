@@ -40,12 +40,21 @@ class ParseResponse(BaseModel):
     list_name: str | None = None
     tags: list[str] = []
     notes: str | None = None
+    # GTD enrichment fields
+    project_name: str | None = None
+    area_name: str | None = None
+    energy_level: str | None = None  # 'low' | 'medium' | 'high'
+    time_estimate_minutes: int | None = None
 
 
 _PARSE_SYSTEM = """You are a task parser. Given a natural language task description,
 extract structured fields and return valid JSON with keys:
 title (string, required), due_date (ISO8601 string or null),
-list_name (string or null), tags (array of strings), notes (string or null).
+list_name (string or null), tags (array of strings), notes (string or null),
+project_name (string or null — the GTD project this task belongs to),
+area_name (string or null — the GTD area of responsibility),
+energy_level (one of "low", "medium", "high", or null),
+time_estimate_minutes (integer minutes or null).
 Return only the JSON object, no explanation."""
 
 

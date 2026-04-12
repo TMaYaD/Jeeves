@@ -101,3 +101,143 @@ async def test_multi_user_isolation(client: AsyncClient) -> None:
     # Alice still sees her todo
     alice_list = await client.get("/todos/", headers=headers_a)
     assert len(alice_list.json()) == 1
+
+
+# ── GTD E2E tests ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_gtd_inbox_capture_and_process(client: AsyncClient) -> None:
+    """Capture a todo into inbox, enrich it, attach a project tag, then process it."""
+    reg = await client.post("/user", json={"email": "gtd-inbox@example.com", "password": "secret"})
+    headers = auth_header(reg.json()["access_token"])
+
+    # 1. Capture to inbox
+    create = await client.post(
+        "/todos/",
+        json={"title": "Buy paint", "state": "inbox", "capture_source": "manual"},
+        headers=headers,
+    )
+    assert create.status_code == 201
+    todo = create.json()
+    todo_id = todo["id"]
+    assert todo["state"] == "inbox"
+    assert todo["capture_source"] == "manual"
+    assert todo["energy_level"] is None
+    assert todo["time_estimate"] is None
+
+    # 2. Enrich with GTD fields
+    patch = await client.patch(
+        f"/todos/{todo_id}",
+        json={
+            "energy_level": "medium",
+            "time_estimate": 30,
+            "state": "next_action",
+            "tags": [{"name": "HomeReno", "type": "project"}],
+        },
+        headers=headers,
+    )
+    assert patch.status_code == 200
+    enriched = patch.json()
+    assert enriched["state"] == "next_action"
+    assert enriched["energy_level"] == "medium"
+    assert enriched["time_estimate"] == 30
+
+    project_tags = [t for t in enriched["tags"] if t["type"] == "project"]
+    assert len(project_tags) == 1
+    assert project_tags[0]["name"] == "HomeReno"
+
+    # 3. Verify via GET
+    get = await client.get(f"/todos/{todo_id}", headers=headers)
+    assert get.status_code == 200
+    fetched = get.json()
+    assert fetched["capture_source"] == "manual"
+    assert fetched["state"] == "next_action"
+    assert any(t["name"] == "HomeReno" and t["type"] == "project" for t in fetched["tags"])
+
+
+@pytest.mark.asyncio
+async def test_project_tag_single_assignment(client: AsyncClient) -> None:
+    """Assigning two project tags to the same todo is rejected with 422."""
+    reg = await client.post(
+        "/user", json={"email": "single-proj@example.com", "password": "secret"}
+    )
+    headers = auth_header(reg.json()["access_token"])
+
+    resp = await client.post(
+        "/todos/",
+        json={
+            "title": "Ambiguous task",
+            "tags": [
+                {"name": "ProjectAlpha", "type": "project"},
+                {"name": "ProjectBeta", "type": "project"},
+            ],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 422
+    assert "project" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_gtd_tag_types(client: AsyncClient) -> None:
+    """A todo can have tags of all four types; GET returns each with correct type."""
+    reg = await client.post(
+        "/user", json={"email": "all-tag-types@example.com", "password": "secret"}
+    )
+    headers = auth_header(reg.json()["access_token"])
+
+    create = await client.post(
+        "/todos/",
+        json={
+            "title": "Multi-type task",
+            "tags": [
+                "@office",
+                {"name": "Renovation", "type": "project"},
+                {"name": "Home", "type": "area"},
+                "urgent",
+            ],
+        },
+        headers=headers,
+    )
+    assert create.status_code == 201
+    tags_by_name = {t["name"]: t["type"] for t in create.json()["tags"]}
+
+    assert tags_by_name["@office"] == "context"
+    assert tags_by_name["Renovation"] == "project"
+    assert tags_by_name["Home"] == "area"
+    assert tags_by_name["urgent"] == "label"
+
+    # Verify via separate GET
+    get = await client.get(f"/todos/{create.json()['id']}", headers=headers)
+    assert get.status_code == 200
+    fetched_tags = {t["name"]: t["type"] for t in get.json()["tags"]}
+    assert fetched_tags == tags_by_name
+
+
+@pytest.mark.asyncio
+async def test_capture_source_tracking(client: AsyncClient) -> None:
+    """Todos created with different capture sources are stored and returned correctly."""
+    reg = await client.post(
+        "/user", json={"email": "capture-src@example.com", "password": "secret"}
+    )
+    headers = auth_header(reg.json()["access_token"])
+
+    sources = ["manual", "share_sheet", "voice", "ai_parse"]
+    created_ids: list[str] = []
+    for source in sources:
+        resp = await client.post(
+            "/todos/",
+            json={"title": f"Task via {source}", "capture_source": source},
+            headers=headers,
+        )
+        assert resp.status_code == 201
+        assert resp.json()["capture_source"] == source
+        created_ids.append(resp.json()["id"])
+
+    # All appear in the list
+    listing = await client.get("/todos/", headers=headers)
+    assert listing.status_code == 200
+    listed_sources = {t["id"]: t["capture_source"] for t in listing.json()}
+    for todo_id, source in zip(created_ids, sources, strict=False):
+        assert listed_sources[todo_id] == source

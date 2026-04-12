@@ -8,10 +8,28 @@ the Electric client.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+# ---------------------------------------------------------------------------
+# Canonical constant sets — single source of truth shared with schemas.py
+# ---------------------------------------------------------------------------
+
+GTD_STATES = ("inbox", "next_action", "waiting_for", "scheduled", "someday_maybe", "done")
+TAG_TYPES = ("context", "project", "area", "label")
+ENERGY_LEVELS = ("low", "medium", "high")
 
 
 def _uuid() -> str:
@@ -20,10 +38,15 @@ def _uuid() -> str:
 
 class Tag(Base):
     __tablename__ = "tags"
+    __table_args__ = (
+        Index("ix_tags_type", "type"),
+        CheckConstraint("type IN ('context','project','area','label')", name="ck_tags_type"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     color: Mapped[str | None] = mapped_column(String(20))
+    type: Mapped[str] = mapped_column(String(20), nullable=False, default="context")
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
     todos: Mapped[list["Todo"]] = relationship("Todo", secondary="todo_tags", back_populates="tags")
@@ -40,6 +63,17 @@ class TodoTag(Base):
 
 class Todo(Base):
     __tablename__ = "todos"
+    __table_args__ = (
+        Index("ix_todos_user_state", "user_id", "state"),
+        CheckConstraint(
+            "state IN ('inbox','next_action','waiting_for','scheduled','someday_maybe','done')",
+            name="ck_todos_state",
+        ),
+        CheckConstraint(
+            "energy_level IS NULL OR energy_level IN ('low','medium','high')",
+            name="ck_todos_energy_level",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -51,6 +85,10 @@ class Todo(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     state: Mapped[str] = mapped_column(String(50), default="inbox")
+    time_estimate: Mapped[int | None] = mapped_column(Integer)  # minutes
+    energy_level: Mapped[str | None] = mapped_column(String(20))
+    capture_source: Mapped[str | None] = mapped_column(String(50))
+
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 

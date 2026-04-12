@@ -10,9 +10,10 @@ if git diff --cached --name-only | grep -q "^backend/"; then
     echo "=> 🐍 Backend files modified. Running checks..."
     
     cd backend || exit 1
-    
-    # We assume 'ruff' and 'mypy' and 'pytest' are installed in the active environment 
-    # or available globally.
+
+    # Activate the project venv so ruff/mypy/pytest are available.
+    # shellcheck disable=SC1091
+    . .venv/bin/activate
     
     echo ">> Running ruff check..."
     ruff check .
@@ -50,7 +51,25 @@ if git diff --cached --name-only | grep -q "^app/"; then
     echo "=> 🐦 Flutter app files modified. Running checks..."
     
     cd app || exit 1
-    
+
+    # Add Flutter to PATH if not already present.
+    for flutter_candidate in \
+        "$HOME/development/flutter/bin" \
+        "$HOME/flutter/bin" \
+        "/opt/flutter/bin"; do
+        if [ -x "$flutter_candidate/flutter" ]; then
+            export PATH="$flutter_candidate:$PATH"
+            break
+        fi
+    done
+
+    echo ">> Running build_runner..."
+    dart run build_runner build --delete-conflicting-outputs
+    if [ $? -ne 0 ]; then
+        echo "❌ build_runner failed! Please fix code generation errors."
+        exit 1
+    fi
+
     echo ">> Running flutter analyze..."
     flutter analyze
     if [ $? -ne 0 ]; then
