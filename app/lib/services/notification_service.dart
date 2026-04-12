@@ -23,8 +23,9 @@ class NotificationService {
       requestBadgePermission: false,
       requestSoundPermission: false,
     );
-    const settings = InitializationSettings(android: android, iOS: iOS);
-    await instance._plugin.initialize(settings);
+    await instance._plugin.initialize(
+      settings: const InitializationSettings(android: android, iOS: iOS),
+    );
   }
 
   Future<bool> requestPermissions() async {
@@ -46,7 +47,7 @@ class NotificationService {
   }
 
   Future<void> cancelReminder(int id) async {
-    await _plugin.cancel(id);
+    await _plugin.cancel(id: id);
   }
 
   Future<void> cancelAll() async {

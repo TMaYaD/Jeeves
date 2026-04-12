@@ -4,7 +4,7 @@ part 'todo_list.freezed.dart';
 part 'todo_list.g.dart';
 
 @freezed
-class TodoList with _$TodoList {
+abstract class TodoList with _$TodoList {
   const factory TodoList({
     required String id,
     required String name,

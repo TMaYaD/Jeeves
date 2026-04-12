@@ -6,7 +6,7 @@ part 'recurrence_rule.g.dart';
 enum RecurrenceFrequency { daily, weekly, monthly, yearly }
 
 @freezed
-class RecurrenceRule with _$RecurrenceRule {
+abstract class RecurrenceRule with _$RecurrenceRule {
   const factory RecurrenceRule({
     required String id,
     required String todoId,

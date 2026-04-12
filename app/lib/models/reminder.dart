@@ -6,7 +6,7 @@ part 'reminder.g.dart';
 enum ReminderType { time, location }
 
 @freezed
-class Reminder with _$Reminder {
+abstract class Reminder with _$Reminder {
   const factory Reminder({
     required String id,
     required String todoId,

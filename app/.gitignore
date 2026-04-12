@@ -1,0 +1,19 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Code generation (regenerate with `dart run build_runner build`)
+*.freezed.dart
+*.g.dart
+*.gr.dart
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
