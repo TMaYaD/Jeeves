@@ -31,7 +31,7 @@ class TodoList(Base):
 
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
-    todos: Mapped[list["Todo"]] = relationship("Todo", back_populates="list")
+    todos: Mapped[list["Todo"]] = relationship("Todo", back_populates="todo_list")
 
 
 class Todo(Base):
@@ -50,7 +50,7 @@ class Todo(Base):
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
-    list: Mapped[TodoList | None] = relationship("TodoList", back_populates="todos")
+    todo_list: Mapped[TodoList | None] = relationship("TodoList", back_populates="todos")
     reminders: Mapped[list["Reminder"]] = relationship("Reminder", back_populates="todo")
     recurrence_rule: Mapped["RecurrenceRule | None"] = relationship(
         "RecurrenceRule", back_populates="todo", uselist=False
