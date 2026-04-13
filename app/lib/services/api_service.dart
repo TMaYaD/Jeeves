@@ -1,7 +1,7 @@
-/// REST API service — wraps the FastAPI backend.
-///
-/// Handles authentication, task CRUD for non-sync paths (e.g. initial load,
-/// conflict resolution), AI requests, and settings.
+// REST API service — wraps the FastAPI backend.
+//
+// Handles authentication, task CRUD for non-sync paths (e.g. initial load,
+// conflict resolution), AI requests, and settings.
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

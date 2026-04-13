@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'screens/inbox/inbox_screen.dart';
 import 'services/notification_service.dart';
 
 Future<void> main() async {
@@ -17,14 +18,10 @@ class JeevesApp extends StatelessWidget {
     return MaterialApp(
       title: 'Jeeves',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        colorSchemeSeed: const Color(0xFF2667B7),
         useMaterial3: true,
       ),
-      home: const Scaffold(
-        body: Center(
-          child: Text('Jeeves — coming soon'),
-        ),
-      ),
+      home: const InboxScreen(),
     );
   }
 }

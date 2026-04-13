@@ -1,10 +1,10 @@
-/// Notification service — local and push notifications.
-///
-/// - Local notifications: flutter_local_notifications (time-based reminders)
-/// - Push notifications: Firebase Cloud Messaging (cross-platform)
-///
-/// Platform-specific deep OS integration (Siri, Android App Actions) is
-/// handled via platform channels in android/ and ios/.
+// Notification service — local and push notifications.
+//
+// - Local notifications: flutter_local_notifications (time-based reminders)
+// - Push notifications: Firebase Cloud Messaging (cross-platform)
+//
+// Platform-specific deep OS integration (Siri, Android App Actions) is
+// handled via platform channels in android/ and ios/.
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

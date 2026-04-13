@@ -42,6 +42,9 @@ dependencies:
   # AI / NLP helpers
   # (calls backend AI endpoint via api_service)
 
+  # Connectivity
+  connectivity_plus: ^6.1.1
+
   # Utilities
   uuid: ^4.4.0
   freezed_annotation: ^3.1.0
@@ -51,6 +54,9 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
+  sqlite3: ^2.9.4
   flutter_lints: ^6.0.0
   build_runner: ^2.13.1
   freezed: ^3.2.5

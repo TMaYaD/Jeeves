@@ -19,6 +19,14 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
         .watch();
   }
 
+  Future<void> insertTodo(TodosCompanion companion) {
+    return into(todos).insert(companion);
+  }
+
+  Future<void> deleteTodo(String id) {
+    return (delete(todos)..where((t) => t.id.equals(id))).go();
+  }
+
   /// Transition a todo out of inbox to [newState].
   Future<void> processInboxItem(String todoId, {required String newState}) {
     return (update(todos)..where((t) => t.id.equals(todoId)))

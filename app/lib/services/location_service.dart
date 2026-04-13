@@ -1,8 +1,8 @@
-/// Location service — geofencing and location tagging.
-///
-/// Uses geolocator for position fixes and constructs geofences locally.
-/// Geofence evaluation for reminders runs in the backend (or via platform
-/// channels on mobile for background delivery).
+// Location service — geofencing and location tagging.
+//
+// Uses geolocator for position fixes and constructs geofences locally.
+// Geofence evaluation for reminders runs in the backend (or via platform
+// channels on mobile for background delivery).
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
