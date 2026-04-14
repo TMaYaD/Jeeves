@@ -99,20 +99,19 @@ void main() {
 
     testWidgets('submitting text field clears the input', (tester) async {
       final db = GtdDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
       await tester.pumpWidget(_buildApp(db: db));
       await tester.pump();
 
       await tester.enterText(find.byType(TextField), 'My task');
       await tester.pump();
       await tester.testTextInput.receiveAction(TextInputAction.done);
-      await tester.pump();
+      await tester.pumpAndSettle();
 
       expect(
         tester.widget<TextField>(find.byType(TextField)).controller?.text,
         isEmpty,
       );
-
-      await db.close();
     });
 
     testWidgets('no add button in header', (tester) async {

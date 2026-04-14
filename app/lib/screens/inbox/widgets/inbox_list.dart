@@ -41,7 +41,12 @@ class InboxList extends ConsumerWidget {
 
     return asyncItems.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (err, _) => Center(child: Text('Error: $err')),
+      error: (err, stack) {
+        debugPrint('InboxList error: $err\n$stack');
+        return const Center(
+          child: Text('Could not load inbox. Pull to refresh and try again.'),
+        );
+      },
       data: (items) => RefreshIndicator(
         onRefresh: onRefresh,
         child: ListView.builder(

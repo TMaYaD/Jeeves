@@ -1,9 +1,12 @@
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
+import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/main.dart' as app;
+import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_screen.dart';
 
 void main() {
@@ -18,9 +21,12 @@ void main() {
     });
 
     testWidgets('type title and tap Add — item appears in list', (tester) async {
+      final db = GtdDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
       await tester.pumpWidget(
-        const ProviderScope(
-          child: MaterialApp(home: InboxScreen()),
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: const MaterialApp(home: InboxScreen()),
         ),
       );
       await tester.pumpAndSettle();
@@ -33,9 +39,12 @@ void main() {
     });
 
     testWidgets('inbox count badge matches list length', (tester) async {
+      final db = GtdDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
       await tester.pumpWidget(
-        const ProviderScope(
-          child: MaterialApp(home: InboxScreen()),
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: const MaterialApp(home: InboxScreen()),
         ),
       );
       await tester.pumpAndSettle();

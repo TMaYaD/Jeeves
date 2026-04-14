@@ -84,9 +84,12 @@ class SyncService {
     }
   }
 
-  /// Trigger a one-shot sync attempt.  No-op until Electric SQL client is wired.
+  /// Trigger a one-shot sync attempt.  Emits status transitions so the UI
+  /// receives an explicit non-success result until Electric SQL is wired.
   Future<void> sync() async {
+    _statusController.add(SyncStatus.connecting);
     // TODO: trigger Electric SQL sync when client is available
+    _statusController.add(SyncStatus.error);
   }
 
   Future<void> stop() async {

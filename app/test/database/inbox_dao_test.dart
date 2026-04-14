@@ -54,9 +54,9 @@ void main() {
 
     test('watchInbox filters out non-inbox states', () async {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Inbox item'));
-      await db.inboxDao.insertTodo(
-        _companion(id: 'b', title: 'Next action', state: 'next_action'),
-      );
+      await db.inboxDao.insertTodo(_companion(id: 'b', title: 'Next action'));
+      // Transition 'b' out of inbox — the real production path for non-inbox rows.
+      await db.inboxDao.processInboxItem('b', newState: 'next_action');
 
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items.length, 1);

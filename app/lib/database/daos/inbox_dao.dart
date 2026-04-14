@@ -20,7 +20,17 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   }
 
   Future<void> insertTodo(TodosCompanion companion) {
-    return into(todos).insert(companion);
+    final state = companion.state.present ? companion.state.value : 'inbox';
+    if (state != 'inbox') {
+      throw ArgumentError.value(
+        state,
+        'state',
+        'InboxDao only accepts todos with state = inbox',
+      );
+    }
+    return into(todos).insert(
+      companion.copyWith(state: const Value('inbox')),
+    );
   }
 
   Future<void> deleteTodo(String id) {

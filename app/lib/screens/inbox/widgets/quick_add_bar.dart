@@ -17,6 +17,15 @@ class QuickAddBar extends StatefulWidget {
 
 class _QuickAddBarState extends State<QuickAddBar> {
   final _focusNode = FocusNode();
+  bool _isSubmitting = false;
+
+  @override
+  void didUpdateWidget(covariant QuickAddBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      if (_isSubmitting) setState(() => _isSubmitting = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -25,11 +34,18 @@ class _QuickAddBarState extends State<QuickAddBar> {
   }
 
   Future<void> _submit() async {
+    if (_isSubmitting) return;
     final title = widget.controller.text.trim();
     if (title.isEmpty) return;
-    await widget.onAdd(title);
-    widget.controller.clear();
-    _focusNode.requestFocus();
+    setState(() => _isSubmitting = true);
+    try {
+      await widget.onAdd(title);
+      if (!mounted) return;
+      widget.controller.clear();
+      _focusNode.requestFocus();
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override

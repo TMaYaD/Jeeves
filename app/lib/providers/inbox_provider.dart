@@ -26,12 +26,16 @@ class InboxNotifier {
   final Ref _ref;
 
   Future<void> addTodo(String title, {String? notes}) async {
+    final normalizedTitle = title.trim();
+    if (normalizedTitle.isEmpty) {
+      throw ArgumentError.value(title, 'title', 'Title cannot be empty');
+    }
     final db = _ref.read(databaseProvider);
     final id = const Uuid().v4();
     final now = DateTime.now();
     await db.inboxDao.insertTodo(TodosCompanion(
       id: Value(id),
-      title: Value(title),
+      title: Value(normalizedTitle),
       notes: Value(notes),
       state: Value(GtdState.inbox.value),
       captureSource: const Value('manual'),
