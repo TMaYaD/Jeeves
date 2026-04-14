@@ -3,6 +3,7 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../../models/todo.dart' show GtdState;
 import '../gtd_database.dart';
 
 part 'inbox_dao.g.dart';
@@ -14,14 +15,16 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   /// Stream of all inbox todos for [userId], ordered by createdAt descending.
   Stream<List<Todo>> watchInbox(String userId) {
     return (select(todos)
-          ..where((t) => t.userId.equals(userId) & t.state.equals('inbox'))
+          ..where((t) => t.userId.equals(userId) & t.state.equals(GtdState.inbox.value))
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
         .watch();
   }
 
   Future<void> insertTodo(TodosCompanion companion) {
-    final state = companion.state.present ? companion.state.value : 'inbox';
-    if (state != 'inbox') {
+    final state = companion.state.present
+        ? companion.state.value
+        : GtdState.inbox.value;
+    if (state != GtdState.inbox.value) {
       throw ArgumentError.value(
         state,
         'state',
@@ -29,7 +32,7 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
       );
     }
     return into(todos).insert(
-      companion.copyWith(state: const Value('inbox')),
+      companion.copyWith(state: Value(GtdState.inbox.value)),
     );
   }
 

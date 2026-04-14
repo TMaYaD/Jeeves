@@ -150,7 +150,7 @@ void main() {
         const Offset(0, 300),
         1000,
       );
-      await tester.pump();
+      await tester.pumpAndSettle();
     });
   });
 }

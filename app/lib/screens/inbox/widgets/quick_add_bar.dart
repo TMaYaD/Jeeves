@@ -80,6 +80,10 @@ class _QuickAddBarState extends State<QuickAddBar> {
               ),
             ),
           ),
+          TextButton(
+            onPressed: _isSubmitting ? null : _submit,
+            child: const Text('Add'),
+          ),
           Icon(
             Icons.camera_alt_outlined,
             color: const Color(0xFF4A5568),

@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/main.dart' as app;
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_screen.dart';
 
@@ -14,7 +13,14 @@ void main() {
 
   group('Inbox capture E2E', () {
     testWidgets('app launches and shows Inbox screen', (tester) async {
-      app.main();
+      final db = GtdDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: const MaterialApp(home: InboxScreen()),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Inbox'), findsOneWidget);
