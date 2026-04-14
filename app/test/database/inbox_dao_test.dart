@@ -73,7 +73,7 @@ void main() {
 
     test('deleteTodo removes row from inbox watch', () async {
       await db.inboxDao.insertTodo(_companion(id: 'del', title: 'Delete me'));
-      await db.inboxDao.deleteTodo('del');
+      await db.inboxDao.deleteTodo('del', userId: _userId);
 
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items, isEmpty);

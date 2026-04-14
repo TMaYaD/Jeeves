@@ -22,9 +22,7 @@ class _QuickAddBarState extends State<QuickAddBar> {
   @override
   void didUpdateWidget(covariant QuickAddBar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.controller, widget.controller)) {
-      if (_isSubmitting) setState(() => _isSubmitting = false);
-    }
+    // No-op: keep _isSubmitting lifecycle tied to _submit() only.
   }
 
   @override
