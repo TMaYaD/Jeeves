@@ -20,12 +20,6 @@ class _QuickAddBarState extends State<QuickAddBar> {
   bool _isSubmitting = false;
 
   @override
-  void didUpdateWidget(covariant QuickAddBar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // No-op: keep _isSubmitting lifecycle tied to _submit() only.
-  }
-
-  @override
   void dispose() {
     _focusNode.dispose();
     super.dispose();
@@ -33,13 +27,16 @@ class _QuickAddBarState extends State<QuickAddBar> {
 
   Future<void> _submit() async {
     if (_isSubmitting) return;
-    final title = widget.controller.text.trim();
+    final submittedText = widget.controller.text;
+    final title = submittedText.trim();
     if (title.isEmpty) return;
     setState(() => _isSubmitting = true);
     try {
       await widget.onAdd(title);
       if (!mounted) return;
-      widget.controller.clear();
+      if (widget.controller.text == submittedText) {
+        widget.controller.clear();
+      }
       _focusNode.requestFocus();
     } finally {
       if (mounted) setState(() => _isSubmitting = false);

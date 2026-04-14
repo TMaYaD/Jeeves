@@ -52,6 +52,15 @@ void main() {
       );
     });
 
+    test('insertTodo rejects non-inbox state', () async {
+      expect(
+        () => db.inboxDao.insertTodo(
+          _companion(id: 'bad', title: 'Wrong state', state: 'next_action'),
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
     test('watchInbox filters out non-inbox states', () async {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Inbox item'));
       await db.inboxDao.insertTodo(_companion(id: 'b', title: 'Next action'));
