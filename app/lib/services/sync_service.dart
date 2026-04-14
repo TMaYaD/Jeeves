@@ -1,17 +1,17 @@
-/// Sync service — Electric SQL client integration.
-///
-/// Responsible for:
-/// - Maintaining the local Drift database as the offline-first store
-/// - Syncing changes from/to the Electric SQL replication layer via three shapes:
-///     1. todos   (filtered by user_id)
-///     2. tags    (filtered by user_id)
-///     3. todo_tags (references user-scoped todo_id rows)
-/// - Surfacing sync status to UI via a [SyncStatus] stream
-/// - Tracking pending (unsynced) writes so the UI can display an indicator
-///
-/// TODO: Replace the stub Electric client calls below with the real
-/// `electric_client` Flutter package once it is published.
-/// See: https://electric-sql.com/docs/integrations/flutter
+// Sync service — Electric SQL client integration.
+//
+// Responsible for:
+// - Maintaining the local Drift database as the offline-first store
+// - Syncing changes from/to the Electric SQL replication layer via three shapes:
+//     1. todos   (filtered by user_id)
+//     2. tags    (filtered by user_id)
+//     3. todo_tags (references user-scoped todo_id rows)
+// - Surfacing sync status to UI via a [SyncStatus] stream
+// - Tracking pending (unsynced) writes so the UI can display an indicator
+//
+// TODO: Replace the stub Electric client calls below with the real
+// `electric_client` Flutter package once it is published.
+// See: https://electric-sql.com/docs/integrations/flutter
 
 import 'dart:async';
 
@@ -82,6 +82,14 @@ class SyncService {
       _pendingWrites--;
       _pendingWriteController.add(_pendingWrites);
     }
+  }
+
+  /// Trigger a one-shot sync attempt.  Emits status transitions so the UI
+  /// receives an explicit non-success result until Electric SQL is wired.
+  Future<void> sync() async {
+    _statusController.add(SyncStatus.connecting);
+    // TODO: trigger Electric SQL sync when client is available
+    _statusController.add(SyncStatus.error);
   }
 
   Future<void> stop() async {

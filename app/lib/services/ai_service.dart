@@ -1,8 +1,8 @@
-/// AI service — natural language task entry, suggestions, summarization.
-///
-/// All LLM calls are proxied through the FastAPI backend's /ai/* endpoints.
-/// This keeps API keys server-side and allows model swapping without app
-/// updates. On-device models are a future option for latency-sensitive paths.
+// AI service — natural language task entry, suggestions, summarization.
+//
+// All LLM calls are proxied through the FastAPI backend's /ai/* endpoints.
+// This keeps API keys server-side and allows model swapping without app
+// updates. On-device models are a future option for latency-sensitive paths.
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
