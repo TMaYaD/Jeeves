@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'screens/inbox/inbox_screen.dart';
 import 'services/notification_service.dart';
@@ -20,6 +21,8 @@ class JeevesApp extends StatelessWidget {
       theme: ThemeData(
         colorSchemeSeed: const Color(0xFF2667B7),
         useMaterial3: true,
+        textTheme: GoogleFonts.interTextTheme(),
+        scaffoldBackgroundColor: Colors.white,
       ),
       home: const InboxScreen(),
     );

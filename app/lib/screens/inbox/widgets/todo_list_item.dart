@@ -11,21 +11,64 @@ class TodoListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      title: Text(todo.title),
-      subtitle: todo.notes != null ? Text(todo.notes!) : null,
-      trailing: Text(
-        _relativeTime(todo.createdAt),
-        style: Theme.of(context).textTheme.bodySmall,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2, right: 12),
+            child: Icon(
+              Icons.chevron_right,
+              color: const Color(0xFF9CA3AF),
+              size: 20,
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  todo.title,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1A1A2E),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '– ${_formatTime(todo.createdAt)}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  String _relativeTime(DateTime createdAt) {
-    final diff = DateTime.now().difference(createdAt);
-    if (diff.inSeconds < 60) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
-    if (diff.inHours < 24) return '${diff.inHours} hr ago';
-    return DateFormat.MMMd().format(createdAt);
+  String _formatTime(DateTime createdAt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final tomorrow = today.add(const Duration(days: 1));
+    final itemDate = DateTime(createdAt.year, createdAt.month, createdAt.day);
+
+    final time = DateFormat('h:mm a').format(createdAt);
+
+    if (itemDate == today) {
+      return 'Today, $time';
+    } else if (itemDate == tomorrow) {
+      return 'Tomorrow, $time';
+    } else if (itemDate.isAfter(today) &&
+        itemDate.isBefore(today.add(const Duration(days: 7)))) {
+      return '${DateFormat.EEEE().format(createdAt)}, $time';
+    } else {
+      return '${DateFormat.MMMd().format(createdAt)}, $time';
+    }
   }
 }

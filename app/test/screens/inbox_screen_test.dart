@@ -82,47 +82,29 @@ void main() {
       expect(find.text('Call dentist'), findsOneWidget);
     });
 
-    testWidgets('item count badge shows correct number', (tester) async {
-      final items = [_todo('a', 'Task A'), _todo('b', 'Task B')];
-      await tester.pumpWidget(_buildApp(inboxStream: Stream.value(items)));
-      await tester.pump();
-
-      expect(find.text('2'), findsOneWidget);
-    });
-
-    testWidgets('Add button is disabled when text field is empty',
-        (tester) async {
+    testWidgets('quick add bar has placeholder text', (tester) async {
       await tester.pumpWidget(_buildApp());
       await tester.pump();
 
-      final button = tester.widget<ElevatedButton>(
-        find.widgetWithText(ElevatedButton, 'Add'),
-      );
-      expect(button.onPressed, isNull);
+      expect(find.text("What's on your mind?"), findsOneWidget);
     });
 
-    testWidgets('Add button is enabled when text field has content',
-        (tester) async {
+    testWidgets('quick add bar has camera and mic icons', (tester) async {
       await tester.pumpWidget(_buildApp());
       await tester.pump();
 
-      await tester.enterText(find.byType(TextField), 'Some task');
-      await tester.pump();
-
-      final button = tester.widget<ElevatedButton>(
-        find.widgetWithText(ElevatedButton, 'Add'),
-      );
-      expect(button.onPressed, isNotNull);
+      expect(find.byIcon(Icons.camera_alt_outlined), findsOneWidget);
+      expect(find.byIcon(Icons.mic_none), findsOneWidget);
     });
 
-    testWidgets('tapping Add clears the text field', (tester) async {
+    testWidgets('submitting text field clears the input', (tester) async {
       final db = GtdDatabase.forTesting(NativeDatabase.memory());
       await tester.pumpWidget(_buildApp(db: db));
       await tester.pump();
 
       await tester.enterText(find.byType(TextField), 'My task');
       await tester.pump();
-      await tester.tap(find.text('Add'));
+      await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pump();
 
       expect(
@@ -131,6 +113,13 @@ void main() {
       );
 
       await db.close();
+    });
+
+    testWidgets('no add button in header', (tester) async {
+      await tester.pumpWidget(_buildApp());
+      await tester.pump();
+
+      expect(find.byIcon(Icons.add), findsNothing);
     });
 
     testWidgets('OfflineChip is visible when connectivity is none',

@@ -27,68 +27,52 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final asyncItems = ref.watch(inboxItemsProvider);
-    final count = asyncItems.asData?.value.length ?? 0;
-
     final isOnline = ref.watch(isOnlineProvider).asData?.value ?? true;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Inbox'),
-            if (count > 0) ...[
-              const SizedBox(width: 8),
-              _CountBadge(count: count),
-            ],
+            // Header row: title + offline chip
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Inbox',
+                      style: TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF1A1A2E),
+                      ),
+                    ),
+                  ),
+                  if (!isOnline) const OfflineChip(),
+                ],
+              ),
+            ),
+            // Quick add bar (pill-shaped input)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: QuickAddBar(
+                controller: _controller,
+                onAdd: (title) =>
+                    ref.read(inboxNotifierProvider).addTodo(title),
+              ),
+            ),
+            // Inbox list
+            Expanded(
+              child: InboxList(
+                onRefresh: ref.read(syncServiceProvider).sync,
+              ),
+            ),
           ],
         ),
-        actions: [
-          if (!isOnline) const Padding(
-            padding: EdgeInsets.only(right: 8),
-            child: OfflineChip(),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: InboxList(
-              onRefresh: ref.read(syncServiceProvider).sync,
-            ),
-          ),
-          QuickAddBar(
-            controller: _controller,
-            onAdd: (title) =>
-                ref.read(inboxNotifierProvider).addTodo(title),
-          ),
-        ],
       ),
     );
   }
-}
 
-class _CountBadge extends StatelessWidget {
-  const _CountBadge({required this.count});
-
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(
-        '$count',
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.onPrimary,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
 }

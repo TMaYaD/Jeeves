@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Pinned bottom bar with a text field and an Add button.
+/// Pill-shaped input bar for quick inbox capture.
 class QuickAddBar extends StatefulWidget {
   const QuickAddBar({
     super.key,
@@ -17,25 +17,11 @@ class QuickAddBar extends StatefulWidget {
 
 class _QuickAddBarState extends State<QuickAddBar> {
   final _focusNode = FocusNode();
-  bool _isEmpty = true;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_onTextChanged);
-    _isEmpty = widget.controller.text.trim().isEmpty;
-  }
 
   @override
   void dispose() {
-    widget.controller.removeListener(_onTextChanged);
     _focusNode.dispose();
     super.dispose();
-  }
-
-  void _onTextChanged() {
-    final empty = widget.controller.text.trim().isEmpty;
-    if (empty != _isEmpty) setState(() => _isEmpty = empty);
   }
 
   Future<void> _submit() async {
@@ -48,34 +34,48 @@ class _QuickAddBarState extends State<QuickAddBar> {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                focusNode: _focusNode,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _submit(),
-                decoration: const InputDecoration(
-                  hintText: 'Capture a task…',
-                  border: InputBorder.none,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            ElevatedButton(
-              onPressed: _isEmpty ? null : _submit,
-              style: ElevatedButton.styleFrom(
-                shape: const StadiumBorder(),
-              ),
-              child: const Text('Add'),
-            ),
-          ],
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.primary,
+          width: 1.5,
         ),
+        color: Colors.white,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: widget.controller,
+              focusNode: _focusNode,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+              decoration: const InputDecoration(
+                hintText: "What's on your mind?",
+                hintStyle: TextStyle(
+                  color: Color(0xFF9CA3AF),
+                  fontSize: 16,
+                ),
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                isDense: true,
+              ),
+            ),
+          ),
+          Icon(
+            Icons.camera_alt_outlined,
+            color: const Color(0xFF4A5568),
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Icon(
+            Icons.mic_none,
+            color: const Color(0xFF4A5568),
+            size: 24,
+          ),
+        ],
       ),
     );
   }
