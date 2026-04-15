@@ -55,7 +55,7 @@ class PlanSummaryStep extends ConsumerWidget {
             if (overCapacity) ...[
               const SizedBox(height: 10),
               _OverCapacityWarning(
-                // Step 2 = Next Actions review (was step 0 in old 4-step flow)
+                // Step 2 = Review Next Actions
                 onReview: () =>
                     ref.read(dailyPlanningProvider.notifier).goToStep(2),
               ),

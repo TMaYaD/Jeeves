@@ -260,13 +260,20 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   Future<void> reEnterPlanning() async {
     final today = _sessionDate;
     final prefs = await SharedPreferences.getInstance();
-    // Clear DB first — it is the more failure-prone operation.  If it throws,
-    // prefs and notifier state are left untouched (consistent).
-    await _db.todoDao.clearTodaySelections(kLocalUserId, today);
-    await prefs.remove(_kCompletedDateKey);
-    // Reset the session date in case the clock crossed midnight.
-    ref.read(planningSessionDateProvider.notifier).reset();
-    planningCompletionNotifier.value = false;
-    state = const DailyPlanningState(); // reset to Step 1
+    try {
+      // Clear DB first — it is the more failure-prone operation.  If it throws,
+      // prefs and notifier state are left untouched (consistent).
+      await _db.todoDao.clearTodaySelections(kLocalUserId, today);
+      await prefs.remove(_kCompletedDateKey);
+      // Reset the session date in case the clock crossed midnight.
+      ref.read(planningSessionDateProvider.notifier).reset();
+      planningCompletionNotifier.value = false;
+      state = const DailyPlanningState(); // reset to Step 0
+    } catch (e) {
+      // DB selections were already cleared.  Restore the completion flag so
+      // the router guard doesn't block re-entry on the next attempt.
+      await prefs.setString(_kCompletedDateKey, today);
+      rethrow;
+    }
   }
 }

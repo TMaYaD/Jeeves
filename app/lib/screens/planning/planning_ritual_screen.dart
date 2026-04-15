@@ -1,7 +1,7 @@
 /// Daily planning ritual — outer container screen (Issue #82).
 ///
 /// Renders a full-screen, drawer-free scaffold with:
-/// - A segmented progress bar across the top (4 steps).
+/// - A segmented progress bar across the top (6 steps).
 /// - A non-swipeable [PageView] that displays each ritual step.
 /// - Back / Next navigation buttons at the bottom.
 library;

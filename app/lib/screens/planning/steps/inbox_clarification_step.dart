@@ -87,17 +87,29 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     super.dispose();
   }
 
-  Future<void> _saveFields() async {
+  /// Validates and saves editable fields on the current inbox item.
+  ///
+  /// Returns `false` (and shows a validation error) if the title is empty,
+  /// since a task must have a non-empty title before it can be processed.
+  Future<bool> _saveFields(BuildContext context) async {
     final title = _titleCtrl.text.trim();
+    if (title.isEmpty) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a title before processing.')),
+      );
+      return false;
+    }
     final notes = _notesCtrl.text.trim();
     await ref.read(dailyPlanningProvider.notifier).updateInboxItemFields(
           widget.todo.id,
-          title: title.isNotEmpty ? title : null,
+          title: title,
           notes: notes.isNotEmpty ? notes : null,
           energyLevel: _energyLevel,
           timeEstimate: _timeEstimate,
           dueDate: _dueDate,
         );
+    return true;
   }
 
   Future<void> _process(BuildContext context, GtdState destination) async {
@@ -109,9 +121,11 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       setState(() => _dueDate = picked);
     }
 
+    final saved = await _saveFields(context);
+    if (!saved || !context.mounted) return;
+
     Object? error;
     try {
-      await _saveFields();
       await ref
           .read(dailyPlanningProvider.notifier)
           .processInboxItem(widget.todo.id, destination);
@@ -228,7 +242,11 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           children: _estimateOptions.map((m) {
             final selected = _timeEstimate == m;
             return _EstimateChip(
-              label: m < 60 ? '${m}m' : '${m ~/ 60}h',
+              label: m < 60
+                  ? '${m}m'
+                  : m % 60 == 0
+                      ? '${m ~/ 60}h'
+                      : '${m ~/ 60}h ${m % 60}m',
               selected: selected,
               onTap: () => setState(
                   () => _timeEstimate = selected ? null : m),

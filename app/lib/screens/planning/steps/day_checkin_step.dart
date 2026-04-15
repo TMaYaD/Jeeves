@@ -243,7 +243,7 @@ class _TimeInputRow extends StatelessWidget {
             keyboardType: TextInputType.number,
             inputFormatters: [
               FilteringTextInputFormatter.digitsOnly,
-              _MaxValueFormatter(24),
+              _MaxValueFormatter(23),
             ],
             onChanged: (_) => onChanged(),
           ),
