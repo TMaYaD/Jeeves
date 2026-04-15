@@ -49,13 +49,22 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
           children: [
             // Header row: title + count badge + offline chip
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              padding: const EdgeInsets.fromLTRB(16, 16, 20, 0),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: Row(
                       children: [
+                        Builder(
+                          builder: (ctx) => IconButton(
+                            icon: const Icon(Icons.menu),
+                            onPressed: () {
+                              ctx.findRootAncestorStateOfType<ScaffoldState>()?.openDrawer();
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
                         const Text(
                           'Inbox',
                           style: TextStyle(

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import 'screens/inbox/inbox_screen.dart';
+import 'router.dart';
 import 'services/notification_service.dart';
 
 Future<void> main() async {
@@ -16,7 +16,7 @@ class JeevesApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
       title: 'Jeeves',
       theme: ThemeData(
         colorSchemeSeed: const Color(0xFF2667B7),
@@ -24,7 +24,7 @@ class JeevesApp extends StatelessWidget {
         textTheme: GoogleFonts.interTextTheme(),
         scaffoldBackgroundColor: Colors.white,
       ),
-      home: const InboxScreen(),
+      routerConfig: appRouter,
     );
   }
 }

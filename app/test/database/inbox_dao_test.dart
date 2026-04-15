@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/gtd_state_machine.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase.forTesting(NativeDatabase.memory());
@@ -65,7 +66,8 @@ void main() {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Inbox item'));
       await db.inboxDao.insertTodo(_companion(id: 'b', title: 'Next action'));
       // Transition 'b' out of inbox — the real production path for non-inbox rows.
-      await db.inboxDao.processInboxItem('b', newState: 'next_action');
+      await db.inboxDao
+          .processInboxItem('b', userId: _userId, newState: 'next_action');
 
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items.length, 1);
@@ -74,7 +76,8 @@ void main() {
 
     test('processInboxItem removes row from inbox watch', () async {
       await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
-      await db.inboxDao.processInboxItem('x', newState: 'next_action');
+      await db.inboxDao
+          .processInboxItem('x', userId: _userId, newState: 'next_action');
 
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items, isEmpty);
@@ -86,6 +89,30 @@ void main() {
 
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items, isEmpty);
+    });
+
+    test('processInboxItem rejects invalid transition (inbox → inProgress)', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'bad', title: 'Bad transition'));
+      await expectLater(
+        db.inboxDao.processInboxItem(
+            'bad', userId: _userId, newState: 'in_progress'),
+        throwsA(isA<InvalidStateTransitionException>()),
+      );
+      // State must remain unchanged after the rejected transition.
+      final items = await db.inboxDao.watchInbox(_userId).first;
+      expect(items.any((t) => t.id == 'bad' && t.state == 'inbox'), isTrue);
+    });
+
+    test('processInboxItem rejects invalid transition (inbox → scheduled)', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'bad2', title: 'Also bad'));
+      await expectLater(
+        db.inboxDao.processInboxItem(
+            'bad2', userId: _userId, newState: 'scheduled'),
+        throwsA(isA<InvalidStateTransitionException>()),
+      );
+      // State must remain unchanged after the rejected transition.
+      final items = await db.inboxDao.watchInbox(_userId).first;
+      expect(items.any((t) => t.id == 'bad2' && t.state == 'inbox'), isTrue);
     });
 
     test('watchInbox returns newest first', () async {

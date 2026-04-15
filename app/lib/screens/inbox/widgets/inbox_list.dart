@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../providers/inbox_provider.dart';
 import 'todo_list_item.dart';
@@ -67,7 +68,10 @@ class InboxList extends ConsumerWidget {
                 ),
               );
             }
-            return TodoListItem(todo: items[index]);
+            return TodoListItem(
+              todo: items[index],
+              onTap: () => context.push('/task/${items[index].id}'),
+            );
           },
         ),
       ),
