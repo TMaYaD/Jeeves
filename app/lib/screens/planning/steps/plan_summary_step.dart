@@ -1,63 +1,26 @@
-/// Step 4 of the daily planning ritual: summary and commit.
+/// Step 5 of the daily planning ritual: summary and commit.
 ///
 /// Shows:
-/// - An editable "available time" field (defaults to 480 min / 8 h).
-/// - The full list of tasks selected for today with their estimates.
+/// - The full list of tasks selected for today, sorted by priority:
+///   due date (ascending) → scheduled → next actions.
 /// - A colour-coded capacity bar (green ≤ 80 %, amber ≤ 100 %, red > 100 %).
-/// - An over-capacity warning with a "Review Selections" back-link.
+/// - An over-capacity warning with a "Review Selections" back-link to Step 2.
 /// - A "Start Day" button that finalises the plan and unlocks execution.
+///
+/// Available time is entered in Step 1 (Day Check-in).
 library;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../providers/daily_planning_provider.dart';
 
-class PlanSummaryStep extends ConsumerStatefulWidget {
+class PlanSummaryStep extends ConsumerWidget {
   const PlanSummaryStep({super.key});
 
   @override
-  ConsumerState<PlanSummaryStep> createState() => _PlanSummaryStepState();
-}
-
-class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
-  late TextEditingController _hoursCtrl;
-  late TextEditingController _minutesCtrl;
-
-  @override
-  void initState() {
-    super.initState();
-    final available =
-        ref.read(dailyPlanningProvider).availableMinutes;
-    _hoursCtrl =
-        TextEditingController(text: (available ~/ 60).toString());
-    _minutesCtrl =
-        TextEditingController(text: (available % 60).toString());
-  }
-
-  @override
-  void dispose() {
-    _hoursCtrl.dispose();
-    _minutesCtrl.dispose();
-    super.dispose();
-  }
-
-  void _onTimeChanged() {
-    final h = int.tryParse(_hoursCtrl.text) ?? 0;
-    final m = int.tryParse(_minutesCtrl.text) ?? 0;
-    final totalMinutes = h * 60 + m;
-    // Both fields empty / zero — preserve the current provider value rather
-    // than clamping 0 to 1 which would be unintended.
-    if (totalMinutes == 0) return;
-    ref
-        .read(dailyPlanningProvider.notifier)
-        .setAvailableTime(totalMinutes.clamp(1, 1440));
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final planningState = ref.watch(dailyPlanningProvider);
     final availableMinutes = planningState.availableMinutes;
     final asyncSelected = ref.watch(todaySelectedTasksProvider);
@@ -65,7 +28,11 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     return asyncSelected.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (err, _) => Center(child: Text('Error: $err')),
-      data: (tasks) {
+      data: (rawTasks) {
+        // Sort: tasks with a due date first (ascending), then scheduled
+        // without a due date, then everything else (next actions).
+        final tasks = _sortTasks(rawTasks);
+
         final totalMinutes =
             tasks.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
         final ratio = availableMinutes > 0
@@ -76,36 +43,27 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
-            // --- Available time ---
-            _SectionLabel('Available time today'),
-            const SizedBox(height: 8),
-            _AvailableTimeRow(
-              hoursCtrl: _hoursCtrl,
-              minutesCtrl: _minutesCtrl,
-              onChanged: _onTimeChanged,
-            ),
-            const SizedBox(height: 20),
-
             // --- Capacity bar ---
             _SectionLabel('Capacity'),
             const SizedBox(height: 8),
             _CapacityBar(ratio: ratio.clamp(0.0, 2.0)),
             const SizedBox(height: 6),
             Text(
-              _capacitySummary(tasks.length, totalMinutes),
+              _capacitySummary(tasks.length, totalMinutes, availableMinutes),
               style: TextStyle(fontSize: 13, color: Colors.grey[600]),
             ),
             if (overCapacity) ...[
               const SizedBox(height: 10),
               _OverCapacityWarning(
+                // Step 2 = Next Actions review (was step 0 in old 4-step flow)
                 onReview: () =>
-                    ref.read(dailyPlanningProvider.notifier).goToStep(0),
+                    ref.read(dailyPlanningProvider.notifier).goToStep(2),
               ),
             ],
             const SizedBox(height: 20),
 
             // --- Task list ---
-            _SectionLabel('Selected tasks (${tasks.length})'),
+            _SectionLabel('Today\'s tasks (${tasks.length})'),
             const SizedBox(height: 8),
             if (tasks.isEmpty)
               Padding(
@@ -123,7 +81,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
 
             // --- Start Day button ---
             FilledButton(
-              onPressed: () => _startDay(context),
+              onPressed: () => _startDay(context, ref),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF2563EB),
                 minimumSize: const Size.fromHeight(52),
@@ -132,8 +90,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
               ),
               child: const Text(
                 'Start Day',
-                style:
-                    TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -142,7 +99,20 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     );
   }
 
-  Future<void> _startDay(BuildContext context) async {
+  /// Sorts selected tasks: due-date tasks (closest first) → scheduled → rest.
+  List<Todo> _sortTasks(List<Todo> tasks) {
+    final withDue = tasks.where((t) => t.dueDate != null).toList()
+      ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
+    final scheduledNoDue = tasks
+        .where((t) => t.dueDate == null && t.state == GtdState.scheduled.value)
+        .toList();
+    final rest = tasks
+        .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
+        .toList();
+    return [...withDue, ...scheduledNoDue, ...rest];
+  }
+
+  Future<void> _startDay(BuildContext context, WidgetRef ref) async {
     // Capture any error so all context usage stays after a single mounted check.
     Object? startError;
     try {
@@ -160,11 +130,18 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     context.go('/next-actions');
   }
 
-  String _capacitySummary(int count, int totalMinutes) {
-    final h = totalMinutes ~/ 60;
-    final m = totalMinutes % 60;
-    final timeStr = h > 0 ? '${h}h ${m}m' : '${m}m';
-    return '$count task${count == 1 ? '' : 's'} · $timeStr planned';
+  String _capacitySummary(int count, int totalMinutes, int availableMinutes) {
+    final planned = _formatMinutes(totalMinutes);
+    final available = _formatMinutes(availableMinutes);
+    return '$count task${count == 1 ? '' : 's'} · $planned planned of $available available';
+  }
+
+  String _formatMinutes(int minutes) {
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    if (h == 0) return '${m}m';
+    if (m == 0) return '${h}h';
+    return '${h}h ${m}m';
   }
 }
 
@@ -186,63 +163,6 @@ class _SectionLabel extends StatelessWidget {
         letterSpacing: 1.2,
         color: Color(0xFF9CA3AF),
       ),
-    );
-  }
-}
-
-class _AvailableTimeRow extends StatelessWidget {
-  const _AvailableTimeRow({
-    required this.hoursCtrl,
-    required this.minutesCtrl,
-    required this.onChanged,
-  });
-
-  final TextEditingController hoursCtrl;
-  final TextEditingController minutesCtrl;
-  final VoidCallback onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final inputDeco = InputDecoration(
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-      contentPadding:
-          const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      isDense: true,
-    );
-
-    return Row(
-      children: [
-        SizedBox(
-          width: 72,
-          child: TextField(
-            controller: hoursCtrl,
-            decoration: inputDeco.copyWith(suffixText: 'h'),
-            keyboardType: TextInputType.number,
-            inputFormatters: [
-              FilteringTextInputFormatter.digitsOnly,
-              _MaxValueFormatter(24),
-            ],
-            onChanged: (_) => onChanged(),
-          ),
-        ),
-        const SizedBox(width: 10),
-        SizedBox(
-          width: 72,
-          child: TextField(
-            controller: minutesCtrl,
-            decoration: inputDeco.copyWith(suffixText: 'm'),
-            keyboardType: TextInputType.number,
-            inputFormatters: [
-              FilteringTextInputFormatter.digitsOnly,
-              _MaxValueFormatter(59),
-            ],
-            onChanged: (_) => onChanged(),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Text('available',
-            style: TextStyle(fontSize: 14, color: Colors.grey[500])),
-      ],
     );
   }
 }
@@ -293,11 +213,10 @@ class _OverCapacityWarning extends StatelessWidget {
           const Icon(Icons.warning_amber_rounded,
               color: Color(0xFFDC2626), size: 18),
           const SizedBox(width: 8),
-          Expanded(
+          const Expanded(
             child: Text(
               'You\'re over capacity. Consider deferring some tasks.',
-              style: const TextStyle(
-                  fontSize: 13, color: Color(0xFFB91C1C)),
+              style: TextStyle(fontSize: 13, color: Color(0xFFB91C1C)),
             ),
           ),
           const SizedBox(width: 8),
@@ -332,10 +251,22 @@ class _SelectedTaskRow extends StatelessWidget {
               size: 18, color: Color(0xFF16A34A)),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              todo.title,
-              style: const TextStyle(
-                  fontSize: 14, color: Color(0xFF1A1A2E)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  todo.title,
+                  style: const TextStyle(
+                      fontSize: 14, color: Color(0xFF1A1A2E)),
+                ),
+                if (todo.dueDate != null)
+                  Text(
+                    'Due ${todo.dueDate!.year}-'
+                    '${todo.dueDate!.month.toString().padLeft(2, '0')}-'
+                    '${todo.dueDate!.day.toString().padLeft(2, '0')}',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  ),
+              ],
             ),
           ),
           if (estimate != null)
@@ -353,23 +284,5 @@ class _SelectedTaskRow extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Input formatter helpers
-// ---------------------------------------------------------------------------
-
-class _MaxValueFormatter extends TextInputFormatter {
-  const _MaxValueFormatter(this.max);
-  final int max;
-
-  @override
-  TextEditingValue formatEditUpdate(
-      TextEditingValue old, TextEditingValue current) {
-    if (current.text.isEmpty) return current;
-    final value = int.tryParse(current.text);
-    if (value == null || value > max) return old;
-    return current;
   }
 }

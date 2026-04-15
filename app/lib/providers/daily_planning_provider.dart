@@ -16,10 +16,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
+import '../models/todo.dart' show GtdState;
 import 'database_provider.dart';
 import 'user_constants.dart';
 
 export '../database/gtd_database.dart' show Todo;
+export '../models/todo.dart' show GtdState;
 
 // ---------------------------------------------------------------------------
 // Date helpers
@@ -36,7 +38,7 @@ String planningToday() {
 const _kCompletedDateKey = 'planning_ritual_completed_date';
 
 /// Total number of planning ritual steps (0-indexed max).
-const int _maxStepIndex = 3;
+const int _maxStepIndex = 5;
 
 // ---------------------------------------------------------------------------
 // Router refresh notifier
@@ -124,15 +126,25 @@ class DailyPlanningState {
   const DailyPlanningState({
     this.currentStep = 0,
     this.availableMinutes = 480, // 8 hours default
+    this.energyLevel,
   });
 
   final int currentStep;
   final int availableMinutes;
 
-  DailyPlanningState copyWith({int? currentStep, int? availableMinutes}) =>
+  /// User's self-reported energy level for today: 'low' | 'medium' | 'high'.
+  final String? energyLevel;
+
+  DailyPlanningState copyWith({
+    int? currentStep,
+    int? availableMinutes,
+    String? energyLevel,
+    bool clearEnergyLevel = false,
+  }) =>
       DailyPlanningState(
         currentStep: currentStep ?? this.currentStep,
         availableMinutes: availableMinutes ?? this.availableMinutes,
+        energyLevel: clearEnergyLevel ? null : (energyLevel ?? this.energyLevel),
       );
 }
 
@@ -164,7 +176,41 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     state = state.copyWith(availableMinutes: minutes);
   }
 
-  // ---- Task mutations (Step 1 — Next Actions) --------------------------------
+  void setEnergyLevel(String level) {
+    state = state.copyWith(energyLevel: level);
+  }
+
+  // ---- Inbox clarification (Step 0) -----------------------------------------
+
+  /// Updates mutable fields on an inbox item before it is processed.
+  Future<void> updateInboxItemFields(
+    String id, {
+    String? title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    bool clearDueDate = false,
+  }) =>
+      _db.todoDao.updateFields(
+        id, kLocalUserId,
+        title: title,
+        notes: notes,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+        dueDate: dueDate,
+        clearDueDate: clearDueDate,
+      );
+
+  /// Processes an inbox item to a GTD list (transitions out of inbox state).
+  Future<void> processInboxItem(String id, GtdState newState) =>
+      _db.inboxDao.processInboxItem(
+        id,
+        userId: kLocalUserId,
+        newState: newState.value,
+      );
+
+  // ---- Task mutations (Step 2 — Next Actions review) -------------------------
 
   Future<void> selectTask(String id) =>
       _db.todoDao.selectForToday(id, kLocalUserId, _sessionDate);
@@ -178,7 +224,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   Future<void> deferTask(String id) =>
       _db.todoDao.deferTaskToSomeday(id, kLocalUserId);
 
-  // ---- Task mutations (Step 2 — Scheduled) -----------------------------------
+  // ---- Task mutations (Step 3 — Scheduled review) ----------------------------
 
   Future<void> confirmScheduledTask(String id) =>
       _db.todoDao.selectForToday(id, kLocalUserId, _sessionDate);
@@ -186,7 +232,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   Future<void> rescheduleTask(String id, DateTime newDate) =>
       _db.todoDao.rescheduleTask(id, kLocalUserId, newDate);
 
-  // ---- Task mutations (Step 3 — Time Estimates) ------------------------------
+  // ---- Task mutations (Step 4 — Time Estimates) ------------------------------
 
   Future<void> setTimeEstimate(String id, int minutes) =>
       _db.todoDao.updateFields(id, kLocalUserId, timeEstimate: minutes);

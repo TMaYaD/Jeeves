@@ -26,7 +26,13 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 ### Epic 2: The Daily Execution Layer
 **Goal:** Prevent overwhelm by filtering the GTD inventory into a manageable daily plan.
-* **Daily Planning Ritual:** A guided workflow forcing users to review 'Next Actions'/'Scheduled' lists and select tasks for the current day.
+* **Daily Planning Ritual:** A guided 6-step workflow:
+    1. **Clarify Inbox (Step 1):** Process every inbox item before queueing work. For each item, the user answers "What's the expected outcome?", sets fields (energy level, time estimate, due date), and routes it to the correct GTD list (Next Action, Scheduled, Waiting For, Someday/Maybe, or Done). Advancing is gated on an empty inbox.
+    2. **Day Check-in (Step 2):** User reports today's energy level (Low / Medium / High) and available time (hours + minutes).
+    3. **Review Next Actions (Step 3):** Swipe-card review of unreviewed next-action tasks — select for today, skip, or defer to Someday/Maybe.
+    4. **Today's Schedule (Step 4):** Confirm or reschedule tasks that are due today.
+    5. **Time Estimates (Step 5):** Set time estimates on any selected task that is still missing one.
+    6. **Today's Plan (Step 6):** Summary showing tasks sorted by priority — due date (ascending) → scheduled → next actions. Capacity bar warns if planned time exceeds available time. "Start Day" finalises the plan.
 * **Bi-Directional Calendar Sync:** Split-screen UI. Left side: Today's selected tasks. Right side: Calendar (Google/Apple/Outlook sync). Users drag tasks onto the calendar to create timeboxes.
 * **Capacity Warning:** Visual indicators (e.g., progress bars or red text) if the total estimated time of selected tasks exceeds the available free time on the synced calendar.
 * **Focus Mode:** A minimalist execution UI that hides all other system lists and shows only the active task.
