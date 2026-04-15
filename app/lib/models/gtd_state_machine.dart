@@ -34,6 +34,7 @@ class GtdStateMachine {
       GtdState.done,
     },
     GtdState.nextAction: {
+      GtdState.inProgress,
       GtdState.scheduled,
       GtdState.waitingFor,
       GtdState.somedayMaybe,

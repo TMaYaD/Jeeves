@@ -15,14 +15,16 @@ final taskDetailTodoProvider =
   return db.todoDao.watchTodo(todoId, kLocalUserId);
 });
 
-/// Watches the Drift Tag rows associated with [todoId].
+/// Watches the Drift Tag rows associated with [todoId], scoped to the local user.
 final taskTagsProvider =
     StreamProvider.autoDispose.family<List<Tag>, String>((ref, todoId) {
   final db = ref.watch(databaseProvider);
   final query = db.select(db.tags).join([
     innerJoin(db.todoTags, db.todoTags.tagId.equalsExp(db.tags.id)),
+    innerJoin(db.todos, db.todos.id.equalsExp(db.todoTags.todoId)),
   ])
-    ..where(db.todoTags.todoId.equals(todoId));
+    ..where(db.todoTags.todoId.equals(todoId) &
+        db.todos.userId.equals(kLocalUserId));
   return query.map((row) => row.readTable(db.tags)).watch();
 });
 
@@ -30,10 +32,9 @@ final taskTagsProvider =
 final taskBlockersProvider =
     StreamProvider.autoDispose.family<List<Todo>, String>((ref, todoId) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao.watchTodo(todoId, kLocalUserId).asyncExpand((current) {
-    if (current == null) return const Stream.empty();
-    return db.todoDao.watchNextActionsAndBlocked(kLocalUserId).map((items) => items.where((t) => t.id != todoId).toList());
-  });
+  return db.todoDao
+      .watchNextActionsAndBlocked(kLocalUserId)
+      .map((items) => items.where((t) => t.id != todoId).toList());
 });
 
 /// Provides mutation operations for the task detail screen.
@@ -107,9 +108,11 @@ class TaskDetailNotifier {
       );
 
   Future<void> assignProject(String tagId) =>
-      _db.tagDao.enforceSingleProject(_todoId, tagId);
+      _db.tagDao.enforceSingleProject(_todoId, kLocalUserId, tagId);
 
   Future<void> clearProject() async {
+    final todo = await _db.todoDao.getTodo(_todoId, kLocalUserId);
+    if (todo == null) return;
     final projectTagIds = await (_db.select(_db.tags)
           ..where((t) => t.type.equals('project')))
         .map((t) => t.id)
@@ -123,10 +126,15 @@ class TaskDetailNotifier {
         .go();
   }
 
-  Future<void> assignContextTag(String tagId) =>
-      _db.tagDao.assignTag(_todoId, tagId);
+  Future<void> assignContextTag(String tagId) async {
+    final todo = await _db.todoDao.getTodo(_todoId, kLocalUserId);
+    if (todo == null) return;
+    await _db.tagDao.assignTag(_todoId, tagId);
+  }
 
   Future<void> removeContextTag(String tagId) async {
+    final todo = await _db.todoDao.getTodo(_todoId, kLocalUserId);
+    if (todo == null) return;
     await (_db.delete(_db.todoTags)
           ..where(
             (jt) => jt.todoId.equals(_todoId) & jt.tagId.equals(tagId),
@@ -159,20 +167,20 @@ class TaskDetailNotifier {
   /// Watch all next-action todos for this user (excluding this task itself),
   /// as candidates for the blocked-by picker.
   Stream<List<Todo>> watchPotentialBlockers() {
-    return _db.todoDao.watchTodo(_todoId, kLocalUserId).asyncExpand((current) {
-      if (current == null) return const Stream.empty();
-      return _db.todoDao
-          .watchNextActionsAndBlocked(kLocalUserId)
-          .map((items) => items.where((t) => t.id != _todoId).toList());
-    });
+    return _db.todoDao
+        .watchNextActionsAndBlocked(kLocalUserId)
+        .map((items) => items.where((t) => t.id != _todoId).toList());
   }
 
-  /// Watch all tag associations for this todo (returns Drift [Tag] rows).
+  /// Watch all tag associations for this todo (returns Drift [Tag] rows),
+  /// scoped to the local user.
   Stream<List<Tag>> watchTags() {
     final query = _db.select(_db.tags).join([
       innerJoin(_db.todoTags, _db.todoTags.tagId.equalsExp(_db.tags.id)),
+      innerJoin(_db.todos, _db.todos.id.equalsExp(_db.todoTags.todoId)),
     ])
-      ..where(_db.todoTags.todoId.equals(_todoId));
+      ..where(_db.todoTags.todoId.equals(_todoId) &
+          _db.todos.userId.equals(kLocalUserId));
     return query.map((row) => row.readTable(_db.tags)).watch();
   }
 }

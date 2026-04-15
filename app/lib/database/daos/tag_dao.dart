@@ -34,7 +34,15 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].
   ///
   /// Enforces the single-project-per-todo invariant on the client side.
-  Future<void> enforceSingleProject(String todoId, String newProjectTagId) async {
+  /// Silently returns without changes if [todoId] does not belong to [userId].
+  Future<void> enforceSingleProject(
+      String todoId, String userId, String newProjectTagId) async {
+    // Verify the todo belongs to this user before mutating
+    final todo = await (select(todos)
+          ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+        .getSingleOrNull();
+    if (todo == null) return;
+
     // Find IDs of all project-typed tags
     final projectTagIds = await (select(tags)..where((t) => t.type.equals('project')))
         .map((t) => t.id)

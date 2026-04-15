@@ -101,9 +101,9 @@ void main() {
       ));
 
       // Assign first project.
-      await db.tagDao.enforceSingleProject('todo2', 'p1');
+      await db.tagDao.enforceSingleProject('todo2', _userId, 'p1');
       // Reassign to second project.
-      await db.tagDao.enforceSingleProject('todo2', 'p2');
+      await db.tagDao.enforceSingleProject('todo2', _userId, 'p2');
 
       // Only the second project should remain.
       final rows = await (db.select(db.todoTags)

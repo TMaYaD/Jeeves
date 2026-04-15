@@ -19,6 +19,7 @@ void main() {
       test('inbox → somedayMaybe', () => expectValid(GtdState.inbox, GtdState.somedayMaybe));
       test('inbox → done', () => expectValid(GtdState.inbox, GtdState.done));
 
+      test('nextAction → inProgress', () => expectValid(GtdState.nextAction, GtdState.inProgress));
       test('nextAction → scheduled', () => expectValid(GtdState.nextAction, GtdState.scheduled));
       test('nextAction → waitingFor', () => expectValid(GtdState.nextAction, GtdState.waitingFor));
       test('nextAction → somedayMaybe', () => expectValid(GtdState.nextAction, GtdState.somedayMaybe));
@@ -60,9 +61,6 @@ void main() {
 
       // inbox cannot go to deferred
       test('inbox → deferred is rejected', () => expectInvalid(GtdState.inbox, GtdState.deferred));
-
-      // nextAction cannot go directly to inProgress
-      test('nextAction → inProgress is rejected', () => expectInvalid(GtdState.nextAction, GtdState.inProgress));
 
       // done is terminal
       test('done → nextAction is rejected', () => expectInvalid(GtdState.done, GtdState.nextAction));

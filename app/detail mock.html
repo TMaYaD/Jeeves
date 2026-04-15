@@ -4,6 +4,7 @@
 <head>
         <meta charset="utf-8" />
         <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+        <title>Task Detail Mock</title>
         <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap"
                 rel="stylesheet" />
@@ -41,11 +42,6 @@
                         min-height: max(884px, 100dvh);
                 }
         </style>
-        <style>
-                body {
-                        min-height: max(884px, 100dvh);
-                }
-        </style>
 </head>
 
 <body class="flex flex-col h-screen overflow-hidden">
@@ -63,7 +59,8 @@
                         <span>Marketing</span>
                 </div>
                 <div class="mb-4">
-                        <input class="w-full text-2xl font-bold border-none p-0 focus:ring-0 placeholder-gray-300"
+                        <label for="task-title" class="sr-only">Task title</label>
+                        <input id="task-title" class="w-full text-2xl font-bold border-none p-0 focus:ring-0 placeholder-gray-300"
                                 placeholder="Task Title" type="text" value="Draft Q3 Marketing Report" />
                 </div>
                 <div class="flex flex-wrap gap-2 mb-5">
@@ -128,7 +125,7 @@
                 </div>
         </main>
         <div class="p-6 bg-white border-t border-gray-100">
-                <button
+                <button type="button"
                         class="w-full bg-[#2563eb] text-white font-semibold py-4 rounded-xl shadow-lg shadow-blue-200 active:scale-[0.98] transition-transform">
                         Start
                 </button>

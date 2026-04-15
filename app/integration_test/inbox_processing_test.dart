@@ -40,11 +40,21 @@ void main() {
       );
     });
 
-    testWidgets('bottom navigation has four tabs', (tester) async {
+    testWidgets('navigation drawer has five GTD list items', (tester) async {
       app.main();
       await tester.pumpAndSettle(const Duration(seconds: 3));
 
-      expect(find.byType(NavigationDestination), findsNWidgets(4));
+      // Open the drawer
+      final ScaffoldState scaffold = tester.state(find.byType(Scaffold).first);
+      scaffold.openDrawer();
+      await tester.pumpAndSettle();
+
+      // Verify all five GTD navigation items are present in the drawer
+      expect(find.text('Inbox'), findsWidgets);
+      expect(find.text('Next Actions'), findsOneWidget);
+      expect(find.text('Waiting For'), findsOneWidget);
+      expect(find.text('Blocked'), findsOneWidget);
+      expect(find.text('Someday/Maybe'), findsOneWidget);
     });
 
     testWidgets('add item to inbox then tap to open detail view', (tester) async {
