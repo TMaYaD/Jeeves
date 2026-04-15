@@ -41,7 +41,9 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
   @override
   void initState() {
     super.initState();
-    _pageController = PageController();
+    _pageController = PageController(
+      initialPage: ref.read(dailyPlanningProvider).currentStep,
+    );
   }
 
   @override

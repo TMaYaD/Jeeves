@@ -108,6 +108,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           energyLevel: _energyLevel,
           timeEstimate: _timeEstimate,
           dueDate: _dueDate,
+          clearDueDate: _dueDate == null && widget.todo.dueDate != null,
         );
     return true;
   }
@@ -121,11 +122,10 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       setState(() => _dueDate = picked);
     }
 
-    final saved = await _saveFields(context);
-    if (!saved || !context.mounted) return;
-
     Object? error;
     try {
+      final saved = await _saveFields(context);
+      if (!saved || !context.mounted) return;
       await ref
           .read(dailyPlanningProvider.notifier)
           .processInboxItem(widget.todo.id, destination);
