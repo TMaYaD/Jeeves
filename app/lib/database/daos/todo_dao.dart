@@ -310,13 +310,17 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   }
 
   /// Updates the due date for a scheduled task (reschedule without state change).
+  ///
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to
+  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
   Future<void> rescheduleTask(
-      String id, String userId, DateTime newDueDate) async {
+      String id, String userId, DateTime newDueDate, {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
     await (update(todos)
           ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
         .write(TodosCompanion(
       dueDate: Value(newDueDate),
-      updatedAt: Value(DateTime.now()),
+      updatedAt: Value(ts),
     ));
   }
 
@@ -324,13 +328,19 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   ///
   /// Used when re-entering the planning ritual mid-day so the user can
   /// re-evaluate each task from scratch.
-  Future<void> clearTodaySelections(String userId, String date) async {
+  ///
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to
+  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
+  Future<void> clearTodaySelections(String userId, String date,
+      {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
     await (update(todos)
           ..where(
               (t) => t.userId.equals(userId) & t.dailySelectionDate.equals(date)))
-        .write(const TodosCompanion(
+        .write(TodosCompanion(
       selectedForToday: Value(null),
       dailySelectionDate: Value(null),
+      updatedAt: Value(ts),
     ));
   }
 

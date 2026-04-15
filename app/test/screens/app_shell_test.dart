@@ -47,6 +47,12 @@ Widget _buildShellOnly({
           final router = GoRouter(
             initialLocation: '/inbox',
             routes: [
+              // /planning is outside the ShellRoute — matches production router
+              // where PlanningRitualScreen renders without the AppShell wrapper.
+              GoRoute(
+                path: '/planning',
+                builder: (_, _) => const Scaffold(body: Text('Planning body')),
+              ),
               ShellRoute(
                 builder: (context, state, child) => AppShell(child: child),
                 routes: [
@@ -85,10 +91,6 @@ Widget _buildShellOnly({
                   GoRoute(
                     path: '/scheduled',
                     builder: (_, _) => const Scaffold(body: Text('Scheduled body')),
-                  ),
-                  GoRoute(
-                    path: '/planning',
-                    builder: (_, _) => const Scaffold(body: Text('Planning body')),
                   ),
                 ],
               ),

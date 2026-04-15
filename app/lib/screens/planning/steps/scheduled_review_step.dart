@@ -31,15 +31,25 @@ class ScheduledReviewStep extends ConsumerWidget {
           separatorBuilder: (context, i) => const SizedBox(height: 8),
           itemBuilder: (context, i) => _ScheduledCard(
             todo: items[i],
-            onConfirm: () => ref
-                .read(dailyPlanningProvider.notifier)
-                .confirmScheduledTask(items[i].id),
-            onReschedule: () =>
-                _pickNewDate(context, ref, items[i]),
+            onConfirm: () => _handleConfirm(context, ref, items[i]),
+            onReschedule: () => _pickNewDate(context, ref, items[i]),
           ),
         );
       },
     );
+  }
+
+  Future<void> _handleConfirm(
+      BuildContext context, WidgetRef ref, Todo todo) async {
+    try {
+      await ref.read(dailyPlanningProvider.notifier).confirmScheduledTask(todo.id);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error confirming task: $e')),
+      );
+    }
   }
 
   Future<void> _pickNewDate(
@@ -57,7 +67,15 @@ class ScheduledReviewStep extends ConsumerWidget {
       helpText: 'Reschedule to',
     );
     if (picked != null) {
-      await notifier.rescheduleTask(todoId, picked);
+      try {
+        await notifier.rescheduleTask(todoId, picked);
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error rescheduling task: $e')),
+        );
+      }
     }
   }
 }

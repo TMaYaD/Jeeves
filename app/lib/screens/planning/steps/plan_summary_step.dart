@@ -143,9 +143,20 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
   }
 
   Future<void> _startDay(BuildContext context) async {
-    await ref.read(dailyPlanningProvider.notifier).startDay();
-    if (!mounted) return;
-    // ignore: use_build_context_synchronously
+    // Capture any error so all context usage stays after a single mounted check.
+    Object? startError;
+    try {
+      await ref.read(dailyPlanningProvider.notifier).startDay();
+    } catch (e) {
+      startError = e;
+    }
+    if (!context.mounted) return;
+    if (startError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to start day: $startError')),
+      );
+      return;
+    }
     context.go('/next-actions');
   }
 
@@ -329,7 +340,11 @@ class _SelectedTaskRow extends StatelessWidget {
           ),
           if (estimate != null)
             Text(
-              estimate < 60 ? '${estimate}m' : '${estimate ~/ 60}h',
+              estimate < 60
+                  ? '${estimate}m'
+                  : estimate % 60 == 0
+                      ? '${estimate ~/ 60}h'
+                      : '${estimate ~/ 60}h ${estimate % 60}m',
               style: TextStyle(
                   fontSize: 13,
                   color: Colors.grey[500],
