@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/tags_provider.dart';
+import '../providers/daily_planning_provider.dart';
 
 /// Persistent scaffold with a collapsible left drawer navigation.
 ///
@@ -35,7 +36,8 @@ class CustomDrawer extends ConsumerWidget {
     final waitingForCount = ref.watch(waitingForProvider).asData?.value.length ?? 0;
     final blockedCount = ref.watch(blockedTasksProvider).asData?.value.length ?? 0;
     final somedayCount = ref.watch(somedayMaybeProvider).asData?.value.length ?? 0;
-    
+    final scheduledCount = ref.watch(scheduledProvider).asData?.value.length ?? 0;
+
     final projectTags = ref.watch(projectTagsProvider).asData?.value ?? [];
     final contextTags = ref.watch(contextTagsProvider).asData?.value ?? [];
 
@@ -60,10 +62,31 @@ class CustomDrawer extends ConsumerWidget {
                   _buildSectionHeader('GTD LISTS'),
                   _buildNavItem(context, icon: Icons.inbox_outlined, title: 'Inbox', path: '/inbox', location: location, count: inboxCount),
                   _buildNavItem(context, icon: Icons.check_circle_outline, title: 'Next Actions', path: '/next-actions', location: location, count: nextActionsCount),
+                  _buildNavItem(context, icon: Icons.event_outlined, title: 'Scheduled', path: '/scheduled', location: location, count: scheduledCount),
                   _buildNavItem(context, icon: Icons.hourglass_empty, title: 'Waiting For', path: '/waiting-for', location: location, count: waitingForCount),
                   _buildNavItem(context, icon: Icons.block, title: 'Blocked', path: '/blocked', location: location, count: blockedCount),
                   _buildNavItem(context, icon: Icons.star_border, title: 'Someday/Maybe', path: '/someday-maybe', location: location, count: somedayCount),
-                  
+
+                  const SizedBox(height: 8),
+                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                  const SizedBox(height: 8),
+
+                  // Re-plan Day — re-enters the daily planning ritual
+                  _buildSectionHeader('PLANNING'),
+                  ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+                    leading: const Icon(Icons.wb_sunny_outlined, color: Color(0xFF6B7280)),
+                    title: const Text(
+                      'Re-plan Day',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+                    ),
+                    onTap: () async {
+                      Navigator.pop(context); // close drawer first
+                      await ref.read(dailyPlanningProvider.notifier).reEnterPlanning();
+                      if (context.mounted) context.go('/planning');
+                    },
+                  ),
+
                   const SizedBox(height: 16),
                   _buildSectionHeader('CONTEXTS'),
                   Padding(

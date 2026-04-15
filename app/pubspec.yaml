@@ -48,6 +48,9 @@ dependencies:
   # Connectivity
   connectivity_plus: ^6.1.1
 
+  # Local key-value persistence (planning ritual state)
+  shared_preferences: ^2.3.3
+
   # Utilities
   uuid: ^4.4.0
   freezed_annotation: ^3.1.0

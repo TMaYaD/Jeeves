@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/providers/connectivity_provider.dart';
+import 'package:jeeves/providers/daily_planning_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
@@ -24,8 +25,10 @@ Widget _buildShellOnly({
       waitingForProvider.overrideWith((_) => Stream.value([])),
       blockedTasksProvider.overrideWith((_) => Stream.value([])),
       somedayMaybeProvider.overrideWith((_) => Stream.value([])),
+      scheduledProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
+      todaySelectedTasksProvider.overrideWith((_) => Stream.value([])),
     ],
     child: MaterialApp(
       home: Builder(
@@ -98,7 +101,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('GTD LISTS'), findsOneWidget);
-    expect(find.text('CONTEXTS'), findsOneWidget);
+    expect(find.text('PLANNING'), findsOneWidget);
+    // Scroll the drawer to reveal sections further down.
+    await tester.drag(find.byType(Drawer), const Offset(0, -300));
+    await tester.pumpAndSettle();
     expect(find.text('PROJECTS'), findsOneWidget);
   });
 

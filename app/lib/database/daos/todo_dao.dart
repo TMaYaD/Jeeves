@@ -201,6 +201,124 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Daily planning queries
+  // ---------------------------------------------------------------------------
+
+  /// Formats a [DateTime] as an ISO-8601 date string (yyyy-MM-dd).
+  static String _fmtDate(DateTime dt) =>
+      '${dt.year.toString().padLeft(4, '0')}-'
+      '${dt.month.toString().padLeft(2, '0')}-'
+      '${dt.day.toString().padLeft(2, '0')}';
+
+  /// Stream of next-action todos for [userId] not yet reviewed today.
+  ///
+  /// A task is "not yet reviewed" when its [dailySelectionDate] is null or
+  /// does not equal [today] (ISO-8601 date string). Blocked tasks are excluded
+  /// to match the standard next-actions view.
+  Stream<List<Todo>> watchNextActionsForPlanning(String userId, String today) {
+    return _watchAllForUser(userId).map((all) {
+      final byId = {for (final t in all) t.id: t};
+      final pending = all
+          .where((t) =>
+              t.state == GtdState.nextAction.value &&
+              (t.dailySelectionDate == null || t.dailySelectionDate != today))
+          .toList();
+      return _filterUnblocked(pending, byId);
+    });
+  }
+
+  /// Stream of scheduled todos with a due date on [today] that have not yet
+  /// been confirmed (i.e. [dailySelectionDate] is null or != [today]).
+  Stream<List<Todo>> watchScheduledDueToday(String userId, String today) {
+    return _watchAllForUser(userId).map((all) => all
+        .where((t) =>
+            t.state == GtdState.scheduled.value &&
+            t.dueDate != null &&
+            _fmtDate(t.dueDate!) == today &&
+            (t.dailySelectionDate == null || t.dailySelectionDate != today))
+        .toList());
+  }
+
+  /// Stream of todos selected for [today] (selectedForToday == true and
+  /// dailySelectionDate == [today]).
+  Stream<List<Todo>> watchSelectedForToday(String userId, String today) {
+    return _watchAllForUser(userId).map((all) => all
+        .where((t) =>
+            t.selectedForToday == true && t.dailySelectionDate == today)
+        .toList());
+  }
+
+  /// Stream of todos selected for [today] that are missing a time estimate.
+  Stream<List<Todo>> watchSelectedTasksMissingEstimates(
+      String userId, String today) {
+    return watchSelectedForToday(userId, today)
+        .map((selected) => selected.where((t) => t.timeEstimate == null).toList());
+  }
+
+  /// Marks [id] as selected for [today].
+  Future<void> selectForToday(String id, String userId, String date) async {
+    await (update(todos)
+          ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+        .write(TodosCompanion(
+      selectedForToday: const Value(true),
+      dailySelectionDate: Value(date),
+      updatedAt: Value(DateTime.now()),
+    ));
+  }
+
+  /// Marks [id] as skipped for [today].
+  Future<void> skipForToday(String id, String userId, String date) async {
+    await (update(todos)
+          ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+        .write(TodosCompanion(
+      selectedForToday: const Value(false),
+      dailySelectionDate: Value(date),
+      updatedAt: Value(DateTime.now()),
+    ));
+  }
+
+  /// Undoes a review decision — resets [selectedForToday] and
+  /// [dailySelectionDate] so the task reappears in the planning list.
+  Future<void> undoReview(String id, String userId) async {
+    await (update(todos)
+          ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+        .write(const TodosCompanion(
+      selectedForToday: Value(null),
+      dailySelectionDate: Value(null),
+    ));
+  }
+
+  /// Defers [id] to Someday/Maybe via the GTD state machine.
+  Future<void> deferTaskToSomeday(String id, String userId) async {
+    await transitionState(id, userId, GtdState.somedayMaybe);
+  }
+
+  /// Updates the due date for a scheduled task (reschedule without state change).
+  Future<void> rescheduleTask(
+      String id, String userId, DateTime newDueDate) async {
+    await (update(todos)
+          ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+        .write(TodosCompanion(
+      dueDate: Value(newDueDate),
+      updatedAt: Value(DateTime.now()),
+    ));
+  }
+
+  /// Resets planning selections for all todos reviewed on [date].
+  ///
+  /// Used when re-entering the planning ritual mid-day so the user can
+  /// re-evaluate each task from scratch.
+  Future<void> clearTodaySelections(String userId, String date) async {
+    await (update(todos)
+          ..where(
+              (t) => t.userId.equals(userId) & t.dailySelectionDate.equals(date)))
+        .write(const TodosCompanion(
+      selectedForToday: Value(null),
+      dailySelectionDate: Value(null),
+    ));
+  }
+
   /// Update mutable todo fields (title, notes, energy level, time estimate).
   Future<void> updateFields(
     String todoId,
