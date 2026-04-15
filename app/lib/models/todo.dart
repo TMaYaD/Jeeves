@@ -11,7 +11,9 @@ enum GtdState {
   nextAction,
   waitingFor,
   scheduled,
+  inProgress,
   somedayMaybe,
+  deferred,
   done;
 
   String get value => switch (this) {
@@ -19,7 +21,9 @@ enum GtdState {
         GtdState.nextAction => 'next_action',
         GtdState.waitingFor => 'waiting_for',
         GtdState.scheduled => 'scheduled',
+        GtdState.inProgress => 'in_progress',
         GtdState.somedayMaybe => 'someday_maybe',
+        GtdState.deferred => 'deferred',
         GtdState.done => 'done',
       };
 
@@ -28,9 +32,23 @@ enum GtdState {
         'next_action' => GtdState.nextAction,
         'waiting_for' => GtdState.waitingFor,
         'scheduled' => GtdState.scheduled,
+        'in_progress' => GtdState.inProgress,
         'someday_maybe' => GtdState.somedayMaybe,
+        'deferred' => GtdState.deferred,
         'done' => GtdState.done,
         _ => GtdState.inbox,
+      };
+
+  /// Human-readable display label.
+  String get displayName => switch (this) {
+        GtdState.inbox => 'Inbox',
+        GtdState.nextAction => 'Next Actions',
+        GtdState.waitingFor => 'Waiting For',
+        GtdState.scheduled => 'Scheduled',
+        GtdState.inProgress => 'In Progress',
+        GtdState.somedayMaybe => 'Someday / Maybe',
+        GtdState.deferred => 'Deferred',
+        GtdState.done => 'Done',
       };
 }
 

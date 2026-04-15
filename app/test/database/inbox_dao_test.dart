@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/gtd_state_machine.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase.forTesting(NativeDatabase.memory());
@@ -86,6 +87,22 @@ void main() {
 
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items, isEmpty);
+    });
+
+    test('processInboxItem rejects invalid transition (inbox → inProgress)', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'bad', title: 'Bad transition'));
+      expect(
+        () => db.inboxDao.processInboxItem('bad', newState: 'in_progress'),
+        throwsA(isA<InvalidStateTransitionException>()),
+      );
+    });
+
+    test('processInboxItem rejects invalid transition (inbox → scheduled)', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'bad2', title: 'Also bad'));
+      expect(
+        () => db.inboxDao.processInboxItem('bad2', newState: 'scheduled'),
+        throwsA(isA<InvalidStateTransitionException>()),
+      );
     });
 
     test('watchInbox returns newest first', () async {

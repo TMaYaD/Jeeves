@@ -31,6 +31,7 @@ Todo _todo(String id, String title) => Todo(
       captureSource: 'manual',
       locationId: null,
       userId: 'local',
+      timeSpentMinutes: 0,
     );
 
 /// Build the app with fully controlled provider overrides so no platform

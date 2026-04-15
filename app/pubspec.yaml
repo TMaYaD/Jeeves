@@ -42,6 +42,9 @@ dependencies:
   # AI / NLP helpers
   # (calls backend AI endpoint via api_service)
 
+  # Navigation
+  go_router: ^14.0.0
+
   # Connectivity
   connectivity_plus: ^6.1.1
 

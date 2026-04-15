@@ -35,6 +35,16 @@ class Todos extends Table {
   TextColumn get locationId => text().nullable()();
   TextColumn get userId => text()();
 
+  /// ISO-8601 timestamp; set when entering in_progress, cleared on exit.
+  TextColumn get inProgressSince => text().nullable()();
+
+  /// Cumulative time spent in minutes across all in_progress stints.
+  IntColumn get timeSpentMinutes =>
+      integer().withDefault(const Constant(0))();
+
+  /// ID of another todo that must be completed before this one is actionable.
+  TextColumn get blockedByTodoId => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

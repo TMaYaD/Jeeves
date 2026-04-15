@@ -3,6 +3,7 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../../models/gtd_state_machine.dart';
 import '../../models/todo.dart' show GtdState;
 import '../gtd_database.dart';
 
@@ -48,8 +49,19 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   }
 
   /// Transition a todo out of inbox to [newState].
-  Future<void> processInboxItem(String todoId, {required String newState}) {
-    return (update(todos)..where((t) => t.id.equals(todoId)))
+  ///
+  /// Validates the transition via [GtdStateMachine] before writing.
+  /// Throws [InvalidStateTransitionException] for invalid moves.
+  Future<void> processInboxItem(String todoId, {required String newState}) async {
+    final row = await (select(todos)..where((t) => t.id.equals(todoId)))
+        .getSingleOrNull();
+    if (row == null) return;
+
+    final from = GtdState.fromString(row.state);
+    final to = GtdState.fromString(newState);
+    GtdStateMachine.validate(from, to);
+
+    await (update(todos)..where((t) => t.id.equals(todoId)))
         .write(TodosCompanion(state: Value(newState)));
   }
 }

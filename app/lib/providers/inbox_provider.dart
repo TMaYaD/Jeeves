@@ -7,12 +7,13 @@ import '../models/todo.dart' hide Todo;
 import 'database_provider.dart';
 
 /// Placeholder user id until authentication is wired up.
-const _localUserId = 'local';
+/// Exported so other providers can reference the same constant.
+const kLocalUserId = 'local';
 
 /// Stream of all inbox todos, newest first.
 final inboxItemsProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.inboxDao.watchInbox(_localUserId);
+  return db.inboxDao.watchInbox(kLocalUserId);
 });
 
 /// Notifier exposing inbox mutation operations.
@@ -39,7 +40,7 @@ class InboxNotifier {
       notes: Value(notes),
       state: Value(GtdState.inbox.value),
       captureSource: const Value('manual'),
-      userId: const Value(_localUserId),
+      userId: const Value(kLocalUserId),
       createdAt: Value(now),
       updatedAt: Value(now),
     ));
