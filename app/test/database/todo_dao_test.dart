@@ -41,13 +41,13 @@ void main() {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
-    tearDown(() => db.close());
+    tearDown(() async => db.close());
 
     test('valid transition updates state', () async {
       await _insertTodo(db, id: 'a', title: 'Task A');
       await db.todoDao.transitionState('a', _userId, GtdState.nextAction);
 
-      final row = await db.todoDao.getTodo('a');
+      final row = await db.todoDao.getTodo('a', _userId);
       expect(row?.state, GtdState.nextAction.value);
     });
 
@@ -65,7 +65,7 @@ void main() {
       await db.todoDao
           .transitionState('c', _userId, GtdState.inProgress, now: startTime);
 
-      final row = await db.todoDao.getTodo('c');
+      final row = await db.todoDao.getTodo('c', _userId);
       expect(row?.state, GtdState.inProgress.value);
       expect(row?.inProgressSince, startTime.toIso8601String());
     });
@@ -81,7 +81,7 @@ void main() {
       await db.todoDao
           .transitionState('d', _userId, GtdState.done, now: finish);
 
-      final row = await db.todoDao.getTodo('d');
+      final row = await db.todoDao.getTodo('d', _userId);
       expect(row?.state, GtdState.done.value);
       expect(row?.timeSpentMinutes, 2);
       expect(row?.inProgressSince, equals(null));
@@ -110,7 +110,7 @@ void main() {
       await db.todoDao
           .transitionState('e', _userId, GtdState.done, now: end2);
 
-      final row = await db.todoDao.getTodo('e');
+      final row = await db.todoDao.getTodo('e', _userId);
       expect(row?.timeSpentMinutes, 3); // 1 + 2
       expect(row?.inProgressSince, equals(null));
     });
@@ -127,7 +127,7 @@ void main() {
         now: start.add(const Duration(minutes: 10)),
       );
 
-      final row = await db.todoDao.getTodo('f');
+      final row = await db.todoDao.getTodo('f', _userId);
       expect(row?.inProgressSince, equals(null));
     });
   });
@@ -136,7 +136,7 @@ void main() {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
-    tearDown(() => db.close());
+    tearDown(() async => db.close());
 
     test('watchWaitingFor returns only waiting_for todos', () async {
       await _insertTodo(db, id: 'w1', title: 'Waiting 1');
@@ -205,13 +205,13 @@ void main() {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
-    tearDown(() => db.close());
+    tearDown(() async => db.close());
 
     test('updates title and notes', () async {
       await _insertTodo(db, id: 'u1', title: 'Original');
       await db.todoDao.updateFields('u1', _userId, title: 'Updated', notes: 'Some notes');
 
-      final row = await db.todoDao.getTodo('u1');
+      final row = await db.todoDao.getTodo('u1', _userId);
       expect(row?.title, 'Updated');
       expect(row?.notes, 'Some notes');
     });
@@ -222,7 +222,7 @@ void main() {
           .write(const TodosCompanion(blockedByTodoId: Value('other')));
 
       await db.todoDao.updateFields('u2', _userId, clearBlockedBy: true);
-      final row = await db.todoDao.getTodo('u2');
+      final row = await db.todoDao.getTodo('u2', _userId);
       expect(row?.blockedByTodoId, equals(null));
     });
   });

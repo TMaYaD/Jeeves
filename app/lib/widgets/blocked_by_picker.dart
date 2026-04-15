@@ -17,6 +17,14 @@ class BlockedByPickerWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Guard against a stale blocker ID that is no longer in potentialBlockers:
+    // DropdownButtonFormField asserts that initialValue matches a menu item.
+    final safeInitialBlockerId = potentialBlockers.any(
+      (t) => t.id == currentBlockerId,
+    )
+        ? currentBlockerId
+        : null;
+
     return DropdownButtonFormField<String?>(
       decoration: const InputDecoration(
         labelText: 'Blocked by',
@@ -24,7 +32,7 @@ class BlockedByPickerWidget extends StatelessWidget {
         border: OutlineInputBorder(),
         contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       ),
-      initialValue: currentBlockerId,
+      initialValue: safeInitialBlockerId,
       items: [
         const DropdownMenuItem<String?>(
           value: null,

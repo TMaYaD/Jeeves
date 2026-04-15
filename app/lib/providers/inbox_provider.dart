@@ -5,10 +5,9 @@ import 'package:uuid/uuid.dart';
 import '../database/gtd_database.dart';
 import '../models/todo.dart' hide Todo;
 import 'database_provider.dart';
+import 'user_constants.dart';
 
-/// Placeholder user id until authentication is wired up.
-/// Exported so other providers can reference the same constant.
-const kLocalUserId = 'local';
+export 'user_constants.dart' show kLocalUserId;
 
 /// Stream of all inbox todos, newest first.
 final inboxItemsProvider = StreamProvider<List<Todo>>((ref) {

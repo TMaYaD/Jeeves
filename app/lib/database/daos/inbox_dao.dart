@@ -50,18 +50,43 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
 
   /// Transition a todo out of inbox to [newState].
   ///
-  /// Validates the transition via [GtdStateMachine] before writing.
-  /// Throws [InvalidStateTransitionException] for invalid moves.
-  Future<void> processInboxItem(String todoId, {required String newState}) async {
-    final row = await (select(todos)..where((t) => t.id.equals(todoId)))
-        .getSingleOrNull();
-    if (row == null) return;
+  /// - Scoped to [userId] to prevent cross-user mutations.
+  /// - Rejects the operation if the row is not currently in the inbox state.
+  /// - Validates the transition via [GtdStateMachine] before writing.
+  /// - Runs the read, validation, and write atomically inside a transaction to
+  ///   prevent check-then-write races.
+  /// - Throws [InvalidStateTransitionException] for invalid moves.
+  Future<void> processInboxItem(
+    String todoId, {
+    required String userId,
+    required String newState,
+  }) async {
+    await transaction(() async {
+      final row = await (select(todos)
+            ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+          .getSingleOrNull();
+      if (row == null) return;
 
-    final from = GtdState.fromString(row.state);
-    final to = GtdState.fromString(newState);
-    GtdStateMachine.validate(from, to);
+      final from = GtdState.fromString(row.state);
+      if (from != GtdState.inbox) {
+        throw ArgumentError.value(
+          row.state,
+          'state',
+          'Todo is not in inbox',
+        );
+      }
+      final to = GtdState.fromString(newState);
+      GtdStateMachine.validate(from, to);
 
-    await (update(todos)..where((t) => t.id.equals(todoId)))
-        .write(TodosCompanion(state: Value(newState)));
+      final updated = await (update(todos)
+            ..where((t) =>
+                t.id.equals(todoId) &
+                t.userId.equals(userId) &
+                t.state.equals(row.state)))
+          .write(TodosCompanion(state: Value(newState)));
+      if (updated != 1) {
+        throw StateError('Todo state changed during transition; retry');
+      }
+    });
   }
 }

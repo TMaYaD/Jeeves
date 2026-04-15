@@ -18,14 +18,18 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // Single-todo helpers
   // ---------------------------------------------------------------------------
 
-  /// Returns a single todo by [todoId], or null if not found.
-  Future<Todo?> getTodo(String todoId) {
-    return (select(todos)..where((t) => t.id.equals(todoId))).getSingleOrNull();
+  /// Returns a single todo by [todoId] scoped to [userId], or null if not found.
+  Future<Todo?> getTodo(String todoId, String userId) {
+    return (select(todos)
+          ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+        .getSingleOrNull();
   }
 
-  /// Stream that re-emits a single todo whenever it changes.
-  Stream<Todo?> watchTodo(String todoId) {
-    return (select(todos)..where((t) => t.id.equals(todoId))).watchSingleOrNull();
+  /// Stream that re-emits a single todo (scoped to [userId]) whenever it changes.
+  Stream<Todo?> watchTodo(String todoId, String userId) {
+    return (select(todos)
+          ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+        .watchSingleOrNull();
   }
 
   // ---------------------------------------------------------------------------
@@ -120,20 +124,22 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     GtdState newState, {
     DateTime? now,
   }) async {
-    final row = await (select(todos)
-          ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
-        .getSingleOrNull();
-    if (row == null) return;
+    await transaction(() async {
+      final row = await (select(todos)
+            ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+          .getSingleOrNull();
+      if (row == null) return;
 
-    final from = GtdState.fromString(row.state);
-    GtdStateMachine.validate(from, newState);
+      final from = GtdState.fromString(row.state);
+      GtdStateMachine.validate(from, newState);
 
-    final effectiveNow = now ?? DateTime.now();
-    final companion = _buildTransitionCompanion(row, newState, effectiveNow);
+      final effectiveNow = now ?? DateTime.now();
+      final companion = _buildTransitionCompanion(row, newState, effectiveNow);
 
-    await (update(todos)
-          ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
-        .write(companion);
+      await (update(todos)
+            ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+          .write(companion);
+    });
   }
 
   TodosCompanion _buildTransitionCompanion(
@@ -179,6 +185,27 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     String? blockedByTodoId,
     bool clearBlockedBy = false,
   }) async {
+    if (!clearBlockedBy && blockedByTodoId != null) {
+      if (blockedByTodoId == todoId) {
+        throw ArgumentError.value(
+          blockedByTodoId,
+          'blockedByTodoId',
+          'A todo cannot block itself',
+        );
+      }
+      final blocker = await (select(todos)
+            ..where(
+                (t) => t.id.equals(blockedByTodoId) & t.userId.equals(userId)))
+          .getSingleOrNull();
+      if (blocker == null) {
+        throw ArgumentError.value(
+          blockedByTodoId,
+          'blockedByTodoId',
+          'Blocking todo was not found for this user',
+        );
+      }
+    }
+
     final companion = TodosCompanion(
       updatedAt: Value(DateTime.now()),
       title: title != null ? Value(title) : const Value.absent(),

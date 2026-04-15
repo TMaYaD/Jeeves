@@ -13,8 +13,6 @@ import '../test_helpers.dart';
 // Helpers
 // ---------------------------------------------------------------------------
 
-const _userId = 'local';
-
 /// Builds a standalone GtdListScreen with a custom stream, bypassing routing.
 Widget _buildScreen(Stream<List<Todo>> stream) {
   final provider = StreamProvider<List<Todo>>((_) => stream);
@@ -35,7 +33,7 @@ Todo _todo(String id, String title, {String state = 'next_action'}) => Todo(
       completed: false,
       createdAt: DateTime(2024, 1, 1),
       state: state,
-      userId: _userId,
+      userId: kLocalUserId,
       timeSpentMinutes: 0,
     );
 

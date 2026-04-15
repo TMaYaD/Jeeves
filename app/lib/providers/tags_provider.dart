@@ -4,7 +4,7 @@ import 'package:uuid/uuid.dart';
 
 import '../database/gtd_database.dart';
 import 'database_provider.dart';
-import 'inbox_provider.dart' show kLocalUserId;
+import 'user_constants.dart' show kLocalUserId;
 
 /// Stream of all project tags for the local user.
 final projectTagsProvider = StreamProvider<List<Tag>>((ref) {
@@ -27,15 +27,24 @@ class TagNotifier {
   final Ref _ref;
 
   Future<Tag> createTag(String name, String type) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed.length > 100) {
+      throw ArgumentError.value(
+        name,
+        'name',
+        'Tag name must be between 1 and 100 characters.',
+      );
+    }
+
     final db = _ref.read(databaseProvider);
     final id = const Uuid().v4();
     final companion = TagsCompanion(
       id: Value(id),
-      name: Value(name.trim()),
+      name: Value(trimmed),
       type: Value(type),
       userId: const Value(kLocalUserId),
     );
     await db.tagDao.upsertTag(companion);
-    return Tag(id: id, name: name.trim(), type: type, userId: kLocalUserId);
+    return Tag(id: id, name: trimmed, type: type, userId: kLocalUserId);
   }
 }

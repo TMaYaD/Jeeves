@@ -128,25 +128,39 @@ class _ProjectPickerDialogState extends State<_ProjectPickerDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (widget.currentId != null)
-              ListTile(
-                leading: const Icon(Icons.clear),
-                title: const Text('Remove project'),
-                onTap: () => Navigator.of(context)
-                    .pop(const _ProjectPickerResult.none()),
+            // Project list in a bounded scrollable area so the dialog does not
+            // overflow when the project count grows beyond the viewport.
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.4,
               ),
-            for (final p in widget.projects)
-              ListTile(
-                leading: Icon(
-                  Icons.folder,
-                  color: p.id == widget.currentId
-                      ? Theme.of(context).colorScheme.primary
-                      : null,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (widget.currentId != null)
+                      ListTile(
+                        leading: const Icon(Icons.clear),
+                        title: const Text('Remove project'),
+                        onTap: () => Navigator.of(context)
+                            .pop(const _ProjectPickerResult.none()),
+                      ),
+                    for (final p in widget.projects)
+                      ListTile(
+                        leading: Icon(
+                          Icons.folder,
+                          color: p.id == widget.currentId
+                              ? Theme.of(context).colorScheme.primary
+                              : null,
+                        ),
+                        title: Text(p.name),
+                        onTap: () => Navigator.of(context)
+                            .pop(_ProjectPickerResult.select(p)),
+                      ),
+                  ],
                 ),
-                title: Text(p.name),
-                onTap: () => Navigator.of(context)
-                    .pop(_ProjectPickerResult.select(p)),
               ),
+            ),
             if (_creatingNew)
               Padding(
                 padding: const EdgeInsets.only(top: 8),

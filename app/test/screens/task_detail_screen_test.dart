@@ -44,7 +44,7 @@ Future<Todo> _insertAt(
       Variable.withInt(0),
     ],
   );
-  return (await db.todoDao.getTodo(id))!;
+  return (await db.todoDao.getTodo(id, _userId))!;
 }
 
 /// Builds the app with an `/inbox` base route so that [GoRouter.pop] works
@@ -124,7 +124,7 @@ void main() {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
-    tearDown(() => db.close());
+    tearDown(() async => db.close());
 
     testWidgets('shows title field with current title', (tester) async {
       final todo = await _insertAt(db, id: 'task1', title: 'Fix the bug');
@@ -197,7 +197,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       // Verify the DB was updated.
-      final row = await db.todoDao.getTodo('task5');
+      final row = await db.todoDao.getTodo('task5', _userId);
       expect(row?.state, GtdState.nextAction.value);
       await tester.pump(const Duration(milliseconds: 100));
     });

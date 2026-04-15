@@ -23,6 +23,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   late TextEditingController _titleController;
   late TextEditingController _notesController;
   late TextEditingController _timeEstimateController;
+  late FocusNode _titleFocusNode;
+  late FocusNode _notesFocusNode;
 
   bool _titleInitialized = false;
   bool _notesInitialized = false;
@@ -33,10 +35,33 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     _titleController = TextEditingController();
     _notesController = TextEditingController();
     _timeEstimateController = TextEditingController();
+
+    _titleFocusNode = FocusNode();
+    _notesFocusNode = FocusNode();
+
+    _titleFocusNode.addListener(() {
+      if (!_titleFocusNode.hasFocus && mounted) {
+        ref
+            .read(taskDetailNotifierProvider(widget.todoId))
+            .updateTitle(_titleController.text)
+            .catchError((e) => debugPrint('Error saving title: $e'));
+      }
+    });
+
+    _notesFocusNode.addListener(() {
+      if (!_notesFocusNode.hasFocus && mounted) {
+        ref
+            .read(taskDetailNotifierProvider(widget.todoId))
+            .updateNotes(_notesController.text)
+            .catchError((e) => debugPrint('Error saving notes: $e'));
+      }
+    });
   }
 
   @override
   void dispose() {
+    _titleFocusNode.dispose();
+    _notesFocusNode.dispose();
     _titleController.dispose();
     _notesController.dispose();
     _timeEstimateController.dispose();
@@ -105,6 +130,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 // Title
                 TextField(
                   controller: _titleController,
+                  focusNode: _titleFocusNode,
                   decoration: const InputDecoration(
                     labelText: 'Title',
                     border: OutlineInputBorder(),
@@ -113,24 +139,19 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
                   ),
-                  onEditingComplete: () => _notifier
-                      .updateTitle(_titleController.text)
-                      .ignore(),
                 ),
                 const SizedBox(height: 16),
 
                 // Notes
                 TextField(
                   controller: _notesController,
+                  focusNode: _notesFocusNode,
                   decoration: const InputDecoration(
                     labelText: 'Notes',
                     border: OutlineInputBorder(),
                     alignLabelWithHint: true,
                   ),
                   maxLines: 4,
-                  onEditingComplete: () => _notifier
-                      .updateNotes(_notesController.text)
-                      .ignore(),
                 ),
                 const SizedBox(height: 16),
 
@@ -185,9 +206,20 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                   keyboardType: TextInputType.number,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   onEditingComplete: () {
-                    final val = int.tryParse(_timeEstimateController.text);
-                    if (val != null) {
-                      _notifier.setTimeEstimate(val).ignore();
+                    final text = _timeEstimateController.text.trim();
+                    if (text.isEmpty) {
+                      _notifier
+                          .clearTimeEstimate()
+                          .catchError(
+                              (e) => debugPrint('Error clearing estimate: $e'));
+                    } else {
+                      final val = int.tryParse(text);
+                      if (val != null) {
+                        _notifier
+                            .setTimeEstimate(val)
+                            .catchError((e) =>
+                                debugPrint('Error saving estimate: $e'));
+                      }
                     }
                   },
                 ),

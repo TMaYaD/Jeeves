@@ -2,7 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
 import 'database_provider.dart';
-import 'inbox_provider.dart' show kLocalUserId;
+import 'user_constants.dart' show kLocalUserId;
 
 export '../database/gtd_database.dart' show Todo;
 

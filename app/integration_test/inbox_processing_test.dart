@@ -1,18 +1,43 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'package:jeeves/main.dart' as app;
+
+/// Deletes the on-device SQLite file so the next [app.main] call starts from
+/// a clean state.  Must be awaited before each test.
+Future<void> _resetAppState() async {
+  final dbFolder = await getApplicationDocumentsDirectory();
+  final file = File(p.join(dbFolder.path, 'jeeves.sqlite'));
+  if (await file.exists()) {
+    await file.delete();
+  }
+}
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   group('Inbox processing E2E', () {
+    setUp(() async {
+      await _resetAppState();
+    });
+
     testWidgets('app launches and shows Inbox screen', (tester) async {
       app.main();
       await tester.pumpAndSettle(const Duration(seconds: 3));
 
-      expect(find.text('Inbox'), findsOneWidget);
+      // Scope to AppBar title to avoid matching the bottom-nav label too.
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.text('Inbox'),
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('bottom navigation has four tabs', (tester) async {

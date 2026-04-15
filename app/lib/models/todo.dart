@@ -36,7 +36,10 @@ enum GtdState {
         'someday_maybe' => GtdState.somedayMaybe,
         'deferred' => GtdState.deferred,
         'done' => GtdState.done,
-        _ => GtdState.inbox,
+        _ => () {
+            assert(false, 'Unknown GtdState value: $value');
+            return GtdState.inbox;
+          }(),
       };
 
   /// Human-readable display label.

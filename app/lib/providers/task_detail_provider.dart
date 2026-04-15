@@ -6,13 +6,13 @@ import '../database/gtd_database.dart';
 import '../models/gtd_state_machine.dart';
 import '../models/todo.dart' show GtdState;
 import 'database_provider.dart';
-import 'inbox_provider.dart' show kLocalUserId;
+import 'user_constants.dart' show kLocalUserId;
 
 /// Watches a single todo by ID, re-emitting on any change.
 final taskDetailTodoProvider =
     StreamProvider.autoDispose.family<Todo?, String>((ref, todoId) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao.watchTodo(todoId);
+  return db.todoDao.watchTodo(todoId, kLocalUserId);
 });
 
 /// Watches the Drift Tag rows associated with [todoId].
@@ -71,7 +71,20 @@ class TaskDetailNotifier {
     await (_db.update(_db.todos)
           ..where(
               (t) => t.id.equals(_todoId) & t.userId.equals(kLocalUserId)))
-        .write(TodosCompanion(energyLevel: const Value(null)));
+        .write(TodosCompanion(
+          energyLevel: const Value(null),
+          updatedAt: Value(DateTime.now()),
+        ));
+  }
+
+  Future<void> clearTimeEstimate() async {
+    await (_db.update(_db.todos)
+          ..where(
+              (t) => t.id.equals(_todoId) & t.userId.equals(kLocalUserId)))
+        .write(TodosCompanion(
+          timeEstimate: const Value(null),
+          updatedAt: Value(DateTime.now()),
+        ));
   }
 
   Future<void> setTimeEstimate(int minutes) => _db.todoDao.updateFields(
@@ -130,9 +143,10 @@ class TaskDetailNotifier {
   Future<void> transition(GtdState newState, {DateTime? now}) =>
       _db.todoDao.transitionState(_todoId, kLocalUserId, newState, now: now);
 
-  /// Watch all non-done todos in the same project as this task (for block-by picker).
+  /// Watch all next-action todos for this user (excluding this task itself),
+  /// as candidates for the blocked-by picker.
   Stream<List<Todo>> watchPotentialBlockers() {
-    return _db.todoDao.watchTodo(_todoId).asyncExpand((current) {
+    return _db.todoDao.watchTodo(_todoId, kLocalUserId).asyncExpand((current) {
       if (current == null) return const Stream.empty();
       return _db.todoDao
           .watchByState(kLocalUserId, GtdState.nextAction.value)
