@@ -44,6 +44,10 @@ class ScheduledReviewStep extends ConsumerWidget {
 
   Future<void> _pickNewDate(
       BuildContext context, WidgetRef ref, Todo todo) async {
+    // Capture notifier and id before the async gap — context may become
+    // invalid while the date picker is open.
+    final notifier = ref.read(dailyPlanningProvider.notifier);
+    final todoId = todo.id;
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
@@ -53,9 +57,7 @@ class ScheduledReviewStep extends ConsumerWidget {
       helpText: 'Reschedule to',
     );
     if (picked != null) {
-      await ref
-          .read(dailyPlanningProvider.notifier)
-          .rescheduleTask(todo.id, picked);
+      await notifier.rescheduleTask(todoId, picked);
     }
   }
 }

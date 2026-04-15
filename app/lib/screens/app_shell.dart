@@ -81,9 +81,13 @@ class CustomDrawer extends ConsumerWidget {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
                     ),
                     onTap: () async {
+                      // Capture the router before closing the drawer; after
+                      // Navigator.pop the drawer unmounts and context becomes
+                      // invalid across the subsequent await gap.
+                      final router = GoRouter.of(context);
                       Navigator.pop(context); // close drawer first
                       await ref.read(dailyPlanningProvider.notifier).reEnterPlanning();
-                      if (context.mounted) context.go('/planning');
+                      router.go('/planning');
                     },
                   ),
 

@@ -51,12 +51,12 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
     final notifier = ref.read(dailyPlanningProvider.notifier);
     final step = planningState.currentStep;
 
-    // Animate the PageView whenever the step changes.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_pageController.hasClients &&
-          _pageController.page?.round() != step) {
+    // Animate the PageView only when currentStep actually changes.
+    // Using ref.listen avoids scheduling a callback on every build.
+    ref.listen<DailyPlanningState>(dailyPlanningProvider, (prev, next) {
+      if (prev?.currentStep != next.currentStep && _pageController.hasClients) {
         _pageController.animateToPage(
-          step,
+          next.currentStep,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeInOut,
         );

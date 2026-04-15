@@ -43,15 +43,25 @@ class NextActionsReviewStep extends ConsumerWidget {
     );
   }
 
-  void _handleAction(
-      BuildContext context, WidgetRef ref, Todo todo, _Action action) {
+  Future<void> _handleAction(
+      BuildContext context, WidgetRef ref, Todo todo, _Action action) async {
     final notifier = ref.read(dailyPlanningProvider.notifier);
-    if (action == _Action.select) {
-      notifier.selectTask(todo.id);
-    } else {
-      notifier.skipTask(todo.id);
+    try {
+      if (action == _Action.select) {
+        await notifier.selectTask(todo.id);
+      } else {
+        await notifier.skipTask(todo.id);
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+      return;
     }
 
+    if (!context.mounted) return;
     final label = action == _Action.select ? 'Selected' : 'Skipped';
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -60,14 +70,38 @@ class NextActionsReviewStep extends ConsumerWidget {
         duration: const Duration(seconds: 3),
         action: SnackBarAction(
           label: 'Undo',
-          onPressed: () => notifier.undoTaskReview(todo.id),
+          onPressed: () async {
+            try {
+              await notifier.undoTaskReview(todo.id);
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Undo failed: $e')),
+                );
+              }
+            }
+          },
         ),
       ),
     );
   }
 
-  void _handleDefer(BuildContext context, WidgetRef ref, Todo todo) {
-    ref.read(dailyPlanningProvider.notifier).deferTask(todo.id);
+  Future<void> _handleDefer(
+      BuildContext context, WidgetRef ref, Todo todo) async {
+    final notifier = ref.read(dailyPlanningProvider.notifier);
+    try {
+      await notifier.deferTask(todo.id);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+      return;
+    }
+
+    if (!context.mounted) return;
     ScaffoldMessenger.of(context).clearSnackBars();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

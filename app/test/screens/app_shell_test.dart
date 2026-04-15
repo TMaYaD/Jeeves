@@ -11,6 +11,15 @@ import 'package:jeeves/screens/app_shell.dart';
 import '../test_helpers.dart';
 
 // ---------------------------------------------------------------------------
+// Mock notifier — no-ops async operations that touch DB / SharedPreferences
+// ---------------------------------------------------------------------------
+
+class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
+  @override
+  Future<void> reEnterPlanning() async {} // no-op for widget tests
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -29,6 +38,8 @@ Widget _buildShellOnly({
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       todaySelectedTasksProvider.overrideWith((_) => Stream.value([])),
+      dailyPlanningProvider
+          .overrideWith(() => _MockDailyPlanningNotifier()),
     ],
     child: MaterialApp(
       home: Builder(
@@ -70,6 +81,14 @@ Widget _buildShellOnly({
                   GoRoute(
                     path: '/blocked',
                     builder: (_, _) => const Scaffold(body: Text('Blocked body')),
+                  ),
+                  GoRoute(
+                    path: '/scheduled',
+                    builder: (_, _) => const Scaffold(body: Text('Scheduled body')),
+                  ),
+                  GoRoute(
+                    path: '/planning',
+                    builder: (_, _) => const Scaffold(body: Text('Planning body')),
                   ),
                 ],
               ),
@@ -125,8 +144,10 @@ void main() {
 
     expect(find.text('Inbox'), findsOneWidget); // Plus "Inbox body" outside, but 'Inbox' list tile
     expect(find.text('Next Actions'), findsOneWidget);
+    expect(find.text('Scheduled'), findsOneWidget);
     expect(find.text('Waiting For'), findsOneWidget);
     expect(find.text('Someday/Maybe'), findsOneWidget);
+    expect(find.text('Re-plan Day'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
   });
 
@@ -183,6 +204,34 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Blocked body'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('AppShell navigates to Scheduled on drawer tap', (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Scheduled'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Scheduled body'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('AppShell Re-plan Day navigates to /planning on tap', (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Re-plan Day'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Planning body'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
   });
 }

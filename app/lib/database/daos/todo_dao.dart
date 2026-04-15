@@ -257,35 +257,50 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   }
 
   /// Marks [id] as selected for [today].
-  Future<void> selectForToday(String id, String userId, String date) async {
+  ///
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to
+  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
+  Future<void> selectForToday(String id, String userId, String date,
+      {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
     await (update(todos)
           ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
         .write(TodosCompanion(
       selectedForToday: const Value(true),
       dailySelectionDate: Value(date),
-      updatedAt: Value(DateTime.now()),
+      updatedAt: Value(ts),
     ));
   }
 
   /// Marks [id] as skipped for [today].
-  Future<void> skipForToday(String id, String userId, String date) async {
+  ///
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to
+  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
+  Future<void> skipForToday(String id, String userId, String date,
+      {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
     await (update(todos)
           ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
         .write(TodosCompanion(
       selectedForToday: const Value(false),
       dailySelectionDate: Value(date),
-      updatedAt: Value(DateTime.now()),
+      updatedAt: Value(ts),
     ));
   }
 
   /// Undoes a review decision — resets [selectedForToday] and
   /// [dailySelectionDate] so the task reappears in the planning list.
-  Future<void> undoReview(String id, String userId) async {
+  ///
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to
+  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
+  Future<void> undoReview(String id, String userId, {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
     await (update(todos)
           ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
-        .write(const TodosCompanion(
+        .write(TodosCompanion(
       selectedForToday: Value(null),
       dailySelectionDate: Value(null),
+      updatedAt: Value(ts),
     ));
   }
 

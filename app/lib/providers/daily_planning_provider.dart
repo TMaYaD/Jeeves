@@ -3,6 +3,9 @@
 /// Architecture:
 /// - [planningCompletionNotifier] — a [ValueNotifier] wired to GoRouter's
 ///   [refreshListenable] so the router re-evaluates the redirect on change.
+/// - [planningSessionDateProvider] — a [StateProvider] that caches today's
+///   date for the current session, preventing date-boundary inconsistencies
+///   if the clock rolls past midnight mid-session.
 /// - [DailyPlanningNotifier] — manages step navigation and available-minutes
 ///   state; delegates all database writes to [TodoDao] planning methods.
 /// - Stream providers expose live lists of tasks for each ritual step.
@@ -32,6 +35,9 @@ String planningToday() {
 
 const _kCompletedDateKey = 'planning_ritual_completed_date';
 
+/// Total number of planning ritual steps (0-indexed max).
+const int _maxStepIndex = 3;
+
 // ---------------------------------------------------------------------------
 // Router refresh notifier
 // ---------------------------------------------------------------------------
@@ -53,32 +59,60 @@ Future<void> initPlanningCompletion() async {
 }
 
 // ---------------------------------------------------------------------------
+// Session date cache
+// ---------------------------------------------------------------------------
+
+/// Caches the planning date for the current session.
+///
+/// Initialized to today's date when first read. [DailyPlanningNotifier.reEnterPlanning]
+/// resets it via [PlanningSessionDateNotifier.reset] so the cached date stays
+/// consistent even if the clock rolls past midnight mid-session.
+final planningSessionDateProvider =
+    NotifierProvider<PlanningSessionDateNotifier, String>(
+  PlanningSessionDateNotifier.new,
+);
+
+class PlanningSessionDateNotifier extends Notifier<String> {
+  @override
+  String build() => planningToday();
+
+  /// Refreshes the cached date to [planningToday()].
+  ///
+  /// Call this at the start of a new planning session (e.g. after
+  /// [DailyPlanningNotifier.reEnterPlanning]).
+  void reset() => state = planningToday();
+}
+
+// ---------------------------------------------------------------------------
 // Stream providers — planning data
 // ---------------------------------------------------------------------------
 
 /// Next-action tasks not yet reviewed in today's planning session.
 final nextActionsForPlanningProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao.watchNextActionsForPlanning(kLocalUserId, planningToday());
+  final today = ref.watch(planningSessionDateProvider);
+  return db.todoDao.watchNextActionsForPlanning(kLocalUserId, today);
 });
 
 /// Scheduled tasks with a due date on today, not yet confirmed in planning.
 final scheduledDueTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao.watchScheduledDueToday(kLocalUserId, planningToday());
+  final today = ref.watch(planningSessionDateProvider);
+  return db.todoDao.watchScheduledDueToday(kLocalUserId, today);
 });
 
 /// Tasks selected for today (selectedForToday == true).
 final todaySelectedTasksProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao.watchSelectedForToday(kLocalUserId, planningToday());
+  final today = ref.watch(planningSessionDateProvider);
+  return db.todoDao.watchSelectedForToday(kLocalUserId, today);
 });
 
 /// Selected tasks that are still missing a time estimate (drives Step 3).
 final selectedTasksMissingEstimatesProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao
-      .watchSelectedTasksMissingEstimates(kLocalUserId, planningToday());
+  final today = ref.watch(planningSessionDateProvider);
+  return db.todoDao.watchSelectedTasksMissingEstimates(kLocalUserId, today);
 });
 
 // ---------------------------------------------------------------------------
@@ -113,15 +147,17 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
 
   GtdDatabase get _db => ref.read(databaseProvider);
 
+  String get _sessionDate => ref.read(planningSessionDateProvider);
+
   // ---- Step navigation -------------------------------------------------------
 
   void advanceStep() {
     state = state.copyWith(
-        currentStep: (state.currentStep + 1).clamp(0, 3));
+        currentStep: (state.currentStep + 1).clamp(0, _maxStepIndex));
   }
 
   void goToStep(int step) {
-    state = state.copyWith(currentStep: step.clamp(0, 3));
+    state = state.copyWith(currentStep: step.clamp(0, _maxStepIndex));
   }
 
   void setAvailableTime(int minutes) {
@@ -131,10 +167,10 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   // ---- Task mutations (Step 1 — Next Actions) --------------------------------
 
   Future<void> selectTask(String id) =>
-      _db.todoDao.selectForToday(id, kLocalUserId, planningToday());
+      _db.todoDao.selectForToday(id, kLocalUserId, _sessionDate);
 
   Future<void> skipTask(String id) =>
-      _db.todoDao.skipForToday(id, kLocalUserId, planningToday());
+      _db.todoDao.skipForToday(id, kLocalUserId, _sessionDate);
 
   Future<void> undoTaskReview(String id) =>
       _db.todoDao.undoReview(id, kLocalUserId);
@@ -145,7 +181,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   // ---- Task mutations (Step 2 — Scheduled) -----------------------------------
 
   Future<void> confirmScheduledTask(String id) =>
-      _db.todoDao.selectForToday(id, kLocalUserId, planningToday());
+      _db.todoDao.selectForToday(id, kLocalUserId, _sessionDate);
 
   Future<void> rescheduleTask(String id, DateTime newDate) =>
       _db.todoDao.rescheduleTask(id, kLocalUserId, newDate);
@@ -159,19 +195,31 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
 
   /// Marks the ritual as complete for today and unlocks execution features.
   Future<void> startDay() async {
+    final today = _sessionDate;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kCompletedDateKey, planningToday());
-    planningCompletionNotifier.value = true;
-    state = const DailyPlanningState(); // reset UI state
+    try {
+      await prefs.setString(_kCompletedDateKey, today);
+      planningCompletionNotifier.value = true;
+      state = const DailyPlanningState(); // reset UI state
+    } catch (e) {
+      // Attempt rollback of prefs on failure so persisted state stays
+      // consistent with the in-memory notifier.
+      await prefs.remove(_kCompletedDateKey);
+      rethrow;
+    }
   }
 
   /// Clears completion state and resets task selections so the user can
   /// re-plan mid-day.
   Future<void> reEnterPlanning() async {
-    final today = planningToday();
+    final today = _sessionDate;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kCompletedDateKey);
+    // Clear DB first — it is the more failure-prone operation.  If it throws,
+    // prefs and notifier state are left untouched (consistent).
     await _db.todoDao.clearTodaySelections(kLocalUserId, today);
+    await prefs.remove(_kCompletedDateKey);
+    // Reset the session date in case the clock crossed midnight.
+    ref.read(planningSessionDateProvider.notifier).reset();
     planningCompletionNotifier.value = false;
     state = const DailyPlanningState(); // reset to Step 1
   }

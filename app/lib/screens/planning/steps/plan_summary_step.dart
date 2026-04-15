@@ -47,9 +47,13 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
   void _onTimeChanged() {
     final h = int.tryParse(_hoursCtrl.text) ?? 0;
     final m = int.tryParse(_minutesCtrl.text) ?? 0;
+    final totalMinutes = h * 60 + m;
+    // Both fields empty / zero — preserve the current provider value rather
+    // than clamping 0 to 1 which would be unintended.
+    if (totalMinutes == 0) return;
     ref
         .read(dailyPlanningProvider.notifier)
-        .setAvailableTime((h * 60 + m).clamp(1, 1440));
+        .setAvailableTime(totalMinutes.clamp(1, 1440));
   }
 
   @override
