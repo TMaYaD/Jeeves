@@ -23,3 +23,9 @@ final somedayMaybeProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   return db.todoDao.watchSomedayMaybe(kLocalUserId);
 });
+
+/// Stream of blocked todos.
+final blockedTasksProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.todoDao.watchByState(kLocalUserId, 'blocked');
+});

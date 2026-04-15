@@ -26,13 +26,14 @@ final taskTagsProvider =
   return query.map((row) => row.readTable(db.tags)).watch();
 });
 
-/// Watches potential blocker todos for [todoId] (next_action todos, excluding self).
+/// Watches potential blocker todos for [todoId] (next_action or blocked todos, excluding self).
 final taskBlockersProvider =
     StreamProvider.autoDispose.family<List<Todo>, String>((ref, todoId) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao
-      .watchByState(kLocalUserId, GtdState.nextAction.value)
-      .map((items) => items.where((t) => t.id != todoId).toList());
+  return db.todoDao.watchTodo(todoId, kLocalUserId).asyncExpand((current) {
+    if (current == null) return const Stream.empty();
+    return db.todoDao.watchNextActionsAndBlocked(kLocalUserId).map((items) => items.where((t) => t.id != todoId).toList());
+  });
 });
 
 /// Provides mutation operations for the task detail screen.
@@ -93,6 +94,18 @@ class TaskDetailNotifier {
         timeEstimate: minutes,
       );
 
+  Future<void> setDueDate(DateTime date) => _db.todoDao.updateFields(
+        _todoId,
+        kLocalUserId,
+        dueDate: date,
+      );
+
+  Future<void> clearDueDate() => _db.todoDao.updateFields(
+        _todoId,
+        kLocalUserId,
+        clearDueDate: true,
+      );
+
   Future<void> assignProject(String tagId) =>
       _db.tagDao.enforceSingleProject(_todoId, tagId);
 
@@ -149,7 +162,7 @@ class TaskDetailNotifier {
     return _db.todoDao.watchTodo(_todoId, kLocalUserId).asyncExpand((current) {
       if (current == null) return const Stream.empty();
       return _db.todoDao
-          .watchByState(kLocalUserId, GtdState.nextAction.value)
+          .watchNextActionsAndBlocked(kLocalUserId)
           .map((items) => items.where((t) => t.id != _todoId).toList());
     });
   }

@@ -11,6 +11,7 @@ class ProjectPickerWidget extends ConsumerWidget {
     required this.currentProjectTag,
     required this.onAssign,
     required this.onClear,
+    this.customChild,
   });
 
   /// The currently assigned project tag, or null if none.
@@ -22,6 +23,9 @@ class ProjectPickerWidget extends ConsumerWidget {
   /// Called when the user removes the project.
   final VoidCallback onClear;
 
+  /// Optional custom child widget to display instead of the default styled container.
+  final Widget? customChild;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final projectsAsync = ref.watch(projectTagsProvider);
@@ -29,30 +33,32 @@ class ProjectPickerWidget extends ConsumerWidget {
     return InkWell(
       onTap: () => _showPicker(context, ref, projectsAsync.asData?.value ?? []),
       borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.folder_outlined, size: 18, color: Color(0xFF6B7280)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                currentProjectTag?.name ?? 'No project',
-                style: TextStyle(
-                  color: currentProjectTag != null
-                      ? const Color(0xFF1A1A2E)
-                      : const Color(0xFF9CA3AF),
-                ),
-              ),
+      child: customChild ??
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              borderRadius: BorderRadius.circular(8),
             ),
-            const Icon(Icons.arrow_drop_down, color: Color(0xFF9CA3AF)),
-          ],
-        ),
-      ),
+            child: Row(
+              children: [
+                const Icon(Icons.folder_outlined,
+                    size: 18, color: Color(0xFF6B7280)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    currentProjectTag?.name ?? 'No project',
+                    style: TextStyle(
+                      color: currentProjectTag != null
+                          ? const Color(0xFF1A1A2E)
+                          : const Color(0xFF9CA3AF),
+                    ),
+                  ),
+                ),
+                const Icon(Icons.arrow_drop_down, color: Color(0xFF9CA3AF)),
+              ],
+            ),
+          ),
     );
   }
 

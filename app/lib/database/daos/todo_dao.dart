@@ -87,6 +87,17 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         .watch();
   }
 
+  /// Stream of todos matching either next_action or blocked state for [userId].
+  Stream<List<Todo>> watchNextActionsAndBlocked(String userId) {
+    return (select(todos)
+          ..where((t) =>
+              t.userId.equals(userId) &
+              (t.state.equals(GtdState.nextAction.value) |
+                  t.state.equals(GtdState.blocked.value)))
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .watch();
+  }
+
   /// Stream of todos associated with a specific project tag [projectTagId].
   Stream<List<Todo>> watchByProject(String userId, String projectTagId) {
     final query = select(todos).join([
@@ -139,6 +150,22 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       await (update(todos)
             ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
           .write(companion);
+
+      if (newState == GtdState.done) {
+        // Unblock any tasks that were blocked by this one
+        final dependents = await (select(todos)
+              ..where((t) => t.blockedByTodoId.equals(todoId) & t.userId.equals(userId)))
+            .get();
+        for (final dep in dependents) {
+          if (dep.state == GtdState.blocked.value) {
+            await (update(todos)..where((t) => t.id.equals(dep.id)))
+                .write(TodosCompanion(
+              state: Value(GtdState.nextAction.value),
+              updatedAt: Value(effectiveNow),
+            ));
+          }
+        }
+      }
     });
   }
 
@@ -184,6 +211,8 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     int? timeEstimate,
     String? blockedByTodoId,
     bool clearBlockedBy = false,
+    DateTime? dueDate,
+    bool clearDueDate = false,
   }) async {
     if (!clearBlockedBy && blockedByTodoId != null) {
       if (blockedByTodoId == todoId) {
@@ -206,12 +235,22 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       }
     }
 
+    final newState = clearBlockedBy
+        ? GtdState.nextAction.value
+        : (blockedByTodoId != null ? GtdState.blocked.value : null);
+
     final companion = TodosCompanion(
       updatedAt: Value(DateTime.now()),
       title: title != null ? Value(title) : const Value.absent(),
       notes: notes != null ? Value(notes) : const Value.absent(),
       energyLevel: energyLevel != null ? Value(energyLevel) : const Value.absent(),
       timeEstimate: timeEstimate != null ? Value(timeEstimate) : const Value.absent(),
+      state: newState != null ? Value(newState) : const Value.absent(),
+      dueDate: clearDueDate
+          ? const Value(null)
+          : dueDate != null
+              ? Value(dueDate)
+              : const Value.absent(),
       blockedByTodoId: clearBlockedBy
           ? const Value(null)
           : blockedByTodoId != null
