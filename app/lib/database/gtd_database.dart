@@ -33,7 +33,7 @@ class GtdDatabase extends _$GtdDatabase {
   GtdDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -43,6 +43,10 @@ class GtdDatabase extends _$GtdDatabase {
             await m.addColumn(todos, todos.inProgressSince);
             await m.addColumn(todos, todos.timeSpentMinutes);
             await m.addColumn(todos, todos.blockedByTodoId);
+          }
+          if (from < 3) {
+            await m.addColumn(todos, todos.selectedForToday);
+            await m.addColumn(todos, todos.dailySelectionDate);
           }
         },
       );

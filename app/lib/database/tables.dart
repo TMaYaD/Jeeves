@@ -45,6 +45,13 @@ class Todos extends Table {
   /// ID of another todo that must be completed before this one is actionable.
   TextColumn get blockedByTodoId => text().nullable()();
 
+  /// Whether this todo was selected (true), skipped (false), or not yet
+  /// reviewed (null) during the daily planning ritual for [dailySelectionDate].
+  BoolColumn get selectedForToday => boolean().nullable()();
+
+  /// ISO-8601 date string (yyyy-MM-dd) on which the planning selection was made.
+  TextColumn get dailySelectionDate => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

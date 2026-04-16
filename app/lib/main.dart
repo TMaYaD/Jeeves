@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'providers/daily_planning_provider.dart';
 import 'router.dart';
 import 'services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.initialize();
+  // Seed the planning-completion notifier before the router is consulted so
+  // the first redirect evaluation is synchronous and correct.
+  await initPlanningCompletion();
   runApp(const ProviderScope(child: JeevesApp()));
 }
 

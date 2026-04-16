@@ -35,7 +35,8 @@ class CustomDrawer extends ConsumerWidget {
     final waitingForCount = ref.watch(waitingForProvider).asData?.value.length ?? 0;
     final blockedCount = ref.watch(blockedTasksProvider).asData?.value.length ?? 0;
     final somedayCount = ref.watch(somedayMaybeProvider).asData?.value.length ?? 0;
-    
+    final scheduledCount = ref.watch(scheduledProvider).asData?.value.length ?? 0;
+
     final projectTags = ref.watch(projectTagsProvider).asData?.value ?? [];
     final contextTags = ref.watch(contextTagsProvider).asData?.value ?? [];
 
@@ -57,13 +58,18 @@ class CustomDrawer extends ConsumerWidget {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
-                  _buildSectionHeader('GTD LISTS'),
                   _buildNavItem(context, icon: Icons.inbox_outlined, title: 'Inbox', path: '/inbox', location: location, count: inboxCount),
+                  _buildNavItem(context, icon: Icons.center_focus_strong_outlined, title: 'Focus', path: '/focus', location: location),
                   _buildNavItem(context, icon: Icons.check_circle_outline, title: 'Next Actions', path: '/next-actions', location: location, count: nextActionsCount),
+                  _buildNavItem(context, icon: Icons.event_outlined, title: 'Scheduled', path: '/scheduled', location: location, count: scheduledCount),
                   _buildNavItem(context, icon: Icons.hourglass_empty, title: 'Waiting For', path: '/waiting-for', location: location, count: waitingForCount),
                   _buildNavItem(context, icon: Icons.block, title: 'Blocked', path: '/blocked', location: location, count: blockedCount),
                   _buildNavItem(context, icon: Icons.star_border, title: 'Someday/Maybe', path: '/someday-maybe', location: location, count: somedayCount),
-                  
+
+                  const SizedBox(height: 8),
+                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                  const SizedBox(height: 8),
+
                   const SizedBox(height: 16),
                   _buildSectionHeader('CONTEXTS'),
                   Padding(
