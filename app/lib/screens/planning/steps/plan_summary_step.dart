@@ -56,59 +56,67 @@ class PlanSummaryStep extends ConsumerWidget {
 
         // --- Scrollable task list ---
         Expanded(
-          child: ListView(
-            physics: const ClampingScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-            children: [
-              // Today's tasks (selected)
-              if (selectedTasks.isNotEmpty) ...[
-                _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
-                const SizedBox(height: 8),
-                ...selectedTasks.map((t) => _ReviewCard(
-                      todo: t,
-                      isSelected: true,
-                      onUndo: () => _handleUndo(ref, t),
-                      onSkip: () => _handleSkip(ref, t),
-                    )),
-                const SizedBox(height: 16),
-              ],
+          child: ScrollConfiguration(
+            // Disable the M3 stretch (and legacy glow) overscroll indicator.
+            // ClampingScrollPhysics already clamps the scroll position, but it
+            // still dispatches an OverscrollNotification that would trigger the
+            // StretchingOverscrollIndicator unless we opt out here.
+            behavior:
+                ScrollConfiguration.of(context).copyWith(overscroll: false),
+            child: ListView(
+              physics: const ClampingScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+              children: [
+                // Today's tasks (selected)
+                if (selectedTasks.isNotEmpty) ...[
+                  _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
+                  const SizedBox(height: 8),
+                  ...selectedTasks.map((t) => _ReviewCard(
+                        todo: t,
+                        isSelected: true,
+                        onUndo: () => _handleUndo(ref, t),
+                        onSkip: () => _handleSkip(ref, t),
+                      )),
+                  const SizedBox(height: 16),
+                ],
 
-              // Pending review
-              if (pendingTasks.isNotEmpty) ...[
-                _SectionLabel('Pending Review (${pendingTasks.length})'),
-                const SizedBox(height: 8),
-                ...pendingTasks.map((t) => _ReviewCard(
-                      todo: t,
-                      onSelect: () => _handleSelect(ref, t),
-                      onSkip: () => _handleSkip(ref, t),
-                    )),
-                const SizedBox(height: 16),
-              ],
+                // Pending review
+                if (pendingTasks.isNotEmpty) ...[
+                  _SectionLabel('Pending Review (${pendingTasks.length})'),
+                  const SizedBox(height: 8),
+                  ...pendingTasks.map((t) => _ReviewCard(
+                        todo: t,
+                        onSelect: () => _handleSelect(ref, t),
+                        onSkip: () => _handleSkip(ref, t),
+                      )),
+                  const SizedBox(height: 16),
+                ],
 
-              // Skipped tasks
-              if (skippedTasks.isNotEmpty) ...[
-                _SectionLabel('Skipped Tasks (${skippedTasks.length})'),
-                const SizedBox(height: 8),
-                ...skippedTasks.map((t) => _ReviewCard(
-                      todo: t,
-                      isSkipped: true,
-                      onSelect: () => _handleSelect(ref, t),
-                      onUndo: () => _handleUndo(ref, t),
-                    )),
-              ],
+                // Skipped tasks
+                if (skippedTasks.isNotEmpty) ...[
+                  _SectionLabel('Skipped Tasks (${skippedTasks.length})'),
+                  const SizedBox(height: 8),
+                  ...skippedTasks.map((t) => _ReviewCard(
+                        todo: t,
+                        isSkipped: true,
+                        onSelect: () => _handleSelect(ref, t),
+                        onUndo: () => _handleUndo(ref, t),
+                      )),
+                ],
 
-              if (selectedTasks.isEmpty &&
-                  pendingTasks.isEmpty &&
-                  skippedTasks.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  child: Text(
-                    'No tasks to review!',
-                    style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-                    textAlign: TextAlign.center,
+                if (selectedTasks.isEmpty &&
+                    pendingTasks.isEmpty &&
+                    skippedTasks.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'No tasks to review!',
+                      style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
