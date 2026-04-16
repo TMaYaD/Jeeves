@@ -12,6 +12,7 @@ from app.auth.routes import router as auth_router
 from app.config import settings
 from app.database import engine
 from app.health.routes import router as health_router
+from app.import_nirvana.routes import router as import_router
 from app.powersync.routes import router as powersync_router
 from app.todos.routes import router as todo_router
 from app.todos.tag_routes import router as tag_router
@@ -44,4 +45,5 @@ app.include_router(auth_router)
 app.include_router(todo_router)
 app.include_router(tag_router, tags=["tags"])
 app.include_router(ai_router)
+app.include_router(import_router)
 app.include_router(powersync_router, prefix="/powersync", tags=["powersync"])

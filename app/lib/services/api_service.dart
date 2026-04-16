@@ -12,11 +12,16 @@ import 'platform_helper.dart'
 
 class ApiService {
   ApiService({required String baseUrl})
-      : _dio = Dio(BaseOptions(baseUrl: baseUrl)) {
+      : _baseUrl = baseUrl,
+        _dio = Dio(BaseOptions(baseUrl: baseUrl)) {
     _dio.interceptors.add(_AuthRetryInterceptor(this));
   }
 
+  final String _baseUrl;
   final Dio _dio;
+
+  String get baseUrl => _baseUrl;
+
   String? _authToken;
 
   // Called by AuthService after construction to wire up the 401 refresh path.
@@ -44,6 +49,18 @@ class ApiService {
   }
 
   bool get isAuthenticated => _authToken != null;
+
+  Map<String, String> get authHeaders => _authToken != null
+      ? {'Authorization': 'Bearer $_authToken'}
+      : {};
+
+  Future<Map<String, dynamic>> postFormData(
+    String path,
+    FormData formData,
+  ) async {
+    final response = await _dio.post<Map<String, dynamic>>(path, data: formData);
+    return response.data!;
+  }
 
   Future<Map<String, dynamic>> get(String path) async {
     final response = await _dio.get<Map<String, dynamic>>(path);
