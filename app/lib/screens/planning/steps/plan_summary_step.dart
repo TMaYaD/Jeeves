@@ -388,12 +388,19 @@ class _IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      icon: Icon(icon, color: color, size: 22),
-      tooltip: tooltip,
-      onPressed: onTap,
-      padding: const EdgeInsets.all(6),
-      constraints: const BoxConstraints(),
+    // Use InkWell + Padding instead of IconButton to avoid M3's 48px minimum
+    // touch-target enforcement, which caused overflow in the fixed-width button
+    // slot (2 × 48px = 96px > 80px SizedBox).
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(icon, color: color, size: 22),
+        ),
+      ),
     );
   }
 }
