@@ -1,13 +1,8 @@
-/// Step 2 of the daily planning ritual: review today's scheduled items.
-///
-/// Displays scheduled tasks with a due date on today.
-/// - Confirm → selected for today (stays scheduled).
-/// - Reschedule → opens a date picker; task moves to a future date and
-///   disappears from this list.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../providers/daily_planning_provider.dart';
 
@@ -16,186 +11,154 @@ class ScheduledReviewStep extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncItems = ref.watch(scheduledDueTodayProvider);
+    final asyncSelected = ref.watch(todaySelectedTasksProvider);
 
-    return asyncItems.when(
+    return asyncSelected.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (err, _) => Center(child: Text('Error: $err')),
-      data: (items) {
-        if (items.isEmpty) {
-          return const _EmptyScheduled();
-        }
-        return ListView.separated(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          itemCount: items.length,
-          separatorBuilder: (context, i) => const SizedBox(height: 8),
-          itemBuilder: (context, i) => _ScheduledCard(
-            todo: items[i],
-            onConfirm: () => _handleConfirm(context, ref, items[i]),
-            onReschedule: () => _pickNewDate(context, ref, items[i]),
-          ),
+      data: (tasks) {
+        final withDue = tasks.where((t) => t.dueDate != null).toList()
+          ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
+        final scheduledNoDue = tasks
+            .where((t) => t.dueDate == null && t.state == GtdState.scheduled.value)
+            .toList();
+        final rest = tasks
+            .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
+            .toList();
+        final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
+
+        return ListView(
+          physics: const ClampingScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          children: [
+            const Text(
+              "Today's Schedule",
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1A1A2E),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.grey[50],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[200]!),
+              ),
+              child: const Center(
+                child: Text(
+                  "Calendar events placeholder",
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            ),
+            const SizedBox(height: 36),
+            const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            const SizedBox(height: 36),
+            const Text(
+              "Today's Tasks",
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1A1A2E),
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (sortedTasks.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Text(
+                  'No tasks selected — go back and select some!',
+                  style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                  textAlign: TextAlign.center,
+                ),
+              )
+            else
+              ...sortedTasks.map((t) => _TaskRow(todo: t)),
+            const SizedBox(height: 48),
+            FilledButton(
+              onPressed: () => _startDay(context, ref),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF2563EB),
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text(
+                'Start Day',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              ),
+            ),
+            const SizedBox(height: 32),
+          ],
         );
       },
     );
   }
 
-  Future<void> _handleConfirm(
-      BuildContext context, WidgetRef ref, Todo todo) async {
+  Future<void> _startDay(BuildContext context, WidgetRef ref) async {
+    Object? startError;
     try {
-      await ref.read(dailyPlanningProvider.notifier).confirmScheduledTask(todo.id);
+      await ref.read(dailyPlanningProvider.notifier).startDay();
     } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).clearSnackBars();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error confirming task: $e')),
-      );
+      startError = e;
     }
-  }
-
-  Future<void> _pickNewDate(
-      BuildContext context, WidgetRef ref, Todo todo) async {
-    // Capture notifier and id before the async gap — context may become
-    // invalid while the date picker is open.
-    final notifier = ref.read(dailyPlanningProvider.notifier);
-    final todoId = todo.id;
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: now.add(const Duration(days: 1)),
-      firstDate: now.add(const Duration(days: 1)),
-      lastDate: now.add(const Duration(days: 365)),
-      helpText: 'Reschedule to',
-    );
-    if (picked != null) {
-      try {
-        await notifier.rescheduleTask(todoId, picked);
-      } catch (e) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error rescheduling task: $e')),
-        );
-      }
+    if (!context.mounted) return;
+    if (startError != null) {
+      debugPrint('Failed to start day: $startError');
+      return;
     }
+    context.go('/next-actions');
   }
 }
 
-// ---------------------------------------------------------------------------
-// Scheduled task card
-// ---------------------------------------------------------------------------
-
-class _ScheduledCard extends StatelessWidget {
-  const _ScheduledCard(
-      {required this.todo,
-      required this.onConfirm,
-      required this.onReschedule});
-
+class _TaskRow extends StatelessWidget {
+  const _TaskRow({required this.todo});
   final Todo todo;
-  final VoidCallback onConfirm;
-  final VoidCallback onReschedule;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xFFE5E7EB)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    final estimate = todo.timeEstimate;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_outline,
+              size: 20, color: Color(0xFF16A34A)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.event_outlined,
-                    size: 16, color: Color(0xFF6B7280)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    todo.title,
-                    style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFF1A1A2E)),
-                  ),
+                Text(
+                  todo.title,
+                  style: const TextStyle(
+                      fontSize: 15, color: Color(0xFF1A1A2E), fontWeight: FontWeight.w500),
                 ),
-              ],
-            ),
-            if (todo.timeEstimate != null) ...[
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(Icons.timer_outlined,
-                      size: 12, color: Colors.grey[500]),
-                  const SizedBox(width: 4),
+                if (todo.dueDate != null)
                   Text(
-                    '${todo.timeEstimate}m estimated',
+                    'Due ${todo.dueDate!.year}-'
+                    '${todo.dueDate!.month.toString().padLeft(2, '0')}-'
+                    '${todo.dueDate!.day.toString().padLeft(2, '0')}',
                     style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                   ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onReschedule,
-                    icon: const Icon(Icons.edit_calendar_outlined, size: 16),
-                    label: const Text('Reschedule'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF6B7280),
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: onConfirm,
-                    icon: const Icon(Icons.check, size: 16),
-                    label: const Text('Confirm'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF16A34A),
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                    ),
-                  ),
-                ),
               ],
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EmptyScheduled extends StatelessWidget {
-  const _EmptyScheduled();
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.event_available_outlined,
-              size: 56, color: Colors.grey[300]),
-          const SizedBox(height: 16),
-          Text(
-            'Nothing scheduled for today',
-            style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[600]),
           ),
-          const SizedBox(height: 6),
-          Text(
-            'Tap Next to continue.',
-            style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-          ),
+          if (estimate != null)
+            Text(
+              estimate < 60
+                  ? '${estimate}m'
+                  : estimate % 60 == 0
+                      ? '${estimate ~/ 60}h'
+                      : '${estimate ~/ 60}h ${estimate % 60}m',
+              style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[500],
+                  fontWeight: FontWeight.w500),
+            ),
         ],
       ),
     );

@@ -11,12 +11,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/daily_planning_provider.dart';
 import '../../providers/inbox_provider.dart';
-import 'steps/day_checkin_step.dart';
+import 'steps/day_checkin_energy_step.dart';
+import 'steps/day_checkin_time_step.dart';
 import 'steps/inbox_clarification_step.dart';
-import 'steps/next_actions_review_step.dart';
 import 'steps/plan_summary_step.dart';
 import 'steps/scheduled_review_step.dart';
-import 'steps/time_estimates_step.dart';
 
 class PlanningRitualScreen extends ConsumerStatefulWidget {
   const PlanningRitualScreen({super.key});
@@ -31,11 +30,10 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
 
   static const _stepTitles = [
     'Clarify Inbox',
-    'Day Check-in',
+    'Energy Check-in',
+    'Time Check-in',
     'Review Next Actions',
     'Today\'s Schedule',
-    'Time Estimates',
-    'Today\'s Plan',
   ];
 
   @override
@@ -83,17 +81,16 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
               child: PageView(
                 controller: _pageController,
                 physics: const NeverScrollableScrollPhysics(),
-                children: const [
+                children: [
                   InboxClarificationStep(),
-                  DayCheckinStep(),
-                  NextActionsReviewStep(),
-                  ScheduledReviewStep(),
-                  TimeEstimatesStep(),
+                  DayCheckinEnergyStep(),
+                  DayCheckinTimeStep(),
                   PlanSummaryStep(),
+                  ScheduledReviewStep(),
                 ],
               ),
             ),
-            if (step < 5)
+            if (step < 4)
               _PlanningFooter(
                 step: step,
                 onBack: step > 0 ? () => notifier.goToStep(step - 1) : null,
@@ -110,26 +107,16 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
   /// Returns true when the user is allowed to proceed from [step].
   bool _canAdvance(int step, WidgetRef ref) {
     return switch (step) {
-      // Step 0: inbox must be empty before moving on
-      0 => ref.watch(inboxItemsProvider).asData?.value.isEmpty ?? false,
-      // Step 1: day check-in is always passable (fields are optional)
+      // Step 0: inbox empty or skipped out of queue
+      0 => ref.watch(inboxItemsProvider).asData?.value.where((i) => !(i.selectedForToday == false && i.dailySelectionDate == ref.read(planningSessionDateProvider))).isEmpty ?? false,
+      // Step 1: energy check in
       1 => true,
-      // Step 2: all next actions reviewed
-      2 => ref
-              .watch(nextActionsForPlanningProvider)
-              .asData
-              ?.value
-              .isEmpty ??
-          false,
-      // Step 3: all scheduled items confirmed / rescheduled
-      3 => ref.watch(scheduledDueTodayProvider).asData?.value.isEmpty ?? false,
-      // Step 4: no selected task is missing an estimate
-      4 => ref
-              .watch(selectedTasksMissingEstimatesProvider)
-              .asData
-              ?.value
-              .isEmpty ??
-          false,
+      // Step 2: time check in
+      2 => true,
+      // Step 3: Plan Summary and Next Actions view is fully controllable, just let them advance
+      3 => true,
+      // Step 4: ScheduledReviewStep is last page
+      4 => false,
       _ => false,
     };
   }
@@ -139,14 +126,14 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
 // Header: title + segmented progress bar
 // ---------------------------------------------------------------------------
 
-class _PlanningHeader extends StatelessWidget {
+class _PlanningHeader extends ConsumerWidget {
   const _PlanningHeader({required this.step, required this.stepTitle});
 
   final int step;
   final String stepTitle;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
       child: Column(
@@ -178,39 +165,89 @@ class _PlanningHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _SegmentedProgressBar(currentStep: step, totalSteps: 6),
+          _SegmentedProgressBar(currentStep: step, totalSteps: 5, ref: ref),
           const SizedBox(height: 4),
-          Text(
-            'Step ${step + 1} of 6',
-            style: TextStyle(fontSize: 12, color: Colors.grey[400]),
-          ),
+          _buildSubtitle(step, ref),
           const SizedBox(height: 8),
         ],
       ),
+    );
+  }
+
+  Widget _buildSubtitle(int step, WidgetRef ref) {
+    if (step == 0) {
+      final state = ref.watch(dailyPlanningProvider);
+      final initial = state.initialInboxCount ?? 0;
+      final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
+      final skipped = state.inboxSkippedCount;
+      return Text(
+        'Step 1 of 5. $processed processed out of $initial (skipped $skipped)',
+        style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+      );
+    }
+    return Text(
+      'Step ${step + 1} of 5',
+      style: TextStyle(fontSize: 12, color: Colors.grey[400]),
     );
   }
 }
 
 class _SegmentedProgressBar extends StatelessWidget {
   const _SegmentedProgressBar(
-      {required this.currentStep, required this.totalSteps});
+      {required this.currentStep, required this.totalSteps, required this.ref});
 
   final int currentStep;
   final int totalSteps;
+  final WidgetRef ref;
 
   @override
   Widget build(BuildContext context) {
+    final state = ref.watch(dailyPlanningProvider);
+    final initial = state.initialInboxCount ?? 1;
+    final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
+    final clarifyProgress = initial > 0 ? (processed / initial).clamp(0.0, 1.0) : 1.0;
+
     return Row(
       children: List.generate(totalSteps, (i) {
-        final filled = i <= currentStep;
+        final isClarify = i == 0;
+        final filled = i < currentStep;
+        
+        Widget bar = Container(
+          height: 4,
+          decoration: BoxDecoration(
+            color: filled ? const Color(0xFF2563EB) : const Color(0xFFE5E7EB),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        );
+
+        if (isClarify && currentStep == 0) {
+          bar = Stack(
+            children: [
+              Container(
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E7EB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              FractionallySizedBox(
+                widthFactor: clarifyProgress,
+                child: Container(
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2563EB),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+
         return Expanded(
-          child: Container(
-            margin: EdgeInsets.only(right: i < totalSteps - 1 ? 4 : 0),
-            height: 4,
-            decoration: BoxDecoration(
-              color: filled ? const Color(0xFF2563EB) : const Color(0xFFE5E7EB),
-              borderRadius: BorderRadius.circular(2),
-            ),
+          child: Padding(
+            padding: EdgeInsets.only(right: i < totalSteps - 1 ? 4 : 0),
+            child: bar,
           ),
         );
       }),

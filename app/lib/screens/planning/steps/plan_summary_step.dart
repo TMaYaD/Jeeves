@@ -1,18 +1,7 @@
-/// Step 5 of the daily planning ritual: summary and commit.
-///
-/// Shows:
-/// - The full list of tasks selected for today, sorted by priority:
-///   due date (ascending) → scheduled → next actions.
-/// - A colour-coded capacity bar (green ≤ 80 %, amber ≤ 100 %, red > 100 %).
-/// - An over-capacity warning with a "Review Selections" back-link to Step 2.
-/// - A "Start Day" button that finalises the plan and unlocks execution.
-///
-/// Available time is entered in Step 1 (Day Check-in).
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../providers/daily_planning_provider.dart';
 
@@ -24,82 +13,102 @@ class PlanSummaryStep extends ConsumerWidget {
     final planningState = ref.watch(dailyPlanningProvider);
     final availableMinutes = planningState.availableMinutes;
     final asyncSelected = ref.watch(todaySelectedTasksProvider);
+    final asyncPending = ref.watch(nextActionsForPlanningProvider);
+    final asyncSkipped = ref.watch(skippedNextActionsForPlanningProvider);
 
-    return asyncSelected.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (err, _) => Center(child: Text('Error: $err')),
-      data: (rawTasks) {
-        // Sort: tasks with a due date first (ascending), then scheduled
-        // without a due date, then everything else (next actions).
-        final tasks = _sortTasks(rawTasks);
+    // Simple combinations of states
+    if (asyncSelected.isLoading || asyncPending.isLoading || asyncSkipped.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-        final totalMinutes =
-            tasks.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
-        final ratio = availableMinutes > 0
-            ? totalMinutes / availableMinutes
-            : double.infinity;
-        final overCapacity = ratio > 1.0;
+    final selectedTasks = _sortTasks(asyncSelected.asData?.value ?? []);
+    final pendingTasks = asyncPending.asData?.value ?? [];
+    final skippedTasks = asyncSkipped.asData?.value ?? [];
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-          children: [
-            // --- Capacity bar ---
-            _SectionLabel('Capacity'),
-            const SizedBox(height: 8),
-            _CapacityBar(ratio: ratio.clamp(0.0, 2.0)),
-            const SizedBox(height: 6),
-            Text(
-              _capacitySummary(tasks.length, totalMinutes, availableMinutes),
-              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+    final totalMinutes =
+        selectedTasks.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
+    final ratio = availableMinutes > 0
+        ? totalMinutes / availableMinutes
+        : double.infinity;
+
+    return ListView(
+      physics: const ClampingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+      children: [
+        // --- Capacity bar ---
+        _SectionLabel('Capacity'),
+        const SizedBox(height: 8),
+        _CapacityBar(ratio: ratio.clamp(0.0, 2.0)),
+        const SizedBox(height: 6),
+        Text(
+          _capacitySummary(selectedTasks.length, totalMinutes, availableMinutes),
+          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+        ),
+        const SizedBox(height: 20),
+
+        // --- Today's tasks (Selected) ---
+        if (selectedTasks.isNotEmpty) ...[
+          _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
+          const SizedBox(height: 8),
+          ...selectedTasks.map((t) => _ReviewCard(
+                todo: t,
+                isSelected: true,
+                onSkip: () => _handleSkip(ref, t),
+                onUndo: () => _handleUndo(ref, t),
+              )),
+          const SizedBox(height: 16),
+        ],
+
+        // --- Pending Review ---
+        if (pendingTasks.isNotEmpty) ...[
+          _SectionLabel('Pending Review (${pendingTasks.length})'),
+          const SizedBox(height: 8),
+          ...pendingTasks.map((t) => _ReviewCard(
+                todo: t,
+                isSelected: false,
+                isSkipped: false,
+                onSelect: () => _handleSelect(ref, t),
+                onSkip: () => _handleSkip(ref, t),
+              )),
+          const SizedBox(height: 16),
+        ],
+
+        // --- Skipped tasks ---
+        if (skippedTasks.isNotEmpty) ...[
+          _SectionLabel('Skipped Tasks (${skippedTasks.length})'),
+          const SizedBox(height: 8),
+          ...skippedTasks.map((t) => _ReviewCard(
+                todo: t,
+                isSkipped: true,
+                onUndo: () => _handleUndo(ref, t),
+              )),
+        ],
+
+        if (selectedTasks.isEmpty && pendingTasks.isEmpty && skippedTasks.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text(
+              'No tasks to review!',
+              style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+              textAlign: TextAlign.center,
             ),
-            if (overCapacity) ...[
-              const SizedBox(height: 10),
-              _OverCapacityWarning(
-                // Step 2 = Review Next Actions
-                onReview: () =>
-                    ref.read(dailyPlanningProvider.notifier).goToStep(2),
-              ),
-            ],
-            const SizedBox(height: 20),
-
-            // --- Task list ---
-            _SectionLabel('Today\'s tasks (${tasks.length})'),
-            const SizedBox(height: 8),
-            if (tasks.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(
-                  'No tasks selected — go back and select some!',
-                  style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-                  textAlign: TextAlign.center,
-                ),
-              )
-            else
-              ...tasks.map((t) => _SelectedTaskRow(todo: t)),
-
-            const SizedBox(height: 28),
-
-            // --- Start Day button ---
-            FilledButton(
-              onPressed: () => _startDay(context, ref),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF2563EB),
-                minimumSize: const Size.fromHeight(52),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-              child: const Text(
-                'Start Day',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
+          )
+      ],
     );
   }
 
-  /// Sorts selected tasks: due-date tasks (closest first) → scheduled → rest.
+  void _handleSelect(WidgetRef ref, Todo todo) {
+    ref.read(dailyPlanningProvider.notifier).selectTask(todo.id);
+  }
+
+  void _handleSkip(WidgetRef ref, Todo todo) {
+    ref.read(dailyPlanningProvider.notifier).skipTask(todo.id);
+  }
+
+  void _handleUndo(WidgetRef ref, Todo todo) {
+    ref.read(dailyPlanningProvider.notifier).undoTaskReview(todo.id);
+  }
+
   List<Todo> _sortTasks(List<Todo> tasks) {
     final withDue = tasks.where((t) => t.dueDate != null).toList()
       ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
@@ -110,24 +119,6 @@ class PlanSummaryStep extends ConsumerWidget {
         .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
         .toList();
     return [...withDue, ...scheduledNoDue, ...rest];
-  }
-
-  Future<void> _startDay(BuildContext context, WidgetRef ref) async {
-    // Capture any error so all context usage stays after a single mounted check.
-    Object? startError;
-    try {
-      await ref.read(dailyPlanningProvider.notifier).startDay();
-    } catch (e) {
-      startError = e;
-    }
-    if (!context.mounted) return;
-    if (startError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start day: $startError')),
-      );
-      return;
-    }
-    context.go('/next-actions');
   }
 
   String _capacitySummary(int count, int totalMinutes, int availableMinutes) {
@@ -195,94 +186,159 @@ class _CapacityBar extends StatelessWidget {
   }
 }
 
-class _OverCapacityWarning extends StatelessWidget {
-  const _OverCapacityWarning({required this.onReview});
-  final VoidCallback onReview;
+class _ReviewCard extends StatelessWidget {
+  const _ReviewCard({
+    required this.todo,
+    this.isSelected = false,
+    this.isSkipped = false,
+    this.onSelect,
+    this.onSkip,
+    this.onUndo,
+  });
+
+  final Todo todo;
+  final bool isSelected;
+  final bool isSkipped;
+  final VoidCallback? onSelect;
+  final VoidCallback? onSkip;
+  final VoidCallback? onUndo;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFEF2F2),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFFCA5A5)),
+    final textColor = isSkipped ? Colors.grey[500] : const Color(0xFF1A1A2E);
+    final backgroundColor = isSkipped ? const Color(0xFFF9FAFB) : Colors.white;
+
+    return Card(
+      elevation: 0,
+      color: backgroundColor,
+      margin: const EdgeInsets.only(bottom: 8),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: isSkipped ? const Color(0xFFF3F4F6) : const Color(0xFFE5E7EB),
+        ),
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.warning_amber_rounded,
-              color: Color(0xFFDC2626), size: 18),
-          const SizedBox(width: 8),
-          const Expanded(
-            child: Text(
-              'You\'re over capacity. Consider deferring some tasks.',
-              style: TextStyle(fontSize: 13, color: Color(0xFFB91C1C)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    todo.title,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: textColor,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      if (todo.timeEstimate != null)
+                        _Chip(
+                          icon: Icons.timer_outlined,
+                          label: '${todo.timeEstimate}m',
+                          color: isSkipped ? Colors.grey[400]! : const Color(0xFF2563EB),
+                        ),
+                      if (todo.energyLevel != null)
+                        _Chip(
+                          icon: Icons.bolt_outlined,
+                          label: _energyLabel(todo.energyLevel!),
+                          color: isSkipped ? Colors.grey[400]! : const Color(0xFF7C3AED),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          TextButton(
-            onPressed: onReview,
-            style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFFDC2626),
-                padding: EdgeInsets.zero,
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-            child: const Text('Review',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-          ),
-        ],
+            const SizedBox(width: 8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!isSelected && !isSkipped && onSelect != null)
+                  _IconBtn(
+                    icon: Icons.check_circle_outline,
+                    color: const Color(0xFF16A34A),
+                    tooltip: 'Select for today',
+                    onTap: onSelect!,
+                  ),
+                if (!isSkipped && onSkip != null)
+                  _IconBtn(
+                    icon: Icons.remove_circle_outline,
+                    color: const Color(0xFF6B7280),
+                    tooltip: 'Skip',
+                    onTap: onSkip!,
+                  ),
+                if ((isSelected || isSkipped) && onUndo != null)
+                  _IconBtn(
+                    icon: Icons.undo,
+                    color: const Color(0xFF6B7280),
+                    tooltip: 'Undo',
+                    onTap: onUndo!,
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  String _energyLabel(String level) => switch (level) {
+        'low' => 'Low',
+        'medium' => 'Medium',
+        'high' => 'High',
+        _ => level,
+      };
+}
+
+class _Chip extends StatelessWidget {
+  const _Chip({required this.icon, required this.label, required this.color});
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 2),
+        Text(label,
+            style: TextStyle(
+                fontSize: 12, color: color, fontWeight: FontWeight.w500)),
+      ],
     );
   }
 }
 
-class _SelectedTaskRow extends StatelessWidget {
-  const _SelectedTaskRow({required this.todo});
-  final Todo todo;
+class _IconBtn extends StatelessWidget {
+  const _IconBtn({
+    required this.icon,
+    required this.color,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String tooltip;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final estimate = todo.timeEstimate;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          const Icon(Icons.check_circle_outline,
-              size: 18, color: Color(0xFF16A34A)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  todo.title,
-                  style: const TextStyle(
-                      fontSize: 14, color: Color(0xFF1A1A2E)),
-                ),
-                if (todo.dueDate != null)
-                  Text(
-                    'Due ${todo.dueDate!.year}-'
-                    '${todo.dueDate!.month.toString().padLeft(2, '0')}-'
-                    '${todo.dueDate!.day.toString().padLeft(2, '0')}',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                  ),
-              ],
-            ),
-          ),
-          if (estimate != null)
-            Text(
-              estimate < 60
-                  ? '${estimate}m'
-                  : estimate % 60 == 0
-                      ? '${estimate ~/ 60}h'
-                      : '${estimate ~/ 60}h ${estimate % 60}m',
-              style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[500],
-                  fontWeight: FontWeight.w500),
-            ),
-        ],
-      ),
+    return IconButton(
+      icon: Icon(icon, color: color, size: 22),
+      tooltip: tooltip,
+      onPressed: onTap,
+      padding: const EdgeInsets.all(6),
+      constraints: const BoxConstraints(),
     );
   }
 }

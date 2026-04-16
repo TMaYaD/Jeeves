@@ -228,6 +228,20 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     });
   }
 
+  /// Stream of next-action todos for [userId] skipped today.
+  Stream<List<Todo>> watchSkippedNextActionsForPlanning(String userId, String today) {
+    return _watchAllForUser(userId).map((all) {
+      final byId = {for (final t in all) t.id: t};
+      final skipped = all
+          .where((t) =>
+              t.state == GtdState.nextAction.value &&
+              t.selectedForToday == false &&
+              t.dailySelectionDate == today)
+          .toList();
+      return _filterUnblocked(skipped, byId);
+    });
+  }
+
   /// Stream of scheduled todos with a due date on [today] that have not yet
   /// been confirmed (i.e. [dailySelectionDate] is null or != [today]).
   Stream<List<Todo>> watchScheduledDueToday(String userId, String today) {

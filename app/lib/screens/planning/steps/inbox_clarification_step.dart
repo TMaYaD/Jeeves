@@ -21,22 +21,32 @@ class InboxClarificationStep extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncItems = ref.watch(inboxItemsProvider);
+    final sessionDate = ref.watch(planningSessionDateProvider);
 
     return asyncItems.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (err, _) => Center(child: Text('Error: $err')),
       data: (items) {
-        if (items.isEmpty) {
+        final pendingItems = items.where((i) => !(i.selectedForToday == false && i.dailySelectionDate == sessionDate)).toList();
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final state = ref.read(dailyPlanningProvider);
+          if (state.initialInboxCount == null) {
+            ref.read(dailyPlanningProvider.notifier).setInitialInboxCount(pendingItems.length);
+          }
+        });
+
+        if (pendingItems.isEmpty) {
           return const _InboxCleared();
         }
         // Show remaining count + the first (oldest-last) item to clarify.
         // inboxItemsProvider orders by createdAt DESC so items.last is oldest.
         // Process in FIFO order: work from the end of the list forward.
-        final current = items.last;
+        final current = pendingItems.last;
         return _ClarifyCard(
           key: ValueKey(current.id),
           todo: current,
-          remaining: items.length,
+          remaining: pendingItems.length,
         );
       },
     );
@@ -94,10 +104,6 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   Future<bool> _saveFields(BuildContext context) async {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) {
-      ScaffoldMessenger.of(context).clearSnackBars();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a title before processing.')),
-      );
       return false;
     }
     final notes = _notesCtrl.text.trim();
@@ -135,10 +141,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
 
     if (!context.mounted) return;
     if (error != null) {
-      ScaffoldMessenger.of(context).clearSnackBars();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $error')),
-      );
+      debugPrint('Error: $error');
     }
   }
 
@@ -156,6 +159,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   @override
   Widget build(BuildContext context) {
     return ListView(
+      physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
         // Progress indicator
@@ -330,6 +334,15 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           icon: Icons.delete_outline,
           color: const Color(0xFFDC2626),
           onTap: () => _process(context, GtdState.done),
+        ),
+        const SizedBox(height: 20),
+        _DestinationButton(
+          label: 'Skip for today',
+          icon: Icons.next_plan_outlined,
+          color: const Color(0xFF6B7280),
+          onTap: () {
+            ref.read(dailyPlanningProvider.notifier).skipInboxItem(widget.todo.id);
+          },
         ),
       ],
     );

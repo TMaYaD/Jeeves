@@ -117,6 +117,13 @@ final selectedTasksMissingEstimatesProvider = StreamProvider<List<Todo>>((ref) {
   return db.todoDao.watchSelectedTasksMissingEstimates(kLocalUserId, today);
 });
 
+/// Skipped Next Actions for today.
+final skippedNextActionsForPlanningProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final today = ref.watch(planningSessionDateProvider);
+  return db.todoDao.watchSkippedNextActionsForPlanning(kLocalUserId, today);
+});
+
 // ---------------------------------------------------------------------------
 // DailyPlanningNotifier — step navigation + mutations
 // ---------------------------------------------------------------------------
@@ -127,6 +134,9 @@ class DailyPlanningState {
     this.currentStep = 0,
     this.availableMinutes = 480, // 8 hours default
     this.energyLevel,
+    this.initialInboxCount,
+    this.inboxClarifiedCount = 0,
+    this.inboxSkippedCount = 0,
   });
 
   final int currentStep;
@@ -135,16 +145,26 @@ class DailyPlanningState {
   /// User's self-reported energy level for today: 'low' | 'medium' | 'high'.
   final String? energyLevel;
 
+  final int? initialInboxCount;
+  final int inboxClarifiedCount;
+  final int inboxSkippedCount;
+
   DailyPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
     String? energyLevel,
     bool clearEnergyLevel = false,
+    int? initialInboxCount,
+    int? inboxClarifiedCount,
+    int? inboxSkippedCount,
   }) =>
       DailyPlanningState(
         currentStep: currentStep ?? this.currentStep,
         availableMinutes: availableMinutes ?? this.availableMinutes,
         energyLevel: clearEnergyLevel ? null : (energyLevel ?? this.energyLevel),
+        initialInboxCount: initialInboxCount ?? this.initialInboxCount,
+        inboxClarifiedCount: inboxClarifiedCount ?? this.inboxClarifiedCount,
+        inboxSkippedCount: inboxSkippedCount ?? this.inboxSkippedCount,
       );
 }
 
@@ -180,6 +200,10 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     state = state.copyWith(energyLevel: level);
   }
 
+  void setInitialInboxCount(int count) {
+    state = state.copyWith(initialInboxCount: count);
+  }
+
   // ---- Inbox clarification (Step 0) -----------------------------------------
 
   /// Updates mutable fields on an inbox item before it is processed.
@@ -203,12 +227,24 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
       );
 
   /// Processes an inbox item to a GTD list (transitions out of inbox state).
-  Future<void> processInboxItem(String id, GtdState newState) =>
-      _db.inboxDao.processInboxItem(
-        id,
-        userId: kLocalUserId,
-        newState: newState.value,
-      );
+  Future<void> processInboxItem(String id, GtdState newState) async {
+    await _db.inboxDao.processInboxItem(
+      id,
+      userId: kLocalUserId,
+      newState: newState.value,
+    );
+    state = state.copyWith(
+      inboxClarifiedCount: state.inboxClarifiedCount + 1,
+    );
+  }
+
+  /// Skips an inbox item for today without clarifying it.
+  Future<void> skipInboxItem(String id) async {
+    await _db.todoDao.skipForToday(id, kLocalUserId, _sessionDate);
+    state = state.copyWith(
+      inboxSkippedCount: state.inboxSkippedCount + 1,
+    );
+  }
 
   // ---- Task mutations (Step 2 — Next Actions review) -------------------------
 
