@@ -68,6 +68,7 @@ class PlanSummaryStep extends ConsumerWidget {
                       todo: t,
                       isSelected: true,
                       onUndo: () => _handleUndo(ref, t),
+                      onSkip: () => _handleSkip(ref, t),
                     )),
                 const SizedBox(height: 16),
               ],
@@ -91,6 +92,7 @@ class PlanSummaryStep extends ConsumerWidget {
                 ...skippedTasks.map((t) => _ReviewCard(
                       todo: t,
                       isSkipped: true,
+                      onSelect: () => _handleSelect(ref, t),
                       onUndo: () => _handleUndo(ref, t),
                     )),
               ],
@@ -204,11 +206,15 @@ class _CapacityBar extends StatelessWidget {
 
 /// Card representing a task in the plan-summary review list.
 ///
-/// Exactly one of three modes is active:
-/// - **pending** (`onSelect` + `onSkip` provided): shows select + skip buttons.
-/// - **selected** (`isSelected = true`, `onUndo` provided): shows only undo.
-/// - **skipped** (`isSkipped = true`, `onUndo` provided): shows only undo,
-///   dimmed appearance.
+/// Two buttons are always shown in fixed positions so the layout never shifts:
+/// - **Left slot** — the "select" action or its undo:
+///   - pending & skipped → Select (check icon)
+///   - selected → Undo (un-select)
+/// - **Right slot** — the "skip" action or its undo:
+///   - pending & selected → Skip (minus icon)
+///   - skipped → Undo (un-skip)
+///
+/// This means "only the button that was pressed changes to Undo".
 class _ReviewCard extends StatelessWidget {
   const _ReviewCard({
     required this.todo,
@@ -283,35 +289,44 @@ class _ReviewCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            // Button layout is fixed-width so cards don't shift when state changes:
-            //   pending  → [check] [skip]
-            //   selected → [    ] [undo]   (check replaced by undo, skip hidden)
-            //   skipped  → [    ] [undo]
+            // Fixed two-button layout — positions never shift:
+            //   pending  → [select] [skip]
+            //   selected → [undo]   [skip]   ← only left changes
+            //   skipped  → [select] [undo]   ← only right changes
             SizedBox(
               width: 80,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  if (!isSelected && !isSkipped && onSelect != null)
+                  // Left slot: Select (pending/skipped) or Undo-of-select (planned)
+                  if (isSelected && onUndo != null)
+                    _IconBtn(
+                      icon: Icons.undo,
+                      color: const Color(0xFF6B7280),
+                      tooltip: 'Remove from today',
+                      onTap: onUndo!,
+                    )
+                  else if (!isSelected && onSelect != null)
                     _IconBtn(
                       icon: Icons.check_circle_outline,
                       color: const Color(0xFF16A34A),
                       tooltip: 'Select for today',
                       onTap: onSelect!,
                     ),
-                  if (!isSelected && !isSkipped && onSkip != null)
-                    _IconBtn(
-                      icon: Icons.remove_circle_outline,
-                      color: const Color(0xFF6B7280),
-                      tooltip: 'Skip',
-                      onTap: onSkip!,
-                    ),
-                  if ((isSelected || isSkipped) && onUndo != null)
+                  // Right slot: Skip (pending/planned) or Undo-of-skip (skipped)
+                  if (isSkipped && onUndo != null)
                     _IconBtn(
                       icon: Icons.undo,
                       color: const Color(0xFF6B7280),
-                      tooltip: 'Undo',
+                      tooltip: 'Un-skip',
                       onTap: onUndo!,
+                    )
+                  else if (!isSkipped && onSkip != null)
+                    _IconBtn(
+                      icon: Icons.remove_circle_outline,
+                      color: const Color(0xFF6B7280),
+                      tooltip: 'Skip for today',
+                      onTap: onSkip!,
                     ),
                 ],
               ),

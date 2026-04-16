@@ -1,9 +1,10 @@
 /// Daily planning ritual — outer container screen (Issue #82).
 ///
 /// Renders a full-screen, drawer-free scaffold with:
-/// - A segmented progress bar across the top (6 steps).
-/// - A non-swipeable [PageView] that displays each ritual step.
-/// - Back / Next navigation buttons at the bottom.
+/// - A 4-segment progress bar (Inbox → Energy → Time → Plan Summary).
+///   The 5th screen (Today's Schedule) is the completion view: all 4 filled.
+/// - A non-swipeable [PageView] that displays each step.
+/// - Back / Next navigation buttons at the bottom (hidden on the last step).
 library;
 
 import 'package:flutter/material.dart';
@@ -200,7 +201,7 @@ class _PlanningHeader extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _SegmentedProgressBar(currentStep: step, totalSteps: 5, ref: ref),
+          _SegmentedProgressBar(currentStep: step, totalSteps: 4, ref: ref),
           const SizedBox(height: 4),
           _buildSubtitle(step, ref),
           const SizedBox(height: 8),
@@ -216,12 +217,19 @@ class _PlanningHeader extends ConsumerWidget {
       final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
       final skipped = state.inboxSkippedCount;
       return Text(
-        'Step 1 of 5. $processed processed out of $initial (skipped $skipped)',
+        'Step 1 of 4 · $processed / $initial processed (skipped $skipped)',
+        style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+      );
+    }
+    // Step 4 = Today's Schedule (completion screen — all 4 segments filled).
+    if (step >= 4) {
+      return Text(
+        'Planning complete',
         style: TextStyle(fontSize: 12, color: Colors.grey[400]),
       );
     }
     return Text(
-      'Step ${step + 1} of 5',
+      'Step ${step + 1} of 4',
       style: TextStyle(fontSize: 12, color: Colors.grey[400]),
     );
   }

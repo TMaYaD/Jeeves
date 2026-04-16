@@ -331,22 +331,19 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
 
   /// Clears completion state and returns the user to the planning ritual.
   ///
-  /// Selected tasks are **preserved** so the day's plan is not wiped on
-  /// re-planning.  Only skipped tasks are reset so the user can re-review
-  /// them.  Energy level and available time are also preserved so the user
-  /// doesn't have to re-enter them.
+  /// All existing task selections (selected and skipped) are **preserved** so
+  /// the day's plan is unchanged on re-entry.  The user can adjust individual
+  /// tasks via the Plan Summary screen's action buttons.  Energy level and
+  /// available time are also preserved so the user doesn't have to re-enter
+  /// them.
   Future<void> reEnterPlanning() async {
     final today = _sessionDate;
     final prefs = await SharedPreferences.getInstance();
-    // Snapshot state values to restore on the new planning session.
+    // Snapshot state values to restore in the new planning session.
     final preservedEnergy = state.energyLevel;
     final preservedMinutes = state.availableMinutes;
     final preservedTimeSet = state.availableTimeSet;
     try {
-      // Clear only skipped tasks — selected tasks remain in the plan.
-      // This is the more failure-prone operation; if it throws, prefs and
-      // notifier state are left untouched (consistent).
-      await _db.todoDao.clearTodaySkippedSelections(kLocalUserId, today);
       await prefs.remove(_kCompletedDateKey);
       // Reset the session date in case the clock crossed midnight.
       ref.read(planningSessionDateProvider.notifier).reset();
@@ -358,8 +355,8 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
         energyLevel: preservedEnergy,
       );
     } catch (e) {
-      // DB selections were already cleared.  Restore the completion flag so
-      // the router guard doesn't block re-entry on the next attempt.
+      // Restore the completion flag so the router guard doesn't block
+      // re-entry on the next attempt.
       await prefs.setString(_kCompletedDateKey, today);
       rethrow;
     }
