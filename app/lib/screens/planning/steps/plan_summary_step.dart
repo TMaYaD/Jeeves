@@ -31,68 +31,84 @@ class PlanSummaryStep extends ConsumerWidget {
         ? totalMinutes / availableMinutes
         : double.infinity;
 
-    return ListView(
-      physics: const ClampingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+    return Column(
       children: [
-        // --- Capacity bar ---
-        _SectionLabel('Capacity'),
-        const SizedBox(height: 8),
-        _CapacityBar(ratio: ratio.clamp(0.0, 2.0)),
-        const SizedBox(height: 6),
-        Text(
-          _capacitySummary(selectedTasks.length, totalMinutes, availableMinutes),
-          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+        // --- Sticky capacity bar ---
+        Container(
+          color: Colors.white,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _SectionLabel('Capacity'),
+              const SizedBox(height: 8),
+              _CapacityBar(ratio: ratio.clamp(0.0, 2.0)),
+              const SizedBox(height: 6),
+              Text(
+                _capacitySummary(
+                    selectedTasks.length, totalMinutes, availableMinutes),
+                style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 20),
+        const Divider(height: 1, color: Color(0xFFF3F4F6)),
 
-        // --- Today's tasks (Selected) ---
-        if (selectedTasks.isNotEmpty) ...[
-          _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
-          const SizedBox(height: 8),
-          ...selectedTasks.map((t) => _ReviewCard(
-                todo: t,
-                isSelected: true,
-                onSkip: () => _handleSkip(ref, t),
-                onUndo: () => _handleUndo(ref, t),
-              )),
-          const SizedBox(height: 16),
-        ],
+        // --- Scrollable task list ---
+        Expanded(
+          child: ListView(
+            physics: const ClampingScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+            children: [
+              // Today's tasks (selected)
+              if (selectedTasks.isNotEmpty) ...[
+                _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
+                const SizedBox(height: 8),
+                ...selectedTasks.map((t) => _ReviewCard(
+                      todo: t,
+                      isSelected: true,
+                      onUndo: () => _handleUndo(ref, t),
+                    )),
+                const SizedBox(height: 16),
+              ],
 
-        // --- Pending Review ---
-        if (pendingTasks.isNotEmpty) ...[
-          _SectionLabel('Pending Review (${pendingTasks.length})'),
-          const SizedBox(height: 8),
-          ...pendingTasks.map((t) => _ReviewCard(
-                todo: t,
-                isSelected: false,
-                isSkipped: false,
-                onSelect: () => _handleSelect(ref, t),
-                onSkip: () => _handleSkip(ref, t),
-              )),
-          const SizedBox(height: 16),
-        ],
+              // Pending review
+              if (pendingTasks.isNotEmpty) ...[
+                _SectionLabel('Pending Review (${pendingTasks.length})'),
+                const SizedBox(height: 8),
+                ...pendingTasks.map((t) => _ReviewCard(
+                      todo: t,
+                      onSelect: () => _handleSelect(ref, t),
+                      onSkip: () => _handleSkip(ref, t),
+                    )),
+                const SizedBox(height: 16),
+              ],
 
-        // --- Skipped tasks ---
-        if (skippedTasks.isNotEmpty) ...[
-          _SectionLabel('Skipped Tasks (${skippedTasks.length})'),
-          const SizedBox(height: 8),
-          ...skippedTasks.map((t) => _ReviewCard(
-                todo: t,
-                isSkipped: true,
-                onUndo: () => _handleUndo(ref, t),
-              )),
-        ],
+              // Skipped tasks
+              if (skippedTasks.isNotEmpty) ...[
+                _SectionLabel('Skipped Tasks (${skippedTasks.length})'),
+                const SizedBox(height: 8),
+                ...skippedTasks.map((t) => _ReviewCard(
+                      todo: t,
+                      isSkipped: true,
+                      onUndo: () => _handleUndo(ref, t),
+                    )),
+              ],
 
-        if (selectedTasks.isEmpty && pendingTasks.isEmpty && skippedTasks.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Text(
-              'No tasks to review!',
-              style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-              textAlign: TextAlign.center,
-            ),
-          )
+              if (selectedTasks.isEmpty &&
+                  pendingTasks.isEmpty &&
+                  skippedTasks.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Text(
+                    'No tasks to review!',
+                    style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -186,6 +202,13 @@ class _CapacityBar extends StatelessWidget {
   }
 }
 
+/// Card representing a task in the plan-summary review list.
+///
+/// Exactly one of three modes is active:
+/// - **pending** (`onSelect` + `onSkip` provided): shows select + skip buttons.
+/// - **selected** (`isSelected = true`, `onUndo` provided): shows only undo.
+/// - **skipped** (`isSkipped = true`, `onUndo` provided): shows only undo,
+///   dimmed appearance.
 class _ReviewCard extends StatelessWidget {
   const _ReviewCard({
     required this.todo,
@@ -241,14 +264,18 @@ class _ReviewCard extends StatelessWidget {
                       if (todo.timeEstimate != null)
                         _Chip(
                           icon: Icons.timer_outlined,
-                          label: '${todo.timeEstimate}m',
-                          color: isSkipped ? Colors.grey[400]! : const Color(0xFF2563EB),
+                          label: _formatMinutes(todo.timeEstimate!),
+                          color: isSkipped
+                              ? Colors.grey[400]!
+                              : const Color(0xFF2563EB),
                         ),
                       if (todo.energyLevel != null)
                         _Chip(
                           icon: Icons.bolt_outlined,
                           label: _energyLabel(todo.energyLevel!),
-                          color: isSkipped ? Colors.grey[400]! : const Color(0xFF7C3AED),
+                          color: isSkipped
+                              ? Colors.grey[400]!
+                              : const Color(0xFF7C3AED),
                         ),
                     ],
                   ),
@@ -256,31 +283,38 @@ class _ReviewCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (!isSelected && !isSkipped && onSelect != null)
-                  _IconBtn(
-                    icon: Icons.check_circle_outline,
-                    color: const Color(0xFF16A34A),
-                    tooltip: 'Select for today',
-                    onTap: onSelect!,
-                  ),
-                if (!isSkipped && onSkip != null)
-                  _IconBtn(
-                    icon: Icons.remove_circle_outline,
-                    color: const Color(0xFF6B7280),
-                    tooltip: 'Skip',
-                    onTap: onSkip!,
-                  ),
-                if ((isSelected || isSkipped) && onUndo != null)
-                  _IconBtn(
-                    icon: Icons.undo,
-                    color: const Color(0xFF6B7280),
-                    tooltip: 'Undo',
-                    onTap: onUndo!,
-                  ),
-              ],
+            // Button layout is fixed-width so cards don't shift when state changes:
+            //   pending  → [check] [skip]
+            //   selected → [    ] [undo]   (check replaced by undo, skip hidden)
+            //   skipped  → [    ] [undo]
+            SizedBox(
+              width: 80,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (!isSelected && !isSkipped && onSelect != null)
+                    _IconBtn(
+                      icon: Icons.check_circle_outline,
+                      color: const Color(0xFF16A34A),
+                      tooltip: 'Select for today',
+                      onTap: onSelect!,
+                    ),
+                  if (!isSelected && !isSkipped && onSkip != null)
+                    _IconBtn(
+                      icon: Icons.remove_circle_outline,
+                      color: const Color(0xFF6B7280),
+                      tooltip: 'Skip',
+                      onTap: onSkip!,
+                    ),
+                  if ((isSelected || isSkipped) && onUndo != null)
+                    _IconBtn(
+                      icon: Icons.undo,
+                      color: const Color(0xFF6B7280),
+                      tooltip: 'Undo',
+                      onTap: onUndo!,
+                    ),
+                ],
+              ),
             ),
           ],
         ),
@@ -294,6 +328,12 @@ class _ReviewCard extends StatelessWidget {
         'high' => 'High',
         _ => level,
       };
+
+  String _formatMinutes(int m) {
+    if (m < 60) return '${m}m';
+    if (m % 60 == 0) return '${m ~/ 60}h';
+    return '${m ~/ 60}h ${m % 60}m';
+  }
 }
 
 class _Chip extends StatelessWidget {

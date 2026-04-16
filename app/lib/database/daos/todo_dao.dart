@@ -358,6 +358,29 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ));
   }
 
+  /// Resets planning selections only for todos that were **skipped** on [date].
+  ///
+  /// Used when re-entering the planning ritual so that already-selected tasks
+  /// remain in the day's plan while skipped tasks are returned to the
+  /// pending-review queue.
+  ///
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to
+  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
+  Future<void> clearTodaySkippedSelections(String userId, String date,
+      {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
+    await (update(todos)
+          ..where((t) =>
+              t.userId.equals(userId) &
+              t.dailySelectionDate.equals(date) &
+              t.selectedForToday.equals(false)))
+        .write(TodosCompanion(
+      selectedForToday: Value(null),
+      dailySelectionDate: Value(null),
+      updatedAt: Value(ts),
+    ));
+  }
+
   /// Update mutable todo fields (title, notes, energy level, time estimate).
   Future<void> updateFields(
     String todoId,

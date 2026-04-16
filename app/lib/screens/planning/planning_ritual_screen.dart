@@ -42,6 +42,38 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
     _pageController = PageController(
       initialPage: ref.read(dailyPlanningProvider).currentStep,
     );
+    // Auto-advance from inbox step if inbox is already empty on first load.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeAutoAdvanceInbox(ref.read(inboxItemsProvider));
+    });
+  }
+
+  /// Auto-advances from step 0 to step 1 when the inbox has no pending items.
+  ///
+  /// Called both on first load (via [addPostFrameCallback] in [initState]) and
+  /// whenever [inboxItemsProvider] emits a new value (via [ref.listen]).
+  void _maybeAutoAdvanceInbox(AsyncValue<List<Todo>> inboxAsync) {
+    if (ref.read(dailyPlanningProvider).currentStep != 0) return;
+    final items = inboxAsync.asData?.value;
+    if (items == null) return; // still loading
+    final sessionDate = ref.read(planningSessionDateProvider);
+    final hasPending = items.any(
+      (i) => !(i.selectedForToday == false && i.dailySelectionDate == sessionDate),
+    );
+    if (!hasPending) {
+      ref.read(dailyPlanningProvider.notifier).advanceStep();
+    }
+  }
+
+  /// Handles the Next button tap, inserting any step-specific side-effects.
+  void _handleNext(int step) {
+    final notifier = ref.read(dailyPlanningProvider.notifier);
+    if (step == 1) {
+      // Energy → Time: auto-skip tasks that exceed today's energy.
+      notifier.autoSkipByEnergy().then((_) => notifier.advanceStep());
+    } else {
+      notifier.advanceStep();
+    }
   }
 
   @override
@@ -57,7 +89,6 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
     final step = planningState.currentStep;
 
     // Animate the PageView only when currentStep actually changes.
-    // Using ref.listen avoids scheduling a callback on every build.
     ref.listen<DailyPlanningState>(dailyPlanningProvider, (prev, next) {
       if (prev?.currentStep != next.currentStep && _pageController.hasClients) {
         _pageController.animateToPage(
@@ -67,6 +98,12 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
         );
       }
     });
+
+    // Auto-advance from inbox step when inbox becomes empty mid-session.
+    ref.listen<AsyncValue<List<Todo>>>(
+      inboxItemsProvider,
+      (_, next) => _maybeAutoAdvanceInbox(next),
+    );
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -94,9 +131,7 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
               _PlanningFooter(
                 step: step,
                 onBack: step > 0 ? () => notifier.goToStep(step - 1) : null,
-                onNext: _canAdvance(step, ref)
-                    ? () => notifier.advanceStep()
-                    : null,
+                onNext: _canAdvance(step, ref) ? () => _handleNext(step) : null,
               ),
           ],
         ),
@@ -200,54 +235,89 @@ class _SegmentedProgressBar extends StatelessWidget {
   final int totalSteps;
   final WidgetRef ref;
 
+  /// Returns the fill fraction (0.0–1.0) for the current segment of [step].
+  ///
+  /// - Step 0 (inbox): ratio of items processed so far.
+  /// - Step 1 (energy): 1.0 when an energy level has been chosen, else 0.0.
+  /// - Step 2 (time): 1.0 when the user has explicitly set available time.
+  /// - All other steps: 0.0 (segment stays empty until the step is completed).
+  double _currentStepFraction(int step, DailyPlanningState state) {
+    switch (step) {
+      case 0:
+        final initial = state.initialInboxCount ?? 1;
+        final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
+        return initial > 0 ? (processed / initial).clamp(0.0, 1.0) : 1.0;
+      case 1:
+        return state.energyLevel != null ? 1.0 : 0.0;
+      case 2:
+        return state.availableTimeSet ? 1.0 : 0.0;
+      default:
+        return 0.0;
+    }
+  }
+
+  Widget _buildBar(double fraction) {
+    if (fraction >= 1.0) {
+      return Container(
+        height: 4,
+        decoration: BoxDecoration(
+          color: const Color(0xFF2563EB),
+          borderRadius: BorderRadius.circular(2),
+        ),
+      );
+    }
+    if (fraction <= 0.0) {
+      return Container(
+        height: 4,
+        decoration: BoxDecoration(
+          color: const Color(0xFFE5E7EB),
+          borderRadius: BorderRadius.circular(2),
+        ),
+      );
+    }
+    // Partial fill
+    return Stack(
+      children: [
+        Container(
+          height: 4,
+          decoration: BoxDecoration(
+            color: const Color(0xFFE5E7EB),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        FractionallySizedBox(
+          widthFactor: fraction,
+          child: Container(
+            height: 4,
+            decoration: BoxDecoration(
+              color: const Color(0xFF2563EB),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(dailyPlanningProvider);
-    final initial = state.initialInboxCount ?? 1;
-    final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
-    final clarifyProgress = initial > 0 ? (processed / initial).clamp(0.0, 1.0) : 1.0;
 
     return Row(
       children: List.generate(totalSteps, (i) {
-        final isClarify = i == 0;
-        final filled = i < currentStep;
-        
-        Widget bar = Container(
-          height: 4,
-          decoration: BoxDecoration(
-            color: filled ? const Color(0xFF2563EB) : const Color(0xFFE5E7EB),
-            borderRadius: BorderRadius.circular(2),
-          ),
-        );
-
-        if (isClarify && currentStep == 0) {
-          bar = Stack(
-            children: [
-              Container(
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE5E7EB),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              FractionallySizedBox(
-                widthFactor: clarifyProgress,
-                child: Container(
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2563EB),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-            ],
-          );
+        final double fraction;
+        if (i < currentStep) {
+          fraction = 1.0; // completed step
+        } else if (i == currentStep) {
+          fraction = _currentStepFraction(i, state); // active step
+        } else {
+          fraction = 0.0; // future step
         }
 
         return Expanded(
           child: Padding(
             padding: EdgeInsets.only(right: i < totalSteps - 1 ? 4 : 0),
-            child: bar,
+            child: _buildBar(fraction),
           ),
         );
       }),

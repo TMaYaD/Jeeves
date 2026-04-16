@@ -378,6 +378,57 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // clearTodaySkippedSelections
+  // ---------------------------------------------------------------------------
+
+  group('clearTodaySkippedSelections', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('resets only skipped tasks, leaving selected tasks intact', () async {
+      await _insert(db, id: 'a', title: 'A', state: 'next_action');
+      await _insert(db, id: 'b', title: 'B', state: 'next_action');
+      await db.todoDao.selectForToday('a', _userId, _today);
+      await db.todoDao.skipForToday('b', _userId, _today);
+
+      await db.todoDao.clearTodaySkippedSelections(_userId, _today);
+
+      final rowA = await db.todoDao.getTodo('a', _userId);
+      final rowB = await db.todoDao.getTodo('b', _userId);
+      // Selected task 'a' is untouched.
+      expect(rowA?.selectedForToday, true);
+      expect(rowA?.dailySelectionDate, _today);
+      // Skipped task 'b' is reset.
+      expect(rowB?.selectedForToday, equals(null));
+      expect(rowB?.dailySelectionDate, equals(null));
+    });
+
+    test('does not reset tasks from a different date', () async {
+      await _insert(db, id: 'a', title: 'A', state: 'next_action');
+      await db.todoDao.skipForToday('a', _userId, _yesterday);
+
+      await db.todoDao.clearTodaySkippedSelections(_userId, _today);
+
+      final row = await db.todoDao.getTodo('a', _userId);
+      // Yesterday's skip is untouched.
+      expect(row?.selectedForToday, false);
+      expect(row?.dailySelectionDate, _yesterday);
+    });
+
+    test('does not reset tasks that were not reviewed today', () async {
+      await _insert(db, id: 'a', title: 'A', state: 'next_action');
+
+      await db.todoDao.clearTodaySkippedSelections(_userId, _today);
+
+      final row = await db.todoDao.getTodo('a', _userId);
+      expect(row?.selectedForToday, equals(null));
+      expect(row?.dailySelectionDate, equals(null));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // watchSelectedTasksMissingEstimates
   // ---------------------------------------------------------------------------
 

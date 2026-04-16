@@ -133,6 +133,7 @@ class DailyPlanningState {
   const DailyPlanningState({
     this.currentStep = 0,
     this.availableMinutes = 480, // 8 hours default
+    this.availableTimeSet = false,
     this.energyLevel,
     this.initialInboxCount,
     this.inboxClarifiedCount = 0,
@@ -141,6 +142,9 @@ class DailyPlanningState {
 
   final int currentStep;
   final int availableMinutes;
+
+  /// True once the user has explicitly set available time (not the default).
+  final bool availableTimeSet;
 
   /// User's self-reported energy level for today: 'low' | 'medium' | 'high'.
   final String? energyLevel;
@@ -152,6 +156,7 @@ class DailyPlanningState {
   DailyPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
+    bool? availableTimeSet,
     String? energyLevel,
     bool clearEnergyLevel = false,
     int? initialInboxCount,
@@ -161,6 +166,7 @@ class DailyPlanningState {
       DailyPlanningState(
         currentStep: currentStep ?? this.currentStep,
         availableMinutes: availableMinutes ?? this.availableMinutes,
+        availableTimeSet: availableTimeSet ?? this.availableTimeSet,
         energyLevel: clearEnergyLevel ? null : (energyLevel ?? this.energyLevel),
         initialInboxCount: initialInboxCount ?? this.initialInboxCount,
         inboxClarifiedCount: inboxClarifiedCount ?? this.inboxClarifiedCount,
@@ -193,7 +199,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   }
 
   void setAvailableTime(int minutes) {
-    state = state.copyWith(availableMinutes: minutes);
+    state = state.copyWith(availableMinutes: minutes, availableTimeSet: true);
   }
 
   void setEnergyLevel(String level) {
@@ -273,6 +279,38 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   Future<void> setTimeEstimate(String id, int minutes) =>
       _db.todoDao.updateFields(id, kLocalUserId, timeEstimate: minutes);
 
+  // ---- Energy-based auto-skip ------------------------------------------------
+
+  /// Skips all pending next-action tasks whose energy requirement exceeds the
+  /// day's energy level.
+  ///
+  /// Called when the user advances past the Energy Check-in step so that the
+  /// Plan Summary only shows tasks the user can realistically do today.
+  ///
+  /// - 'low' day  → auto-skips 'medium' and 'high' tasks.
+  /// - 'medium' day → auto-skips 'high' tasks.
+  /// - 'high' day or no energy set → no auto-skips.
+  /// - Tasks with no energy tag are never auto-skipped.
+  Future<void> autoSkipByEnergy() async {
+    final dayEnergy = state.energyLevel;
+    if (dayEnergy == null || dayEnergy == 'high') return;
+
+    const energyOrder = {'low': 1, 'medium': 2, 'high': 3};
+    final dayLevel = energyOrder[dayEnergy] ?? 0;
+    final today = _sessionDate;
+
+    final pending =
+        await _db.todoDao.watchNextActionsForPlanning(kLocalUserId, today).first;
+    for (final task in pending) {
+      if (task.energyLevel != null) {
+        final taskLevel = energyOrder[task.energyLevel] ?? 0;
+        if (taskLevel > dayLevel) {
+          await _db.todoDao.skipForToday(task.id, kLocalUserId, today);
+        }
+      }
+    }
+  }
+
   // ---- Ritual lifecycle ------------------------------------------------------
 
   /// Marks the ritual as complete for today and unlocks execution features.
@@ -291,20 +329,34 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     }
   }
 
-  /// Clears completion state and resets task selections so the user can
-  /// re-plan mid-day.
+  /// Clears completion state and returns the user to the planning ritual.
+  ///
+  /// Selected tasks are **preserved** so the day's plan is not wiped on
+  /// re-planning.  Only skipped tasks are reset so the user can re-review
+  /// them.  Energy level and available time are also preserved so the user
+  /// doesn't have to re-enter them.
   Future<void> reEnterPlanning() async {
     final today = _sessionDate;
     final prefs = await SharedPreferences.getInstance();
+    // Snapshot state values to restore on the new planning session.
+    final preservedEnergy = state.energyLevel;
+    final preservedMinutes = state.availableMinutes;
+    final preservedTimeSet = state.availableTimeSet;
     try {
-      // Clear DB first — it is the more failure-prone operation.  If it throws,
-      // prefs and notifier state are left untouched (consistent).
-      await _db.todoDao.clearTodaySelections(kLocalUserId, today);
+      // Clear only skipped tasks — selected tasks remain in the plan.
+      // This is the more failure-prone operation; if it throws, prefs and
+      // notifier state are left untouched (consistent).
+      await _db.todoDao.clearTodaySkippedSelections(kLocalUserId, today);
       await prefs.remove(_kCompletedDateKey);
       // Reset the session date in case the clock crossed midnight.
       ref.read(planningSessionDateProvider.notifier).reset();
       planningCompletionNotifier.value = false;
-      state = const DailyPlanningState(); // reset to Step 0
+      state = DailyPlanningState(
+        currentStep: 0,
+        availableMinutes: preservedMinutes,
+        availableTimeSet: preservedTimeSet,
+        energyLevel: preservedEnergy,
+      );
     } catch (e) {
       // DB selections were already cleared.  Restore the completion flag so
       // the router guard doesn't block re-entry on the next attempt.
