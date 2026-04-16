@@ -320,7 +320,13 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     try {
       await prefs.setString(_kCompletedDateKey, today);
       planningCompletionNotifier.value = true;
-      state = const DailyPlanningState(); // reset UI state
+      // Reset step/inbox counters but keep energy and time so reEnterPlanning()
+      // can restore them if the user replans later in the same session.
+      state = DailyPlanningState(
+        energyLevel: state.energyLevel,
+        availableMinutes: state.availableMinutes,
+        availableTimeSet: state.availableTimeSet,
+      );
     } catch (e) {
       // Attempt rollback of prefs on failure so persisted state stays
       // consistent with the in-memory notifier.
