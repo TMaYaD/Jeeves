@@ -92,6 +92,10 @@ Widget _buildShellOnly({
                     path: '/scheduled',
                     builder: (_, _) => const Scaffold(body: Text('Scheduled body')),
                   ),
+                  GoRoute(
+                    path: '/focus',
+                    builder: (_, _) => const Scaffold(body: Text('Focus body')),
+                  ),
                 ],
               ),
             ],
@@ -115,14 +119,13 @@ void main() {
     await tester.pump();
 
     // Drawer is initially hidden
-    expect(find.text('GTD LISTS'), findsNothing);
+    expect(find.text('Inbox'), findsNothing);
 
     // Open drawer via the menu button added in the mock child scaffold
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
 
-    expect(find.text('GTD LISTS'), findsOneWidget);
-    expect(find.text('PLANNING'), findsOneWidget);
+    expect(find.text('Inbox'), findsWidgets);
     // Scroll the drawer to reveal sections further down.
     await tester.drag(find.byType(Drawer), const Offset(0, -300));
     await tester.pumpAndSettle();
@@ -149,7 +152,7 @@ void main() {
     expect(find.text('Scheduled'), findsOneWidget);
     expect(find.text('Waiting For'), findsOneWidget);
     expect(find.text('Someday/Maybe'), findsOneWidget);
-    expect(find.text('Re-plan Day'), findsOneWidget);
+    expect(find.text('Focus'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
   });
 
@@ -223,17 +226,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
-  testWidgets('AppShell Re-plan Day navigates to /planning on tap', (tester) async {
+  testWidgets('AppShell Focus navigates to /focus on tap', (tester) async {
     await tester.pumpWidget(_buildShellOnly());
     await tester.pump();
 
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Re-plan Day'));
+    await tester.tap(find.text('Focus'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Planning body'), findsOneWidget);
+    expect(find.text('Focus body'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
   });
 }

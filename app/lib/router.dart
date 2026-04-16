@@ -10,6 +10,7 @@ import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/blocked/blocked_screen.dart';
+import 'screens/focus_screen.dart';
 
 /// Routes that require the daily planning ritual to be completed first.
 const _protectedPaths = [
@@ -18,6 +19,7 @@ const _protectedPaths = [
   '/someday-maybe',
   '/blocked',
   '/scheduled',
+  '/focus',
 ];
 
 final appRouter = GoRouter(
@@ -66,6 +68,10 @@ final appRouter = GoRouter(
         GoRoute(
           path: '/scheduled',
           builder: (context, state) => const ScheduledScreen(),
+        ),
+        GoRoute(
+          path: '/focus',
+          builder: (context, state) => const FocusScreen(),
         ),
       ],
     ),

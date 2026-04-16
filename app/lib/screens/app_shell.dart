@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/tags_provider.dart';
-import '../providers/daily_planning_provider.dart';
 
 /// Persistent scaffold with a collapsible left drawer navigation.
 ///
@@ -59,8 +58,8 @@ class CustomDrawer extends ConsumerWidget {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
-                  _buildSectionHeader('GTD LISTS'),
                   _buildNavItem(context, icon: Icons.inbox_outlined, title: 'Inbox', path: '/inbox', location: location, count: inboxCount),
+                  _buildNavItem(context, icon: Icons.center_focus_strong_outlined, title: 'Focus', path: '/focus', location: location),
                   _buildNavItem(context, icon: Icons.check_circle_outline, title: 'Next Actions', path: '/next-actions', location: location, count: nextActionsCount),
                   _buildNavItem(context, icon: Icons.event_outlined, title: 'Scheduled', path: '/scheduled', location: location, count: scheduledCount),
                   _buildNavItem(context, icon: Icons.hourglass_empty, title: 'Waiting For', path: '/waiting-for', location: location, count: waitingForCount),
@@ -70,26 +69,6 @@ class CustomDrawer extends ConsumerWidget {
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 8),
-
-                  // Re-plan Day — re-enters the daily planning ritual
-                  _buildSectionHeader('PLANNING'),
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                    leading: const Icon(Icons.wb_sunny_outlined, color: Color(0xFF6B7280)),
-                    title: const Text(
-                      'Re-plan Day',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-                    ),
-                    onTap: () async {
-                      // Capture the router before closing the drawer; after
-                      // Navigator.pop the drawer unmounts and context becomes
-                      // invalid across the subsequent await gap.
-                      final router = GoRouter.of(context);
-                      Navigator.pop(context); // close drawer first
-                      await ref.read(dailyPlanningProvider.notifier).reEnterPlanning();
-                      router.go('/planning');
-                    },
-                  ),
 
                   const SizedBox(height: 16),
                   _buildSectionHeader('CONTEXTS'),

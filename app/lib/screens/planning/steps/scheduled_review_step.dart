@@ -110,7 +110,7 @@ class ScheduledReviewStep extends ConsumerWidget {
       debugPrint('Failed to start day: $startError');
       return;
     }
-    context.go('/next-actions');
+    context.go('/focus');
   }
 }
 
