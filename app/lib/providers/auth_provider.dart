@@ -47,16 +47,26 @@ class AuthNotifier extends AsyncNotifier<String?> {
   Future<String?> build() async {
     final service = ref.watch(authServiceProvider);
     final token = await service.getToken();
-    if (token != null) {
-      final userId = _extractUserId(token);
-      if (userId == null) {
-        // Token is malformed — clear it and remain unauthenticated.
-        await service.clearToken();
-        return null;
-      }
-      ref.read(currentUserIdProvider.notifier).setUserId(userId);
-      authStateNotifier.value = true;
+
+    if (token == null) {
+      ref.read(currentUserIdProvider.notifier).reset();
+      authStateNotifier.value = false;
+      return null;
     }
+
+    final userId = _extractUserId(token);
+    if (userId == null) {
+      // Token is malformed or expired — best-effort cleanup, stay unauthenticated.
+      try {
+        await service.clearToken();
+      } catch (_) {}
+      ref.read(currentUserIdProvider.notifier).reset();
+      authStateNotifier.value = false;
+      return null;
+    }
+
+    ref.read(currentUserIdProvider.notifier).setUserId(userId);
+    authStateNotifier.value = true;
     return token;
   }
 
@@ -133,6 +143,11 @@ String? _extractUserId(String token) {
     );
     final decoded = utf8.decode(base64Url.decode(padded));
     final json = jsonDecode(decoded) as Map<String, dynamic>;
+    final exp = json['exp'];
+    final expSeconds =
+        exp is int ? exp : (exp is String ? int.tryParse(exp) : null);
+    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (expSeconds != null && expSeconds <= nowSeconds) return null;
     return json['sub'] as String?;
   } catch (_) {
     return null;

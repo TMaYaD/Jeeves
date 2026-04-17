@@ -39,7 +39,13 @@ class AuthService {
   final ApiService _api;
   final SecureStorage _storage;
 
-  Future<String?> getToken() => _storage.read(_kTokenKey);
+  Future<String?> getToken() async {
+    final token = await _storage.read(_kTokenKey);
+    if (token != null) {
+      _api.setAuthToken(token);
+    }
+    return token;
+  }
 
   Future<void> saveToken(String token) async {
     await _storage.write(_kTokenKey, token);

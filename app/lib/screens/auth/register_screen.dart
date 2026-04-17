@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../providers/auth_provider.dart';
+import 'auth_helpers.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
@@ -42,7 +43,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = _messageFromDio(e);
+        _errorMessage = authMessageFromDio(e, duplicateStatusCode: 409);
       });
     } catch (_) {
       if (!mounted) return;
@@ -51,16 +52,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         _errorMessage = 'Something went wrong. Please try again.';
       });
     }
-  }
-
-  String _messageFromDio(DioException e) {
-    final status = e.response?.statusCode;
-    if (status == 409) return 'An account with this email already exists.';
-    if (e.type == DioExceptionType.connectionError ||
-        e.type == DioExceptionType.connectionTimeout) {
-      return 'Connection failed. Check your network.';
-    }
-    return 'Something went wrong. Please try again.';
   }
 
   @override
@@ -94,19 +85,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     ),
                     const SizedBox(height: 40),
                     if (_errorMessage != null) ...[
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFEF2F2),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFFCA5A5)),
-                        ),
-                        child: Text(
-                          _errorMessage!,
-                          style: const TextStyle(
-                              color: Color(0xFFDC2626), fontSize: 14),
-                        ),
-                      ),
+                      buildErrorBanner(_errorMessage!),
                       const SizedBox(height: 16),
                     ],
                     TextFormField(

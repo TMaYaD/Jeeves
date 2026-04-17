@@ -80,5 +80,18 @@ void main() {
 
       expect(await sut.getToken(), 'second');
     });
+
+    test('getToken restores API auth state on startup hydration', () async {
+      await sut.saveToken('tok123');
+
+      // Simulate restart: fresh API client + new service instance, same storage.
+      final freshApi = _FakeApiService();
+      final freshSut = AuthService(apiService: freshApi, storage: storage);
+
+      final token = await freshSut.getToken();
+
+      expect(token, 'tok123');
+      expect(freshApi.capturedToken, 'tok123');
+    });
   });
 }

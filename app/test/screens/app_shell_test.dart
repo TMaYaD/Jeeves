@@ -21,11 +21,14 @@ class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
 }
 
 class _MockAuthNotifier extends AuthNotifier {
+  _MockAuthNotifier({this.onLogout});
+  final VoidCallback? onLogout;
+
   @override
   Future<String?> build() async => null; // no FlutterSecureStorage call
 
   @override
-  Future<void> logout() async {}
+  Future<void> logout() async => onLogout?.call();
 }
 
 // ---------------------------------------------------------------------------
@@ -34,10 +37,11 @@ class _MockAuthNotifier extends AuthNotifier {
 
 Widget _buildShellOnly({
   List<Todo> items = const [],
+  VoidCallback? onLogout,
 }) {
   return ProviderScope(
     overrides: [
-      authTokenProvider.overrideWith(() => _MockAuthNotifier()),
+      authTokenProvider.overrideWith(() => _MockAuthNotifier(onLogout: onLogout)),
       isOnlineProvider.overrideWith((_) => Stream.value(true)),
       inboxItemsProvider.overrideWith((_) => Stream.value(items)),
       nextActionsProvider.overrideWith((_) => Stream.value([])),
@@ -262,5 +266,22 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('sign_out_tile')), findsOneWidget);
+  });
+
+  testWidgets('AppShell Sign Out tile calls logout()', (tester) async {
+    var called = false;
+    await tester.pumpWidget(_buildShellOnly(onLogout: () => called = true));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(Drawer), const Offset(0, -600));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('sign_out_tile')));
+    await tester.pump();
+
+    expect(called, isTrue);
   });
 }

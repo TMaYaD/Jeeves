@@ -204,4 +204,43 @@ void main() {
       expect(find.text('Register'), findsOneWidget);
     });
   });
+
+  group('LoginScreen — success flow', () {
+    testWidgets('successful login triggers router redirect to /inbox',
+        (tester) async {
+      final router = GoRouter(
+        initialLocation: '/login',
+        refreshListenable: authStateNotifier,
+        redirect: (_, state) {
+          if (authStateNotifier.value && state.uri.path == '/login') {
+            return '/inbox';
+          }
+          return null;
+        },
+        routes: [
+          GoRoute(
+              path: '/login',
+              builder: (_, _) => const LoginScreen()),
+          GoRoute(
+              path: '/inbox',
+              builder: (_, _) => const Scaffold(body: Text('Inbox'))),
+        ],
+      );
+
+      await tester.pumpWidget(_buildScreen(
+        notifierFactory: _SuccessAuthNotifier.new,
+        router: router,
+      ));
+      await tester.pump();
+
+      await tester.enterText(
+          find.byKey(const Key('email_field')), 'a@b.com');
+      await tester.enterText(
+          find.byKey(const Key('password_field')), 'password');
+      await tester.tap(find.byKey(const Key('sign_in_button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Inbox'), findsOneWidget);
+    });
+  });
 }
