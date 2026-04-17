@@ -22,6 +22,21 @@ class _SuccessAuthNotifier extends AuthNotifier {
   }
 }
 
+class _ConnectionErrorAuthNotifier extends AuthNotifier {
+  @override
+  Future<String?> build() async => null;
+
+  @override
+  Future<void> login(String email, String password) async {
+    final err = DioException(
+      requestOptions: RequestOptions(path: '/session'),
+      type: DioExceptionType.connectionError,
+    );
+    state = AsyncError(err, StackTrace.empty);
+    throw err;
+  }
+}
+
 class _FailAuthNotifier extends AuthNotifier {
   final int statusCode;
   _FailAuthNotifier(this.statusCode);
@@ -153,6 +168,26 @@ void main() {
       await tester.pump(); // settle state
 
       expect(find.text('Invalid email or password.'), findsOneWidget);
+    });
+  });
+
+  group('LoginScreen — connection errors', () {
+    testWidgets('shows connection error message on network failure',
+        (tester) async {
+      await tester.pumpWidget(_buildScreen(
+        notifierFactory: _ConnectionErrorAuthNotifier.new,
+      ));
+      await tester.pump();
+
+      await tester.enterText(
+          find.byKey(const Key('email_field')), 'a@b.com');
+      await tester.enterText(
+          find.byKey(const Key('password_field')), 'password');
+      await tester.tap(find.byKey(const Key('sign_in_button')));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Connection failed. Check your network.'), findsOneWidget);
     });
   });
 

@@ -28,6 +28,10 @@ final currentUserIdProvider =
 class CurrentUserIdNotifier extends Notifier<String> {
   @override
   String build() => 'local';
+
+  void setUserId(String id) => state = id;
+
+  void reset() => state = 'local';
 }
 
 // ---------------------------------------------------------------------------
@@ -44,8 +48,13 @@ class AuthNotifier extends AsyncNotifier<String?> {
     final service = ref.watch(authServiceProvider);
     final token = await service.getToken();
     if (token != null) {
-      final userId = _extractUserId(token) ?? 'local';
-      ref.read(currentUserIdProvider.notifier).state = userId;
+      final userId = _extractUserId(token);
+      if (userId == null) {
+        // Token is malformed — clear it and remain unauthenticated.
+        await service.clearToken();
+        return null;
+      }
+      ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
     }
     return token;
@@ -56,8 +65,11 @@ class AuthNotifier extends AsyncNotifier<String?> {
     try {
       final service = ref.read(authServiceProvider);
       final token = await service.login(email, password);
-      final userId = _extractUserId(token) ?? 'local';
-      ref.read(currentUserIdProvider.notifier).state = userId;
+      final userId = _extractUserId(token);
+      if (userId == null) {
+        throw StateError('Server returned a token without a valid user ID.');
+      }
+      ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
       state = AsyncData(token);
     } catch (e, st) {
@@ -71,8 +83,11 @@ class AuthNotifier extends AsyncNotifier<String?> {
     try {
       final service = ref.read(authServiceProvider);
       final token = await service.register(email, password);
-      final userId = _extractUserId(token) ?? 'local';
-      ref.read(currentUserIdProvider.notifier).state = userId;
+      final userId = _extractUserId(token);
+      if (userId == null) {
+        throw StateError('Server returned a token without a valid user ID.');
+      }
+      ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
       state = AsyncData(token);
     } catch (e, st) {
@@ -82,8 +97,12 @@ class AuthNotifier extends AsyncNotifier<String?> {
   }
 
   Future<void> logout() async {
-    await ref.read(authServiceProvider).clearToken();
-    ref.read(currentUserIdProvider.notifier).state = 'local';
+    try {
+      await ref.read(authServiceProvider).clearToken();
+    } catch (_) {
+      // Best-effort token removal; proceed with local state reset regardless.
+    }
+    ref.read(currentUserIdProvider.notifier).reset();
     state = const AsyncData(null);
     authStateNotifier.value = false;
   }

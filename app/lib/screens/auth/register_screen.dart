@@ -120,7 +120,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         if (v == null || v.trim().isEmpty) {
                           return 'Email is required.';
                         }
-                        if (!v.contains('@')) return 'Enter a valid email.';
+                        final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+                        if (!emailRegex.hasMatch(v.trim())) {
+                          return 'Enter a valid email.';
+                        }
                         return null;
                       },
                     ),
@@ -138,6 +141,9 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                       validator: (v) {
                         if (v == null || v.isEmpty) {
                           return 'Password is required.';
+                        }
+                        if (v.length < 8) {
+                          return 'Password must be at least 8 characters.';
                         }
                         return null;
                       },

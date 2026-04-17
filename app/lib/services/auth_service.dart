@@ -56,7 +56,10 @@ class AuthService {
       'email': email,
       'password': password,
     });
-    final token = response['access_token'] as String;
+    final token = response['access_token'] as String?;
+    if (token == null) {
+      throw StateError('Server response missing access_token from /session');
+    }
     await saveToken(token);
     return token;
   }
@@ -66,7 +69,10 @@ class AuthService {
       'email': email,
       'password': password,
     });
-    final token = response['access_token'] as String;
+    final token = response['access_token'] as String?;
+    if (token == null) {
+      throw StateError('Server response missing access_token from /user');
+    }
     await saveToken(token);
     return token;
   }
