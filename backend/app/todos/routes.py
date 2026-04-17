@@ -137,6 +137,7 @@ async def create_todo(
         priority=body.priority,
         time_estimate=body.time_estimate,
         energy_level=body.energy_level,
+        waiting_for=body.waiting_for,
         capture_source=body.capture_source,
         waiting_for=body.waiting_for,
         in_progress_since=body.in_progress_since,

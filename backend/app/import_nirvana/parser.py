@@ -49,6 +49,17 @@ _JSON_ENERGY_MAP: dict[int, str | None] = {
 }
 
 
+def _json_str(row: dict[str, object], field: str) -> str:
+    """Return a string value from a JSON row, raising ParseError for non-string types."""
+    value = row.get(field)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        got = type(value).__name__
+        raise ParseError(f"Invalid JSON field '{field}': expected string, got {got}")
+    return value
+
+
 def _normalise_csv_state(raw: str) -> str:
     return _CSV_STATE_MAP.get(raw.strip().lower(), "inbox")
 
@@ -180,7 +191,7 @@ def parse_json(content: str) -> tuple[list[NirvanaItem], int]:
             skipped += 1
             continue
 
-        name = (row.get("name") or "").strip()
+        name = _json_str(row, "name").strip()
         if not name:
             skipped += 1
             continue
@@ -203,7 +214,7 @@ def parse_json(content: str) -> tuple[list[NirvanaItem], int]:
             state = "done"
 
         # Tags: Nirvana stores as ",tag1,tag2," — strip leading/trailing commas
-        raw_tags = row.get("tags") or ""
+        raw_tags = _json_str(row, "tags")
         tags = [t.strip() for t in raw_tags.strip(",").split(",") if t.strip()]
 
         energy_raw = row.get("energy", 0)
@@ -212,7 +223,7 @@ def parse_json(content: str) -> tuple[list[NirvanaItem], int]:
         etime = row.get("etime", 0)
         time_estimate = etime if isinstance(etime, int) and etime > 0 else None
 
-        duedate_raw = row.get("duedate") or ""
+        duedate_raw = _json_str(row, "duedate")
         due_date = _parse_csv_date(duedate_raw) if duedate_raw.strip() else None
 
         parent_id = row.get("parentid") or None
@@ -226,14 +237,14 @@ def parse_json(content: str) -> tuple[list[NirvanaItem], int]:
                 type=item_type,  # type: ignore[arg-type]
                 state=state,
                 completed=completed,
-                notes=(row.get("note") or "").strip() or None,
+                notes=_json_str(row, "note").strip() or None,
                 tags=tags,
                 energy_level=energy_level,
                 time_estimate=time_estimate,
                 due_date=due_date,
                 parent_id=parent_id,
                 parent_name=None,
-                waiting_for=(row.get("waitingfor") or "").strip() or None,
+                waiting_for=_json_str(row, "waitingfor").strip() or None,
             )
         )
 

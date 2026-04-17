@@ -1,5 +1,7 @@
 """Import endpoint: POST /import/nirvana."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,7 +47,7 @@ async def import_nirvana(
     """
     if format not in ("csv", "json", "auto"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="format must be 'csv', 'json', or 'auto'",
         )
 
@@ -82,18 +84,21 @@ async def import_nirvana(
 
     new_project_names, todo_payloads = convert_items(items, existing_project_names)
 
-    # Upsert new project tags, tracking actual inserts
+    # Upsert new project tags: promote existing same-name tags or insert new ones
     project_tags_created = 0
     for project_name in new_project_names:
-        existing_tag = await db.execute(
+        existing_tag_row = await db.execute(
             select(Tag).where(
                 Tag.user_id == current_user.id,
-                Tag.type == "project",
                 Tag.name == project_name,
             )
         )
-        if existing_tag.scalar_one_or_none() is None:
+        existing_tag = existing_tag_row.scalar_one_or_none()
+        if existing_tag is None:
             db.add(Tag(name=project_name, type="project", user_id=current_user.id))
+            project_tags_created += 1
+        elif existing_tag.type != "project":
+            existing_tag.type = "project"
             project_tags_created += 1
 
     await db.flush()
@@ -104,12 +109,14 @@ async def import_nirvana(
         batch = todo_payloads[i : i + _BATCH_SIZE]
         for payload in batch:
             tags = await _resolve_tags(payload.tags, current_user.id, db)
+            due_date = datetime.fromisoformat(payload.due_date) if payload.due_date else None
             todo = Todo(
                 title=payload.title,
                 notes=payload.notes,
                 state=payload.state,
                 completed=(payload.state == "done"),
                 priority=payload.priority,
+                due_date=due_date,
                 time_estimate=payload.time_estimate,
                 energy_level=payload.energy_level,
                 waiting_for=payload.waiting_for,
