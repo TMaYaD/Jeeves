@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,7 +17,14 @@ class Settings(BaseSettings):
     electric_url: str = "http://localhost:3000"
 
     # Auth
-    secret_key: str
+    secret_key: str = "insecure-dev-key"
+
+    @model_validator(mode="after")
+    def _require_secret_key_in_production(self) -> "Settings":
+        if self.env == "production" and self.secret_key == "insecure-dev-key":
+            raise ValueError("JEEVES_SECRET_KEY must be set in production")
+        return self
+
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7  # 1 week
 
@@ -33,4 +41,4 @@ class Settings(BaseSettings):
     firebase_credentials_path: str = ""
 
 
-settings = Settings()  # type: ignore[call-arg]  # secret_key loaded from env
+settings = Settings()

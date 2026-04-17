@@ -3,7 +3,10 @@
 // Handles authentication, task CRUD for non-sync paths (e.g. initial load,
 // conflict resolution), AI requests, and settings.
 
+import 'dart:io' show Platform;
+
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class ApiService {
@@ -55,11 +58,16 @@ class ApiService {
   }
 }
 
+String _defaultBaseUrl() {
+  const override = String.fromEnvironment('JEEVES_API_URL');
+  if (override.isNotEmpty) return override;
+
+  // Android emulator routes 10.0.2.2 to the host machine's loopback.
+  final host =
+      !kIsWeb && Platform.isAndroid ? '10.0.2.2' : 'localhost';
+  return 'http://$host:8000';
+}
+
 final apiServiceProvider = Provider<ApiService>((ref) {
-  // TODO: read base URL from environment / config
-  const baseUrl = String.fromEnvironment(
-    'JEEVES_API_URL',
-    defaultValue: 'http://localhost:8000',
-  );
-  return ApiService(baseUrl: baseUrl);
+  return ApiService(baseUrl: _defaultBaseUrl());
 });
