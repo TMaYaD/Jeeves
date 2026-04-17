@@ -80,9 +80,11 @@ class Todo(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
     priority: Mapped[int | None] = mapped_column(Integer)
-    due_date: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     state: Mapped[str] = mapped_column(String(50), default="inbox")
     time_estimate: Mapped[int | None] = mapped_column(Integer)  # minutes
@@ -106,11 +108,13 @@ class Reminder(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     todo_id: Mapped[str] = mapped_column(ForeignKey("todos.id"), nullable=False)
     type: Mapped[str] = mapped_column(String(20), nullable=False)  # "time" | "location"
-    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     on_arrival: Mapped[bool] = mapped_column(Boolean, default=False)
     on_departure: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
     todo: Mapped[Todo] = relationship("Todo", back_populates="reminders")
 
@@ -124,7 +128,9 @@ class Location(Base):
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     radius_meters: Mapped[float] = mapped_column(Float, default=100.0)
     address: Mapped[str | None] = mapped_column(String(500))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
     todos: Mapped[list[Todo]] = relationship("Todo", back_populates="location")
 
@@ -138,7 +144,7 @@ class RecurrenceRule(Base):
     interval: Mapped[int] = mapped_column(Integer, default=1)
     by_day_of_week: Mapped[str | None] = mapped_column(String(50))  # JSON array as string
     by_day_of_month: Mapped[int | None] = mapped_column(Integer)
-    until: Mapped[datetime | None] = mapped_column(DateTime)
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     count: Mapped[int | None] = mapped_column(Integer)
 
     todo: Mapped[Todo] = relationship("Todo", back_populates="recurrence_rule")
