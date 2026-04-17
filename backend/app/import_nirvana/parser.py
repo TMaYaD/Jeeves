@@ -226,13 +226,17 @@ def parse_json(content: str) -> tuple[list[NirvanaItem], int]:
         duedate_raw = _json_str(row, "duedate")
         due_date = _parse_csv_date(duedate_raw) if duedate_raw.strip() else None
 
-        parent_id = row.get("parentid") or None
+        parent_id_raw = row.get("parentid")
+        parent_id = str(parent_id_raw) if parent_id_raw else None
         if parent_id == "":
             parent_id = None
 
+        id_raw = row.get("id")
+        item_id = str(id_raw) if id_raw else str(_uuid.uuid4())
+
         items.append(
             NirvanaItem(
-                id=row.get("id") or str(_uuid.uuid4()),
+                id=item_id,
                 name=name,
                 type=item_type,  # type: ignore[arg-type]
                 state=state,

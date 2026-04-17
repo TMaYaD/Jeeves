@@ -114,7 +114,7 @@ async def import_nirvana(
                 title=payload.title,
                 notes=payload.notes,
                 state=payload.state,
-                completed=(payload.state == "done"),
+                completed=payload.completed,
                 priority=payload.priority,
                 due_date=due_date,
                 time_estimate=payload.time_estimate,

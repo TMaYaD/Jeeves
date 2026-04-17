@@ -66,6 +66,7 @@ class TodoCreate(BaseModel):
     id: str | None = None  # Client-side UUID for idempotency (PowerSync offline-first)
     title: str
     notes: str | None = None
+    completed: bool = False
     state: str = "inbox"
     # Each item is either a plain string ("@office") or a TagInput dict.
     # Plain strings: "@" prefix → context; bare word → label.

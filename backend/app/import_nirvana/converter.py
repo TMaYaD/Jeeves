@@ -57,6 +57,7 @@ def convert_items(
             TodoCreate(
                 title=item.name,
                 notes=item.notes,
+                completed=item.completed,
                 state=item.state,
                 tags=tag_specs,
                 due_date=item.due_date,
