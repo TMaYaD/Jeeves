@@ -17,8 +17,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show GtdState;
+import 'auth_provider.dart';
 import 'database_provider.dart';
-import 'user_constants.dart';
 
 export '../database/gtd_database.dart' show Todo;
 export '../models/todo.dart' show GtdState;
@@ -93,35 +93,40 @@ class PlanningSessionDateNotifier extends Notifier<String> {
 final nextActionsForPlanningProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final today = ref.watch(planningSessionDateProvider);
-  return db.todoDao.watchNextActionsForPlanning(kLocalUserId, today);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.todoDao.watchNextActionsForPlanning(userId, today);
 });
 
 /// Scheduled tasks with a due date on today, not yet confirmed in planning.
 final scheduledDueTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final today = ref.watch(planningSessionDateProvider);
-  return db.todoDao.watchScheduledDueToday(kLocalUserId, today);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.todoDao.watchScheduledDueToday(userId, today);
 });
 
 /// Tasks selected for today (selectedForToday == true).
 final todaySelectedTasksProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final today = ref.watch(planningSessionDateProvider);
-  return db.todoDao.watchSelectedForToday(kLocalUserId, today);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.todoDao.watchSelectedForToday(userId, today);
 });
 
 /// Selected tasks that are still missing a time estimate (drives Step 3).
 final selectedTasksMissingEstimatesProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final today = ref.watch(planningSessionDateProvider);
-  return db.todoDao.watchSelectedTasksMissingEstimates(kLocalUserId, today);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.todoDao.watchSelectedTasksMissingEstimates(userId, today);
 });
 
 /// Skipped Next Actions for today.
 final skippedNextActionsForPlanningProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final today = ref.watch(planningSessionDateProvider);
-  return db.todoDao.watchSkippedNextActionsForPlanning(kLocalUserId, today);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.todoDao.watchSkippedNextActionsForPlanning(userId, today);
 });
 
 // ---------------------------------------------------------------------------
@@ -184,7 +189,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   DailyPlanningState build() => const DailyPlanningState();
 
   GtdDatabase get _db => ref.read(databaseProvider);
-
+  String get _userId => ref.read(currentUserIdProvider);
   String get _sessionDate => ref.read(planningSessionDateProvider);
 
   // ---- Step navigation -------------------------------------------------------
@@ -223,7 +228,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     bool clearDueDate = false,
   }) =>
       _db.todoDao.updateFields(
-        id, kLocalUserId,
+        id, _userId,
         title: title,
         notes: notes,
         energyLevel: energyLevel,
@@ -236,7 +241,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   Future<void> processInboxItem(String id, GtdState newState) async {
     await _db.inboxDao.processInboxItem(
       id,
-      userId: kLocalUserId,
+      userId: _userId,
       newState: newState.value,
     );
     state = state.copyWith(
@@ -246,7 +251,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
 
   /// Skips an inbox item for today without clarifying it.
   Future<void> skipInboxItem(String id) async {
-    await _db.todoDao.skipForToday(id, kLocalUserId, _sessionDate);
+    await _db.todoDao.skipForToday(id, _userId, _sessionDate);
     state = state.copyWith(
       inboxSkippedCount: state.inboxSkippedCount + 1,
     );
@@ -255,29 +260,29 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   // ---- Task mutations (Step 2 — Next Actions review) -------------------------
 
   Future<void> selectTask(String id) =>
-      _db.todoDao.selectForToday(id, kLocalUserId, _sessionDate);
+      _db.todoDao.selectForToday(id, _userId, _sessionDate);
 
   Future<void> skipTask(String id) =>
-      _db.todoDao.skipForToday(id, kLocalUserId, _sessionDate);
+      _db.todoDao.skipForToday(id, _userId, _sessionDate);
 
   Future<void> undoTaskReview(String id) =>
-      _db.todoDao.undoReview(id, kLocalUserId);
+      _db.todoDao.undoReview(id, _userId);
 
   Future<void> deferTask(String id) =>
-      _db.todoDao.deferTaskToSomeday(id, kLocalUserId);
+      _db.todoDao.deferTaskToSomeday(id, _userId);
 
   // ---- Task mutations (Step 3 — Scheduled review) ----------------------------
 
   Future<void> confirmScheduledTask(String id) =>
-      _db.todoDao.selectForToday(id, kLocalUserId, _sessionDate);
+      _db.todoDao.selectForToday(id, _userId, _sessionDate);
 
   Future<void> rescheduleTask(String id, DateTime newDate) =>
-      _db.todoDao.rescheduleTask(id, kLocalUserId, newDate);
+      _db.todoDao.rescheduleTask(id, _userId, newDate);
 
   // ---- Task mutations (Step 4 — Time Estimates) ------------------------------
 
   Future<void> setTimeEstimate(String id, int minutes) =>
-      _db.todoDao.updateFields(id, kLocalUserId, timeEstimate: minutes);
+      _db.todoDao.updateFields(id, _userId, timeEstimate: minutes);
 
   // ---- Energy-based auto-skip ------------------------------------------------
 
@@ -300,12 +305,12 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     final today = _sessionDate;
 
     final pending =
-        await _db.todoDao.watchNextActionsForPlanning(kLocalUserId, today).first;
+        await _db.todoDao.watchNextActionsForPlanning(_userId, today).first;
     for (final task in pending) {
       if (task.energyLevel != null) {
         final taskLevel = energyOrder[task.energyLevel] ?? 0;
         if (taskLevel > dayLevel) {
-          await _db.todoDao.skipForToday(task.id, kLocalUserId, today);
+          await _db.todoDao.skipForToday(task.id, _userId, today);
         }
       }
     }

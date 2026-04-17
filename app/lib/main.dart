@@ -11,6 +11,8 @@ Future<void> main() async {
   await NotificationService.initialize();
   // Seed the planning-completion notifier before the router is consulted so
   // the first redirect evaluation is synchronous and correct.
+  // Auth state is owned entirely by AuthNotifier to avoid a race where
+  // currentUserIdProvider briefly holds 'local' before the real user ID loads.
   await initPlanningCompletion();
   runApp(const ProviderScope(child: JeevesApp()));
 }

@@ -51,6 +51,9 @@ dependencies:
   # Local key-value persistence (planning ritual state)
   shared_preferences: ^2.3.3
 
+  # Encrypted token storage (JWT)
+  flutter_secure_storage: ^9.0.0
+
   # Utilities
   uuid: ^4.4.0
   freezed_annotation: ^3.1.0

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/daily_planning_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
@@ -11,12 +12,23 @@ import 'package:jeeves/screens/app_shell.dart';
 import '../test_helpers.dart';
 
 // ---------------------------------------------------------------------------
-// Mock notifier — no-ops async operations that touch DB / SharedPreferences
+// Mock notifiers — no-ops async operations that touch platform channels
 // ---------------------------------------------------------------------------
 
 class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
   @override
-  Future<void> reEnterPlanning() async {} // no-op for widget tests
+  Future<void> reEnterPlanning() async {}
+}
+
+class _MockAuthNotifier extends AuthNotifier {
+  _MockAuthNotifier({this.onLogout});
+  final VoidCallback? onLogout;
+
+  @override
+  Future<String?> build() async => null; // no FlutterSecureStorage call
+
+  @override
+  Future<void> logout() async => onLogout?.call();
 }
 
 // ---------------------------------------------------------------------------
@@ -25,9 +37,11 @@ class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
 
 Widget _buildShellOnly({
   List<Todo> items = const [],
+  VoidCallback? onLogout,
 }) {
   return ProviderScope(
     overrides: [
+      authTokenProvider.overrideWith(() => _MockAuthNotifier(onLogout: onLogout)),
       isOnlineProvider.overrideWith((_) => Stream.value(true)),
       inboxItemsProvider.overrideWith((_) => Stream.value(items)),
       nextActionsProvider.overrideWith((_) => Stream.value([])),
@@ -238,5 +252,36 @@ void main() {
 
     expect(find.text('Focus body'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('AppShell drawer shows Sign Out tile', (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+
+    // Scroll to reveal the Sign Out tile at the bottom.
+    await tester.drag(find.byType(Drawer), const Offset(0, -600));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('sign_out_tile')), findsOneWidget);
+  });
+
+  testWidgets('AppShell Sign Out tile calls logout()', (tester) async {
+    var called = false;
+    await tester.pumpWidget(_buildShellOnly(onLogout: () => called = true));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(Drawer), const Offset(0, -600));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('sign_out_tile')));
+    await tester.pump();
+
+    expect(called, isTrue);
   });
 }
