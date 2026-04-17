@@ -13,7 +13,7 @@ from app.import_nirvana.converter import convert_items
 from app.import_nirvana.parser import ParseError, parse_csv, parse_json
 from app.import_nirvana.schemas import ImportResult
 from app.todos.models import Tag, Todo
-from app.todos.routes import _resolve_tags
+from app.todos.utils import resolve_tags
 
 router = APIRouter(prefix="/import", tags=["import"])
 
@@ -108,7 +108,7 @@ async def import_nirvana(
     for i in range(0, len(todo_payloads), _BATCH_SIZE):
         batch = todo_payloads[i : i + _BATCH_SIZE]
         for payload in batch:
-            tags = await _resolve_tags(payload.tags, current_user.id, db)
+            tags = await resolve_tags(payload.tags, current_user.id, db)
             due_date = datetime.fromisoformat(payload.due_date) if payload.due_date else None
             todo = Todo(
                 title=payload.title,
