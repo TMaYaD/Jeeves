@@ -7,6 +7,11 @@ import uuid as _uuid
 
 from app.import_nirvana.schemas import NirvanaItem
 
+
+class ParseError(Exception):
+    """Raised when the uploaded file is structurally invalid."""
+
+
 # ---------------------------------------------------------------------------
 # State mapping helpers
 # ---------------------------------------------------------------------------
@@ -92,8 +97,8 @@ def parse_csv(content: str) -> tuple[list[NirvanaItem], int]:
     # produces an extra empty-string key in DictReader; we just ignore it.
     try:
         reader = csv.DictReader(io.StringIO(content))
-    except Exception:
-        return [], 0
+    except Exception as exc:
+        raise ParseError(f"Invalid CSV content: {exc}") from exc
 
     for row in reader:
         name = (row.get("NAME") or "").strip()
@@ -153,11 +158,11 @@ def parse_json(content: str) -> tuple[list[NirvanaItem], int]:
     """
     try:
         data = json.loads(content)
-    except json.JSONDecodeError:
-        return [], 0
+    except json.JSONDecodeError as exc:
+        raise ParseError(f"Invalid JSON: {exc}") from exc
 
     if not isinstance(data, list):
-        return [], 0
+        raise ParseError("JSON export must be a list of items")
 
     items: list[NirvanaItem] = []
     skipped = 0

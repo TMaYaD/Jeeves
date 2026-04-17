@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,14 +29,12 @@ class ImportService {
   final ApiService _api;
 
   Future<ImportResult> importNirvana({
-    required File file,
+    required Uint8List bytes,
+    required String filename,
     String format = 'auto',
   }) async {
     final formData = FormData.fromMap({
-      'file': await MultipartFile.fromFile(
-        file.path,
-        filename: file.path.split(Platform.pathSeparator).last,
-      ),
+      'file': MultipartFile.fromBytes(bytes, filename: filename),
       'format': format,
     });
 

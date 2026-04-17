@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -14,7 +14,7 @@ class ImportScreen extends ConsumerStatefulWidget {
 }
 
 class _ImportScreenState extends ConsumerState<ImportScreen> {
-  File? _selectedFile;
+  Uint8List? _selectedBytes;
   String? _selectedFileName;
 
   String _detectedFormat(String filename) {
@@ -27,21 +27,25 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['csv', 'json'],
+      withData: true,
     );
     if (result == null || result.files.isEmpty) return;
     final picked = result.files.single;
-    if (picked.path == null) return;
+    final bytes = picked.bytes;
+    if (bytes == null) return;
     setState(() {
-      _selectedFile = File(picked.path!);
+      _selectedBytes = bytes;
       _selectedFileName = picked.name;
     });
     ref.read(importNotifierProvider.notifier).reset();
   }
 
   Future<void> _import() async {
-    if (_selectedFile == null || _selectedFileName == null) return;
+    if (_selectedBytes == null || _selectedFileName == null) return;
     final format = _detectedFormat(_selectedFileName!);
-    await ref.read(importNotifierProvider.notifier).importFile(_selectedFile!, format);
+    await ref
+        .read(importNotifierProvider.notifier)
+        .importFile(_selectedBytes!, _selectedFileName!, format);
   }
 
   @override
@@ -145,7 +149,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
             ),
           ] else ...[
             FilledButton(
-              onPressed: _selectedFile != null ? _import : null,
+              onPressed: _selectedBytes != null ? _import : null,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF2563EB),
                 padding: const EdgeInsets.symmetric(vertical: 14),

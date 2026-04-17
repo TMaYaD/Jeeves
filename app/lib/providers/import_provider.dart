@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -22,12 +22,14 @@ class ImportState {
   ImportState copyWith({
     bool? isLoading,
     ImportResult? result,
+    bool clearResult = false,
     String? error,
+    bool clearError = false,
   }) =>
       ImportState(
         isLoading: isLoading ?? this.isLoading,
-        result: result ?? this.result,
-        error: error ?? this.error,
+        result: clearResult ? null : (result ?? this.result),
+        error: clearError ? null : (error ?? this.error),
       );
 }
 
@@ -35,11 +37,12 @@ class ImportNotifier extends Notifier<ImportState> {
   @override
   ImportState build() => const ImportState();
 
-  Future<void> importFile(File file, String format) async {
+  Future<void> importFile(Uint8List bytes, String filename, String format) async {
     state = const ImportState(isLoading: true);
     try {
       final result = await ref.read(importServiceProvider).importNirvana(
-            file: file,
+            bytes: bytes,
+            filename: filename,
             format: format,
           );
       state = ImportState(result: result);

@@ -25,10 +25,7 @@ def convert_items(
     for item in items:
         if item.type == "project":
             all_project_names.add(item.name)
-            if item.parent_id:
-                id_to_project[item.id] = item.name
-            else:
-                id_to_project[item.id] = item.name
+            id_to_project[item.id] = item.name
             name_to_project[item.name] = item.name
 
     new_project_names = [n for n in all_project_names if n not in existing_tag_names]
