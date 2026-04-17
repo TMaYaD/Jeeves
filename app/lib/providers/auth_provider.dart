@@ -67,6 +67,11 @@ class AuthNotifier extends AsyncNotifier<String?> {
       final token = await service.login(email, password);
       final userId = _extractUserId(token);
       if (userId == null) {
+        try {
+          await service.clearToken();
+        } catch (_) {
+          // Preserve the auth failure below.
+        }
         throw StateError('Server returned a token without a valid user ID.');
       }
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
@@ -85,6 +90,11 @@ class AuthNotifier extends AsyncNotifier<String?> {
       final token = await service.register(email, password);
       final userId = _extractUserId(token);
       if (userId == null) {
+        try {
+          await service.clearToken();
+        } catch (_) {
+          // Preserve the auth failure below.
+        }
         throw StateError('Server returned a token without a valid user ID.');
       }
       ref.read(currentUserIdProvider.notifier).setUserId(userId);

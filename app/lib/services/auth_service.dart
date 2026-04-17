@@ -47,8 +47,8 @@ class AuthService {
   }
 
   Future<void> clearToken() async {
-    await _storage.delete(_kTokenKey);
     _api.clearAuthToken();
+    await _storage.delete(_kTokenKey);
   }
 
   Future<String> login(String email, String password) async {

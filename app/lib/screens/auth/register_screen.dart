@@ -39,11 +39,13 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           );
       // Router redirect handles navigation once authStateNotifier flips.
     } on DioException catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _errorMessage = _messageFromDio(e);
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _errorMessage = 'Something went wrong. Please try again.';
@@ -173,7 +175,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     ),
                     const SizedBox(height: 16),
                     TextButton(
-                      onPressed: () => context.go('/login'),
+                      onPressed: _isLoading ? null : () => context.go('/login'),
                       child: const Text('Already have an account? Sign in'),
                     ),
                   ],
