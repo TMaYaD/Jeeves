@@ -53,3 +53,4 @@ The Jeeves FastAPI service is built following the [12-Factor App methodology](ht
 ### 12. Admin Processes
 - **Principle:** Run admin/management tasks as one-off processes.
 - **Application:** Database migrations (`alembic upgrade`) and administrative scripts are run as isolated one-off commands against a release within the same environment as the long-running processes.
+- **Local dev exception:** `infra/docker-compose.yml` runs `alembic upgrade head` inline before `uvicorn` for convenience. This is acceptable only for single-instance local dev. An advisory lock in `alembic/env.py` prevents concurrent migration races. For production-like deployments, run migrations as a separate one-off job or init container.

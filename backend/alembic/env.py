@@ -2,7 +2,7 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -34,10 +34,19 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# Advisory lock ID to prevent concurrent migration runs (e.g. scaled replicas).
+_MIGRATION_LOCK_ID = 7_239_183_491  # arbitrary unique int
+
+
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
-    with context.begin_transaction():
-        context.run_migrations()
+    # Acquire a Postgres advisory lock so only one process migrates at a time.
+    connection.execute(text(f"SELECT pg_advisory_lock({_MIGRATION_LOCK_ID})"))
+    try:
+        context.configure(connection=connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+    finally:
+        connection.execute(text(f"SELECT pg_advisory_unlock({_MIGRATION_LOCK_ID})"))
 
 
 async def run_async_migrations() -> None:

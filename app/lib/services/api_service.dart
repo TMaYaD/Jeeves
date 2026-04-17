@@ -3,10 +3,11 @@
 // Handles authentication, task CRUD for non-sync paths (e.g. initial load,
 // conflict resolution), AI requests, and settings.
 
-import 'dart:io' show Platform;
-
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+
+import 'platform_helper.dart'
+    if (dart.library.io) 'platform_helper_io.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class ApiService {
@@ -64,7 +65,7 @@ String _defaultBaseUrl() {
 
   // Android emulator routes 10.0.2.2 to the host machine's loopback.
   final host =
-      !kIsWeb && Platform.isAndroid ? '10.0.2.2' : 'localhost';
+      !kIsWeb && isAndroidPlatform ? '10.0.2.2' : 'localhost';
   return 'http://$host:8000';
 }
 

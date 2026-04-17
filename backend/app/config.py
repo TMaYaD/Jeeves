@@ -1,7 +1,10 @@
+import logging
 from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -20,9 +23,15 @@ class Settings(BaseSettings):
     secret_key: str = "insecure-dev-key"
 
     @model_validator(mode="after")
-    def _require_secret_key_in_production(self) -> "Settings":
-        if self.env == "production" and self.secret_key == "insecure-dev-key":
-            raise ValueError("JEEVES_SECRET_KEY must be set in production")
+    def _validate_secret_key(self) -> "Settings":
+        if self.secret_key == "insecure-dev-key":
+            if self.env not in ("development", "test"):
+                raise ValueError(
+                    f"JEEVES_SECRET_KEY must be explicitly set when JEEVES_ENV={self.env!r}"
+                )
+            _logger.warning(
+                "Using insecure default secret_key — this is only acceptable in development/test"
+            )
         return self
 
     algorithm: str = "HS256"
