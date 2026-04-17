@@ -1,6 +1,7 @@
 """CSV and JSON parsers that produce NirvanaItem lists."""
 
 import csv
+import datetime as _datetime
 import io
 import json
 import uuid as _uuid
@@ -65,6 +66,7 @@ def _parse_csv_date(raw: str) -> str | None:
         parts = [int(p) for p in raw.split("-")]
         if len(parts) == 3:
             year, month, day = parts
+            _datetime.date(year, month, day)  # validates calendar ranges
             return f"{year:04d}-{month:02d}-{day:02d}"
     except (ValueError, TypeError):
         pass
@@ -95,12 +97,14 @@ def parse_csv(content: str) -> tuple[list[NirvanaItem], int]:
 
     # Nirvana CSV exports sometimes end columns with a trailing comma which
     # produces an extra empty-string key in DictReader; we just ignore it.
+    reader = csv.DictReader(io.StringIO(content))
+
     try:
-        reader = csv.DictReader(io.StringIO(content))
-    except Exception as exc:
+        rows = list(reader)
+    except csv.Error as exc:
         raise ParseError(f"Invalid CSV content: {exc}") from exc
 
-    for row in reader:
+    for row in rows:
         name = (row.get("NAME") or "").strip()
         if not name:
             skipped += 1

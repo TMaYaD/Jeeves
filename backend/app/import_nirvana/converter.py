@@ -53,9 +53,6 @@ def convert_items(
         for tag_name in item.tags:
             tag_specs.append(tag_name)
 
-        if item.waiting_for:
-            tag_specs.append(item.waiting_for)
-
         todos.append(
             TodoCreate(
                 title=item.name,
@@ -65,6 +62,7 @@ def convert_items(
                 due_date=item.due_date,
                 time_estimate=item.time_estimate,
                 energy_level=item.energy_level,
+                waiting_for=item.waiting_for,
                 capture_source="nirvana_import",
             )
         )

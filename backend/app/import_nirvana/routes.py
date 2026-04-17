@@ -45,7 +45,7 @@ async def import_nirvana(
     """
     if format not in ("csv", "json", "auto"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="format must be 'csv', 'json', or 'auto'",
         )
 
@@ -112,6 +112,7 @@ async def import_nirvana(
                 priority=payload.priority,
                 time_estimate=payload.time_estimate,
                 energy_level=payload.energy_level,
+                waiting_for=payload.waiting_for,
                 capture_source=payload.capture_source,
                 user_id=current_user.id,
                 tags=tags,

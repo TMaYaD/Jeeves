@@ -16,6 +16,37 @@ class ImportScreen extends ConsumerStatefulWidget {
 class _ImportScreenState extends ConsumerState<ImportScreen> {
   Uint8List? _selectedBytes;
   String? _selectedFileName;
+  ProviderSubscription<ImportState>? _importSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _importSubscription = ref.listenManual<ImportState>(
+      importNotifierProvider,
+      (previous, next) {
+        if (next.result != null && previous?.result == null) {
+          final r = next.result!;
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Imported ${r.importedCount} tasks'
+                '${r.projectTagsCreated > 0 ? ', ${r.projectTagsCreated} projects created' : ''}'
+                '${r.skippedCount > 0 ? ' (${r.skippedCount} skipped)' : ''}',
+              ),
+              backgroundColor: Colors.green[700],
+            ),
+          );
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _importSubscription?.close();
+    super.dispose();
+  }
 
   String _detectedFormat(String filename) {
     if (filename.toLowerCase().endsWith('.json')) return 'json';
@@ -51,22 +82,6 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
   @override
   Widget build(BuildContext context) {
     final importState = ref.watch(importNotifierProvider);
-
-    ref.listen<ImportState>(importNotifierProvider, (previous, next) {
-      if (next.result != null && previous?.result == null) {
-        final r = next.result!;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Imported ${r.importedCount} tasks'
-              '${r.projectTagsCreated > 0 ? ', ${r.projectTagsCreated} projects created' : ''}'
-              '${r.skippedCount > 0 ? ' (${r.skippedCount} skipped)' : ''}',
-            ),
-            backgroundColor: Colors.green[700],
-          ),
-        );
-      }
-    });
 
     return Scaffold(
       appBar: AppBar(

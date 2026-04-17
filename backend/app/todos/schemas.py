@@ -76,7 +76,7 @@ class TodoCreate(BaseModel):
     energy_level: str | None = None  # 'low' | 'medium' | 'high'
     capture_source: str | None = None  # 'manual' | 'share_sheet' | 'voice' | 'ai_parse'
     # Client-state columns (migration 0007)
-    waiting_for: str | None = None
+    waiting_for: str | None = None  # who/what the task is waiting on
     in_progress_since: str | None = None
     time_spent_minutes: int = Field(default=0, ge=0)
     blocked_by_todo_id: str | None = None
