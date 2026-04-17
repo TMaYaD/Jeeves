@@ -1,7 +1,11 @@
+import 'package:flutter/widgets.dart';
 import 'package:go_router/go_router.dart';
 
+import 'providers/auth_provider.dart';
 import 'providers/daily_planning_provider.dart';
 import 'screens/app_shell.dart';
+import 'screens/auth/login_screen.dart';
+import 'screens/auth/register_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next_actions/next_actions_screen.dart';
 import 'screens/planning/planning_ritual_screen.dart';
@@ -24,20 +28,37 @@ const _protectedPaths = [
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
-  // Re-evaluate the redirect whenever the planning completion state changes
-  // (e.g. after "Start Day" or "Re-plan Day").
-  refreshListenable: planningCompletionNotifier,
+  refreshListenable:
+      Listenable.merge([authStateNotifier, planningCompletionNotifier]),
   redirect: (context, state) {
-    final completed = planningCompletionNotifier.value;
-    if (!completed) {
-      final loc = state.uri.path;
-      final isProtected = _protectedPaths.any((p) => loc.startsWith(p));
-      if (isProtected) return '/planning';
+    final isAuthenticated = authStateNotifier.value;
+    final loc = state.uri.path;
+    final isAuthRoute = loc == '/login' || loc == '/register';
+
+    // Auth guard — runs before the planning ritual guard.
+    if (!isAuthenticated && !isAuthRoute) return '/login';
+    if (isAuthenticated && isAuthRoute) return '/inbox';
+
+    // Planning ritual guard (only reached when authenticated).
+    if (isAuthenticated) {
+      final completed = planningCompletionNotifier.value;
+      if (!completed) {
+        final isProtected = _protectedPaths.any((p) => loc.startsWith(p));
+        if (isProtected) return '/planning';
+      }
     }
-    // Already heading to /planning — no loop.
+
     return null;
   },
   routes: [
+    GoRoute(
+      path: '/login',
+      builder: (context, state) => const LoginScreen(),
+    ),
+    GoRoute(
+      path: '/register',
+      builder: (context, state) => const RegisterScreen(),
+    ),
     GoRoute(
       path: '/planning',
       builder: (context, state) => const PlanningRitualScreen(),

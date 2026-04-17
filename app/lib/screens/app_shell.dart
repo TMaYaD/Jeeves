@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../providers/auth_provider.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/tags_provider.dart';
@@ -103,6 +104,24 @@ class CustomDrawer extends ConsumerWidget {
                   )),
                 ],
               ),
+            ),
+            const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            ListTile(
+              key: const Key('sign_out_tile'),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+              leading: const Icon(Icons.logout, color: Color(0xFF9CA3AF)),
+              title: const Text(
+                'Sign Out',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF374151),
+                ),
+              ),
+              onTap: () async {
+                Navigator.pop(context);
+                await ref.read(authTokenProvider.notifier).logout();
+              },
             ),
           ],
         ),

@@ -3,19 +3,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../database/gtd_database.dart';
+import 'auth_provider.dart';
 import 'database_provider.dart';
-import 'user_constants.dart' show kLocalUserId;
 
-/// Stream of all project tags for the local user.
+/// Stream of all project tags for the current user.
 final projectTagsProvider = StreamProvider<List<Tag>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.tagDao.watchByType(kLocalUserId, 'project');
+  final userId = ref.watch(currentUserIdProvider);
+  return db.tagDao.watchByType(userId, 'project');
 });
 
-/// Stream of all context tags for the local user.
+/// Stream of all context tags for the current user.
 final contextTagsProvider = StreamProvider<List<Tag>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.tagDao.watchByType(kLocalUserId, 'context');
+  final userId = ref.watch(currentUserIdProvider);
+  return db.tagDao.watchByType(userId, 'context');
 });
 
 /// Exposes tag mutation operations.
@@ -37,14 +39,15 @@ class TagNotifier {
     }
 
     final db = _ref.read(databaseProvider);
+    final userId = _ref.read(currentUserIdProvider);
     final id = const Uuid().v4();
     final companion = TagsCompanion(
       id: Value(id),
       name: Value(trimmed),
       type: Value(type),
-      userId: const Value(kLocalUserId),
+      userId: Value(userId),
     );
     await db.tagDao.upsertTag(companion);
-    return Tag(id: id, name: trimmed, type: type, userId: kLocalUserId);
+    return Tag(id: id, name: trimmed, type: type, userId: userId);
   }
 }

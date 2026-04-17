@@ -4,15 +4,16 @@ import 'package:uuid/uuid.dart';
 
 import '../database/gtd_database.dart';
 import '../models/todo.dart' hide Todo;
+import 'auth_provider.dart';
 import 'database_provider.dart';
-import 'user_constants.dart';
 
 export 'user_constants.dart' show kLocalUserId;
 
 /// Stream of all inbox todos, newest first.
 final inboxItemsProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.inboxDao.watchInbox(kLocalUserId);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.inboxDao.watchInbox(userId);
 });
 
 /// Notifier exposing inbox mutation operations.
@@ -33,13 +34,14 @@ class InboxNotifier {
     final db = _ref.read(databaseProvider);
     final id = const Uuid().v4();
     final now = DateTime.now();
+    final userId = _ref.read(currentUserIdProvider);
     await db.inboxDao.insertTodo(TodosCompanion(
       id: Value(id),
       title: Value(normalizedTitle),
       notes: Value(notes),
       state: Value(GtdState.inbox.value),
       captureSource: const Value('manual'),
-      userId: const Value(kLocalUserId),
+      userId: Value(userId),
       createdAt: Value(now),
       updatedAt: Value(now),
     ));
