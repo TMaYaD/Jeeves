@@ -33,8 +33,9 @@ services:
     environment:
       DATABASE_URL: "postgresql://jeeves:jeeves@postgres:5432/jeeves?sslmode=disable"
       ELECTRIC_WRITE_TO_PG_MODE: "direct_writes"
+      ELECTRIC_INSECURE: "true"  # dev only — use ELECTRIC_SECRET in production
       AUTH_MODE: "jwt"
-      AUTH_JWT_KEY: "${JEEVES_SECRET_KEY}"  # same key the backend uses to sign tokens
+      AUTH_JWT_KEY: "${JEEVES_SECRET_KEY:-insecure-dev-key}"  # same key the backend uses to sign tokens
     ports:
       - "3000:3000"
 
@@ -55,7 +56,7 @@ services:
       - "8000:8000"
     volumes:
       - ../backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   redis:
     image: redis:7-alpine
