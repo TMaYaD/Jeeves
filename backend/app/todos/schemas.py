@@ -32,10 +32,10 @@ class TagInput(BaseModel):
 class TagCreate(BaseModel):
     id: str | None = None  # Client-side UUID for idempotency
     name: str
-    type: str = "context"
+    type: TagType = TagType.context
     color: str | None = None
 
-    @field_validator("type")
+    @field_validator("type", mode="before")
     @classmethod
     def validate_type(cls, v: str) -> str:
         if v not in TAG_TYPES:

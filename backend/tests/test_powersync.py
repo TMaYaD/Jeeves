@@ -48,6 +48,7 @@ async def test_credentials_token_is_short_lived(client: AsyncClient) -> None:
 
     token = await register(client, "ps-expiry@example.com")
     response = await client.get("/powersync/credentials", headers=auth_header(token))
+    assert response.headers.get("Cache-Control") == "no-store"
     ps_token = response.json()["token"]
 
     ps_payload = jwt.decode(

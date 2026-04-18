@@ -26,7 +26,7 @@ services:
         -c max_replication_slots=10
 
   powersync:
-    image: journeyapps/powersync-service:latest
+    image: journeyapps/powersync-service:1.20.5
     restart: unless-stopped
     depends_on:
       - postgres

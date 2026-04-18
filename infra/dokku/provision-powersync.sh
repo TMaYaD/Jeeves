@@ -4,7 +4,7 @@
 set -euo pipefail
 
 APP=powersync
-IMAGE=journeyapps/powersync-service:1.20.5
+IMAGE=journeyapps/powersync-service:1.20.5@sha256:dfdb914b1d7a160dad9b8743af8f5f931552b1a210b890216a08c09e054dae76
 
 echo "==> Provisioning Dokku app: ${APP}"
 
@@ -27,7 +27,10 @@ if ! dokku ports:list "${APP}" 2>/dev/null | grep -q "80:8080"; then
 fi
 
 # Set NODE memory limit (~80% of available RAM; adjust as needed).
-dokku resource:limit --memory 400m "${APP}" || true
-echo "    Resource limit set"
+if dokku resource:limit --memory 400m "${APP}" 2>/dev/null; then
+  echo "    Resource limit set (400m)"
+else
+  echo "    WARN: resource:limit failed (plugin may not be installed)"
+fi
 
 echo "==> Done: ${APP} provisioned"

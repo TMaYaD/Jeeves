@@ -24,7 +24,7 @@ dokku config:set --no-restart "${APP}" \
   NODE_OPTIONS="--max-old-space-size=400" \
   JEEVES_SECRET_KEY="${JEEVES_SECRET_KEY}" \
   DATABASE_URL="${DATABASE_URL}" \
-  PS_DATA_SOURCE_URI="${DATABASE_URL}"
+  PS_DATA_SOURCE_URI="${DATABASE_URL}" > /dev/null
 echo "    Environment variables set"
 
 # Create storage directory for sync-config.yaml if it doesn't exist.
@@ -34,7 +34,7 @@ if [ ! -d "${CONFIG_STORAGE}" ]; then
 fi
 
 # Mount the config directory into the container.
-if ! dokku storage:list "${APP}" 2>/dev/null | grep -q "/config"; then
+if ! dokku storage:list "${APP}" 2>/dev/null | grep -qE ":/config$"; then
   dokku storage:mount "${APP}" "${CONFIG_STORAGE}:/config"
   echo "    Mounted ${CONFIG_STORAGE} -> /config"
 else

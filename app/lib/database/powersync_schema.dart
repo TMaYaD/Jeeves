@@ -29,6 +29,7 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('user_id'),
   ]),
   ps.Table('todo_tags', [
+    ps.Column.text('id'),
     ps.Column.text('todo_id'),
     ps.Column.text('tag_id'),
   ]),

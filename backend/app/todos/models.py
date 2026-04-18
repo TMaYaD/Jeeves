@@ -55,9 +55,9 @@ class Tag(Base):
 class TodoTag(Base):
     __tablename__ = "todo_tags"
 
-    # id is the PowerSync-assigned UUID stored so the upload handler can
-    # find this row for deletion by entry.id.  NULL for server-side inserts
-    # until PostgreSQL assigns a value via the column's server default.
+    # PowerSync-assigned UUID used by the upload handler to delete by entry.id.
+    # NULL for server-side inserts; PostgreSQL fills this via the server default
+    # added in migration 0006 (gen_random_uuid()).  SQLite test rows stay NULL.
     id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     todo_id: Mapped[str] = mapped_column(
         ForeignKey("todos.id", ondelete="CASCADE"), primary_key=True

@@ -29,8 +29,10 @@ async def create_tag(
     # Idempotency: return existing tag if the client-side id already exists.
     if body.id is not None:
         existing = await db.get(Tag, body.id)
-        if existing and existing.user_id == current_user.id:
-            return existing
+        if existing:
+            if existing.user_id == current_user.id:
+                return existing
+            raise HTTPException(status_code=409, detail="Tag id already exists")
     tag = Tag(
         **({"id": body.id} if body.id is not None else {}),
         name=body.name,
@@ -87,6 +89,11 @@ async def create_todo_tag(
     todo = await db.get(Todo, body.todo_id)
     if not todo or todo.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Todo not found")
+
+    # Verify the tag exists and belongs to the current user.
+    tag = await db.get(Tag, body.tag_id)
+    if not tag or tag.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Tag not found")
 
     # Idempotency: return if already exists by id.
     if body.id is not None:

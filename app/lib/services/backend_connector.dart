@@ -44,6 +44,9 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
             await _uploadTag(entry);
           case 'todo_tags':
             await _uploadTodoTag(entry);
+          default:
+            // ignore: avoid_print
+            print('Warning: unhandled table in CRUD batch: ${entry.table}');
         }
       }
       await batch.complete();

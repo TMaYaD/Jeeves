@@ -49,6 +49,7 @@ class SyncService {
   /// Call after the user has authenticated and an [ApiService] with a valid
   /// auth token is available.
   Future<void> start({required ApiService api}) async {
+    if (_db != null) return; // Already started; avoid duplicate initialization.
     _statusController.add(SyncStatus.connecting);
 
     final dbFolder = await getApplicationDocumentsDirectory();
