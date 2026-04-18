@@ -10,6 +10,7 @@ replication:
       # Connects to the same Postgres instance used by the backend.
       # PS_DATA_SOURCE_URI is set via the POWERSYNC_CONFIG environment.
       uri: !env PS_DATA_SOURCE_URI
+      sslmode: disable
       # Required: enable logical replication slot for change capture.
       slot_name: powersync_slot
 
@@ -51,6 +52,7 @@ client_auth:
 storage:
   type: postgresql
   uri: !env PS_DATA_SOURCE_URI
+  sslmode: disable
 
 # --- API server ---------------------------------------------------------------
 api:
