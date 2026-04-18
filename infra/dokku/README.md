@@ -46,6 +46,7 @@ latest image).
 ## Backend CD
 
 The backend is deployed via `.github/workflows/backend-cd.yml` using
-`git subtree push`. PowerSync is a pre-built image — it does not need a
+`git push` to the Dokku remote (Dokku's `build-dir` config scopes the
+build to the backend directory). PowerSync is a pre-built image — it does not need a
 code deploy, only `provision-powersync.sh` when a new image version is
 desired.

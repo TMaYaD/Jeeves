@@ -25,6 +25,9 @@ dokku config:set --no-restart "${APP}" \
   PS_JEEVES_SECRET_KEY="${JEEVES_SECRET_KEY}" \
   DATABASE_URL="${DATABASE_URL}" \
   PS_DATA_SOURCE_URI="${DATABASE_URL}" > /dev/null
+
+# Remove legacy key if present (safe on re-runs)
+dokku config:unset --no-restart "${APP}" JEEVES_SECRET_KEY >/dev/null 2>&1 || true
 echo "    Environment variables set"
 
 # Create storage directory for sync-config.yaml if it doesn't exist.
