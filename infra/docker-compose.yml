@@ -2,7 +2,7 @@ version: "3.9"
 
 # Local development stack:
 #   postgres   — primary datastore
-#   electric   — Electric SQL sync layer (Postgres → clients)
+#   powersync  — PowerSync sync layer (Postgres → clients)
 #   backend    — FastAPI service
 #   redis      — Celery broker
 
@@ -18,26 +18,25 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # Electric SQL requires logical replication
+    # PowerSync requires logical replication
     command: >
       postgres
         -c wal_level=logical
         -c max_wal_senders=10
         -c max_replication_slots=10
 
-  electric:
-    image: electricsql/electric:latest
+  powersync:
+    image: journeyapps/powersync-service:latest
     restart: unless-stopped
     depends_on:
       - postgres
     environment:
-      DATABASE_URL: "postgresql://jeeves:jeeves@postgres:5432/jeeves?sslmode=disable"
-      ELECTRIC_WRITE_TO_PG_MODE: "direct_writes"
-      ELECTRIC_INSECURE: "true"  # dev only — use ELECTRIC_SECRET in production
-      AUTH_MODE: "jwt"
-      AUTH_JWT_KEY: "${JEEVES_SECRET_KEY:-insecure-dev-key}"  # same key the backend uses to sign tokens
+      POWERSYNC_CONFIG_PATH: /config/sync-config.yaml
+      JEEVES_SECRET_KEY: "${JEEVES_SECRET_KEY:-insecure-dev-key}"
+    volumes:
+      - ./powersync:/config
     ports:
-      - "3000:3000"
+      - "8080:8080"
 
   backend:
     build:
@@ -46,11 +45,11 @@ services:
     restart: unless-stopped
     depends_on:
       - postgres
-      - electric
+      - powersync
       - redis
     environment:
       JEEVES_DATABASE_URL: "postgresql+asyncpg://jeeves:jeeves@postgres:5432/jeeves"
-      JEEVES_ELECTRIC_URL: "http://electric:3000"
+      JEEVES_POWERSYNC_URL: "http://powersync:8080"
       JEEVES_REDIS_URL: "redis://redis:6379/0"
     ports:
       - "8000:8000"

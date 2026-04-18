@@ -1,6 +1,6 @@
 /// Drift table declarations for the local GTD database.
 ///
-/// These mirror the backend PostgreSQL schema so Electric SQL can replicate
+/// These mirror the backend PostgreSQL schema so PowerSync can replicate
 /// rows bidirectionally without column-name mismatches.
 library;
 

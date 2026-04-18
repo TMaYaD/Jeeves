@@ -1,6 +1,6 @@
 """Todos CRUD API.
 
-Electric SQL handles real-time sync; these endpoints cover initial load,
+PowerSync handles real-time sync; these endpoints cover initial load,
 auth-gated mutations, and operations that require server-side logic
 (e.g. recurrence expansion, AI-assisted parsing).
 """

@@ -1,105 +1,110 @@
-// Sync service — Electric SQL client integration.
+// Sync service — PowerSync integration.
 //
 // Responsible for:
-// - Maintaining the local Drift database as the offline-first store
-// - Syncing changes from/to the Electric SQL replication layer via three shapes:
-//     1. todos   (filtered by user_id)
-//     2. tags    (filtered by user_id)
-//     3. todo_tags (references user-scoped todo_id rows)
-// - Surfacing sync status to UI via a [SyncStatus] stream
-// - Tracking pending (unsynced) writes so the UI can display an indicator
-//
-// TODO: Replace the stub Electric client calls below with the real
-// `electric_client` Flutter package once it is published.
-// See: https://electric-sql.com/docs/integrations/flutter
+// - Connecting to the self-hosted PowerSync service for bidirectional sync
+// - Syncing three shapes: todos, tags, todo_tags (all filtered by user_id)
+// - Surfacing sync status to the UI via a [SyncStatus] stream
+// - Tracking pending (unsynced) writes via PowerSync's upload queue
 
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:powersync/powersync.dart' as ps;
+
+import '../database/powersync_schema.dart';
+import 'api_service.dart';
+import 'backend_connector.dart';
+
+export 'backend_connector.dart';
 
 enum SyncStatus { disconnected, connecting, synced, error }
-
 
 class SyncService {
   SyncService._();
 
   static final SyncService instance = SyncService._();
 
-  final _statusController = StreamController<SyncStatus>.broadcast();
-  final _pendingWriteController = StreamController<int>.broadcast();
+  ps.PowerSyncDatabase? _db;
+  StreamSubscription<SyncStatus>? _statusSub;
 
-  int _pendingWrites = 0;
+  final _statusController = StreamController<SyncStatus>.broadcast();
 
   /// Current sync status stream.
   Stream<SyncStatus> get statusStream => _statusController.stream;
 
-  /// Stream of pending (unsynced) write counts.
-  Stream<int> get pendingWriteCountStream => _pendingWriteController.stream;
+  /// Stream reflecting whether there are locally queued (unsynced) writes.
+  /// Emits 1 while PowerSync is uploading changes, 0 otherwise.
+  Stream<int> get pendingWriteCountStream {
+    final db = _db;
+    if (db == null) return Stream.value(0);
+    return db.statusStream.map((s) => s.uploading ? 1 : 0);
+  }
 
-  /// Start syncing.  Call after the user has authenticated and a JWT is
-  /// available.  Declares the three GTD sync shapes and transitions status
-  /// through [SyncStatus.connecting] → [SyncStatus.synced].
-  Future<void> start({
-    required String electricUrl,
-    required String userId,
-    required String jwt,
-  }) async {
+  /// Connect to PowerSync and begin bidirectional sync.
+  ///
+  /// Call after the user has authenticated and an [ApiService] with a valid
+  /// auth token is available.
+  Future<void> start({required ApiService api}) async {
     _statusController.add(SyncStatus.connecting);
 
-    // TODO: replace with real Electric SQL client once published:
-    //
-    // final client = await ElectricClient.connect(
-    //   electricUrl,
-    //   config: ElectricConfig(auth: AuthState(token: jwt)),
-    // );
-    //
-    // for (final shape in _shapes) {
-    //   final resolvedWhere = shape.where?.replaceAll('\$userId', userId);
-    //   await client.syncShape(
-    //     Shape(table: shape.table, where: resolvedWhere),
-    //   );
-    // }
-    //
-    // client.onStatusChange((status) {
-    //   _statusController.add(status == ElectricStatus.connected
-    //       ? SyncStatus.synced
-    //       : SyncStatus.error);
-    // });
+    final dbFolder = await getApplicationDocumentsDirectory();
+    final dbPath = p.join(dbFolder.path, 'jeeves.sqlite');
 
-    // Stub: immediately signal synced for now.
-    _statusController.add(SyncStatus.synced);
+    _db = ps.PowerSyncDatabase(
+      schema: powersyncSchema,
+      path: dbPath,
+    );
+    await _db!.initialize();
+
+    final connector = JevesBackendConnector(api);
+    await _db!.connect(connector: connector);
+
+    // Map PowerSync's internal SyncStatus to the app's SyncStatus enum.
+    _statusSub = _db!.statusStream.map(_toAppStatus).listen(
+      _statusController.add,
+      onError: (_) => _statusController.add(SyncStatus.error),
+    );
   }
 
-  /// Increment the pending write count (call before a local Drift write).
-  void trackPendingWrite() {
-    _pendingWrites++;
-    _pendingWriteController.add(_pendingWrites);
-  }
-
-  /// Decrement the pending write count (call after Electric confirms the write).
-  void acknowledgePendingWrite() {
-    if (_pendingWrites > 0) {
-      _pendingWrites--;
-      _pendingWriteController.add(_pendingWrites);
-    }
-  }
-
-  /// Trigger a one-shot sync attempt.  Emits status transitions so the UI
-  /// receives an explicit non-success result until Electric SQL is wired.
+  /// Trigger a manual sync refresh (e.g. on pull-to-refresh).
   Future<void> sync() async {
+    final db = _db;
+    if (db == null) {
+      _statusController.add(SyncStatus.error);
+      return;
+    }
     _statusController.add(SyncStatus.connecting);
-    // TODO: trigger Electric SQL sync when client is available
-    _statusController.add(SyncStatus.error);
+    // PowerSync syncs continuously when connected; emit the current status.
+    _statusController.add(_toAppStatus(db.currentStatus));
   }
 
+  /// Disconnect from PowerSync and release resources.
   Future<void> stop() async {
-    // TODO: disconnect Electric SQL client
+    await _statusSub?.cancel();
+    _statusSub = null;
+    await _db?.disconnect();
+    _db = null;
     _statusController.add(SyncStatus.disconnected);
   }
 
+  /// No-op: PowerSync's upload queue replaces the manual pending-write counter.
+  void trackPendingWrite() {}
+
+  /// No-op: PowerSync's upload queue replaces the manual pending-write counter.
+  void acknowledgePendingWrite() {}
+
   void dispose() {
     _statusController.close();
-    _pendingWriteController.close();
+  }
+
+  static SyncStatus _toAppStatus(ps.SyncStatus status) {
+    if (status.anyError != null) return SyncStatus.error;
+    if (status.connected) return SyncStatus.synced;
+    if (status.connecting) return SyncStatus.connecting;
+    if (status.lastSyncedAt != null) return SyncStatus.disconnected;
+    return SyncStatus.connecting;
   }
 }
 

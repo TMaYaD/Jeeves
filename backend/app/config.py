@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves"
 
-    # Electric SQL
-    electric_url: str = "http://localhost:3000"
+    # PowerSync
+    powersync_url: str = "http://localhost:8080"
 
     # Auth
     secret_key: str = "insecure-dev-key"
