@@ -59,8 +59,8 @@ async def test_credentials_token_is_short_lived(client: AsyncClient) -> None:
     exp = datetime.fromtimestamp(ps_payload["exp"], tz=UTC)
     now = datetime.now(UTC)
     ttl_minutes = (exp - now).total_seconds() / 60
-    # Should expire within 10 minutes (we set 5).
-    assert ttl_minutes <= 10
+    # Allow a little execution skew around the 5-minute target.
+    assert ttl_minutes <= 6
     assert ttl_minutes > 0
 
 

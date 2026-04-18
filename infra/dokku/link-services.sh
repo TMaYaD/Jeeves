@@ -13,8 +13,9 @@ POWERSYNC_APP=powersync
 
 echo "==> Linking services: ${POWERSYNC_APP} -> ${BACKEND_APP}"
 
-# Resolve the PowerSync public domain (first global vhost).
-PS_DOMAIN=$(dokku domains:report "${POWERSYNC_APP}" --domains-global-vhosts 2>/dev/null | head -1 | tr -d '[:space:]')
+# Resolve the PowerSync public domain (first global vhost, in case multiple are returned).
+PS_DOMAINS=$(dokku domains:report "${POWERSYNC_APP}" --domains-global-vhosts 2>/dev/null | head -1 | tr -d '[:space:]')
+PS_DOMAIN="${PS_DOMAINS%%,*}"
 
 if [ -z "${PS_DOMAIN}" ]; then
   echo "ERROR: Could not determine domain for ${POWERSYNC_APP}."

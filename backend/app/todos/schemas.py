@@ -29,7 +29,41 @@ class TagInput(BaseModel):
         return v
 
 
+class TagCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    name: str
+    type: str = "context"
+    color: str | None = None
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        if v not in TAG_TYPES:
+            raise ValueError(f"tag type must be one of {sorted(TAG_TYPES)}")
+        return v
+
+
+class TagUpdate(BaseModel):
+    name: str | None = None
+    type: str | None = None
+    color: str | None = None
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in TAG_TYPES:
+            raise ValueError(f"tag type must be one of {sorted(TAG_TYPES)}")
+        return v
+
+
+class TodoTagCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    todo_id: str
+    tag_id: str
+
+
 class TodoCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency (PowerSync offline-first)
     title: str
     notes: str | None = None
     state: str = "inbox"

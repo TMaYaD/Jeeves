@@ -33,6 +33,7 @@ services:
     environment:
       POWERSYNC_CONFIG_PATH: /config/sync-config.yaml
       JEEVES_SECRET_KEY: "${JEEVES_SECRET_KEY:-insecure-dev-key}"
+      PS_DATA_SOURCE_URI: "postgresql://jeeves:jeeves@postgres:5432/jeeves"
     volumes:
       - ./powersync:/config
     ports:
@@ -49,7 +50,7 @@ services:
       - redis
     environment:
       JEEVES_DATABASE_URL: "postgresql+asyncpg://jeeves:jeeves@postgres:5432/jeeves"
-      JEEVES_POWERSYNC_URL: "http://powersync:8080"
+      JEEVES_POWERSYNC_URL: "${JEEVES_POWERSYNC_URL:-http://localhost:8080}"
       JEEVES_REDIS_URL: "redis://redis:6379/0"
     ports:
       - "8000:8000"

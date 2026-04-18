@@ -8,7 +8,8 @@ replication:
   connections:
     - type: postgresql
       # Connects to the same Postgres instance used by the backend.
-      uri: postgresql://jeeves:jeeves@postgres:5432/jeeves
+      # PS_DATA_SOURCE_URI is set via the POWERSYNC_CONFIG environment.
+      uri: !env PS_DATA_SOURCE_URI
       # Required: enable logical replication slot for change capture.
       slot_name: powersync_slot
 
@@ -49,7 +50,7 @@ client_auth:
 # Uses the same Postgres instance — no MongoDB required.
 storage:
   type: postgresql
-  uri: postgresql://jeeves:jeeves@postgres:5432/jeeves
+  uri: !env PS_DATA_SOURCE_URI
 
 # --- API server ---------------------------------------------------------------
 api:

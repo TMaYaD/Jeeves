@@ -17,11 +17,14 @@ CONFIG_STORAGE=/var/lib/dokku/data/storage/${APP}
 echo "==> Configuring Dokku app: ${APP}"
 
 # Set environment variables on the app (--no-restart allows batching).
+# PS_DATA_SOURCE_URI is the PowerSync-required name for the Postgres URI
+# (PowerSync only substitutes variables prefixed with PS_).
 dokku config:set --no-restart "${APP}" \
   POWERSYNC_CONFIG_PATH=/config/sync-config.yaml \
   NODE_OPTIONS="--max-old-space-size=400" \
   JEEVES_SECRET_KEY="${JEEVES_SECRET_KEY}" \
-  DATABASE_URL="${DATABASE_URL}"
+  DATABASE_URL="${DATABASE_URL}" \
+  PS_DATA_SOURCE_URI="${DATABASE_URL}"
 echo "    Environment variables set"
 
 # Create storage directory for sync-config.yaml if it doesn't exist.

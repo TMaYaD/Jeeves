@@ -124,7 +124,13 @@ async def create_todo(
     current_user: User = Depends(get_current_user),
 ) -> Todo:
     tags = await _resolve_tags(body.tags, current_user.id, db)
+    # Check for existing todo by client-provided id (idempotent retry support).
+    if body.id is not None:
+        existing = await _get_todo_with_tags(body.id, db)
+        if existing and existing.user_id == current_user.id:
+            return existing
     todo = Todo(
+        **({"id": body.id} if body.id is not None else {}),
         title=body.title,
         notes=body.notes,
         state=body.state,

@@ -34,12 +34,14 @@ class SyncService {
   /// Current sync status stream.
   Stream<SyncStatus> get statusStream => _statusController.stream;
 
-  /// Stream reflecting whether there are locally queued (unsynced) writes.
-  /// Emits 1 while PowerSync is uploading changes, 0 otherwise.
+  /// Stream of the actual number of locally queued (unsynced) writes.
   Stream<int> get pendingWriteCountStream {
     final db = _db;
     if (db == null) return Stream.value(0);
-    return db.statusStream.map((s) => s.uploading ? 1 : 0);
+    return db.statusStream.asyncMap((_) async {
+      final stats = await db.getUploadQueueStats();
+      return stats.count;
+    });
   }
 
   /// Connect to PowerSync and begin bidirectional sync.
@@ -101,8 +103,12 @@ class SyncService {
 
   static SyncStatus _toAppStatus(ps.SyncStatus status) {
     if (status.anyError != null) return SyncStatus.error;
-    if (status.connected) return SyncStatus.synced;
-    if (status.connecting) return SyncStatus.connecting;
+    if (status.connecting || status.downloading || status.uploading) {
+      return SyncStatus.connecting;
+    }
+    if (status.connected && status.hasSynced == true) {
+      return SyncStatus.synced;
+    }
     if (status.lastSyncedAt != null) return SyncStatus.disconnected;
     return SyncStatus.connecting;
   }

@@ -21,11 +21,6 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('capture_source'),
     ps.Column.text('location_id'),
     ps.Column.text('user_id'),
-    ps.Column.text('in_progress_since'),
-    ps.Column.integer('time_spent_minutes'),
-    ps.Column.text('blocked_by_todo_id'),
-    ps.Column.integer('selected_for_today'),
-    ps.Column.text('daily_selection_date'),
   ]),
   ps.Table('tags', [
     ps.Column.text('name'),

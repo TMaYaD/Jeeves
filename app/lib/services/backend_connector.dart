@@ -27,8 +27,9 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   /// Upload locally-queued writes to the backend REST API.
   ///
   /// Each CRUD entry maps to the corresponding REST endpoint:
-  ///   - todos: POST /todos/, PATCH /todos/{id}, DELETE /todos/{id}
-  ///   - tags/todo_tags: managed server-side via todo operations; skip here.
+  ///   - todos:     POST /todos/,       PATCH /todos/{id},      DELETE /todos/{id}
+  ///   - tags:      POST /tags/,        PATCH /tags/{id},       DELETE /tags/{id}
+  ///   - todo_tags: POST /todo_tags/,                           DELETE /todo_tags/{id}
   @override
   Future<void> uploadData(ps.PowerSyncDatabase database) async {
     final batch = await database.getCrudBatch();
@@ -39,10 +40,10 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
         switch (entry.table) {
           case 'todos':
             await _uploadTodo(entry);
-          default:
-            // tags and todo_tags are managed server-side when todos are
-            // created/updated. No direct upload needed for these tables.
-            break;
+          case 'tags':
+            await _uploadTag(entry);
+          case 'todo_tags':
+            await _uploadTodoTag(entry);
         }
       }
       await batch.complete();
@@ -55,11 +56,41 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   Future<void> _uploadTodo(ps.CrudEntry entry) async {
     switch (entry.op) {
       case ps.UpdateType.put:
-        await _api.post('/todos/', entry.opData ?? {});
+        // Include entry.id so the backend can deduplicate on retry.
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/todos/', body);
       case ps.UpdateType.patch:
         await _api.patch('/todos/${entry.id}', entry.opData ?? {});
       case ps.UpdateType.delete:
         await _api.delete('/todos/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadTag(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/tags/', body);
+      case ps.UpdateType.patch:
+        await _api.patch('/tags/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/tags/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadTodoTag(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/todo_tags/', body);
+      case ps.UpdateType.patch:
+        // todo_tags has no updatable fields; treat as no-op.
+        break;
+      case ps.UpdateType.delete:
+        await _api.delete('/todo_tags/${entry.id}');
     }
   }
 }

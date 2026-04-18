@@ -4,7 +4,7 @@
 set -euo pipefail
 
 APP=powersync
-IMAGE=journeyapps/powersync-service:latest
+IMAGE=journeyapps/powersync-service:1.20.5
 
 echo "==> Provisioning Dokku app: ${APP}"
 
