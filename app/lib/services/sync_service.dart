@@ -28,20 +28,26 @@ class SyncService {
 
   ps.PowerSyncDatabase? _db;
   StreamSubscription<SyncStatus>? _statusSub;
+  StreamSubscription<ps.SyncStatus>? _pendingWriteSub;
 
   final _statusController = StreamController<SyncStatus>.broadcast();
+  final _pendingWriteCountController = StreamController<int>.broadcast();
 
   /// Current sync status stream.
   Stream<SyncStatus> get statusStream => _statusController.stream;
 
   /// Stream of the actual number of locally queued (unsynced) writes.
-  Stream<int> get pendingWriteCountStream {
+  /// Long-lived — subscribers survive stop/restart cycles.
+  Stream<int> get pendingWriteCountStream => _pendingWriteCountController.stream;
+
+  Future<void> _emitPendingWriteCount() async {
     final db = _db;
-    if (db == null) return Stream.value(0);
-    return db.statusStream.asyncMap((_) async {
-      final stats = await db.getUploadQueueStats();
-      return stats.count;
-    });
+    if (db == null) {
+      _pendingWriteCountController.add(0);
+      return;
+    }
+    final stats = await db.getUploadQueueStats();
+    _pendingWriteCountController.add(stats.count);
   }
 
   /// Connect to PowerSync and begin bidirectional sync.
@@ -64,11 +70,16 @@ class SyncService {
     final connector = JevesBackendConnector(api);
     await _db!.connect(connector: connector);
 
-    // Map PowerSync's internal SyncStatus to the app's SyncStatus enum.
+    // Map PowerSync's internal SyncStatus to the app's SyncStatus enum and
+    // refresh the pending write count on every status change.
     _statusSub = _db!.statusStream.map(_toAppStatus).listen(
       _statusController.add,
       onError: (_) => _statusController.add(SyncStatus.error),
     );
+    _pendingWriteSub = _db!.statusStream.listen(
+      (_) => _emitPendingWriteCount(),
+    );
+    await _emitPendingWriteCount();
   }
 
   /// Trigger a manual sync refresh (e.g. on pull-to-refresh).
@@ -87,9 +98,12 @@ class SyncService {
   Future<void> stop() async {
     await _statusSub?.cancel();
     _statusSub = null;
+    await _pendingWriteSub?.cancel();
+    _pendingWriteSub = null;
     await _db?.disconnect();
     _db = null;
     _statusController.add(SyncStatus.disconnected);
+    _pendingWriteCountController.add(0);
   }
 
   /// No-op: PowerSync's upload queue replaces the manual pending-write counter.
@@ -98,8 +112,10 @@ class SyncService {
   /// No-op: PowerSync's upload queue replaces the manual pending-write counter.
   void acknowledgePendingWrite() {}
 
-  void dispose() {
-    _statusController.close();
+  Future<void> dispose() async {
+    await stop();
+    await _statusController.close();
+    await _pendingWriteCountController.close();
   }
 
   static SyncStatus _toAppStatus(ps.SyncStatus status) {

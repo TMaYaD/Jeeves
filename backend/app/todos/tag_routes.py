@@ -95,11 +95,18 @@ async def create_todo_tag(
     if not tag or tag.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Tag not found")
 
-    # Idempotency: return if already exists by id.
+    # Idempotency: return if already exists by id, but only when the stored
+    # relation matches exactly; a mismatched relation is a conflict.
     if body.id is not None:
         result = await db.execute(select(TodoTag).where(TodoTag.id == body.id))
-        if result.scalar_one_or_none() is not None:
-            return {"todo_id": body.todo_id, "tag_id": body.tag_id}
+        existing_by_id = result.scalar_one_or_none()
+        if existing_by_id is not None:
+            if existing_by_id.todo_id == body.todo_id and existing_by_id.tag_id == body.tag_id:
+                return {"todo_id": body.todo_id, "tag_id": body.tag_id}
+            raise HTTPException(
+                status_code=409,
+                detail="TodoTag id already used for a different relation",
+            )
 
     # Idempotency: return if (todo_id, tag_id) pair already exists.
     result = await db.execute(

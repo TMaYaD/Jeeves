@@ -1,8 +1,12 @@
-// PowerSync schema — mirrors the three Drift tables that are replicated.
+// PowerSync schema — mirrors the three tables that are replicated.
 //
 // Column names must match the PostgreSQL column names (snake_case) because
 // PowerSync receives rows directly from Postgres via logical replication.
-// The id column is managed by PowerSync and must not be listed here.
+//
+// The implicit primary-key id columns for todos and tags are managed by
+// PowerSync and must NOT be listed here.  todo_tags.id is an intentional
+// exception: it is an explicit UUID column (not the composite PK) stored so
+// the upload handler can locate rows for deletion by entry.id.
 
 import 'package:powersync/powersync.dart' as ps;
 
