@@ -34,7 +34,7 @@ lib/
 ├── main.dart
 ├── models/           # Freezed data models (Todo, List, Reminder, Location, RecurrenceRule)
 ├── services/
-│   ├── sync_service.dart        # Electric SQL offline-first sync
+│   ├── sync_service.dart        # PowerSync offline-first sync
 │   ├── api_service.dart         # FastAPI REST client (Dio)
 │   ├── notification_service.dart
 │   ├── location_service.dart
@@ -44,7 +44,7 @@ lib/
 
 **State management:** Riverpod  
 **Local storage:** Drift (SQLite, offline-first)  
-**Sync:** Electric SQL client (wired in once Flutter package is published)
+**Sync:** PowerSync (`powersync` Dart package, self-hosted service)
 
 ## Platform channels
 

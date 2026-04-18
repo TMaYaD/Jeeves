@@ -8,7 +8,7 @@ Async Python backend powering the Jeeves todos app.
 - **ORM:** SQLAlchemy 2 (async) + asyncpg
 - **Migrations:** Alembic
 - **Database:** PostgreSQL
-- **Sync layer:** Electric SQL (self-hosted alongside Postgres)
+- **Sync layer:** PowerSync (self-hosted alongside Postgres, bidirectional)
 - **AI:** Anthropic Python SDK (`claude-haiku-4-5-20251001` for task parsing)
 - **Background tasks:** Celery + Redis
 
@@ -28,7 +28,7 @@ cp .env.example .env
 
 ## Run (development)
 
-Start Postgres and Electric SQL first (see `../infra/`), then:
+Start Postgres and PowerSync first (see `../infra/`), then:
 
 ```bash
 alembic upgrade head

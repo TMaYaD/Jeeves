@@ -6,7 +6,7 @@ A productivity-focused todos app for mobile, web, and desktop.
 
 - **Frontend:** Flutter (mobile + web + desktop)
 - **Backend:** FastAPI (Python, async)
-- **Sync:** Electric SQL (self-hosted, Postgres-native)
+- **Sync:** PowerSync (self-hosted, Postgres-native, bidirectional)
 - **Database:** PostgreSQL
 
 ## Mono-repo layout

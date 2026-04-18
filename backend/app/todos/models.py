@@ -1,8 +1,8 @@
 """SQLAlchemy ORM models for the todos feature.
 
-Electric SQL requires standard Postgres tables — no exotic types that would
+PowerSync requires standard Postgres tables — no exotic types that would
 break replication. UUIDs are stored as TEXT for maximum compatibility with
-the Electric client.
+the PowerSync sync rules.
 """
 
 import uuid
@@ -55,6 +55,10 @@ class Tag(Base):
 class TodoTag(Base):
     __tablename__ = "todo_tags"
 
+    # PowerSync-assigned UUID used by the upload handler to delete by entry.id.
+    # NULL for server-side inserts; PostgreSQL fills this via the server default
+    # added in migration 0006 (gen_random_uuid()).  SQLite test rows stay NULL.
+    id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     todo_id: Mapped[str] = mapped_column(
         ForeignKey("todos.id", ondelete="CASCADE"), primary_key=True
     )

@@ -24,8 +24,8 @@ dependencies:
   dio: ^5.4.3
   retrofit: ^4.9.2
 
-  # Sync (Electric SQL client)
-  # electric_client: ^0.x.x  # Add when package is published
+  # Sync (PowerSync — bidirectional offline-first sync)
+  powersync: ^1.0.0
 
   # Notifications
   flutter_local_notifications: ^21.0.0

@@ -39,14 +39,13 @@ _MIGRATION_LOCK_ID = 7_239_183_491  # arbitrary unique int
 
 
 def do_run_migrations(connection: Connection) -> None:
-    # Acquire a Postgres advisory lock so only one process migrates at a time.
-    connection.execute(text(f"SELECT pg_advisory_lock({_MIGRATION_LOCK_ID})"))
-    try:
-        context.configure(connection=connection, target_metadata=target_metadata)
-        with context.begin_transaction():
-            context.run_migrations()
-    finally:
-        connection.execute(text(f"SELECT pg_advisory_unlock({_MIGRATION_LOCK_ID})"))
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        # pg_advisory_xact_lock is transaction-scoped: auto-releases on commit/rollback,
+        # and must be acquired inside the transaction to avoid triggering SA autobegin
+        # before context.begin_transaction() can take ownership of the connection.
+        connection.execute(text(f"SELECT pg_advisory_xact_lock({_MIGRATION_LOCK_ID})"))
+        context.run_migrations()
 
 
 async def run_async_migrations() -> None:
@@ -57,6 +56,7 @@ async def run_async_migrations() -> None:
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
+        await connection.commit()
     await connectable.dispose()
 
 
