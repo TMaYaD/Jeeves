@@ -44,7 +44,7 @@ client_auth:
   # audience must match the "aud" claim issued by /powersync/credentials.
   audience: ["jeeves"]
   jwt_secrets:
-    - !env JEEVES_SECRET_KEY
+    - !env PS_JEEVES_SECRET_KEY
 
 # --- Internal storage (bucket state) ------------------------------------------
 # Uses the same Postgres instance — no MongoDB required.

@@ -22,7 +22,7 @@ echo "==> Configuring Dokku app: ${APP}"
 dokku config:set --no-restart "${APP}" \
   POWERSYNC_CONFIG_PATH=/config/sync-config.yaml \
   NODE_OPTIONS="--max-old-space-size=400" \
-  JEEVES_SECRET_KEY="${JEEVES_SECRET_KEY}" \
+  PS_JEEVES_SECRET_KEY="${JEEVES_SECRET_KEY}" \
   DATABASE_URL="${DATABASE_URL}" \
   PS_DATA_SOURCE_URI="${DATABASE_URL}" > /dev/null
 echo "    Environment variables set"

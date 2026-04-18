@@ -32,7 +32,7 @@ services:
       - postgres
     environment:
       POWERSYNC_CONFIG_PATH: /config/sync-config.yaml
-      JEEVES_SECRET_KEY: "${JEEVES_SECRET_KEY:-insecure-dev-key}"
+      PS_JEEVES_SECRET_KEY: "${JEEVES_SECRET_KEY:-insecure-dev-key}"
       PS_DATA_SOURCE_URI: "postgresql://jeeves:jeeves@postgres:5432/jeeves"
     volumes:
       - ./powersync:/config
