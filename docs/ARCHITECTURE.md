@@ -1,5 +1,7 @@
 # Architecture
 
+<!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
+
 This document describes the architectural design of Jeeves, a productivity-focused todos application.
 
 ## High-Level System Overview
