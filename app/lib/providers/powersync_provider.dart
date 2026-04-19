@@ -11,6 +11,7 @@
 // on completion.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -61,8 +62,12 @@ final powerSyncInstanceProvider =
   // login → logout (or vice-versa) can never interleave connect() and
   // disconnect() calls on the same PowerSync DB.
   Future<void> pending = Future.value();
+  var disposed = false;
   Future<void> applyUser(String userId) {
     final next = pending.then((_) async {
+      // Skip if disposal began while this transition was queued, so we
+      // never call connect()/disconnect() on a closing database.
+      if (disposed) return;
       if (userId == 'local') {
         await db.disconnect();
       } else {
@@ -82,19 +87,33 @@ final powerSyncInstanceProvider =
     currentUserIdProvider,
     (previous, next) {
       if (previous == next) return;
+      if (disposed) return;
       // Enqueue the transition; the serial chain above ensures it runs
       // strictly after any in-flight connect/disconnect completes.
       unawaited(applyUser(next));
     },
   );
 
-  ref.onDispose(sub.close);
-  ref.onDispose(db.close);
+  // Single async disposal: mark disposed, cancel the listener, drain any
+  // in-flight transition, then close the DB.  Registering close() hooks
+  // separately could otherwise race with a queued applyUser() that's
+  // about to touch a closing database.
+  ref.onDispose(() async {
+    disposed = true;
+    sub.close();
+    await pending;
+    await db.close();
+  });
 
   return db;
 });
 
 Future<void> _dropLegacyDriftTables(String dbPath) async {
+  // Skip when the file doesn't exist yet — opening a fresh `SqliteDatabase`
+  // would create an empty file, which PowerSync will then open as its own
+  // first-run storage anyway.  Avoiding the stub write keeps cold-start
+  // cheap for new installs.
+  if (!File(dbPath).existsSync()) return;
   final raw = sa.SqliteDatabase(path: dbPath);
   try {
     await raw.initialize();
