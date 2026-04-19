@@ -1,0 +1,14 @@
+# Drift code-generator configuration.
+#
+# `store_date_time_values_as_text: true` is required because the shared
+# SQLite file is owned by PowerSync in production, and PowerSync persists
+# timestamps as ISO-8601 text.  Drift's default (epoch int) would mis-read
+# every date replicated from Postgres.  This setting makes Drift use text
+# serialization end-to-end, which is also what sqlite_async / PowerSync's
+# own helpers produce.
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          store_date_time_values_as_text: true

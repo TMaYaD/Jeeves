@@ -1,16 +1,20 @@
-/// Local-first GTD database backed by Drift (SQLite).
+/// Local-first GTD database backed by Drift.
 ///
-/// [schemaVersion] is 1 — this is a clean-slate schema; no prior Drift
-/// migrations exist. All subsequent schema changes must use Migrator.addColumn /
-/// Migrator.createTable inside [onUpgrade] following additive-only discipline.
+/// In production the underlying storage is PowerSync's `SqliteConnection`
+/// (shared so replicated rows are visible to Drift immediately via SQLite's
+/// update_hook).  In tests the constructor takes an injected [QueryExecutor]
+/// (typically `NativeDatabase.memory()`) which keeps every DAO test hermetic
+/// and synchronous.
+///
+/// Schema ownership: PowerSync creates the application-visible tables as
+/// views over its internal storage, so Drift's [migration] is effectively
+/// a no-op on the production path.  On the in-memory test path [onCreate]
+/// and [onUpgrade] run normally.
 library;
 
-import 'dart:io';
-
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:drift_sqlite_async/drift_sqlite_async.dart';
+import 'package:sqlite_async/sqlite_async.dart';
 
 import 'daos/inbox_dao.dart';
 import 'daos/tag_dao.dart';
@@ -26,8 +30,8 @@ part 'gtd_database.g.dart';
   daos: [InboxDao, TagDao, TodoDao],
 )
 class GtdDatabase extends _$GtdDatabase {
-  /// Production constructor — opens (or creates) the on-device SQLite file.
-  GtdDatabase() : super(_openConnection());
+  /// Production constructor — wraps a [SqliteConnection] owned by PowerSync.
+  GtdDatabase(SqliteConnection db) : super(SqliteAsyncDriftConnection(db));
 
   /// Test constructor — accepts an injected [QueryExecutor] (e.g. in-memory).
   GtdDatabase.forTesting(super.executor);
@@ -50,12 +54,4 @@ class GtdDatabase extends _$GtdDatabase {
           }
         },
       );
-}
-
-LazyDatabase _openConnection() {
-  return LazyDatabase(() async {
-    final dbFolder = await getApplicationDocumentsDirectory();
-    final file = File(p.join(dbFolder.path, 'jeeves.sqlite'));
-    return NativeDatabase.createInBackground(file);
-  });
 }

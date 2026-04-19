@@ -70,7 +70,10 @@ class AuthNotifier extends AsyncNotifier<String?> {
 
     ref.read(currentUserIdProvider.notifier).setUserId(userId);
     authStateNotifier.value = true;
-    unawaited(SyncService.instance.start(api: ref.read(apiServiceProvider)));
+    unawaited(SyncService.instance.start(
+      api: ref.read(apiServiceProvider),
+      currentUserId: userId,
+    ));
     return token;
   }
 
@@ -91,7 +94,10 @@ class AuthNotifier extends AsyncNotifier<String?> {
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
       state = AsyncData(token);
-      unawaited(SyncService.instance.start(api: ref.read(apiServiceProvider)));
+      unawaited(SyncService.instance.start(
+        api: ref.read(apiServiceProvider),
+        currentUserId: userId,
+      ));
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
@@ -115,7 +121,10 @@ class AuthNotifier extends AsyncNotifier<String?> {
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
       state = AsyncData(token);
-      unawaited(SyncService.instance.start(api: ref.read(apiServiceProvider)));
+      unawaited(SyncService.instance.start(
+        api: ref.read(apiServiceProvider),
+        currentUserId: userId,
+      ));
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
