@@ -21,7 +21,7 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
             ;;
     esac
 
-    # Block pushing any wip commits
+    # Block pushing any wip/fixup!/squash! commits
     if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
         # Branch deletion — nothing to inspect
         continue
@@ -29,15 +29,15 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
 
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
         # New branch — only inspect commits not already on any ref of this remote
-        wip_commits=$(git log --oneline "$local_sha" --not --remotes="$remote_name" 2>/dev/null | grep -iE '^[0-9a-f]+ wip(\(.*\))?: ')
+        wip_commits=$(git log --oneline "$local_sha" --not --remotes="$remote_name" 2>/dev/null | grep -iE '^[0-9a-f]+ (wip(\(.*\))?: |(fixup|squash)! )')
     else
-        wip_commits=$(git log --oneline "$remote_sha..$local_sha" 2>/dev/null | grep -iE '^[0-9a-f]+ wip(\(.*\))?: ')
+        wip_commits=$(git log --oneline "$remote_sha..$local_sha" 2>/dev/null | grep -iE '^[0-9a-f]+ (wip(\(.*\))?: |(fixup|squash)! )')
     fi
     if [ -n "$wip_commits" ]; then
-        echo "❌ Push rejected: found WIP commit(s):"
+        echo "❌ Push rejected: found WIP/fixup!/squash! commit(s):"
         echo "$wip_commits"
         echo ""
-        echo "Please squash or fixup WIP commits before pushing:"
+        echo "Please squash or fixup these commits before pushing:"
         echo "  git rebase -i --autosquash"
         exit 1
     fi
