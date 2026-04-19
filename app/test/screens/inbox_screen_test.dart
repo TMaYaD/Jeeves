@@ -99,7 +99,7 @@ void main() {
     });
 
     testWidgets('submitting text field clears the input', (tester) async {
-      final db = GtdDatabase.forTesting(NativeDatabase.memory());
+      final db = GtdDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       await tester.pumpWidget(_buildApp(db: db));
       await tester.pump();

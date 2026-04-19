@@ -13,7 +13,7 @@ void main() {
 
   group('Inbox capture E2E', () {
     testWidgets('app launches and shows Inbox screen', (tester) async {
-      final db = GtdDatabase.forTesting(NativeDatabase.memory());
+      final db = GtdDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       await tester.pumpWidget(
         ProviderScope(
@@ -27,7 +27,7 @@ void main() {
     });
 
     testWidgets('type title and tap Add — item appears in list', (tester) async {
-      final db = GtdDatabase.forTesting(NativeDatabase.memory());
+      final db = GtdDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       await tester.pumpWidget(
         ProviderScope(
@@ -45,7 +45,7 @@ void main() {
     });
 
     testWidgets('inbox count badge matches list length', (tester) async {
-      final db = GtdDatabase.forTesting(NativeDatabase.memory());
+      final db = GtdDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       await tester.pumpWidget(
         ProviderScope(

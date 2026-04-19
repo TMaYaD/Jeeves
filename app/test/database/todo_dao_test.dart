@@ -7,7 +7,7 @@ import 'package:jeeves/models/gtd_state_machine.dart';
 import 'package:jeeves/models/todo.dart';
 import '../test_helpers.dart';
 
-GtdDatabase _openInMemory() => GtdDatabase.forTesting(NativeDatabase.memory());
+GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 const _userId = 'test-user';
 

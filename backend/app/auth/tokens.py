@@ -17,5 +17,5 @@ def create_access_token(data: dict[str, object], expires_delta: timedelta | None
         to_encode,
         settings.secret_key,
         algorithm=settings.algorithm,
-        headers={"kid": "jeeves-dev"},
+        headers={"kid": settings.jwt_kid},
     )

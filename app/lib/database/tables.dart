@@ -43,6 +43,9 @@ class Todos extends Table {
   TextColumn get locationId => text().nullable()();
   TextColumn get userId => text()();
 
+  /// Who or what a `waiting_for`-state task is waiting on (freeform).
+  TextColumn get waitingFor => text().nullable()();
+
   /// ISO-8601 timestamp; set when entering in_progress, cleared on exit.
   TextColumn get inProgressSince => text().nullable()();
 

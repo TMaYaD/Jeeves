@@ -48,24 +48,19 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   ///   - tags:      POST /tags/,        PATCH /tags/{id},       DELETE /tags/{id}
   ///   - todo_tags: POST /todo_tags/,                           DELETE /todo_tags/{id}
   ///
-  /// Errors are classified to avoid wedging the upload queue:
-  ///   - 4xx responses are fatal (malformed payload, RLS violation,
-  ///     row-not-found on PATCH/DELETE etc.).  The offending entry is
-  ///     logged and the whole batch is marked complete so subsequent
-  ///     writes aren't blocked behind it.  If data-loss protection ever
-  ///     matters, escalate here — stash the failing CRUD elsewhere for
-  ///     manual reconciliation before completing.
-  ///   - 5xx and network errors are transient — rethrow so PowerSync
-  ///     retries the batch on the next connect/backoff.
+  /// Errors are classified per-entry so one bad row doesn't poison the batch:
+  ///   - 4xx (except 401) is fatal for THAT entry — log it and skip; the
+  ///     rest of the batch still runs.  If data-loss protection matters,
+  ///     stash the failing CRUD elsewhere for manual reconciliation first.
+  ///   - 5xx, network errors, and 401 are transient — rethrow so PowerSync
+  ///     retries the whole batch on the next connect/backoff.
   @override
   Future<void> uploadData(ps.PowerSyncDatabase database) async {
     final batch = await database.getCrudBatch();
     if (batch == null) return;
 
-    ps.CrudEntry? lastEntry;
-    try {
-      for (final entry in batch.crud) {
-        lastEntry = entry;
+    for (final entry in batch.crud) {
+      try {
         switch (entry.table) {
           case 'todos':
             await _uploadTodo(entry);
@@ -78,19 +73,19 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
               'JevesBackendConnector: unhandled table ${entry.table}',
             );
         }
-      }
-      await batch.complete();
-    } on DioException catch (e) {
-      if (_isFatal(e)) {
-        debugPrint(
-          'JevesBackendConnector: fatal error on $lastEntry '
-          '(status ${e.response?.statusCode}); discarding batch',
-        );
-        await batch.complete();
-      } else {
-        rethrow; // Transient — let PowerSync retry.
+      } on DioException catch (e) {
+        if (_isFatal(e)) {
+          debugPrint(
+            'JevesBackendConnector: fatal error on $entry '
+            '(status ${e.response?.statusCode}); skipping entry',
+          );
+          // Drop only this entry — continue with the rest of the batch.
+          continue;
+        }
+        rethrow; // Transient — let PowerSync retry the whole batch.
       }
     }
+    await batch.complete();
   }
 
   Future<void> _uploadTodo(ps.CrudEntry entry) async {

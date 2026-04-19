@@ -56,13 +56,25 @@ final powerSyncInstanceProvider =
   // Bridge the current auth state to PowerSync's connection lifecycle.
   // [currentUserIdProvider] holds `'local'` when no-one is logged in and
   // the real user id otherwise.  Transitions drive connect/disconnect.
-  Future<void> applyUser(String userId) async {
-    if (userId == 'local') {
-      await db.disconnect();
-    } else {
-      final connector = JevesBackendConnector(ref.read(apiServiceProvider));
-      await db.connect(connector: connector);
-    }
+  //
+  // All transitions are serialized through [pending] so a rapid
+  // login → logout (or vice-versa) can never interleave connect() and
+  // disconnect() calls on the same PowerSync DB.
+  Future<void> pending = Future.value();
+  Future<void> applyUser(String userId) {
+    final next = pending.then((_) async {
+      if (userId == 'local') {
+        await db.disconnect();
+      } else {
+        final connector = JevesBackendConnector(ref.read(apiServiceProvider));
+        await db.connect(connector: connector);
+      }
+    }).catchError((Object e, StackTrace st) {
+      // Swallow so one failed transition doesn't poison the chain — errors
+      // are observable via PowerSync's status stream.
+    });
+    pending = next;
+    return next;
   }
 
   await applyUser(ref.read(currentUserIdProvider));
@@ -70,7 +82,8 @@ final powerSyncInstanceProvider =
     currentUserIdProvider,
     (previous, next) {
       if (previous == next) return;
-      // Fire-and-forget; errors are surfaced via PowerSync's status stream.
+      // Enqueue the transition; the serial chain above ensures it runs
+      // strictly after any in-flight connect/disconnect completes.
       unawaited(applyUser(next));
     },
   );

@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7  # 1 week
 
+    # PowerSync's JWKS validator selects a key by `kid`.  Must match the
+    # `kid` declared in infra/powersync/sync-config.yaml's client_auth.jwks.
+    jwt_kid: str = "jeeves-dev"
+
     # CORS — set to actual Flutter app origin(s) in production
     allowed_origins: list[str] = ["*"]
 

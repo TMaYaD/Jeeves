@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import '../test_helpers.dart';
 
-GtdDatabase _openInMemory() => GtdDatabase.forTesting(NativeDatabase.memory());
+GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 const _userId = 'test-user';
 

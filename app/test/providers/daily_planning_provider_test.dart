@@ -24,7 +24,7 @@ void main() {
     late ProviderContainer container;
 
     setUp(() {
-      db = GtdDatabase.forTesting(NativeDatabase.memory());
+      db = GtdDatabase(NativeDatabase.memory());
       container = _container(db);
     });
 

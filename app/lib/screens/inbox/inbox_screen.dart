@@ -110,7 +110,16 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                   // refresh is purely a UX affordance.  Awaiting the
                   // provider's future ensures the DB has been opened at
                   // least once before we return control to the gesture.
-                  await ref.read(powerSyncInstanceProvider.future);
+                  // Failures (e.g. PowerSync init error) are surfaced via a
+                  // snackbar so the gesture resolves cleanly.
+                  try {
+                    await ref.read(powerSyncInstanceProvider.future);
+                  } catch (_) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Unable to refresh')),
+                    );
+                  }
                 },
               ),
             ),

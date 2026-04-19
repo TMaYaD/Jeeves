@@ -1,10 +1,9 @@
 /// Local-first GTD database backed by Drift.
 ///
-/// In production the underlying storage is PowerSync's `SqliteConnection`
-/// (shared so replicated rows are visible to Drift immediately via SQLite's
-/// update_hook).  In tests the constructor takes an injected [QueryExecutor]
-/// (typically `NativeDatabase.memory()`) which keeps every DAO test hermetic
-/// and synchronous.
+/// Accepts any Drift [QueryExecutor] so the same class serves both
+/// production (a `SqliteAsyncDriftConnection` over PowerSync's shared
+/// SQLite file, typically wrapped in `DatabaseConnection.delayed`) and
+/// tests (`NativeDatabase.memory()`).
 ///
 /// Schema ownership: PowerSync creates the application-visible tables as
 /// views over its internal storage, so Drift's [migration] is effectively
@@ -13,9 +12,7 @@
 library;
 
 import 'package:drift/drift.dart';
-import 'package:drift_sqlite_async/drift_sqlite_async.dart';
 import 'package:powersync/powersync.dart' show uuid;
-import 'package:sqlite_async/sqlite_async.dart';
 
 import 'daos/inbox_dao.dart';
 import 'daos/tag_dao.dart';
@@ -31,14 +28,10 @@ part 'gtd_database.g.dart';
   daos: [InboxDao, TagDao, TodoDao],
 )
 class GtdDatabase extends _$GtdDatabase {
-  /// Production constructor — wraps a [SqliteConnection] owned by PowerSync.
-  GtdDatabase(SqliteConnection db) : super(SqliteAsyncDriftConnection(db));
-
-  /// Test constructor — accepts an injected [QueryExecutor] (e.g. in-memory).
-  GtdDatabase.forTesting(super.executor);
+  GtdDatabase(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -52,6 +45,9 @@ class GtdDatabase extends _$GtdDatabase {
           if (from < 3) {
             await m.addColumn(todos, todos.selectedForToday);
             await m.addColumn(todos, todos.dailySelectionDate);
+          }
+          if (from < 4) {
+            await m.addColumn(todos, todos.waitingFor);
           }
         },
       );
