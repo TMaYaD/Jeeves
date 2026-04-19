@@ -1,5 +1,7 @@
 # Testing Strategy
 
+<!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
+
 This document outlines the testing methodology and standards for the Jeeves project.
 
 ## Development Methodology: TDD (Top-Down)

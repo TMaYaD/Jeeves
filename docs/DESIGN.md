@@ -1,5 +1,7 @@
 # Design System Document
 
+<!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
+
 This document outlines the core aesthetic and functional principles of our design system.
 
 ## Brand Identity

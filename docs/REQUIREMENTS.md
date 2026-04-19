@@ -1,5 +1,7 @@
 # Product Requirements Document (PRD): GTD Execution Hybrid App
 
+<!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
+
 ## 1. Product Vision
 To build a hybrid productivity application that merges the rigid organizational trust of a Getting Things Done (GTD) inventory (e.g., Nirvana) with the focused, day-to-day execution layer of a daily planner and timeboxer (e.g., Sunsama). The system prioritizes immediate execution through Pomodoro constraints and maintains data integrity through forced behavioral guardrails.
 

@@ -107,3 +107,22 @@ Update after completing each goal. Keep goals small (< 30 min each).
 | `docs/` | Detailed documentation | Project-specific |
 
 Keep AGENTS.md generic. Project details go in README.md and docs/.
+
+## Documentation in docs/
+
+Files in docs/ (ARCHITECTURE.md, BACKEND_GUIDELINES.md, DESIGN.md, REQUIREMENTS.md, TESTING.md) describe the current state of the project. They are not changelogs. A reader should be able to understand the system today by reading them, without consulting git history, issues, or PRs.
+When you change code that affects anything these documents describe, update the relevant document in the same change — not at the end of the session. Treat the docs as part of the code.
+When updating:
+
+Rewrite affected sections so they describe the new state. Do not add "Updated X" or "Changed Y" notes.
+Remove statements that are no longer true. Stale claims are worse than missing ones.
+If scope, goals, or direction changed (not just implementation), update REQUIREMENTS.md or DESIGN.md accordingly.
+If you're unsure whether a doc needs updating, read the doc first and check. Don't skip this step.
+
+Git history and GitHub issues are the source of truth for how and why the system got here. The source code is the source of truth for what it is now. /docs is a summary of both.
+
+## Keep Notes
+
+When you make a non-obvious decision, encounter a surprise about this codebase, or learn something by failing an approach first, append a one-line entry to NOTES.md under today's date before moving on. Don't ask permission.
+
+
