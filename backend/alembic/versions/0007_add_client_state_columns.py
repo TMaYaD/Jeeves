@@ -43,6 +43,13 @@ def upgrade() -> None:
             server_default=sa.text("0"),
         ),
     )
+    # Defense in depth: a buggy/stale offline client must not be able to
+    # sync a negative cumulative-minutes total.
+    op.create_check_constraint(
+        "ck_todos_time_spent_minutes_nonnegative",
+        "todos",
+        "time_spent_minutes >= 0",
+    )
     op.add_column("todos", sa.Column("blocked_by_todo_id", sa.Text(), nullable=True))
     op.add_column("todos", sa.Column("selected_for_today", sa.Boolean(), nullable=True))
     op.add_column("todos", sa.Column("daily_selection_date", sa.Text(), nullable=True))
@@ -52,6 +59,7 @@ def downgrade() -> None:
     op.drop_column("todos", "daily_selection_date")
     op.drop_column("todos", "selected_for_today")
     op.drop_column("todos", "blocked_by_todo_id")
+    op.drop_constraint("ck_todos_time_spent_minutes_nonnegative", "todos", type_="check")
     op.drop_column("todos", "time_spent_minutes")
     op.drop_column("todos", "in_progress_since")
     op.drop_column("todos", "waiting_for")

@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.todos.models import ENERGY_LEVELS, GTD_STATES, TAG_TYPES
 
@@ -78,7 +78,7 @@ class TodoCreate(BaseModel):
     # Client-state columns (migration 0007)
     waiting_for: str | None = None
     in_progress_since: str | None = None
-    time_spent_minutes: int = 0
+    time_spent_minutes: int = Field(default=0, ge=0)
     blocked_by_todo_id: str | None = None
     selected_for_today: bool | None = None
     daily_selection_date: str | None = None
@@ -112,7 +112,7 @@ class TodoUpdate(BaseModel):
     # Client-state columns (migration 0007)
     waiting_for: str | None = None
     in_progress_since: str | None = None
-    time_spent_minutes: int | None = None
+    time_spent_minutes: int | None = Field(default=None, ge=0)
     blocked_by_todo_id: str | None = None
     selected_for_today: bool | None = None
     daily_selection_date: str | None = None

@@ -132,12 +132,13 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   /// 4xx responses indicate a client-side problem (bad payload, stale
   /// row, RLS violation).  Retrying will keep failing, so we treat them
   /// as fatal and complete the batch to unblock the queue.
-  /// 401 is deliberately *not* fatal — the auth layer will refresh the
-  /// JWT and the batch will succeed on retry.
+  /// 401 and 429 are deliberately *not* fatal: 401 triggers a JWT
+  /// refresh on the next attempt, and 429 is back-pressure — PowerSync's
+  /// retry backoff will resolve it.
   static bool _isFatal(DioException e) {
     final code = e.response?.statusCode;
     if (code == null) return false; // Network error — retry.
-    if (code == 401) return false; // Token refresh path — retry.
+    if (code == 401 || code == 429) return false;
     return code >= 400 && code < 500;
   }
 

@@ -77,6 +77,10 @@ class Todo(Base):
             "energy_level IS NULL OR energy_level IN ('low','medium','high')",
             name="ck_todos_energy_level",
         ),
+        CheckConstraint(
+            "time_spent_minutes >= 0",
+            name="ck_todos_time_spent_minutes_nonnegative",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
