@@ -14,6 +14,7 @@ library;
 
 import 'package:drift/drift.dart';
 import 'package:drift_sqlite_async/drift_sqlite_async.dart';
+import 'package:powersync/powersync.dart' show uuid;
 import 'package:sqlite_async/sqlite_async.dart';
 
 import 'daos/inbox_dao.dart';

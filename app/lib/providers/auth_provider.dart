@@ -1,12 +1,9 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../services/api_service.dart';
 import '../services/auth_service.dart';
-import '../services/sync_service.dart';
 
 // ---------------------------------------------------------------------------
 // Router refresh notifier
@@ -25,6 +22,7 @@ final authStateNotifier = ValueNotifier<bool>(false);
 ///
 /// Defaults to `'local'` (the pre-auth placeholder) and is updated to the
 /// real user ID when [AuthNotifier] completes its build or after login.
+/// [powerSyncInstanceProvider] listens to this to drive sync lifecycle.
 final currentUserIdProvider =
     NotifierProvider<CurrentUserIdNotifier, String>(CurrentUserIdNotifier.new);
 
@@ -70,10 +68,6 @@ class AuthNotifier extends AsyncNotifier<String?> {
 
     ref.read(currentUserIdProvider.notifier).setUserId(userId);
     authStateNotifier.value = true;
-    unawaited(SyncService.instance.start(
-      api: ref.read(apiServiceProvider),
-      currentUserId: userId,
-    ));
     return token;
   }
 
@@ -94,10 +88,6 @@ class AuthNotifier extends AsyncNotifier<String?> {
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
       state = AsyncData(token);
-      unawaited(SyncService.instance.start(
-        api: ref.read(apiServiceProvider),
-        currentUserId: userId,
-      ));
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
@@ -121,10 +111,6 @@ class AuthNotifier extends AsyncNotifier<String?> {
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
       state = AsyncData(token);
-      unawaited(SyncService.instance.start(
-        api: ref.read(apiServiceProvider),
-        currentUserId: userId,
-      ));
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
@@ -132,12 +118,13 @@ class AuthNotifier extends AsyncNotifier<String?> {
   }
 
   Future<void> logout() async {
-    await SyncService.instance.stop();
     try {
       await ref.read(authServiceProvider).clearToken();
     } catch (_) {
       // Best-effort token removal; proceed with local state reset regardless.
     }
+    // Flip the user id back to 'local'; [powerSyncInstanceProvider] will
+    // observe the change and call `disconnect()` on the PowerSync DB.
     ref.read(currentUserIdProvider.notifier).reset();
     state = const AsyncData(null);
     authStateNotifier.value = false;

@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/connectivity_provider.dart';
 import '../../providers/inbox_provider.dart';
-import '../../services/sync_service.dart';
+import '../../providers/powersync_provider.dart';
 import 'widgets/inbox_list.dart';
 import 'widgets/offline_chip.dart';
 import 'widgets/quick_add_bar.dart';
@@ -105,7 +105,13 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
             // Inbox list
             Expanded(
               child: InboxList(
-                onRefresh: ref.read(syncServiceProvider).sync,
+                onRefresh: () async {
+                  // PowerSync syncs continuously while connected — pull-to-
+                  // refresh is purely a UX affordance.  Awaiting the
+                  // provider's future ensures the DB has been opened at
+                  // least once before we return control to the gesture.
+                  await ref.read(powerSyncInstanceProvider.future);
+                },
               ),
             ),
           ],

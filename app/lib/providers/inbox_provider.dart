@@ -1,6 +1,5 @@
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 
 import '../database/gtd_database.dart';
 import '../models/todo.dart' hide Todo;
@@ -32,11 +31,9 @@ class InboxNotifier {
       throw ArgumentError.value(title, 'title', 'Title cannot be empty');
     }
     final db = _ref.read(databaseProvider);
-    final id = const Uuid().v4();
     final now = DateTime.now();
     final userId = _ref.read(currentUserIdProvider);
     await db.inboxDao.insertTodo(TodosCompanion(
-      id: Value(id),
       title: Value(normalizedTitle),
       notes: Value(notes),
       state: Value(GtdState.inbox.value),

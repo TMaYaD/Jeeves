@@ -5,13 +5,14 @@
 library;
 
 import 'package:drift/drift.dart';
+import 'package:powersync/powersync.dart' show uuid;
 
 // ---------------------------------------------------------------------------
 // todos
 // ---------------------------------------------------------------------------
 
 class Todos extends Table {
-  TextColumn get id => text()();
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get title => text().withLength(max: 500)();
   TextColumn get notes => text().nullable()();
   // Both defaults are intentional: `withDefault` wires the SQL-level DEFAULT
@@ -68,7 +69,7 @@ class Todos extends Table {
 // ---------------------------------------------------------------------------
 
 class Tags extends Table {
-  TextColumn get id => text()();
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get name => text().withLength(max: 100)();
   TextColumn get color => text().nullable()();
 
