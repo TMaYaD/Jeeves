@@ -31,7 +31,7 @@ class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -48,6 +48,9 @@ class GtdDatabase extends _$GtdDatabase {
           }
           if (from < 4) {
             await m.addColumn(todos, todos.waitingFor);
+          }
+          if (from < 5) {
+            await m.addColumn(todoTags, todoTags.userId);
           }
         },
       );

@@ -95,6 +95,10 @@ class TodoTags extends Table {
   TextColumn get todoId => text().references(Todos, #id)();
   TextColumn get tagId => text().references(Tags, #id)();
 
+  /// Denormalized from `todos.user_id` so PowerSync can filter junction rows
+  /// with a per-user parameter bucket (see Alembic 0008 and sync-config.yaml).
+  TextColumn get userId => text()();
+
   @override
   Set<Column<Object>> get primaryKey => {todoId, tagId};
 }

@@ -25,9 +25,18 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   }
 
   /// Associate a tag with a todo (idempotent).
-  Future<void> assignTag(String todoId, String tagId) {
+  ///
+  /// [userId] is denormalized onto the junction row so PowerSync can sync it
+  /// in a per-user bucket (see sync-config.yaml `by_user_todo_tags`).  It
+  /// must match the parent todo's `user_id`; callers typically pass
+  /// `ref.read(currentUserIdProvider)`.
+  Future<void> assignTag(String todoId, String tagId, String userId) {
     return into(todoTags).insertOnConflictUpdate(
-      TodoTagsCompanion(todoId: Value(todoId), tagId: Value(tagId)),
+      TodoTagsCompanion(
+        todoId: Value(todoId),
+        tagId: Value(tagId),
+        userId: Value(userId),
+      ),
     );
   }
 
@@ -57,6 +66,6 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
           .go();
     }
 
-    await assignTag(todoId, newProjectTagId);
+    await assignTag(todoId, newProjectTagId, userId);
   }
 }

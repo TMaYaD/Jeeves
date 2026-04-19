@@ -66,13 +66,14 @@ void main() {
         userId: const Value(_userId),
       ));
 
-      await db.tagDao.assignTag('todo1', 'ctx1');
+      await db.tagDao.assignTag('todo1', 'ctx1', _userId);
 
       final rows = await (db.select(db.todoTags)
             ..where((jt) => jt.todoId.equals('todo1')))
           .get();
       expect(rows.length, 1);
       expect(rows.first.tagId, 'ctx1');
+      expect(rows.first.userId, _userId);
     });
 
     test('enforceSingleProject removes old project and assigns new one',
@@ -111,6 +112,7 @@ void main() {
           .get();
       expect(rows.length, 1);
       expect(rows.first.tagId, 'p2');
+      expect(rows.first.userId, _userId);
     });
 
     test('watchByType returns tags in alphabetical order', () async {

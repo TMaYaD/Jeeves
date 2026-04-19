@@ -4,8 +4,9 @@
 // PowerSync receives rows directly from Postgres via logical replication.
 //
 // The implicit primary-key `id` column is managed by PowerSync for every
-// table and must NOT be listed here — including on todo_tags (replicated as
-// a global bucket with its Postgres-assigned UUID serving as the PK).
+// table and must NOT be listed here — including on todo_tags (replicated
+// via a per-user parameter bucket thanks to the denormalized `user_id`
+// column added in Alembic 0008; see infra/powersync/sync-config.yaml).
 
 import 'package:powersync/powersync.dart' as ps;
 
@@ -41,5 +42,6 @@ const powersyncSchema = ps.Schema([
   ps.Table('todo_tags', [
     ps.Column.text('todo_id'),
     ps.Column.text('tag_id'),
+    ps.Column.text('user_id'),
   ]),
 ]);

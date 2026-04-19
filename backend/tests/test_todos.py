@@ -1,6 +1,11 @@
+import jwt
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.todos.models import TodoTag
 from tests.conftest import auth_header, register
 
 
@@ -208,3 +213,58 @@ async def test_invalid_energy_level_returns_422(client: AsyncClient) -> None:
         headers=auth_header(token),
     )
     assert resp.status_code == 422
+
+
+# ── todo_tags.user_id denormalization (migration 0008) ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_todo_tags_user_id_populated_on_all_write_paths(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Every junction row must carry user_id regardless of which write path
+    created it.  Covers the ORM-cascade path (POST /todos/ with tags, PATCH
+    /todos/{id} with tags — both exercising the before_flush listener) and
+    the explicit endpoint (POST /todo_tags/ which sets user_id directly)."""
+    token = await register(client, "junction-user@example.com")
+    payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    user_id = payload["sub"]
+
+    # Path 1: POST /todos/ with tags — ORM cascade.
+    create = await client.post(
+        "/todos/",
+        json={"title": "Path 1", "tags": ["@home"]},
+        headers=auth_header(token),
+    )
+    assert create.status_code == 201
+    todo_id = create.json()["id"]
+
+    # Path 2: PATCH /todos/{id} with replacement tags — ORM cascade again.
+    patch = await client.patch(
+        f"/todos/{todo_id}",
+        json={"tags": ["@office", "urgent"]},
+        headers=auth_header(token),
+    )
+    assert patch.status_code == 200
+
+    # Path 3: POST /todo_tags/ — explicit endpoint.  First create a fresh tag
+    # to attach so we're exercising the idempotency-free branch.
+    tag_resp = await client.post(
+        "/tags/",
+        json={"name": "next", "type": "label"},
+        headers=auth_header(token),
+    )
+    assert tag_resp.status_code == 201
+    tag_id = tag_resp.json()["id"]
+    attach = await client.post(
+        "/todo_tags/",
+        json={"todo_id": todo_id, "tag_id": tag_id},
+        headers=auth_header(token),
+    )
+    assert attach.status_code == 201
+
+    # Assert: every junction row on this todo has the correct user_id.
+    rows = (await db.execute(select(TodoTag).where(TodoTag.todo_id == todo_id))).scalars().all()
+    assert len(rows) >= 1  # PATCH replaced the original set; at least the new tag + the 2 patched
+    for row in rows:
+        assert row.user_id == user_id, f"junction row {row.todo_id},{row.tag_id} has wrong user_id"

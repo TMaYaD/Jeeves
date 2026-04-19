@@ -133,7 +133,7 @@ class TaskDetailNotifier {
   Future<void> assignContextTag(String tagId) async {
     final todo = await _db.todoDao.getTodo(_todoId, _userId);
     if (todo == null) return;
-    await _db.tagDao.assignTag(_todoId, tagId);
+    await _db.tagDao.assignTag(_todoId, tagId, _userId);
   }
 
   Future<void> removeContextTag(String tagId) async {

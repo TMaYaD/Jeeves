@@ -63,6 +63,14 @@ class TodoTag(Base):
         ForeignKey("todos.id", ondelete="CASCADE"), primary_key=True
     )
     tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+    # Denormalized from todos.user_id so PowerSync can filter junction rows
+    # by bucket parameter (see migration 0008 and sync-config.yaml).  Set
+    # explicitly at every write call site — we manage TodoTag rows directly
+    # (not via the secondary-cascade on Todo.tags) so user_id is always set
+    # in the same statement that creates the row.
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
 
 class Todo(Base):
