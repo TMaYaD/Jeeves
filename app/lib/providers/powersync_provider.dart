@@ -82,7 +82,15 @@ final powerSyncInstanceProvider =
     return next;
   }
 
-  await applyUser(ref.read(currentUserIdProvider));
+  // Subscribe BEFORE the initial apply.  On cold start, auth restoration
+  // runs concurrently with this provider's build() and can flip
+  // [currentUserIdProvider] from `'local'` to the real user id during the
+  // `await` below.  If we subscribed after that await, such transitions
+  // would land in the gap — [ref.listen] does not fire for existing
+  // state — and PowerSync would stay disconnected until the next manual
+  // login/logout.  The [pending] chain serialises the initial apply with
+  // any listener-triggered apply, so the correct end state is reached
+  // regardless of ordering.
   final sub = ref.listen<String>(
     currentUserIdProvider,
     (previous, next) {
@@ -93,6 +101,7 @@ final powerSyncInstanceProvider =
       unawaited(applyUser(next));
     },
   );
+  await applyUser(ref.read(currentUserIdProvider));
 
   // Single async disposal: mark disposed, cancel the listener, drain any
   // in-flight transition, then close the DB.  Registering close() hooks

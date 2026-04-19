@@ -4,14 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/auth_service.dart';
+import '../services/migration_service.dart';
 
 // ---------------------------------------------------------------------------
 // Router refresh notifier
 // ---------------------------------------------------------------------------
 
 /// Flips whenever auth state changes so GoRouter re-evaluates its redirect.
-///
-/// Must be initialised before [runApp] via [initAuthState].
 final authStateNotifier = ValueNotifier<bool>(false);
 
 // ---------------------------------------------------------------------------
@@ -44,73 +43,99 @@ final authTokenProvider = AsyncNotifierProvider<AuthNotifier, String?>(
 );
 
 class AuthNotifier extends AsyncNotifier<String?> {
+  /// Cold-start: restore session from stored tokens.
+  ///
+  /// 1. If the stored access token is still valid → use it.
+  /// 2. If it is expired (or absent) → try a silent refresh via the stored
+  ///    refresh token.
+  /// 3. If the refresh also fails → remain in local-only mode; never redirect
+  ///    to the login screen.
   @override
   Future<String?> build() async {
     final service = ref.watch(authServiceProvider);
-    final token = await service.getToken();
+    final storedToken = await service.getToken();
 
-    if (token == null) {
-      ref.read(currentUserIdProvider.notifier).reset();
-      authStateNotifier.value = false;
-      return null;
+    // Case 1: valid access token already in storage.
+    if (storedToken != null) {
+      final userId = _extractUserId(storedToken);
+      if (userId != null) {
+        ref.read(currentUserIdProvider.notifier).setUserId(userId);
+        authStateNotifier.value = true;
+        return storedToken;
+      }
     }
 
-    final userId = _extractUserId(token);
-    if (userId == null) {
-      // Token is malformed or expired — best-effort cleanup, stay unauthenticated.
-      try {
-        await service.clearToken();
-      } catch (_) {}
-      ref.read(currentUserIdProvider.notifier).reset();
-      authStateNotifier.value = false;
-      return null;
+    // Case 2: access token missing or expired — try silent refresh.
+    final refreshed = await service.refreshSession();
+    if (refreshed != null) {
+      final userId = _extractUserId(refreshed);
+      if (userId != null) {
+        ref.read(currentUserIdProvider.notifier).setUserId(userId);
+        authStateNotifier.value = true;
+        return refreshed;
+      }
     }
 
-    ref.read(currentUserIdProvider.notifier).setUserId(userId);
-    authStateNotifier.value = true;
-    return token;
+    // Case 3: no valid session — stay in local-only mode.
+    try {
+      await service.clearTokens();
+    } catch (_) {}
+    ref.read(currentUserIdProvider.notifier).reset();
+    authStateNotifier.value = false;
+    return null;
   }
 
-  Future<void> login(String email, String password) async {
+  /// Sign in and optionally migrate local data to the authenticated account.
+  ///
+  /// [onConflict] is called when the local device has data AND the server
+  /// already has data for this user.  The callback should show a dialog and
+  /// return the user's resolution choice.  If null the default is [merge].
+  Future<void> login(
+    String email,
+    String password, {
+    Future<ConflictResolution> Function()? onConflict,
+  }) async {
     state = const AsyncLoading();
     try {
       final service = ref.read(authServiceProvider);
-      final token = await service.login(email, password);
-      final userId = _extractUserId(token);
+      final (:accessToken, refreshToken: _) =
+          await service.login(email, password);
+      final userId = _extractUserId(accessToken);
       if (userId == null) {
-        try {
-          await service.clearToken();
-        } catch (_) {
-          // Preserve the auth failure below.
-        }
+        await service.clearTokens();
         throw StateError('Server returned a token without a valid user ID.');
       }
+      await _handleMigration(userId, onConflict: onConflict);
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
-      state = AsyncData(token);
+      state = AsyncData(accessToken);
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
     }
   }
 
-  Future<void> register(String email, String password) async {
+  /// Register a new account and migrate local data to the new user.
+  Future<void> register(
+    String email,
+    String password, {
+    Future<ConflictResolution> Function()? onConflict,
+  }) async {
     state = const AsyncLoading();
     try {
       final service = ref.read(authServiceProvider);
-      final token = await service.register(email, password);
-      final userId = _extractUserId(token);
+      final (:accessToken, refreshToken: _) =
+          await service.register(email, password);
+      final userId = _extractUserId(accessToken);
       if (userId == null) {
-        try {
-          await service.clearToken();
-        } catch (_) {
-          // Preserve the auth failure below.
-        }
+        await service.clearTokens();
         throw StateError('Server returned a token without a valid user ID.');
       }
+      // New registrations have no server-side data yet; skip conflict check.
+      await _handleMigration(userId, skipConflictCheck: true);
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
-      state = AsyncData(token);
+      state = AsyncData(accessToken);
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
@@ -118,16 +143,73 @@ class AuthNotifier extends AsyncNotifier<String?> {
   }
 
   Future<void> logout() async {
-    try {
-      await ref.read(authServiceProvider).clearToken();
-    } catch (_) {
-      // Best-effort token removal; proceed with local state reset regardless.
+    // Reassign rows owned by the authenticated user back to the `'local'`
+    // placeholder before resetting the user id.  Without this, queries —
+    // which filter by [currentUserIdProvider] — would match nothing after
+    // sign-out and the user's tasks/tags appear to vanish.  Signing in
+    // again runs the mirror migration in [_handleMigration], so data
+    // round-trips correctly through a logout/login cycle.
+    final previousUserId = ref.read(currentUserIdProvider);
+    if (previousUserId != 'local') {
+      try {
+        await ref.read(migrationServiceProvider).migrate(
+              fromUserId: previousUserId,
+              toUserId: 'local',
+            );
+      } catch (_) {
+        // Best-effort: if the local reassignment fails the rows stay
+        // under the old user id and will be recovered when the same
+        // user signs in again.  Don't block sign-out on it.
+      }
     }
-    // Flip the user id back to 'local'; [powerSyncInstanceProvider] will
-    // observe the change and call `disconnect()` on the PowerSync DB.
+
+    try {
+      await ref.read(authServiceProvider).logout();
+    } catch (_) {
+      // Best-effort; proceed with local state reset regardless.
+    }
     ref.read(currentUserIdProvider.notifier).reset();
     state = const AsyncData(null);
     authStateNotifier.value = false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Migration helper
+  // ---------------------------------------------------------------------------
+
+  Future<void> _handleMigration(
+    String toUserId, {
+    Future<ConflictResolution> Function()? onConflict,
+    bool skipConflictCheck = false,
+  }) async {
+    final migrationService = ref.read(migrationServiceProvider);
+    final hasLocal = await migrationService.hasLocalData();
+    if (!hasLocal) return; // Nothing to migrate.
+
+    ConflictResolution resolution = ConflictResolution.merge;
+
+    if (!skipConflictCheck) {
+      // Treat remote-check failures as "possibly has data" so the user still
+      // gets a chance to resolve a conflict instead of silently merging.
+      bool serverHasData;
+      try {
+        serverHasData = await ref.read(authServiceProvider).serverHasTodos();
+      } catch (_) {
+        serverHasData = true;
+      }
+      if (serverHasData && onConflict != null) {
+        resolution = await onConflict();
+      }
+    }
+
+    switch (resolution) {
+      case ConflictResolution.keepLocal:
+        await migrationService.migrate(fromUserId: 'local', toUserId: toUserId);
+      case ConflictResolution.keepServer:
+        await migrationService.deleteLocalData('local');
+      case ConflictResolution.merge:
+        await migrationService.migrate(fromUserId: 'local', toUserId: toUserId);
+    }
   }
 }
 

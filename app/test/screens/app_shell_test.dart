@@ -254,34 +254,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
-  testWidgets('AppShell drawer shows Sign Out tile', (tester) async {
+  testWidgets('AppShell drawer shows Settings tile', (tester) async {
     await tester.pumpWidget(_buildShellOnly());
     await tester.pump();
 
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
 
-    // Scroll to reveal the Sign Out tile at the bottom.
+    // Scroll to reveal the Settings tile at the bottom.
     await tester.drag(find.byType(Drawer), const Offset(0, -600));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('sign_out_tile')), findsOneWidget);
-  });
-
-  testWidgets('AppShell Sign Out tile calls logout()', (tester) async {
-    var called = false;
-    await tester.pumpWidget(_buildShellOnly(onLogout: () => called = true));
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-
-    await tester.drag(find.byType(Drawer), const Offset(0, -600));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const Key('sign_out_tile')));
-    await tester.pump();
-
-    expect(called, isTrue);
+    expect(find.byKey(const Key('settings_tile')), findsOneWidget);
   });
 }

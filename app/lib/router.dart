@@ -1,4 +1,3 @@
-import 'package:flutter/widgets.dart';
 import 'package:go_router/go_router.dart';
 
 import 'providers/auth_provider.dart';
@@ -10,6 +9,7 @@ import 'screens/inbox/inbox_screen.dart';
 import 'screens/next_actions/next_actions_screen.dart';
 import 'screens/planning/planning_ritual_screen.dart';
 import 'screens/scheduled/scheduled_screen.dart';
+import 'screens/settings/settings_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
@@ -28,16 +28,14 @@ const _protectedPaths = [
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
-  refreshListenable:
-      Listenable.merge([authStateNotifier, planningCompletionNotifier]),
+  // Intentionally excludes authStateNotifier: login/register screens own
+  // their post-auth navigation. Refreshing on auth changes would rebuild the
+  // route stack from the current URI and drop any imperatively-pushed entry
+  // (e.g. /login pushed on top of /settings), breaking the pop-back flow.
+  refreshListenable: planningCompletionNotifier,
   redirect: (context, state) {
     final isAuthenticated = authStateNotifier.value;
     final loc = state.uri.path;
-    final isAuthRoute = loc == '/login' || loc == '/register';
-
-    // Auth guard — runs before the planning ritual guard.
-    if (!isAuthenticated && !isAuthRoute) return '/login';
-    if (isAuthenticated && isAuthRoute) return '/inbox';
 
     // Planning ritual guard (only reached when authenticated).
     if (isAuthenticated) {
@@ -62,6 +60,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/planning',
       builder: (context, state) => const PlanningRitualScreen(),
+    ),
+    GoRoute(
+      path: '/settings',
+      builder: (context, state) => const SettingsScreen(),
     ),
     ShellRoute(
       builder: (context, state, child) => AppShell(child: child),
