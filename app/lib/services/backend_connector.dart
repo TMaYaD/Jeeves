@@ -6,9 +6,12 @@
 //   2. uploadData()       — drain PowerSync's CRUD queue and persist each
 //      local write to the backend via the existing REST API.
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:powersync/powersync.dart' as ps;
 
 import 'api_service.dart';
+import 'platform_helper.dart'
+    if (dart.library.io) 'platform_helper_io.dart';
 
 class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   JevesBackendConnector(this._api);
@@ -18,8 +21,14 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   @override
   Future<ps.PowerSyncCredentials?> fetchCredentials() async {
     final data = await _api.get('/powersync/credentials');
+    var endpoint = data['powersync_url'] as String;
+    // Android emulator cannot reach the host's localhost; Google's emulator
+    // routes 10.0.2.2 to host loopback.  iOS/macOS/web are unaffected.
+    if (!kIsWeb && isAndroidPlatform) {
+      endpoint = endpoint.replaceFirst('://localhost', '://10.0.2.2');
+    }
     return ps.PowerSyncCredentials(
-      endpoint: data['powersync_url'] as String,
+      endpoint: endpoint,
       token: data['token'] as String,
     );
   }

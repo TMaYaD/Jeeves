@@ -98,6 +98,14 @@ class Todo(Base):
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
+    # Client-state columns replicated via PowerSync (migration 0007).
+    waiting_for: Mapped[str | None] = mapped_column(Text)
+    in_progress_since: Mapped[str | None] = mapped_column(Text)
+    time_spent_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blocked_by_todo_id: Mapped[str | None] = mapped_column(Text)
+    selected_for_today: Mapped[bool | None] = mapped_column(Boolean)
+    daily_selection_date: Mapped[str | None] = mapped_column(Text)
+
     tags: Mapped[list["Tag"]] = relationship("Tag", secondary="todo_tags", back_populates="todos")
     reminders: Mapped[list["Reminder"]] = relationship("Reminder", back_populates="todo")
     recurrence_rule: Mapped["RecurrenceRule | None"] = relationship(

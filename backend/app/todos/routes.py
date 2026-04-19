@@ -138,6 +138,12 @@ async def create_todo(
         time_estimate=body.time_estimate,
         energy_level=body.energy_level,
         capture_source=body.capture_source,
+        waiting_for=body.waiting_for,
+        in_progress_since=body.in_progress_since,
+        time_spent_minutes=body.time_spent_minutes,
+        blocked_by_todo_id=body.blocked_by_todo_id,
+        selected_for_today=body.selected_for_today,
+        daily_selection_date=body.daily_selection_date,
         user_id=current_user.id,
         tags=tags,
     )

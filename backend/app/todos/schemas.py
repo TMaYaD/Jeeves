@@ -75,6 +75,13 @@ class TodoCreate(BaseModel):
     time_estimate: int | None = None  # minutes
     energy_level: str | None = None  # 'low' | 'medium' | 'high'
     capture_source: str | None = None  # 'manual' | 'share_sheet' | 'voice' | 'ai_parse'
+    # Client-state columns (migration 0007)
+    waiting_for: str | None = None
+    in_progress_since: str | None = None
+    time_spent_minutes: int = 0
+    blocked_by_todo_id: str | None = None
+    selected_for_today: bool | None = None
+    daily_selection_date: str | None = None
 
     @field_validator("state")
     @classmethod
@@ -102,6 +109,13 @@ class TodoUpdate(BaseModel):
     time_estimate: int | None = None
     energy_level: str | None = None
     capture_source: str | None = None
+    # Client-state columns (migration 0007)
+    waiting_for: str | None = None
+    in_progress_since: str | None = None
+    time_spent_minutes: int | None = None
+    blocked_by_todo_id: str | None = None
+    selected_for_today: bool | None = None
+    daily_selection_date: str | None = None
 
     @field_validator("state")
     @classmethod
@@ -140,5 +154,12 @@ class TodoOut(BaseModel):
     time_estimate: int | None
     energy_level: str | None
     capture_source: str | None
+    # Client-state columns (migration 0007)
+    waiting_for: str | None
+    in_progress_since: str | None
+    time_spent_minutes: int
+    blocked_by_todo_id: str | None
+    selected_for_today: bool | None
+    daily_selection_date: str | None
 
     model_config = {"from_attributes": True}

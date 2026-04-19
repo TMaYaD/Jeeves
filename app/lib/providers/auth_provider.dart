@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../services/sync_service.dart';
 
 // ---------------------------------------------------------------------------
 // Router refresh notifier
@@ -67,6 +70,7 @@ class AuthNotifier extends AsyncNotifier<String?> {
 
     ref.read(currentUserIdProvider.notifier).setUserId(userId);
     authStateNotifier.value = true;
+    unawaited(SyncService.instance.start(api: ref.read(apiServiceProvider)));
     return token;
   }
 
@@ -87,6 +91,7 @@ class AuthNotifier extends AsyncNotifier<String?> {
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
       state = AsyncData(token);
+      unawaited(SyncService.instance.start(api: ref.read(apiServiceProvider)));
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
@@ -110,6 +115,7 @@ class AuthNotifier extends AsyncNotifier<String?> {
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
       authStateNotifier.value = true;
       state = AsyncData(token);
+      unawaited(SyncService.instance.start(api: ref.read(apiServiceProvider)));
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
@@ -117,6 +123,7 @@ class AuthNotifier extends AsyncNotifier<String?> {
   }
 
   Future<void> logout() async {
+    await SyncService.instance.stop();
     try {
       await ref.read(authServiceProvider).clearToken();
     } catch (_) {
