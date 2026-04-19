@@ -9,7 +9,7 @@ remote_name="$1"
 
 # Read the ref lines that git passes on stdin.
 # Each line: <local_ref> <local_sha> <remote_ref> <remote_sha>
-while read -r _local_ref _local_sha remote_ref _remote_sha; do
+while read -r _local_ref local_sha remote_ref remote_sha; do
     case "$remote_ref" in
         refs/heads/main|refs/heads/master)
             if [ "$remote_name" = "dokku" ]; then
@@ -20,6 +20,27 @@ while read -r _local_ref _local_sha remote_ref _remote_sha; do
             fi
             ;;
     esac
+
+    # Block pushing any wip/fixup!/squash! commits
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        # Branch deletion — nothing to inspect
+        continue
+    fi
+
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        # New branch — only inspect commits not already on any ref of this remote
+        wip_commits=$(git log --oneline "$local_sha" --not --remotes="$remote_name" 2>/dev/null | grep -iE '^[0-9a-f]+ (wip(\(.*\))?: |(fixup|squash)! )')
+    else
+        wip_commits=$(git log --oneline "$remote_sha..$local_sha" 2>/dev/null | grep -iE '^[0-9a-f]+ (wip(\(.*\))?: |(fixup|squash)! )')
+    fi
+    if [ -n "$wip_commits" ]; then
+        echo "❌ Push rejected: found WIP/fixup!/squash! commit(s):"
+        echo "$wip_commits"
+        echo ""
+        echo "Please squash or fixup these commits before pushing:"
+        echo "  git rebase -i --autosquash"
+        exit 1
+    fi
 done
 
 echo "✅ All pre-push checks passed!"

@@ -1,7 +1,7 @@
 #!/bin/sh
 
-# Regex to check for conventional commits
-commit_regex='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_-]+\))?: .+'
+# Regex to check for conventional commits (wip allowed locally, blocked on push)
+commit_regex='^((fixup|squash)! )?(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|wip)(\([a-zA-Z0-9_-]+\))?: .+'
 
 if ! grep -iqE "$commit_regex" "$1"; then
     echo "❌ Error: Commit message does not follow Conventional Commits format."
