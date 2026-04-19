@@ -78,6 +78,28 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Auto-Triage:** LLM parses raw inbox text and suggests Project, Context, Energy, and Duration.
 * **Human-in-the-Loop:** User must explicitly approve/modify AI suggestions before committing to the inventory.
 * **Conversational Capture:** Audio interface for brain-dumping, where the system prompts the user verbally to define GTD parameters.
+* **Interactive Verbal Clarifier:** Structured verbal Q&A that prompts the user through GTD clarification questions for a single task, distinct from the passive conversational brain dump.
+* **AI-Powered Tag Summary:** On-demand AI-generated summary of all tasks under a given tag — task count, completion status, overdue highlights, and next actions.
+* **Graceful AI Degradation:** All AI-powered features must fall back gracefully when the AI service is unavailable, ensuring core GTD workflows remain fully functional without intelligence features.
+
+### Epic 9: Habit Tracking
+**Goal:** Support recurring behavioral commitments that don't fit the "complete and forget" model of a GTD task.
+* **Habit Definition:** Create habits with title, frequency (daily, specific weekdays, X times per week/month), time-of-day anchor, and optional context/location link.
+* **Check-In:** Binary (done/not done) or measurable (numeric value, e.g., "glasses of water: 6").
+* **Streak Tracking:** Current streak, best streak, completion rate over 7/30/90 days. Flexible frequency awareness — rest days don't break non-daily streaks.
+* **Visualization:** Heatmap/calendar view showing consistency over time.
+* **GTD Integration:** Habits surface in the Daily Planning summary (without consuming task capacity), morning review, Evening Shutdown check-in, and context/location-based surfacing. Habits can optionally be worked on in Focus Mode with Pomodoro timing.
+
+### Epic 10: Extended Capture Channels
+**Goal:** Meet users where they are with additional low-friction capture methods beyond the core app and Android OS integration.
+* **Home Screen Widget:** Quick-capture widget for task entry without opening the app.
+* **Email-to-Inbox:** Forward emails to a dedicated address to create inbox items.
+* **Messaging Integration:** Capture tasks via messaging platforms (e.g., Telegram bot, WhatsApp).
+* **Scheduled Reminder Notifications:** Timezone-aware local push notifications for tasks with due dates, ensuring users are reminded of deadlines even when the app is closed.
+
+### Epic 11: Data Portability & Migration
+**Goal:** Reduce switching costs and prevent vendor lock-in.
+* **Import from Nirvana:** One-time migration of tasks, projects, contexts, and metadata from Nirvana GTD export, preserving GTD state and hierarchy.
 
 ---
 
@@ -89,6 +111,8 @@ To build a hybrid productivity application that merges the rigid organizational 
 | **Phase 2: Execution Loop** | Pomodoros, Resolution Matrix, Guardrails | Epic 3, Epic 4, Epic 5 | The core differentiator (80/20 value). Guardrails must be deployed before beta testing to prevent garbage data accumulation. |
 | **Phase 3: OS Hooks** | Share Sheet, Geofencing, Time Filters | Epic 6, Epic 7 | High value, moderate effort. Improves capture flow and contextual filtering. |
 | **Phase 4: Intelligence** | AI Triage, Conversational Capture | Epic 8 | Highest latency/cost risk. Treat as a progressive enhancement built on top of the solid manual workflows. |
+| **Phase 5: Behavioral Layer** | Habits, Extended Capture | Epic 9, Epic 10 | Expands the system from task management into holistic productivity. Habits address the recurring-task workaround users already employ. |
+| **Phase 6: Portability** | Import/Export, Migration | Epic 11 | Reduces onboarding friction for users switching from other GTD tools. |
 
 ---
 
@@ -96,3 +120,5 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 * **Engineering:** Prioritize Local-First data storage to eliminate UI latency. Manage the state transitions (Scheduled -> In Progress -> Deferred) rigidly to ensure accurate time tracking.
 * **Design:** Maintain a strict visual dichotomy. High information density for the GTD Inventory (planning phase) and extreme minimalism for Focus Mode (execution phase). Ensure Guardrail interruptions are clear, explaining the *why* behind the restriction.
+* **Optional Authentication:** The app must be fully functional without login. Authentication is only required for cross-device sync via PowerSync. Users can operate indefinitely in local-only mode, with opt-in sign-up to enable sync. Local data must be preserved and migrated on first sign-in.
+* **Sync:** Real-time bidirectional sync between local SQLite (Drift) and PostgreSQL via self-hosted PowerSync. The sync layer activates only after authentication and must handle offline write queuing and conflict resolution (last-write-wins for v1).
