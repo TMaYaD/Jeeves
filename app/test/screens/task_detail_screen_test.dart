@@ -17,7 +17,7 @@ import '../test_helpers.dart';
 
 const _userId = 'local';
 
-GtdDatabase _openInMemory() => GtdDatabase.forTesting(NativeDatabase.memory());
+GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 Future<Todo> _insertAt(
   GtdDatabase db, {

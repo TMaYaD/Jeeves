@@ -63,6 +63,14 @@ class TodoTag(Base):
         ForeignKey("todos.id", ondelete="CASCADE"), primary_key=True
     )
     tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+    # Denormalized from todos.user_id so PowerSync can filter junction rows
+    # by bucket parameter (see migration 0008 and sync-config.yaml).  Set
+    # explicitly at every write call site — we manage TodoTag rows directly
+    # (not via the secondary-cascade on Todo.tags) so user_id is always set
+    # in the same statement that creates the row.
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
 
 class Todo(Base):
@@ -76,6 +84,10 @@ class Todo(Base):
         CheckConstraint(
             "energy_level IS NULL OR energy_level IN ('low','medium','high')",
             name="ck_todos_energy_level",
+        ),
+        CheckConstraint(
+            "time_spent_minutes >= 0",
+            name="ck_todos_time_spent_minutes_nonnegative",
         ),
     )
 
@@ -97,6 +109,14 @@ class Todo(Base):
 
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+
+    # Client-state columns replicated via PowerSync (migration 0007).
+    waiting_for: Mapped[str | None] = mapped_column(Text)
+    in_progress_since: Mapped[str | None] = mapped_column(Text)
+    time_spent_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blocked_by_todo_id: Mapped[str | None] = mapped_column(Text)
+    selected_for_today: Mapped[bool | None] = mapped_column(Boolean)
+    daily_selection_date: Mapped[str | None] = mapped_column(Text)
 
     tags: Mapped[list["Tag"]] = relationship("Tag", secondary="todo_tags", back_populates="todos")
     reminders: Mapped[list["Reminder"]] = relationship("Reminder", back_populates="todo")

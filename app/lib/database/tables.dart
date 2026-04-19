@@ -5,23 +5,31 @@
 library;
 
 import 'package:drift/drift.dart';
+import 'package:powersync/powersync.dart' show uuid;
 
 // ---------------------------------------------------------------------------
 // todos
 // ---------------------------------------------------------------------------
 
 class Todos extends Table {
-  TextColumn get id => text()();
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get title => text().withLength(max: 500)();
   TextColumn get notes => text().nullable()();
-  BoolColumn get completed => boolean().withDefault(const Constant(false))();
+  // Both defaults are intentional: `withDefault` wires the SQL-level DEFAULT
+  // (honoured on raw `customInsert` paths and by migration tests), while
+  // `clientDefault` makes Drift *materialise* the value on companion inserts
+  // where the column is `Value.absent()` — critical because PowerSync replaces
+  // the table with a view whose INSERT does not honour SQL DEFAULTs.
+  BoolColumn get completed =>
+      boolean().withDefault(const Constant(false)).clientDefault(() => false)();
   IntColumn get priority => integer().nullable()();
   DateTimeColumn get dueDate => dateTime().nullable()();
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
   /// GTD state: inbox | next_action | waiting_for | scheduled | someday_maybe | done
-  TextColumn get state => text().withDefault(const Constant('inbox'))();
+  TextColumn get state =>
+      text().withDefault(const Constant('inbox')).clientDefault(() => 'inbox')();
 
   /// Estimated effort in minutes (nullable).
   IntColumn get timeEstimate => integer().nullable()();
@@ -35,12 +43,15 @@ class Todos extends Table {
   TextColumn get locationId => text().nullable()();
   TextColumn get userId => text()();
 
+  /// Who or what a `waiting_for`-state task is waiting on (freeform).
+  TextColumn get waitingFor => text().nullable()();
+
   /// ISO-8601 timestamp; set when entering in_progress, cleared on exit.
   TextColumn get inProgressSince => text().nullable()();
 
   /// Cumulative time spent in minutes across all in_progress stints.
   IntColumn get timeSpentMinutes =>
-      integer().withDefault(const Constant(0))();
+      integer().withDefault(const Constant(0)).clientDefault(() => 0)();
 
   /// ID of another todo that must be completed before this one is actionable.
   TextColumn get blockedByTodoId => text().nullable()();
@@ -61,12 +72,14 @@ class Todos extends Table {
 // ---------------------------------------------------------------------------
 
 class Tags extends Table {
-  TextColumn get id => text()();
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get name => text().withLength(max: 100)();
   TextColumn get color => text().nullable()();
 
   /// GTD discriminator: context | project | area | label
-  TextColumn get type => text().withDefault(const Constant('context'))();
+  TextColumn get type => text()
+      .withDefault(const Constant('context'))
+      .clientDefault(() => 'context')();
 
   TextColumn get userId => text()();
 
@@ -81,6 +94,10 @@ class Tags extends Table {
 class TodoTags extends Table {
   TextColumn get todoId => text().references(Todos, #id)();
   TextColumn get tagId => text().references(Tags, #id)();
+
+  /// Denormalized from `todos.user_id` so PowerSync can filter junction rows
+  /// with a per-user parameter bucket (see Alembic 0008 and sync-config.yaml).
+  TextColumn get userId => text()();
 
   @override
   Set<Column<Object>> get primaryKey => {todoId, tagId};

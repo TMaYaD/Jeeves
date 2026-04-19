@@ -6,7 +6,7 @@ auth-gated mutations, and operations that require server-side logic
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -138,11 +138,28 @@ async def create_todo(
         time_estimate=body.time_estimate,
         energy_level=body.energy_level,
         capture_source=body.capture_source,
+        waiting_for=body.waiting_for,
+        in_progress_since=body.in_progress_since,
+        time_spent_minutes=body.time_spent_minutes,
+        blocked_by_todo_id=body.blocked_by_todo_id,
+        selected_for_today=body.selected_for_today,
+        daily_selection_date=body.daily_selection_date,
         user_id=current_user.id,
-        tags=tags,
     )
     db.add(todo)
+    # Flush so todo.id (and any new tag IDs from _resolve_tags) are assigned
+    # before we insert junction rows.  We manage TodoTag rows explicitly
+    # rather than via `todo.tags = tags` because the secondary-relationship
+    # cascade issues raw INSERTs that bypass TodoTag's mapper — we'd have no
+    # call site to set user_id on.
+    await db.flush()
+    for tag in tags:
+        db.add(TodoTag(todo_id=todo.id, tag_id=tag.id, user_id=current_user.id))
     await db.commit()
+    # The session's in-memory `todo.tags` collection is still the stale
+    # (empty) set the ORM tracked before we inserted junction rows directly.
+    # Expire it so `_get_todo_with_tags` reloads via selectinload.
+    db.expire(todo, ["tags"])
     loaded = await _get_todo_with_tags(todo.id, db)
     assert loaded is not None
     return loaded
@@ -176,12 +193,19 @@ async def update_todo(
     if "tags" in update_data:
         # Use the validated model field (TagInput objects), not the serialised dict
         update_data.pop("tags")
-        todo.tags = await _resolve_tags(body.tags, current_user.id, db)  # type: ignore[arg-type]
+        # Replace the tag set by deleting existing junction rows and inserting
+        # new ones — explicit so we can populate user_id (see create_todo).
+        new_tags = await _resolve_tags(body.tags, current_user.id, db)  # type: ignore[arg-type]
+        await db.execute(delete(TodoTag).where(TodoTag.todo_id == todo.id))
+        for tag in new_tags:
+            db.add(TodoTag(todo_id=todo.id, tag_id=tag.id, user_id=current_user.id))
 
     for field, value in update_data.items():
         setattr(todo, field, value)
 
     await db.commit()
+    # Expire the in-memory tags collection; see create_todo for rationale.
+    db.expire(todo, ["tags"])
     loaded = await _get_todo_with_tags(todo.id, db)
     assert loaded is not None
     return loaded

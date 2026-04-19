@@ -2,50 +2,69 @@
 #
 # Docs: https://docs.powersync.com/self-hosting/configuration
 # Reference: https://github.com/powersync-ja/self-host-demo
+#
+# Top-level keys (replication, storage, client_auth, api) are parsed by
+# PowerSync directly.  Only the sync rules live under `sync_config.content`
+# (a string the service parses as its own YAML document).
 
 # --- Replication source -------------------------------------------------------
 replication:
   connections:
     - type: postgresql
       # Connects to the same Postgres instance used by the backend.
-      # PS_DATA_SOURCE_URI is set via the POWERSYNC_CONFIG environment.
       uri: !env PS_DATA_SOURCE_URI
       sslmode: disable
       # Required: enable logical replication slot for change capture.
       slot_name: powersync_slot
 
 # --- Sync rules ---------------------------------------------------------------
-# Three user-scoped buckets matching the three Drift tables.
-# token_parameters.user_id comes from the JWT sub claim.
-bucket_definitions:
-  by_user_todos:
-    parameters:
-      - SELECT id AS user_id FROM users WHERE id = token_parameters.user_id
-    data:
-      - SELECT * FROM todos WHERE user_id = bucket.user_id
+# Three user-scoped buckets — todos, tags, and todo_tags.
+#
+# The parameter query below relies on the JWT carrying a `user_id` claim —
+# `token_parameters.user_id` is read directly and no users-table lookup is
+# required.
+#
+# todo_tags carries a denormalized `user_id` column (migration 0008) following
+# PowerSync's "Denormalize Foreign Key onto Child Table" pattern for many-to-
+# many join tables [1], so the junction can be filtered per-user without the
+# JOINs that PowerSync rejects in parameter buckets.  The SELECT lists columns
+# explicitly because PowerSync manages `id` itself for the junction table and
+# declaring it on the client would duplicate the column.
+#
+# [1] https://docs.powersync.com/sync/rules/many-to-many-join-tables
+sync_config:
+  content: |
+    bucket_definitions:
+      by_user_todos:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM todos WHERE user_id = bucket.user_id
 
-  by_user_tags:
-    parameters:
-      - SELECT id AS user_id FROM users WHERE id = token_parameters.user_id
-    data:
-      - SELECT * FROM tags WHERE user_id = bucket.user_id
+      by_user_tags:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM tags WHERE user_id = bucket.user_id
 
-  by_user_todo_tags:
-    parameters:
-      - SELECT id AS user_id FROM users WHERE id = token_parameters.user_id
-    data:
-      - SELECT tt.*
-          FROM todo_tags tt
-          JOIN todos t ON t.id = tt.todo_id
-         WHERE t.user_id = bucket.user_id
+      by_user_todo_tags:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT id, todo_id, tag_id, user_id FROM todo_tags WHERE user_id = bucket.user_id
 
 # --- Client auth --------------------------------------------------------------
-# Validate JWTs signed by the backend using the shared JEEVES_SECRET_KEY.
+# Validate JWTs signed by the backend using the shared secret.
+# PowerSync requires symmetric keys to be declared in JWKS format.  `kid`
+# must match the `kid` header set when the backend signs a token.
 client_auth:
-  # audience must match the "aud" claim issued by /powersync/credentials.
   audience: ["jeeves"]
-  jwt_secrets:
-    - !env PS_JEEVES_SECRET_KEY
+  jwks:
+    keys:
+      - kty: oct
+        alg: HS256
+        k: !env PS_JEEVES_SECRET_KEY_B64
+        kid: jeeves-dev
 
 # --- Internal storage (bucket state) ------------------------------------------
 # Uses the same Postgres instance — no MongoDB required.

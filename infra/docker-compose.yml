@@ -33,6 +33,20 @@ services:
       timeout: 5s
       retries: 10
 
+  # --- Shared JWT secret -----------------------------------------------------
+  # Backend signs JWTs with `JEEVES_SECRET_KEY` (raw bytes).  PowerSync
+  # validates them using `PS_JEEVES_SECRET_KEY_B64` (base64url-encoded, no
+  # padding) declared in sync-config.yaml's JWKS block.  Both must derive
+  # from the SAME material — mismatch = every login-time sync fails with
+  # `invalid token signature` and is hard to debug from the client side.
+  #
+  # For dev parity both default to "insecure-dev-key" / its base64url form.
+  # To override, export ONE of these in the shell before `compose up`:
+  #   export JEEVES_SECRET_KEY="my-real-secret"
+  #   export PS_JEEVES_SECRET_KEY_B64="$(printf 'my-real-secret' | \
+  #     base64 | tr -d '=' | tr '/+' '_-')"
+  # Both variables are then picked up below.
+
   powersync:
     image: journeyapps/powersync-service:1.20.5
     restart: unless-stopped
@@ -41,7 +55,8 @@ services:
         condition: service_healthy
     environment:
       POWERSYNC_CONFIG_PATH: /config/sync-config.yaml
-      PS_JEEVES_SECRET_KEY: "${PS_JEEVES_SECRET_KEY:-insecure-dev-key}"
+      # Base64url-encoded (no padding).  Default encodes "insecure-dev-key".
+      PS_JEEVES_SECRET_KEY_B64: "${PS_JEEVES_SECRET_KEY_B64:-aW5zZWN1cmUtZGV2LWtleQ}"
       PS_DATA_SOURCE_URI: "postgresql://jeeves:jeeves@postgres:5432/jeeves"
     volumes:
       - ./powersync:/config
@@ -64,6 +79,9 @@ services:
       JEEVES_DATABASE_URL: "postgresql+asyncpg://jeeves:jeeves@postgres:5432/jeeves"
       JEEVES_POWERSYNC_URL: "${JEEVES_POWERSYNC_URL:-http://localhost:8080}"
       JEEVES_REDIS_URL: "redis://redis:6379/0"
+      # Raw form of the same key PowerSync validates against.  Default matches
+      # the base64url default above: base64url("insecure-dev-key") = "aW5zZWN1cmUtZGV2LWtleQ".
+      JEEVES_SECRET_KEY: "${JEEVES_SECRET_KEY:-insecure-dev-key}"
     ports:
       - "8000:8000"
     volumes:

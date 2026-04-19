@@ -3,10 +3,10 @@
 // Column names must match the PostgreSQL column names (snake_case) because
 // PowerSync receives rows directly from Postgres via logical replication.
 //
-// The implicit primary-key id columns for todos and tags are managed by
-// PowerSync and must NOT be listed here.  todo_tags.id is an intentional
-// exception: it is an explicit UUID column (not the composite PK) stored so
-// the upload handler can locate rows for deletion by entry.id.
+// The implicit primary-key `id` column is managed by PowerSync for every
+// table and must NOT be listed here — including on todo_tags (replicated
+// via a per-user parameter bucket thanks to the denormalized `user_id`
+// column added in Alembic 0008; see infra/powersync/sync-config.yaml).
 
 import 'package:powersync/powersync.dart' as ps;
 
@@ -25,6 +25,13 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('capture_source'),
     ps.Column.text('location_id'),
     ps.Column.text('user_id'),
+    // Previously client-only; now replicated (see Alembic 0007).
+    ps.Column.text('waiting_for'),
+    ps.Column.text('in_progress_since'),
+    ps.Column.integer('time_spent_minutes'),
+    ps.Column.text('blocked_by_todo_id'),
+    ps.Column.integer('selected_for_today'),
+    ps.Column.text('daily_selection_date'),
   ]),
   ps.Table('tags', [
     ps.Column.text('name'),
@@ -33,8 +40,8 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('user_id'),
   ]),
   ps.Table('todo_tags', [
-    ps.Column.text('id'),
     ps.Column.text('todo_id'),
     ps.Column.text('tag_id'),
+    ps.Column.text('user_id'),
   ]),
 ]);

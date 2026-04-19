@@ -20,8 +20,14 @@ async def get_powersync_credentials(
 ) -> dict[str, str]:
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
+    # PowerSync sync rules read `token_parameters.user_id`; the `sub` claim is
+    # not automatically bound to that name, so expose the user id explicitly.
     token = create_access_token(
-        data={"sub": current_user.id, "aud": "jeeves"},
+        data={
+            "sub": current_user.id,
+            "aud": "jeeves",
+            "user_id": current_user.id,
+        },
         expires_delta=timedelta(minutes=_POWERSYNC_TOKEN_EXPIRE_MINUTES),
     )
     return {

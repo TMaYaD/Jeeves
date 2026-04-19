@@ -119,6 +119,7 @@ async def create_todo_tag(
         **({"id": body.id} if body.id is not None else {}),
         todo_id=body.todo_id,
         tag_id=body.tag_id,
+        user_id=current_user.id,
     )
     db.add(todo_tag)
     await db.commit()

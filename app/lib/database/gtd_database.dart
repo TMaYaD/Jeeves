@@ -1,16 +1,18 @@
-/// Local-first GTD database backed by Drift (SQLite).
+/// Local-first GTD database backed by Drift.
 ///
-/// [schemaVersion] is 1 — this is a clean-slate schema; no prior Drift
-/// migrations exist. All subsequent schema changes must use Migrator.addColumn /
-/// Migrator.createTable inside [onUpgrade] following additive-only discipline.
+/// Accepts any Drift [QueryExecutor] so the same class serves both
+/// production (a `SqliteAsyncDriftConnection` over PowerSync's shared
+/// SQLite file, typically wrapped in `DatabaseConnection.delayed`) and
+/// tests (`NativeDatabase.memory()`).
+///
+/// Schema ownership: PowerSync creates the application-visible tables as
+/// views over its internal storage, so Drift's [migration] is effectively
+/// a no-op on the production path.  On the in-memory test path [onCreate]
+/// and [onUpgrade] run normally.
 library;
 
-import 'dart:io';
-
 import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:powersync/powersync.dart' show uuid;
 
 import 'daos/inbox_dao.dart';
 import 'daos/tag_dao.dart';
@@ -26,14 +28,10 @@ part 'gtd_database.g.dart';
   daos: [InboxDao, TagDao, TodoDao],
 )
 class GtdDatabase extends _$GtdDatabase {
-  /// Production constructor — opens (or creates) the on-device SQLite file.
-  GtdDatabase() : super(_openConnection());
-
-  /// Test constructor — accepts an injected [QueryExecutor] (e.g. in-memory).
-  GtdDatabase.forTesting(super.executor);
+  GtdDatabase(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -48,14 +46,12 @@ class GtdDatabase extends _$GtdDatabase {
             await m.addColumn(todos, todos.selectedForToday);
             await m.addColumn(todos, todos.dailySelectionDate);
           }
+          if (from < 4) {
+            await m.addColumn(todos, todos.waitingFor);
+          }
+          if (from < 5) {
+            await m.addColumn(todoTags, todoTags.userId);
+          }
         },
       );
-}
-
-LazyDatabase _openConnection() {
-  return LazyDatabase(() async {
-    final dbFolder = await getApplicationDocumentsDirectory();
-    final file = File(p.join(dbFolder.path, 'jeeves.sqlite'));
-    return NativeDatabase.createInBackground(file);
-  });
 }
