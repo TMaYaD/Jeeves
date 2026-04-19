@@ -14,6 +14,7 @@ services:
       POSTGRES_USER: jeeves
       POSTGRES_PASSWORD: jeeves
       POSTGRES_DB: jeeves
+      POSTGRES_HOST_AUTH_METHOD: md5
     ports:
       - "5432:5432"
     volumes:
@@ -24,15 +25,23 @@ services:
         -c wal_level=logical
         -c max_wal_senders=10
         -c max_replication_slots=10
+        -c log_connections=on
+        -c log_disconnections=on
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jeeves -d jeeves"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   powersync:
     image: journeyapps/powersync-service:1.20.5
     restart: unless-stopped
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       POWERSYNC_CONFIG_PATH: /config/sync-config.yaml
-      JEEVES_SECRET_KEY: "${JEEVES_SECRET_KEY:-insecure-dev-key}"
+      PS_JEEVES_SECRET_KEY: "${PS_JEEVES_SECRET_KEY:-insecure-dev-key}"
       PS_DATA_SOURCE_URI: "postgresql://jeeves:jeeves@postgres:5432/jeeves"
     volumes:
       - ./powersync:/config
@@ -45,9 +54,12 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      - postgres
-      - powersync
-      - redis
+      postgres:
+        condition: service_healthy
+      powersync:
+        condition: service_started
+      redis:
+        condition: service_started
     environment:
       JEEVES_DATABASE_URL: "postgresql+asyncpg://jeeves:jeeves@postgres:5432/jeeves"
       JEEVES_POWERSYNC_URL: "${JEEVES_POWERSYNC_URL:-http://localhost:8080}"
