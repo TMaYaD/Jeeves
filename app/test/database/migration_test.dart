@@ -113,11 +113,10 @@ void main() {
         "VALUES ('todo1', 'tag1', '$_userId')",
       );
 
-      // Run the production v6 migration steps directly.
-      await db.customStatement('ALTER TABLE todo_tags ADD COLUMN id TEXT');
-      await db.customStatement(
-        "UPDATE todo_tags SET id = lower(hex(randomblob(16))) WHERE id IS NULL",
-      );
+      // Drive the real production onUpgrade path (from=5, to=6) so the test
+      // stays in sync with the migration code automatically.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 5, 6);
 
       final rows = await db.customSelect('SELECT id FROM todo_tags').get();
       expect(rows.length, 1);

@@ -41,27 +41,31 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   ///
   /// When updating an existing row, any absent fields in [tag] are filled from
   /// the stored row before replacing, so partial companions never wipe columns
-  /// such as [Tags.color] that the caller did not intend to change.
-  Future<void> upsertTag(TagsCompanion tag) async {
-    if (tag.id.present) {
-      final existing = await (select(tags)
-            ..where((t) => t.id.equals(tag.id.value)))
-          .getSingleOrNull();
-      if (existing != null) {
-        await into(tags).insert(
-          TagsCompanion(
-            id: tag.id,
-            name: tag.name.present ? tag.name : Value(existing.name),
-            color: tag.color.present ? tag.color : Value(existing.color),
-            type: tag.type.present ? tag.type : Value(existing.type),
-            userId: tag.userId.present ? tag.userId : Value(existing.userId),
-          ),
-          mode: InsertMode.insertOrReplace,
-        );
-        return;
+  /// such as [Tags.color] that the caller did not intend to change.  The
+  /// SELECT and INSERT run inside a single transaction to prevent two
+  /// concurrent partial updates from racing and clobbering each other.
+  Future<void> upsertTag(TagsCompanion tag) {
+    return transaction(() async {
+      if (tag.id.present) {
+        final existing = await (select(tags)
+              ..where((t) => t.id.equals(tag.id.value)))
+            .getSingleOrNull();
+        if (existing != null) {
+          await into(tags).insert(
+            TagsCompanion(
+              id: tag.id,
+              name: tag.name.present ? tag.name : Value(existing.name),
+              color: tag.color.present ? tag.color : Value(existing.color),
+              type: tag.type.present ? tag.type : Value(existing.type),
+              userId: tag.userId.present ? tag.userId : Value(existing.userId),
+            ),
+            mode: InsertMode.insertOrReplace,
+          );
+          return;
+        }
       }
-    }
-    await into(tags).insert(tag, mode: InsertMode.insertOrReplace);
+      await into(tags).insert(tag, mode: InsertMode.insertOrReplace);
+    });
   }
 
   /// Associate a tag with a todo (idempotent).
