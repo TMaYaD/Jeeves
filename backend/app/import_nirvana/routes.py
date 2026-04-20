@@ -12,7 +12,7 @@ from app.database import get_db
 from app.import_nirvana.converter import convert_items
 from app.import_nirvana.parser import ParseError, parse_csv, parse_json
 from app.import_nirvana.schemas import ImportResult
-from app.todos.models import Tag, Todo
+from app.todos.models import Tag, Todo, TodoTag
 from app.todos.utils import resolve_tags
 
 router = APIRouter(prefix="/import", tags=["import"])
@@ -103,10 +103,13 @@ async def import_nirvana(
 
     await db.flush()
 
-    # Insert todos in batches
+    # Insert todos in batches.  TodoTag rows are inserted explicitly (not via
+    # `todo.tags = tags`) so we can set `user_id` — the secondary-relationship
+    # cascade bypasses TodoTag's mapper.  See app/todos/routes.py::create_todo.
     imported_count = 0
     for i in range(0, len(todo_payloads), _BATCH_SIZE):
         batch = todo_payloads[i : i + _BATCH_SIZE]
+        pending: list[tuple[Todo, list[Tag]]] = []
         for payload in batch:
             tags = await resolve_tags(payload.tags, current_user.id, db)
             due_date = datetime.fromisoformat(payload.due_date) if payload.due_date else None
@@ -122,10 +125,16 @@ async def import_nirvana(
                 waiting_for=payload.waiting_for,
                 capture_source=payload.capture_source,
                 user_id=current_user.id,
-                tags=tags,
             )
             db.add(todo)
+            pending.append((todo, tags))
             imported_count += 1
+        # Flush so todo.id and any new tag IDs are assigned before inserting
+        # junction rows.
+        await db.flush()
+        for todo, tags in pending:
+            for tag in tags:
+                db.add(TodoTag(todo_id=todo.id, tag_id=tag.id, user_id=current_user.id))
         await db.flush()
 
     await db.commit()

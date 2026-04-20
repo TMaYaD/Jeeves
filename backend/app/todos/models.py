@@ -106,7 +106,6 @@ class Todo(Base):
     time_estimate: Mapped[int | None] = mapped_column(Integer)  # minutes
     energy_level: Mapped[str | None] = mapped_column(String(20))
     capture_source: Mapped[str | None] = mapped_column(String(50))
-    waiting_for: Mapped[str | None] = mapped_column(String(255))
 
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
