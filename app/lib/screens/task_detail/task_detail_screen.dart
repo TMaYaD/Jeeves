@@ -184,12 +184,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                           ...contextTags.map((tag) {
                             final colors = _getPastelColor(tag.name);
                             return GestureDetector(
-                              onTap: () => _showContextTagEditor(context, contextTags),
+                              onTap: () => _showContextTagEditor(context),
                               child: _buildTagPill(tag.name, colors.$2),
                             );
                           }),
                           GestureDetector(
-                            onTap: () => _showContextTagEditor(context, contextTags),
+                            onTap: () => _showContextTagEditor(context),
                             child: Container(
                               width: 24,
                               height: 24,
@@ -572,11 +572,17 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     return body;
   }
 
-  void _showContextTagEditor(BuildContext context, List<Tag> currentTags) {
+  void _showContextTagEditor(BuildContext context) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
+      // The modal lives under the root Navigator overlay, so it does not
+      // rebuild when the task detail screen rebuilds.  Wrap in [Consumer]
+      // so FilterChip's `selected` state tracks taskTagsProvider live —
+      // otherwise the chip's "selected" flag is frozen at open time and
+      // tapping it appears to do nothing even though the DB write
+      // succeeded.
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom + 24, left: 24, right: 24, top: 24),
         child: Column(
@@ -585,10 +591,21 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           children: [
             const Text('Edit Context Tags', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
-            ContextTagPickerWidget(
-              assignedTags: currentTags,
-              onAssign: (tag) => _notifier.assignContextTag(tag.id).ignore(),
-              onRemove: (tag) => _notifier.removeContextTag(tag.id).ignore(),
+            Consumer(
+              builder: (context, ref, _) {
+                final tags =
+                    ref.watch(taskTagsProvider(widget.todoId)).asData?.value ??
+                        const <Tag>[];
+                final contextTags =
+                    tags.where((t) => t.type == 'context').toList();
+                return ContextTagPickerWidget(
+                  assignedTags: contextTags,
+                  onAssign: (tag) =>
+                      _notifier.assignContextTag(tag.id).ignore(),
+                  onRemove: (tag) =>
+                      _notifier.removeContextTag(tag.id).ignore(),
+                );
+              },
             ),
           ],
         ),
