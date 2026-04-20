@@ -116,19 +116,6 @@ class CustomDrawer extends ConsumerWidget {
                       count: somedayCount),
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                    leading: const Icon(Icons.download_outlined, color: Color(0xFF6B7280)),
-                    title: const Text(
-                      'Import from Nirvana',
-                      style: TextStyle(fontSize: 14, color: Color(0xFF374151)),
-                    ),
-                    onTap: () {
-                      context.go('/import');
-                      Navigator.pop(context);
-                    },
-                  ),
-                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 16),
                   _buildSectionHeader('CONTEXTS'),
                   Padding(

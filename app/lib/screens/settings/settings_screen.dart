@@ -79,6 +79,22 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ],
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
+          _sectionHeader('IMPORT'),
+          ListTile(
+            leading:
+                const Icon(Icons.download_outlined, color: Color(0xFF9CA3AF)),
+            title: const Text(
+              'Import from Nirvana',
+              style: TextStyle(
+                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: const Text(
+              'Import tasks and projects from a Nirvana export.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => context.push('/import'),
+          ),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
           ListTile(
             leading: const Icon(Icons.info_outline, color: Color(0xFF9CA3AF)),
