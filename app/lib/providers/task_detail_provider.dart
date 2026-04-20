@@ -41,19 +41,35 @@ final taskBlockersProvider =
 });
 
 /// Provides mutation operations for the task detail screen.
+///
+/// The notifier captures the [GtdDatabase] and current user id eagerly
+/// rather than holding a [Ref].  `Provider.autoDispose` tears the ref
+/// down between synchronous calls, so reading `databaseProvider` through
+/// a stored [Ref] after an `await` throws "Cannot use the Ref … after it
+/// has been disposed".  `GtdDatabase` is a process-wide singleton and
+/// the screen pops on logout, so capturing both values at construction
+/// is safe.
 final taskDetailNotifierProvider =
     Provider.autoDispose.family<TaskDetailNotifier, String>((ref, todoId) {
-  return TaskDetailNotifier(ref, todoId);
+  return TaskDetailNotifier(
+    db: ref.read(databaseProvider),
+    userId: ref.read(currentUserIdProvider),
+    todoId: todoId,
+  );
 });
 
 class TaskDetailNotifier {
-  TaskDetailNotifier(this._ref, this._todoId);
+  TaskDetailNotifier({
+    required GtdDatabase db,
+    required String userId,
+    required String todoId,
+  })  : _db = db,
+        _userId = userId,
+        _todoId = todoId;
 
-  final Ref _ref;
+  final GtdDatabase _db;
+  final String _userId;
   final String _todoId;
-
-  GtdDatabase get _db => _ref.read(databaseProvider);
-  String get _userId => _ref.read(currentUserIdProvider);
 
   Future<void> updateTitle(String title) => _db.todoDao.updateFields(
         _todoId,

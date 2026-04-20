@@ -92,6 +92,15 @@ class Tags extends Table {
 // ---------------------------------------------------------------------------
 
 class TodoTags extends Table {
+  /// PowerSync exposes `todo_tags` as a view over `ps_data__todo_tags` whose
+  /// INSTEAD OF INSERT trigger writes `NEW.id` into the backing table — so
+  /// an explicit `id` is required even though the *logical* identity of a
+  /// junction row is (todo_id, tag_id).  Callers should derive it
+  /// deterministically via `todoTagIdFor(todoId, tagId)` (see tag_dao.dart)
+  /// so re-assigning the same tag collapses under INSERT OR REPLACE instead
+  /// of accumulating duplicate rows.
+  TextColumn get id => text()();
+
   TextColumn get todoId => text().references(Todos, #id)();
   TextColumn get tagId => text().references(Tags, #id)();
 

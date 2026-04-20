@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/database/gtd_database.dart';
 import '../test_helpers.dart';
 
@@ -74,6 +75,35 @@ void main() {
       expect(rows.length, 1);
       expect(rows.first.tagId, 'ctx1');
       expect(rows.first.userId, _userId);
+    });
+
+    test('assignTag is idempotent — re-assigning keeps a single row', () async {
+      final now = DateTime.now();
+      await db.inboxDao.insertTodo(TodosCompanion(
+        id: const Value('todo-idem'),
+        title: const Value('Idempotency task'),
+        userId: const Value(_userId),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('ctx-idem'),
+        name: const Value('idem'),
+        type: const Value('context'),
+        userId: const Value(_userId),
+      ));
+
+      // Assign the same tag three times; the deterministic id should make
+      // INSERT OR REPLACE collapse every call onto the same junction row.
+      await db.tagDao.assignTag('todo-idem', 'ctx-idem', _userId);
+      await db.tagDao.assignTag('todo-idem', 'ctx-idem', _userId);
+      await db.tagDao.assignTag('todo-idem', 'ctx-idem', _userId);
+
+      final rows = await (db.select(db.todoTags)
+            ..where((jt) => jt.todoId.equals('todo-idem')))
+          .get();
+      expect(rows.length, 1);
+      expect(rows.first.id, todoTagIdFor('todo-idem', 'ctx-idem'));
     });
 
     test('enforceSingleProject removes old project and assigns new one',
