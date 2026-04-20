@@ -54,6 +54,16 @@ async def register(client: AsyncClient, email: str, password: str = "secret") ->
     return reg.json()["access_token"]
 
 
+async def register_full(
+    client: AsyncClient, email: str, password: str = "secret"
+) -> tuple[str, str]:
+    """Register a user and return (access_token, refresh_token)."""
+    reg = await client.post("/user", json={"email": email, "password": password})
+    assert reg.status_code == 201, f"register failed: {reg.status_code} {reg.text}"
+    data = reg.json()
+    return data["access_token"], data["refresh_token"]
+
+
 def auth_header(token: str) -> dict[str, str]:
     """Return an Authorization header dict for the given token."""
     return {"Authorization": f"Bearer {token}"}

@@ -57,32 +57,36 @@ void main() {
       expect(await sut.getToken(), isNull);
     });
 
-    test('saveToken persists the token and sets it on the api client', () async {
-      await sut.saveToken('tok123');
+    test('saveTokens persists the token and sets it on the api client',
+        () async {
+      await sut.saveTokens('tok123', 'refresh123');
 
       expect(await sut.getToken(), 'tok123');
+      expect(await sut.getRefreshToken(), 'refresh123');
       expect(api.capturedToken, 'tok123');
     });
 
-    test('clearToken removes the stored token and clears the api client',
+    test('clearTokens removes the stored token and clears the api client',
         () async {
-      await sut.saveToken('tok123');
-      await sut.clearToken();
+      await sut.saveTokens('tok123', 'refresh123');
+      await sut.clearTokens();
 
       expect(await sut.getToken(), isNull);
+      expect(await sut.getRefreshToken(), isNull);
       expect(api.capturedToken, isNull);
       expect(api.tokenCleared, isTrue);
     });
 
     test('getToken round-trips after multiple writes', () async {
-      await sut.saveToken('first');
-      await sut.saveToken('second');
+      await sut.saveTokens('first', 'r1');
+      await sut.saveTokens('second', 'r2');
 
       expect(await sut.getToken(), 'second');
+      expect(await sut.getRefreshToken(), 'r2');
     });
 
     test('getToken restores API auth state on startup hydration', () async {
-      await sut.saveToken('tok123');
+      await sut.saveTokens('tok123', 'refresh123');
 
       // Simulate restart: fresh API client + new service instance, same storage.
       final freshApi = _FakeApiService();

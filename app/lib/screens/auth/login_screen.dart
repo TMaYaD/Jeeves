@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../services/migration_service.dart';
 import 'auth_helpers.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -27,6 +28,34 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     super.dispose();
   }
 
+  Future<ConflictResolution> _showConflictDialog() async {
+    final result = await showDialog<ConflictResolution>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Data conflict'),
+        content: const Text(
+          'You have local data on this device and your account already has data on the server. What would you like to do?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ConflictResolution.keepLocal),
+            child: const Text('Keep local data'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ConflictResolution.keepServer),
+            child: const Text('Keep synced data'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ConflictResolution.merge),
+            child: const Text('Merge both'),
+          ),
+        ],
+      ),
+    );
+    return result ?? ConflictResolution.merge;
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() {
@@ -37,8 +66,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       await ref.read(authTokenProvider.notifier).login(
             _emailController.text.trim(),
             _passwordController.text,
+            onConflict: _showConflictDialog,
           );
-      // Router redirect handles navigation once authStateNotifier flips.
+      if (!mounted) return;
+      // Pop back to the caller (e.g. Settings) if we were pushed on top of
+      // an existing route. Otherwise navigate to the app home.
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/inbox');
+      }
     } on DioException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -56,7 +93,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final canPop = context.canPop();
     return Scaffold(
+      appBar: canPop
+          ? AppBar(
+              backgroundColor: Colors.white,
+              elevation: 0,
+              leading: CloseButton(onPressed: () => context.pop()),
+            )
+          : null,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -79,9 +124,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Sign in to your account',
+                      'Sign in to sync across devices',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: Color(0xFF6B7280)),
+                      style:
+                          TextStyle(fontSize: 16, color: Color(0xFF6B7280)),
                     ),
                     const SizedBox(height: 40),
                     if (_errorMessage != null) ...[
@@ -101,7 +147,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         if (v == null || v.trim().isEmpty) {
                           return 'Email is required.';
                         }
-                        final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+                        final emailRegex =
+                            RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
                         if (!emailRegex.hasMatch(v.trim())) {
                           return 'Enter a valid email.';
                         }
@@ -151,7 +198,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     const SizedBox(height: 16),
                     TextButton(
-                      onPressed: _isLoading ? null : () => context.go('/register'),
+                      onPressed: _isLoading
+                          ? null
+                          : () => context.pushReplacement('/register'),
                       child:
                           const Text("Don't have an account? Create one"),
                     ),

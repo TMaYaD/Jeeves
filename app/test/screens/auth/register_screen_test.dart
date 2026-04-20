@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/screens/auth/register_screen.dart';
+import 'package:jeeves/services/migration_service.dart';
 
 // ---------------------------------------------------------------------------
 // Fake notifiers
@@ -16,7 +17,8 @@ class _SuccessAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> register(String email, String password) async {
+  Future<void> register(String email, String password,
+      {Future<ConflictResolution> Function()? onConflict}) async {
     authStateNotifier.value = true;
     state = const AsyncData('fake.jwt.token');
   }
@@ -27,7 +29,8 @@ class _NetworkErrorAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> register(String email, String password) async {
+  Future<void> register(String email, String password,
+      {Future<ConflictResolution> Function()? onConflict}) async {
     final err = DioException(
       requestOptions: RequestOptions(path: '/user'),
       type: DioExceptionType.connectionError,
@@ -45,7 +48,8 @@ class _FailAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> register(String email, String password) async {
+  Future<void> register(String email, String password,
+      {Future<ConflictResolution> Function()? onConflict}) async {
     final err = DioException(
       requestOptions: RequestOptions(path: '/user'),
       response: Response(
@@ -231,6 +235,65 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Inbox'), findsOneWidget);
+    });
+
+    testWidgets(
+        'Settings → login → register link → register: pops back to Settings',
+        (tester) async {
+      final router = GoRouter(
+        initialLocation: '/settings',
+        routes: [
+          GoRoute(
+            path: '/settings',
+            builder: (_, _) => Scaffold(
+              body: Builder(
+                builder: (ctx) => TextButton(
+                  onPressed: () => ctx.push('/login'),
+                  child: const Text('Open login'),
+                ),
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/login',
+            builder: (_, _) => Scaffold(
+              body: Builder(
+                builder: (ctx) => TextButton(
+                  onPressed: () => ctx.pushReplacement('/register'),
+                  child: const Text('Go to register'),
+                ),
+              ),
+            ),
+          ),
+          GoRoute(path: '/register', builder: (_, _) => const RegisterScreen()),
+        ],
+      );
+
+      await tester.pumpWidget(_buildScreen(
+        notifierFactory: _SuccessAuthNotifier.new,
+        router: router,
+      ));
+      await tester.pump();
+
+      // Settings → login (push)
+      await tester.tap(find.text('Open login'));
+      await tester.pumpAndSettle();
+
+      // login → register (pushReplacement, keeps /settings below)
+      await tester.tap(find.text('Go to register'));
+      await tester.pumpAndSettle();
+
+      // Register
+      await tester.enterText(
+          find.byKey(const Key('email_field')), 'a@b.com');
+      await tester.enterText(
+          find.byKey(const Key('password_field')), 'password1');
+      await tester.tap(find.byKey(const Key('create_account_button')));
+      await tester.pumpAndSettle();
+
+      // Should have popped back to /settings.
+      expect(find.text('Open login'), findsOneWidget);
+      expect(find.byKey(const Key('create_account_button')), findsNothing);
     });
   });
 

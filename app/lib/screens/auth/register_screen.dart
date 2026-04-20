@@ -38,7 +38,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             _emailController.text.trim(),
             _passwordController.text,
           );
-      // Router redirect handles navigation once authStateNotifier flips.
+      if (!mounted) return;
+      // Pop back to the caller (e.g. Settings) if we were pushed on top of
+      // an existing route. Otherwise navigate to the app home.
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/inbox');
+      }
     } on DioException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -56,7 +63,15 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final canPop = context.canPop();
     return Scaffold(
+      appBar: canPop
+          ? AppBar(
+              backgroundColor: Colors.white,
+              elevation: 0,
+              leading: CloseButton(onPressed: () => context.pop()),
+            )
+          : null,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -81,7 +96,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     const Text(
                       'Create your account',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: Color(0xFF6B7280)),
+                      style:
+                          TextStyle(fontSize: 16, color: Color(0xFF6B7280)),
                     ),
                     const SizedBox(height: 40),
                     if (_errorMessage != null) ...[
@@ -101,7 +117,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                         if (v == null || v.trim().isEmpty) {
                           return 'Email is required.';
                         }
-                        final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+                        final emailRegex =
+                            RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
                         if (!emailRegex.hasMatch(v.trim())) {
                           return 'Enter a valid email.';
                         }
@@ -154,8 +171,11 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                     ),
                     const SizedBox(height: 16),
                     TextButton(
-                      onPressed: _isLoading ? null : () => context.go('/login'),
-                      child: const Text('Already have an account? Sign in'),
+                      onPressed: _isLoading
+                          ? null
+                          : () => context.pushReplacement('/login'),
+                      child:
+                          const Text('Already have an account? Sign in'),
                     ),
                   ],
                 ),

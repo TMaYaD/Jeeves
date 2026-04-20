@@ -35,7 +35,8 @@ class Settings(BaseSettings):
         return self
 
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24 * 7  # 1 week
+    access_token_expire_minutes: int = 15  # short-lived; renewed via refresh token
+    refresh_token_expire_days: int = 365  # 1 year
 
     # PowerSync's JWKS validator selects a key by `kid`.  Must match the
     # `kid` declared in infra/powersync/sync-config.yaml's client_auth.jwks.
