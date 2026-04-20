@@ -92,6 +92,40 @@ void main() {
       expect(items.first.blockedByTodoId, equals(null));
     });
 
+    test('v5→v6 migration: existing todo_tags rows get backfilled id', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Recreate todo_tags with the v5 shape (no id column).
+      await db.customStatement('DROP TABLE IF EXISTS todo_tags');
+      await db.customStatement(
+        'CREATE TABLE todo_tags ('
+        '  todo_id TEXT NOT NULL,'
+        '  tag_id TEXT NOT NULL,'
+        '  user_id TEXT NOT NULL,'
+        '  PRIMARY KEY (todo_id, tag_id)'
+        ')',
+      );
+
+      // Seed a legacy junction row.
+      await db.customStatement(
+        "INSERT INTO todo_tags (todo_id, tag_id, user_id) "
+        "VALUES ('todo1', 'tag1', '$_userId')",
+      );
+
+      // Run the production v6 migration steps directly.
+      await db.customStatement('ALTER TABLE todo_tags ADD COLUMN id TEXT');
+      await db.customStatement(
+        "UPDATE todo_tags SET id = lower(hex(randomblob(16))) WHERE id IS NULL",
+      );
+
+      final rows = await db.customSelect('SELECT id FROM todo_tags').get();
+      expect(rows.length, 1);
+      final id = rows.first.read<String?>('id');
+      expect(id, isA<String>());
+      expect(id!.length, greaterThan(0));
+    });
+
     test('v1→v2 migration: legacy rows survive upgrade with correct defaults',
         () async {
       // Open a fresh in-memory DB.  onCreate runs and creates the current (v2)

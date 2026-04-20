@@ -51,6 +51,29 @@ void main() {
       expect(tags.first.name, 'home-v2');
     });
 
+    test('upsertTag preserves absent fields (e.g. color) on update', () async {
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('t3'),
+        name: const Value('errand'),
+        color: const Value('#ff0000'),
+        type: const Value('context'),
+        userId: const Value(_userId),
+      ));
+
+      // Update name only — color must survive.
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('t3'),
+        name: const Value('errand-v2'),
+        type: const Value('context'),
+        userId: const Value(_userId),
+      ));
+
+      final tags = await db.tagDao.watchByType(_userId, 'context').first;
+      expect(tags.length, 1);
+      expect(tags.first.name, 'errand-v2');
+      expect(tags.first.color, '#ff0000');
+    });
+
     test('assignTag creates a junction row', () async {
       final now = DateTime.now();
       await db.inboxDao.insertTodo(TodosCompanion(

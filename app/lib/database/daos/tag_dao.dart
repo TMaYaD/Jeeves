@@ -38,8 +38,30 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Uses INSERT OR REPLACE instead of INSERT ... ON CONFLICT DO UPDATE because
   /// todos/tags/todo_tags are PowerSync SQLite views — SQLite forbids UPSERT
   /// syntax on views even when INSTEAD OF triggers are present.
-  Future<void> upsertTag(TagsCompanion tag) {
-    return into(tags).insert(tag, mode: InsertMode.insertOrReplace);
+  ///
+  /// When updating an existing row, any absent fields in [tag] are filled from
+  /// the stored row before replacing, so partial companions never wipe columns
+  /// such as [Tags.color] that the caller did not intend to change.
+  Future<void> upsertTag(TagsCompanion tag) async {
+    if (tag.id.present) {
+      final existing = await (select(tags)
+            ..where((t) => t.id.equals(tag.id.value)))
+          .getSingleOrNull();
+      if (existing != null) {
+        await into(tags).insert(
+          TagsCompanion(
+            id: tag.id,
+            name: tag.name.present ? tag.name : Value(existing.name),
+            color: tag.color.present ? tag.color : Value(existing.color),
+            type: tag.type.present ? tag.type : Value(existing.type),
+            userId: tag.userId.present ? tag.userId : Value(existing.userId),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+        return;
+      }
+    }
+    await into(tags).insert(tag, mode: InsertMode.insertOrReplace);
   }
 
   /// Associate a tag with a todo (idempotent).

@@ -56,7 +56,22 @@ class GtdDatabase extends _$GtdDatabase {
             await _addColumnIfTable(m, todoTags, todoTags.userId);
           }
           if (from < 6) {
-            await _addColumnIfTable(m, todoTags, todoTags.id);
+            // todoTags.id is declared non-nullable, so m.addColumn generates
+            // ALTER TABLE ... ADD COLUMN id TEXT NOT NULL, which SQLite rejects
+            // on populated tables (no DEFAULT clause).  Add as nullable first,
+            // backfill, then the invariant is satisfied without a table rebuild.
+            // _addColumnIfTable is not used here because it delegates to
+            // m.addColumn which would emit the NOT NULL form.
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'todo_tags'",
+            ).get();
+            if (rows.isNotEmpty && rows.first.read<String>('type') == 'table') {
+              await customStatement('ALTER TABLE todo_tags ADD COLUMN id TEXT');
+              await customStatement(
+                "UPDATE todo_tags SET id = lower(hex(randomblob(16))) "
+                "WHERE id IS NULL",
+              );
+            }
           }
         },
       );
