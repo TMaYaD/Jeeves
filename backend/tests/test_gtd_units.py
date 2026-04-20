@@ -3,8 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from app.todos.routes import _infer_tag_type
 from app.todos.schemas import TagInput, TagType, TodoCreate, TodoUpdate
+from app.todos.utils import _infer_tag_type
 
 # ── State validator ───────────────────────────────────────────────────────────
 

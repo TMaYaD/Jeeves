@@ -15,6 +15,7 @@ import 'screens/task_detail/task_detail_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/blocked/blocked_screen.dart';
 import 'screens/focus_screen.dart';
+import 'screens/import_screen.dart';
 
 /// Routes that require the daily planning ritual to be completed first.
 const _protectedPaths = [
@@ -103,6 +104,10 @@ final appRouter = GoRouter(
       builder: (context, state) => TaskDetailScreen(
         todoId: state.pathParameters['id']!,
       ),
+    ),
+    GoRoute(
+      path: '/import',
+      builder: (context, state) => const ImportScreen(),
     ),
   ],
 );

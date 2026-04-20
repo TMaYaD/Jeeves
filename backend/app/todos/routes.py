@@ -5,6 +5,8 @@ auth-gated mutations, and operations that require server-side logic
 (e.g. recurrence expansion, AI-assisted parsing).
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,73 +16,10 @@ from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.database import get_db
 from app.todos.models import Tag, Todo, TodoTag
-from app.todos.schemas import TagInput, TodoCreate, TodoOut, TodoUpdate
+from app.todos.schemas import TodoCreate, TodoOut, TodoUpdate
+from app.todos.utils import resolve_tags
 
 router = APIRouter(prefix="/todos", tags=["todos"])
-
-
-def _infer_tag_type(name: str) -> str:
-    """Infer tag type from name convention.
-
-    - '@' prefix  → 'context'  (GTD context: @office, @phone)
-    - bare word   → 'label'    (general label)
-    """
-    return "context" if name.startswith("@") else "label"
-
-
-async def _resolve_tags(
-    tag_specs: list[str | TagInput],
-    user_id: str,
-    db: AsyncSession,
-) -> list[Tag]:
-    """Return Tag ORM objects for the given specs, creating any that don't exist yet.
-
-    Each spec is either:
-    - a plain string: type is inferred from name ('context' if '@' prefix, else 'label')
-    - a TagInput: explicit name + type
-
-    At most one tag of type='project' may be in the returned list.
-    """
-    if not tag_specs:
-        return []
-
-    # Normalise to (name, type) pairs
-    pairs: list[tuple[str, str]] = []
-    project_count = 0
-    for spec in tag_specs:
-        if isinstance(spec, str):
-            tag_type = _infer_tag_type(spec)
-            pairs.append((spec, tag_type))
-        else:
-            pairs.append((spec.name, spec.type.value))
-        if pairs[-1][1] == "project":
-            project_count += 1
-
-    if project_count > 1:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A todo may only have one project tag.",
-        )
-
-    names = [name for name, _ in pairs]
-    result = await db.execute(select(Tag).where(Tag.user_id == user_id, Tag.name.in_(names)))
-    existing: dict[str, Tag] = {tag.name: tag for tag in result.scalars().all()}
-
-    tags: list[Tag] = []
-    for name, tag_type in pairs:
-        if name in existing:
-            tag = existing[name]
-            # Upgrade type if the caller is explicit about it (e.g. promoting a string
-            # tag that was previously labelled 'label' to 'project').
-            if tag.type != tag_type:
-                tag.type = tag_type
-            tags.append(tag)
-        else:
-            new_tag = Tag(name=name, type=tag_type, user_id=user_id)
-            db.add(new_tag)
-            tags.append(new_tag)
-
-    return tags
 
 
 async def _get_todo_with_tags(todo_id: str, db: AsyncSession) -> Todo | None:
@@ -123,7 +62,8 @@ async def create_todo(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Todo:
-    tags = await _resolve_tags(body.tags, current_user.id, db)
+    tags = await resolve_tags(body.tags, current_user.id, db)
+    due_date = datetime.fromisoformat(body.due_date) if body.due_date else None
     # Check for existing todo by client-provided id (idempotent retry support).
     if body.id is not None:
         existing = await _get_todo_with_tags(body.id, db)
@@ -133,8 +73,10 @@ async def create_todo(
         **({"id": body.id} if body.id is not None else {}),
         title=body.title,
         notes=body.notes,
+        completed=body.completed,
         state=body.state,
         priority=body.priority,
+        due_date=due_date,
         time_estimate=body.time_estimate,
         energy_level=body.energy_level,
         capture_source=body.capture_source,
@@ -147,7 +89,7 @@ async def create_todo(
         user_id=current_user.id,
     )
     db.add(todo)
-    # Flush so todo.id (and any new tag IDs from _resolve_tags) are assigned
+    # Flush so todo.id (and any new tag IDs from resolve_tags) are assigned
     # before we insert junction rows.  We manage TodoTag rows explicitly
     # rather than via `todo.tags = tags` because the secondary-relationship
     # cascade issues raw INSERTs that bypass TodoTag's mapper — we'd have no
@@ -195,7 +137,7 @@ async def update_todo(
         update_data.pop("tags")
         # Replace the tag set by deleting existing junction rows and inserting
         # new ones — explicit so we can populate user_id (see create_todo).
-        new_tags = await _resolve_tags(body.tags, current_user.id, db)  # type: ignore[arg-type]
+        new_tags = await resolve_tags(body.tags, current_user.id, db)  # type: ignore[arg-type]
         await db.execute(delete(TodoTag).where(TodoTag.todo_id == todo.id))
         for tag in new_tags:
             db.add(TodoTag(todo_id=todo.id, tag_id=tag.id, user_id=current_user.id))

@@ -66,6 +66,7 @@ class TodoCreate(BaseModel):
     id: str | None = None  # Client-side UUID for idempotency (PowerSync offline-first)
     title: str
     notes: str | None = None
+    completed: bool = False
     state: str = "inbox"
     # Each item is either a plain string ("@office") or a TagInput dict.
     # Plain strings: "@" prefix → context; bare word → label.
@@ -76,7 +77,7 @@ class TodoCreate(BaseModel):
     energy_level: str | None = None  # 'low' | 'medium' | 'high'
     capture_source: str | None = None  # 'manual' | 'share_sheet' | 'voice' | 'ai_parse'
     # Client-state columns (migration 0007)
-    waiting_for: str | None = None
+    waiting_for: str | None = None  # who/what the task is waiting on
     in_progress_since: str | None = None
     time_spent_minutes: int = Field(default=0, ge=0)
     blocked_by_todo_id: str | None = None

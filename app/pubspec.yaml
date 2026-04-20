@@ -64,6 +64,9 @@ dependencies:
   # Local key-value persistence (planning ritual state)
   shared_preferences: ^2.3.3
 
+  # File import
+  file_picker: ^8.1.2
+
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^10.0.0
 
