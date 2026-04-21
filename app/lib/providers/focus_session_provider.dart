@@ -74,7 +74,23 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
 
   /// Restores a focus session for a task already in inProgress state
   /// (e.g. after app restart). Does not change DB state.
+  ///
+  /// If the session is currently paused (e.g. user exited via _onExit), the
+  /// pause gap is folded into [accumulated] so elapsed stays frozen correctly.
   void resumeFrom(String todoId, DateTime inProgressSince) {
+    if (state.activeTodoId == todoId &&
+        state.isPaused &&
+        state.pauseStart != null) {
+      final pauseDuration = DateTime.now().difference(state.pauseStart!);
+      state = FocusModeState(
+        activeTodoId: todoId,
+        sessionStart: state.sessionStart ?? inProgressSince,
+        accumulated: state.accumulated + pauseDuration,
+        isPaused: false,
+      );
+      return;
+    }
+
     state = FocusModeState(
       activeTodoId: todoId,
       sessionStart: inProgressSince,

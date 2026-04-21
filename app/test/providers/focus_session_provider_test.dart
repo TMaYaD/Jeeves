@@ -99,6 +99,23 @@ void main() {
       expect(s.sessionStart, since);
     });
 
+    test('resumeFrom while paused folds pause gap into accumulated', () {
+      final since = DateTime.now().subtract(const Duration(minutes: 10));
+      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
+      container.read(focusModeProvider.notifier).pauseFocus();
+      final pausedState = container.read(focusModeProvider);
+      expect(pausedState.isPaused, isTrue);
+
+      // Simulate exit → re-enter: resumeFrom called with same todoId while paused.
+      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
+      final s = container.read(focusModeProvider);
+
+      expect(s.isPaused, isFalse);
+      expect(s.sessionStart, since);
+      // The pause gap should have been folded in, so elapsed < 10 minutes.
+      expect(s.accumulated, greaterThan(Duration.zero));
+    });
+
     test('pauseFocus freezes timer', () {
       final since = DateTime.now().subtract(const Duration(minutes: 5));
       container.read(focusModeProvider.notifier).resumeFrom('id-1', since);

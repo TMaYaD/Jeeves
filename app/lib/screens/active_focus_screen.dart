@@ -58,6 +58,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       title: title,
       elapsed: focusState.elapsed,
     );
+    _bgNotificationTimer?.cancel();
     _bgNotificationTimer =
         Timer.periodic(const Duration(minutes: 1), (_) {
       if (!mounted) return;
@@ -84,7 +85,9 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
 
-    final allSelected = ref.read(todaySelectedTasksProvider).value ?? [];
+    final allSelected = await ref.read(todaySelectedTasksProvider.future);
+    if (!mounted) return;
+
     final nextTask = allSelected
         .where((t) =>
             t.id != todoId &&
