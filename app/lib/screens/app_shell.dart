@@ -6,6 +6,7 @@ import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
 import '../providers/tags_provider.dart';
+import '../widgets/planning_banner.dart';
 
 /// Persistent scaffold with a collapsible left drawer navigation.
 ///
@@ -20,7 +21,12 @@ class AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       drawer: const CustomDrawer(),
-      body: child,
+      body: Column(
+        children: [
+          const PlanningBanner(),
+          Expanded(child: child),
+        ],
+      ),
     );
   }
 }
