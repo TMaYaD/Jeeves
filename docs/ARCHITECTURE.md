@@ -100,3 +100,19 @@ The ritual can no longer be auto-launched. Users are nudged through two opt-in m
 | `planning_settings_notification_enabled` | `bool` | Notification toggle |
 | `planning_settings_banner_enabled` | `bool` | Banner toggle |
 | `planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |
+
+## Navigation & Global Filter State
+
+### Tag Cloud Navigation Filter
+
+A sticky, multi-select context-tag filter lives in the navigation drawer and persists across screen navigation for the duration of the app session.
+
+**State:** `TagFilterNotifier` (a `Notifier<Set<String>>` in `app/lib/providers/tag_filter_provider.dart`) holds the active set of context tag IDs.  Calling `toggle(id)` adds or removes a tag; `clear()` resets the set.  The `tagFilterProvider` is app-scoped so the state survives route changes.
+
+**Drawer widget:** `TagCloud` (`app/lib/screens/common/tag_cloud.dart`) renders a `Wrap` of `FilterChip`s sourced from `contextTagsWithCountProvider`.  Chip visual weight (font size and opacity) scales linearly with each tag's active-task count relative to the maximum in the set.  Tags with zero active tasks are hidden unless currently selected.  Long-pressing a chip opens `TagManagementSheet` for rename/recolour/merge.
+
+**Active filter indicator:** `_ActiveFilterBar` (embedded in `GtdListScreen`) and `_InboxFilterBar` (embedded in `InboxScreen`) show the currently selected tags as removable `InputChip`s plus a "Clear all" button.  The CONTEXTS section header in the drawer gains a count badge when any filter is active.
+
+**DAO layer:** `TagDao.watchTagsWithActiveCount(userId, type)` uses a `customSelect` SQL query with `readsFrom: {tags, todoTags, todos}` so the count stream re-emits reactively when any of the three tables change.  Each GTD watch method in `TodoDao` and `InboxDao` accepts an optional `Set<String> tagIds` parameter; when non-empty a SQL subquery enforces AND semantics: `COUNT(DISTINCT tag_id) WHERE tag_id IN (...) = N`.
+
+**Provider wiring:** Every GTD list provider (`nextActionsProvider`, `waitingForProvider`, `somedayMaybeProvider`, `blockedTasksProvider`, `scheduledProvider`, `inboxItemsProvider`) watches `tagFilterProvider` and passes the current tag set to its DAO method.  When the filter changes, Riverpod automatically cancels and re-subscribes the DAO stream, so the list view re-renders without any additional work in the UI layer.
