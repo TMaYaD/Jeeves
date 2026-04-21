@@ -15,6 +15,7 @@ import 'package:timezone/timezone.dart' as tz;
 
 // Stable notification IDs.
 const _kPlanningNotificationId = 0;
+const _kPlanningSnoozeNotificationId = 1;
 
 // Action identifiers sent back via onDidReceiveNotificationResponse.
 const kNotificationActionOpen = 'open';
@@ -111,14 +112,14 @@ class NotificationService {
     );
   }
 
-  /// Cancels the recurring daily notification and schedules a one-off fire
-  /// [minutes] from now.
+  /// Schedules a one-off snooze notification [minutes] from now. Leaves the
+  /// recurring daily schedule untouched so tomorrow's reminder still fires.
   Future<void> snoozePlanningReminder(int minutes) async {
-    await cancelPlanningReminder();
+    await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
     final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
     // No matchDateTimeComponents — fires once only.
     await _plugin.zonedSchedule(
-      id: _kPlanningNotificationId,
+      id: _kPlanningSnoozeNotificationId,
       title: 'Time to plan your day',
       body: 'Tap to open your Daily Planning Ritual.',
       scheduledDate: fireAt,
@@ -129,6 +130,7 @@ class NotificationService {
 
   Future<void> cancelPlanningReminder() async {
     await _plugin.cancel(id: _kPlanningNotificationId);
+    await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
   }
 
   Future<void> cancelReminder(int id) async {

@@ -88,13 +88,19 @@ class PlanningSettingsNotifier extends Notifier<PlanningSettings> {
 /// [initPlanningCompletion] so skip-state and settings are loaded first.
 Future<void> initPlanningNotificationSchedule() async {
   final prefs = await SharedPreferences.getInstance();
+  final svc = NotificationService.instance;
   final notificationEnabled =
       prefs.getBool(_kNotificationEnabled) ?? true;
-  if (!notificationEnabled) return;
-  if (isNotificationSuppressedToday()) return;
+  if (!notificationEnabled || isNotificationSuppressedToday()) {
+    // Clear any reminder left scheduled from a previous session so the
+    // current (disabled/suppressed) settings are honoured even if the app
+    // was killed before [_reschedulePlanningReminder] could run.
+    await svc.cancelPlanningReminder();
+    return;
+  }
 
   final hour = prefs.getInt(_kTimeHour) ?? 8;
   final minute = prefs.getInt(_kTimeMinute) ?? 0;
-  await NotificationService.instance
-      .schedulePlanningReminder(time: TimeOfDay(hour: hour, minute: minute));
+  await svc.schedulePlanningReminder(
+      time: TimeOfDay(hour: hour, minute: minute));
 }

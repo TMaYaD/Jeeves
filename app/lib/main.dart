@@ -27,6 +27,16 @@ Future<void> main() async {
   // Re-establish the daily planning notification schedule after an app restart.
   await initPlanningNotificationSchedule();
 
+  // Cold-start: if the user tapped a notification to launch the app from a
+  // terminated state, onDidReceiveNotificationResponse will not fire; the
+  // launch details must be fetched explicitly and dispatched.
+  final launchDetails =
+      await NotificationService.instance.getLaunchDetails();
+  if (launchDetails?.didNotificationLaunchApp == true &&
+      launchDetails?.notificationResponse != null) {
+    _handleNotificationResponse(launchDetails!.notificationResponse!);
+  }
+
   runApp(const ProviderScope(child: JeevesApp()));
 }
 
