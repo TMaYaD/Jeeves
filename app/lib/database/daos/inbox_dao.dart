@@ -14,11 +14,33 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   InboxDao(super.db);
 
   /// Stream of all inbox todos for [userId], ordered by createdAt descending.
-  Stream<List<Todo>> watchInbox(String userId) {
-    return (select(todos)
-          ..where((t) => t.userId.equals(userId) & t.state.equals(GtdState.inbox.value))
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
-        .watch();
+  ///
+  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
+  /// returned (AND semantics).
+  Stream<List<Todo>> watchInbox(String userId, {Set<String> tagIds = const {}}) {
+    if (tagIds.isEmpty) {
+      return (select(todos)
+            ..where((t) =>
+                t.userId.equals(userId) & t.state.equals(GtdState.inbox.value))
+            ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+          .watch();
+    }
+
+    final n = tagIds.length;
+    final placeholders = List.filled(n, '?').join(', ');
+    return customSelect(
+      'SELECT todos.* FROM todos '
+      'WHERE todos.user_id = ? AND todos.state = ? '
+      'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
+      '     WHERE todo_id = todos.id AND tag_id IN ($placeholders)) = $n '
+      'ORDER BY todos.created_at DESC',
+      variables: [
+        Variable(userId),
+        Variable(GtdState.inbox.value),
+        ...tagIds.map(Variable.new),
+      ],
+      readsFrom: {todos, todoTags},
+    ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
   Future<void> insertTodo(TodosCompanion companion) {

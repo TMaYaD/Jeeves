@@ -5,8 +5,10 @@ import 'package:go_router/go_router.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
+import '../providers/tag_filter_provider.dart';
 import '../providers/tags_provider.dart';
 import '../widgets/planning_banner.dart';
+import 'common/tag_cloud.dart';
 
 /// Persistent scaffold with a collapsible left drawer navigation.
 ///
@@ -49,7 +51,7 @@ class CustomDrawer extends ConsumerWidget {
         : syncAsync.asData?.value;
 
     final projectTags = ref.watch(projectTagsProvider).asData?.value ?? [];
-    final contextTags = ref.watch(contextTagsProvider).asData?.value ?? [];
+    final activeFilterCount = ref.watch(tagFilterProvider).length;
 
     return Drawer(
       backgroundColor: Colors.white,
@@ -123,32 +125,11 @@ class CustomDrawer extends ConsumerWidget {
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 16),
-                  _buildSectionHeader('CONTEXTS'),
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: contextTags
-                          .map((t) => Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFEFF6FF),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                      color: const Color(0xFFDBEAFE)),
-                                ),
-                                child: Text(t.name,
-                                    style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF1D4ED8))),
-                              ))
-                          .toList(),
-                    ),
+                  _buildSectionHeader(
+                    'CONTEXTS',
+                    badge: activeFilterCount > 0 ? activeFilterCount : null,
                   ),
+                  const TagCloud(),
                   const SizedBox(height: 16),
                   _buildSectionHeader('PROJECTS'),
                   ...projectTags.map((t) => ListTile(
@@ -159,13 +140,6 @@ class CustomDrawer extends ConsumerWidget {
                         title: Text(t.name,
                             style: const TextStyle(
                                 fontSize: 14, color: Color(0xFF374151))),
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text(
-                                      'Project filters coming soon!')));
-                          Navigator.pop(context);
-                        },
                       )),
                 ],
               ),
@@ -195,17 +169,39 @@ class CustomDrawer extends ConsumerWidget {
     );
   }
 
-  Widget _buildSectionHeader(String title) {
+  Widget _buildSectionHeader(String title, {int? badge}) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Color(0xFF9CA3AF),
-        ),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
+              color: Color(0xFF9CA3AF),
+            ),
+          ),
+          if (badge != null) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2563EB),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$badge',
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -280,4 +276,3 @@ class _SyncIndicator extends StatelessWidget {
     );
   }
 }
-
