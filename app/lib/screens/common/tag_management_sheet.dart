@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../database/gtd_database.dart' show Tag;
+import '../../providers/tag_filter_provider.dart';
 import '../../providers/tags_provider.dart';
 
 /// A bottom sheet with rename, recolour, and merge actions for a [tag].
@@ -99,13 +100,13 @@ class TagManagementSheet extends ConsumerWidget {
               if (newName.isEmpty) return;
               try {
                 await ref.read(tagNotifierProvider).rename(tag.id, newName);
+                if (ctx.mounted) Navigator.pop(ctx);
               } catch (_) {
                 if (!ctx.mounted) return;
                 ScaffoldMessenger.of(ctx).showSnackBar(
                   const SnackBar(content: Text('Could not rename tag')),
                 );
               }
-              if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('Save'),
           ),
@@ -134,10 +135,19 @@ class TagManagementSheet extends ConsumerWidget {
                 // "Clear colour" swatch
                 return GestureDetector(
                   onTap: () async {
-                    await ref
-                        .read(tagNotifierProvider)
-                        .updateColor(tag.id, null);
-                    if (ctx.mounted) Navigator.pop(ctx);
+                    try {
+                      await ref
+                          .read(tagNotifierProvider)
+                          .updateColor(tag.id, null);
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    } catch (_) {
+                      if (!ctx.mounted) return;
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        const SnackBar(
+                          content: Text('Could not update tag colour'),
+                        ),
+                      );
+                    }
                   },
                   child: Container(
                     decoration: BoxDecoration(
@@ -154,10 +164,19 @@ class TagManagementSheet extends ConsumerWidget {
               final isCurrent = tag.color == hex;
               return GestureDetector(
                 onTap: () async {
-                  await ref
-                      .read(tagNotifierProvider)
-                      .updateColor(tag.id, hex);
-                  if (ctx.mounted) Navigator.pop(ctx);
+                  try {
+                    await ref
+                        .read(tagNotifierProvider)
+                        .updateColor(tag.id, hex);
+                    if (ctx.mounted) Navigator.pop(ctx);
+                  } catch (_) {
+                    if (!ctx.mounted) return;
+                    ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(
+                        content: Text('Could not update tag colour'),
+                      ),
+                    );
+                  }
                 },
                 child: Container(
                   decoration: BoxDecoration(
@@ -317,6 +336,19 @@ class _MergeTargetSheet extends ConsumerWidget {
                             await ref
                                 .read(tagNotifierProvider)
                                 .merge(source.id, target.id);
+                            // If the merged-away tag was in the active
+                            // filter, swap it for the target so DAO watchers
+                            // keep returning the user's intended results.
+                            final filter = ref.read(tagFilterProvider);
+                            if (filter.contains(source.id)) {
+                              final notifier =
+                                  ref.read(tagFilterProvider.notifier);
+                              notifier.toggle(source.id);
+                              if (!filter.contains(target.id)) {
+                                notifier.toggle(target.id);
+                              }
+                            }
+                            if (context.mounted) Navigator.pop(context);
                           } catch (_) {
                             if (!context.mounted) return;
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -324,7 +356,6 @@ class _MergeTargetSheet extends ConsumerWidget {
                                   content: Text('Merge failed')),
                             );
                           }
-                          if (context.mounted) Navigator.pop(context);
                         },
                       );
                     },

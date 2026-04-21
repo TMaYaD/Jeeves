@@ -95,16 +95,18 @@ void main() {
           id: 't1', title: 'Active task', state: 'next_action');
       await _assignTag(db, t1, 'ctx1');
 
-      final stream =
-          db.tagDao.watchTagsWithActiveCount(_userId, 'context');
+      // Single subscription — two separate `.first` calls would create
+      // fresh streams and hide any reactivity bug.
+      final counts = db.tagDao
+          .watchTagsWithActiveCount(_userId, 'context')
+          .map((rows) => rows.first.count);
+      final expectation = expectLater(counts, emitsInOrder([1, 0]));
 
-      expect(await stream.first.then((r) => r.first.count), 1);
-
-      // Complete the todo
+      // Complete the todo — should push a new emission on the same stream.
       await (db.update(db.todos)..where((t) => t.id.equals(t1)))
           .write(const TodosCompanion(state: Value('done')));
 
-      expect(await stream.first.then((r) => r.first.count), 0);
+      await expectation;
     });
 
     test('returns tags sorted alphabetically', () async {

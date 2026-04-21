@@ -134,7 +134,17 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Re-assigns all `todo_tags` rows that reference [sourceTagId] to
   /// [targetTagId] (idempotent via [assignTag]), then deletes the source tag
   /// and its junction rows atomically.
+  ///
+  /// Throws [ArgumentError] if [sourceTagId] equals [targetTagId] — a
+  /// self-merge would silently delete the tag and strip every association.
   Future<void> merge(String sourceTagId, String targetTagId) {
+    if (sourceTagId == targetTagId) {
+      throw ArgumentError.value(
+        targetTagId,
+        'targetTagId',
+        'Source and target tags must differ',
+      );
+    }
     return transaction(() async {
       final sourceTodoTags = await (select(todoTags)
             ..where((tt) => tt.tagId.equals(sourceTagId)))
