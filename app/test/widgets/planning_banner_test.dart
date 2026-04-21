@@ -115,7 +115,7 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('Plan your day \u2192'), findsOneWidget);
+    expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
   });
 
   testWidgets('banner hidden when ritual is complete', (tester) async {
@@ -126,7 +126,7 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('Plan your day \u2192'), findsNothing);
+    expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
   });
 
   testWidgets('banner hidden when dismissed today', (tester) async {
@@ -137,7 +137,7 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('Plan your day \u2192'), findsNothing);
+    expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
   });
 
   testWidgets('banner hidden when bannerEnabled is false', (tester) async {
@@ -148,7 +148,7 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('Plan your day \u2192'), findsNothing);
+    expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
   });
 
   testWidgets('tapping banner navigates to /planning', (tester) async {
@@ -159,7 +159,7 @@ void main() {
     ));
     await tester.pump();
 
-    await tester.tap(find.text('Plan your day \u2192'));
+    await tester.tap(find.byKey(const Key('planning_banner_visible')));
     await tester.pumpAndSettle();
 
     expect(find.text('planning'), findsOneWidget);
@@ -176,12 +176,12 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('Plan your day \u2192'), findsOneWidget);
+    expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('planning_banner_dismiss')));
     await tester.pump();
 
-    expect(find.text('Plan your day \u2192'), findsNothing);
+    expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
     expect(mockPlanning.bannerDismissed, isTrue);
   });
 
@@ -193,12 +193,12 @@ void main() {
     ));
     await tester.pump();
 
-    expect(find.text('Plan your day \u2192'), findsOneWidget);
+    expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
 
     // Simulate ritual completion.
     planningCompletionNotifier.value = true;
     await tester.pump();
 
-    expect(find.text('Plan your day \u2192'), findsNothing);
+    expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
   });
 }
