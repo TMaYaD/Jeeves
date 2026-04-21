@@ -88,7 +88,7 @@ class NotificationService {
         ),
         iOS: DarwinNotificationDetails(),
       ),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
   }
 
@@ -106,7 +106,7 @@ class NotificationService {
       body: 'Tap to open your Daily Planning Ritual.',
       scheduledDate: _nextInstanceOf(time),
       notificationDetails: _planningNotificationDetails(),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
       matchDateTimeComponents: DateTimeComponents.time,
     );
   }
@@ -123,7 +123,7 @@ class NotificationService {
       body: 'Tap to open your Daily Planning Ritual.',
       scheduledDate: fireAt,
       notificationDetails: _planningNotificationDetails(),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
   }
 

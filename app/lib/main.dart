@@ -18,6 +18,7 @@ Future<void> main() async {
   await NotificationService.initialize(
     onNotificationResponse: _handleNotificationResponse,
   );
+  await NotificationService.instance.requestPermissions();
 
   // Seed planning state from SharedPreferences before the first frame.
   await initPlanningCompletion();
