@@ -64,10 +64,11 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   Future<void> startFocus(String todoId) async {
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
-    await db.todoDao.transitionState(todoId, userId, GtdState.inProgress);
+    final now = DateTime.now();
+    await db.todoDao.transitionState(todoId, userId, GtdState.inProgress, now: now);
     state = FocusModeState(
       activeTodoId: todoId,
-      sessionStart: DateTime.now(),
+      sessionStart: now,
     );
   }
 

@@ -24,20 +24,22 @@ class _FakeFocusModeNotifier extends FocusModeNotifier {
 
 void main() {
   group('ElapsedTimerWidget', () {
-    testWidgets('shows MM:SS when elapsed < 1 hour', (tester) async {
+    testWidgets('shows 00:MM:SS when elapsed < 1 hour', (tester) async {
       final start = DateTime.now().subtract(const Duration(minutes: 5, seconds: 3));
       await tester.pumpWidget(_wrap(
         focusState: FocusModeState(sessionStart: start),
       ));
       await tester.pump();
 
-      // Should show something like "05:03"
+      // Should show something like "00:05:03"
       final text = tester.widget<Text>(find.byType(Text)).data ?? '';
-      expect(RegExp(r'^\d{2}:\d{2}$').hasMatch(text), isTrue,
-          reason: 'Expected MM:SS format, got "$text"');
+      expect(RegExp(r'^\d{2}:\d{2}:\d{2}$').hasMatch(text), isTrue,
+          reason: 'Expected HH:MM:SS format, got "$text"');
+      expect(text.startsWith('00:'), isTrue,
+          reason: 'Sub-hour sessions should start with "00:", got "$text"');
     });
 
-    testWidgets('shows H:MM:SS when elapsed >= 1 hour', (tester) async {
+    testWidgets('shows HH:MM:SS when elapsed >= 1 hour', (tester) async {
       final start =
           DateTime.now().subtract(const Duration(hours: 1, minutes: 2, seconds: 5));
       await tester.pumpWidget(_wrap(
@@ -46,15 +48,15 @@ void main() {
       await tester.pump();
 
       final text = tester.widget<Text>(find.byType(Text)).data ?? '';
-      expect(RegExp(r'^\d+:\d{2}:\d{2}$').hasMatch(text), isTrue,
-          reason: 'Expected H:MM:SS format, got "$text"');
+      expect(RegExp(r'^\d{2}:\d{2}:\d{2}$').hasMatch(text), isTrue,
+          reason: 'Expected HH:MM:SS format, got "$text"');
     });
 
-    testWidgets('shows 00:00 when no session active', (tester) async {
+    testWidgets('shows 00:00:00 when no session active', (tester) async {
       await tester.pumpWidget(_wrap(focusState: const FocusModeState()));
       await tester.pump();
 
-      expect(find.text('00:00'), findsOneWidget);
+      expect(find.text('00:00:00'), findsOneWidget);
     });
 
     testWidgets('display is frozen while paused', (tester) async {

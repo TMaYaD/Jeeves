@@ -198,6 +198,10 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       timeSpentMinutes: Value(timeSpent),
       inProgressSince: Value(newInProgressSince),
       updatedAt: Value(now),
+      // Transitioning to deferred removes the task from today's focus list.
+      selectedForToday: newState == GtdState.deferred
+          ? const Value(false)
+          : const Value.absent(),
     );
   }
 

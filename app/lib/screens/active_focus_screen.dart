@@ -60,6 +60,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     );
     _bgNotificationTimer =
         Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!mounted) return;
       final current = ref.read(focusModeProvider);
       final currentTitle =
           ref.read(taskDetailTodoProvider(todoId)).value?.title ?? 'Focus Task';

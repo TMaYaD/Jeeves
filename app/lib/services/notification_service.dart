@@ -34,8 +34,26 @@ class NotificationService {
     final android = instance._plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
-    final granted = await android?.requestNotificationsPermission() ?? false;
-    return granted;
+    final iOS = instance._plugin
+        .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin>();
+    final macOS = instance._plugin
+        .resolvePlatformSpecificImplementation<
+            MacOSFlutterLocalNotificationsPlugin>();
+    final androidGranted = await android?.requestNotificationsPermission() ?? false;
+    final iosGranted = await iOS?.requestPermissions(
+          alert: true,
+          badge: true,
+          sound: true,
+        ) ??
+        false;
+    final macOSGranted = await macOS?.requestPermissions(
+          alert: true,
+          badge: true,
+          sound: true,
+        ) ??
+        false;
+    return androidGranted || iosGranted || macOSGranted;
   }
 
   Future<void> scheduleReminder({
