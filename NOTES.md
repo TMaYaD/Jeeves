@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-04-21
+
+- Clarify-Inbox destination buttons (Next Action / Waiting For / Someday / Done) silently did nothing in prod; only Skip worked. Root cause #1: `InboxDao.processInboxItem` asserted `updated == 1` after the UPDATE, but in prod `todos` is a PowerSync view with an INSTEAD OF UPDATE trigger. SQLite's `sqlite3_changes()` excludes writes done inside trigger bodies, so `updated` is always 0 for view UPDATEs — the assertion threw `StateError`, which `_process` in `inbox_clarification_step.dart` caught and only `debugPrint`-ed. Tests passed because `inbox_dao_test.dart` uses `NativeDatabase.memory()` (raw table, no trigger). Rule: never assert on affected-row counts for UPDATE/DELETE against PowerSync view tables (`todos`, `tags`, `todo_tags`); rely on the WHERE-clause optimistic lock instead.
+- Root cause #2 for the same screen: the "Scheduled" button tried `inbox → scheduled` in one hop, but the state machine intentionally forbids it (see `gtd_state_machine_test.dart`'s `inbox → scheduled is rejected`). Scheduling means "a clarified next-action with a date", so it's conceptually two steps. Fix: `DailyPlanningNotifier.processInboxItem` does `inbox → nextAction` then `nextAction → scheduled` when the destination is `scheduled`. Kept the state machine as-is.
+
 ## 2026-04-20
 
 - Login/register screens relied on GoRouter's `/login`→`/inbox` redirect for post-auth navigation, but when the screen is pushed on top of another route (e.g. Settings → Sign in to sync) the redirect doesn't pop the pushed entry and `_isLoading` never resets — spinner gets stuck. Fix: explicitly `context.pop()` when `canPop`, fall back to `setState(_isLoading = false)` otherwise and let the redirect take over.
