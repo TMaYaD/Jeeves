@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../models/planning_settings.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/planning_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
@@ -288,9 +289,9 @@ class _DailyPlanningSettings extends ConsumerWidget {
   Future<void> _pickSnoozeDuration(
     BuildContext context,
     WidgetRef ref,
-    settings,
+    PlanningSettings settings,
   ) async {
-    final durations = settings.snoozeDurations as List<int>;
+    final durations = settings.snoozeDurations;
     final picked = await showDialog<int>(
       context: context,
       builder: (ctx) => SimpleDialog(
