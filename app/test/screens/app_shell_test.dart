@@ -2,13 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:jeeves/models/planning_settings.dart';
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/daily_planning_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
+import 'package:jeeves/providers/planning_settings_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
 
 // ---------------------------------------------------------------------------
@@ -18,6 +21,23 @@ import '../test_helpers.dart';
 class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
   @override
   Future<void> reEnterPlanning() async {}
+
+  @override
+  Future<void> dismissBannerForToday() async {}
+
+  @override
+  Future<void> skipPlanningToday() async {}
+
+  @override
+  Future<void> snoozePlanningNotification(int minutes) async {}
+}
+
+class _MockPlanningSettingsNotifier extends PlanningSettingsNotifier {
+  _MockPlanningSettingsNotifier(this._settings);
+  final PlanningSettings _settings;
+
+  @override
+  PlanningSettings build() => _settings;
 }
 
 class _MockAuthNotifier extends AuthNotifier {
@@ -38,6 +58,7 @@ class _MockAuthNotifier extends AuthNotifier {
 Widget _buildShellOnly({
   List<Todo> items = const [],
   VoidCallback? onLogout,
+  PlanningSettings planningSettings = const PlanningSettings(bannerEnabled: false),
 }) {
   return ProviderScope(
     overrides: [
@@ -52,8 +73,9 @@ Widget _buildShellOnly({
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       todaySelectedTasksProvider.overrideWith((_) => Stream.value([])),
-      dailyPlanningProvider
-          .overrideWith(() => _MockDailyPlanningNotifier()),
+      dailyPlanningProvider.overrideWith(() => _MockDailyPlanningNotifier()),
+      planningSettingsProvider.overrideWith(
+          () => _MockPlanningSettingsNotifier(planningSettings)),
     ],
     child: MaterialApp(
       home: Builder(
@@ -127,6 +149,12 @@ Widget _buildShellOnly({
 
 void main() {
   setUpAll(configureSqliteForTests);
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    planningCompletionNotifier.value = false;
+    bannerDismissedNotifier.value = false;
+  });
 
   testWidgets('AppShell renders CustomDrawer that can be opened', (tester) async {
     await tester.pumpWidget(_buildShellOnly());

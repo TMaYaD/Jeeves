@@ -1,21 +1,66 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/auth_provider.dart';
 import 'providers/daily_planning_provider.dart';
+import 'providers/planning_settings_provider.dart';
 import 'router.dart';
 import 'services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService.initialize();
-  // Seed the planning-completion notifier before the router is consulted so
-  // the first redirect evaluation is synchronous and correct.
-  // Auth state is owned entirely by AuthNotifier to avoid a race where
-  // currentUserIdProvider briefly holds 'local' before the real user ID loads.
+
+  // Initialize notification service with the action handler registered before
+  // any notification can fire (including cold-start launch).
+  await NotificationService.initialize(
+    onNotificationResponse: _handleNotificationResponse,
+  );
+
+  // Seed planning state from SharedPreferences before the first frame.
   await initPlanningCompletion();
+  await loadNotificationSuppression();
+
+  // Re-establish the daily planning notification schedule after an app restart.
+  await initPlanningNotificationSchedule();
+
   runApp(const ProviderScope(child: JeevesApp()));
+}
+
+/// Handles taps on planning notification actions (foreground and background).
+///
+/// The `@pragma('vm:entry-point')` annotation keeps this function alive in
+/// release builds so the OS can call it when the app is in the background.
+@pragma('vm:entry-point')
+void _handleNotificationResponse(NotificationResponse response) async {
+  final actionId = response.actionId;
+
+  switch (actionId) {
+    case kNotificationActionOpen:
+    case null:
+      // Null actionId means the notification body was tapped — both cases
+      // navigate to the planning ritual.
+      appRouter.go('/planning');
+
+    case kNotificationActionSnooze:
+      // Read snooze duration directly from SharedPreferences; Riverpod is not
+      // available in background-isolate notification callbacks.
+      final snoozeMins = await _readDefaultSnoozeDuration();
+      final until = DateTime.now().add(Duration(minutes: snoozeMins));
+      await persistSnoozedUntil(until);
+      await NotificationService.instance.snoozePlanningReminder(snoozeMins);
+
+    case kNotificationActionSkip:
+      await persistSkipToday();
+      await NotificationService.instance.cancelPlanningReminder();
+  }
+}
+
+Future<int> _readDefaultSnoozeDuration() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getInt('planning_settings_default_snooze_duration') ?? 60;
 }
 
 class JeevesApp extends ConsumerWidget {

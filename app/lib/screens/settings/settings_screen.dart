@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../providers/planning_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -94,6 +95,9 @@ class SettingsScreen extends ConsumerWidget {
             ),
             onTap: () => context.push('/import'),
           ),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+          _sectionHeader('DAILY PLANNING'),
+          _DailyPlanningSettings(),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
           ListTile(
@@ -197,6 +201,112 @@ class SettingsScreen extends ConsumerWidget {
     if (confirmed == true) {
       await ref.read(authTokenProvider.notifier).logout();
       // Stay on Settings; the screen rebuilds to show the signed-out state.
+    }
+  }
+}
+
+class _DailyPlanningSettings extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(planningSettingsProvider);
+    final notifier = ref.read(planningSettingsProvider.notifier);
+
+    return Column(
+      children: [
+        ListTile(
+          key: const Key('planning_time_tile'),
+          leading: const Icon(Icons.schedule_outlined, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Planning time',
+            style: TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: Text(
+            settings.planningTime.format(context),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () async {
+            final picked = await showTimePicker(
+              context: context,
+              initialTime: settings.planningTime,
+            );
+            if (picked != null) {
+              await notifier.setPlanningTime(picked);
+            }
+          },
+        ),
+        SwitchListTile(
+          key: const Key('planning_notification_toggle'),
+          secondary: const Icon(Icons.notifications_outlined,
+              color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Notify me at planning time',
+            style: TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          value: settings.notificationEnabled,
+          onChanged: (v) => notifier.setNotificationEnabled(v),
+        ),
+        if (settings.notificationEnabled)
+          ListTile(
+            key: const Key('planning_snooze_tile'),
+            leading: const Icon(Icons.snooze_outlined, color: Color(0xFF9CA3AF)),
+            title: const Text(
+              'Default snooze duration',
+              style: TextStyle(
+                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: Text(
+              _snoozeLabel(settings.defaultSnoozeDuration),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => _pickSnoozeDuration(context, ref, settings),
+          ),
+        SwitchListTile(
+          key: const Key('planning_banner_toggle'),
+          secondary: const Icon(Icons.campaign_outlined, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Show banner on main views',
+            style: TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: const Text(
+            'A reminder banner until you plan your day.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          value: settings.bannerEnabled,
+          onChanged: (v) => notifier.setBannerEnabled(v),
+        ),
+      ],
+    );
+  }
+
+  String _snoozeLabel(int minutes) {
+    if (minutes < 60) return '$minutes min';
+    if (minutes == 60) return '1 hour';
+    if (minutes < 1440) return '${minutes ~/ 60} hours';
+    return 'Tomorrow';
+  }
+
+  Future<void> _pickSnoozeDuration(
+    BuildContext context,
+    WidgetRef ref,
+    settings,
+  ) async {
+    final durations = settings.snoozeDurations as List<int>;
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Default snooze duration'),
+        children: durations
+            .map((d) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(ctx, d),
+                  child: Text(_snoozeLabel(d)),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked != null) {
+      await ref
+          .read(planningSettingsProvider.notifier)
+          .setDefaultSnoozeDuration(picked);
     }
   }
 }
