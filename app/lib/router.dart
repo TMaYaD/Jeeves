@@ -14,6 +14,7 @@ import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/blocked/blocked_screen.dart';
+import 'screens/active_focus_screen.dart';
 import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
 
@@ -104,6 +105,10 @@ final appRouter = GoRouter(
       builder: (context, state) => TaskDetailScreen(
         todoId: state.pathParameters['id']!,
       ),
+    ),
+    GoRoute(
+      path: '/focus/active',
+      builder: (context, state) => const ActiveFocusScreen(),
     ),
     GoRoute(
       path: '/import',

@@ -9,6 +9,8 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+const _kFocusId = 1001;
+
 class NotificationService {
   NotificationService._();
 
@@ -52,6 +54,43 @@ class NotificationService {
 
   Future<void> cancelAll() async {
     await _plugin.cancelAll();
+  }
+
+  /// Shows (or updates) a persistent notification indicating an active focus
+  /// session. Safe to call repeatedly — re-showing the same [_kFocusId]
+  /// replaces the previous notification on Android.
+  Future<void> showFocusNotification({
+    required String title,
+    required Duration elapsed,
+  }) async {
+    final h = elapsed.inHours;
+    final m = (elapsed.inMinutes % 60).toString().padLeft(2, '0');
+    final s = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
+    final elapsedStr = h > 0 ? '$h:$m:$s' : '$m:$s';
+
+    const android = AndroidNotificationDetails(
+      'focus_mode',
+      'Focus Mode',
+      channelDescription: 'Active focus session indicator',
+      importance: Importance.low,
+      priority: Priority.low,
+      ongoing: true,
+      autoCancel: false,
+      showWhen: false,
+    );
+    const iOS = DarwinNotificationDetails();
+
+    await _plugin.show(
+      id: _kFocusId,
+      title: 'In Focus: $title',
+      body: 'Elapsed: $elapsedStr',
+      notificationDetails: const NotificationDetails(android: android, iOS: iOS),
+    );
+  }
+
+  /// Cancels the active focus session notification.
+  Future<void> cancelFocusNotification() async {
+    await _plugin.cancel(id: _kFocusId);
   }
 }
 

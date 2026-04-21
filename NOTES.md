@@ -1,5 +1,11 @@
 # Notes
 
+## 2026-04-21
+
+- `flutter_local_notifications` v21 switched `show()` and `cancel()` from positional to named parameters. The existing `cancelReminder(id: id)` call was already correct (coincidentally); new notification methods must use `show(id:, title:, body:, notificationDetails:)` and `cancel(id:)`.
+- `FocusModeNotifier.startFocus` reads `databaseProvider` and `currentUserIdProvider` eagerly before the `await` to avoid the autoDispose-ref-after-await bug (same pattern established in `TaskDetailNotifier`).
+- `inProgress → deferred` (Abandon) leaves `selectedForToday = true`, so an abandoned task still appears on the focus screen list in `deferred` state. This is intentional for v1 — the user can re-plan or it will drop out naturally the next day.
+
 ## 2026-04-20
 
 - Login/register screens relied on GoRouter's `/login`→`/inbox` redirect for post-auth navigation, but when the screen is pushed on top of another route (e.g. Settings → Sign in to sync) the redirect doesn't pop the pushed entry and `_isLoading` never resets — spinner gets stuck. Fix: explicitly `context.pop()` when `canPop`, fall back to `setState(_isLoading = false)` otherwise and let the redirect take over.
