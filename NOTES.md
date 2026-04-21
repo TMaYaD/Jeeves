@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-04-21
+
+- Universal search (issue #118) uses a Drift LEFT OUTER JOIN across todos/todo_tags/tags rather than FTS5. FTS5 content-table triggers require `AFTER INSERT ON todos` — impossible in production where `todos` is a PowerSync view (SQLite only supports `INSTEAD OF` triggers on views). LIKE + Dart-side filtering on 10k rows is fast enough (< 10ms). SearchDao is a plain class, not `@DriftAccessor`, so no `build_runner` step needed.
+- `StateProvider` is gone in Riverpod 3.x. Use `NotifierProvider` with a one-method `Notifier` as a drop-in replacement — the notifier exposes an `update(T)` method that sets state, replacing the `.notifier.state = ` pattern.
+
 ## 2026-04-20
 
 - Login/register screens relied on GoRouter's `/login`→`/inbox` redirect for post-auth navigation, but when the screen is pushed on top of another route (e.g. Settings → Sign in to sync) the redirect doesn't pop the pushed entry and `_isLoading` never resets — spinner gets stuck. Fix: explicitly `context.pop()` when `canPop`, fall back to `setState(_isLoading = false)` otherwise and let the redirect take over.

@@ -63,3 +63,34 @@ PowerSync provides bidirectional offline-first sync between the Flutter SQLite s
 - Local writes made through the PowerSync client are queued and uploaded to the backend REST API via `JevesBackendConnector.uploadData()`.
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.
 - Conflict resolution: last-write-wins (acceptable for v1).
+
+## Local Search
+
+Universal search is implemented entirely client-side against the local SQLite store, with no network dependency.
+
+### SearchDao
+
+`lib/database/daos/search_dao.dart` — a plain Dart class (not a `@DriftAccessor`) that exposes a single `search(userId, SearchQuery)` method returning a reactive `Stream<List<SearchResult>>`.
+
+**Query strategy:** A single Drift LEFT OUTER JOIN across `todos`, `todo_tags`, and `tags`. Drift's type-safe `readTable` / `readTableOrNull` API handles all column mapping so no manual SQL parsing is needed. Structured filters (state, energy level, time estimate, due date range) are applied as SQL WHERE clauses. Free-text search and tag-scope filtering are applied in Dart after the join, which avoids FTS5 trigger compatibility issues with PowerSync views.
+
+**Why not FTS5?** In production, `todos` is a PowerSync-managed SQLite view. SQLite only supports `INSTEAD OF` triggers on views, not `AFTER INSERT/UPDATE/DELETE`, so the standard FTS5 content-table + trigger pattern cannot be used. LIKE + Dart-side string matching on 10k rows completes in < 10 ms in practice.
+
+### Search models
+
+- `lib/models/search_query.dart` — plain Dart class holding text, state set, tag-ID set, energy levels, date range, and time-estimate cap. No code generation required.
+- `lib/models/search_result.dart` — wraps a Drift `Todo` + its `List<Tag>` + a `Set<SearchMatchField>` indicating which fields matched + an optional notes snippet.
+
+### Providers
+
+`lib/providers/search_provider.dart`:
+
+- `searchQueryProvider` — `NotifierProvider<SearchQueryNotifier, SearchQuery>` that the search screen writes to on each (debounced) keystroke.
+- `searchResultsProvider` — `StreamProvider.autoDispose` that watches `searchQueryProvider` and delegates to `SearchDao.search`, grouping results by `GtdState`.
+- `recentSearchesProvider` — `NotifierProvider<RecentSearchesNotifier, List<String>>` backed by `SharedPreferences` (max 10 entries, MRU order).
+
+### Navigation
+
+The search screen lives at `/search` outside the `ShellRoute` (full-screen, no drawer). It is reachable via:
+- The **Search** entry in the drawer navigation (visible on every GTD list screen).
+- **Ctrl+K** or **/** keyboard shortcuts registered in `AppShell` via Flutter's `Shortcuts` + `Actions` API.

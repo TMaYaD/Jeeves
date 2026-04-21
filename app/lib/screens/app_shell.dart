@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -7,10 +8,18 @@ import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
 import '../providers/tags_provider.dart';
 
+/// Intent dispatched by the search keyboard shortcut (Ctrl+K or /).
+class _SearchIntent extends Intent {
+  const _SearchIntent();
+}
+
 /// Persistent scaffold with a collapsible left drawer navigation.
 ///
 /// The [child] is rendered in the body; routes inside the [ShellRoute]
 /// automatically replace the body while keeping the drawer state consistent.
+///
+/// Registers a global keyboard shortcut (Ctrl+K or /) that opens the search
+/// screen from any GTD list view.
 class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.child});
 
@@ -18,9 +27,29 @@ class AppShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      drawer: const CustomDrawer(),
-      body: child,
+    return Shortcuts(
+      shortcuts: {
+        LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyK):
+            const _SearchIntent(),
+        LogicalKeySet(LogicalKeyboardKey.slash): const _SearchIntent(),
+      },
+      child: Actions(
+        actions: {
+          _SearchIntent: CallbackAction<_SearchIntent>(
+            onInvoke: (_) {
+              context.push('/search');
+              return null;
+            },
+          ),
+        },
+        child: Focus(
+          autofocus: true,
+          child: Scaffold(
+            drawer: const CustomDrawer(),
+            body: child,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -73,6 +102,33 @@ class CustomDrawer extends ConsumerWidget {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
+                  ListTile(
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 24),
+                    leading: const Icon(Icons.search,
+                        color: Color(0xFF6B7280)),
+                    title: const Text(
+                      'Search',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF374151),
+                      ),
+                    ),
+                    trailing: const Text(
+                      'Ctrl+K',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF9CA3AF),
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.pop(context);
+                      context.push('/search');
+                    },
+                  ),
+                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                  const SizedBox(height: 8),
                   _buildNavItem(context,
                       icon: Icons.inbox_outlined,
                       title: 'Inbox',

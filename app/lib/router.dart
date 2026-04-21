@@ -16,6 +16,7 @@ import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/blocked/blocked_screen.dart';
 import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
+import 'screens/search/search_screen.dart';
 
 /// Routes that require the daily planning ritual to be completed first.
 const _protectedPaths = [
@@ -108,6 +109,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/import',
       builder: (context, state) => const ImportScreen(),
+    ),
+    GoRoute(
+      path: '/search',
+      builder: (context, state) => const SearchScreen(),
     ),
   ],
 );
