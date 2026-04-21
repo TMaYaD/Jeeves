@@ -199,6 +199,23 @@ void main() {
       expect(remainingIds, isNot(contains('src')));
     });
 
+    test('throws on self-merge without deleting data', () async {
+      await _insertTag(db, id: 'src', name: 'old');
+      final t1 = await _insertTodo(db,
+          id: 't1', title: 'Task', state: 'next_action');
+      await _assignTag(db, t1, 'src');
+
+      expect(() => db.tagDao.merge('src', 'src'), throwsArgumentError);
+
+      final tags = await db.tagDao.watchByType(_userId, 'context').first;
+      expect(tags.map((t) => t.id), contains('src'));
+      final rows = await (db.select(db.todoTags)
+            ..where((tt) => tt.todoId.equals(t1)))
+          .get();
+      expect(rows, hasLength(1));
+      expect(rows.single.tagId, 'src');
+    });
+
     test('merge is idempotent when todo already has target tag', () async {
       await _insertTag(db, id: 'src', name: 'old');
       await _insertTag(db, id: 'tgt', name: 'new');

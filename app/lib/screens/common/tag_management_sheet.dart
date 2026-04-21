@@ -133,12 +133,49 @@ class TagManagementSheet extends ConsumerWidget {
             itemBuilder: (_, i) {
               if (i == _kColors.length) {
                 // "Clear colour" swatch
-                return GestureDetector(
+                return Semantics(
+                  button: true,
+                  label: 'Clear tag colour',
+                  child: GestureDetector(
+                    onTap: () async {
+                      try {
+                        await ref
+                            .read(tagNotifierProvider)
+                            .updateColor(tag.id, null);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } catch (_) {
+                        if (!ctx.mounted) return;
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not update tag colour'),
+                          ),
+                        );
+                      }
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: const Color(0xFFD1D5DB)),
+                      ),
+                      child: const Icon(Icons.block,
+                          size: 16, color: Color(0xFF9CA3AF)),
+                    ),
+                  ),
+                );
+              }
+              final hex = _kColors[i];
+              final color = _hexToColor(hex);
+              final isCurrent = tag.color == hex;
+              return Semantics(
+                button: true,
+                label: 'Set tag colour $hex',
+                selected: isCurrent,
+                child: GestureDetector(
                   onTap: () async {
                     try {
                       await ref
                           .read(tagNotifierProvider)
-                          .updateColor(tag.id, null);
+                          .updateColor(tag.id, hex);
                       if (ctx.mounted) Navigator.pop(ctx);
                     } catch (_) {
                       if (!ctx.mounted) return;
@@ -151,41 +188,13 @@ class TagManagementSheet extends ConsumerWidget {
                   },
                   child: Container(
                     decoration: BoxDecoration(
+                      color: color,
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFFD1D5DB)),
+                      border: isCurrent
+                          ? Border.all(
+                              color: const Color(0xFF1A1A2E), width: 2)
+                          : null,
                     ),
-                    child: const Icon(Icons.block,
-                        size: 16, color: Color(0xFF9CA3AF)),
-                  ),
-                );
-              }
-              final hex = _kColors[i];
-              final color = _hexToColor(hex);
-              final isCurrent = tag.color == hex;
-              return GestureDetector(
-                onTap: () async {
-                  try {
-                    await ref
-                        .read(tagNotifierProvider)
-                        .updateColor(tag.id, hex);
-                    if (ctx.mounted) Navigator.pop(ctx);
-                  } catch (_) {
-                    if (!ctx.mounted) return;
-                    ScaffoldMessenger.of(ctx).showSnackBar(
-                      const SnackBar(
-                        content: Text('Could not update tag colour'),
-                      ),
-                    );
-                  }
-                },
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: color,
-                    shape: BoxShape.circle,
-                    border: isCurrent
-                        ? Border.all(
-                            color: const Color(0xFF1A1A2E), width: 2)
-                        : null,
                   ),
                 ),
               );
