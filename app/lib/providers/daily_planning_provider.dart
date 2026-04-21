@@ -297,12 +297,26 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
       );
 
   /// Processes an inbox item to a GTD list (transitions out of inbox state).
+  ///
+  /// The GTD state machine deliberately forbids `inbox → scheduled` as a
+  /// single hop (see `GtdStateMachine`); scheduling requires first clarifying
+  /// the item as a next action. When [newState] is [GtdState.scheduled], this
+  /// method performs the two-hop transition `inbox → nextAction → scheduled`.
   Future<void> processInboxItem(String id, GtdState newState) async {
-    await _db.inboxDao.processInboxItem(
-      id,
-      userId: _userId,
-      newState: newState.value,
-    );
+    if (newState == GtdState.scheduled) {
+      await _db.inboxDao.processInboxItem(
+        id,
+        userId: _userId,
+        newState: GtdState.nextAction.value,
+      );
+      await _db.todoDao.transitionState(id, _userId, GtdState.scheduled);
+    } else {
+      await _db.inboxDao.processInboxItem(
+        id,
+        userId: _userId,
+        newState: newState.value,
+      );
+    }
     state = state.copyWith(
       inboxClarifiedCount: state.inboxClarifiedCount + 1,
     );

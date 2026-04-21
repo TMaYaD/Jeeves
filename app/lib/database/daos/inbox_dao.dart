@@ -54,8 +54,14 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   /// - Rejects the operation if the row is not currently in the inbox state.
   /// - Validates the transition via [GtdStateMachine] before writing.
   /// - Runs the read, validation, and write atomically inside a transaction to
-  ///   prevent check-then-write races.
+  ///   prevent check-then-write races. The UPDATE's WHERE clause pins the
+  ///   row to its observed state, acting as an optimistic lock.
   /// - Throws [InvalidStateTransitionException] for invalid moves.
+  ///
+  /// Note: we deliberately do NOT assert on the affected row count — in
+  /// production `todos` is a PowerSync view with INSTEAD OF UPDATE triggers,
+  /// and SQLite reports 0 changes for UPDATE statements handled by a trigger
+  /// body (`sqlite3_changes()` excludes lower-level trigger writes).
   Future<void> processInboxItem(
     String todoId, {
     required String userId,
@@ -78,15 +84,15 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
       final to = GtdState.fromString(newState);
       GtdStateMachine.validate(from, to);
 
-      final updated = await (update(todos)
+      await (update(todos)
             ..where((t) =>
                 t.id.equals(todoId) &
                 t.userId.equals(userId) &
                 t.state.equals(row.state)))
-          .write(TodosCompanion(state: Value(newState)));
-      if (updated != 1) {
-        throw StateError('Todo state changed during transition; retry');
-      }
+          .write(TodosCompanion(
+        state: Value(newState),
+        updatedAt: Value(DateTime.now()),
+      ));
     });
   }
 }
