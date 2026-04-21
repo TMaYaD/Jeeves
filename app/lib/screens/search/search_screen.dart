@@ -29,10 +29,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     super.initState();
     _controller = TextEditingController();
     _focusNode = FocusNode();
+    // Reset synchronously so the first build sees an empty query; if this
+    // moved into a post-frame callback, reopening /search could flash a frame
+    // of stale query/filter state against an empty text field.
+    ref.read(searchQueryProvider.notifier).update(const SearchQuery());
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Reset to empty query each time the search screen is opened.
-      ref.read(searchQueryProvider.notifier).update(const SearchQuery());
-      _controller.clear();
       _focusNode.requestFocus();
     });
   }
@@ -45,14 +46,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     super.dispose();
   }
 
+  void _commitText(String text) {
+    _debounce?.cancel();
+    final current = ref.read(searchQueryProvider);
+    ref.read(searchQueryProvider.notifier).update(current.copyWith(text: text));
+  }
+
   void _onTextChanged(String text) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 300), () {
       if (!mounted) return;
-      final current = ref.read(searchQueryProvider);
-      ref.read(searchQueryProvider.notifier).update(
-              current.copyWith(text: text),
-            );
+      _commitText(text);
     });
   }
 
@@ -68,16 +72,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     _controller.selection = TextSelection.fromPosition(
       TextPosition(offset: query.length),
     );
-    final current = ref.read(searchQueryProvider);
-    ref.read(searchQueryProvider.notifier).update(
-          current.copyWith(text: query),
-        );
+    _commitText(query);
   }
 
   void _clearText() {
     _controller.clear();
-    final current = ref.read(searchQueryProvider);
-    ref.read(searchQueryProvider.notifier).update(current.copyWith(text: ''));
+    _commitText('');
     _focusNode.requestFocus();
   }
 

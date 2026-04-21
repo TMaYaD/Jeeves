@@ -35,7 +35,7 @@ class SearchQuery {
   final bool includeDone;
 
   bool get isEmpty =>
-      text.isEmpty &&
+      text.trim().isEmpty &&
       states.isEmpty &&
       tagIds.isEmpty &&
       energyLevels.isEmpty &&

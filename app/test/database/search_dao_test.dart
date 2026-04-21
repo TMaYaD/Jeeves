@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -361,17 +363,19 @@ void main() {
           .search(_user, const SearchQuery(text: 'hello'))
           .map((r) => r.length);
 
-      final emissions = <int>[];
-      final sub = stream.listen(emissions.add);
+      final it = StreamIterator(stream);
 
-      // First emission: nothing matches
-      await Future<void>.delayed(Duration.zero);
+      // First emission: nothing matches.
+      expect(await it.moveNext(), isTrue);
+      expect(it.current, 0);
 
       await _insertTodo(db, id: 'x', title: 'hello world');
-      await Future<void>.delayed(Duration.zero);
 
-      await sub.cancel();
-      expect(emissions.last, greaterThan(0));
+      // Next emission fires once Drift re-fetches after the write.
+      expect(await it.moveNext(), isTrue);
+      expect(it.current, greaterThan(0));
+
+      await it.cancel();
     });
   });
 }

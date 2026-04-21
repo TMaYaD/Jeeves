@@ -32,7 +32,10 @@ class AppShell extends ConsumerWidget {
       shortcuts: {
         LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyK):
             const _SearchIntent(),
-        LogicalKeySet(LogicalKeyboardKey.slash): const _SearchIntent(),
+        // CharacterActivator is layout-agnostic: it binds to the '/' character
+        // regardless of where it sits on the user's keyboard, unlike
+        // LogicalKeyboardKey.slash which is position-based on QWERTY.
+        const CharacterActivator('/'): const _SearchIntent(),
       },
       child: Actions(
         actions: {
