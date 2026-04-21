@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
+import '../../utils/tag_colors.dart';
 import '../gtd_database.dart';
 
 part 'tag_dao.g.dart';
@@ -180,6 +181,29 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       ),
       mode: InsertMode.insertOrReplace,
     );
+  }
+
+  /// One-time idempotent backfill: writes a derived color for every tag that
+  /// currently has a NULL color value.
+  ///
+  /// Safe to call on every startup — rows that already have a color are
+  /// untouched.  Operates inside a transaction so a partial failure does
+  /// not leave the table in a mixed state.
+  Future<void> backfillMissingColors(String userId) {
+    return transaction(() async {
+      final nullColorTags = await (select(tags)
+            ..where((t) => t.userId.equals(userId) & t.color.isNull()))
+          .get();
+      for (final tag in nullColorTags) {
+        final colorHex = tagColorToHex(tagColorForName(tag.name));
+        await upsertTag(
+          TagsCompanion(
+            id: Value(tag.id),
+            color: Value(colorHex),
+          ),
+        );
+      }
+    });
   }
 
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].

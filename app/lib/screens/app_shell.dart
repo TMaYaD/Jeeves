@@ -81,6 +81,7 @@ class CustomDrawer extends ConsumerWidget {
 
     final projectTags = ref.watch(projectTagsProvider).asData?.value ?? [];
     final activeFilterCount = ref.watch(tagFilterProvider).length;
+    ref.watch(tagColorBackfillProvider);
 
     return Drawer(
       backgroundColor: Colors.white,
