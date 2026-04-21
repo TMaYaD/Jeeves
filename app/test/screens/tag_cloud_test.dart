@@ -8,9 +8,11 @@ import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/daily_planning_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
+import 'package:jeeves/providers/planning_settings_provider.dart';
 import 'package:jeeves/providers/tag_filter_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/database/gtd_database.dart' show Tag;
+import 'package:jeeves/models/planning_settings.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import '../test_helpers.dart';
 
@@ -28,6 +30,13 @@ class _MockAuthNotifier extends AuthNotifier {
 class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
   @override
   Future<void> reEnterPlanning() async {}
+}
+
+/// Disables the planning banner so its infinite pulse animation doesn't
+/// prevent [WidgetTester.pumpAndSettle] from completing.
+class _NoBannerSettingsNotifier extends PlanningSettingsNotifier {
+  @override
+  PlanningSettings build() => const PlanningSettings(bannerEnabled: false);
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +70,8 @@ Widget _buildShell({
           .overrideWith((_) => Stream.value(contextTagsWithCount)),
       todaySelectedTasksProvider.overrideWith((_) => Stream.value([])),
       dailyPlanningProvider.overrideWith(() => _MockDailyPlanningNotifier()),
+      planningSettingsProvider
+          .overrideWith(() => _NoBannerSettingsNotifier()),
     ],
     child: MaterialApp(
       home: Builder(builder: (ctx) {
@@ -221,6 +232,8 @@ void main() {
           todaySelectedTasksProvider.overrideWith((_) => Stream.value([])),
           dailyPlanningProvider
               .overrideWith(() => _MockDailyPlanningNotifier()),
+          planningSettingsProvider
+              .overrideWith(() => _NoBannerSettingsNotifier()),
         ],
         child: Consumer(builder: (ctx, ref, _) {
           capturedRef = ref;

@@ -38,10 +38,13 @@ class TagCloud extends ConsumerWidget {
             .where((t) => t.count > 0 || selectedIds.contains(t.tag.id))
             .toList();
 
-        if (visible.isEmpty) return const SizedBox.shrink();
+        if (visible.isEmpty && selectedIds.isEmpty) {
+          return const SizedBox.shrink();
+        }
 
-        final maxCount =
-            visible.map((t) => t.count).reduce(max).clamp(1, 1 << 30);
+        final maxCount = visible.isEmpty
+            ? 1
+            : visible.map((t) => t.count).reduce(max).clamp(1, 1 << 30);
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(24, 4, 24, 8),

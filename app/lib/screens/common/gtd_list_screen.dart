@@ -105,8 +105,7 @@ class _ActiveFilterBar extends ConsumerWidget {
 
     final notifier = ref.read(tagFilterProvider.notifier);
     final allTags = ref.watch(contextTagsProvider).asData?.value ?? [];
-    final selectedTags =
-        allTags.where((t) => selectedIds.contains(t.id)).toList();
+    final tagsById = {for (final t in allTags) t.id: t};
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
@@ -115,25 +114,27 @@ class _ActiveFilterBar extends ConsumerWidget {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            ...selectedTags.map(
-              (t) => Padding(
+            ...selectedIds.map((id) {
+              final tag = tagsById[id];
+              final label = tag?.name ?? 'Deleted tag';
+              return Padding(
                 padding: const EdgeInsets.only(right: 6),
                 child: InputChip(
-                  key: Key('active_filter_chip_${t.id}'),
-                  label: Text(t.name,
+                  key: Key('active_filter_chip_$id'),
+                  label: Text(label,
                       style: const TextStyle(
                           fontSize: 12, color: Color(0xFF1D4ED8))),
                   selected: true,
                   selectedColor: const Color(0xFFDBEAFE),
                   deleteIcon:
                       const Icon(Icons.close, size: 14, color: Color(0xFF1D4ED8)),
-                  onDeleted: () => notifier.toggle(t.id),
-                  onPressed: () => notifier.toggle(t.id),
+                  onDeleted: () => notifier.toggle(id),
+                  onPressed: () => notifier.toggle(id),
                   padding: const EdgeInsets.symmetric(horizontal: 2),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-              ),
-            ),
+              );
+            }),
             TextButton(
               key: const Key('active_filter_clear_all'),
               onPressed: notifier.clear,
