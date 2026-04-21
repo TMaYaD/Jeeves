@@ -26,7 +26,7 @@ class TagCloud extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tagsAsync = ref.watch(contextTagsWithCountProvider);
     final selectedIds = ref.watch(tagFilterProvider);
-    final notifier = ref.watch(tagFilterProvider.notifier);
+    final notifier = ref.read(tagFilterProvider.notifier);
 
     return tagsAsync.when(
       loading: () => const SizedBox.shrink(),

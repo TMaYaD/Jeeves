@@ -74,9 +74,15 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       'SELECT todos.* FROM todos '
       'WHERE todos.user_id = ? AND todos.state = ? '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
-      '     WHERE todo_id = todos.id AND tag_id IN ($placeholders)) = $n '
+      '     WHERE todo_id = todos.id AND user_id = ? '
+      '       AND tag_id IN ($placeholders)) = $n '
       'ORDER BY todos.created_at',
-      variables: [Variable(userId), Variable(state), ...tagIds.map(Variable.new)],
+      variables: [
+        Variable(userId),
+        Variable(state),
+        Variable(userId),
+        ...tagIds.map(Variable.new),
+      ],
       readsFrom: {todos, todoTags},
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }

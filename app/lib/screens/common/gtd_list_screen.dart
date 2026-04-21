@@ -103,7 +103,7 @@ class _ActiveFilterBar extends ConsumerWidget {
     final selectedIds = ref.watch(tagFilterProvider);
     if (selectedIds.isEmpty) return const SizedBox.shrink();
 
-    final notifier = ref.watch(tagFilterProvider.notifier);
+    final notifier = ref.read(tagFilterProvider.notifier);
     final allTags = ref.watch(contextTagsProvider).asData?.value ?? [];
     final selectedTags =
         allTags.where((t) => selectedIds.contains(t.id)).toList();
