@@ -101,19 +101,22 @@ void main() {
 
     test('resumeFrom while paused folds pause gap into accumulated', () {
       final since = DateTime.now().subtract(const Duration(minutes: 10));
+      final pauseTime = DateTime.now();
+      final resumeTime = pauseTime.add(const Duration(milliseconds: 100));
+
       container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
-      container.read(focusModeProvider.notifier).pauseFocus();
-      final pausedState = container.read(focusModeProvider);
-      expect(pausedState.isPaused, isTrue);
+      container.read(focusModeProvider.notifier).pauseFocus(now: pauseTime);
+      expect(container.read(focusModeProvider).isPaused, isTrue);
 
       // Simulate exit → re-enter: resumeFrom called with same todoId while paused.
-      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
+      container
+          .read(focusModeProvider.notifier)
+          .resumeFrom('id-1', since, now: resumeTime);
       final s = container.read(focusModeProvider);
 
       expect(s.isPaused, isFalse);
       expect(s.sessionStart, since);
-      // The pause gap should have been folded in, so elapsed < 10 minutes.
-      expect(s.accumulated, greaterThan(Duration.zero));
+      expect(s.accumulated, const Duration(milliseconds: 100));
     });
 
     test('pauseFocus freezes timer', () {
@@ -136,16 +139,16 @@ void main() {
 
     test('resumeFocus accumulates pause duration', () {
       final since = DateTime.now().subtract(const Duration(minutes: 10));
+      final pauseTime = DateTime.now();
+      final resumeTime = pauseTime.add(const Duration(seconds: 90));
+
       container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
-      container.read(focusModeProvider.notifier).pauseFocus();
-      // Simulate a 2-minute pause by manipulating state directly is not
-      // straightforward; instead verify structural invariants.
-      container.read(focusModeProvider.notifier).resumeFocus();
+      container.read(focusModeProvider.notifier).pauseFocus(now: pauseTime);
+      container.read(focusModeProvider.notifier).resumeFocus(now: resumeTime);
       final s = container.read(focusModeProvider);
       expect(s.isPaused, isFalse);
       expect(s.pauseStart, isNull);
-      // accumulated should be > zero after resuming from a pause
-      expect(s.accumulated, greaterThan(Duration.zero));
+      expect(s.accumulated, const Duration(seconds: 90));
     });
 
     test('resumeFocus no-ops when not paused', () {
@@ -194,6 +197,19 @@ void main() {
       final updated = await db.todoDao.getTodo(todo.id, _userId);
       expect(updated?.state, GtdState.inProgress.value);
       expect(updated?.inProgressSince, isNotNull);
+      // DB timestamp and in-memory session start must match (shared now).
+      expect(DateTime.parse(updated!.inProgressSince!), s.sessionStart);
+    });
+
+    test('throws StateError when a different task is already active', () async {
+      final todo1 = await _insertTask(db);
+      final todo2 = await _insertTask(db);
+      await container.read(focusModeProvider.notifier).startFocus(todo1.id);
+
+      expect(
+        () => container.read(focusModeProvider.notifier).startFocus(todo2.id),
+        throwsA(isA<StateError>()),
+      );
     });
   });
 }

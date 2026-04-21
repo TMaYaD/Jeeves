@@ -247,6 +247,7 @@ class _FocusBody extends StatelessWidget {
                 ),
               ),
               IconButton(
+                tooltip: 'Exit Focus Mode',
                 icon: const Icon(Icons.close, color: Color(0xFF9CA3AF)),
                 onPressed: onExit,
               ),

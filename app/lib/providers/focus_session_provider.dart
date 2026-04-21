@@ -61,7 +61,16 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   FocusModeState build() => const FocusModeState();
 
   /// Transitions [todoId] to inProgress in the DB and starts the focus timer.
+  ///
+  /// Throws [StateError] if a different task is already active, preventing
+  /// silent session overwrites that leave orphaned inProgress DB rows.
   Future<void> startFocus(String todoId) async {
+    if (state.activeTodoId != null && state.activeTodoId != todoId) {
+      throw StateError(
+        'Cannot start a new focus session while another task is still active.',
+      );
+    }
+
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
     final now = DateTime.now();
@@ -77,11 +86,12 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   ///
   /// If the session is currently paused (e.g. user exited via _onExit), the
   /// pause gap is folded into [accumulated] so elapsed stays frozen correctly.
-  void resumeFrom(String todoId, DateTime inProgressSince) {
+  /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
+  void resumeFrom(String todoId, DateTime inProgressSince, {DateTime? now}) {
     if (state.activeTodoId == todoId &&
         state.isPaused &&
         state.pauseStart != null) {
-      final pauseDuration = DateTime.now().difference(state.pauseStart!);
+      final pauseDuration = (now ?? DateTime.now()).difference(state.pauseStart!);
       state = FocusModeState(
         activeTodoId: todoId,
         sessionStart: state.sessionStart ?? inProgressSince,
@@ -97,14 +107,16 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     );
   }
 
-  void pauseFocus() {
+  /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
+  void pauseFocus({DateTime? now}) {
     if (state.isPaused || state.sessionStart == null) return;
-    state = state.copyWith(isPaused: true, pauseStart: DateTime.now());
+    state = state.copyWith(isPaused: true, pauseStart: now ?? DateTime.now());
   }
 
-  void resumeFocus() {
+  /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
+  void resumeFocus({DateTime? now}) {
     if (!state.isPaused || state.pauseStart == null) return;
-    final pauseDuration = DateTime.now().difference(state.pauseStart!);
+    final pauseDuration = (now ?? DateTime.now()).difference(state.pauseStart!);
     state = FocusModeState(
       activeTodoId: state.activeTodoId,
       sessionStart: state.sessionStart,
