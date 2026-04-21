@@ -103,16 +103,24 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
 
   /// Atomically transitions an inbox item to the scheduled state.
   ///
-  /// This performs the two-step transition (inbox → nextAction → scheduled)
-  /// inside a single transaction, ensuring atomicity. If either step fails,
-  /// the entire operation is rolled back.
+  /// Conceptually this is the two-hop transition `inbox → nextAction →
+  /// scheduled`. Both hops are validated via [GtdStateMachine] up front, then
+  /// a single UPDATE writes the final `scheduled` state inside a transaction.
+  /// Writing both hops as separate UPDATEs is not safe under PowerSync: the
+  /// view's INSTEAD OF UPDATE triggers cause SQLite to report 0 affected rows,
+  /// so any affected-row check between hops would spuriously early-exit.
   ///
-  /// - First transitions the todo from inbox to nextAction state
-  /// - Then transitions from nextAction to scheduled state
   /// - Scoped to [userId] to prevent cross-user mutations
-  /// - Validates both transitions via [GtdStateMachine]
-  /// - Returns `true` if both transitions succeeded, `false` if the todo
-  ///   was not found or already processed
+  /// - Validates both hops of the logical transition via [GtdStateMachine]
+  /// - Pins the UPDATE with an optimistic-lock WHERE on the observed state
+  /// - Returns `true` if a row was updated, `false` if the todo was not found
+  ///   or the optimistic lock failed
+  ///
+  /// Note: in production `todos` is a PowerSync view with INSTEAD OF UPDATE
+  /// triggers. SQLite reports 0 changes for UPDATE statements handled by a trigger
+  /// body (`sqlite3_changes()` excludes lower-level trigger writes), so the
+  /// return value may be unreliable in that environment. Use this return value
+  /// for detecting concurrent updates in tests or non-PowerSync environments.
   ///
   /// This method should be used when scheduling an inbox item directly during
   /// the daily planning ritual to avoid race conditions from separate calls.
@@ -121,7 +129,7 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
     required String userId,
   }) async {
     return await transaction(() async {
-      // Step 1: Read and validate initial state
+      // Read and validate initial state
       final row = await (select(todos)
             ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
           .getSingleOrNull();
@@ -140,33 +148,20 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
       GtdStateMachine.validate(GtdState.inbox, GtdState.nextAction);
       GtdStateMachine.validate(GtdState.nextAction, GtdState.scheduled);
 
-      final now = DateTime.now();
-
-      // Step 2: Transition inbox → nextAction
-      final rows1 = await (update(todos)
+      // Write directly to scheduled in a single UPDATE. Both hops are
+      // validated above; splitting into two UPDATEs would be unsafe under
+      // PowerSync (see doc comment).
+      final rows = await (update(todos)
             ..where((t) =>
                 t.id.equals(todoId) &
                 t.userId.equals(userId) &
                 t.state.equals(row.state)))
           .write(TodosCompanion(
-        state: Value(GtdState.nextAction.value),
-        updatedAt: Value(now),
-      ));
-
-      if (rows1 == 0) return false;
-
-      // Step 3: Transition nextAction → scheduled
-      final rows2 = await (update(todos)
-            ..where((t) =>
-                t.id.equals(todoId) &
-                t.userId.equals(userId) &
-                t.state.equals(GtdState.nextAction.value)))
-          .write(TodosCompanion(
         state: Value(GtdState.scheduled.value),
-        updatedAt: Value(now),
+        updatedAt: Value(DateTime.now()),
       ));
 
-      return rows2 > 0;
+      return rows > 0;
     });
   }
 }
