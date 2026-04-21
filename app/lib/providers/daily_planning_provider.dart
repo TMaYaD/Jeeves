@@ -301,15 +301,15 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   /// The GTD state machine deliberately forbids `inbox → scheduled` as a
   /// single hop (see `GtdStateMachine`); scheduling requires first clarifying
   /// the item as a next action. When [newState] is [GtdState.scheduled], this
-  /// method performs the two-hop transition `inbox → nextAction → scheduled`.
+  /// method uses the atomic [InboxDao.transitionInboxToScheduled] to perform
+  /// the two-hop transition `inbox → nextAction → scheduled` in a single
+  /// transaction.
   Future<void> processInboxItem(String id, GtdState newState) async {
     if (newState == GtdState.scheduled) {
-      await _db.inboxDao.processInboxItem(
+      await _db.inboxDao.transitionInboxToScheduled(
         id,
         userId: _userId,
-        newState: GtdState.nextAction.value,
       );
-      await _db.todoDao.transitionState(id, _userId, GtdState.scheduled);
     } else {
       await _db.inboxDao.processInboxItem(
         id,
