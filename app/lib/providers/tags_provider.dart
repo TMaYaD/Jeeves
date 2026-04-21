@@ -10,19 +10,6 @@ import 'database_provider.dart';
 
 export '../database/daos/tag_dao.dart' show TagWithCount;
 
-/// Runs once at startup (per user session) to backfill null colors on tags
-/// that were created before the color field was populated.
-///
-/// Watch this provider high in the widget tree (e.g. AppShell) so the
-/// backfill fires before tags are rendered.  Errors are swallowed — a missed
-/// backfill is cosmetic (colors fall back to the derived palette at render
-/// time via [resolvedTagColor]).
-final tagColorBackfillProvider = FutureProvider<void>((ref) async {
-  final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  await db.tagDao.backfillMissingColors(userId);
-});
-
 /// Stream of all project tags for the current user.
 final projectTagsProvider = StreamProvider<List<Tag>>((ref) {
   final db = ref.watch(databaseProvider);

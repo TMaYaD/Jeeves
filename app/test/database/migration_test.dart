@@ -92,6 +92,38 @@ void main() {
       expect(items.first.blockedByTodoId, equals(null));
     });
 
+    test('v6→v7 migration: null-color tags get backfilled, explicit nulls from updateColor are unrelated post-migration', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Insert two legacy tags with no color (simulating pre-v7 rows).
+      await db.customStatement(
+        "INSERT INTO tags (id, name, type, user_id) VALUES ('t1', 'work', 'context', '$_userId')",
+      );
+      await db.customStatement(
+        "INSERT INTO tags (id, name, type, user_id) VALUES ('t2', 'home', 'context', '$_userId')",
+      );
+
+      // Confirm both start with null color.
+      final before = await (db.select(db.tags)).get();
+      expect(before.where((t) => t.color == null).length, 2);
+
+      // Run the v7 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 6, 7);
+
+      // Both tags must now have non-null colors.
+      final after = await (db.select(db.tags)).get();
+      expect(after.every((t) => t.color != null), isTrue);
+
+      // Colors must be deterministic: same name → same color across calls.
+      final work = after.firstWhere((t) => t.id == 't1');
+      final home = after.firstWhere((t) => t.id == 't2');
+      expect(work.color, isA<String>());
+      expect(home.color, isA<String>());
+      expect(work.color, isNot(equals(home.color)));
+    });
+
     test('v5→v6 migration: existing todo_tags rows get backfilled id', () async {
       final db = _openInMemory();
       addTearDown(db.close);

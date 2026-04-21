@@ -130,6 +130,23 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         TagsCompanion(id: Value(tagId), color: Value(color)),
       );
 
+  /// One-time migration: derives and persists a color for every tag whose
+  /// color is currently NULL.
+  ///
+  /// Called from [GtdDatabase.onUpgrade] when upgrading to schema v7 — not on
+  /// every startup — so intentional NULLs set via [updateColor] after the
+  /// migration are never overwritten.
+  Future<void> backfillAllMissingColors() {
+    return transaction(() async {
+      final nullColorTags =
+          await (select(tags)..where((t) => t.color.isNull())).get();
+      for (final tag in nullColorTags) {
+        final colorHex = tagColorToHex(tagColorForName(tag.name));
+        await upsertTag(TagsCompanion(id: Value(tag.id), color: Value(colorHex)));
+      }
+    });
+  }
+
   /// Merge [sourceTagId] into [targetTagId].
   ///
   /// Re-assigns all `todo_tags` rows that reference [sourceTagId] to
@@ -181,29 +198,6 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       ),
       mode: InsertMode.insertOrReplace,
     );
-  }
-
-  /// One-time idempotent backfill: writes a derived color for every tag that
-  /// currently has a NULL color value.
-  ///
-  /// Safe to call on every startup — rows that already have a color are
-  /// untouched.  Operates inside a transaction so a partial failure does
-  /// not leave the table in a mixed state.
-  Future<void> backfillMissingColors(String userId) {
-    return transaction(() async {
-      final nullColorTags = await (select(tags)
-            ..where((t) => t.userId.equals(userId) & t.color.isNull()))
-          .get();
-      for (final tag in nullColorTags) {
-        final colorHex = tagColorToHex(tagColorForName(tag.name));
-        await upsertTag(
-          TagsCompanion(
-            id: Value(tag.id),
-            color: Value(colorHex),
-          ),
-        );
-      }
-    });
   }
 
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].
