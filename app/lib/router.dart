@@ -1,7 +1,5 @@
 import 'package:go_router/go_router.dart';
 
-import 'providers/auth_provider.dart';
-import 'providers/daily_planning_provider.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
@@ -18,38 +16,8 @@ import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
 import 'screens/search/search_screen.dart';
 
-/// Routes that require the daily planning ritual to be completed first.
-const _protectedPaths = [
-  '/next-actions',
-  '/waiting-for',
-  '/someday-maybe',
-  '/blocked',
-  '/scheduled',
-  '/focus',
-];
-
 final appRouter = GoRouter(
   initialLocation: '/inbox',
-  // Intentionally excludes authStateNotifier: login/register screens own
-  // their post-auth navigation. Refreshing on auth changes would rebuild the
-  // route stack from the current URI and drop any imperatively-pushed entry
-  // (e.g. /login pushed on top of /settings), breaking the pop-back flow.
-  refreshListenable: planningCompletionNotifier,
-  redirect: (context, state) {
-    final isAuthenticated = authStateNotifier.value;
-    final loc = state.uri.path;
-
-    // Planning ritual guard (only reached when authenticated).
-    if (isAuthenticated) {
-      final completed = planningCompletionNotifier.value;
-      if (!completed) {
-        final isProtected = _protectedPaths.any((p) => loc.startsWith(p));
-        if (isProtected) return '/planning';
-      }
-    }
-
-    return null;
-  },
   routes: [
     GoRoute(
       path: '/login',
