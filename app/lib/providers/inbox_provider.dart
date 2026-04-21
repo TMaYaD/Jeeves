@@ -5,14 +5,19 @@ import '../database/gtd_database.dart';
 import '../models/todo.dart' hide Todo;
 import 'auth_provider.dart';
 import 'database_provider.dart';
+import 'tag_filter_provider.dart';
 
 export 'user_constants.dart' show kLocalUserId;
 
 /// Stream of all inbox todos, newest first.
+///
+/// Automatically filtered by the active context tag set from
+/// [tagFilterProvider] (AND semantics when multiple tags are selected).
 final inboxItemsProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final userId = ref.watch(currentUserIdProvider);
-  return db.inboxDao.watchInbox(userId);
+  final tagIds = ref.watch(tagFilterProvider);
+  return db.inboxDao.watchInbox(userId, tagIds: tagIds);
 });
 
 /// Notifier exposing inbox mutation operations.

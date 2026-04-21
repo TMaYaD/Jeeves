@@ -56,35 +56,108 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     }).toList();
   }
 
+  /// Returns a stream of [Todo]s with [state] belonging to [userId] whose
+  /// tags include ALL of [tagIds] (AND semantics).
+  ///
+  /// Watches both [todos] and [todoTags] so the stream re-emits when either
+  /// table changes.  Uses `todos.map(row.data)` to produce typed [Todo]
+  /// objects without repeating the column-mapping logic.
+  Stream<List<Todo>> _watchFilteredByStateAndTags(
+    String userId,
+    String state,
+    Set<String> tagIds,
+  ) {
+    assert(tagIds.isNotEmpty);
+    final n = tagIds.length;
+    final placeholders = List.filled(n, '?').join(', ');
+    return customSelect(
+      'SELECT todos.* FROM todos '
+      'WHERE todos.user_id = ? AND todos.state = ? '
+      'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
+      '     WHERE todo_id = todos.id AND user_id = ? '
+      '       AND tag_id IN ($placeholders)) = $n '
+      'ORDER BY todos.created_at',
+      variables: [
+        Variable(userId),
+        Variable(state),
+        Variable(userId),
+        ...tagIds.map(Variable.new),
+      ],
+      readsFrom: {todos, todoTags},
+    ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
+  }
+
   /// Stream of next-action todos for [userId], excluding blocked tasks.
-  Stream<List<Todo>> watchNextActions(String userId) {
-    return _watchAllForUser(userId).map((all) {
-      final byId = {for (final t in all) t.id: t};
-      final nextActions = all.where((t) => t.state == GtdState.nextAction.value).toList();
-      return _filterUnblocked(nextActions, byId);
+  ///
+  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
+  /// returned (AND semantics).
+  Stream<List<Todo>> watchNextActions(String userId,
+      {Set<String> tagIds = const {}}) {
+    if (tagIds.isEmpty) {
+      return _watchAllForUser(userId).map((all) {
+        final byId = {for (final t in all) t.id: t};
+        final nextActions =
+            all.where((t) => t.state == GtdState.nextAction.value).toList();
+        return _filterUnblocked(nextActions, byId);
+      });
+    }
+
+    // Tag-filtered: use SQL-level AND filter, then apply blocked-by in memory.
+    return _watchFilteredByStateAndTags(
+            userId, GtdState.nextAction.value, tagIds)
+        .asyncMap((filteredNextActions) async {
+      final allTodos =
+          await (select(todos)..where((t) => t.userId.equals(userId))).get();
+      final byId = {for (final t in allTodos) t.id: t};
+      return _filterUnblocked(filteredNextActions, byId);
     });
   }
 
   /// Stream of waiting-for todos for [userId].
-  Stream<List<Todo>> watchWaitingFor(String userId) {
-    return _watchAllForUser(userId).map(
-      (all) => all.where((t) => t.state == GtdState.waitingFor.value).toList(),
-    );
+  ///
+  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
+  /// returned (AND semantics).
+  Stream<List<Todo>> watchWaitingFor(String userId,
+      {Set<String> tagIds = const {}}) {
+    if (tagIds.isEmpty) {
+      return _watchAllForUser(userId).map(
+        (all) =>
+            all.where((t) => t.state == GtdState.waitingFor.value).toList(),
+      );
+    }
+    return _watchFilteredByStateAndTags(
+        userId, GtdState.waitingFor.value, tagIds);
   }
 
   /// Stream of someday/maybe todos for [userId].
-  Stream<List<Todo>> watchSomedayMaybe(String userId) {
-    return _watchAllForUser(userId).map(
-      (all) => all.where((t) => t.state == GtdState.somedayMaybe.value).toList(),
-    );
+  ///
+  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
+  /// returned (AND semantics).
+  Stream<List<Todo>> watchSomedayMaybe(String userId,
+      {Set<String> tagIds = const {}}) {
+    if (tagIds.isEmpty) {
+      return _watchAllForUser(userId).map(
+        (all) =>
+            all.where((t) => t.state == GtdState.somedayMaybe.value).toList(),
+      );
+    }
+    return _watchFilteredByStateAndTags(
+        userId, GtdState.somedayMaybe.value, tagIds);
   }
 
   /// Stream of todos matching an arbitrary [state] string for [userId].
-  Stream<List<Todo>> watchByState(String userId, String state) {
-    return (select(todos)
-          ..where((t) => t.userId.equals(userId) & t.state.equals(state))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-        .watch();
+  ///
+  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
+  /// returned (AND semantics).
+  Stream<List<Todo>> watchByState(String userId, String state,
+      {Set<String> tagIds = const {}}) {
+    if (tagIds.isEmpty) {
+      return (select(todos)
+            ..where((t) => t.userId.equals(userId) & t.state.equals(state))
+            ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          .watch();
+    }
+    return _watchFilteredByStateAndTags(userId, state, tagIds);
   }
 
   /// Stream of todos matching either next_action or blocked state for [userId].

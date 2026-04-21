@@ -6,8 +6,10 @@ import 'package:go_router/go_router.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
+import '../providers/tag_filter_provider.dart';
 import '../providers/tags_provider.dart';
 import '../widgets/planning_banner.dart';
+import 'common/tag_cloud.dart';
 
 /// Intent dispatched by the search keyboard shortcut (Ctrl+K or /).
 class _SearchIntent extends Intent {
@@ -46,16 +48,13 @@ class AppShell extends ConsumerWidget {
             },
           ),
         },
-        child: Focus(
-          autofocus: true,
-          child: Scaffold(
-            drawer: const CustomDrawer(),
-            body: Column(
-              children: [
-                const PlanningBanner(),
-                Expanded(child: child),
-              ],
-            ),
+        child: Scaffold(
+          drawer: const CustomDrawer(),
+          body: Column(
+            children: [
+              const PlanningBanner(),
+              Expanded(child: child),
+            ],
           ),
         ),
       ),
@@ -81,7 +80,7 @@ class CustomDrawer extends ConsumerWidget {
         : syncAsync.asData?.value;
 
     final projectTags = ref.watch(projectTagsProvider).asData?.value ?? [];
-    final contextTags = ref.watch(contextTagsProvider).asData?.value ?? [];
+    final activeFilterCount = ref.watch(tagFilterProvider).length;
 
     return Drawer(
       backgroundColor: Colors.white,
@@ -107,36 +106,46 @@ class CustomDrawer extends ConsumerWidget {
               ),
             ),
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            // Search — fixed (non-scrollable) for consistent visibility
+            ListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 24),
+              leading: const Icon(Icons.search,
+                  color: Color(0xFF6B7280)),
+              title: const Text(
+                'Search',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF374151),
+                ),
+              ),
+              trailing: const Text(
+                'Ctrl+K',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFF9CA3AF),
+                ),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                context.push('/search');
+              },
+            ),
+            const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            // Contexts filter — fixed so chips are always tappable without scrolling
+            _buildSectionHeader(
+              'CONTEXTS',
+              badge: activeFilterCount > 0 ? activeFilterCount : null,
+            ),
+            const TagCloud(),
+            const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            // Nav items — scrollable to accommodate all list types + projects
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 8),
+              child: SingleChildScrollView(
+                child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  ListTile(
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 24),
-                    leading: const Icon(Icons.search,
-                        color: Color(0xFF6B7280)),
-                    title: const Text(
-                      'Search',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFF374151),
-                      ),
-                    ),
-                    trailing: const Text(
-                      'Ctrl+K',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF9CA3AF),
-                      ),
-                    ),
-                    onTap: () {
-                      Navigator.pop(context);
-                      context.push('/search');
-                    },
-                  ),
-                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 8),
                   _buildNavItem(context,
                       icon: Icons.inbox_outlined,
@@ -182,33 +191,6 @@ class CustomDrawer extends ConsumerWidget {
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 16),
-                  _buildSectionHeader('CONTEXTS'),
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: contextTags
-                          .map((t) => Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFEFF6FF),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                      color: const Color(0xFFDBEAFE)),
-                                ),
-                                child: Text(t.name,
-                                    style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF1D4ED8))),
-                              ))
-                          .toList(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
                   _buildSectionHeader('PROJECTS'),
                   ...projectTags.map((t) => ListTile(
                         contentPadding:
@@ -218,15 +200,10 @@ class CustomDrawer extends ConsumerWidget {
                         title: Text(t.name,
                             style: const TextStyle(
                                 fontSize: 14, color: Color(0xFF374151))),
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text(
-                                      'Project filters coming soon!')));
-                          Navigator.pop(context);
-                        },
                       )),
+                  const SizedBox(height: 8),
                 ],
+              ),
               ),
             ),
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
@@ -254,17 +231,39 @@ class CustomDrawer extends ConsumerWidget {
     );
   }
 
-  Widget _buildSectionHeader(String title) {
+  Widget _buildSectionHeader(String title, {int? badge}) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Color(0xFF9CA3AF),
-        ),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
+              color: Color(0xFF9CA3AF),
+            ),
+          ),
+          if (badge != null) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2563EB),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                '$badge',
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -339,4 +338,3 @@ class _SyncIndicator extends StatelessWidget {
     );
   }
 }
-
