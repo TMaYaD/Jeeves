@@ -105,3 +105,40 @@ A `ConsumerStatefulWidget` with `WidgetsBindingObserver` for lifecycle events:
 ### Background Notification
 
 When `AppLifecycleState.paused` fires during an active focus session, `NotificationService.showFocusNotification()` shows an `ongoing` Android notification (low importance, no sound). A `Timer.periodic` updates the notification body every minute. Cancelled on `AppLifecycleState.resumed`.
+
+## Daily Planning State
+
+The daily planning feature uses a mix of global `ValueNotifier` objects (for cross-widget reactivity without a Riverpod container) and `SharedPreferences` for persistence across restarts.
+
+### Key objects
+
+| Object | Type | Purpose |
+|---|---|---|
+| `planningCompletionNotifier` | `ValueNotifier<bool>` | `true` when the ritual has been completed today |
+| `bannerDismissedNotifier` | `ValueNotifier<bool>` | `true` when the banner has been dismissed today |
+| `DailyPlanningNotifier` | Riverpod `NotifierProvider` | Step navigation, task mutations, banner dismiss, skip/snooze |
+| `PlanningSettingsNotifier` | Riverpod `NotifierProvider` | User preferences: planning time, notification/banner toggles, snooze duration |
+
+Both `ValueNotifier` objects are initialised from `SharedPreferences` in `initPlanningCompletion()`, which is called in `main()` before `runApp`.
+
+### Planning nudges
+
+The ritual can no longer be auto-launched. Users are nudged through two opt-in mechanisms:
+
+1. **`PlanningBanner`** (`lib/widgets/planning_banner.dart`) — rendered at the top of `AppShell` (all shell-hosted routes). Visible when `planningCompletionNotifier == false && !bannerDismissedNotifier && planningSettings.bannerEnabled`. Tapping navigates to `/planning`; the × button calls `DailyPlanningNotifier.dismissBannerForToday()`.
+
+2. **Local notification** — scheduled daily at the user's configured planning time via `NotificationService.schedulePlanningReminder()`. Uses `flutter_local_notifications` `zonedSchedule` with `matchDateTimeComponents: time` so the OS re-fires it every day without app interaction. Notification actions: Open (→ `/planning`), Snooze (one-off reschedule), Skip today (cancel until tomorrow). Handled in `_handleNotificationResponse` in `main.dart`. `matchDateTimeComponents: time` means the OS reschedules the notification daily automatically — snooze cancels the repeating schedule and registers a one-off fire instead.
+
+### SharedPreferences keys
+
+| Key | Value | Description |
+|---|---|---|
+| `planning_ritual_completed_date` | `yyyy-MM-dd` | Date of last completed ritual |
+| `planning_banner_dismissed_date` | `yyyy-MM-dd` | Date banner was last dismissed |
+| `planning_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" |
+| `planning_notification_snoozed_until` | ISO-8601 datetime | When the snoozed notification will fire |
+| `planning_settings_time_hour` | `int` | Planning time hour |
+| `planning_settings_time_minute` | `int` | Planning time minute |
+| `planning_settings_notification_enabled` | `bool` | Notification toggle |
+| `planning_settings_banner_enabled` | `bool` | Banner toggle |
+| `planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |

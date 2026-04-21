@@ -28,6 +28,10 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 ### Epic 2: The Daily Execution Layer
 **Goal:** Prevent overwhelm by filtering the GTD inventory into a manageable daily plan.
+* **Daily Planning Entry:** The ritual is never auto-launched on app open. Users are nudged through two opt-in mechanisms:
+    * **Persistent banner:** A dismissible "Plan your day →" banner shown at the top of all main views until the ritual is completed or dismissed for the day. Configurable via Settings.
+    * **Scheduled notification:** A local push notification at the user's configured planning time (default 08:00) with actions — Open, Snooze (configurable duration: 15 min / 1 hr / tomorrow), and Skip today. Skip suppresses all nudges until the next calendar day. Snooze reschedules a one-off notification. All state persists across app restarts.
+    * Settings: planning time, default snooze duration, enable/disable notification, enable/disable banner.
 * **Daily Planning Ritual:** A guided 6-step workflow:
     1. **Clarify Inbox (Step 1):** Process every inbox item before queueing work. For each item, the user answers "What's the expected outcome?", sets fields (energy level, time estimate, due date), and routes it to the correct GTD list (Next Action, Scheduled, Waiting For, Someday/Maybe, or Done). Advancing is gated on an empty inbox.
     2. **Day Check-in (Step 2):** User reports today's energy level (Low / Medium / High) and available time (hours + minutes).

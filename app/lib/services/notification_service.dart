@@ -6,19 +6,44 @@
 // Platform-specific deep OS integration (Siri, Android App Actions) is
 // handled via platform channels in android/ and ios/.
 
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
+import 'package:timezone/data/latest_all.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
+
+// Stable notification IDs.
+const _kPlanningNotificationId = 0;
+const _kPlanningSnoozeNotificationId = 1;
+
+// Action identifiers sent back via onDidReceiveNotificationResponse.
+const kNotificationActionOpen = 'open';
+const kNotificationActionSnooze = 'snooze_default';
+const kNotificationActionSkip = 'skip_today';
 
 const _kFocusId = 1001;
 
 class NotificationService {
   NotificationService._();
 
+  /// Creates a bare instance with no plugin initialised — for use in tests
+  /// where platform channels are not available.
+  @visibleForTesting
+  NotificationService.forTesting();
+
   static final NotificationService instance = NotificationService._();
 
   final _plugin = FlutterLocalNotificationsPlugin();
 
-  static Future<void> initialize() async {
+  static Future<void> initialize({
+    void Function(NotificationResponse)? onNotificationResponse,
+  }) async {
+    tz_data.initializeTimeZones();
+    // flutter_timezone 5.x returns TimezoneInfo; .identifier gives the IANA string.
+    final tzInfo = await FlutterTimezone.getLocalTimezone();
+    tz.setLocalLocation(tz.getLocation(tzInfo.identifier));
+
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iOS = DarwinInitializationSettings(
       requestAlertPermission: false,
@@ -27,6 +52,8 @@ class NotificationService {
     );
     await instance._plugin.initialize(
       settings: const InitializationSettings(android: android, iOS: iOS),
+      onDidReceiveNotificationResponse: onNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse: onNotificationResponse,
     );
   }
 
@@ -56,14 +83,74 @@ class NotificationService {
     return androidGranted || iosGranted || macOSGranted;
   }
 
+  // ---------------------------------------------------------------------------
+  // Task reminders (generic, used by future reminder feature)
+  // ---------------------------------------------------------------------------
+
   Future<void> scheduleReminder({
     required int id,
     required String title,
     required String body,
     required DateTime scheduledAt,
   }) async {
-    // TODO: implement using zonedSchedule with TZDateTime
-    // await _plugin.zonedSchedule(...)
+    final scheduled = tz.TZDateTime.from(scheduledAt, tz.local);
+    await _plugin.zonedSchedule(
+      id: id,
+      title: title,
+      body: body,
+      scheduledDate: scheduled,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'task_reminders',
+          'Task Reminders',
+          channelDescription: 'Reminders for scheduled tasks',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(),
+      ),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Daily planning notification
+  // ---------------------------------------------------------------------------
+
+  /// Schedules (or re-schedules) the daily planning notification to fire at
+  /// [time] every day. Uses [DateTimeComponents.time] so the OS reschedules it
+  /// automatically each day without any app interaction.
+  Future<void> schedulePlanningReminder({required TimeOfDay time}) async {
+    await _plugin.zonedSchedule(
+      id: _kPlanningNotificationId,
+      title: 'Time to plan your day',
+      body: 'Tap to open your Daily Planning Ritual.',
+      scheduledDate: _nextInstanceOf(time),
+      notificationDetails: _planningNotificationDetails(),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      matchDateTimeComponents: DateTimeComponents.time,
+    );
+  }
+
+  /// Schedules a one-off snooze notification [minutes] from now. Leaves the
+  /// recurring daily schedule untouched so tomorrow's reminder still fires.
+  Future<void> snoozePlanningReminder(int minutes) async {
+    await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
+    final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
+    // No matchDateTimeComponents — fires once only.
+    await _plugin.zonedSchedule(
+      id: _kPlanningSnoozeNotificationId,
+      title: 'Time to plan your day',
+      body: 'Tap to open your Daily Planning Ritual.',
+      scheduledDate: fireAt,
+      notificationDetails: _planningNotificationDetails(),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  Future<void> cancelPlanningReminder() async {
+    await _plugin.cancel(id: _kPlanningNotificationId);
+    await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
   }
 
   Future<void> cancelReminder(int id) async {
@@ -73,6 +160,10 @@ class NotificationService {
   Future<void> cancelAll() async {
     await _plugin.cancelAll();
   }
+
+  // ---------------------------------------------------------------------------
+  // Focus session notification
+  // ---------------------------------------------------------------------------
 
   /// Shows (or updates) a persistent notification indicating an active focus
   /// session. Safe to call repeatedly — re-showing the same [_kFocusId]
@@ -109,6 +200,47 @@ class NotificationService {
   /// Cancels the active focus session notification.
   Future<void> cancelFocusNotification() async {
     await _plugin.cancel(id: _kFocusId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cold-start launch detection
+  // ---------------------------------------------------------------------------
+
+  Future<NotificationAppLaunchDetails?> getLaunchDetails() =>
+      _plugin.getNotificationAppLaunchDetails();
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  tz.TZDateTime _nextInstanceOf(TimeOfDay time) {
+    final now = tz.TZDateTime.now(tz.local);
+    var scheduled = tz.TZDateTime(
+        tz.local, now.year, now.month, now.day, time.hour, time.minute);
+    if (scheduled.isBefore(now)) {
+      scheduled = scheduled.add(const Duration(days: 1));
+    }
+    return scheduled;
+  }
+
+  NotificationDetails _planningNotificationDetails() {
+    return const NotificationDetails(
+      android: AndroidNotificationDetails(
+        'daily_planning',
+        'Daily Planning',
+        channelDescription: 'Daily planning ritual reminder',
+        importance: Importance.high,
+        priority: Priority.high,
+        actions: [
+          AndroidNotificationAction(kNotificationActionOpen, 'Open'),
+          AndroidNotificationAction(kNotificationActionSnooze, 'Snooze'),
+          AndroidNotificationAction(kNotificationActionSkip, 'Skip today'),
+        ],
+      ),
+      iOS: DarwinNotificationDetails(
+        categoryIdentifier: 'daily_planning',
+      ),
+    );
   }
 }
 

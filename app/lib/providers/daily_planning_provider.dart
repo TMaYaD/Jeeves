@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show GtdState;
+import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -36,6 +37,9 @@ String planningToday() {
 }
 
 const _kCompletedDateKey = 'planning_ritual_completed_date';
+const _kBannerDismissedDateKey = 'planning_banner_dismissed_date';
+const _kNotificationSkippedDateKey = 'planning_notification_skipped_date';
+const _kNotificationSnoozedUntilKey = 'planning_notification_snoozed_until';
 
 /// Total number of planning ritual steps (0-indexed max).
 const int _maxStepIndex = 5;
@@ -51,13 +55,68 @@ const int _maxStepIndex = 5;
 /// [reEnterPlanning]).
 final planningCompletionNotifier = ValueNotifier<bool>(false);
 
-/// Initialises [planningCompletionNotifier] from [SharedPreferences].
+/// Global notifier for banner dismissal state — mirrors the SharedPreferences
+/// key so widgets can react without a Riverpod container.
+final bannerDismissedNotifier = ValueNotifier<bool>(false);
+
+/// Initialises [planningCompletionNotifier] and [bannerDismissedNotifier] from
+/// [SharedPreferences].
 ///
 /// Must be called once in [main] after [WidgetsFlutterBinding.ensureInitialized].
 Future<void> initPlanningCompletion() async {
   final prefs = await SharedPreferences.getInstance();
-  final stored = prefs.getString(_kCompletedDateKey);
-  planningCompletionNotifier.value = stored == planningToday();
+  final today = planningToday();
+  planningCompletionNotifier.value =
+      prefs.getString(_kCompletedDateKey) == today;
+  bannerDismissedNotifier.value =
+      prefs.getString(_kBannerDismissedDateKey) == today;
+}
+
+// ---------------------------------------------------------------------------
+// Notification suppression helpers (top-level so both the settings provider
+// and notification handler can call them without a Riverpod container).
+// ---------------------------------------------------------------------------
+
+/// Returns true if the user has skipped planning notifications for today or
+/// has an active snooze that hasn't expired yet.
+bool isNotificationSuppressedToday() {
+  // This is intentionally synchronous — callers that need the persisted value
+  // should call [loadNotificationSuppression] first.
+  return _notificationSkippedToday || _notificationSnoozedActive;
+}
+
+bool _notificationSkippedToday = false;
+bool _notificationSnoozedActive = false;
+
+/// Reads skip/snooze state from [SharedPreferences] into module-level flags.
+Future<void> loadNotificationSuppression() async {
+  final prefs = await SharedPreferences.getInstance();
+  final today = planningToday();
+  _notificationSkippedToday =
+      prefs.getString(_kNotificationSkippedDateKey) == today;
+
+  final snoozedUntilStr = prefs.getString(_kNotificationSnoozedUntilKey);
+  if (snoozedUntilStr != null) {
+    final snoozedUntil = DateTime.tryParse(snoozedUntilStr);
+    _notificationSnoozedActive =
+        snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
+  } else {
+    _notificationSnoozedActive = false;
+  }
+}
+
+/// Persists and activates the "skip today" suppression.
+Future<void> persistSkipToday() async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_kNotificationSkippedDateKey, planningToday());
+  _notificationSkippedToday = true;
+}
+
+/// Persists and activates a snooze until [until].
+Future<void> persistSnoozedUntil(DateTime until) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_kNotificationSnoozedUntilKey, until.toIso8601String());
+  _notificationSnoozedActive = DateTime.now().isBefore(until);
 }
 
 // ---------------------------------------------------------------------------
@@ -238,12 +297,26 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
       );
 
   /// Processes an inbox item to a GTD list (transitions out of inbox state).
+  ///
+  /// The GTD state machine deliberately forbids `inbox → scheduled` as a
+  /// single hop (see `GtdStateMachine`); scheduling requires first clarifying
+  /// the item as a next action. When [newState] is [GtdState.scheduled], this
+  /// method uses the atomic [InboxDao.transitionInboxToScheduled] to perform
+  /// the two-hop transition `inbox → nextAction → scheduled` in a single
+  /// transaction.
   Future<void> processInboxItem(String id, GtdState newState) async {
-    await _db.inboxDao.processInboxItem(
-      id,
-      userId: _userId,
-      newState: newState.value,
-    );
+    if (newState == GtdState.scheduled) {
+      await _db.inboxDao.transitionInboxToScheduled(
+        id,
+        userId: _userId,
+      );
+    } else {
+      await _db.inboxDao.processInboxItem(
+        id,
+        userId: _userId,
+        newState: newState.value,
+      );
+    }
     state = state.copyWith(
       inboxClarifiedCount: state.inboxClarifiedCount + 1,
     );
@@ -314,6 +387,33 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
         }
       }
     }
+  }
+
+  // ---- Banner dismissal ------------------------------------------------------
+
+  /// Hides the planning banner for the rest of today.
+  Future<void> dismissBannerForToday() async {
+    final today = planningToday();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kBannerDismissedDateKey, today);
+    bannerDismissedNotifier.value = true;
+  }
+
+  // ---- Notification skip / snooze --------------------------------------------
+
+  /// Suppresses all planning nudges until the next calendar day and cancels
+  /// any scheduled notification for today.
+  Future<void> skipPlanningToday() async {
+    await persistSkipToday();
+    await NotificationService.instance.cancelPlanningReminder();
+  }
+
+  /// Snoozes the planning notification by [minutes] and reschedules it as a
+  /// one-off fire.
+  Future<void> snoozePlanningNotification(int minutes) async {
+    final until = DateTime.now().add(Duration(minutes: minutes));
+    await persistSnoozedUntil(until);
+    await NotificationService.instance.snoozePlanningReminder(minutes);
   }
 
   // ---- Ritual lifecycle ------------------------------------------------------
