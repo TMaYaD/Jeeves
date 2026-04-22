@@ -20,7 +20,7 @@ dependencies:
   # shared SQLite file backs both.  Without this, Drift and PowerSync would
   # each open their own connection and their watchers would never see each
   # other's writes.
-  drift_sqlite_async: ^0.2.6
+  drift_sqlite_async: ^0.3.0
   # sqlite_async itself is a transitive dependency of both powersync and
   # drift_sqlite_async, but imported directly in gtd_database.dart for the
   # `SqliteConnection` type in the production constructor signature.
