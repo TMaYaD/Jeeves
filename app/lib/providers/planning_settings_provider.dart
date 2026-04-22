@@ -8,7 +8,6 @@ import '../services/daily_state_refresher.dart';
 import '../services/notification_service.dart';
 import 'daily_planning_provider.dart';
 
-const _kNotificationEnabled = 'planning_settings_notification_enabled';
 const _kBannerEnabled = 'planning_settings_banner_enabled';
 const _kDefaultSnoozeDuration = 'planning_settings_default_snooze_duration';
 
@@ -30,7 +29,7 @@ class PlanningSettingsNotifier extends Notifier<PlanningSettings> {
     final hour = prefs.getInt(kSettingsTimeHour) ?? 8;
     final minute = prefs.getInt(kSettingsTimeMinute) ?? 0;
     final notificationEnabled =
-        prefs.getBool(_kNotificationEnabled) ?? true;
+        prefs.getBool(kSettingsNotificationEnabled) ?? true;
     final bannerEnabled = prefs.getBool(_kBannerEnabled) ?? true;
     final defaultSnoozeDuration =
         prefs.getInt(_kDefaultSnoozeDuration) ?? 60;
@@ -56,7 +55,7 @@ class PlanningSettingsNotifier extends Notifier<PlanningSettings> {
 
   Future<void> setNotificationEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kNotificationEnabled, enabled);
+    await prefs.setBool(kSettingsNotificationEnabled, enabled);
     state = state.copyWith(notificationEnabled: enabled);
     await _reschedulePlanningReminder();
   }
@@ -93,7 +92,7 @@ Future<void> initPlanningNotificationSchedule() async {
   final prefs = await SharedPreferences.getInstance();
   final svc = NotificationService.instance;
   final notificationEnabled =
-      prefs.getBool(_kNotificationEnabled) ?? true;
+      prefs.getBool(kSettingsNotificationEnabled) ?? true;
   if (!notificationEnabled || isNotificationSuppressedToday()) {
     // Clear any reminder left scheduled from a previous session so the
     // current (disabled/suppressed) settings are honoured even if the app

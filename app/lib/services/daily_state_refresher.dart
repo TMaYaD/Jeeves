@@ -4,12 +4,9 @@ import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../constants/planning_settings_keys.dart';
 import '../providers/daily_planning_provider.dart';
 import 'notification_service.dart';
-
-// SharedPreferences key duplicated from planning_settings_provider.dart to
-// avoid a circular import (settings imports daily_planning_provider).
-const _kNotificationEnabled = 'planning_settings_notification_enabled';
 
 /// Keeps planning-day state fresh without requiring an app restart.
 ///
@@ -117,7 +114,7 @@ class DailyStateRefresher with WidgetsBindingObserver {
 
   Future<void> _rearmNotificationIfNeeded() async {
     final prefs = await SharedPreferences.getInstance();
-    final notificationEnabled = prefs.getBool(_kNotificationEnabled) ?? true;
+    final notificationEnabled = prefs.getBool(kSettingsNotificationEnabled) ?? true;
     if (notificationEnabled && !isNotificationSuppressedToday()) {
       await NotificationService.instance
           .schedulePlanningReminder(time: _planningTime);

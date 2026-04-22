@@ -5,3 +5,4 @@
 /// creating a circular import.
 const kSettingsTimeHour = 'planning_settings_time_hour';
 const kSettingsTimeMinute = 'planning_settings_time_minute';
+const kSettingsNotificationEnabled = 'planning_settings_notification_enabled';
