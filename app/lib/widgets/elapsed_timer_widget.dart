@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,7 +9,6 @@ import '../providers/focus_session_provider.dart';
 /// Displays a Jeeves-flavoured elapsed-time reminder sourced from
 /// [focusModeProvider]. Updates every minute; bucketed to 5-min accuracy
 /// under 15 min, 15-min accuracy up to 2 h, 30-min accuracy beyond.
-/// Returns [SizedBox.shrink] when elapsed < 5 min and not paused.
 class ElapsedTimerWidget extends ConsumerStatefulWidget {
   const ElapsedTimerWidget({super.key, this.style});
 
@@ -17,52 +17,111 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   @override
   ConsumerState<ElapsedTimerWidget> createState() => _ElapsedTimerWidgetState();
 
+  static final _random = Random();
+
   /// Returns the Jeeves-flavoured phrase for [elapsed].
-  /// [isPaused] appends a pause suffix when [elapsed] is non-trivial,
-  /// or returns a standalone paused phrase when elapsed < 5 min.
-  static String jeevesPhrase(Duration elapsed, {bool isPaused = false}) {
+  ///
+  /// [isPaused] appends a pause suffix.
+  ///
+  /// [seed] makes template selection deterministic. The widget seeds from
+  /// the active task id plus the current bucket so the phrase is stable
+  /// per-task-per-bucket and doesn't flip mid-glance on rebuilds.
+  static String jeevesPhrase(Duration elapsed, {bool isPaused = false, int? seed}) {
     final m = elapsed.inMinutes;
-    String phrase;
+    final duration = m < 5 ? '' : _describeDuration(m);
+    final template = _pickTemplate(m, seed: seed);
+    var phrase = template.replaceAll('{d}', duration);
+
+    if (isPaused) phrase = '$phrase (Paused.)';
+    return phrase;
+  }
+
+  /// Renders the duration itself in period-appropriate prose.
+  static String _describeDuration(int m) {
+    if (m < 15) {
+      // 5-min buckets: 5, 10
+      return {5: 'five minutes', 10: 'ten minutes'}[(m ~/ 5) * 5]!;
+    }
+    if (m < 120) {
+      // 15-min buckets
+      return const {
+        15: 'a quarter-hour',
+        30: 'half an hour',
+        45: 'three-quarters of an hour',
+        60: 'an hour',
+        75: 'an hour and a quarter',
+        90: 'an hour and a half',
+        105: 'an hour and three-quarters',
+      }[(m ~/ 15) * 15]!;
+    }
+    // 30-min buckets, capped at a sensible maximum
+    final bucket = (m ~/ 30) * 30;
+    final hours = bucket ~/ 60;
+    final halfWord = bucket % 60 == 30 ? ' and a half' : '';
+    final hoursWord = _numberWord(hours);
+    return '$hoursWord$halfWord hours';
+  }
+
+  static String _numberWord(int n) =>
+      const {
+        2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six',
+        7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten',
+      }[n] ??
+      '$n';
+
+  /// Picks a template whose tone matches the elapsed time. Deterministic
+  /// when [seed] is supplied; otherwise draws from a shared [Random].
+  static String _pickTemplate(int m, {int? seed}) {
+    late final List<String> pool;
 
     if (m < 5) {
-      phrase = '';
+      pool = const [
+        'Just begun, sir.',
+        'Underway, sir.',
+        'We have commenced, sir.',
+      ];
     } else if (m < 15) {
-      // 5-min buckets: 5, 10
-      const map = {
-        5: 'A trifling five minutes thus far, sir.',
-        10: 'Some ten minutes have elapsed, sir.',
-      };
-      phrase = map[(m ~/ 5) * 5] ?? '';
+      pool = const [
+        'A trifling {d} thus far, sir.',
+        'Merely {d}, sir.',
+        'Some {d} in, sir.',
+      ];
+    } else if (m < 60) {
+      pool = const [
+        '{d} has passed, sir.',
+        '{d}, if I may note, sir.',
+        'Some {d} thus far, sir.',
+        '{d} on the matter, sir.',
+      ];
     } else if (m < 120) {
-      // 15-min buckets: 15 … 105
-      const map = {
-        15: 'A quarter-hour has passed, sir.',
-        30: 'Half an hour, if I may note, sir.',
-        45: 'Three-quarters of an hour, sir.',
-        60: 'An hour has elapsed, sir.',
-        75: 'An hour and a quarter have passed, sir, if I may say so.',
-        90: 'An hour and a half, sir.',
-        105: 'An hour and three-quarters, sir, if you will permit the observation.',
-      };
-      phrase = map[(m ~/ 15) * 15] ?? map[105]!;
+      pool = const [
+        '{d} elapsed, sir.',
+        '{d}, sir, if you will permit the observation.',
+        '{d} on the task, sir.',
+        'A full {d}, sir.',
+      ];
+    } else if (m < 180) {
+      pool = const [
+        '{d} on the matter, sir. One ventures to suggest a brief respite.',
+        "{d} elapsed, sir. Perhaps a moment's pause would not go amiss.",
+        '{d} already, sir. Might one suggest a brief interval?',
+      ];
+    } else if (m < 240) {
+      pool = const [
+        '{d}, sir. I feel it my duty to gently insist on a respite.',
+        '{d} at the grindstone, sir. One really must protest.',
+        '{d}, sir. One must, regrettably, insist on a pause.',
+      ];
     } else {
-      // 30-min buckets: 120, 150, 180 …
-      const map = {
-        120: 'Two hours have elapsed, sir. One ventures to suggest a brief respite.',
-        150: 'Two and a half hours on the matter, sir. One ventures to suggest a brief respite.',
-        180: 'Three hours, sir. I feel it my duty to gently insist on a brief respite.',
-        210: 'Three and a half hours, sir. I feel it my duty to gently insist on a brief respite.',
-        240: 'Four hours, sir. Bertram, really.',
-      };
-      final bucket = (m ~/ 30) * 30;
-      phrase = map[bucket] ?? map[240]!;
+      pool = const [
+        '{d}, sir. I really must speak plainly: do stop.',
+        '{d} at this, sir. This has gone quite far enough.',
+        '{d}, sir. I beg you — put the matter down.',
+      ];
     }
 
-    if (isPaused && phrase.isNotEmpty) {
-      return '$phrase (Paused.)';
-    }
-    if (isPaused) return 'Paused, sir.';
-    return phrase;
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
   }
 }
 
@@ -86,10 +145,22 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget> {
   @override
   Widget build(BuildContext context) {
     final focusState = ref.watch(focusModeProvider);
-    final phrase = ElapsedTimerWidget.jeevesPhrase(
-      focusState.elapsed,
-      isPaused: focusState.isPaused,
-    );
+    final m = focusState.elapsed.inMinutes;
+    // Seed by task id + minute-bucket so the phrase is stable within a
+    // bucket; it re-rolls naturally when the duration crosses a threshold.
+    // Buckets mirror _describeDuration's granularity.
+    final bucketSize = m < 15 ? 5 : (m < 120 ? 15 : 30);
+    final bucket = m ~/ bucketSize;
+    final seed = focusState.isActive
+        ? Object.hash(focusState.activeTodoId, bucket, bucketSize)
+        : null;
+    final phrase = focusState.isActive
+        ? ElapsedTimerWidget.jeevesPhrase(
+            focusState.elapsed,
+            isPaused: focusState.isPaused,
+            seed: seed,
+          )
+        : '';
 
     if (phrase.isEmpty) return const SizedBox.shrink();
 
