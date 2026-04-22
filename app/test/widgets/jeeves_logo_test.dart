@@ -81,9 +81,8 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('size < 16 throws assertion', (tester) async {
-      await tester.pumpWidget(_wrap(JeevesLogo(size: 15)));
-      expect(tester.takeException(), isA<AssertionError>());
+    test('size < 16 throws assertion', () {
+      expect(() => JeevesLogo(size: 15), throwsAssertionError);
     });
   });
 
