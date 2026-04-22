@@ -2,13 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../constants/planning_settings_keys.dart';
 import '../models/planning_settings.dart';
 import '../services/daily_state_refresher.dart';
 import '../services/notification_service.dart';
 import 'daily_planning_provider.dart';
 
-const _kTimeHour = 'planning_settings_time_hour';
-const _kTimeMinute = 'planning_settings_time_minute';
 const _kNotificationEnabled = 'planning_settings_notification_enabled';
 const _kBannerEnabled = 'planning_settings_banner_enabled';
 const _kDefaultSnoozeDuration = 'planning_settings_default_snooze_duration';
@@ -28,8 +27,8 @@ class PlanningSettingsNotifier extends Notifier<PlanningSettings> {
 
   Future<void> _loadFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    final hour = prefs.getInt(_kTimeHour) ?? 8;
-    final minute = prefs.getInt(_kTimeMinute) ?? 0;
+    final hour = prefs.getInt(kSettingsTimeHour) ?? 8;
+    final minute = prefs.getInt(kSettingsTimeMinute) ?? 0;
     final notificationEnabled =
         prefs.getBool(_kNotificationEnabled) ?? true;
     final bannerEnabled = prefs.getBool(_kBannerEnabled) ?? true;
@@ -46,8 +45,8 @@ class PlanningSettingsNotifier extends Notifier<PlanningSettings> {
 
   Future<void> setPlanningTime(TimeOfDay time) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kTimeHour, time.hour);
-    await prefs.setInt(_kTimeMinute, time.minute);
+    await prefs.setInt(kSettingsTimeHour, time.hour);
+    await prefs.setInt(kSettingsTimeMinute, time.minute);
     state = state.copyWith(planningTime: time);
     // Keep the boundary timer and cached planning time in sync with the new
     // setting so the rollover fires at the correct wall-clock time.
@@ -103,8 +102,8 @@ Future<void> initPlanningNotificationSchedule() async {
     return;
   }
 
-  final hour = prefs.getInt(_kTimeHour) ?? 8;
-  final minute = prefs.getInt(_kTimeMinute) ?? 0;
+  final hour = prefs.getInt(kSettingsTimeHour) ?? 8;
+  final minute = prefs.getInt(kSettingsTimeMinute) ?? 0;
   await svc.schedulePlanningReminder(
       time: TimeOfDay(hour: hour, minute: minute));
 }

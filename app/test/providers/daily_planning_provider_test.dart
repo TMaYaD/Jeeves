@@ -64,16 +64,17 @@ void main() {
       // is treated as "before the boundary" and returns yesterday's date.
       updateCachedPlanningTime(const TimeOfDay(hour: 23, minute: 59));
       final now = DateTime.now();
-      if (now.hour < 23 || (now.hour == 23 && now.minute < 59)) {
-        // Before 23:59 → should return yesterday.
-        final yesterday = now.subtract(const Duration(days: 1));
-        final expected =
-            '${yesterday.year.toString().padLeft(4, '0')}-'
-            '${yesterday.month.toString().padLeft(2, '0')}-'
-            '${yesterday.day.toString().padLeft(2, '0')}';
-        expect(planningToday(), equals(expected));
+      if (now.hour >= 23 && now.minute >= 59) {
+        // Skip when running at or after 23:59 — boundary has passed.
+        return;
       }
-      // After 23:59 the test is a no-op — the boundary has passed.
+      // Before 23:59 → should return yesterday.
+      final yesterday = now.subtract(const Duration(days: 1));
+      final expected =
+          '${yesterday.year.toString().padLeft(4, '0')}-'
+          '${yesterday.month.toString().padLeft(2, '0')}-'
+          '${yesterday.day.toString().padLeft(2, '0')}';
+      expect(planningToday(), equals(expected));
     });
 
     test('returns current calendar date when planning time is 00:00', () {

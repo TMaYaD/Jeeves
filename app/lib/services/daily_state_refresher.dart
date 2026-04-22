@@ -32,12 +32,15 @@ class DailyStateRefresher with WidgetsBindingObserver {
   Timer? _boundaryTimer;
   Timer? _snoozeTimer;
   TimeOfDay _planningTime = const TimeOfDay(hour: 8, minute: 0);
+  bool _initialized = false;
 
   /// Registers the lifecycle observer and schedules the first boundary timer.
   ///
   /// [planningTime] should match the value returned by
   /// [currentCachedPlanningTime] immediately after [loadPlanningTime].
   void init(TimeOfDay planningTime) {
+    if (_initialized) return;
+    _initialized = true;
     _planningTime = planningTime;
     WidgetsBinding.instance.addObserver(this);
     _scheduleBoundaryTimer();

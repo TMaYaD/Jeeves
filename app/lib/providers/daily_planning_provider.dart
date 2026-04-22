@@ -16,6 +16,7 @@ import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../constants/planning_settings_keys.dart';
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show GtdState;
 import '../services/notification_service.dart';
@@ -28,11 +29,6 @@ export '../models/todo.dart' show GtdState;
 // ---------------------------------------------------------------------------
 // Date helpers
 // ---------------------------------------------------------------------------
-
-// Shared-preferences keys for planning time — duplicated from
-// planning_settings_provider.dart to avoid a circular import.
-const _kSettingsTimeHour = 'planning_settings_time_hour';
-const _kSettingsTimeMinute = 'planning_settings_time_minute';
 
 /// In-memory cache of the user's planning time, used by [planningToday].
 ///
@@ -50,8 +46,8 @@ TimeOfDay get currentCachedPlanningTime => _cachedPlanningTime;
 /// Must be called once in [main] before any call to [planningToday].
 Future<void> loadPlanningTime() async {
   final prefs = await SharedPreferences.getInstance();
-  final hour = prefs.getInt(_kSettingsTimeHour) ?? 8;
-  final minute = prefs.getInt(_kSettingsTimeMinute) ?? 0;
+  final hour = prefs.getInt(kSettingsTimeHour) ?? 8;
+  final minute = prefs.getInt(kSettingsTimeMinute) ?? 0;
   _cachedPlanningTime = TimeOfDay(hour: hour, minute: minute);
 }
 
