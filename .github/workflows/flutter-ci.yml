@@ -46,6 +46,8 @@ jobs:
           if python3 -c "
           import sys
           def parse(v):
+              import re
+              v = re.split(r'[-+]', v, 1)[0]
               return tuple(int(x) for x in v.split('.'))
           pinned = parse('${PINNED_VERSION}')
           latest = parse('${LATEST}')
