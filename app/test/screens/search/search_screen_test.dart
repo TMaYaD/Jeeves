@@ -67,5 +67,23 @@ void main() {
       expect(find.text('Search tasks…'), findsOneWidget);
       expect(find.byType(ListTile), findsNothing);
     });
+
+    testWidgets('query resets after leaving and reopening search', (tester) async {
+      await tester.pumpWidget(_buildScreen());
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'inbox');
+      await tester.pump();
+
+      // Dispose SearchScreen (and its autoDispose providers).
+      await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+      await tester.pump();
+
+      // Reopen and verify autoDispose reset the query to empty.
+      await tester.pumpWidget(_buildScreen());
+      await tester.pump();
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text ?? '', isEmpty);
+    });
   });
 }
