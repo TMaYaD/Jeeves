@@ -1,7 +1,15 @@
 # Notes
 
+## 2026-04-22
+
+- `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
+- Notes in `ActiveFocusScreen` are now rendered as interactive `MarkdownBody` (same `flutter_markdown_plus` stack as `TaskDetailScreen`). Checkboxes toggle and persist via `taskDetailNotifierProvider.updateNotes`; links launch via `url_launcher`. `_FocusBody` became a `ConsumerStatefulWidget` to hold `_notes` local state for optimistic checkbox updates, synced from `todo.notes` via `didUpdateWidget`.
+
 ## 2026-04-21
 
+- `flutter_local_notifications` v21 switched `show()` and `cancel()` from positional to named parameters. The existing `cancelReminder(id: id)` call was already correct (coincidentally); new notification methods must use `show(id:, title:, body:, notificationDetails:)` and `cancel(id:)`.
+- `FocusModeNotifier.startFocus` reads `databaseProvider` and `currentUserIdProvider` eagerly before the `await` to avoid the autoDispose-ref-after-await bug (same pattern established in `TaskDetailNotifier`).
+- `inProgress → deferred` (Abandon) clears `selectedForToday` to false via `_buildTransitionCompanion`, so the task is immediately removed from today's focus list and returned to Next Actions.
 - Universal search (issue #118) uses a Drift LEFT OUTER JOIN across todos/todo_tags/tags rather than FTS5. FTS5 content-table triggers require `AFTER INSERT ON todos` — impossible in production where `todos` is a PowerSync view (SQLite only supports `INSTEAD OF` triggers on views). LIKE + Dart-side filtering on 10k rows is fast enough (< 10ms). SearchDao is a plain class, not `@DriftAccessor`, so no `build_runner` step needed.
 - In Riverpod 3.x, `StateProvider` is classified as legacy and moved to `legacy.dart` for backward compatibility. Prefer `NotifierProvider` with a one-method `Notifier` for new code — the notifier exposes an `update(T)` method that sets state, replacing the `.notifier.state = ` pattern.
 - Clarify-Inbox destination buttons (Next Action / Waiting For / Someday / Done) silently did nothing in prod; only Skip worked. Root cause #1: `InboxDao.processInboxItem` asserted `updated == 1` after the UPDATE, but in prod `todos` is a PowerSync view with an INSTEAD OF UPDATE trigger. SQLite's `sqlite3_changes()` excludes writes done inside trigger bodies, so `updated` is always 0 for view UPDATEs — the assertion threw `StateError`, which `_process` in `inbox_clarification_step.dart` caught and only `debugPrint`-ed. Tests passed because `inbox_dao_test.dart` uses `NativeDatabase.memory()` (raw table, no trigger). Rule: never assert on affected-row counts for UPDATE/DELETE against PowerSync view tables (`todos`, `tags`, `todo_tags`); rely on the WHERE-clause optimistic lock instead.

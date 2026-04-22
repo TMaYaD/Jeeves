@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../providers/daily_planning_provider.dart';
+import '../providers/focus_session_provider.dart';
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
@@ -139,55 +140,127 @@ class FocusScreen extends ConsumerWidget {
   }
 }
 
-class _TaskRow extends StatelessWidget {
+class _TaskRow extends ConsumerWidget {
   const _TaskRow({required this.todo});
   final Todo todo;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final estimate = todo.timeEstimate;
-    return InkWell(
-      onTap: () => context.push('/task/${todo.id}'),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    todo.title,
-                    style: const TextStyle(
-                        fontSize: 16, color: Color(0xFF1A1A2E), fontWeight: FontWeight.w500),
-                  ),
-                  if (todo.dueDate != null) ...[
-                    const SizedBox(height: 2),
+    final gtdState = GtdState.fromString(todo.state);
+    final isDone = gtdState == GtdState.done;
+    final isInProgress = gtdState == GtdState.inProgress;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () => context.push('/task/${todo.id}'),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      'Due ${todo.dueDate!.year}-'
-                      '${todo.dueDate!.month.toString().padLeft(2, '0')}-'
-                      '${todo.dueDate!.day.toString().padLeft(2, '0')}',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                      todo.title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: isDone
+                            ? const Color(0xFF9CA3AF)
+                            : const Color(0xFF1A1A2E),
+                        fontWeight: FontWeight.w500,
+                        decoration:
+                            isDone ? TextDecoration.lineThrough : null,
+                      ),
                     ),
+                    if (todo.dueDate != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Due ${todo.dueDate!.year}-'
+                        '${todo.dueDate!.month.toString().padLeft(2, '0')}-'
+                        '${todo.dueDate!.day.toString().padLeft(2, '0')}',
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF9CA3AF)),
+                      ),
+                    ],
+                    if (estimate != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        estimate < 60
+                            ? '${estimate}m'
+                            : estimate % 60 == 0
+                                ? '${estimate ~/ 60}h'
+                                : '${estimate ~/ 60}h ${estimate % 60}m',
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF9CA3AF)),
+                      ),
+                    ],
                   ],
-                  if (estimate != null) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      estimate < 60
-                          ? '${estimate}m'
-                          : estimate % 60 == 0
-                              ? '${estimate ~/ 60}h'
-                              : '${estimate ~/ 60}h ${estimate % 60}m',
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
-            const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
-          ],
-        ),
+          ),
+          const SizedBox(width: 8),
+          if (isDone)
+            const Icon(Icons.check_circle,
+                color: Color(0xFF2667B7), size: 20)
+          else if (isInProgress)
+            _StartButton(
+              label: 'Resume',
+              todoId: todo.id,
+              inProgressSince: todo.inProgressSince != null
+                  ? DateTime.tryParse(todo.inProgressSince!)
+                  : null,
+            )
+          else
+            _StartButton(label: 'Start', todoId: todo.id),
+        ],
       ),
+    );
+  }
+}
+
+class _StartButton extends ConsumerWidget {
+  const _StartButton({
+    required this.label,
+    required this.todoId,
+    this.inProgressSince,
+  });
+
+  final String label;
+  final String todoId;
+
+  /// Non-null only when the task is already inProgress (Resume path).
+  final DateTime? inProgressSince;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FilledButton(
+      onPressed: () async {
+        final notifier = ref.read(focusModeProvider.notifier);
+        if (inProgressSince != null) {
+          // Task is already inProgress — restore session from DB timestamp.
+          notifier.resumeFrom(todoId, inProgressSince!);
+        } else {
+          await notifier.startFocus(todoId);
+        }
+        if (context.mounted) {
+          context.push('/focus/active');
+        }
+      },
+      style: FilledButton.styleFrom(
+        backgroundColor: const Color(0xFF2667B7),
+        minimumSize: const Size(72, 36),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle:
+            const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+      child: Text(label),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 
+import 'providers/daily_planning_provider.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
@@ -12,12 +13,21 @@ import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/blocked/blocked_screen.dart';
+import 'screens/active_focus_screen.dart';
 import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
 import 'screens/search/search_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
+  refreshListenable: planningCompletionNotifier,
+  redirect: (context, state) {
+    if (state.matchedLocation.startsWith('/focus') &&
+        !planningCompletionNotifier.value) {
+      return '/planning';
+    }
+    return null;
+  },
   routes: [
     GoRoute(
       path: '/login',
@@ -73,6 +83,10 @@ final appRouter = GoRouter(
       builder: (context, state) => TaskDetailScreen(
         todoId: state.pathParameters['id']!,
       ),
+    ),
+    GoRoute(
+      path: '/focus/active',
+      builder: (context, state) => const ActiveFocusScreen(),
     ),
     GoRoute(
       path: '/import',
