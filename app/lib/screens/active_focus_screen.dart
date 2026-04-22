@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/daily_planning_provider.dart';
@@ -209,7 +211,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
   }
 }
 
-class _FocusBody extends StatelessWidget {
+class _FocusBody extends ConsumerStatefulWidget {
   const _FocusBody({
     required this.todo,
     required this.focusState,
@@ -219,7 +221,7 @@ class _FocusBody extends StatelessWidget {
     required this.onExit,
   });
 
-  final Todo todo; // Drift-generated type, re-exported by daily_planning_provider
+  final Todo todo;
   final FocusModeState focusState;
   final VoidCallback onTogglePause;
   final VoidCallback onComplete;
@@ -227,7 +229,111 @@ class _FocusBody extends StatelessWidget {
   final VoidCallback onExit;
 
   @override
+  ConsumerState<_FocusBody> createState() => _FocusBodyState();
+}
+
+class _FocusBodyState extends ConsumerState<_FocusBody> {
+  late String _notes;
+
+  @override
+  void initState() {
+    super.initState();
+    _notes = widget.todo.notes ?? '';
+  }
+
+  @override
+  void didUpdateWidget(_FocusBody old) {
+    super.didUpdateWidget(old);
+    // Sync when an external change arrives (e.g. from task detail screen).
+    if (old.todo.notes != widget.todo.notes) {
+      setState(() => _notes = widget.todo.notes ?? '');
+    }
+  }
+
+  void _onCheckboxToggle(int checkboxIndex, bool value) {
+    final lines = _notes.split('\n');
+    int found = 0;
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (RegExp(r'^\s*[-*+]\s+\[[ xX]\]').hasMatch(line) ||
+          RegExp(r'^\s*\d+\.\s+\[[ xX]\]').hasMatch(line)) {
+        if (found == checkboxIndex) {
+          if (value) {
+            lines[i] = line
+                .replaceFirst('[ ]', '[x]')
+                .replaceFirst('[X]', '[x]');
+          } else {
+            lines[i] = line
+                .replaceFirst('[x]', '[ ]')
+                .replaceFirst('[X]', '[ ]');
+          }
+          break;
+        }
+        found++;
+      }
+    }
+    final updated = lines.join('\n');
+    setState(() => _notes = updated);
+    ref
+        .read(taskDetailNotifierProvider(widget.todo.id))
+        .updateNotes(updated)
+        .ignore();
+  }
+
+  Widget _buildNotes() {
+    if (_notes.isEmpty) return const SizedBox.shrink();
+    int checkboxIndex = 0;
+    return MarkdownBody(
+      data: _notes,
+      selectable: true,
+      styleSheet: MarkdownStyleSheet(
+        p: const TextStyle(
+            fontSize: 16, height: 1.5, color: Color(0xFF6B7280)),
+        h1: const TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937)),
+        h2: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937)),
+        h3: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF1F2937)),
+        strong: const TextStyle(
+            fontWeight: FontWeight.bold, color: Color(0xFF374151)),
+        em: const TextStyle(fontStyle: FontStyle.italic),
+        listBullet: const TextStyle(color: Color(0xFF9CA3AF)),
+      ),
+      checkboxBuilder: (bool value) {
+        final currentIdx = checkboxIndex++;
+        return SizedBox(
+          width: 24,
+          height: 24,
+          child: Checkbox(
+            value: value,
+            onChanged: (v) {
+              if (v == null) return;
+              _onCheckboxToggle(currentIdx, v);
+            },
+          ),
+        );
+      },
+      onTapLink: (text, href, title) {
+        if (href != null) {
+          launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication)
+              .ignore();
+        }
+      },
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final todo = widget.todo;
+    final focusState = widget.focusState;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -249,12 +355,12 @@ class _FocusBody extends StatelessWidget {
               IconButton(
                 tooltip: 'Exit Focus Mode',
                 icon: const Icon(Icons.close, color: Color(0xFF9CA3AF)),
-                onPressed: onExit,
+                onPressed: widget.onExit,
               ),
             ],
           ),
         ),
-        // Task content
+        // Task content — title + interactive notes
         Expanded(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
@@ -270,44 +376,18 @@ class _FocusBody extends StatelessWidget {
                     height: 1.3,
                   ),
                 ),
-                if (todo.notes != null && todo.notes!.isNotEmpty) ...[
+                if (_notes.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  Text(
-                    todo.notes!,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: Color(0xFF6B7280),
-                      height: 1.5,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 56),
-                Center(
-                  child: ElapsedTimerWidget(
-                    style: const TextStyle(
-                      fontSize: 52,
-                      fontWeight: FontWeight.w300,
-                      color: Color(0xFF1A1A2E),
-                      letterSpacing: 2,
-                    ),
-                  ),
-                ),
-                if (focusState.isPaused) ...[
-                  const SizedBox(height: 8),
-                  const Center(
-                    child: Text(
-                      'Paused',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Color(0xFF9CA3AF),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
+                  _buildNotes(),
                 ],
               ],
             ),
           ),
+        ),
+        // Jeeves elapsed reminder — small, above the toolbar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
+          child: ElapsedTimerWidget(),
         ),
         // Action bar
         Container(
@@ -320,7 +400,7 @@ class _FocusBody extends StatelessWidget {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: onTogglePause,
+                  onPressed: widget.onTogglePause,
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size.fromHeight(48),
                     shape: RoundedRectangleBorder(
@@ -332,7 +412,7 @@ class _FocusBody extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton(
-                  onPressed: onComplete,
+                  onPressed: widget.onComplete,
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF2667B7),
                     minimumSize: const Size.fromHeight(48),
@@ -345,7 +425,7 @@ class _FocusBody extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton(
-                  onPressed: onAbandon,
+                  onPressed: widget.onAbandon,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.red[600],
                     side: BorderSide(color: Colors.red[300]!),

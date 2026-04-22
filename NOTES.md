@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-04-22
+
+- `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
+- Notes in `ActiveFocusScreen` are now rendered as interactive `MarkdownBody` (same `flutter_markdown_plus` stack as `TaskDetailScreen`). Checkboxes toggle and persist via `taskDetailNotifierProvider.updateNotes`; links launch via `url_launcher`. `_FocusBody` became a `ConsumerStatefulWidget` to hold `_notes` local state for optimistic checkbox updates, synced from `todo.notes` via `didUpdateWidget`.
+
 ## 2026-04-21
 
 - `flutter_local_notifications` v21 switched `show()` and `cancel()` from positional to named parameters. The existing `cancelReminder(id: id)` call was already correct (coincidentally); new notification methods must use `show(id:, title:, body:, notificationDetails:)` and `cancel(id:)`.
