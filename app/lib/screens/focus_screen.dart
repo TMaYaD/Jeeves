@@ -281,10 +281,10 @@ class _TaskRow extends ConsumerWidget {
     final estimate = todo.timeEstimate;
     final isActive = sprintState.activeTask?.id == todo.id;
     final isRunning = isActive && sprintState.phase == SprintPhase.running;
-    final isDone = todo.state == 'done';
+    final isDone = todo.state == GtdState.done.value;
     final sprintCanStart = !isDone &&
         sprintState.phase == SprintPhase.idle &&
-        todo.state != 'in_progress';
+        todo.state != GtdState.inProgress.value;
 
     return InkWell(
       onTap: () => context.push('/task/${todo.id}'),

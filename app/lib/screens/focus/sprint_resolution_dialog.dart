@@ -30,7 +30,9 @@ class _SprintResolutionDialogState
 
     final otherTasks = todayTasks
         .where((t) =>
-            t.id != widget.task.id && t.state != 'done' && t.state != 'in_progress')
+            t.id != widget.task.id &&
+            t.state != GtdState.done.value &&
+            t.state != GtdState.inProgress.value)
         .toList();
 
     final spentMinutes = _spentMinutes(widget.task, sprintState.sprintCount);
@@ -142,9 +144,11 @@ class _SprintResolutionDialogState
     if (_puntedTaskId != null) {
       final todayTasks =
           ref.read(todaySelectedTasksProvider).value ?? [];
-      final punted = todayTasks.firstWhere((t) => t.id == _puntedTaskId,
-          orElse: () => todayTasks.first);
-      await ref.read(sprintProvider.notifier).puntTask(punted);
+      final punted =
+          todayTasks.where((t) => t.id == _puntedTaskId).firstOrNull;
+      if (punted != null) {
+        await ref.read(sprintProvider.notifier).puntTask(punted);
+      }
     }
     await ref.read(sprintProvider.notifier).resolveExtend();
     if (context.mounted) Navigator.of(context).pop();
@@ -359,7 +363,7 @@ class _SpilloverMatrix extends StatelessWidget {
           child: ListView.separated(
             shrinkWrap: true,
             itemCount: tasks.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
+            separatorBuilder: (context, index) => const Divider(height: 1),
             itemBuilder: (context, i) {
               final task = tasks[i];
               final isPunted = task.id == puntedTaskId;
