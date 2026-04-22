@@ -91,7 +91,10 @@ class SprintNotifier extends Notifier<SprintState> {
   Timer? _ticker;
 
   @override
-  SprintState build() => const SprintState(phase: SprintPhase.idle);
+  SprintState build() {
+    ref.onDispose(_cancelTicker);
+    return const SprintState(phase: SprintPhase.idle);
+  }
 
   /// Starts a 20-minute sprint for [task].
   ///
@@ -206,11 +209,6 @@ class SprintNotifier extends Notifier<SprintState> {
     }
   }
 
-  @override
-  void dispose() {
-    _cancelTicker();
-    super.dispose();
-  }
 }
 
 final sprintProvider = NotifierProvider<SprintNotifier, SprintState>(

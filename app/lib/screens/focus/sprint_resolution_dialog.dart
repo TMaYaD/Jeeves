@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../database/gtd_database.dart' show Todo;
 import '../../providers/daily_planning_provider.dart';
 import '../../providers/sprint_provider.dart';
 
@@ -27,7 +26,7 @@ class _SprintResolutionDialogState
   @override
   Widget build(BuildContext context) {
     final sprintState = ref.watch(sprintProvider);
-    final todayTasks = ref.watch(todaySelectedTasksProvider).valueOrNull ?? [];
+    final todayTasks = ref.watch(todaySelectedTasksProvider).value ?? [];
 
     final otherTasks = todayTasks
         .where((t) =>
@@ -142,7 +141,7 @@ class _SprintResolutionDialogState
   Future<void> _handleExtend(BuildContext context) async {
     if (_puntedTaskId != null) {
       final todayTasks =
-          ref.read(todaySelectedTasksProvider).valueOrNull ?? [];
+          ref.read(todaySelectedTasksProvider).value ?? [];
       final punted = todayTasks.firstWhere((t) => t.id == _puntedTaskId,
           orElse: () => todayTasks.first);
       await ref.read(sprintProvider.notifier).puntTask(punted);
@@ -360,7 +359,7 @@ class _SpilloverMatrix extends StatelessWidget {
           child: ListView.separated(
             shrinkWrap: true,
             itemCount: tasks.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
+            separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (context, i) {
               final task = tasks[i];
               final isPunted = task.id == puntedTaskId;

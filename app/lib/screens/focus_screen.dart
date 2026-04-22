@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../database/gtd_database.dart' show Todo;
 import '../providers/daily_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_provider.dart';
