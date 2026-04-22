@@ -29,10 +29,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     super.initState();
     _controller = TextEditingController();
     _focusNode = FocusNode();
-    // Reset synchronously so the first build sees an empty query; if this
-    // moved into a post-frame callback, reopening /search could flash a frame
-    // of stale query/filter state against an empty text field.
-    ref.read(searchQueryProvider.notifier).update(const SearchQuery());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
