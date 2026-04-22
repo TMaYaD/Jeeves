@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../providers/focus_session_provider.dart';
 
@@ -29,11 +30,42 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   static String jeevesPhrase(Duration elapsed, {bool isPaused = false, int? seed}) {
     final m = elapsed.inMinutes;
     final duration = m < 5 ? '' : _describeDuration(m);
-    final template = _pickTemplate(m, seed: seed);
+    final template = isPaused
+        ? _pickPausedTemplate(m, seed: seed)
+        : _pickTemplate(m, seed: seed);
     var phrase = template.replaceAll('{d}', duration);
 
-    if (isPaused) phrase = '$phrase (Paused.)';
+    // Jeeves does not begin sentences with lowercase letters.
+    if (phrase.isNotEmpty) {
+      phrase = phrase[0].toUpperCase() + phrase.substring(1);
+    }
     return phrase;
+  }
+
+  /// Jeeves-voice utterance for a paused session. Replaces the active
+  /// commentary entirely — Jeeves doesn't speak parentheticals.
+  /// All templates carry a `rest`/`reprieve`/`abeyance` marker so callers
+  /// can recognise paused-mode prose without exact-string matching.
+  static String _pickPausedTemplate(int m, {int? seed}) {
+    late final List<String> pool;
+    if (m < 5) {
+      pool = const [
+        'Barely begun, sir, and already at rest.',
+        'Scarcely underway, sir; at rest already.',
+        'A reprieve before we have properly begun, sir.',
+      ];
+    } else {
+      pool = const [
+        '{d} on the matter, sir; we are at rest.',
+        '{d} thus far, sir, and now at rest.',
+        '{d}, sir. The matter rests, with your leave.',
+        '{d} elapsed, sir; held in abeyance.',
+        'A reprieve at {d}, sir.',
+        'After {d}, sir, a brief reprieve.',
+      ];
+    }
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
   }
 
   /// Renders the duration itself in period-appropriate prose.
@@ -125,8 +157,16 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   }
 }
 
-class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget> {
+class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
+    with SingleTickerProviderStateMixin {
+  // Parchment palette — "the butler observes, no action required".
+  // Urgency (amber, red) is reserved for Jeeves utterances that demand action.
+  static const _bg = Color(0xFFF7F2E7); // parchment
+  static const _accent = Color(0xFF8B6B3E); // warm brown
+  static const _ink = Color(0xFF4A3B28); // dark brown
+
   Timer? _ticker;
+  late final AnimationController _pulse;
 
   @override
   void initState() {
@@ -134,11 +174,16 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget> {
     _ticker = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat(reverse: true);
   }
 
   @override
   void dispose() {
     _ticker?.cancel();
+    _pulse.dispose();
     super.dispose();
   }
 
@@ -164,16 +209,39 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget> {
 
     if (phrase.isEmpty) return const SizedBox.shrink();
 
-    return Text(
-      phrase,
-      textAlign: TextAlign.center,
-      style: widget.style ??
-          const TextStyle(
-            fontSize: 13,
-            fontStyle: FontStyle.italic,
-            color: Color(0xFF9CA3AF),
-            height: 1.4,
-          ),
+    final voiceStyle = widget.style ??
+        GoogleFonts.ebGaramond(
+          fontSize: 20,
+          fontStyle: FontStyle.italic,
+          fontWeight: FontWeight.w500,
+          color: _ink,
+          height: 1.35,
+          letterSpacing: 0.1,
+        );
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: _bg,
+        border: Border(
+          top: BorderSide(color: Color(0x228B6B3E)),
+          bottom: BorderSide(color: Color(0x228B6B3E)),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+        child: Row(
+          children: [
+            ScaleTransition(
+              scale: Tween<double>(begin: 0.92, end: 1.08).animate(
+                CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
+              ),
+              child: const Icon(Icons.access_time, size: 24, color: _accent),
+            ),
+            const SizedBox(width: 14),
+            Expanded(child: Text(phrase, style: voiceStyle)),
+          ],
+        ),
+      ),
     );
   }
 }

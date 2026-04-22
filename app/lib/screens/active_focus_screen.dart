@@ -337,19 +337,26 @@ class _FocusBodyState extends ConsumerState<_FocusBody> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header
+        // Chrome: task title alongside the close X. The pair reads as one
+        // header zone; neither element distracts from the Jeeves banner
+        // below, which is where the eye next lands.
         Padding(
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+          padding: const EdgeInsets.fromLTRB(24, 20, 4, 20),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(width: 48),
-              const Text(
-                'Focus',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF9CA3AF),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    todo.title,
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1A1A2E),
+                      height: 1.3,
+                    ),
+                  ),
                 ),
               ),
               IconButton(
@@ -360,34 +367,20 @@ class _FocusBodyState extends ConsumerState<_FocusBody> {
             ],
           ),
         ),
-        // Task content — title + interactive notes
+        // Jeeves elapsed reminder — parchment banner at the threshold
+        // between chrome and content. "I merely observe, sir."
+        const ElapsedTimerWidget(),
+        // Notes area — unshared scroll zone; the banner above doesn't scroll.
         Expanded(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  todo.title,
-                  style: const TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF1A1A2E),
-                    height: 1.3,
-                  ),
-                ),
-                if (_notes.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  _buildNotes(),
-                ],
+                if (_notes.isNotEmpty) _buildNotes(),
               ],
             ),
           ),
-        ),
-        // Jeeves elapsed reminder — small, above the toolbar
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
-          child: ElapsedTimerWidget(),
         ),
         // Action bar
         Container(

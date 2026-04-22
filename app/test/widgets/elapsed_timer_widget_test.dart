@@ -27,19 +27,22 @@ Duration _minutes(int m) => Duration(minutes: m);
 void main() {
   // Seed templates are drawn from a pool now; phrases are asserted by the
   // stable duration substring plus tier-appropriate flavour. A fixed seed
-  // keeps template selection deterministic across runs.
+  // keeps template selection deterministic across runs. Lowercased so that
+  // assertions don't have to care whether the duration falls at the start
+  // of a sentence (where the first letter is capitalized).
   String phrase(int m, {bool isPaused = false, int seed = 0}) =>
-      ElapsedTimerWidget.jeevesPhrase(_minutes(m), isPaused: isPaused, seed: seed);
+      ElapsedTimerWidget.jeevesPhrase(_minutes(m), isPaused: isPaused, seed: seed)
+          .toLowerCase();
 
   group('ElapsedTimerWidget.jeevesPhrase unit tests', () {
     test('< 5 min → just-started phrase', () {
       expect(
         phrase(0),
-        anyOf(contains('begun'), contains('Underway'), contains('commenced')),
+        anyOf(contains('begun'), contains('underway'), contains('commenced')),
       );
       expect(
         phrase(4),
-        anyOf(contains('begun'), contains('Underway'), contains('commenced')),
+        anyOf(contains('begun'), contains('underway'), contains('commenced')),
       );
     });
 
@@ -114,16 +117,35 @@ void main() {
       expect(phrase(45, seed: 7), phrase(45, seed: 7));
     });
 
-    test('paused, < 5 min → just-started phrase with paused suffix', () {
+    // Every Jeeves-voice paused utterance carries one of these markers.
+    final pausedMarker = anyOf(
+      contains('rest'),
+      contains('reprieve'),
+      contains('abeyance'),
+    );
+
+    test('paused, < 5 min → just-started Jeeves-voice paused prose', () {
       final p = phrase(3, isPaused: true);
-      expect(p, anyOf(contains('begun'), contains('Underway'), contains('commenced')));
-      expect(p, contains('(Paused.)'));
+      expect(p, anyOf(contains('begun'), contains('underway')));
+      expect(p, pausedMarker);
     });
 
-    test('paused, ≥ 5 min → phrase with paused suffix', () {
+    test('paused, ≥ 5 min → Jeeves-voice paused prose with duration', () {
       final p = phrase(45, isPaused: true);
       expect(p, contains('three-quarters of an hour'));
-      expect(p, contains('(Paused.)'));
+      expect(p, pausedMarker);
+    });
+
+    test("phrase always begins with a capital letter (Jeeves's standards)", () {
+      // Sample across all duration tiers; the first character must be uppercase
+      // regardless of whether the template starts with the duration token.
+      for (final m in [0, 7, 12, 22, 47, 62, 78, 95, 110, 135, 165, 200, 320]) {
+        for (final seed in [0, 1, 2, 3]) {
+          final raw = ElapsedTimerWidget.jeevesPhrase(_minutes(m), seed: seed);
+          expect(raw[0], equals(raw[0].toUpperCase()),
+              reason: 'phrase($m, seed=$seed) starts lowercase: $raw');
+        }
+      }
     });
   });
 
@@ -172,11 +194,15 @@ void main() {
       ));
       await tester.pump();
       final text = tester.widget<Text>(find.byType(Text)).data!;
+      expect(text, anyOf(contains('begun'), contains('underway')));
       expect(
         text,
-        anyOf(contains('begun'), contains('Underway'), contains('commenced')),
+        anyOf(
+          contains('rest'),
+          contains('reprieve'),
+          contains('abeyance'),
+        ),
       );
-      expect(text, contains('(Paused.)'));
     });
 
     testWidgets('display is frozen while paused', (tester) async {
