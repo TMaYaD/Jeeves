@@ -418,6 +418,49 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     await transitionState(id, userId, GtdState.somedayMaybe);
   }
 
+  /// Sprint "Defer" resolution: logs elapsed time from [inProgressSince],
+  /// returns the task to Next Actions, and removes it from today's plan.
+  ///
+  /// Performs the `inProgress → nextAction` transition (which the state machine
+  /// now permits) plus clears [selectedForToday] in a single transaction so the
+  /// task disappears from the Focus screen immediately.
+  Future<void> resolveSprintDefer(
+    String todoId,
+    String userId, {
+    DateTime? now,
+  }) async {
+    await transaction(() async {
+      await transitionState(todoId, userId, GtdState.nextAction, now: now);
+      final ts = now ?? DateTime.now();
+      await (update(todos)
+            ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+          .write(TodosCompanion(
+        selectedForToday: const Value(null),
+        dailySelectionDate: const Value(null),
+        updatedAt: Value(ts),
+      ));
+    });
+  }
+
+  /// Removes [todoId] from today's plan without changing its GTD state.
+  ///
+  /// Used by "Extend" sprint resolution when the user punts a lower-priority
+  /// task to make room for the extended sprint.
+  Future<void> unselectFromToday(
+    String todoId,
+    String userId, {
+    DateTime? now,
+  }) async {
+    final ts = now ?? DateTime.now();
+    await (update(todos)
+          ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+        .write(TodosCompanion(
+      selectedForToday: const Value(null),
+      dailySelectionDate: const Value(null),
+      updatedAt: Value(ts),
+    ));
+  }
+
   /// Updates the due date for a scheduled task (reschedule without state change).
   ///
   /// [now] overrides the timestamp used for [updatedAt]; defaults to

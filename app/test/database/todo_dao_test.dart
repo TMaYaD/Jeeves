@@ -132,6 +132,42 @@ void main() {
     });
   });
 
+  group('TodoDao — sprint resolution', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('resolveSprintDefer logs time and returns task to nextAction', () async {
+      await _insertTodo(db, id: 'sp1', title: 'Sprint Task', state: 'scheduled');
+      final start = DateTime(2024, 6, 1, 9, 0, 0);
+      await db.todoDao.transitionState('sp1', _userId, GtdState.inProgress, now: start);
+
+      // 20 minutes later — one full sprint.
+      final end = start.add(const Duration(minutes: 20));
+      await db.todoDao.resolveSprintDefer('sp1', _userId, now: end);
+
+      final row = await db.todoDao.getTodo('sp1', _userId);
+      expect(row?.state, GtdState.nextAction.value);
+      expect(row?.timeSpentMinutes, 20);
+      expect(row?.inProgressSince, equals(null));
+      expect(row?.selectedForToday, equals(null));
+      expect(row?.dailySelectionDate, equals(null));
+    });
+
+    test('unselectFromToday clears selection without changing state', () async {
+      await _insertTodo(db, id: 'sp2', title: 'Selected Task', state: 'next_action');
+      await db.todoDao.selectForToday('sp2', _userId, '2024-06-01');
+
+      await db.todoDao.unselectFromToday('sp2', _userId);
+
+      final row = await db.todoDao.getTodo('sp2', _userId);
+      expect(row?.state, GtdState.nextAction.value);
+      expect(row?.selectedForToday, equals(null));
+      expect(row?.dailySelectionDate, equals(null));
+    });
+  });
+
   group('TodoDao — GTD list watchers', () {
     late GtdDatabase db;
 

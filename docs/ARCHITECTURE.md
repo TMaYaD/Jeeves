@@ -238,6 +238,53 @@ The ritual can no longer be auto-launched. Users are nudged through two opt-in m
 | `planning_settings_banner_enabled` | `bool` | Banner toggle |
 | `planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |
 
+## Sprint Timer & Resolution Protocol
+
+The sprint execution layer implements Epic 3 / Epic 4 of the requirements. It is entirely client-side with no backend involvement; time tracking is persisted via the existing `inProgressSince` / `timeSpentMinutes` columns.
+
+### State machine extension
+
+`GtdState.inProgress → GtdState.nextAction` is now a valid transition. This enables the "Defer" sprint resolution to atomically log elapsed time and return the task to Next Actions in a single `transitionState` call.
+
+### SprintNotifier (`lib/providers/sprint_provider.dart`)
+
+A plain `NotifierProvider<SprintNotifier, SprintState>` (not `autoDispose`) so the timer survives navigation.
+
+| Phase | Meaning |
+|---|---|
+| `idle` | No sprint running |
+| `running` | 20-min countdown active |
+| `expired` | Timer hit zero — resolution required |
+| `onBreak` | 3-min break between sprints |
+
+**`startSprint(task)`**: transitions the task to `in_progress` (setting `inProgressSince`), then starts a 1-second `dart:async Timer.periodic` ticker that decrements `remainingSeconds`.
+
+**Resolution methods:**
+- `resolveComplete()` — calls `transitionState(done)`, which logs elapsed time from `inProgressSince`. Enters `onBreak` phase.
+- `resolveExtend()` — keeps the task `in_progress`, restarts the 20-min countdown. Increments `sprintCount` so the UI shows "Sprint 2", "Sprint 3", etc.
+- `puntTask(task)` — calls `TodoDao.unselectFromToday` to remove a task from today's plan (used with Extend).
+- `resolveDefer()` — calls `TodoDao.resolveSprintDefer` which transitions `inProgress → nextAction` and clears `selectedForToday` in one transaction.
+
+### DAO additions (`TodoDao`)
+
+- **`resolveSprintDefer(todoId, userId)`**: wraps `transitionState(nextAction)` + clear `selectedForToday` in a single Drift transaction. The time-logging side effect happens inside `transitionState` via `_buildTransitionCompanion`.
+- **`unselectFromToday(todoId, userId)`**: sets `selectedForToday = null` and `dailySelectionDate = null` without touching `state`.
+
+### Focus screen integration (`lib/screens/focus_screen.dart`)
+
+- Uses `ref.listen(sprintProvider, ...)` to watch for `phase == SprintPhase.expired` and immediately shows `SprintResolutionDialog` with `barrierDismissible: false`.
+- A `_SprintCountdown` chip in the AppBar row shows `MM:SS` in amber (running) or green (break).
+- A `_BreakBanner` strip below the header is visible during the break phase with a "Skip Break" shortcut.
+- Each `_TaskRow` shows a **Sprint** button when the sprint is idle and the task is not done. The button transitions to a timer icon while that task is active.
+- Partial time spent is shown inline: `"20m spent"` — derived from `Todo.timeSpentMinutes`.
+
+### SprintResolutionDialog (`lib/screens/focus/sprint_resolution_dialog.dart`)
+
+- Wrapped in `PopScope(canPop: false)` so back-gesture cannot dismiss it.
+- Default view shows three action buttons (Complete / Extend / Defer) with a brief hint description for each.
+- Tapping **Extend** switches to the **spillover matrix** view: a scrollable list of today's remaining tasks with their estimates. The user taps a task to mark it for removal; tapping "Extend & Continue" punts the selected task and restarts the timer.
+- Time spent is computed as `task.timeSpentMinutes + (sprintCount × 20 min)` and shown as `"20m / 60m spent"` next to the task title.
+
 ## Navigation & Global Filter State
 
 ### Tag Cloud Navigation Filter
