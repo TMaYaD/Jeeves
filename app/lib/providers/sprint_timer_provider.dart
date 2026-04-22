@@ -8,7 +8,7 @@ library;
 
 import 'dart:async';
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show Expression, Value;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -325,7 +325,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       final db = ref.read(databaseProvider);
       final userId = ref.read(currentUserIdProvider);
       await (db.update(db.todos)
-            ..where((t) => t.id.equals(taskId).and(t.userId.equals(userId))))
+            ..where((t) => Expression.and([t.id.equals(taskId), t.userId.equals(userId)])))
           .write(TodosCompanion(
         timeSpentMinutes: Value(
           // We do a raw increment; the DAO handles exact accounting on state
@@ -342,7 +342,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   Future<int> _currentTimeSpent(
       GtdDatabase db, String taskId, String userId) async {
     final row = await (db.select(db.todos)
-          ..where((t) => t.id.equals(taskId).and(t.userId.equals(userId))))
+          ..where((t) => Expression.and([t.id.equals(taskId), t.userId.equals(userId)])))
         .getSingleOrNull();
     return row?.timeSpentMinutes ?? 0;
   }
