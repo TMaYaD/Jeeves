@@ -174,6 +174,9 @@ class NotificationService {
   }) async {
     await _plugin.cancel(id: _kSprintEndNotificationId);
     final scheduled = tz.TZDateTime.from(endTime, tz.local);
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final canExact = await android?.canScheduleExactAlarms() ?? false;
     await _plugin.zonedSchedule(
       id: _kSprintEndNotificationId,
       title: 'Sprint complete!',
@@ -191,7 +194,9 @@ class NotificationService {
           presentSound: true,
         ),
       ),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: canExact
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
     );
   }
 
@@ -201,6 +206,9 @@ class NotificationService {
   }) async {
     await _plugin.cancel(id: _kBreakEndNotificationId);
     final scheduled = tz.TZDateTime.from(endTime, tz.local);
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final canExact = await android?.canScheduleExactAlarms() ?? false;
     await _plugin.zonedSchedule(
       id: _kBreakEndNotificationId,
       title: 'Break over — back to it!',
@@ -218,7 +226,9 @@ class NotificationService {
           presentSound: true,
         ),
       ),
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: canExact
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
     );
   }
 
