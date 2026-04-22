@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../auth/auth_mode.dart';
+import '../../auth/password/password_auth_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/migration_service.dart';
 import '../../widgets/jeeves_logo.dart';
@@ -16,18 +18,8 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
   bool _isLoading = false;
   String? _errorMessage;
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
 
   Future<ConflictResolution> _showConflictDialog() async {
     final result = await showDialog<ConflictResolution>(
@@ -57,21 +49,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return result ?? ConflictResolution.merge;
   }
 
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+  Future<void> _submit(String email, String password) async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
     try {
       await ref.read(authTokenProvider.notifier).login(
-            _emailController.text.trim(),
-            _passwordController.text,
+            {'email': email, 'password': password},
             onConflict: _showConflictDialog,
           );
       if (!mounted) return;
-      // Pop back to the caller (e.g. Settings) if we were pushed on top of
-      // an existing route. Otherwise navigate to the app home.
       if (context.canPop()) {
         context.pop();
       } else {
@@ -92,6 +80,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  Widget _buildLoginWidget() {
+    final provider = ref.read(authImplProvider);
+    if (provider is PasswordAuthProvider) {
+      return provider.buildForm(
+        onSubmit: _submit,
+        isLoading: _isLoading,
+        errorMessage: _errorMessage,
+      );
+    }
+    // For SWS (and any future providers), delegate entirely to the provider
+    // widget — conflict resolution is handled inside the notifier.
+    return provider.buildLoginWidget(context);
+  }
+
   @override
   Widget build(BuildContext context) {
     final canPop = context.canPop();
@@ -109,101 +111,31 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 400),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Center(
-                      child: JeevesLogo(
-                        variant: JeevesLogoVariant.wordmark,
-                        size: 48,
-                      ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: JeevesLogo(
+                      variant: JeevesLogoVariant.wordmark,
+                      size: 48,
                     ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Sign in to sync across devices',
-                      textAlign: TextAlign.center,
-                      style:
-                          TextStyle(fontSize: 16, color: Color(0xFF6B7280)),
-                    ),
-                    const SizedBox(height: 40),
-                    if (_errorMessage != null) ...[
-                      buildErrorBanner(_errorMessage!),
-                      const SizedBox(height: 16),
-                    ],
-                    TextFormField(
-                      key: const Key('email_field'),
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(
-                        labelText: 'Email',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) {
-                          return 'Email is required.';
-                        }
-                        final emailRegex =
-                            RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
-                        if (!emailRegex.hasMatch(v.trim())) {
-                          return 'Enter a valid email.';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      key: const Key('password_field'),
-                      controller: _passwordController,
-                      obscureText: true,
-                      textInputAction: TextInputAction.done,
-                      onFieldSubmitted: (_) => _submit(),
-                      decoration: const InputDecoration(
-                        labelText: 'Password',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: (v) {
-                        if (v == null || v.isEmpty) {
-                          return 'Password is required.';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    ElevatedButton(
-                      key: const Key('sign_in_button'),
-                      onPressed: _isLoading ? null : _submit,
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        backgroundColor: const Color(0xFF2563EB),
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor:
-                            const Color(0xFF2563EB).withAlpha(128),
-                      ),
-                      child: _isLoading
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text('Sign In',
-                              style: TextStyle(fontSize: 16)),
-                    ),
-                    const SizedBox(height: 16),
-                    TextButton(
-                      onPressed: _isLoading
-                          ? null
-                          : () => context.pushReplacement('/register'),
-                      child:
-                          const Text("Don't have an account? Create one"),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Sign in to sync across devices',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16, color: Color(0xFF6B7280)),
+                  ),
+                  const SizedBox(height: 40),
+                  _buildLoginWidget(),
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: _isLoading
+                        ? null
+                        : () => context.pushReplacement('/register'),
+                    child: const Text("Don't have an account? Create one"),
+                  ),
+                ],
               ),
             ),
           ),

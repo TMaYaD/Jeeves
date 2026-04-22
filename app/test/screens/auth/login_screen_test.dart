@@ -17,7 +17,7 @@ class _SuccessAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> login(String email, String password,
+  Future<void> login(Map<String, dynamic> params,
       {Future<ConflictResolution> Function()? onConflict}) async {
     authStateNotifier.value = true;
     state = const AsyncData('fake.jwt.token');
@@ -29,7 +29,7 @@ class _ConflictAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> login(String email, String password,
+  Future<void> login(Map<String, dynamic> params,
       {Future<ConflictResolution> Function()? onConflict}) async {
     // Trigger the conflict dialog, then succeed.
     if (onConflict != null) {
@@ -45,7 +45,7 @@ class _ConnectionErrorAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> login(String email, String password,
+  Future<void> login(Map<String, dynamic> params,
       {Future<ConflictResolution> Function()? onConflict}) async {
     final err = DioException(
       requestOptions: RequestOptions(path: '/session'),
@@ -64,7 +64,7 @@ class _FailAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> login(String email, String password,
+  Future<void> login(Map<String, dynamic> params,
       {Future<ConflictResolution> Function()? onConflict}) async {
     final err = DioException(
       requestOptions: RequestOptions(path: '/session'),

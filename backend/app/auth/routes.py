@@ -3,12 +3,15 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.hashing import hash_password, verify_password
 from app.auth.models import RefreshToken, User
+from app.auth.providers.sws_nonce import create_nonce
+from app.auth.providers.sws_strategy import verify_sws
 from app.auth.schemas import (
     LoginRequest,
     LogoutRequest,
@@ -19,6 +22,7 @@ from app.auth.schemas import (
 )
 from app.auth.tokens import create_access_token, create_refresh_token, hash_refresh_token
 from app.database import get_db
+from app.redis import get_redis
 
 router = APIRouter(tags=["auth"])
 
@@ -31,7 +35,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
-    if user is None or not verify_password(body.password, user.hashed_password):
+    if user is None or not verify_password(body.password, user.hashed_password or ""):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -128,3 +132,55 @@ async def register_user(body: UserCreate, db: AsyncSession = Depends(get_db)) ->
 @router.get("/user", response_model=UserRead)
 async def get_current_user_profile(current_user: User = Depends(get_current_user)) -> User:
     return current_user
+
+
+# ── Sign-In With Solana (SWS) ─────────────────────────────────────────────────
+
+
+class SWSChallengeRequest(BaseModel):
+    public_key: str
+
+
+class SWSChallengeResponse(BaseModel):
+    nonce: str
+    issued_at: str
+    domain: str
+
+
+class SWSLoginRequest(BaseModel):
+    public_key: str
+    signature: str  # base64-encoded ed25519 signature
+    nonce: str
+
+
+@router.post("/auth/sws/challenge", response_model=SWSChallengeResponse)
+async def sws_challenge(
+    body: SWSChallengeRequest,
+    redis: object = Depends(get_redis),
+) -> SWSChallengeResponse:
+    """Issue a single-use nonce bound to the given Solana public key.
+
+    The client must use the returned nonce within :data:`NONCE_TTL` seconds
+    (300 s) or request a fresh challenge.
+    """
+    nonce, issued_at = await create_nonce(redis, body.public_key)
+    return SWSChallengeResponse(nonce=nonce, issued_at=issued_at, domain="jeeves.app")
+
+
+@router.post("/auth/sws", response_model=Token)
+async def sws_login(
+    body: SWSLoginRequest,
+    db: AsyncSession = Depends(get_db),
+    redis: object = Depends(get_redis),
+) -> Token:
+    """Complete a Sign-In With Solana flow.
+
+    Verifies the ed25519 signature over the canonical SIWS message, then
+    upserts a user record keyed by *public_key* and issues JWT tokens.
+    """
+    user = await verify_sws(db, redis, body.public_key, body.signature, body.nonce)
+    access_token = create_access_token({"sub": user.id})
+    raw_refresh, refresh_record = create_refresh_token(user.id)
+    db.add(refresh_record)
+    await db.commit()
+    return Token(access_token=access_token, refresh_token=raw_refresh, token_type="bearer")

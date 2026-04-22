@@ -13,6 +13,10 @@
 
 - `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
 - Notes in `ActiveFocusScreen` are now rendered as interactive `MarkdownBody` (same `flutter_markdown_plus` stack as `TaskDetailScreen`). Checkboxes toggle and persist via `taskDetailNotifierProvider.updateNotes`; links launch via `url_launcher`. `_FocusBody` became a `ConsumerStatefulWidget` to hold `_notes` local state for optimistic checkbox updates, synced from `todo.notes` via `didUpdateWidget`.
+- SWS (#129): `PasswordAuthProvider.buildLoginWidget()` throws `UnimplementedError` by design — `LoginScreen` calls `buildForm()` instead to inject its own `onSubmit`/loading/error state. The `AuthProvider` interface's `buildLoginWidget` is used by all other providers (SWS etc.) that own their own state fully.
+- SWS (#129): `AuthNotifier.login()` signature changed from `(String, String, {onConflict})` to `(Map<String,dynamic>, {onConflict})` — existing login_screen_test.dart fake notifiers needed updating.
+- SWS (#129): There is no existing Redis client in the app — created `backend/app/redis.py` as a thin `aioredis.from_url` wrapper with a `get_redis` FastAPI dependency, mirroring the `get_db` pattern.
+- SWS (#129): `ProviderContainer` cannot be passed as `Ref` to auth providers in tests; override `authImplProvider` itself in the container and read from it so the `ref` captured inside the provider is the container's internal `Ref`.
 
 ## 2026-04-21
 

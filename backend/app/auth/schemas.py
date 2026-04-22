@@ -38,7 +38,8 @@ class UserCreate(BaseModel):
 
 class UserRead(BaseModel):
     id: str
-    email: str
+    # Nullable for SWS (Solana) users who authenticate without an email.
+    email: str | None
     is_active: bool
     created_at: datetime
 

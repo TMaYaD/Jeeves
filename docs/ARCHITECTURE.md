@@ -170,6 +170,51 @@ A `ConsumerStatefulWidget` with `WidgetsBindingObserver` for lifecycle events:
 
 When `AppLifecycleState.paused` fires during an active focus session, `NotificationService.showFocusNotification()` shows an `ongoing` Android notification (low importance, no sound). A `Timer.periodic` updates the notification body every minute. Cancelled on `AppLifecycleState.resumed`.
 
+## Auth Provider Interface
+
+The app supports multiple authentication backends selected at compile time.
+
+### AuthProvider abstract interface
+
+`app/lib/auth/auth_provider_interface.dart` defines:
+- `buildLoginWidget(context)` — returns the sign-in widget for that backend.
+- `signIn(params)` — performs sign-in; returns `AuthResult`.
+- `signOut(refreshToken)` — revokes the server session.
+- `restore()` — silently restores a session from secure storage; returns `AuthResult?`.
+
+### AuthResult
+
+`AuthResult` is the canonical return type for every provider sign-in:
+```dart
+class AuthResult {
+  final String accessToken;
+  final String refreshToken;
+  final String userId;  // decoded from the JWT `sub` claim
+}
+```
+
+`AuthNotifier` in `providers/auth_provider.dart` only deals with `AuthResult` — it never inspects JWT bytes itself.
+
+### Compile-time mode selection
+
+`app/lib/auth/auth_mode.dart` exposes `authImplProvider` (a Riverpod `Provider<AuthProvider>`).  The active implementation is chosen at build time:
+
+```
+flutter run --dart-define=JEEVES_AUTH_MODE=sws   # Sign-In With Solana
+flutter run                                        # default: email + password
+```
+
+| `JEEVES_AUTH_MODE` | Implementation | File |
+|---|---|---|
+| `password` (default) | `PasswordAuthProvider` | `auth/password/password_auth_provider.dart` |
+| `sws` | `SwsAuthProvider` | `auth/sws/sws_auth_provider.dart` |
+
+### Adding a new auth provider
+
+1. Create `app/lib/auth/<name>/<name>_auth_provider.dart` implementing `AuthProvider`.
+2. Add a case to the `switch` in `auth_mode.dart`.
+3. Pass `--dart-define=JEEVES_AUTH_MODE=<name>` at run time.
+
 ## Local Search
 
 Universal search is implemented entirely client-side against the local SQLite store, with no network dependency.
