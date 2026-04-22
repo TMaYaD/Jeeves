@@ -4,9 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/connectivity_provider.dart';
 import '../../providers/inbox_provider.dart';
 import '../../providers/powersync_provider.dart';
-import '../../providers/tag_filter_provider.dart';
-import '../../providers/tags_provider.dart';
-import '../../widgets/tag_list.dart';
+import '../../widgets/active_filter_bar.dart';
 import 'widgets/inbox_list.dart';
 import 'widgets/offline_chip.dart';
 import 'widgets/quick_add_bar.dart';
@@ -98,7 +96,7 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
               ),
             ),
             // Active tag filter strip (shown only when filter is active)
-            const _InboxFilterBar(),
+            const ActiveFilterBar(),
             // Quick add bar (pill-shaped input)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
@@ -129,40 +127,6 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _InboxFilterBar extends ConsumerWidget {
-  const _InboxFilterBar();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final selectedIds = ref.watch(tagFilterProvider);
-    if (selectedIds.isEmpty) return const SizedBox.shrink();
-
-    final notifier = ref.read(tagFilterProvider.notifier);
-    final allTags = ref.watch(contextTagsProvider).asData?.value ?? [];
-    final selectedTags =
-        allTags.where((t) => selectedIds.contains(t.id)).toList();
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      color: const Color(0xFFEFF6FF),
-      child: TagList(
-        tags: selectedTags,
-        onDismiss: (tag) => notifier.toggle(tag.id),
-        trailing: TextButton(
-          onPressed: notifier.clear,
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            minimumSize: Size.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          child: const Text('Clear all',
-              style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
         ),
       ),
     );

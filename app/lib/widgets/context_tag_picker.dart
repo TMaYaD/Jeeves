@@ -77,10 +77,16 @@ class _ContextTagPickerWidgetState
                     onSubmitted: _createContext,
                   ),
                 )
-              : ActionChip(
-                  avatar: const Icon(Icons.add, size: 16),
-                  label: const Text('New context'),
-                  onPressed: () => setState(() => _creatingNew = true),
+              : GestureDetector(
+                  onTap: () => setState(() => _creatingNew = true),
+                  child: const Text(
+                    '+ context',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF9CA3AF),
+                    ),
+                  ),
                 ),
         ),
         if (_creatingNew)
