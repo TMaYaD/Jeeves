@@ -1,7 +1,7 @@
 """Unit tests for the Redis-backed SWS nonce helpers."""
 
-import pytest
 import fakeredis.aioredis
+import pytest
 
 from app.auth.providers.sws_nonce import NONCE_TTL, consume_nonce, create_nonce
 
