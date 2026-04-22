@@ -76,9 +76,7 @@ def _b58encode(data: bytes) -> str:
 @pytest.mark.asyncio
 async def test_sws_challenge_returns_nonce(client, signing_key):
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
-    response = await client.post(
-        "/auth/sws/challenge", json={"public_key": public_key_b58}
-    )
+    response = await client.post("/auth/sws/challenge", json={"public_key": public_key_b58})
     assert response.status_code == 200
     data = response.json()
     assert data["nonce"]
@@ -91,9 +89,7 @@ async def test_sws_login_happy_path(client, signing_key):
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
 
     # Step 1: get challenge.
-    challenge = await client.post(
-        "/auth/sws/challenge", json={"public_key": public_key_b58}
-    )
+    challenge = await client.post("/auth/sws/challenge", json={"public_key": public_key_b58})
     assert challenge.status_code == 200
     nonce = challenge.json()["nonce"]
     issued_at = challenge.json()["issued_at"]
@@ -128,9 +124,7 @@ async def test_sws_login_happy_path(client, signing_key):
 async def test_sws_login_bad_signature_returns_401(client, signing_key):
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
 
-    challenge = await client.post(
-        "/auth/sws/challenge", json={"public_key": public_key_b58}
-    )
+    challenge = await client.post("/auth/sws/challenge", json={"public_key": public_key_b58})
     nonce = challenge.json()["nonce"]
     bad_sig = base64.b64encode(b"\x00" * 64).decode()
 

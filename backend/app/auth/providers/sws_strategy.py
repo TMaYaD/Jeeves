@@ -85,9 +85,7 @@ async def verify_sws(
         ) from None
 
     # Step 4: upsert user by Solana public key.
-    result = await db.execute(
-        select(User).where(User.solana_public_key == public_key_b58)
-    )
+    result = await db.execute(select(User).where(User.solana_public_key == public_key_b58))
     user = result.scalar_one_or_none()
     if user is None:
         user = User(
