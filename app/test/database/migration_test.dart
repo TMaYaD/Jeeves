@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/utils/tag_colors.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -116,12 +117,16 @@ void main() {
       final after = await (db.select(db.tags)).get();
       expect(after.every((t) => t.color != null), isTrue);
 
-      // Colors must be deterministic: same name → same color across calls.
+      // Backfill assigns stable, non-null colors; assert the two seeded names
+      // do not collide and that each matches the expected deterministic value.
       final work = after.firstWhere((t) => t.id == 't1');
       final home = after.firstWhere((t) => t.id == 't2');
       expect(work.color, isA<String>());
       expect(home.color, isA<String>());
       expect(work.color, isNot(equals(home.color)));
+      // Determinism: calling the same color function again must yield the same hex.
+      expect(work.color, equals(tagColorToHex(tagColorForName('work'))));
+      expect(home.color, equals(tagColorToHex(tagColorForName('home'))));
 
       // An intentional user reset after the migration must persist as null
       // (the one-time migration must not re-run and overwrite it).
