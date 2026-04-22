@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../providers/daily_planning_provider.dart';
-import '../providers/focus_session_provider.dart';
 import '../providers/sprint_provider.dart';
 import '../utils/time_format.dart';
 import 'focus/sprint_resolution_dialog.dart';
@@ -404,48 +403,6 @@ class _StartSprintButton extends ConsumerWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _StartButton extends ConsumerWidget {
-  const _StartButton({
-    required this.label,
-    required this.todoId,
-    this.inProgressSince,
-  });
-
-  final String label;
-  final String todoId;
-
-  /// Non-null only when the task is already inProgress (Resume path).
-  final DateTime? inProgressSince;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return FilledButton(
-      onPressed: () async {
-        final notifier = ref.read(focusModeProvider.notifier);
-        if (inProgressSince != null) {
-          // Task is already inProgress — restore session from DB timestamp.
-          notifier.resumeFrom(todoId, inProgressSince!);
-        } else {
-          await notifier.startFocus(todoId);
-        }
-        if (context.mounted) {
-          context.push('/focus/active');
-        }
-      },
-      style: FilledButton.styleFrom(
-        backgroundColor: const Color(0xFF2667B7),
-        minimumSize: const Size(72, 36),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        textStyle:
-            const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-      ),
-      child: Text(label),
     );
   }
 }
