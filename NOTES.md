@@ -11,6 +11,8 @@
 
 ## 2026-04-22
 
+- Evening Shutdown (issue #83): "Roll Over" and "Return to Next Actions" for in_progress tasks bypass the GTD state machine (which disallows `inProgress → nextAction`) and write directly to the DB — the same pattern used by planning's `selectForToday`/`skipForToday`. Time logging (elapsed since `inProgressSince`) is performed inline to match `transitionState`'s side effects.
+- `StreamProvider.future` in Riverpod only resolves the first emission. In tests with a fresh in-memory Drift DB, providers that depend on other lazy providers (like `shutdownSessionDateProvider`) may never emit if the container is disposed before the chain resolves. Solution: test DB-level behaviour via the DAO stream directly (`db.todoDao.watchX().first`) instead of going through the Riverpod `StreamProvider.future`.
 - `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
 - Notes in `ActiveFocusScreen` are now rendered as interactive `MarkdownBody` (same `flutter_markdown_plus` stack as `TaskDetailScreen`). Checkboxes toggle and persist via `taskDetailNotifierProvider.updateNotes`; links launch via `url_launcher`. `_FocusBody` became a `ConsumerStatefulWidget` to hold `_notes` local state for optimistic checkbox updates, synced from `todo.notes` via `didUpdateWidget`.
 

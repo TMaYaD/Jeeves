@@ -43,7 +43,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Bi-Directional Calendar Sync:** Split-screen UI. Left side: Today's selected tasks. Right side: Calendar (Google/Apple/Outlook sync). Users drag tasks onto the calendar to create timeboxes.
 * **Capacity Warning:** Visual indicators (e.g., progress bars or red text) if the total estimated time of selected tasks exceeds the available free time on the synced calendar.
 * **Focus Mode:** A minimalist execution UI that hides all navigation and lists, showing only the active task. Activated via a "Start" button on any task in the daily plan. Displays the task title, notes, an elapsed timer (HH:MM:SS), and an action bar with Pause, Complete, and Abandon. Complete transitions the task to `done` and returns to the daily plan; Abandon transitions to `deferred` and returns to the daily plan; Pause freezes the timer (task stays `inProgress`). A persistent notification appears when the app is backgrounded during focus. If the app is restarted mid-session the timer is restored from the `inProgressSince` DB field.
-* **Evening Shutdown:** End-of-day prompt to review completed work against estimates and roll over incomplete tasks.
+* **Evening Shutdown:** End-of-day guided ritual to review completed work against estimates, resolve each unfinished task (roll over to tomorrow, return to next actions, or defer to Someday/Maybe), view daily summary stats, and close the day. Triggered at a user-configured time (default 18:00) via a local notification and a dismissible banner. Available manually from Settings.
 
 ### Epic 3: Dynamic Timeboxing & Pomodoro Engine
 **Goal:** Adapt rigid time constraints to varying task lengths.

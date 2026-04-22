@@ -16,11 +16,16 @@ import 'package:timezone/timezone.dart' as tz;
 // Stable notification IDs.
 const _kPlanningNotificationId = 0;
 const _kPlanningSnoozeNotificationId = 1;
+const _kShutdownNotificationId = 2;
+const _kShutdownSnoozeNotificationId = 3;
 
 // Action identifiers sent back via onDidReceiveNotificationResponse.
 const kNotificationActionOpen = 'open';
 const kNotificationActionSnooze = 'snooze_default';
 const kNotificationActionSkip = 'skip_today';
+const kShutdownNotificationActionOpen = 'shutdown_open';
+const kShutdownNotificationActionSnooze = 'shutdown_snooze';
+const kShutdownNotificationActionSkip = 'shutdown_skip_today';
 
 const _kFocusId = 1001;
 
@@ -153,6 +158,43 @@ class NotificationService {
     await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
   }
 
+  // ---------------------------------------------------------------------------
+  // Evening shutdown notification
+  // ---------------------------------------------------------------------------
+
+  /// Schedules (or re-schedules) the daily evening shutdown notification to
+  /// fire at [time] every day.
+  Future<void> scheduleShutdownReminder({required TimeOfDay time}) async {
+    await _plugin.zonedSchedule(
+      id: _kShutdownNotificationId,
+      title: 'Time to close out the day',
+      body: 'Review your completed work and roll over unfinished tasks.',
+      scheduledDate: _nextInstanceOf(time),
+      notificationDetails: _shutdownNotificationDetails(),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      matchDateTimeComponents: DateTimeComponents.time,
+    );
+  }
+
+  /// Schedules a one-off snooze shutdown notification [minutes] from now.
+  Future<void> snoozeShutdownReminder(int minutes) async {
+    await _plugin.cancel(id: _kShutdownSnoozeNotificationId);
+    final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
+    await _plugin.zonedSchedule(
+      id: _kShutdownSnoozeNotificationId,
+      title: 'Time to close out the day',
+      body: 'Review your completed work and roll over unfinished tasks.',
+      scheduledDate: fireAt,
+      notificationDetails: _shutdownNotificationDetails(),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  Future<void> cancelShutdownReminder() async {
+    await _plugin.cancel(id: _kShutdownNotificationId);
+    await _plugin.cancel(id: _kShutdownSnoozeNotificationId);
+  }
+
   Future<void> cancelReminder(int id) async {
     await _plugin.cancel(id: id);
   }
@@ -239,6 +281,26 @@ class NotificationService {
       ),
       iOS: DarwinNotificationDetails(
         categoryIdentifier: 'daily_planning',
+      ),
+    );
+  }
+
+  NotificationDetails _shutdownNotificationDetails() {
+    return const NotificationDetails(
+      android: AndroidNotificationDetails(
+        'evening_shutdown',
+        'Evening Shutdown',
+        channelDescription: 'Evening shutdown ritual reminder',
+        importance: Importance.high,
+        priority: Priority.high,
+        actions: [
+          AndroidNotificationAction(kShutdownNotificationActionOpen, 'Open'),
+          AndroidNotificationAction(kShutdownNotificationActionSnooze, 'Snooze'),
+          AndroidNotificationAction(kShutdownNotificationActionSkip, 'Skip today'),
+        ],
+      ),
+      iOS: DarwinNotificationDetails(
+        categoryIdentifier: 'evening_shutdown',
       ),
     );
   }

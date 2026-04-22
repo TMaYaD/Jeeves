@@ -457,6 +457,122 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ));
   }
 
+  // ---------------------------------------------------------------------------
+  // Evening shutdown queries and mutations
+  // ---------------------------------------------------------------------------
+
+  /// Tasks from today's plan (selected for [today]) that have been completed.
+  Stream<List<Todo>> watchCompletedToday(String userId, String today) {
+    return _watchAllForUser(userId).map((all) => all
+        .where((t) =>
+            t.state == GtdState.done.value &&
+            t.selectedForToday == true &&
+            t.dailySelectionDate == today)
+        .toList());
+  }
+
+  /// Tasks from today's plan that are still unfinished (not done).
+  Stream<List<Todo>> watchUnfinishedSelectedToday(String userId, String today) {
+    return _watchAllForUser(userId).map((all) => all
+        .where((t) =>
+            t.selectedForToday == true &&
+            t.dailySelectionDate == today &&
+            t.state != GtdState.done.value)
+        .toList());
+  }
+
+  /// Preselects [id] for [tomorrow]'s plan, rolling it over.
+  ///
+  /// If the task is currently [GtdState.inProgress], elapsed time is logged
+  /// and the state is reverted to [GtdState.nextAction] so the task is
+  /// actionable again tomorrow.
+  ///
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to
+  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
+  Future<void> rolloverTask(String id, String userId, String tomorrow,
+      {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
+    await transaction(() async {
+      final row = await (select(todos)
+            ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+          .getSingleOrNull();
+      if (row == null) return;
+
+      var timeSpent = row.timeSpentMinutes;
+      String? inProgressSince = row.inProgressSince;
+      var newState = row.state;
+
+      if (row.state == GtdState.inProgress.value &&
+          row.inProgressSince != null) {
+        final started = DateTime.tryParse(row.inProgressSince!);
+        if (started != null) {
+          final elapsed = ts.difference(started);
+          final minutes = (elapsed.inSeconds / 60).ceil();
+          timeSpent += minutes.clamp(0, double.maxFinite.toInt());
+        }
+        inProgressSince = null;
+        newState = GtdState.nextAction.value;
+      }
+
+      await (update(todos)
+            ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+          .write(TodosCompanion(
+        state: Value(newState),
+        selectedForToday: const Value(true),
+        dailySelectionDate: Value(tomorrow),
+        timeSpentMinutes: Value(timeSpent),
+        inProgressSince: Value(inProgressSince),
+        updatedAt: Value(ts),
+      ));
+    });
+  }
+
+  /// Returns [id] to the unreviewed next-actions pool, clearing today's
+  /// daily selection so it reappears in tomorrow's planning ritual.
+  ///
+  /// If the task is currently [GtdState.inProgress], elapsed time is logged
+  /// and the state is reverted to [GtdState.nextAction].
+  ///
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to
+  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
+  Future<void> returnToNextActions(String id, String userId,
+      {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
+    await transaction(() async {
+      final row = await (select(todos)
+            ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+          .getSingleOrNull();
+      if (row == null) return;
+
+      var timeSpent = row.timeSpentMinutes;
+      String? inProgressSince = row.inProgressSince;
+      var newState = row.state;
+
+      if (row.state == GtdState.inProgress.value &&
+          row.inProgressSince != null) {
+        final started = DateTime.tryParse(row.inProgressSince!);
+        if (started != null) {
+          final elapsed = ts.difference(started);
+          final minutes = (elapsed.inSeconds / 60).ceil();
+          timeSpent += minutes.clamp(0, double.maxFinite.toInt());
+        }
+        inProgressSince = null;
+        newState = GtdState.nextAction.value;
+      }
+
+      await (update(todos)
+            ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+          .write(TodosCompanion(
+        state: Value(newState),
+        selectedForToday: const Value(null),
+        dailySelectionDate: const Value(null),
+        timeSpentMinutes: Value(timeSpent),
+        inProgressSince: Value(inProgressSince),
+        updatedAt: Value(ts),
+      ));
+    });
+  }
+
   /// Resets planning selections only for todos that were **skipped** on [date].
   ///
   /// Used when re-entering the planning ritual so that already-selected tasks

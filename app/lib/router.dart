@@ -17,6 +17,7 @@ import 'screens/active_focus_screen.dart';
 import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
 import 'screens/search/search_screen.dart';
+import 'screens/shutdown/shutdown_ritual_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
@@ -40,6 +41,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/planning',
       builder: (context, state) => const PlanningRitualScreen(),
+    ),
+    GoRoute(
+      path: '/shutdown',
+      builder: (context, state) => const ShutdownRitualScreen(),
     ),
     GoRoute(
       path: '/settings',

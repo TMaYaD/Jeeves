@@ -238,6 +238,54 @@ The ritual can no longer be auto-launched. Users are nudged through two opt-in m
 | `planning_settings_banner_enabled` | `bool` | Banner toggle |
 | `planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |
 
+## Evening Shutdown State
+
+The evening shutdown feature mirrors the daily planning architecture: global `ValueNotifier` objects for cross-widget reactivity and `SharedPreferences` for persistence.
+
+### Key objects
+
+| Object | Type | Purpose |
+|---|---|---|
+| `shutdownCompletionNotifier` | `ValueNotifier<bool>` | `true` when the shutdown ritual has been completed today |
+| `shutdownBannerDismissedNotifier` | `ValueNotifier<bool>` | `true` when the shutdown banner has been dismissed today |
+| `EveningShutdownNotifier` | Riverpod `NotifierProvider` | Step navigation, task rollover/return/defer mutations, banner dismiss, skip/snooze |
+| `ShutdownSettingsNotifier` | Riverpod `NotifierProvider` | User preferences: shutdown time, notification/banner toggles |
+
+Both `ValueNotifier` objects are initialised from `SharedPreferences` in `initShutdownCompletion()`, called in `main()` before `runApp`.
+
+### Shutdown ritual steps
+
+| Step | Screen | Key Operations | Exit Condition |
+|------|--------|---|---|
+| **0: Review Your Day** | `CompletedReviewStep` | Displays completed tasks with `timeEstimate` vs `timeSpentMinutes` side-by-side | User taps Next |
+| **1: Resolve Unfinished** | `UnfinishedTasksStep` | For each unfinished task: Roll Over (preselects for tomorrow), Return to Next Actions (clears selection), or Defer (moves to Someday/Maybe) | All unfinished tasks resolved |
+| **2: Close Day** | `ShutdownSummaryStep` | Summary stats: tasks completed, total time, estimation accuracy. "Close Day" persists completion state | User taps "Close Day" |
+
+### Task resolution mechanics
+
+- **Roll Over** — `TodoDao.rolloverTask()` sets `dailySelectionDate = tomorrow` and `selectedForToday = true`. If the task is `in_progress`, elapsed time is logged and state reverts to `next_action` so it's actionable the next day.
+- **Return to Next Actions** — `TodoDao.returnToNextActions()` clears `selectedForToday` and `dailySelectionDate`. The task reappears in tomorrow's planning ritual's review queue. If `in_progress`, elapsed time is logged and state reverts to `next_action`.
+- **Defer** — `TodoDao.deferTaskToSomeday()` transitions the task to `someday_maybe` via the GTD state machine.
+
+### Shutdown nudges
+
+1. **`ShutdownBanner`** (`lib/widgets/shutdown_banner.dart`) — rendered at the top of `AppShell` below `PlanningBanner`. Visible when planning is complete, shutdown is not yet done, and the banner hasn't been dismissed. Only shown after the user-configured shutdown time (time check in the widget's `build` method).
+
+2. **Local notification** — scheduled daily at the user's configured shutdown time (default 18:00). Uses the same `flutter_local_notifications` pattern as the planning notification. Actions: Open (→ `/shutdown`), Snooze (one-off 60-minute reschedule), Skip today.
+
+### SharedPreferences keys (shutdown)
+
+| Key | Value | Description |
+|---|---|---|
+| `shutdown_ritual_completed_date` | `yyyy-MM-dd` | Date of last completed shutdown ritual |
+| `shutdown_banner_dismissed_date` | `yyyy-MM-dd` | Date shutdown banner was last dismissed |
+| `shutdown_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" on shutdown notification |
+| `shutdown_notification_snoozed_until` | ISO-8601 datetime | When the snoozed shutdown notification will fire |
+| `shutdown_settings_time_hour` | `int` | Shutdown time hour |
+| `shutdown_settings_time_minute` | `int` | Shutdown time minute |
+| `shutdown_settings_notification_enabled` | `bool` | Notification toggle |
+| `shutdown_settings_banner_enabled` | `bool` | Banner toggle |
+
 ## Navigation & Global Filter State
 
 ### Tag Cloud Navigation Filter

@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 
 import '../../models/planning_settings.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/evening_shutdown_provider.dart';
 import '../../providers/planning_settings_provider.dart';
+import '../../providers/shutdown_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
 import '../../widgets/jeeves_logo.dart';
 
@@ -100,6 +102,9 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('DAILY PLANNING'),
           _DailyPlanningSettings(),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+          _sectionHeader('EVENING SHUTDOWN'),
+          _EveningShutdownSettings(),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
           Padding(
@@ -324,5 +329,84 @@ class _DailyPlanningSettings extends ConsumerWidget {
           .read(planningSettingsProvider.notifier)
           .setDefaultSnoozeDuration(picked);
     }
+  }
+}
+
+class _EveningShutdownSettings extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(shutdownSettingsProvider);
+    final notifier = ref.read(shutdownSettingsProvider.notifier);
+
+    return Column(
+      children: [
+        ListTile(
+          key: const Key('shutdown_time_tile'),
+          leading: const Icon(Icons.nightlight_outlined, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Shutdown time',
+            style: TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: Text(
+            settings.shutdownTime.format(context),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () async {
+            final picked = await showTimePicker(
+              context: context,
+              initialTime: settings.shutdownTime,
+            );
+            if (picked != null) {
+              await notifier.setShutdownTime(picked);
+            }
+          },
+        ),
+        SwitchListTile(
+          key: const Key('shutdown_notification_toggle'),
+          secondary: const Icon(Icons.notifications_outlined,
+              color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Notify me at shutdown time',
+            style: TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          value: settings.notificationEnabled,
+          onChanged: (v) => notifier.setNotificationEnabled(v),
+        ),
+        SwitchListTile(
+          key: const Key('shutdown_banner_toggle'),
+          secondary: const Icon(Icons.campaign_outlined, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Show banner at shutdown time',
+            style: TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: const Text(
+            'A reminder banner after your configured shutdown time.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          value: settings.bannerEnabled,
+          onChanged: (v) => notifier.setBannerEnabled(v),
+        ),
+        ListTile(
+          key: const Key('start_shutdown_tile'),
+          leading: const Icon(Icons.nightlight_round, color: Color(0xFF4F46E5)),
+          title: const Text(
+            'Start Evening Shutdown',
+            style: TextStyle(
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF4F46E5),
+            ),
+          ),
+          subtitle: const Text(
+            'Review your day and close out manually.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () {
+            Navigator.pop(context);
+            ref.read(eveningShutdownProvider.notifier).goToStep(0);
+            context.push('/shutdown');
+          },
+        ),
+      ],
+    );
   }
 }
