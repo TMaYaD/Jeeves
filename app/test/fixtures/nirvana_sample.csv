@@ -1,0 +1,18 @@
+"TYPE","PARENT","STATE","COMPLETED","FOCUS","NAME","TAGS","TIME","ENERGY","WAITINGFOR","STARTDATE","DUEDATE","NOTES",
+"Task","Standalone","Logbook","2024-4-3","","On a computer? click the note →","computer","5","","","","","If you're on a computer, there are a number of tricks you'll find indispensable:
+
+- Drag-n-drop to move and sort
+- Right-click and see what happens
+- Press N to create a new action",
+"Task","Standalone","Logbook","2024-3-20","","On mobile? try these gestures","Personal, anywhere","5","","","","","Here are a few gestures you'll want to have at your finger tips when using Nirvana on a mobile device:
+
+x Long-press to move me around
+x Swipe left and see what happens
+x Pull down to refresh",
+"Project","Standalone","Active","","","Brush up on GTD®","","","","","","","",
+"Task","Brush up on GTD®","Next","","","Read the Book","","240","Medium","","","","Getting Things Done: The Art of Stress-Free Productivity, by David Allen
+
+https://nirvanahq.com/go/readthebook",
+"Task","Brush up on GTD®","Next","","","Read our Quick Guide","","15","Low","","","","In this quick read we walk through the high-level GTD® workflow as explained in the book, Getting Things Done: The Art of Stress-Free Productivity, and highlight how it applies to getting things done with Nirvana.
+
+https://nirvanahq.com/go/getting-started",

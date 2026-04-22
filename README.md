@@ -29,6 +29,28 @@ See each subdirectory for setup instructions:
 - [`backend/README.md`](backend/README.md) — FastAPI backend
 - [`infra/README.md`](infra/README.md) — Local dev infrastructure
 
+## Testing Builds on Android
+
+Every PR against `master` that touches `app/` automatically produces a debug APK uploaded to Firebase App Distribution. The GitHub check **PR APK Build** on the PR reflects build success or failure.
+
+### QA tester group
+
+The `qa` tester group currently includes:
+
+- `apps@loonyb.in`
+
+To add a new tester, add their email to the `qa` group in the Firebase App Distribution console.
+
+### First-time setup
+
+When added to the `qa` group, Firebase sends an invitation email to the tester's address. Open that email **on the Android device** and follow the link — it installs the Firebase App Tester app and accepts the invitation in one step. Do not install App Tester from the Play Store directly; the invitation link is required to associate the device with the tester account.
+
+### Finding a build for a PR
+
+Open the Firebase App Tester app. Each build is labeled with the PR number, title, branch, and short commit SHA. Find the entry matching the PR number you want and tap **Download**. Subsequent pushes to the same PR produce a new build that appears at the top of the list.
+
+Re-pushes to the same PR cancel any in-progress build and produce a fresh one.
+
 ## Legacy
 
 The `master` branch contains the legacy Pylons prototype and is archived in place.
