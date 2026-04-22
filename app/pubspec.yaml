@@ -77,7 +77,6 @@ dependencies:
   freezed_annotation: ^3.1.0
   json_annotation: ^4.11.0
   intl: ^0.20.2
-  google_fonts: ^8.0.2
   flutter_markdown_plus: ^1.0.7
   url_launcher: ^6.3.0
 
@@ -100,3 +99,9 @@ flutter:
   assets:
     - assets/images/
     - assets/icons/
+  fonts:
+    - family: Manrope
+      fonts:
+        # Variable font: single TTF covers weights 200–800. Flutter reads the
+        # `wght` axis automatically when a `fontWeight` is applied.
+        - asset: assets/fonts/Manrope-VariableFont_wght.ttf

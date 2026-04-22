@@ -14,10 +14,10 @@ Our color palette is designed for a **light** color mode, prioritizing clarity a
 *   **Neutral Color**: `#4A5568` - This versatile neutral forms the foundation for backgrounds and general UI surfaces.
 
 ### Typography
-We employ a consistent and readable typographic system:
-*   **Headlines**: `inter` - Modern and highly legible for titles and headings.
-*   **Body Text**: `inter` - Ensures readability for all long-form content.
-*   **Labels**: `inter` - Clear and concise for UI labels and interactive elements.
+Our brand font is **Manrope**, used consistently across every surface of the app. Manrope ships as an embedded variable font (`assets/fonts/Manrope-VariableFont_wght.ttf`) so the app works without internet access.
+*   **Headlines**: `Manrope` - Modern and highly legible for titles and headings.
+*   **Body Text**: `Manrope` - Ensures readability for all long-form content.
+*   **Labels**: `Manrope` - Clear and concise for UI labels and interactive elements.
 
 ## Visual Language
 
