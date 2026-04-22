@@ -211,8 +211,18 @@ class NotificationService {
     );
   }
 
+  /// Permanently disables the shutdown reminder — cancels both the recurring
+  /// daily schedule and any pending snooze. Use when the user turns off
+  /// shutdown notifications in Settings.
   Future<void> cancelShutdownReminder() async {
     await _plugin.cancel(id: _kShutdownNotificationId);
+    await _plugin.cancel(id: _kShutdownSnoozeNotificationId);
+  }
+
+  /// Suppresses today's shutdown reminder without removing the recurring daily
+  /// schedule. Use for the "Skip today" notification action so tomorrow's
+  /// reminder still fires automatically.
+  Future<void> skipTodayShutdownReminder() async {
     await _plugin.cancel(id: _kShutdownSnoozeNotificationId);
   }
 

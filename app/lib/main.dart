@@ -91,7 +91,7 @@ void _handleNotificationResponse(NotificationResponse response) async {
 
     case kShutdownNotificationActionSkip:
       await persistShutdownSkipToday();
-      await NotificationService.instance.cancelShutdownReminder();
+      await NotificationService.instance.skipTodayShutdownReminder();
   }
 }
 
