@@ -123,6 +123,10 @@ Future<ImportResult> importNirvanaLocally({
     // --- Insert tasks in batches ---
     final tasks = items.where((i) => i.type == 'task').toList();
 
+    // In-memory cache for context tag ids — avoids redundant SELECTs when
+    // the same tag (e.g. "computer", "anywhere") appears on many tasks.
+    final contextTagIds = <String, String>{};
+
     for (var batchStart = 0;
         batchStart < tasks.length;
         batchStart += _batchSize) {
@@ -178,7 +182,9 @@ Future<ImportResult> importNirvanaLocally({
 
         // Upsert generic (context) tags.
         for (final tagName in item.tags) {
-          final tagId = await _upsertContextTag(db, tagName, userId);
+          final tagId = contextTagIds[tagName] ??
+              await _upsertContextTag(db, tagName, userId);
+          contextTagIds[tagName] = tagId;
           await db.into(db.todoTags).insert(
                 TodoTagsCompanion(
                   id: Value(todoTagIdFor(todoId, tagId)),

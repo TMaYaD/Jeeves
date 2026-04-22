@@ -175,6 +175,27 @@ void main() {
       expect(result.importedCount, 0);
       expect(result.projectTagsCreated, 0);
     });
+
+    test('latin-1 bytes are decoded without error', () async {
+      // Build a minimal CSV with a latin-1 encoded character (é = 0xE9)
+      final latin1Bytes = Uint8List.fromList([
+        ...utf8.encode('TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'),
+        ...utf8.encode('Task,Caf'),
+        0xE9, // é in latin-1
+        ...utf8.encode(',Next,,,,,,,, \n'),
+      ]);
+
+      final result = await importNirvanaLocally(
+        bytes: latin1Bytes,
+        filename: 'latin1.csv',
+        format: 'csv',
+        userId: _userId,
+        db: db,
+      );
+
+      // Should not throw; at least 1 task imported
+      expect(result.importedCount, greaterThanOrEqualTo(1));
+    });
   });
 
   group('importNirvanaLocally — JSON', () {
@@ -241,27 +262,6 @@ void main() {
 
       final tags = await db.tagDao.watchByType(_userId, 'project').first;
       expect(tags.length, 1);
-    });
-
-    test('latin-1 bytes are decoded without error', () async {
-      // Build a minimal CSV with a latin-1 encoded character (é = 0xE9)
-      final latin1Bytes = Uint8List.fromList([
-        ...utf8.encode('TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'),
-        ...utf8.encode('Task,Caf'),
-        0xE9, // é in latin-1
-        ...utf8.encode(',Next,,,,,,,, \n'),
-      ]);
-
-      final result = await importNirvanaLocally(
-        bytes: latin1Bytes,
-        filename: 'latin1.csv',
-        format: 'csv',
-        userId: _userId,
-        db: db,
-      );
-
-      // Should not throw; at least 1 task imported
-      expect(result.importedCount, greaterThanOrEqualTo(1));
     });
 
     test('invalid JSON throws ParseError wrapped in descriptive message', () async {
