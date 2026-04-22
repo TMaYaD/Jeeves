@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../providers/auth_provider.dart';
 
@@ -28,6 +29,12 @@ class _SwsLoginWidgetState extends ConsumerState<SwsLoginWidget> {
       await ref
           .read(authTokenProvider.notifier)
           .login({}, onConflict: null);
+      if (!mounted) return;
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/inbox');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {

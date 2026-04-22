@@ -17,7 +17,7 @@
 ### SWS (#129)
 
 - `PasswordLoginWidget` (ConsumerStatefulWidget) owns loading/error state and the conflict dialog — `LoginScreen` delegates entirely to `provider.buildLoginWidget(context)` without type-checking. All providers implement `buildLoginWidget` and manage their own state.
-- `AuthNotifier.login()` signature changed from `(String, String, {onConflict})` to `(Map<String,dynamic>, {onConflict})` — existing login_screen_test.dart fake notifiers needed updating.
+- `AuthNotifier.login()` signature changed from `(String, String, {onConflict})` to `(Map<String, dynamic>, {onConflict})` — existing login_screen_test.dart fake notifiers needed updating.
 - No existing Redis client in the backend — created `backend/app/redis.py` as a thin `aioredis.from_url` wrapper with a `get_redis` FastAPI dependency, mirroring the `get_db` pattern.
 - `ProviderContainer` cannot be passed as `Ref` to auth providers in tests; override `authImplProvider` itself in the container and read from it so the `ref` captured inside the provider is the container's internal `Ref`.
 

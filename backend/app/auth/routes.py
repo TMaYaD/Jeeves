@@ -11,7 +11,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.hashing import hash_password, verify_password
 from app.auth.models import RefreshToken, User
 from app.auth.providers.sws_nonce import create_nonce
-from app.auth.providers.sws_strategy import verify_sws
+from app.auth.providers.sws_strategy import SIWS_DOMAIN, verify_sws
 from app.auth.schemas import (
     LoginRequest,
     LogoutRequest,
@@ -156,7 +156,7 @@ async def sws_challenge(
     (300 s) or request a fresh challenge.
     """
     nonce, issued_at = await create_nonce(redis, body.public_key)
-    return SWSChallengeResponse(nonce=nonce, issued_at=issued_at, domain="jeeves.app")
+    return SWSChallengeResponse(nonce=nonce, issued_at=issued_at, domain=SIWS_DOMAIN)
 
 
 @router.post("/auth/sws", response_model=Token)

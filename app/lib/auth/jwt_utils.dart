@@ -18,7 +18,8 @@ String? extractUserIdFromJwt(String token) {
     final expSeconds =
         exp is int ? exp : (exp is String ? int.tryParse(exp) : null);
     final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    if (expSeconds != null && expSeconds <= nowSeconds) return null;
+    if (expSeconds == null) return null;
+    if (expSeconds <= nowSeconds) return null;
     return json['sub'] as String?;
   } catch (_) {
     return null;

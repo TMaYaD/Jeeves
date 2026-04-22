@@ -68,15 +68,7 @@ class SwsAuthProvider implements AuthProvider {
   @override
   Future<AuthResult> signIn(Map<String, dynamic> params) async {
     // Step 1: obtain a challenge nonce.
-    // We need the public key to bind the nonce.  Ask the signer to sign an
-    // empty message first just to get the public key, OR we expose a separate
-    // `getPublicKey` method.  For simplicity, sign a zero-length byte array
-    // to retrieve the key, then discard that "signature".
-    //
-    // Real Seed Vault integration would expose a dedicated `publicKey` getter.
-    // Here we sign a minimal probe to read the key.
-    final probe = await _signer.sign(Uint8List(0));
-    final publicKey = probe.publicKey;
+    final publicKey = await _signer.getPublicKey();
 
     final challengeResponse = await _api.post('/auth/sws/challenge', {
       'public_key': publicKey,
@@ -95,6 +87,9 @@ class SwsAuthProvider implements AuthProvider {
     final signed = await _signer.sign(
       Uint8List.fromList(utf8.encode(message)),
     );
+    if (signed.publicKey != publicKey) {
+      throw StateError('Wallet public key changed during sign-in.');
+    }
 
     // Step 4: submit to the backend.
     final tokenResponse = await _api.post('/auth/sws', {

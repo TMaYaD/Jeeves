@@ -2,6 +2,9 @@ import 'dart:typed_data';
 
 /// Abstraction over a Solana wallet that can sign arbitrary messages.
 abstract interface class WalletSigner {
+  /// Returns the wallet's public key as a base58-encoded string.
+  Future<String> getPublicKey();
+
   /// Signs [message] and returns the signer's public key (base58) and the
   /// ed25519 signature over the raw bytes.
   Future<({String publicKey, Uint8List signature})> sign(Uint8List message);
@@ -16,6 +19,9 @@ class StubWalletSigner implements WalletSigner {
   });
 
   final String publicKey;
+
+  @override
+  Future<String> getPublicKey() async => publicKey;
 
   @override
   Future<({String publicKey, Uint8List signature})> sign(
@@ -43,6 +49,15 @@ class StubWalletSigner implements WalletSigner {
 /// ```
 class SeedVaultSigner implements WalletSigner {
   const SeedVaultSigner();
+
+  @override
+  Future<String> getPublicKey() async {
+    throw UnsupportedError(
+      'SWS mode is not functional yet: SeedVaultSigner requires the Solana '
+      'Mobile Stack SDK (seedvault_wallet), which is not yet available on '
+      'pub.dev. See the class-level doc comment for integration instructions.',
+    );
+  }
 
   @override
   Future<({String publicKey, Uint8List signature})> sign(

@@ -19,6 +19,8 @@ from .sws_nonce import consume_nonce
 # SIWS message template
 # ---------------------------------------------------------------------------
 
+SIWS_DOMAIN = "jeeves.app"
+
 # Must be reconstructed byte-for-byte identically in the Flutter client
 # (see ``sws_auth_provider.dart``'s ``_buildSiwsMessage``).
 SIWS_TEMPLATE = (
@@ -68,7 +70,7 @@ async def verify_sws(
 
     # Step 2: reconstruct the message the client signed.
     message = SIWS_TEMPLATE.format(
-        domain="jeeves.app",
+        domain=SIWS_DOMAIN,
         public_key=public_key_b58,
         nonce=nonce,
         issued_at=data["issued_at"],
@@ -88,6 +90,11 @@ async def verify_sws(
     # Step 4: upsert user by Solana public key.
     result = await db.execute(select(User).where(User.solana_public_key == public_key_b58))
     user = result.scalar_one_or_none()
+    if user is not None and not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive",
+        )
     if user is None:
         user = User(
             id=str(uuid.uuid4()),
