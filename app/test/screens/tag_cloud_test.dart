@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:jeeves/widgets/tag_text.dart';
+
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/daily_planning_provider.dart';
@@ -125,7 +127,7 @@ void main() {
       expect(find.byKey(const Key('tag_cloud_clear_filters')), findsNothing);
     });
 
-    testWidgets('renders chips for tags with active tasks', (tester) async {
+    testWidgets('renders tags for tags with active tasks', (tester) async {
       final tag = _tag('ctx1', 'Work');
       await tester.pumpWidget(_buildShell(
         contextTagsWithCount: [_twc(tag, 3)],
@@ -135,6 +137,8 @@ void main() {
       await _openDrawer(tester);
 
       expect(find.byKey(const Key('tag_chip_ctx1')), findsOneWidget);
+      expect(find.byType(TagText), findsOneWidget);
+      expect(find.byType(FilterChip), findsNothing);
     });
 
     testWidgets('tapping a chip selects it and shows clear button',

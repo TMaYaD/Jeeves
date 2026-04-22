@@ -6,13 +6,12 @@ import '../database/gtd_database.dart';
 import '../providers/database_provider.dart';
 import '../providers/tags_provider.dart';
 import '../utils/tag_colors.dart';
+import 'tag_list.dart';
 
-/// Multi-select chip row for context tags.
+/// Multi-select tag list for context tags.
 ///
-/// FilterChips remain for interactive select/deselect; the chip label is
-/// colored with the tag's stored color so the visual language matches
-/// [TagText] elsewhere in the app.  Long-pressing a chip opens a palette
-/// color picker so the user can change the tag's color.
+/// Tags are rendered via [TagList] / [TagText] so the visual language matches
+/// the rest of the app.  Long-pressing a tag opens a palette color picker.
 class ContextTagPickerWidget extends ConsumerStatefulWidget {
   const ContextTagPickerWidget({
     super.key,
@@ -50,57 +49,39 @@ class _ContextTagPickerWidgetState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          spacing: 6,
-          runSpacing: 4,
-          children: [
-            for (final tag in allContexts)
-              GestureDetector(
-                onLongPress: () => _showColorPicker(context, tag),
-                child: FilterChip(
-                  key: ValueKey(tag.id),
-                  label: Text(
-                    '@${tag.name}',
-                    style: TextStyle(
-                      color: resolvedTagColor(
-                          name: tag.name, storedHex: tag.color),
-                      fontWeight: FontWeight.w600,
+        TagList(
+          tags: allContexts,
+          selectedIds: assignedIds,
+          onTap: (tag) {
+            if (assignedIds.contains(tag.id)) {
+              widget.onRemove(tag);
+            } else {
+              widget.onAssign(tag);
+            }
+          },
+          onLongPress: (tag) => _showColorPicker(context, tag),
+          trailing: _creatingNew
+              ? SizedBox(
+                  width: 160,
+                  child: TextField(
+                    controller: _newContextController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      prefixText: '@',
+                      hintText: 'context',
+                      border: OutlineInputBorder(),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      isDense: true,
                     ),
+                    onSubmitted: _createContext,
                   ),
-                  selected: assignedIds.contains(tag.id),
-                  onSelected: (selected) {
-                    if (selected) {
-                      widget.onAssign(tag);
-                    } else {
-                      widget.onRemove(tag);
-                    }
-                  },
+                )
+              : ActionChip(
+                  avatar: const Icon(Icons.add, size: 16),
+                  label: const Text('New context'),
+                  onPressed: () => setState(() => _creatingNew = true),
                 ),
-              ),
-            if (_creatingNew)
-              SizedBox(
-                width: 160,
-                child: TextField(
-                  controller: _newContextController,
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    prefixText: '@',
-                    hintText: 'context',
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    isDense: true,
-                  ),
-                  onSubmitted: _createContext,
-                ),
-              )
-            else
-              ActionChip(
-                avatar: const Icon(Icons.add, size: 16),
-                label: const Text('New context'),
-                onPressed: () => setState(() => _creatingNew = true),
-              ),
-          ],
         ),
         if (_creatingNew)
           Padding(

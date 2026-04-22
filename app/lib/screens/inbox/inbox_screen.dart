@@ -6,6 +6,7 @@ import '../../providers/inbox_provider.dart';
 import '../../providers/powersync_provider.dart';
 import '../../providers/tag_filter_provider.dart';
 import '../../providers/tags_provider.dart';
+import '../../widgets/tag_list.dart';
 import 'widgets/inbox_list.dart';
 import 'widgets/offline_chip.dart';
 import 'widgets/quick_add_bar.dart';
@@ -144,47 +145,24 @@ class _InboxFilterBar extends ConsumerWidget {
 
     final notifier = ref.read(tagFilterProvider.notifier);
     final allTags = ref.watch(contextTagsProvider).asData?.value ?? [];
-    final tagsById = {for (final t in allTags) t.id: t};
+    final selectedTags =
+        allTags.where((t) => selectedIds.contains(t.id)).toList();
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
       color: const Color(0xFFEFF6FF),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            ...selectedIds.map((id) {
-              final tag = tagsById[id];
-              final label = tag?.name ?? 'Deleted tag';
-              return Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: InputChip(
-                  key: Key('inbox_filter_chip_$id'),
-                  label: Text(label,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF1D4ED8))),
-                  selected: true,
-                  selectedColor: const Color(0xFFDBEAFE),
-                  deleteIcon: const Icon(Icons.close,
-                      size: 14, color: Color(0xFF1D4ED8)),
-                  onDeleted: () => notifier.toggle(id),
-                  onPressed: () => notifier.toggle(id),
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              );
-            }),
-            TextButton(
-              onPressed: notifier.clear,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text('Clear all',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-            ),
-          ],
+      child: TagList(
+        tags: selectedTags,
+        onDismiss: (tag) => notifier.toggle(tag.id),
+        trailing: TextButton(
+          onPressed: notifier.clear,
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: const Text('Clear all',
+              style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
         ),
       ),
     );

@@ -10,7 +10,7 @@ import '../../providers/task_detail_provider.dart';
 import '../../widgets/blocked_by_picker.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
-import '../../widgets/tag_text.dart';
+import '../../widgets/tag_list.dart';
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
   const TaskDetailScreen({super.key, required this.todoId});
@@ -177,28 +177,23 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       ),
                       const SizedBox(height: 16),
                       // Context Tags
-                      Wrap(
+                      TagList(
+                        tags: contextTags,
                         spacing: 12,
                         runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          ...contextTags.map((tag) => GestureDetector(
-                                onTap: () => _showContextTagEditor(context),
-                                child: TagText(tag: tag),
-                              )),
-                          GestureDetector(
-                            onTap: () => _showContextTagEditor(context),
-                            child: Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(color: const Color(0xFFD1D5DB)),
-                              ),
-                              child: const Icon(Icons.add, size: 16, color: Color(0xFF9CA3AF)),
+                        onTap: (_) => _showContextTagEditor(context),
+                        trailing: GestureDetector(
+                          onTap: () => _showContextTagEditor(context),
+                          child: Container(
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: const Color(0xFFD1D5DB)),
                             ),
+                            child: const Icon(Icons.add, size: 16, color: Color(0xFF9CA3AF)),
                           ),
-                        ],
+                        ),
                       ),
                       const SizedBox(height: 20),
                       // Attributes Row (Status, Time, Energy)
