@@ -5,18 +5,18 @@ packages:
     dependency: transitive
     description:
       name: _fe_analyzer_shared
-      sha256: "5b7468c326d2f8a4f630056404ca0d291ade42918f4a3c6233618e724f39da8e"
+      sha256: "3b19a47f6ea7c2632760777c78174f47f6aec1e05f0cd611380d4593b8af1dbc"
       url: "https://pub.dev"
     source: hosted
-    version: "92.0.0"
+    version: "96.0.0"
   analyzer:
     dependency: transitive
     description:
       name: analyzer
-      sha256: "70e4b1ef8003c64793a9e268a551a82869a8a96f39deb73dea28084b0e8bf75e"
+      sha256: "0c516bc4ad36a1a75759e54d5047cb9d15cded4459df01aa35a0b5ec7db2c2a0"
       url: "https://pub.dev"
     source: hosted
-    version: "9.0.0"
+    version: "10.2.0"
   analyzer_buffer:
     dependency: transitive
     description:
@@ -269,10 +269,10 @@ packages:
     dependency: "direct main"
     description:
       name: drift_sqlite_async
-      sha256: "3c075f6de753edbb202575b3ddc85e9d683c4aadda9b809772d6c14875b1526e"
+      sha256: "1b6e99562fc5d35fe5e3696741720a8aca47f4c3eee35d4b9b94be819f53a6f6"
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.6"
+    version: "0.3.0"
   equatable:
     dependency: transitive
     description:
@@ -771,10 +771,10 @@ packages:
     dependency: transitive
     description:
       name: meta
-      sha256: "23f08335362185a5ea2ad3a4e597f1375e78bce8a040df5c600c8d3552ef2394"
+      sha256: df0c643f44ad098eb37988027a8e2b2b5a031fd3977f06bbfd3a76637e8df739
       url: "https://pub.dev"
     source: hosted
-    version: "1.17.0"
+    version: "1.18.2"
   mime:
     dependency: transitive
     description:
@@ -1042,10 +1042,11 @@ packages:
   riverpod_analyzer_utils:
     dependency: transitive
     description:
-      name: riverpod_analyzer_utils
-      sha256: e55bc08c084a424e1bbdc303fe8ea75daafe4269b68fd0e0f6f1678413715b66
-      url: "https://pub.dev"
-    source: hosted
+      path: packages/riverpod_analyzer_utils
+      ref: e8b84952e40b395ef47ab1f581eddddf64f0b2fd
+      resolved-ref: e8b84952e40b395ef47ab1f581eddddf64f0b2fd
+      url: "https://github.com/rrousselGit/riverpod.git"
+    source: git
     version: "1.0.0-dev.9"
   riverpod_annotation:
     dependency: "direct main"
@@ -1058,10 +1059,11 @@ packages:
   riverpod_generator:
     dependency: "direct dev"
     description:
-      name: riverpod_generator
-      sha256: "6f9220534d7a353b53c875ea191a84d28cb4e52ac420a66a1bd7318329d977b0"
-      url: "https://pub.dev"
-    source: hosted
+      path: packages/riverpod_generator
+      ref: e8b84952e40b395ef47ab1f581eddddf64f0b2fd
+      resolved-ref: e8b84952e40b395ef47ab1f581eddddf64f0b2fd
+      url: "https://github.com/rrousselGit/riverpod.git"
+    source: git
     version: "4.0.3"
   shared_preferences:
     dependency: "direct main"
@@ -1224,18 +1226,18 @@ packages:
     dependency: "direct dev"
     description:
       name: sqlite3
-      sha256: "3145bd74dcdb4fd6f5c6dda4d4e4490a8087d7f286a14dee5d37087290f0f8a2"
+      sha256: "56da3e13ed7d28a66f930aa2b2b29db6736a233f08283326e96321dd812030f5"
       url: "https://pub.dev"
     source: hosted
-    version: "2.9.4"
+    version: "3.3.1"
   sqlite3_flutter_libs:
     dependency: "direct main"
     description:
       name: sqlite3_flutter_libs
-      sha256: eeb9e3a45207649076b808f8a5a74d68770d0b7f26ccef6d5f43106eee5375ad
+      sha256: 3ed7553eee7bb368f8950f58ba29f634e06e813c029aff6a0d60862b96de8454
       url: "https://pub.dev"
     source: hosted
-    version: "0.5.42"
+    version: "0.6.0+eol"
   sqlite3_web:
     dependency: transitive
     description:
@@ -1248,10 +1250,10 @@ packages:
     dependency: "direct main"
     description:
       name: sqlite_async
-      sha256: "9b47ba01bb600d4a0e44752237ea201408bd4dff57eb203356ef27df41c29421"
+      sha256: "4c243c5386eba3a7102f98999388a7e0a7f2632e4e06dafb3b4f5a44170a26f6"
       url: "https://pub.dev"
     source: hosted
-    version: "0.13.1"
+    version: "0.14.1"
   sqlparser:
     dependency: transitive
     description:

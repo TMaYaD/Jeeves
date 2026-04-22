@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,28 +13,33 @@ import 'services/notification_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize notification service with the action handler registered before
-  // any notification can fire (including cold-start launch).
-  await NotificationService.initialize(
-    onNotificationResponse: _handleNotificationResponse,
-  );
-  await NotificationService.instance.requestPermissions();
-
-  // Seed planning state from SharedPreferences before the first frame.
+  // Seed suppression flags before any notification scheduling so that a
+  // previously skipped/snoozed reminder is not re-enabled on restart.
   await initPlanningCompletion();
   await loadNotificationSuppression();
 
-  // Re-establish the daily planning notification schedule after an app restart.
-  await initPlanningNotificationSchedule();
+  // flutter_local_notifications uses platform channels unavailable on web.
+  // Skip the entire notification stack on web; push notifications are a
+  // separate feature (PWA Web Push) tracked outside this issue.
+  if (!kIsWeb) {
+    // Initialize notification service with the action handler registered
+    // before any notification can fire (including cold-start launch).
+    await NotificationService.initialize(
+      onNotificationResponse: _handleNotificationResponse,
+    );
+    await NotificationService.instance.requestPermissions();
 
-  // Cold-start: if the user tapped a notification to launch the app from a
-  // terminated state, onDidReceiveNotificationResponse will not fire; the
-  // launch details must be fetched explicitly and dispatched.
-  final launchDetails =
-      await NotificationService.instance.getLaunchDetails();
-  if (launchDetails?.didNotificationLaunchApp == true &&
-      launchDetails?.notificationResponse != null) {
-    _handleNotificationResponse(launchDetails!.notificationResponse!);
+    // Re-establish the daily planning notification schedule after a restart.
+    await initPlanningNotificationSchedule();
+
+    // Cold-start: if the user tapped a notification to launch the app from a
+    // terminated state, onDidReceiveNotificationResponse will not fire; the
+    // launch details must be fetched explicitly and dispatched.
+    final launchDetails = await NotificationService.instance.getLaunchDetails();
+    if (launchDetails?.didNotificationLaunchApp == true &&
+        launchDetails?.notificationResponse != null) {
+      _handleNotificationResponse(launchDetails!.notificationResponse!);
+    }
   }
 
   runApp(const ProviderScope(child: JeevesApp()));

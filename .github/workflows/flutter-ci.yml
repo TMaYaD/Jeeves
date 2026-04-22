@@ -9,6 +9,62 @@ on:
     paths: ["app/**"]
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Temporary gate — remove when riverpod_generator publishes a stable release
+  # that supports analyzer ^10 (tracking: rrousselGit/riverpod#4727).
+  #
+  # Logic:
+  #   - PINNED_VERSION is the current pub.dev stable (4.0.3, using analyzer ^9).
+  #   - When pub.dev publishes a version GREATER than 4.0.3, this job fails,
+  #     forcing the engineer to:
+  #       1. Remove the dependency_override in app/pubspec.yaml.
+  #       2. Set riverpod_generator: ^<LATEST> in pubspec.yaml.
+  #       3. Run `flutter pub get` and verify tests pass.
+  #       4. Delete this entire job.
+  #   - Until then, the job passes with an informational log.
+  # ---------------------------------------------------------------------------
+  riverpod-generator-stable-watch:
+    name: Check riverpod_generator stable release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce riverpod_generator stable upgrade
+        env:
+          # Update this when changing the git SHA in app/pubspec.yaml.
+          # Must be the current pub.dev stable version that LACKS analyzer-10
+          # support.  The gate fires when pub.dev publishes anything higher.
+          PINNED_VERSION: "4.0.3"
+        run: |
+          set -euo pipefail
+
+          LATEST=$(curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 --max-time 20 \
+            https://pub.dev/api/packages/riverpod_generator \
+            | python3 -c "import sys, json; print(json.load(sys.stdin)['latest']['version'])")
+
+          echo "Pinned (git build equivalent): ${PINNED_VERSION}"
+          echo "Latest stable on pub.dev:      ${LATEST}"
+
+          if python3 -c "
+          import sys
+          def parse(v):
+              import re
+              v = re.split(r'[-+]', v, 1)[0]
+              return tuple(int(x) for x in v.split('.'))
+          pinned = parse('${PINNED_VERSION}')
+          latest = parse('${LATEST}')
+          sys.exit(0 if latest <= pinned else 1)
+          "; then
+            echo "riverpod_generator: no newer stable release yet. Continuing."
+          else
+            echo "::error::riverpod_generator ${LATEST} supersedes the pinned git build (${PINNED_VERSION})."
+            echo "::error::ACTION REQUIRED:"
+            echo "::error::  1. Remove dependency_overrides.riverpod_generator from app/pubspec.yaml."
+            echo "::error::  2. Remove dependency_overrides.riverpod_analyzer_utils from app/pubspec.yaml."
+            echo "::error::  3. Set 'riverpod_generator: ^${LATEST}' in pubspec.yaml dev_dependencies."
+            echo "::error::  4. Run 'flutter pub get' inside app/ and verify tests pass."
+            echo "::error::  5. Delete the 'riverpod-generator-stable-watch' job from this workflow."
+            exit 1
+          fi
+
   analyze:
     name: Analyze & Test
     runs-on: ubuntu-latest

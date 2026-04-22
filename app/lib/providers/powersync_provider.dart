@@ -9,17 +9,18 @@
 // [databaseProvider] reads this future via `DatabaseConnection.delayed`
 // so Drift queries issued before the DB is ready are queued and flushed
 // on completion.
+//
+// Platform-specific storage (file path on native, OPFS on web) is
+// handled entirely by [PowerSyncStorageImpl] via a conditional import —
+// this file has no dart:io or kIsWeb references.
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:powersync/powersync.dart' as ps;
-import 'package:sqlite_async/sqlite_async.dart' as sa;
 
 import '../database/powersync_schema.dart';
+import '../database/powersync_storage.dart';
 import '../services/api_service.dart';
 import '../services/backend_connector.dart';
 import 'auth_provider.dart';
@@ -35,24 +36,7 @@ final powerSyncInstanceProvider =
     FutureProvider<ps.PowerSyncDatabase>((ref) async {
   ref.keepAlive();
 
-  final dbFolder = await getApplicationDocumentsDirectory();
-  final dbPath = p.join(dbFolder.path, 'jeeves.sqlite');
-
-  // One-shot cleanup for users upgrading from a pre-PowerSync build:
-  // that build wrote real Drift-managed `todos` / `tags` / `todo_tags`
-  // tables into this same file.  PowerSync installs *views* with those
-  // exact names, which cannot coexist with tables of the same name.
-  // Drop the legacy tables (and any rows that hadn't yet replicated to
-  // a server that didn't exist at the time) so PowerSync's view
-  // creation succeeds.  Intentionally destructive — the alternative
-  // was a complex rename-and-copy pipeline that wasn't worth the
-  // maintenance cost for this one-time upgrade.  Future schema changes
-  // must go through Alembic + PowerSync's additive-column discipline,
-  // not data-dropping shortcuts.
-  await _dropLegacyDriftTables(dbPath);
-
-  final db = ps.PowerSyncDatabase(schema: powersyncSchema, path: dbPath);
-  await db.initialize();
+  final db = await PowerSyncStorageImpl().openDatabase(powersyncSchema);
 
   // Bridge the current auth state to PowerSync's connection lifecycle.
   // [currentUserIdProvider] holds `'local'` when no-one is logged in and
@@ -116,27 +100,3 @@ final powerSyncInstanceProvider =
 
   return db;
 });
-
-Future<void> _dropLegacyDriftTables(String dbPath) async {
-  // Skip when the file doesn't exist yet — opening a fresh `SqliteDatabase`
-  // would create an empty file, which PowerSync will then open as its own
-  // first-run storage anyway.  Avoiding the stub write keeps cold-start
-  // cheap for new installs.
-  if (!File(dbPath).existsSync()) return;
-  final raw = sa.SqliteDatabase(path: dbPath);
-  try {
-    await raw.initialize();
-    final rows = await raw.getAll(
-      "SELECT name FROM sqlite_master "
-      "WHERE type = 'table' AND name IN ('todos', 'tags', 'todo_tags')",
-    );
-    if (rows.isEmpty) return;
-    await raw.writeTransaction((tx) async {
-      for (final row in rows) {
-        await tx.execute('DROP TABLE ${row['name']}');
-      }
-    });
-  } finally {
-    await raw.close();
-  }
-}

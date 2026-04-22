@@ -53,8 +53,9 @@ help:
 # Setup
 # -----------------------------------------------------------------------------
 
-setup: ## Fetch Flutter packages and run build_runner
+setup: ## Fetch Flutter packages, download web assets, and run build_runner
 	cd $(APP_DIR) && flutter pub get
+	bash tool/fetch_web_assets.sh
 	cd $(APP_DIR) && dart run build_runner build --delete-conflicting-outputs
 
 # -----------------------------------------------------------------------------
