@@ -82,7 +82,7 @@ void main() {
     });
 
     testWidgets('size < 16 throws assertion', (tester) async {
-      await tester.pumpWidget(_wrap(const JeevesLogo(size: 15)));
+      await tester.pumpWidget(_wrap(JeevesLogo(size: 15)));
       expect(tester.takeException(), isA<AssertionError>());
     });
   });
