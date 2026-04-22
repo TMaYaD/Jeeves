@@ -50,7 +50,7 @@ class NotificationService {
     tz.setLocalLocation(tz.getLocation(tzInfo.identifier));
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iOS = DarwinInitializationSettings(
+    final iOS = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
       requestSoundPermission: false,
@@ -77,7 +77,7 @@ class NotificationService {
       ],
     );
     await instance._plugin.initialize(
-      settings: const InitializationSettings(android: android, iOS: iOS),
+      settings: InitializationSettings(android: android, iOS: iOS),
       onDidReceiveNotificationResponse: onNotificationResponse,
       onDidReceiveBackgroundNotificationResponse: onNotificationResponse,
     );

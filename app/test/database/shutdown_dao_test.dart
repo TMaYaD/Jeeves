@@ -14,6 +14,7 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
+  var taskSeq = 0;
 
   setUp(() {
     db = GtdDatabase(NativeDatabase.memory());
@@ -35,7 +36,7 @@ void main() {
     int timeSpentMinutes = 0,
     String? inProgressSince,
   }) async {
-    final id = 'task-${DateTime.now().microsecondsSinceEpoch}';
+    final id = 'task-${taskSeq++}';
     final now = DateTime.now();
     await db.into(db.todos).insert(TodosCompanion(
       id: Value(id),

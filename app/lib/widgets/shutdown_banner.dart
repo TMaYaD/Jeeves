@@ -104,7 +104,7 @@ class _ShutdownBannerState extends ConsumerState<ShutdownBanner> {
                 if (dismissed) return const SizedBox.shrink();
                 return _BannerContent(
                   key: const Key('shutdown_banner_visible'),
-                  quip: _quipForToday(),
+                  quip: ShutdownBanner._quipForToday(),
                   onTap: () => context.go('/shutdown'),
                   onDismiss: () => ref
                       .read(eveningShutdownProvider.notifier)
