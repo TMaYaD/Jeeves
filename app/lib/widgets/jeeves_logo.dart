@@ -53,7 +53,14 @@ class JeevesLogo extends StatelessWidget {
     required this.size,
     this.onDark,
     this.appIcon = false,
-  });
+  })  : assert(
+          size >= 16,
+          'JeevesLogo: size must be ≥ 16 (minimum legible size for Signature). Got $size.',
+        ),
+        assert(
+          !(variant == JeevesLogoVariant.wordmark && appIcon),
+          'JeevesLogo: appIcon is not supported with wordmark variant.',
+        );
 
   /// Which mark to display. Defaults to [JeevesLogoVariant.auto].
   final JeevesLogoVariant variant;
@@ -74,15 +81,6 @@ class JeevesLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    assert(
-      size >= 16,
-      'JeevesLogo: size must be ≥ 16 (minimum legible size for Signature). Got $size.',
-    );
-    assert(
-      !(variant == JeevesLogoVariant.wordmark && appIcon),
-      'JeevesLogo: appIcon is not supported with wordmark variant.',
-    );
-
     final isDark = onDark ?? (Theme.of(context).brightness == Brightness.dark);
 
     final JeevesLogoVariant resolved = switch (variant) {

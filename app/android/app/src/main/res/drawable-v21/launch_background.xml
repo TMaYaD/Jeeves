@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="?android:colorBackground" />
-    <item>
-        <bitmap
-            android:gravity="center"
-            android:src="@drawable/jeeves_mark" />
-    </item>
+    <item
+        android:drawable="@drawable/jeeves_mark"
+        android:gravity="center"
+        android:width="72dp"
+        android:height="104dp" />
 </layer-list>
