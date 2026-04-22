@@ -78,7 +78,7 @@ Universal search is implemented entirely client-side against the local SQLite st
 
 ### Search models
 
-- `lib/models/search_query.dart` — plain Dart class holding text, state set, tag-ID set, energy levels, date range, and time-estimate cap. No code generation required.
+- `lib/models/search_query.dart` — plain Dart class holding text, state set, tag-ID set, energy levels, date range, time-estimate cap, and the `includeDone` flag. No code generation required.
 - `lib/models/search_result.dart` — wraps a Drift `Todo` + its `List<Tag>` + a `Set<SearchMatchField>` indicating which fields matched + an optional notes snippet.
 
 ### Providers
