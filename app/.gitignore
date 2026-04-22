@@ -17,3 +17,8 @@ build/
 
 # macOS
 .DS_Store
+
+# Web assets (downloaded at build time by tool/fetch_web_assets.sh via `make setup`)
+# Never commit these — they must match the pinned powersync version in pubspec.lock.
+web/sqlite3.wasm
+web/powersync_db.worker.js

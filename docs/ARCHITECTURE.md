@@ -40,7 +40,8 @@ Located in `app/`.
 - **Local Storage:** Offline-first architecture using `drift` and `sqlite3_flutter_libs` as the structured SQL engine.
 - **API Communication:** `dio` and `retrofit`.
 - **Data Models:** `freezed` and `json_serializable` for robust immutable models.
-- **Sync:** PowerSync (`powersync` Dart package) — bidirectional sync via `JevesBackendConnector` and a self-hosted `journeyapps/powersync-service` instance.
+- **Sync:** PowerSync (`powersync ^2.x` Dart package) — bidirectional sync via `JevesBackendConnector` and a self-hosted `journeyapps/powersync-service` instance.
+- **Web storage:** OPFS-backed SQLite via `WebPowerSyncOpenFactory` from `package:powersync/web.dart`, using the WASM worker assets in `app/web/`.
 
 ### Backend (Python/FastAPI)
 
@@ -63,6 +64,69 @@ PowerSync provides bidirectional offline-first sync between the Flutter SQLite s
 - Local writes made through the PowerSync client are queued and uploaded to the backend REST API via `JevesBackendConnector.uploadData()`.
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.
 - Conflict resolution: last-write-wins (acceptable for v1).
+
+## Platform I/O Adapters
+
+Any code that opens a file, spawns a process, or calls a native OS API must be isolated behind a platform adapter using Dart's conditional import mechanism. This keeps `dart:io` out of shared provider and service code so the app compiles cleanly on web without `if (kIsWeb)` branches scattered through business logic.
+
+### The pattern
+
+Three files per adapter:
+
+| File | Compiled on | Responsibility |
+|---|---|---|
+| `*_stub.dart` | Neither (analyser only) | Throws `UnsupportedError` — gives the analyser a type to resolve on all targets |
+| `*_io.dart` | Native (dart:io) | Concrete native implementation; may import `dart:io`, `path_provider`, etc. |
+| `*_web.dart` | Web (dart:html) | Concrete web implementation; may import `package:powersync/web.dart`, `dart:js_interop`, etc. |
+
+The entry-point file uses a conditional export to pick the right implementation:
+
+```dart
+export '*_stub.dart'
+    if (dart.library.io)   '*_io.dart'
+    if (dart.library.html) '*_web.dart';
+```
+
+**Rule:** any new platform-specific I/O must follow this pattern. Never add `if (kIsWeb)` branches inside provider or service code — put platform divergence in the adapter file.
+
+### Current adapters
+
+#### `app/lib/database/powersync_storage.dart`
+
+Opens the process-wide `PowerSyncDatabase`.
+
+- **Native (`powersync_storage_io.dart`):** resolves a file path via `path_provider`, runs the one-shot legacy-table migration, and opens `PowerSyncDatabase(schema, path)` using the native SQLite library (`sqlite3_flutter_libs`).  This path is shared by Android, iOS, macOS, Linux, and Windows — a platform gaining divergent behaviour (e.g. encryption key from Keychain) should split its own adapter rather than branching inside `powersync_storage_io.dart`.
+- **Web (`powersync_storage_web.dart`):** opens `PowerSyncDatabase.withFactory(WebPowerSyncOpenFactory(path: 'jeeves'), schema)` backed by OPFS in Chrome and IndexedDB in other browsers.
+
+#### `app/lib/services/platform_helper.dart`
+
+Detects whether the app is running inside an Android emulator (for API host rewriting).
+
+- **Native (`platform_helper_io.dart`):** reads `Platform.isAndroid` from `dart:io`.
+- **Web (`platform_helper.dart` stub):** always returns `false`.
+
+### Web worker assets
+
+`WebPowerSyncOpenFactory` requires two files to be present in `app/web/` at runtime:
+
+| Asset | Source |
+|---|---|
+| `sqlite3.wasm` | PowerSync GitHub release for the pinned `powersync` version |
+| `powersync_db.worker.js` | Same release |
+
+These files are **not committed** (`app/.gitignore`).  Run `make setup` (or `tool/fetch_web_assets.sh` directly) to download them.  The script reads the exact version from `app/pubspec.lock` so the assets always match the Dart package.
+
+### COOP / COEP headers (OPFS requirement)
+
+OPFS and `SharedArrayBuffer` require [cross-origin isolation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer#security_requirements).  The server must send:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+- **Development:** `flutter run -d web-server --web-header "Cross-Origin-Opener-Policy: same-origin" --web-header "Cross-Origin-Embedder-Policy: require-corp"`
+- **Production:** configure in the reverse proxy or CDN in front of the Flutter web build.
 
 ## Local Search
 

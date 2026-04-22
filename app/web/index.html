@@ -34,6 +34,26 @@
 </head>
 <body>
   <!--
+    PowerSync uses OPFS (Origin Private File System) and SharedArrayBuffer for
+    its WASM-backed SQLite database.  Both require cross-origin isolation — the
+    server must set:
+      Cross-Origin-Opener-Policy: same-origin
+      Cross-Origin-Embedder-Policy: require-corp
+    In development, pass these via `flutter run --web-header`.
+    In production, configure them in your reverse proxy / CDN.
+  -->
+  <script>
+    if (typeof SharedArrayBuffer === 'undefined') {
+      console.warn(
+        '[Jeeves] SharedArrayBuffer is unavailable. ' +
+        'The server must send Cross-Origin-Opener-Policy: same-origin ' +
+        'and Cross-Origin-Embedder-Policy: require-corp headers for ' +
+        'OPFS-backed offline storage to work.'
+      );
+    }
+  </script>
+
+  <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
     or to give the user feedback during the initialization process.
