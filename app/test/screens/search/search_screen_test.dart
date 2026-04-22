@@ -48,7 +48,8 @@ void main() {
       await tester.pump();
 
       // Should not throw; screen should show the search hint text.
-      expect(find.widgetWithText(TextField, ''), findsOneWidget);
+      expect(find.text('Search tasks…'), findsOneWidget);
+      expect(find.byType(TextField), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
