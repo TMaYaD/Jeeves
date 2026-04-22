@@ -92,7 +92,7 @@ void main() {
       expect(items.first.blockedByTodoId, equals(null));
     });
 
-    test('v6→v7 migration: null-color tags get backfilled, explicit nulls from updateColor are unrelated post-migration', () async {
+    test('v6→v7 migration: null-color tags get backfilled; post-migration updateColor(null) is not overwritten', () async {
       final db = _openInMemory();
       addTearDown(db.close);
 
@@ -122,6 +122,14 @@ void main() {
       expect(work.color, isA<String>());
       expect(home.color, isA<String>());
       expect(work.color, isNot(equals(home.color)));
+
+      // An intentional user reset after the migration must persist as null
+      // (the one-time migration must not re-run and overwrite it).
+      await db.tagDao.updateColor('t1', null);
+      final cleared = await (db.select(db.tags)
+            ..where((t) => t.id.equals('t1')))
+          .getSingle();
+      expect(cleared.color, equals(null));
     });
 
     test('v5→v6 migration: existing todo_tags rows get backfilled id', () async {
