@@ -102,10 +102,7 @@ android: setup emulator-android ## Run app on Android emulator
 # Override with:  make seeker SEEKER_DEVICE=<device-id>
 SEEKER_DEVICE ?= emulator
 
-seeker: setup ## Run app on Solana Seeker with SWS auth mode
-	@if [ "$(SEEKER_DEVICE)" = "emulator" ]; then \
-		$(MAKE) emulator-android; \
-	fi
+seeker: setup emulator-android ## Run app on Solana Seeker with SWS auth mode
 	cd $(APP_DIR) && flutter run -d $(SEEKER_DEVICE) --dart-define=JEEVES_AUTH_MODE=sws
 
 iphone ios: setup emulator-ios ## Run app on iOS Simulator
