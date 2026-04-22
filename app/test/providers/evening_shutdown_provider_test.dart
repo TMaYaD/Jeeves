@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import '../test_helpers.dart';

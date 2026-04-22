@@ -27,7 +27,7 @@ void main() {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  Future<String> _insertTask({
+  Future<String> insertTask({
     required String state,
     bool? selectedForToday,
     String? dailySelectionDate,
@@ -59,7 +59,7 @@ void main() {
 
   group('watchCompletedToday', () {
     test('returns done tasks selected for today', () async {
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.done.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -73,7 +73,7 @@ void main() {
     });
 
     test('excludes done tasks not selected for today', () async {
-      await _insertTask(
+      await insertTask(
         state: GtdState.done.value,
         selectedForToday: false,
         dailySelectionDate: _today,
@@ -85,7 +85,7 @@ void main() {
     });
 
     test('excludes done tasks from a different date', () async {
-      await _insertTask(
+      await insertTask(
         state: GtdState.done.value,
         selectedForToday: true,
         dailySelectionDate: '2025-01-14',
@@ -97,7 +97,7 @@ void main() {
     });
 
     test('excludes non-done tasks even if selected today', () async {
-      await _insertTask(
+      await insertTask(
         state: GtdState.nextAction.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -115,7 +115,7 @@ void main() {
 
   group('watchUnfinishedSelectedToday', () {
     test('returns selected non-done tasks for today', () async {
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.nextAction.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -128,7 +128,7 @@ void main() {
     });
 
     test('excludes done tasks', () async {
-      await _insertTask(
+      await insertTask(
         state: GtdState.done.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -141,7 +141,7 @@ void main() {
     });
 
     test('excludes tasks not selected for today', () async {
-      await _insertTask(
+      await insertTask(
         state: GtdState.nextAction.value,
         selectedForToday: false,
         dailySelectionDate: _today,
@@ -155,7 +155,7 @@ void main() {
 
     test('includes in_progress tasks selected today', () async {
       final now = DateTime.now();
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.inProgress.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -175,7 +175,7 @@ void main() {
 
   group('rolloverTask', () {
     test('preselects task for tomorrow', () async {
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.nextAction.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -191,7 +191,7 @@ void main() {
 
     test('logs elapsed time and reverts in_progress to next_action', () async {
       final started = DateTime.now().subtract(const Duration(minutes: 45));
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.inProgress.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -211,7 +211,7 @@ void main() {
     });
 
     test('removes task from today\'s unfinished list after rollover', () async {
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.nextAction.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -232,7 +232,7 @@ void main() {
 
   group('returnToNextActions', () {
     test('clears daily selection fields', () async {
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.nextAction.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -247,7 +247,7 @@ void main() {
 
     test('logs elapsed time and reverts in_progress to next_action', () async {
       final started = DateTime.now().subtract(const Duration(minutes: 20));
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.inProgress.value,
         selectedForToday: true,
         dailySelectionDate: _today,
@@ -267,7 +267,7 @@ void main() {
     });
 
     test('removes task from today\'s unfinished list', () async {
-      final id = await _insertTask(
+      final id = await insertTask(
         state: GtdState.nextAction.value,
         selectedForToday: true,
         dailySelectionDate: _today,

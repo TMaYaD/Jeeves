@@ -15,7 +15,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show GtdState;
 import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
