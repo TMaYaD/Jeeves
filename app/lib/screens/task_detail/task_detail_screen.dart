@@ -379,7 +379,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                       onTap: () async {
                                         final picked = await showDatePicker(
                                           context: context,
-                                          initialDate: todo.dueDate ?? DateTime.now(),
+                                          // Storage is UTC; DatePicker reads
+                                          // year/month/day verbatim, so feed
+                                          // the local-tz instant.
+                                          initialDate: todo.dueDate?.toLocal() ?? DateTime.now(),
                                           firstDate: DateTime(2000),
                                           lastDate: DateTime(2100),
                                           builder: (ctx, child) => Theme(

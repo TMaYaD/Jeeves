@@ -87,7 +87,9 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     _notesCtrl = TextEditingController(text: widget.todo.notes ?? '');
     _energyLevel = widget.todo.energyLevel;
     _timeEstimate = widget.todo.timeEstimate;
-    _dueDate = widget.todo.dueDate;
+    // Storage is UTC; the picker and the year/month/day display below need
+    // local-tz semantics so the user sees the calendar day they chose.
+    _dueDate = widget.todo.dueDate?.toLocal();
   }
 
   @override

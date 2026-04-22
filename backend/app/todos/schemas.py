@@ -8,6 +8,21 @@ from pydantic import BaseModel, Field, field_validator
 from app.todos.models import ENERGY_LEVELS, GTD_STATES, TAG_TYPES
 
 
+def _normalise_drift_iso(value: object) -> object:
+    """Strip the leading space Drift inserts before the timezone offset.
+
+    When `storeDateTimeAsText` is enabled, Drift serialises non-UTC
+    DateTimes as ``2026-04-30T00:00:00.000 +05:30`` — note the space.  That
+    format is accepted by SQLite's date functions but rejected by Pydantic's
+    ISO-8601 parser (and asyncpg's TIMESTAMPTZ encoder).  Removing the space
+    yields a standard offset that Pydantic parses natively, while leaving
+    already-clean strings (``…Z``, ``…+00:00``) untouched.
+    """
+    if isinstance(value, str):
+        return value.replace(" +", "+").replace(" -", "-")
+    return value
+
+
 class TagType(StrEnum):
     context = "context"
     project = "project"
@@ -71,7 +86,7 @@ class TodoCreate(BaseModel):
     # Each item is either a plain string ("@office") or a TagInput dict.
     # Plain strings: "@" prefix → context; bare word → label.
     tags: list[str | TagInput] = []
-    due_date: str | None = None
+    due_date: datetime | None = None
     priority: int | None = None
     time_estimate: int | None = None  # minutes
     energy_level: str | None = None  # 'low' | 'medium' | 'high'
@@ -83,6 +98,8 @@ class TodoCreate(BaseModel):
     blocked_by_todo_id: str | None = None
     selected_for_today: bool | None = None
     daily_selection_date: str | None = None
+
+    _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
 
     @field_validator("state")
     @classmethod
@@ -105,7 +122,7 @@ class TodoUpdate(BaseModel):
     completed: bool | None = None
     state: str | None = None
     tags: list[str | TagInput] | None = None  # Full replacement of tag set when provided
-    due_date: str | None = None
+    due_date: datetime | None = None
     priority: int | None = None
     time_estimate: int | None = None
     energy_level: str | None = None
@@ -117,6 +134,8 @@ class TodoUpdate(BaseModel):
     blocked_by_todo_id: str | None = None
     selected_for_today: bool | None = None
     daily_selection_date: str | None = None
+
+    _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
 
     @field_validator("state")
     @classmethod
