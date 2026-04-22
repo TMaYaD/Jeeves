@@ -26,16 +26,18 @@ final walletSignerProvider = Provider<WalletSigner>((ref) {
 
 /// Reconstructed identically in the backend's `sws_strategy.py`.
 String _buildSiwsMessage({
+  required String domain,
+  required String uri,
   required String publicKey,
   required String nonce,
   required String issuedAt,
 }) =>
-    'jeeves.app wants you to sign in with your Solana account:\n'
+    '$domain wants you to sign in with your Solana account:\n'
     '$publicKey\n'
     '\n'
     'Sign in to Jeeves\n'
     '\n'
-    'URI: https://jeeves.app\n'
+    'URI: $uri\n'
     'Version: 1\n'
     'Chain ID: solana:mainnet\n'
     'Nonce: $nonce\n'
@@ -73,11 +75,15 @@ class SwsAuthProvider implements AuthProvider {
     final challengeResponse = await _api.post('/auth/sws/challenge', {
       'public_key': publicKey,
     });
+    final domain = challengeResponse['domain'] as String;
+    final uri = challengeResponse['uri'] as String? ?? 'https://$domain';
     final nonce = challengeResponse['nonce'] as String;
     final issuedAt = challengeResponse['issued_at'] as String;
 
     // Step 2: build the SIWS message.
     final message = _buildSiwsMessage(
+      domain: domain,
+      uri: uri,
       publicKey: publicKey,
       nonce: nonce,
       issuedAt: issuedAt,

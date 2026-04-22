@@ -40,6 +40,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
 
     pw_ok = (
         user is not None
+        and user.is_active
         and user.hashed_password
         and verify_password(body.password, user.hashed_password)
     )

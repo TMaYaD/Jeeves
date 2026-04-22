@@ -69,11 +69,18 @@ async def verify_sws(
         )
 
     # Step 2: reconstruct the message the client signed.
+    issued_at = data.get("issued_at")
+    if not isinstance(issued_at, str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Nonce invalid or expired",
+        )
+
     message = SIWS_TEMPLATE.format(
         domain=SIWS_DOMAIN,
         public_key=public_key_b58,
         nonce=nonce,
-        issued_at=data["issued_at"],
+        issued_at=issued_at,
     ).encode()
 
     # Step 3: verify ed25519 signature.
@@ -109,5 +116,10 @@ async def verify_sws(
             await db.rollback()
             result = await db.execute(select(User).where(User.solana_public_key == public_key_b58))
             user = result.scalar_one()
+            if not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User account is inactive",
+                ) from None
         await db.refresh(user)
     return user
