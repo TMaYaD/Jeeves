@@ -5,8 +5,6 @@ auth-gated mutations, and operations that require server-side logic
 (e.g. recurrence expansion, AI-assisted parsing).
 """
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,7 +61,6 @@ async def create_todo(
     current_user: User = Depends(get_current_user),
 ) -> Todo:
     tags = await resolve_tags(body.tags, current_user.id, db)
-    due_date = datetime.fromisoformat(body.due_date) if body.due_date else None
     # Check for existing todo by client-provided id (idempotent retry support).
     if body.id is not None:
         existing = await _get_todo_with_tags(body.id, db)
@@ -76,7 +73,7 @@ async def create_todo(
         completed=body.completed,
         state=body.state,
         priority=body.priority,
-        due_date=due_date,
+        due_date=body.due_date,
         time_estimate=body.time_estimate,
         energy_level=body.energy_level,
         capture_source=body.capture_source,

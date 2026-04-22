@@ -1,5 +1,7 @@
 """End-to-end tests covering complete user journeys."""
 
+from datetime import datetime
+
 import pytest
 from httpx import AsyncClient
 
@@ -241,3 +243,33 @@ async def test_capture_source_tracking(client: AsyncClient) -> None:
     listed_sources = {t["id"]: t["capture_source"] for t in listing.json()}
     for todo_id, source in zip(created_ids, sources, strict=False):
         assert listed_sources[todo_id] == source
+
+
+@pytest.mark.asyncio
+async def test_due_date_accepts_drift_local_tz_format(client: AsyncClient) -> None:
+    """PowerSync uploads due_date in Drift's local-tz format with a space
+    before the offset (e.g. '2026-04-30T00:00:00.000 +05:30').  That format
+    is non-standard ISO 8601 but is what Drift produces when
+    `storeDateTimeAsText` is enabled and the DateTime is local.  We must
+    accept it — otherwise PowerSync's CRUD queue gets stuck retrying a
+    poisoned PATCH and the sync indicator goes red."""
+    reg = await client.post("/user", json={"email": "due-date@example.com", "password": "s3cret"})
+    headers = auth_header(reg.json()["access_token"])
+
+    create = await client.post("/todos/", json={"title": "Reschedule me"}, headers=headers)
+    todo_id = create.json()["id"]
+
+    drift_format = "2026-04-30T00:00:00.000 +05:30"
+    expected_instant = datetime.fromisoformat("2026-04-30T00:00:00+05:30")
+    patch = await client.patch(
+        f"/todos/{todo_id}", json={"due_date": drift_format}, headers=headers
+    )
+    assert patch.status_code == 200, patch.text
+    assert datetime.fromisoformat(patch.json()["due_date"]) == expected_instant
+
+    # POST should also accept it.
+    posted = await client.post(
+        "/todos/", json={"title": "Plan now", "due_date": drift_format}, headers=headers
+    )
+    assert posted.status_code == 201, posted.text
+    assert datetime.fromisoformat(posted.json()["due_date"]) == expected_instant

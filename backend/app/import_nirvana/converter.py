@@ -1,5 +1,7 @@
 """Convert NirvanaItem list → project tag names + TodoCreate list."""
 
+from datetime import datetime
+
 from app.import_nirvana.schemas import NirvanaItem
 from app.todos.schemas import TagInput, TodoCreate
 
@@ -60,7 +62,10 @@ def convert_items(
                 completed=item.completed,
                 state=item.state,
                 tags=tag_specs,
-                due_date=item.due_date,
+                # NirvanaItem.due_date is the raw ISO string from the export;
+                # TodoCreate's validator parses it.  Pre-convert so mypy sees
+                # the datetime type the schema now declares.
+                due_date=datetime.fromisoformat(item.due_date) if item.due_date else None,
                 time_estimate=item.time_estimate,
                 energy_level=item.energy_level,
                 waiting_for=item.waiting_for,

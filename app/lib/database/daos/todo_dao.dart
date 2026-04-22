@@ -424,7 +424,11 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     await (update(todos)
           ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
         .write(TodosCompanion(
-      dueDate: Value(newDueDate),
+      // Store UTC so Drift's storeDateTimeAsText path emits a standard
+      // ISO-8601 string (no leading-space offset).  Otherwise PowerSync
+      // uploads "...000 +05:30" which asyncpg's TIMESTAMPTZ encoder
+      // rejects, poisoning the CRUD queue.
+      dueDate: Value(newDueDate.toUtc()),
       updatedAt: Value(ts),
     ));
   }
@@ -517,10 +521,11 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       energyLevel: energyLevel != null ? Value(energyLevel) : const Value.absent(),
       timeEstimate: timeEstimate != null ? Value(timeEstimate) : const Value.absent(),
       state: newState != null ? Value(newState) : const Value.absent(),
+      // Normalise to UTC; see rescheduleTask for rationale.
       dueDate: clearDueDate
           ? const Value(null)
           : dueDate != null
-              ? Value(dueDate)
+              ? Value(dueDate.toUtc())
               : const Value.absent(),
       blockedByTodoId: clearBlockedBy
           ? const Value(null)

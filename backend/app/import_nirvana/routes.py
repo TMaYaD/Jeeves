@@ -1,7 +1,5 @@
 """Import endpoint: POST /import/nirvana."""
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -112,14 +110,13 @@ async def import_nirvana(
         pending: list[tuple[Todo, list[Tag]]] = []
         for payload in batch:
             tags = await resolve_tags(payload.tags, current_user.id, db)
-            due_date = datetime.fromisoformat(payload.due_date) if payload.due_date else None
             todo = Todo(
                 title=payload.title,
                 notes=payload.notes,
                 state=payload.state,
                 completed=payload.completed,
                 priority=payload.priority,
-                due_date=due_date,
+                due_date=payload.due_date,
                 time_estimate=payload.time_estimate,
                 energy_level=payload.energy_level,
                 waiting_for=payload.waiting_for,

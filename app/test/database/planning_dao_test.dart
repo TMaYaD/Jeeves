@@ -319,7 +319,9 @@ void main() {
 
       final row = await db.todoDao.getTodo('a', _userId);
       expect(row?.state, GtdState.scheduled.value);
-      expect(row?.dueDate, newDate);
+      // rescheduleTask normalises to UTC so Drift emits a standard ISO-8601
+      // offset that asyncpg's TIMESTAMPTZ encoder can parse.
+      expect(row?.dueDate, newDate.toUtc());
     });
 
     test('rescheduled task disappears from watchScheduledDueToday', () async {
