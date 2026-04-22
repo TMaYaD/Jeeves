@@ -31,7 +31,8 @@ fi
 #     version: "2.0.1"
 POWERSYNC_VERSION=$(awk '
   /^  powersync:$/ { found=1; next }
-  found && /version:/ { gsub(/"/, "", $2); print $2; exit }
+  found && /^    version:/ { gsub(/"/, "", $2); print $2; exit }
+  found && /^  [^ ]/ { exit }
 ' "$LOCK_FILE")
 
 if [ -z "$POWERSYNC_VERSION" ]; then

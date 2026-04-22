@@ -14,6 +14,11 @@ import 'services/notification_service.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Seed suppression flags before any notification scheduling so that a
+  // previously skipped/snoozed reminder is not re-enabled on restart.
+  await initPlanningCompletion();
+  await loadNotificationSuppression();
+
   // flutter_local_notifications uses platform channels unavailable on web.
   // Skip the entire notification stack on web; push notifications are a
   // separate feature (PWA Web Push) tracked outside this issue.
@@ -37,10 +42,6 @@ Future<void> main() async {
       _handleNotificationResponse(launchDetails!.notificationResponse!);
     }
   }
-
-  // Seed planning state from SharedPreferences before the first frame.
-  await initPlanningCompletion();
-  await loadNotificationSuppression();
 
   runApp(const ProviderScope(child: JeevesApp()));
 }

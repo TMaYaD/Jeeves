@@ -120,7 +120,7 @@ These files are **not committed** (`app/.gitignore`).  Run `make setup` (or `too
 
 OPFS and `SharedArrayBuffer` require [cross-origin isolation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer#security_requirements).  The server must send:
 
-```
+```text
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
