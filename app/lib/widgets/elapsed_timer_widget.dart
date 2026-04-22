@@ -3,7 +3,6 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../providers/focus_session_provider.dart';
 
@@ -210,7 +209,8 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
     if (phrase.isEmpty) return const SizedBox.shrink();
 
     final voiceStyle = widget.style ??
-        GoogleFonts.ebGaramond(
+        const TextStyle(
+          fontFamily: 'Manrope',
           fontSize: 20,
           fontStyle: FontStyle.italic,
           fontWeight: FontWeight.w500,
