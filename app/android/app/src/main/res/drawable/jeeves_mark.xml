@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Jeeves Pointillist mark — Android Vector Drawable.
+  Viewport matches the SVG reference: 142×204 (viewBox "50 24 142 204" shifted to origin).
+  Dot positions: reference (cx,cy) minus (50,24); radii: 14 (brand), 13 (rest).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="72dp"
+    android:height="104dp"
+    android:viewportWidth="142"
+    android:viewportHeight="204">
+
+  <!-- brand #2667B7 — top dot, slightly larger (r=14) -->
+  <path android:fillColor="#2667B7"
+        android:pathData="M 118,6 A 14,14 0 1 0 118,34 A 14,14 0 1 0 118,6 Z"/>
+  <!-- sky #60A5FA -->
+  <path android:fillColor="#60A5FA"
+        android:pathData="M 118,59 A 13,13 0 1 0 118,85 A 13,13 0 1 0 118,59 Z"/>
+  <!-- lav #C4B5FD -->
+  <path android:fillColor="#C4B5FD"
+        android:pathData="M 118,97 A 13,13 0 1 0 118,123 A 13,13 0 1 0 118,97 Z"/>
+  <!-- peach #FDBA74 -->
+  <path android:fillColor="#FDBA74"
+        android:pathData="M 118,135 A 13,13 0 1 0 118,161 A 13,13 0 1 0 118,135 Z"/>
+  <!-- blush #F9A8D4 -->
+  <path android:fillColor="#F9A8D4"
+        android:pathData="M 92,163 A 13,13 0 1 0 92,189 A 13,13 0 1 0 92,163 Z"/>
+  <!-- mint #6EE7B7 -->
+  <path android:fillColor="#6EE7B7"
+        android:pathData="M 54,171 A 13,13 0 1 0 54,197 A 13,13 0 1 0 54,171 Z"/>
+  <!-- butter #FDE68A -->
+  <path android:fillColor="#FDE68A"
+        android:pathData="M 18,153 A 13,13 0 1 0 18,179 A 13,13 0 1 0 18,153 Z"/>
+
+</vector>

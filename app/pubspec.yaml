@@ -123,10 +123,13 @@ flutter_launcher_icons:
   # Re-run `dart run flutter_launcher_icons` after any brand update.
   image_path: "assets/brand/icon-source-1024.png"
   android: true
-  ios: true
-  macos: true
-  linux: true
-  windows: true
+  ios: false
+  macos:
+    generate: false
+  linux:
+    generate: false
+  windows:
+    generate: false
   # Android adaptive icon: INK background + dots-only transparent foreground
   adaptive_icon_background: "#1A1A2E"
   adaptive_icon_foreground: "assets/brand/icon-adaptive-fg-1024.png"

@@ -38,17 +38,32 @@ DOTS = [
     (0xFD, 0xE6, 0x8A, 255),  # butter #FDE68A
 ]
 
-# Dot positions as fractions of the mark bounding box (0-1, top→hook)
-DOT_POS = [
-    (0.50, 0.10),
-    (0.50, 0.30),
-    (0.50, 0.50),
-    (0.50, 0.68),
-    (0.50, 0.82),
-    (0.40, 0.91),
-    (0.28, 0.87),
+# Dot positions in 256×256 appicon coordinate space.
+# Derived from brand reference: STEM_X=168, R=13 (small dots), R=14 (top dot).
+# Mark is centered in 256×256 with ~78 % canvas-height coverage.
+# To scale to any square canvas of size S: multiply cx/cy/r by S/256.
+DOTS_256 = [
+    # (cx, cy, r, color)   — top → hook, brand first
+    (180, 43,  15, DOTS[0]),  # brand
+    (180, 97,  14, DOTS[1]),  # sky
+    (180, 137, 14, DOTS[2]),  # lav
+    (180, 177, 14, DOTS[3]),  # peach
+    (153, 206, 14, DOTS[4]),  # blush
+    (113, 214, 14, DOTS[5]),  # mint
+    (75,  196, 14, DOTS[6]),  # butter
 ]
-DOT_R_FRAC = 0.07   # dot radius as fraction of mark size
+
+
+def _dots_for_size(size, maskable_scale=1.0):
+    """Return (cx, cy, r, color) tuples scaled to a square canvas of `size` px.
+
+    maskable_scale < 1.0 shrinks the mark into the safe zone while keeping it
+    centered (e.g. 0.80 for Android maskable icons).
+    """
+    s = size * maskable_scale / 256.0
+    offset = (size * (1.0 - maskable_scale)) / 2.0
+    return [(cx * s + offset, cy * s + offset, r * s, color)
+            for cx, cy, r, color in DOTS_256]
 
 # Signature geometry (fractions)
 SIG_TITTLE_CY  = 0.12
@@ -197,15 +212,7 @@ def render_pointillist_appicon(size, hairlines=False, maskable_scale=1.0):
     buf = create_buf(size, size)
     rx = round(56 * size / 256)
     draw_rounded_rect(buf, size, size, 0, 0, size - 1, size - 1, rx, INK)
-
-    # For maskable icons shrink the mark into the safe zone (80 % of size)
-    mark_size = size * maskable_scale
-    offset = (size - mark_size) / 2.0
-
-    r = DOT_R_FRAC * mark_size
-    for (fx, fy), color in zip(DOT_POS, DOTS):
-        cx = offset + fx * mark_size
-        cy = offset + fy * mark_size
+    for cx, cy, r, color in _dots_for_size(size, maskable_scale):
         if hairlines:
             draw_circle_aa(buf, size, size, cx, cy, r + 1.25, (255, 255, 255, 217))
         draw_circle_aa(buf, size, size, cx, cy, r, color)
@@ -215,10 +222,7 @@ def render_pointillist_appicon(size, hairlines=False, maskable_scale=1.0):
 def render_pointillist_transparent(size, on_dark=False):
     """Dots only on transparent background."""
     buf = create_buf(size, size)
-    r = DOT_R_FRAC * size
-    for (fx, fy), color in zip(DOT_POS, DOTS):
-        cx = fx * size
-        cy = fy * size
+    for cx, cy, r, color in _dots_for_size(size):
         if on_dark:
             draw_circle_aa(buf, size, size, cx, cy, r + 1.25, (255, 255, 255, 217))
         draw_circle_aa(buf, size, size, cx, cy, r, color)
