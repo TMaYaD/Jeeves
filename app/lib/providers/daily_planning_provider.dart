@@ -12,6 +12,7 @@
 library;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -28,12 +29,62 @@ export '../models/todo.dart' show GtdState;
 // Date helpers
 // ---------------------------------------------------------------------------
 
-/// Returns today's date as an ISO-8601 date string (yyyy-MM-dd).
+// Shared-preferences keys for planning time — duplicated from
+// planning_settings_provider.dart to avoid a circular import.
+const _kSettingsTimeHour = 'planning_settings_time_hour';
+const _kSettingsTimeMinute = 'planning_settings_time_minute';
+
+/// In-memory cache of the user's planning time, used by [planningToday].
+///
+/// Defaults to 08:00. Call [loadPlanningTime] at startup and
+/// [updateCachedPlanningTime] whenever the user changes their planning time.
+TimeOfDay _cachedPlanningTime = const TimeOfDay(hour: 8, minute: 0);
+
+/// Returns the cached planning time (set by [loadPlanningTime] or
+/// [updateCachedPlanningTime]).
+TimeOfDay get currentCachedPlanningTime => _cachedPlanningTime;
+
+/// Loads the user's planning time from [SharedPreferences] into the in-memory
+/// cache so that [planningToday] reflects the correct day boundary.
+///
+/// Must be called once in [main] before any call to [planningToday].
+Future<void> loadPlanningTime() async {
+  final prefs = await SharedPreferences.getInstance();
+  final hour = prefs.getInt(_kSettingsTimeHour) ?? 8;
+  final minute = prefs.getInt(_kSettingsTimeMinute) ?? 0;
+  _cachedPlanningTime = TimeOfDay(hour: hour, minute: minute);
+}
+
+/// Updates the in-memory planning-time cache. Call this whenever the user
+/// saves a new planning time so that subsequent [planningToday] calls use
+/// the updated boundary without requiring an app restart.
+void updateCachedPlanningTime(TimeOfDay time) {
+  _cachedPlanningTime = time;
+}
+
+/// Returns the planning-day identifier as an ISO-8601 date string (yyyy-MM-dd).
+///
+/// The planning day begins at the user's configured planning time (from
+/// [_cachedPlanningTime]) and ends at the same time the following morning.
+/// This means a user who completes the ritual at 23:55 and reopens the app
+/// at 00:05 is still within the same planning day until the planning time
+/// rolls over (e.g. 08:00 the next morning).
 String planningToday() {
   final now = DateTime.now();
-  return '${now.year.toString().padLeft(4, '0')}-'
-      '${now.month.toString().padLeft(2, '0')}-'
-      '${now.day.toString().padLeft(2, '0')}';
+  final todayBoundary = DateTime(
+    now.year,
+    now.month,
+    now.day,
+    _cachedPlanningTime.hour,
+    _cachedPlanningTime.minute,
+  );
+  // Before the planning boundary the current calendar day hasn't "started" yet,
+  // so we treat it as belonging to the previous planning day.
+  final effective =
+      now.isBefore(todayBoundary) ? now.subtract(const Duration(days: 1)) : now;
+  return '${effective.year.toString().padLeft(4, '0')}-'
+      '${effective.month.toString().padLeft(2, '0')}-'
+      '${effective.day.toString().padLeft(2, '0')}';
 }
 
 const _kCompletedDateKey = 'planning_ritual_completed_date';
@@ -117,6 +168,35 @@ Future<void> persistSnoozedUntil(DateTime until) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString(_kNotificationSnoozedUntilKey, until.toIso8601String());
   _notificationSnoozedActive = DateTime.now().isBefore(until);
+}
+
+/// Clears the active snooze flag without touching SharedPreferences.
+///
+/// Called by [DailyStateRefresher] when the one-shot snooze timer fires.
+void clearNotificationSnooze() {
+  _notificationSnoozedActive = false;
+}
+
+/// Called when a snooze is persisted (from [persistSnoozedUntil] callers).
+///
+/// [DailyStateRefresher] sets this to schedule its one-shot snooze timer,
+/// avoiding a circular import between the two files.
+void Function(DateTime until)? onSnoozeScheduled;
+
+/// Re-reads planning completion and banner-dismissed state from
+/// [SharedPreferences] and updates the global [ValueNotifier]s.
+///
+/// Called by [DailyStateRefresher] on app resume and at the planning-time
+/// boundary so the router redirect and banner reflect the current day without
+/// requiring an app restart.
+Future<void> refreshPlanningState() async {
+  final prefs = await SharedPreferences.getInstance();
+  final today = planningToday();
+  planningCompletionNotifier.value =
+      prefs.getString(_kCompletedDateKey) == today;
+  bannerDismissedNotifier.value =
+      prefs.getString(_kBannerDismissedDateKey) == today;
+  await loadNotificationSuppression();
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +494,9 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     final until = DateTime.now().add(Duration(minutes: minutes));
     await persistSnoozedUntil(until);
     await NotificationService.instance.snoozePlanningReminder(minutes);
+    // Notify the refresher so it can schedule a one-shot timer that clears
+    // the snooze flag when it expires (avoiding a circular import).
+    onSnoozeScheduled?.call(until);
   }
 
   // ---- Ritual lifecycle ------------------------------------------------------

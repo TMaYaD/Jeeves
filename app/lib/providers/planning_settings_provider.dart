@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/planning_settings.dart';
+import '../services/daily_state_refresher.dart';
 import '../services/notification_service.dart';
 import 'daily_planning_provider.dart';
 
@@ -48,6 +49,9 @@ class PlanningSettingsNotifier extends Notifier<PlanningSettings> {
     await prefs.setInt(_kTimeHour, time.hour);
     await prefs.setInt(_kTimeMinute, time.minute);
     state = state.copyWith(planningTime: time);
+    // Keep the boundary timer and cached planning time in sync with the new
+    // setting so the rollover fires at the correct wall-clock time.
+    DailyStateRefresher.instance.updatePlanningTime(time);
     await _reschedulePlanningReminder();
   }
 

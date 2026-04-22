@@ -9,6 +9,9 @@
 
 - `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
 - Notes in `ActiveFocusScreen` are now rendered as interactive `MarkdownBody` (same `flutter_markdown_plus` stack as `TaskDetailScreen`). Checkboxes toggle and persist via `taskDetailNotifierProvider.updateNotes`; links launch via `url_launcher`. `_FocusBody` became a `ConsumerStatefulWidget` to hold `_notes` local state for optimistic checkbox updates, synced from `todo.notes` via `didUpdateWidget`.
+- `planningToday()` originally used calendar midnight as the day boundary, causing the router to redirect to the planning ritual when a user completed it at 23:55 and reopened the app at 00:05. Fixed by anchoring the boundary to `_cachedPlanningTime` (loaded at startup from SharedPreferences). The cached value avoids making `planningToday()` async; `updateCachedPlanningTime` and `loadPlanningTime` keep it in sync.
+- `DailyStateRefresher` wires a `WidgetsBindingObserver` + a `Timer` scheduled for the next planning-time boundary. This pattern avoids polling while keeping the global `ValueNotifier`s fresh on resume and at rollover. The snooze timer uses the same singleton to clear `_notificationSnoozedActive` without requiring a restart.
+- Circular import between `daily_state_refresher.dart` and `daily_planning_provider.dart` avoided by exposing `onSnoozeScheduled` as a nullable callback in `daily_planning_provider.dart`; the refresher sets it during `init()`.
 
 ## 2026-04-21
 

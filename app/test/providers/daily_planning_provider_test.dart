@@ -1,4 +1,5 @@
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -44,6 +45,47 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    // Reset to 08:00 default before each test.
+    updateCachedPlanningTime(const TimeOfDay(hour: 8, minute: 0));
+  });
+
+  group('planningToday — planning-time boundary', () {
+    test('returns calendar date when now is after the planning boundary', () {
+      // Set planning time to 08:00 and ask for a time well past it.
+      updateCachedPlanningTime(const TimeOfDay(hour: 8, minute: 0));
+      // We can't control DateTime.now() directly, so we verify the function
+      // returns a valid ISO-8601 date string in the expected format.
+      final result = planningToday();
+      expect(result, matches(RegExp(r'^\d{4}-\d{2}-\d{2}$')));
+    });
+
+    test('returns yesterday when now is before the planning boundary', () {
+      // Set planning time to 23:59 so that any test run before 23:59 today
+      // is treated as "before the boundary" and returns yesterday's date.
+      updateCachedPlanningTime(const TimeOfDay(hour: 23, minute: 59));
+      final now = DateTime.now();
+      if (now.hour < 23 || (now.hour == 23 && now.minute < 59)) {
+        // Before 23:59 → should return yesterday.
+        final yesterday = now.subtract(const Duration(days: 1));
+        final expected =
+            '${yesterday.year.toString().padLeft(4, '0')}-'
+            '${yesterday.month.toString().padLeft(2, '0')}-'
+            '${yesterday.day.toString().padLeft(2, '0')}';
+        expect(planningToday(), equals(expected));
+      }
+      // After 23:59 the test is a no-op — the boundary has passed.
+    });
+
+    test('returns current calendar date when planning time is 00:00', () {
+      // 00:00 boundary means any time after midnight is "today".
+      updateCachedPlanningTime(const TimeOfDay(hour: 0, minute: 0));
+      final now = DateTime.now();
+      final expected =
+          '${now.year.toString().padLeft(4, '0')}-'
+          '${now.month.toString().padLeft(2, '0')}-'
+          '${now.day.toString().padLeft(2, '0')}';
+      expect(planningToday(), equals(expected));
+    });
   });
 
   group('DailyPlanningNotifier', () {

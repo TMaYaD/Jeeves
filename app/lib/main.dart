@@ -8,10 +8,14 @@ import 'providers/auth_provider.dart';
 import 'providers/daily_planning_provider.dart';
 import 'providers/planning_settings_provider.dart';
 import 'router.dart';
+import 'services/daily_state_refresher.dart';
 import 'services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Load planning time first — planningToday() depends on it.
+  await loadPlanningTime();
 
   // Seed suppression flags before any notification scheduling so that a
   // previously skipped/snoozed reminder is not re-enabled on restart.
@@ -42,6 +46,10 @@ Future<void> main() async {
     }
   }
 
+  // Start the daily-rollover refresher so planning state updates at the
+  // planning-time boundary and on app resume without a restart.
+  DailyStateRefresher.instance.init(currentCachedPlanningTime);
+
   runApp(const ProviderScope(child: JeevesApp()));
 }
 
@@ -67,6 +75,7 @@ void _handleNotificationResponse(NotificationResponse response) async {
       final until = DateTime.now().add(Duration(minutes: snoozeMins));
       await persistSnoozedUntil(until);
       await NotificationService.instance.snoozePlanningReminder(snoozeMins);
+      DailyStateRefresher.instance.scheduleSnoozeTimer(until);
 
     case kNotificationActionSkip:
       await persistSkipToday();
