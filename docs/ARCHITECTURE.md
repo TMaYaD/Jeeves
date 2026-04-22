@@ -185,6 +185,7 @@ The app supports multiple authentication backends selected at compile time.
 ### AuthResult
 
 `AuthResult` is the canonical return type for every provider sign-in:
+
 ```dart
 class AuthResult {
   final String accessToken;
@@ -199,7 +200,7 @@ class AuthResult {
 
 `app/lib/auth/auth_mode.dart` exposes `authImplProvider` (a Riverpod `Provider<AuthProvider>`).  The active implementation is chosen at build time:
 
-```
+```bash
 flutter run --dart-define=JEEVES_AUTH_MODE=sws   # Sign-In With Solana
 flutter run                                        # default: email + password
 ```

@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -57,12 +58,12 @@ async def verify_sws(
     3. Verify the ed25519 signature with PyNaCl.
     4. Upsert a :class:`~app.auth.models.User` by *public_key_b58*.
     """
-    # Step 1: nonce must exist and can only be used once.
+    # Step 1: nonce must exist, be unused, and be bound to this public key.
     data = await consume_nonce(redis, nonce)
-    if data is None:
+    if data is None or data.get("public_key") != public_key_b58:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Nonce invalid or expired",
+            detail="Nonce invalid, expired, or bound to a different public key",
         )
 
     # Step 2: reconstruct the message the client signed.
@@ -94,6 +95,12 @@ async def verify_sws(
             is_active=True,
         )
         db.add(user)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Concurrent first login for the same wallet — race loser re-fetches.
+            await db.rollback()
+            result = await db.execute(select(User).where(User.solana_public_key == public_key_b58))
+            user = result.scalar_one()
         await db.refresh(user)
     return user

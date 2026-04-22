@@ -48,9 +48,10 @@ class SeedVaultSigner implements WalletSigner {
   Future<({String publicKey, Uint8List signature})> sign(
     Uint8List message,
   ) async {
-    throw UnimplementedError(
-      'SeedVaultSigner requires the Solana Mobile Stack SDK. '
-      'See the class-level doc comment for integration instructions.',
+    throw UnsupportedError(
+      'SWS mode is not functional yet: SeedVaultSigner requires the Solana '
+      'Mobile Stack SDK (seedvault_wallet), which is not yet available on '
+      'pub.dev. See the class-level doc comment for integration instructions.',
     );
   }
 }

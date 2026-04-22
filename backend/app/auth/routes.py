@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,9 @@ from app.auth.schemas import (
     LoginRequest,
     LogoutRequest,
     RefreshRequest,
+    SWSChallengeRequest,
+    SWSChallengeResponse,
+    SWSLoginRequest,
     Token,
     UserCreate,
     UserRead,
@@ -35,7 +38,12 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
 
-    if user is None or not verify_password(body.password, user.hashed_password or ""):
+    pw_ok = (
+        user is not None
+        and user.hashed_password
+        and verify_password(body.password, user.hashed_password)
+    )
+    if not pw_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -137,26 +145,10 @@ async def get_current_user_profile(current_user: User = Depends(get_current_user
 # ── Sign-In With Solana (SWS) ─────────────────────────────────────────────────
 
 
-class SWSChallengeRequest(BaseModel):
-    public_key: str
-
-
-class SWSChallengeResponse(BaseModel):
-    nonce: str
-    issued_at: str
-    domain: str
-
-
-class SWSLoginRequest(BaseModel):
-    public_key: str
-    signature: str  # base64-encoded ed25519 signature
-    nonce: str
-
-
 @router.post("/auth/sws/challenge", response_model=SWSChallengeResponse)
 async def sws_challenge(
     body: SWSChallengeRequest,
-    redis: object = Depends(get_redis),
+    redis: Redis = Depends(get_redis),
 ) -> SWSChallengeResponse:
     """Issue a single-use nonce bound to the given Solana public key.
 
@@ -171,7 +163,7 @@ async def sws_challenge(
 async def sws_login(
     body: SWSLoginRequest,
     db: AsyncSession = Depends(get_db),
-    redis: object = Depends(get_redis),
+    redis: Redis = Depends(get_redis),
 ) -> Token:
     """Complete a Sign-In With Solana flow.
 

@@ -35,6 +35,7 @@ class _PasswordLoginFormState extends State<PasswordLoginForm> {
   }
 
   Future<void> _handleSubmit() async {
+    if (widget.isLoading) return;
     if (!_formKey.currentState!.validate()) return;
     await widget.onSubmit(
       _emailController.text.trim(),

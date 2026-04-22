@@ -31,6 +31,7 @@ class _FakeApiService extends ApiService {
 
   final List<Map<String, dynamic>> _responses = [];
   final List<Exception> _errors = [];
+  final List<({String path, Map<String, dynamic> body})> calls = [];
 
   void respondWith(Map<String, dynamic> data) => _responses.add(data);
   void throwOnNext(Exception e) => _errors.add(e);
@@ -46,6 +47,7 @@ class _FakeApiService extends ApiService {
     String path,
     Map<String, dynamic> body,
   ) async {
+    calls.add((path: path, body: Map<String, dynamic>.from(body)));
     if (_errors.isNotEmpty) throw _errors.removeAt(0);
     return _responses.removeAt(0);
   }
@@ -131,6 +133,16 @@ void main() {
       expect(result.userId, 'solana-user-1');
       expect(result.accessToken, accessToken);
       expect(result.refreshToken, 'refresh-xyz');
+
+      // Assert the two outbound requests hit the correct endpoints with the
+      // expected payload shape so regressions in the SWS protocol are caught.
+      expect(api.calls, hasLength(2));
+      expect(api.calls[0].path, '/auth/sws/challenge');
+      expect(api.calls[0].body['public_key'], _testPublicKey);
+      expect(api.calls[1].path, '/auth/sws');
+      expect(api.calls[1].body['public_key'], _testPublicKey);
+      expect(api.calls[1].body['nonce'], 'test-nonce');
+      expect(api.calls[1].body['signature'], isA<String>());
     });
 
     test('throws when challenge fetch fails', () async {

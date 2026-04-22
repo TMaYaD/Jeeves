@@ -31,7 +31,7 @@ class _SwsLoginWidgetState extends ConsumerState<SwsLoginWidget> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = 'Could not connect wallet. Please try again.';
       });
     } finally {
       if (mounted) setState(() => _isLoading = false);

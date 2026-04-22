@@ -36,7 +36,7 @@ async def db(engine):
         await session.rollback()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def redis():
     return fakeredis.aioredis.FakeRedis(decode_responses=True)
 

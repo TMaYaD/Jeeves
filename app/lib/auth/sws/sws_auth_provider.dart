@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/api_service.dart';
 import '../../services/auth_service.dart';
 import '../auth_provider_interface.dart';
+import '../jwt_utils.dart';
 import 'sws_login_widget.dart';
 import 'wallet_signer.dart';
 
@@ -111,7 +112,7 @@ class SwsAuthProvider implements AuthProvider {
     // Step 5: persist tokens (so the 401-retry path works).
     await _authService.saveTokens(accessToken, refreshToken);
 
-    final userId = _extractUserIdFromJwt(accessToken);
+    final userId = extractUserIdFromJwt(accessToken);
     if (userId == null) {
       await _authService.clearTokens();
       throw StateError('Server returned a token without a valid user ID.');
@@ -132,7 +133,7 @@ class SwsAuthProvider implements AuthProvider {
     // SWS users use the same JWT + refresh token mechanism as password users.
     final stored = await _authService.getToken();
     if (stored != null) {
-      final userId = _extractUserIdFromJwt(stored);
+      final userId = extractUserIdFromJwt(stored);
       if (userId != null) {
         final refresh = await _authService.getRefreshToken() ?? '';
         return AuthResult(
@@ -145,7 +146,7 @@ class SwsAuthProvider implements AuthProvider {
 
     final refreshed = await _authService.refreshSession();
     if (refreshed != null) {
-      final userId = _extractUserIdFromJwt(refreshed);
+      final userId = extractUserIdFromJwt(refreshed);
       if (userId != null) {
         final refresh = await _authService.getRefreshToken() ?? '';
         return AuthResult(
@@ -160,24 +161,3 @@ class SwsAuthProvider implements AuthProvider {
   }
 }
 
-String? _extractUserIdFromJwt(String token) {
-  final parts = token.split('.');
-  if (parts.length != 3) return null;
-  try {
-    final payload = parts[1];
-    final padded = payload.padRight(
-      payload.length + (4 - payload.length % 4) % 4,
-      '=',
-    );
-    final decoded = utf8.decode(base64Url.decode(padded));
-    final json = jsonDecode(decoded) as Map<String, dynamic>;
-    final exp = json['exp'];
-    final expSeconds =
-        exp is int ? exp : (exp is String ? int.tryParse(exp) : null);
-    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    if (expSeconds != null && expSeconds <= nowSeconds) return null;
-    return json['sub'] as String?;
-  } catch (_) {
-    return null;
-  }
-}
