@@ -6,7 +6,6 @@ library;
 
 import 'dart:convert';
 
-import 'package:uuid/enums.dart' show Namespace;
 import 'package:uuid/uuid.dart';
 
 import 'nirvana_item.dart';

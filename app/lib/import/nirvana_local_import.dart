@@ -10,7 +10,6 @@
 library;
 
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
