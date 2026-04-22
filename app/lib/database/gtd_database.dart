@@ -18,6 +18,7 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
 import 'daos/inbox_dao.dart';
+import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
 import 'daos/todo_dao.dart';
 import 'tables.dart';
@@ -32,6 +33,9 @@ part 'gtd_database.g.dart';
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor);
+
+  /// Plain-class DAO for universal search (no code generation required).
+  late final SearchDao searchDao = SearchDao(this);
 
   @override
   int get schemaVersion => 6;

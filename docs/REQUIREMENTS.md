@@ -25,6 +25,7 @@ To build a hybrid productivity application that merges the rigid organizational 
     * Energy Level
 * **System Views:** Auto-generated lists for 'Next Actions', 'Waiting For', 'Scheduled', and 'Someday/Maybe'.
 * **Sequential Logic:** Support for project dependency tracking. A 'Next Action' must remain hidden until its prerequisite task is marked complete.
+* **Context Tag Cloud:** A sticky, multi-select tag filter in the primary navigation drawer. Each chip shows the context name and its active-task count; chip weight (size/opacity) reflects relative count. Selecting one or more chips filters all list views to tasks carrying **all** selected tags (AND semantics). The filter persists across screen navigation until explicitly cleared. Long-pressing a chip opens tag management (rename, recolour, merge).
 
 ### Epic 2: The Daily Execution Layer
 **Goal:** Prevent overwhelm by filtering the GTD inventory into a manageable daily plan.

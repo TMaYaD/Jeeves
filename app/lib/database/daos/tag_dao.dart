@@ -21,6 +21,16 @@ part 'tag_dao.g.dart';
 String todoTagIdFor(String todoId, String tagId) =>
     uuid.v5(Namespace.url.value, 'jeeves://todo_tag/$todoId/$tagId');
 
+/// A [Tag] together with the count of non-done, non-inbox tasks that carry it.
+class TagWithCount {
+  const TagWithCount({required this.tag, required this.count});
+
+  final Tag tag;
+
+  /// Number of active (not done, not inbox) todos assigned this tag.
+  final int count;
+}
+
 @DriftAccessor(tables: [Tags, TodoTags, Todos])
 class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   TagDao(super.db);
@@ -31,6 +41,47 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
           ..where((t) => t.userId.equals(userId) & t.type.equals(type))
           ..orderBy([(t) => OrderingTerm.asc(t.name)]))
         .watch();
+  }
+
+  /// Stream of tags of [type] for [userId] paired with their active-task count.
+  ///
+  /// "Active" means state is not `done` and not `inbox`.  Tags with zero
+  /// active tasks return count = 0 and are still included so the cloud can
+  /// show them as demoted/faded rather than vanishing mid-session.
+  Stream<List<TagWithCount>> watchTagsWithActiveCount(
+      String userId, String type) {
+    return customSelect(
+      'SELECT tags.id, tags.name, tags.color, tags.type, tags.user_id, '
+      'COUNT(t.id) AS active_count '
+      'FROM tags '
+      'LEFT JOIN todo_tags tt ON tt.tag_id = tags.id '
+      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.state NOT IN (?, ?) '
+      'WHERE tags.user_id = ? AND tags.type = ? '
+      'GROUP BY tags.id '
+      'ORDER BY tags.name',
+      variables: [
+        Variable('done'),
+        Variable('inbox'),
+        Variable(userId),
+        Variable(type),
+      ],
+      readsFrom: {tags, todoTags, todos},
+    ).watch().map(
+          (rows) => rows
+              .map(
+                (row) => TagWithCount(
+                  tag: Tag(
+                    id: row.read<String>('id'),
+                    name: row.read<String>('name'),
+                    color: row.readNullable<String>('color'),
+                    type: row.read<String>('type'),
+                    userId: row.read<String>('user_id'),
+                  ),
+                  count: row.read<int>('active_count'),
+                ),
+              )
+              .toList(),
+        );
   }
 
   /// Insert or replace a tag row (upsert by primary key).
@@ -65,6 +116,46 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         }
       }
       await into(tags).insert(tag, mode: InsertMode.insertOrReplace);
+    });
+  }
+
+  /// Rename a tag in-place, preserving all other fields.
+  Future<void> rename(String tagId, String newName) => upsertTag(
+        TagsCompanion(id: Value(tagId), name: Value(newName.trim())),
+      );
+
+  /// Update the colour of a tag; pass null to clear it.
+  Future<void> updateColor(String tagId, String? color) => upsertTag(
+        TagsCompanion(id: Value(tagId), color: Value(color)),
+      );
+
+  /// Merge [sourceTagId] into [targetTagId].
+  ///
+  /// Re-assigns all `todo_tags` rows that reference [sourceTagId] to
+  /// [targetTagId] (idempotent via [assignTag]), then deletes the source tag
+  /// and its junction rows atomically.
+  ///
+  /// Throws [ArgumentError] if [sourceTagId] equals [targetTagId] — a
+  /// self-merge would silently delete the tag and strip every association.
+  Future<void> merge(String sourceTagId, String targetTagId) {
+    if (sourceTagId == targetTagId) {
+      throw ArgumentError.value(
+        targetTagId,
+        'targetTagId',
+        'Source and target tags must differ',
+      );
+    }
+    return transaction(() async {
+      final sourceTodoTags = await (select(todoTags)
+            ..where((tt) => tt.tagId.equals(sourceTagId)))
+          .get();
+      for (final tt in sourceTodoTags) {
+        await assignTag(tt.todoId, targetTagId, tt.userId);
+      }
+      await (delete(todoTags)
+            ..where((tt) => tt.tagId.equals(sourceTagId)))
+          .go();
+      await (delete(tags)..where((t) => t.id.equals(sourceTagId))).go();
     });
   }
 

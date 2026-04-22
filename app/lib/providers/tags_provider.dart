@@ -2,9 +2,12 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import '../database/daos/tag_dao.dart' show TagWithCount;
 import '../database/gtd_database.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
+
+export '../database/daos/tag_dao.dart' show TagWithCount;
 
 /// Stream of all project tags for the current user.
 final projectTagsProvider = StreamProvider<List<Tag>>((ref) {
@@ -18,6 +21,13 @@ final contextTagsProvider = StreamProvider<List<Tag>>((ref) {
   final db = ref.watch(databaseProvider);
   final userId = ref.watch(currentUserIdProvider);
   return db.tagDao.watchByType(userId, 'context');
+});
+
+/// Stream of context tags paired with their active-task counts.
+final contextTagsWithCountProvider = StreamProvider<List<TagWithCount>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.tagDao.watchTagsWithActiveCount(userId, 'context');
 });
 
 /// Exposes tag mutation operations.
@@ -49,5 +59,31 @@ class TagNotifier {
     );
     await db.tagDao.upsertTag(companion);
     return Tag(id: id, name: trimmed, type: type, userId: userId);
+  }
+
+  /// Rename an existing tag.
+  Future<void> rename(String tagId, String newName) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty || trimmed.length > 100) {
+      throw ArgumentError.value(
+        newName,
+        'newName',
+        'Tag name must be between 1 and 100 characters.',
+      );
+    }
+    final db = _ref.read(databaseProvider);
+    await db.tagDao.rename(tagId, trimmed);
+  }
+
+  /// Update the colour of a tag. Pass null to clear it.
+  Future<void> updateColor(String tagId, String? color) {
+    final db = _ref.read(databaseProvider);
+    return db.tagDao.updateColor(tagId, color);
+  }
+
+  /// Merge [sourceTagId] into [targetTagId], reassigning all associations.
+  Future<void> merge(String sourceTagId, String targetTagId) {
+    final db = _ref.read(databaseProvider);
+    return db.tagDao.merge(sourceTagId, targetTagId);
   }
 }

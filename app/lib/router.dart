@@ -16,6 +16,7 @@ import 'screens/blocked/blocked_screen.dart';
 import 'screens/active_focus_screen.dart';
 import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
+import 'screens/search/search_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
@@ -90,6 +91,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/import',
       builder: (context, state) => const ImportScreen(),
+    ),
+    GoRoute(
+      path: '/search',
+      builder: (context, state) => const SearchScreen(),
     ),
   ],
 );
