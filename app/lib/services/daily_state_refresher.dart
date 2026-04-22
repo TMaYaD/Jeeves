@@ -69,7 +69,10 @@ class DailyStateRefresher with WidgetsBindingObserver {
     // Immediately re-evaluate planning state in case the new boundary crosses
     // the current wall-clock time (e.g. moving from 08:00 to 23:59 at 10:00
     // would change planningToday() to yesterday without this refresh).
-    unawaited(_refresh());
+    // Skip _rearmNotificationIfNeeded here — PlanningSettingsNotifier already
+    // calls _reschedulePlanningReminder() after this, and _rearmNotificationIfNeeded
+    // requires timezone init that is unavailable in unit tests.
+    unawaited(refreshPlanningState());
   }
 
   /// Schedules a one-shot timer that clears the snooze flag when [until] is
