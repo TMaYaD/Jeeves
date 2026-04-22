@@ -65,8 +65,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
     try {
       await ref.read(authTokenProvider.notifier).login(
-            _emailController.text.trim(),
-            _passwordController.text,
+            {
+              'email': _emailController.text.trim(),
+              'password': _passwordController.text,
+            },
             onConflict: _showConflictDialog,
           );
       if (!mounted) return;
