@@ -220,19 +220,23 @@ class _Controls extends ConsumerWidget {
     return Row(
       children: [
         // Pause / Resume
-        OutlinedButton(
-          onPressed: timer.isPaused ? notifier.resumeSprint : notifier.pauseSprint,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFF2563EB),
-            side: const BorderSide(color: Color(0xFFBFDBFE)),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-            minimumSize: const Size(44, 40),
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-          ),
-          child: Icon(
-            timer.isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-            size: 20,
+        Tooltip(
+          message: timer.isPaused ? 'Resume sprint' : 'Pause sprint',
+          child: OutlinedButton(
+            onPressed:
+                timer.isPaused ? notifier.resumeSprint : notifier.pauseSprint,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF2563EB),
+              side: const BorderSide(color: Color(0xFFBFDBFE)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              minimumSize: const Size(44, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+            ),
+            child: Icon(
+              timer.isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+              size: 20,
+            ),
           ),
         ),
         const SizedBox(width: 8),
@@ -252,17 +256,20 @@ class _Controls extends ConsumerWidget {
         ),
         const SizedBox(width: 8),
         // Stop
-        OutlinedButton(
-          onPressed: notifier.stopSprint,
-          style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFF6B7280),
-            side: const BorderSide(color: Color(0xFFE5E7EB)),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-            minimumSize: const Size(44, 40),
-            padding: const EdgeInsets.symmetric(horizontal: 14),
+        Tooltip(
+          message: 'Stop sprint',
+          child: OutlinedButton(
+            onPressed: notifier.stopSprint,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF6B7280),
+              side: const BorderSide(color: Color(0xFFE5E7EB)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+              minimumSize: const Size(44, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+            ),
+            child: const Icon(Icons.stop_rounded, size: 20),
           ),
-          child: const Icon(Icons.stop_rounded, size: 20),
         ),
       ],
     );

@@ -292,18 +292,18 @@ Both use `AndroidScheduleMode.exactAllowWhileIdle` (one-shot, not repeating).
 
 Sprint count for a task is derived from its `timeEstimate`:
 
-```
+```text
 totalSprints = max(1, ceil(timeEstimate / 20))
 currentSprint = floor(timeSpentMinutes / 20) + 1
 ```
 
 ### Time tracking
 
-When a sprint completes normally (`completeSprint`) or the timer expires while the app is backgrounded, the notifier writes `timeSpentMinutes += 20` directly to the `todos` row via Drift. This is best-effort: failures are silently ignored so the UI remains responsive.
+When a sprint completes normally (`completeSprint`) or the timer expires while the app is backgrounded, the notifier atomically increments `time_spent_minutes` in a single SQL UPDATE (`coalesce(time_spent_minutes, 0) + 20`) via Drift's `RawValuesInsertable`. The single-statement approach avoids a read-modify-write race with PowerSync's sync writes. This is best-effort: failures are silently ignored so the UI remains responsive.
 
 ### Batching suggestion
 
-`findBatchingCandidates(List<Todo>)` scans today's tasks for micro-tasks (estimate ≤ 15 min) whose combined total fits within one sprint (≤ 20 min). If 2 or more such tasks are found, Focus Mode shows a dismissible suggestion banner to batch them into a single sprint.
+`findBatchingCandidates(List<Todo>)` scans today's tasks for micro-tasks (estimate ≤ 15 min) and greedily selects the largest subset (sorted by estimate ascending) whose combined total fits within one sprint (≤ 20 min). If 2 or more such tasks are found, Focus Mode shows a dismissible suggestion banner to batch them into a single sprint.
 
 ### UI
 

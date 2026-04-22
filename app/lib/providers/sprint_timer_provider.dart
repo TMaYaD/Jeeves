@@ -8,7 +8,8 @@ library;
 
 import 'dart:async';
 
-import 'package:drift/drift.dart' show Expression, Value;
+import 'package:drift/drift.dart'
+    show CustomExpression, Expression, RawValuesInsertable, Value, Variable;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -269,18 +270,35 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
 
   void _onTimerExpiredBackground(SprintPhase expiredPhase) {
     if (expiredPhase == SprintPhase.focus) {
-      _logSprintTimeToTask().then((_) => _startBreak());
+      // Compute break window relative to when the sprint actually ended so
+      // reopening the app 10+ minutes later doesn't grant a fresh full break.
+      final focusEndedAt = _endTime;
+      _logSprintTimeToTask().then((_) {
+        if (focusEndedAt != null) {
+          final breakEndTime = focusEndedAt.add(_kBreakDuration);
+          final remainingBreak = breakEndTime.difference(DateTime.now());
+          if (remainingBreak <= Duration.zero) {
+            _clearPrefs();
+            state = const SprintTimerState();
+            return;
+          }
+          _startBreak(endTime: breakEndTime, remaining: remainingBreak);
+        } else {
+          _startBreak();
+        }
+      });
     } else {
       _clearPrefs();
       state = const SprintTimerState();
     }
   }
 
-  Future<void> _startBreak() async {
-    _endTime = DateTime.now().add(_kBreakDuration);
+  Future<void> _startBreak({DateTime? endTime, Duration? remaining}) async {
+    _endTime = endTime ?? DateTime.now().add(_kBreakDuration);
+    final breakRemaining = remaining ?? _kBreakDuration;
     state = state.copyWith(
       phase: SprintPhase.break_,
-      remaining: _kBreakDuration,
+      remaining: breakRemaining,
       total: _kBreakDuration,
       isPaused: false,
     );
@@ -324,27 +342,18 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     try {
       final db = ref.read(databaseProvider);
       final userId = ref.read(currentUserIdProvider);
+      // Single atomic SQL increment — avoids a read-modify-write race on
+      // offline-first tables where a sync write could land between SELECT and UPDATE.
       await (db.update(db.todos)
             ..where((t) => Expression.and([t.id.equals(taskId), t.userId.equals(userId)])))
-          .write(TodosCompanion(
-        timeSpentMinutes: Value(
-          // We do a raw increment; the DAO handles exact accounting on state
-          // transitions. Here we just add the sprint duration.
-          (await _currentTimeSpent(db, taskId, userId)) + _kSprintMinutes,
-        ),
-        updatedAt: Value(DateTime.now()),
-      ));
+          .write(RawValuesInsertable({
+        'time_spent_minutes': const CustomExpression<int>(
+            'coalesce(time_spent_minutes, 0) + $_kSprintMinutes'),
+        'updated_at': Variable(DateTime.now()),
+      }));
     } catch (_) {
       // Non-fatal: time tracking is best-effort.
     }
-  }
-
-  Future<int> _currentTimeSpent(
-      GtdDatabase db, String taskId, String userId) async {
-    final row = await (db.select(db.todos)
-          ..where((t) => Expression.and([t.id.equals(taskId), t.userId.equals(userId)])))
-        .getSingleOrNull();
-    return row?.timeSpentMinutes ?? 0;
   }
 
   Future<void> _persist({required bool isPaused}) async {
@@ -418,13 +427,22 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
 List<Todo> findBatchingCandidates(List<Todo> todayTasks) {
   final microTasks = todayTasks
       .where((t) => t.timeEstimate != null && t.timeEstimate! <= 15)
-      .toList();
+      .toList()
+    ..sort((a, b) => (a.timeEstimate ?? 0).compareTo(b.timeEstimate ?? 0));
 
   if (microTasks.length < 2) return [];
 
-  final totalEstimate =
-      microTasks.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
-  if (totalEstimate > _kSprintMinutes) return [];
+  // Greedy accumulation (smallest-first) so we find the largest subset that
+  // fits in one sprint rather than requiring *all* micro-tasks to fit.
+  var budget = 0;
+  final candidates = <Todo>[];
+  for (final task in microTasks) {
+    final est = task.timeEstimate ?? 0;
+    if (budget + est <= _kSprintMinutes) {
+      budget += est;
+      candidates.add(task);
+    }
+  }
 
-  return microTasks;
+  return candidates.length >= 2 ? candidates : [];
 }
