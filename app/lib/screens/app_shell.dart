@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
-import '../providers/tag_filter_provider.dart';
 import '../providers/tags_provider.dart';
 import '../widgets/planning_banner.dart';
 import 'common/tag_cloud.dart';
@@ -80,7 +79,6 @@ class CustomDrawer extends ConsumerWidget {
         : syncAsync.asData?.value;
 
     final projectTags = ref.watch(projectTagsProvider).asData?.value ?? [];
-    final activeFilterCount = ref.watch(tagFilterProvider).length;
 
     return Drawer(
       backgroundColor: Colors.white,
@@ -133,13 +131,6 @@ class CustomDrawer extends ConsumerWidget {
               },
             ),
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
-            // Contexts filter — fixed so chips are always tappable without scrolling
-            _buildSectionHeader(
-              'CONTEXTS',
-              badge: activeFilterCount > 0 ? activeFilterCount : null,
-            ),
-            const TagCloud(),
-            const Divider(height: 1, color: Color(0xFFF3F4F6)),
             // Nav items — scrollable to accommodate all list types + projects
             Expanded(
               child: SingleChildScrollView(
@@ -188,6 +179,10 @@ class CustomDrawer extends ConsumerWidget {
                       path: '/someday-maybe',
                       location: location,
                       count: somedayCount),
+                  const SizedBox(height: 8),
+                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                  const SizedBox(height: 8),
+                  const TagCloud(),
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 16),

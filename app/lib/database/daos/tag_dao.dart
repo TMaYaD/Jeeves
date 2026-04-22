@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
+import '../../utils/tag_colors.dart';
 import '../gtd_database.dart';
 
 part 'tag_dao.g.dart';
@@ -128,6 +129,23 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   Future<void> updateColor(String tagId, String? color) => upsertTag(
         TagsCompanion(id: Value(tagId), color: Value(color)),
       );
+
+  /// One-time migration: derives and persists a color for every tag whose
+  /// color is currently NULL.
+  ///
+  /// Called from [GtdDatabase.onUpgrade] when upgrading to schema v7 — not on
+  /// every startup — so intentional NULLs set via [updateColor] after the
+  /// migration are never overwritten.
+  Future<void> backfillAllMissingColors() {
+    return transaction(() async {
+      final nullColorTags =
+          await (select(tags)..where((t) => t.color.isNull())).get();
+      for (final tag in nullColorTags) {
+        final colorHex = tagColorToHex(tagColorForName(tag.name));
+        await upsertTag(TagsCompanion(id: Value(tag.id), color: Value(colorHex)));
+      }
+    });
+  }
 
   /// Merge [sourceTagId] into [targetTagId].
   ///

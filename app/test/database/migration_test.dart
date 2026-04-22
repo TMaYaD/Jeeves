@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/utils/tag_colors.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -90,6 +91,50 @@ void main() {
       expect(items.first.timeSpentMinutes, 0);
       expect(items.first.inProgressSince, equals(null));
       expect(items.first.blockedByTodoId, equals(null));
+    });
+
+    test('v6→v7 migration: null-color tags get backfilled; post-migration updateColor(null) is not overwritten', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Insert two legacy tags with no color (simulating pre-v7 rows).
+      await db.customStatement(
+        "INSERT INTO tags (id, name, type, user_id) VALUES ('t1', 'work', 'context', '$_userId')",
+      );
+      await db.customStatement(
+        "INSERT INTO tags (id, name, type, user_id) VALUES ('t2', 'home', 'context', '$_userId')",
+      );
+
+      // Confirm both start with null color.
+      final before = await (db.select(db.tags)).get();
+      expect(before.where((t) => t.color == null).length, 2);
+
+      // Run the v7 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 6, 7);
+
+      // Both tags must now have non-null colors.
+      final after = await (db.select(db.tags)).get();
+      expect(after.every((t) => t.color != null), isTrue);
+
+      // Backfill assigns stable, non-null colors; assert the two seeded names
+      // do not collide and that each matches the expected deterministic value.
+      final work = after.firstWhere((t) => t.id == 't1');
+      final home = after.firstWhere((t) => t.id == 't2');
+      expect(work.color, isA<String>());
+      expect(home.color, isA<String>());
+      expect(work.color, isNot(equals(home.color)));
+      // Determinism: calling the same color function again must yield the same hex.
+      expect(work.color, equals(tagColorToHex(tagColorForName('work'))));
+      expect(home.color, equals(tagColorToHex(tagColorForName('home'))));
+
+      // An intentional user reset after the migration must persist as null
+      // (the one-time migration must not re-run and overwrite it).
+      await db.tagDao.updateColor('t1', null);
+      final cleared = await (db.select(db.tags)
+            ..where((t) => t.id.equals('t1')))
+          .getSingle();
+      expect(cleared.color, equals(null));
     });
 
     test('v5→v6 migration: existing todo_tags rows get backfilled id', () async {

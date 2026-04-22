@@ -10,6 +10,7 @@ import '../../providers/task_detail_provider.dart';
 import '../../widgets/blocked_by_picker.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
+import '../../widgets/tag_list.dart';
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
   const TaskDetailScreen({super.key, required this.todoId});
@@ -176,31 +177,23 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       ),
                       const SizedBox(height: 16),
                       // Context Tags
-                      Wrap(
-                        spacing: 12, // More space for flat look
+                      TagList(
+                        tags: contextTags,
+                        spacing: 12,
                         runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          ...contextTags.map((tag) {
-                            final colors = _getPastelColor(tag.name);
-                            return GestureDetector(
-                              onTap: () => _showContextTagEditor(context),
-                              child: _buildTagPill(tag.name, colors.$2),
-                            );
-                          }),
-                          GestureDetector(
-                            onTap: () => _showContextTagEditor(context),
-                            child: Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(color: const Color(0xFFD1D5DB)),
-                              ),
-                              child: const Icon(Icons.add, size: 16, color: Color(0xFF9CA3AF)),
+                        onTap: (_) => _showContextTagEditor(context),
+                        trailing: GestureDetector(
+                          onTap: () => _showContextTagEditor(context),
+                          child: Container(
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: const Color(0xFFD1D5DB)),
                             ),
+                            child: const Icon(Icons.add, size: 16, color: Color(0xFF9CA3AF)),
                           ),
-                        ],
+                        ),
                       ),
                       const SizedBox(height: 20),
                       // Attributes Row (Status, Time, Energy)
@@ -479,37 +472,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         ),
       ),
     );
-  }
-
-  Widget _buildTagPill(String text, Color textC) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.label_outline, size: 14, color: textC),
-        const SizedBox(width: 4),
-        Text(
-          text,
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: textC),
-        ),
-      ],
-    );
-  }
-
-  (Color, Color, Color) _getPastelColor(String text) {
-    if (text.isEmpty) return (const Color(0xFFF3F4F6), const Color(0xFF4B5563), const Color(0xFFE5E7EB));
-    
-    final hash = text.runes.fold(0, (prev, elem) => prev + elem);
-    const palettes = [
-      (Color(0xFFEFF6FF), Color(0xFF1D4ED8), Color(0xFFDBEAFE)), // Blue
-      (Color(0xFFFAF5FF), Color(0xFF7E22CE), Color(0xFFF3E8FF)), // Purple
-      (Color(0xFFECFDF5), Color(0xFF047857), Color(0xFFD1FAE5)), // Emerald
-      (Color(0xFFFFF7ED), Color(0xFFC2410C), Color(0xFFFFEDD5)), // Orange
-      (Color(0xFFFDF2F8), Color(0xFFBE185D), Color(0xFFFCE7F3)), // Pink
-      (Color(0xFFEEF2FF), Color(0xFF4338CA), Color(0xFFE0E7FF)), // Indigo
-      (Color(0xFFF0FDFA), Color(0xFF0F766E), Color(0xFFCCFBF1)), // Teal
-    ];
-    
-    return palettes[hash % palettes.length];
   }
 
   Widget _buildAttributeItem({required IconData icon, required String text, required VoidCallback onTap}) {

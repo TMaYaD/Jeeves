@@ -3,8 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
-import '../../providers/tag_filter_provider.dart';
-import '../../providers/tags_provider.dart';
+import '../../widgets/active_filter_bar.dart';
 
 /// Shared list screen for all GTD views (Next Actions, Waiting For, etc.).
 ///
@@ -53,7 +52,7 @@ class GtdListScreen extends ConsumerWidget {
                 ],
               ),
             ),
-            const _ActiveFilterBar(),
+            const ActiveFilterBar(),
             Expanded(
               child: asyncItems.when(
                 loading: () =>
@@ -79,72 +78,6 @@ class GtdListScreen extends ConsumerWidget {
                   );
                 },
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Active filter bar
-// ---------------------------------------------------------------------------
-
-/// Horizontal strip shown below the screen header when a tag filter is active.
-///
-/// Displays each selected tag as a removable chip plus a "Clear all" button.
-/// Renders nothing when the filter set is empty.
-class _ActiveFilterBar extends ConsumerWidget {
-  const _ActiveFilterBar();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final selectedIds = ref.watch(tagFilterProvider);
-    if (selectedIds.isEmpty) return const SizedBox.shrink();
-
-    final notifier = ref.read(tagFilterProvider.notifier);
-    final allTags = ref.watch(contextTagsProvider).asData?.value ?? [];
-    final tagsById = {for (final t in allTags) t.id: t};
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      color: const Color(0xFFEFF6FF),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            ...selectedIds.map((id) {
-              final tag = tagsById[id];
-              final label = tag?.name ?? 'Deleted tag';
-              return Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: InputChip(
-                  key: Key('active_filter_chip_$id'),
-                  label: Text(label,
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF1D4ED8))),
-                  selected: true,
-                  selectedColor: const Color(0xFFDBEAFE),
-                  deleteIcon:
-                      const Icon(Icons.close, size: 14, color: Color(0xFF1D4ED8)),
-                  onDeleted: () => notifier.toggle(id),
-                  onPressed: () => notifier.toggle(id),
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              );
-            }),
-            TextButton(
-              key: const Key('active_filter_clear_all'),
-              onPressed: notifier.clear,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text('Clear all',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
             ),
           ],
         ),

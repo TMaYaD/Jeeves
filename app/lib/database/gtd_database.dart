@@ -38,7 +38,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -76,6 +76,13 @@ class GtdDatabase extends _$GtdDatabase {
                 "WHERE id IS NULL",
               );
             }
+          }
+          if (from < 7) {
+            // Backfill derived colors for tags created before per-tag color
+            // storage was introduced.  Running this as a migration rather than
+            // on every startup means a later updateColor(tagId, null) that
+            // intentionally clears a color is never overwritten.
+            await tagDao.backfillAllMissingColors();
           }
         },
       );
