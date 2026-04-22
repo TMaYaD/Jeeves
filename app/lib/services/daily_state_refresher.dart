@@ -50,8 +50,11 @@ class DailyStateRefresher with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _boundaryTimer?.cancel();
+    _boundaryTimer = null;
     _snoozeTimer?.cancel();
+    _snoozeTimer = null;
     onSnoozeScheduled = null;
+    _initialized = false;
   }
 
   /// Cancels the current boundary timer and reschedules it for [planningTime].

@@ -1,4 +1,4 @@
-/// Shared SharedPreferences keys for planning-time settings.
+/// SharedPreferences keys for planning-time settings.
 ///
 /// Declared here so [daily_planning_provider.dart], [planning_settings_provider.dart],
 /// and [daily_state_refresher.dart] all read and write the same keys without
