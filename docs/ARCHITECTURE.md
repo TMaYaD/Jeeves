@@ -72,7 +72,7 @@ Focus Mode is the task execution layer activated after daily planning. Its archi
 
 `/focus/active` is a top-level `GoRoute` registered **outside** the `ShellRoute`, so `AppShell` (drawer, navigation) is not rendered. The user sees only the active task. `/focus` (the daily plan list) remains inside the `ShellRoute`.
 
-The existing `/focus` path prefix in `_protectedPaths` also guards `/focus/active` via `startsWith`, so the route requires completed daily planning.
+The router has a `redirect` callback that checks `planningCompletionNotifier.value`; any path starting with `/focus` redirects to `/planning` when daily planning has not been completed. `planningCompletionNotifier` is also set as `refreshListenable` so the guard re-evaluates reactively when planning state changes.
 
 ### FocusModeNotifier (`providers/focus_session_provider.dart`)
 

@@ -172,10 +172,10 @@ class NotificationService {
     required String title,
     required Duration elapsed,
   }) async {
-    final h = elapsed.inHours;
+    final h = elapsed.inHours.toString().padLeft(2, '0');
     final m = (elapsed.inMinutes % 60).toString().padLeft(2, '0');
     final s = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
-    final elapsedStr = h > 0 ? '$h:$m:$s' : '$m:$s';
+    final elapsedStr = '$h:$m:$s';
 
     const android = AndroidNotificationDetails(
       'focus_mode',

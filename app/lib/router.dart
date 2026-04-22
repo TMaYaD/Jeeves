@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 
+import 'providers/daily_planning_provider.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
@@ -18,6 +19,14 @@ import 'screens/import_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
+  refreshListenable: planningCompletionNotifier,
+  redirect: (context, state) {
+    if (state.matchedLocation.startsWith('/focus') &&
+        !planningCompletionNotifier.value) {
+      return '/planning';
+    }
+    return null;
+  },
   routes: [
     GoRoute(
       path: '/login',
