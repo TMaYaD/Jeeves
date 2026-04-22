@@ -176,7 +176,7 @@ class NotificationService {
     final scheduled = tz.TZDateTime.from(endTime, tz.local);
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
-    final canExact = await android?.canScheduleExactAlarms() ?? false;
+    final canExact = await android?.canScheduleExactNotifications() ?? false;
     await _plugin.zonedSchedule(
       id: _kSprintEndNotificationId,
       title: 'Sprint complete!',
@@ -208,7 +208,7 @@ class NotificationService {
     final scheduled = tz.TZDateTime.from(endTime, tz.local);
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
-    final canExact = await android?.canScheduleExactAlarms() ?? false;
+    final canExact = await android?.canScheduleExactNotifications() ?? false;
     await _plugin.zonedSchedule(
       id: _kBreakEndNotificationId,
       title: 'Break over — back to it!',
