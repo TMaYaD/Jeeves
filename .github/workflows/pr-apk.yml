@@ -1,0 +1,67 @@
+name: PR APK Build
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [master]
+    paths:
+      - 'app/**'
+      - '.github/workflows/pr-apk.yml'
+
+concurrency:
+  group: pr-apk-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-distribute:
+    name: build-and-distribute
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.x'
+          channel: stable
+          cache: true
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ hashFiles('app/pubspec.lock') }}
+          restore-keys: pub-
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('app/android/gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: gradle-
+
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: flutter build apk --debug
+
+      - name: Compose release notes
+        id: notes
+        run: |
+          SHORT_SHA="${{ github.sha }}"
+          echo "notes=PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }} | branch: ${{ github.head_ref }} | sha: ${SHORT_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - uses: wzieba/Firebase-Distribution-Github-Action@v1
+        with:
+          appId: ${{ secrets.FIREBASE_APP_ID }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          groups: qa
+          file: app/build/app/outputs/flutter-apk/app-debug.apk
+          releaseNotes: ${{ steps.notes.outputs.notes }}
