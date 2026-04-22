@@ -344,11 +344,28 @@ void main() {
       // Regression: rescheduleTask stores UTC to keep asyncpg happy, so the
       // row is read back as UTC.  watchScheduledDueToday must convert back to
       // local before formatting or non-UTC devices miss the task.
+      //
+      // The bug only manifests when the UTC-day of the chosen local moment
+      // differs from its local-day (e.g. IST +5:30, where local midnight is
+      // the previous UTC day).  In UTC and in negative-offset zones the two
+      // agree, so both the pre-fix and post-fix code paths return the same
+      // answer and the regression cannot be observed.  Skip in that case
+      // rather than silently pass — run under `TZ=Asia/Kolkata` (or any
+      // positive-offset zone) to exercise this.
+      final localMidnight = DateTime(2026, 4, 16);
+      final utcMidnight = localMidnight.toUtc();
+      if (localMidnight.year == utcMidnight.year &&
+          localMidnight.month == utcMidnight.month &&
+          localMidnight.day == utcMidnight.day) {
+        markTestSkipped(
+            'Host TZ does not exercise the UTC-vs-local-day mismatch; '
+            'run with TZ=Asia/Kolkata (or any positive-offset zone).');
+        return;
+      }
       await _insert(db, id: 'a', title: 'A', state: 'scheduled');
       // Local midnight on the session's "today" — the instant a user picks
       // when they reschedule a task to today's date.
-      final localToday = DateTime(2026, 4, 16);
-      await db.todoDao.rescheduleTask('a', _userId, localToday);
+      await db.todoDao.rescheduleTask('a', _userId, localMidnight);
 
       final items =
           await db.todoDao.watchScheduledDueToday(_userId, _today).first;
