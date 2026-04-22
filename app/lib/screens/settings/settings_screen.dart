@@ -6,6 +6,7 @@ import '../../models/planning_settings.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/planning_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
+import '../../widgets/jeeves_logo.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -101,16 +102,30 @@ class SettingsScreen extends ConsumerWidget {
           _DailyPlanningSettings(),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
-          ListTile(
-            leading: const Icon(Icons.info_outline, color: Color(0xFF9CA3AF)),
-            title: const Text(
-              'Jeeves',
-              style: TextStyle(
-                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-            ),
-            subtitle: const Text(
-              'Offline-first GTD task manager',
-              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Center(
+              child: Column(
+                children: [
+                  JeevesLogo(
+                    variant: JeevesLogoVariant.pointillist,
+                    size: 64,
+                    appIcon: true,
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Jeeves',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 18,
+                        color: Color(0xFF1A1A2E)),
+                  ),
+                  const Text(
+                    'Offline-first GTD task manager',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                  ),
+                ],
+              ),
             ),
           ),
           ListTile(

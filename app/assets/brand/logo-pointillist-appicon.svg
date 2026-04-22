@@ -1,0 +1,13 @@
+<!-- Jeeves Pointillist app icon — INK rounded-square plate, 256 viewBox -->
+<!-- rx=56 at 256 viewBox per brand spec. Use for app icons ≥ 32 px. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="56" fill="#1A1A2E"/>
+  <!-- Dots scaled 2.56× from 100×100 coordinate space -->
+  <circle cx="128" cy="26"  r="18" fill="#2667B7"/>
+  <circle cx="128" cy="77"  r="18" fill="#60A5FA"/>
+  <circle cx="128" cy="128" r="18" fill="#C4B5FD"/>
+  <circle cx="128" cy="174" r="18" fill="#FDBA74"/>
+  <circle cx="128" cy="210" r="18" fill="#F9A8D4"/>
+  <circle cx="102" cy="233" r="18" fill="#6EE7B7"/>
+  <circle cx="72"  cy="223" r="18" fill="#FDE68A"/>
+</svg>

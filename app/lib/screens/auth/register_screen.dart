@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../widgets/jeeves_logo.dart';
 import 'auth_helpers.dart';
 
 class RegisterScreen extends ConsumerStatefulWidget {
@@ -83,13 +84,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text(
-                      'Jeeves',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1A1A2E),
+                    Center(
+                      child: JeevesLogo(
+                        variant: JeevesLogoVariant.wordmark,
+                        size: 48,
                       ),
                     ),
                     const SizedBox(height: 8),

@@ -1,11 +1,11 @@
 {
-    "name": "jeeves",
-    "short_name": "jeeves",
+    "name": "Jeeves",
+    "short_name": "Jeeves",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A productivity-focused todos app for mobile, web, and desktop.",
+    "background_color": "#1A1A2E",
+    "theme_color": "#2667B7",
+    "description": "A productivity-focused GTD task manager.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

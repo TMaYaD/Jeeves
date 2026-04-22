@@ -1,0 +1,25 @@
+<!-- Jeeves wordmark — dark surface: Pointillist-on-dark mark + "Jeeves" (Manrope 700, WHITE) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 100" width="260" height="100">
+  <!-- Pointillist mark with per-dot hairlines for dark surfaces -->
+  <circle cx="50" cy="10" r="8.25" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.25"/>
+  <circle cx="50" cy="10" r="7" fill="#2667B7"/>
+  <circle cx="50" cy="30" r="8.25" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.25"/>
+  <circle cx="50" cy="30" r="7" fill="#60A5FA"/>
+  <circle cx="50" cy="50" r="8.25" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.25"/>
+  <circle cx="50" cy="50" r="7" fill="#C4B5FD"/>
+  <circle cx="50" cy="68" r="8.25" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.25"/>
+  <circle cx="50" cy="68" r="7" fill="#FDBA74"/>
+  <circle cx="50" cy="82" r="8.25" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.25"/>
+  <circle cx="50" cy="82" r="7" fill="#F9A8D4"/>
+  <circle cx="40" cy="91" r="8.25" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.25"/>
+  <circle cx="40" cy="91" r="7" fill="#6EE7B7"/>
+  <circle cx="28" cy="87" r="8.25" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.25"/>
+  <circle cx="28" cy="87" r="7" fill="#FDE68A"/>
+  <!-- "Jeeves" wordmark: Manrope 700, WHITE -->
+  <text x="115" y="64"
+        font-family="Manrope, sans-serif"
+        font-weight="700"
+        font-size="48"
+        fill="#FFFFFF"
+        dominant-baseline="auto">Jeeves</text>
+</svg>
