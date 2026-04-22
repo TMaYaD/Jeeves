@@ -138,12 +138,16 @@ class _TaskRow extends StatelessWidget {
                       fontSize: 15, color: Color(0xFF1A1A2E), fontWeight: FontWeight.w500),
                 ),
                 if (todo.dueDate != null)
-                  Text(
-                    'Due ${todo.dueDate!.year}-'
-                    '${todo.dueDate!.month.toString().padLeft(2, '0')}-'
-                    '${todo.dueDate!.day.toString().padLeft(2, '0')}',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                  ),
+                  Builder(builder: (_) {
+                    // Storage is UTC; display the user's local calendar day.
+                    final d = todo.dueDate!.toLocal();
+                    return Text(
+                      'Due ${d.year}-'
+                      '${d.month.toString().padLeft(2, '0')}-'
+                      '${d.day.toString().padLeft(2, '0')}',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    );
+                  }),
               ],
             ),
           ),

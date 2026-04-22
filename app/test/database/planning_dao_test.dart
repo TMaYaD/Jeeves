@@ -338,6 +338,23 @@ void main() {
           await db.todoDao.watchScheduledDueToday(_userId, _today).first;
       expect(items, isEmpty);
     });
+
+    test('rescheduled task (UTC-normalised write) appears on its local day',
+        () async {
+      // Regression: rescheduleTask stores UTC to keep asyncpg happy, so the
+      // row is read back as UTC.  watchScheduledDueToday must convert back to
+      // local before formatting or non-UTC devices miss the task.
+      await _insert(db, id: 'a', title: 'A', state: 'scheduled');
+      // Local midnight on the session's "today" — the instant a user picks
+      // when they reschedule a task to today's date.
+      final localToday = DateTime(2026, 4, 16);
+      await db.todoDao.rescheduleTask('a', _userId, localToday);
+
+      final items =
+          await db.todoDao.watchScheduledDueToday(_userId, _today).first;
+      expect(items.length, 1);
+      expect(items.first.id, 'a');
+    });
   });
 
   // ---------------------------------------------------------------------------

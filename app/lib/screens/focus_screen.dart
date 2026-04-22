@@ -178,13 +178,17 @@ class _TaskRow extends ConsumerWidget {
                     ),
                     if (todo.dueDate != null) ...[
                       const SizedBox(height: 2),
-                      Text(
-                        'Due ${todo.dueDate!.year}-'
-                        '${todo.dueDate!.month.toString().padLeft(2, '0')}-'
-                        '${todo.dueDate!.day.toString().padLeft(2, '0')}',
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF9CA3AF)),
-                      ),
+                      Builder(builder: (_) {
+                        // Storage is UTC; display the user's local calendar day.
+                        final d = todo.dueDate!.toLocal();
+                        return Text(
+                          'Due ${d.year}-'
+                          '${d.month.toString().padLeft(2, '0')}-'
+                          '${d.day.toString().padLeft(2, '0')}',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF9CA3AF)),
+                        );
+                      }),
                     ],
                     if (estimate != null) ...[
                       const SizedBox(height: 2),

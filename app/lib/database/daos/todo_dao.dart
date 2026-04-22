@@ -340,7 +340,11 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         .where((t) =>
             t.state == GtdState.scheduled.value &&
             t.dueDate != null &&
-            _fmtDate(t.dueDate!) == today &&
+            // Storage is UTC (see TodoDao.rescheduleTask / updateFields) but
+            // [today] is a *local* calendar day from planningToday().  Convert
+            // back before formatting so the comparison is local-day vs
+            // local-day; otherwise non-UTC devices drop tasks a day early.
+            _fmtDate(t.dueDate!.toLocal()) == today &&
             (t.dailySelectionDate == null || t.dailySelectionDate != today))
         .toList());
   }
