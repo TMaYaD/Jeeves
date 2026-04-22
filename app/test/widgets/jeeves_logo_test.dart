@@ -135,5 +135,14 @@ void main() {
       )));
       expect(find.text('Jeeves'), findsOneWidget);
     });
+
+    testWidgets('explicit pointillist at size < 32 still shows pointillist', (tester) async {
+      await tester.pumpWidget(_wrap(const JeevesLogo(
+        size: 20,
+        variant: JeevesLogoVariant.pointillist,
+      )));
+      expect(find.byType(JeevesLogo), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 }

@@ -78,6 +78,10 @@ class JeevesLogo extends StatelessWidget {
       size >= 16,
       'JeevesLogo: size must be ≥ 16 (minimum legible size for Signature). Got $size.',
     );
+    assert(
+      !(variant == JeevesLogoVariant.wordmark && appIcon),
+      'JeevesLogo: appIcon is not supported with wordmark variant.',
+    );
 
     final isDark = onDark ?? (Theme.of(context).brightness == Brightness.dark);
 
@@ -122,7 +126,8 @@ class _SvgMark extends StatelessWidget {
       return switch (variant) {
         JeevesLogoVariant.pointillist => 'assets/brand/logo-pointillist-appicon.svg',
         JeevesLogoVariant.signature   => 'assets/brand/logo-signature-appicon.svg',
-        _                             => 'assets/brand/logo-pointillist-appicon.svg',
+        JeevesLogoVariant.auto || JeevesLogoVariant.wordmark =>
+          throw StateError('_SvgMark should not receive $variant'),
       };
     }
     return switch (variant) {
@@ -132,7 +137,8 @@ class _SvgMark extends StatelessWidget {
       JeevesLogoVariant.signature =>
         isDark ? 'assets/brand/logo-signature-on-dark.svg'
                : 'assets/brand/logo-signature.svg',
-      _ => 'assets/brand/logo-pointillist.svg',
+      JeevesLogoVariant.auto || JeevesLogoVariant.wordmark =>
+        throw StateError('_SvgMark should not receive $variant'),
     };
   }
 
