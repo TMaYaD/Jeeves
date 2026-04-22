@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../providers/daily_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_provider.dart';
+import '../utils/time_format.dart';
 import 'focus/sprint_resolution_dialog.dart';
 
 class FocusScreen extends ConsumerWidget {
@@ -339,14 +340,14 @@ class _TaskRow extends ConsumerWidget {
                       ],
                       if (estimate != null)
                         Text(
-                          _fmtEstimate(estimate),
+                          formatMinutes(estimate),
                           style: const TextStyle(
                               fontSize: 12, color: Color(0xFF9CA3AF)),
                         ),
                       if (todo.timeSpentMinutes > 0) ...[
                         const Text(' · ', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
                         Text(
-                          '${_fmtEstimate(todo.timeSpentMinutes)} spent',
+                          '${formatMinutes(todo.timeSpentMinutes)} spent',
                           style: const TextStyle(
                               fontSize: 12, color: Color(0xFF6B7280)),
                         ),
@@ -369,12 +370,6 @@ class _TaskRow extends ConsumerWidget {
     );
   }
 
-  String _fmtEstimate(int minutes) {
-    if (minutes < 60) return '${minutes}m';
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    return m == 0 ? '${h}h' : '${h}h ${m}m';
-  }
 }
 
 class _StartSprintButton extends ConsumerWidget {

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/daily_planning_provider.dart';
 import '../../providers/sprint_provider.dart';
+import '../../utils/time_format.dart';
 
 /// Mandatory interstitial shown when a 20-minute sprint expires.
 ///
@@ -165,9 +166,7 @@ class _SprintResolutionDialogState
 
   int _spentMinutes(Todo task, int sprintCount) {
     final alreadyLogged = task.timeSpentMinutes;
-    // sprintCount shows how many prior sprints finished this session.
-    // Current sprint was 20 min.
-    return alreadyLogged + (sprintCount * 20);
+    return alreadyLogged + (sprintCount * (kSprintDurationSeconds ~/ 60));
   }
 
   Widget _buildFilledButton(
@@ -221,8 +220,8 @@ class _TimeSpentRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final spentLabel = _fmt(spentMinutes);
-    final estimateLabel = estimateMinutes != null ? _fmt(estimateMinutes!) : null;
+    final spentLabel = formatMinutes(spentMinutes);
+    final estimateLabel = estimateMinutes != null ? formatMinutes(estimateMinutes!) : null;
 
     return Text(
       estimateLabel != null
@@ -232,12 +231,6 @@ class _TimeSpentRow extends StatelessWidget {
     );
   }
 
-  String _fmt(int minutes) {
-    if (minutes < 60) return '${minutes}m';
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    return m == 0 ? '${h}h' : '${h}h ${m}m';
-  }
 }
 
 class _ResolutionHint extends StatelessWidget {
@@ -353,7 +346,7 @@ class _SpilloverMatrix extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          '${tasks.length} remaining tasks · ${_fmt(totalEstimate)} estimated',
+          '${tasks.length} remaining tasks · ${formatMinutes(totalEstimate)} estimated',
           style:
               const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
         ),
@@ -402,7 +395,7 @@ class _SpilloverMatrix extends StatelessWidget {
                       if (task.timeEstimate != null) ...[
                         const SizedBox(width: 8),
                         Text(
-                          _fmt(task.timeEstimate!),
+                          formatMinutes(task.timeEstimate!),
                           style: const TextStyle(
                               fontSize: 11, color: Color(0xFF9CA3AF)),
                         ),
@@ -427,10 +420,4 @@ class _SpilloverMatrix extends StatelessWidget {
     );
   }
 
-  String _fmt(int minutes) {
-    if (minutes < 60) return '${minutes}m';
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    return m == 0 ? '${h}h' : '${h}h ${m}m';
-  }
 }
