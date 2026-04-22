@@ -53,9 +53,10 @@ jobs:
             echo "::error::riverpod_generator ${LATEST} supersedes the pinned git build (${PINNED_VERSION})."
             echo "::error::ACTION REQUIRED:"
             echo "::error::  1. Remove dependency_overrides.riverpod_generator from app/pubspec.yaml."
-            echo "::error::  2. Set 'riverpod_generator: ^${LATEST}' in pubspec.yaml dev_dependencies."
-            echo "::error::  3. Run 'flutter pub get' inside app/ and verify tests pass."
-            echo "::error::  4. Delete the 'riverpod-generator-stable-watch' job from this workflow."
+            echo "::error::  2. Remove dependency_overrides.riverpod_analyzer_utils from app/pubspec.yaml."
+            echo "::error::  3. Set 'riverpod_generator: ^${LATEST}' in pubspec.yaml dev_dependencies."
+            echo "::error::  4. Run 'flutter pub get' inside app/ and verify tests pass."
+            echo "::error::  5. Delete the 'riverpod-generator-stable-watch' job from this workflow."
             exit 1
           fi
 
