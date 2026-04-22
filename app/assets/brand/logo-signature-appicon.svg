@@ -1,0 +1,13 @@
+<!-- Jeeves Signature app icon — WHITE stem + WHITE tittle on BRAND rounded-square plate -->
+<!-- Uses APPICON_PATH variant: both stem and tittle are WHITE; plate is BRAND #2667B7. -->
+<!-- rx=56 at 256 viewBox. Use for single-colour icon contexts and ≤ 32 px frames. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="56" fill="#2667B7"/>
+  <!-- Tittle: WHITE (plate is already BRAND) -->
+  <circle cx="128" cy="31" r="18" fill="#FFFFFF"/>
+  <!-- Stem + hook: WHITE, scaled 2.56× -->
+  <path d="M 128 62 L 128 205 Q 128 246 92 236"
+        stroke="#FFFFFF" stroke-width="20"
+        stroke-linecap="round" stroke-linejoin="round"
+        fill="none"/>
+</svg>

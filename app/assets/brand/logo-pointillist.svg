@@ -1,0 +1,13 @@
+<!-- Jeeves Pointillist mark — light surface, transparent background -->
+<!-- Canonical source: docs/design/brand/  Usage: ≥ 32 px, light surfaces -->
+<!-- Reference: STEM_X=168 R=13 top-dot-r=14; viewBox gives natural aspect ratio -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="50 24 142 204" width="142" height="204">
+  <!-- top→hook: brand, sky, lav, peach, blush, mint, butter -->
+  <circle cx="168" cy="44"  r="14" fill="#2667B7"/>
+  <circle cx="168" cy="96"  r="13" fill="#60A5FA"/>
+  <circle cx="168" cy="134" r="13" fill="#C4B5FD"/>
+  <circle cx="168" cy="172" r="13" fill="#FDBA74"/>
+  <circle cx="142" cy="200" r="13" fill="#F9A8D4"/>
+  <circle cx="104" cy="208" r="13" fill="#6EE7B7"/>
+  <circle cx="68"  cy="190" r="13" fill="#FDE68A"/>
+</svg>

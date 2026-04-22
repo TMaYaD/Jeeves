@@ -7,6 +7,7 @@ import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
 import '../providers/tags_provider.dart';
+import '../widgets/jeeves_logo.dart';
 import '../widgets/planning_banner.dart';
 import 'common/tag_cloud.dart';
 
@@ -87,18 +88,12 @@ class CustomDrawer extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 16, 12),
+              padding: const EdgeInsets.fromLTRB(8, 4, 16, 4),
               child: Row(
                 children: [
-                  const Expanded(
-                    child: Text(
-                      'Jeeves',
-                      style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF1A1A2E)),
-                    ),
-                  ),
+                  // Pointillist at 32 px — threshold for auto, meets clear-space req
+                  const JeevesLogo(size: 32),
+                  const Spacer(),
                   _SyncIndicator(status: syncStatus),
                 ],
               ),

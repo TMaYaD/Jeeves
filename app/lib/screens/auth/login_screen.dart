@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../providers/auth_provider.dart';
 import '../../services/migration_service.dart';
+import '../../widgets/jeeves_logo.dart';
 import 'auth_helpers.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -113,13 +114,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text(
-                      'Jeeves',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF1A1A2E),
+                    Center(
+                      child: JeevesLogo(
+                        variant: JeevesLogoVariant.wordmark,
+                        size: 48,
                       ),
                     ),
                     const SizedBox(height: 8),
