@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-04-23
+
+- On-device Nirvana import (#151): CSV format uses UUID v5 of "name|type|parentName" as item ID (no native ID in CSV), making re-imports idempotent via INSERT OR REPLACE. JSON format uses the native Nirvana UUID. Both are then wrapped in a second UUID v5 (`jeeves://nirvana_import/<nirvana_id>`) to produce the Drift row ID.
+- `parseCsv` implements a hand-rolled RFC-4180 parser (single-pass, handles embedded newlines in quoted fields) rather than pulling in a `csv` package — keeps the import path dependency-free and avoids adding a package dependency for a once-at-onboarding feature.
+
 ## 2026-04-22
 
 - `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
