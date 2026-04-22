@@ -90,29 +90,23 @@ class _ShutdownBannerState extends ConsumerState<ShutdownBanner> {
       return const SizedBox.shrink();
     }
 
-    return ValueListenableBuilder<bool>(
-      valueListenable: planningCompletionNotifier,
-      builder: (context, planningDone, _) {
-        if (!planningDone) return const SizedBox.shrink();
-        return ValueListenableBuilder<bool>(
-          valueListenable: shutdownCompletionNotifier,
-          builder: (context, shutdownDone, _) {
-            if (shutdownDone) return const SizedBox.shrink();
-            return ValueListenableBuilder<bool>(
-              valueListenable: shutdownBannerDismissedNotifier,
-              builder: (context, dismissed, _) {
-                if (dismissed) return const SizedBox.shrink();
-                return _BannerContent(
-                  key: const Key('shutdown_banner_visible'),
-                  quip: ShutdownBanner._quipForToday(),
-                  onTap: () => context.go('/shutdown'),
-                  onDismiss: () => ref
-                      .read(eveningShutdownProvider.notifier)
-                      .dismissBannerForToday(),
-                );
-              },
-            );
-          },
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        planningCompletionNotifier,
+        shutdownCompletionNotifier,
+        shutdownBannerDismissedNotifier,
+      ]),
+      builder: (context, _) {
+        if (!planningCompletionNotifier.value) return const SizedBox.shrink();
+        if (shutdownCompletionNotifier.value) return const SizedBox.shrink();
+        if (shutdownBannerDismissedNotifier.value) return const SizedBox.shrink();
+        return _BannerContent(
+          key: const Key('shutdown_banner_visible'),
+          quip: ShutdownBanner._quipForToday(),
+          onTap: () => context.go('/shutdown'),
+          onDismiss: () => ref
+              .read(eveningShutdownProvider.notifier)
+              .dismissBannerForToday(),
         );
       },
     );
