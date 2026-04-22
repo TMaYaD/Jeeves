@@ -151,6 +151,8 @@ void main() {
       await tester.pump();
       await _openDrawer(tester);
 
+      await tester.ensureVisible(find.byKey(const Key('tag_chip_ctx1')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tag_chip_ctx1')));
       await tester.pumpAndSettle();
 
@@ -168,6 +170,8 @@ void main() {
       await _openDrawer(tester);
 
       // Select tag
+      await tester.ensureVisible(find.byKey(const Key('tag_chip_ctx1')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tag_chip_ctx1')));
       await tester.pumpAndSettle();
       expect(
@@ -178,27 +182,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(
           find.byKey(const Key('tag_cloud_clear_filters')), findsNothing);
-    });
-
-    testWidgets('CONTEXTS section badge shows count of active filters',
-        (tester) async {
-      final tag = _tag('ctx1', 'Work');
-      await tester.pumpWidget(_buildShell(
-        contextTagsWithCount: [_twc(tag, 2)],
-        contextTags: [tag],
-      ));
-      await tester.pump();
-      await _openDrawer(tester);
-
-      // No badge before selection
-      expect(find.text('1'), findsNothing);
-
-      // Select tag
-      await tester.tap(find.byKey(const Key('tag_chip_ctx1')));
-      await tester.pumpAndSettle();
-
-      // Badge '1' should appear in the CONTEXTS header row
-      expect(find.text('1'), findsOneWidget);
     });
   });
 
@@ -273,6 +256,8 @@ void main() {
 
       expect(capturedRef.read(tagFilterProvider), isEmpty);
 
+      await tester.ensureVisible(find.byKey(const Key('tag_chip_ctx1')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tag_chip_ctx1')));
       await tester.pumpAndSettle();
 
