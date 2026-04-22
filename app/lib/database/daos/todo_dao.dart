@@ -217,6 +217,20 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       final from = GtdState.fromString(row.state);
       GtdStateMachine.validate(from, newState);
 
+      if (newState == GtdState.inProgress) {
+        final existing = await (select(todos)
+              ..where((t) =>
+                  t.userId.equals(userId) &
+                  t.state.equals(GtdState.inProgress.value) &
+                  t.id.isNotValue(todoId)))
+            .getSingleOrNull();
+        if (existing != null) {
+          throw StateError(
+            'Cannot transition to inProgress: task ${existing.id} is already inProgress.',
+          );
+        }
+      }
+
       final effectiveNow = now ?? DateTime.now();
       final companion = _buildTransitionCompanion(row, newState, effectiveNow);
 
@@ -271,6 +285,10 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       timeSpentMinutes: Value(timeSpent),
       inProgressSince: Value(newInProgressSince),
       updatedAt: Value(now),
+      // Transitioning to deferred removes the task from today's focus list.
+      selectedForToday: newState == GtdState.deferred
+          ? const Value(false)
+          : const Value.absent(),
     );
   }
 
