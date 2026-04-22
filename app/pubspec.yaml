@@ -25,7 +25,7 @@ dependencies:
   # drift_sqlite_async, but imported directly in gtd_database.dart for the
   # `SqliteConnection` type in the production constructor signature.
   sqlite_async: ^0.14.0
-  sqlite3_flutter_libs: ^0.5.24
+  sqlite3_flutter_libs: ^0.6.0+eol
   path_provider: ^2.1.3
   path: ^1.9.0
 
