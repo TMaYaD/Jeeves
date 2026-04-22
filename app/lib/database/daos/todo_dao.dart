@@ -546,7 +546,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
       var timeSpent = row.timeSpentMinutes;
       String? inProgressSince = row.inProgressSince;
-      var newState = row.state;
 
       if (row.state == GtdState.inProgress.value &&
           row.inProgressSince != null) {
@@ -557,13 +556,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
           timeSpent += minutes.clamp(0, double.maxFinite.toInt());
         }
         inProgressSince = null;
-        newState = GtdState.nextAction.value;
       }
 
       await (update(todos)
             ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
           .write(TodosCompanion(
-        state: Value(newState),
+        state: Value(GtdState.nextAction.value),
         selectedForToday: const Value(null),
         dailySelectionDate: const Value(null),
         timeSpentMinutes: Value(timeSpent),

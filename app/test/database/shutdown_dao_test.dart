@@ -190,22 +190,24 @@ void main() {
     });
 
     test('logs elapsed time and reverts in_progress to next_action', () async {
-      final started = DateTime.now().subtract(const Duration(minutes: 45));
+      final started = DateTime(2025, 1, 15, 10, 0);
+      final now = DateTime(2025, 1, 15, 10, 45);
+      const initialSpent = 10;
+      const elapsedMinutes = 45;
       final id = await insertTask(
         state: GtdState.inProgress.value,
         selectedForToday: true,
         dailySelectionDate: _today,
         inProgressSince: started.toIso8601String(),
-        timeSpentMinutes: 10,
+        timeSpentMinutes: initialSpent,
       );
 
-      final now = DateTime.now();
       await db.todoDao.rolloverTask(id, _uid, _tomorrow, now: now);
 
       final task = await db.todoDao.getTodo(id, _uid);
       expect(task?.state, equals(GtdState.nextAction.value));
       expect(task?.inProgressSince, isNull);
-      expect(task?.timeSpentMinutes, greaterThan(10));
+      expect(task?.timeSpentMinutes, equals(initialSpent + elapsedMinutes));
       expect(task?.selectedForToday, isTrue);
       expect(task?.dailySelectionDate, equals(_tomorrow));
     });
@@ -243,25 +245,43 @@ void main() {
       final task = await db.todoDao.getTodo(id, _uid);
       expect(task?.selectedForToday, isNull);
       expect(task?.dailySelectionDate, isNull);
+      expect(task?.state, equals(GtdState.nextAction.value));
+    });
+
+    test('forces scheduled task back to next_action', () async {
+      final id = await insertTask(
+        state: GtdState.scheduled.value,
+        selectedForToday: true,
+        dailySelectionDate: _today,
+      );
+
+      await db.todoDao.returnToNextActions(id, _uid);
+
+      final task = await db.todoDao.getTodo(id, _uid);
+      expect(task?.state, equals(GtdState.nextAction.value));
+      expect(task?.selectedForToday, isNull);
+      expect(task?.dailySelectionDate, isNull);
     });
 
     test('logs elapsed time and reverts in_progress to next_action', () async {
-      final started = DateTime.now().subtract(const Duration(minutes: 20));
+      final started = DateTime(2025, 1, 15, 9, 0);
+      final now = DateTime(2025, 1, 15, 9, 20);
+      const initialSpent = 5;
+      const elapsedMinutes = 20;
       final id = await insertTask(
         state: GtdState.inProgress.value,
         selectedForToday: true,
         dailySelectionDate: _today,
         inProgressSince: started.toIso8601String(),
-        timeSpentMinutes: 5,
+        timeSpentMinutes: initialSpent,
       );
 
-      final now = DateTime.now();
       await db.todoDao.returnToNextActions(id, _uid, now: now);
 
       final task = await db.todoDao.getTodo(id, _uid);
       expect(task?.state, equals(GtdState.nextAction.value));
       expect(task?.inProgressSince, isNull);
-      expect(task?.timeSpentMinutes, greaterThan(5));
+      expect(task?.timeSpentMinutes, equals(initialSpent + elapsedMinutes));
       expect(task?.selectedForToday, isNull);
       expect(task?.dailySelectionDate, isNull);
     });

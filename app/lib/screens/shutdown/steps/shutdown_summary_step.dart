@@ -22,7 +22,33 @@ class ShutdownSummaryStep extends ConsumerWidget {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final completed = asyncCompleted.asData?.value ?? [];
+    if (asyncCompleted.hasError) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: Colors.red[300]),
+              const SizedBox(height: 16),
+              const Text(
+                'Could not load today\'s summary',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                asyncCompleted.error.toString(),
+                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final completed = asyncCompleted.asData!.value;
     final totalEstimated =
         completed.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
     final totalActual =

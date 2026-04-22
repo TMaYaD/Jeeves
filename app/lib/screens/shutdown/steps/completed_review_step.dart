@@ -115,33 +115,31 @@ class _SummaryBar extends StatelessWidget {
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      child: Row(
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 8,
         children: [
           _StatChip(
             label: 'Done',
             value: '$completedCount',
             color: const Color(0xFF16A34A),
           ),
-          const SizedBox(width: 12),
           _StatChip(
             label: 'Estimated',
             value: _fmtMinutes(totalEstimated),
             color: const Color(0xFF2563EB),
           ),
-          const SizedBox(width: 12),
           _StatChip(
             label: 'Actual',
             value: _fmtMinutes(totalActual),
             color: const Color(0xFF7C3AED),
           ),
-          if (accuracy != null) ...[
-            const SizedBox(width: 12),
+          if (accuracy != null)
             _StatChip(
               label: 'Accuracy',
               value: '$accuracy%',
               color: _accuracyColor(accuracy),
             ),
-          ],
         ],
       ),
     );

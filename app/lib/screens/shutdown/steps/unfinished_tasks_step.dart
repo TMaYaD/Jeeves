@@ -23,7 +23,27 @@ class UnfinishedTasksStep extends ConsumerWidget {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final unfinished = asyncUnfinished.asData?.value ?? [];
+    if (asyncUnfinished.hasError) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: Colors.red[300]),
+              const SizedBox(height: 16),
+              const Text(
+                'Could not load unfinished tasks',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final unfinished = asyncUnfinished.asData!.value;
 
     if (unfinished.isEmpty) {
       return const _AllResolved();

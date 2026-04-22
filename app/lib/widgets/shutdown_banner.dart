@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,7 +14,7 @@ import '../providers/shutdown_settings_provider.dart';
 ///
 /// Only shown after the user-configured shutdown time so it doesn't distract
 /// during the working day.
-class ShutdownBanner extends ConsumerWidget {
+class ShutdownBanner extends ConsumerStatefulWidget {
   const ShutdownBanner({super.key});
 
   static const _quips = <_Quip>[
@@ -50,7 +52,32 @@ class ShutdownBanner extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ShutdownBanner> createState() => _ShutdownBannerState();
+}
+
+class _ShutdownBannerState extends ConsumerState<ShutdownBanner> {
+  Timer? _wakeTimer;
+
+  @override
+  void dispose() {
+    _wakeTimer?.cancel();
+    super.dispose();
+  }
+
+  void _scheduleWakeAt(TimeOfDay shutdownTime) {
+    _wakeTimer?.cancel();
+    final now = TimeOfDay.now();
+    final nowMinutes = now.hour * 60 + now.minute;
+    final targetMinutes = shutdownTime.hour * 60 + shutdownTime.minute;
+    if (targetMinutes <= nowMinutes) return;
+    _wakeTimer = Timer(
+      Duration(minutes: targetMinutes - nowMinutes),
+      () { if (mounted) setState(() {}); },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final settings = ref.watch(shutdownSettingsProvider);
     if (!settings.bannerEnabled) return const SizedBox.shrink();
 
@@ -58,7 +85,10 @@ class ShutdownBanner extends ConsumerWidget {
     final shutdownTime = settings.shutdownTime;
     final isAfterShutdownTime = now.hour > shutdownTime.hour ||
         (now.hour == shutdownTime.hour && now.minute >= shutdownTime.minute);
-    if (!isAfterShutdownTime) return const SizedBox.shrink();
+    if (!isAfterShutdownTime) {
+      _scheduleWakeAt(shutdownTime);
+      return const SizedBox.shrink();
+    }
 
     return ValueListenableBuilder<bool>(
       valueListenable: planningCompletionNotifier,

@@ -54,6 +54,27 @@ class NotificationService {
       requestAlertPermission: false,
       requestBadgePermission: false,
       requestSoundPermission: false,
+      notificationCategories: [
+        DarwinNotificationCategory(
+          'daily_planning',
+          actions: [
+            DarwinNotificationAction.plain(kNotificationActionOpen, 'Open'),
+            DarwinNotificationAction.plain(kNotificationActionSnooze, 'Snooze'),
+            DarwinNotificationAction.plain(kNotificationActionSkip, 'Skip today'),
+          ],
+        ),
+        DarwinNotificationCategory(
+          'evening_shutdown',
+          actions: [
+            DarwinNotificationAction.plain(
+                kShutdownNotificationActionOpen, 'Open'),
+            DarwinNotificationAction.plain(
+                kShutdownNotificationActionSnooze, 'Snooze'),
+            DarwinNotificationAction.plain(
+                kShutdownNotificationActionSkip, 'Skip today'),
+          ],
+        ),
+      ],
     );
     await instance._plugin.initialize(
       settings: const InitializationSettings(android: android, iOS: iOS),

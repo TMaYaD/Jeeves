@@ -71,7 +71,8 @@ void main() {
 
     test('advanceStep clamps at max step', () {
       final notifier = container.read(eveningShutdownProvider.notifier);
-      notifier.goToStep(3); // beyond max
+      notifier.goToStep(2); // at max
+      notifier.advanceStep(); // try to go beyond
       expect(container.read(eveningShutdownProvider).currentStep, equals(2));
     });
 
