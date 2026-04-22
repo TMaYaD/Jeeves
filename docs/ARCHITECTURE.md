@@ -238,6 +238,78 @@ The ritual can no longer be auto-launched. Users are nudged through two opt-in m
 | `planning_settings_banner_enabled` | `bool` | Banner toggle |
 | `planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |
 
+## Sprint Timer (Pomodoro Engine)
+
+Focus Mode includes a 20-minute Pomodoro sprint timer bound to a selected task. The timer persists across app backgrounding via SharedPreferences and fires a local notification at expiry.
+
+### State machine
+
+`lib/providers/sprint_timer_provider.dart` — `SprintTimerNotifier` (a Riverpod `NotifierProvider<SprintTimerNotifier, SprintTimerState>`).
+
+**Phases:**
+
+| Phase | Duration | Description |
+|---|---|---|
+| `idle` | — | No sprint running |
+| `focus` | 20 min | Active sprint, countdown running |
+| `break_` | 3 min | Break between sprints |
+
+**Key operations:**
+
+- `startSprint(Todo)` — starts a 20-min focus sprint; triggers haptic feedback and schedules a local notification.
+- `pauseSprint()` / `resumeSprint()` — freezes/resumes the remaining duration; cancels/reschedules the end notification.
+- `completeSprint()` — logs 20 min to `todos.time_spent_minutes`, then starts the break timer.
+- `stopSprint()` — cancels the timer and clears all persisted state.
+- `skipBreak()` — ends the break early and returns to idle.
+
+### Persistence across backgrounding
+
+When a sprint starts the notifier stores the absolute end time in `SharedPreferences`. On app resume, `_restoreFromPrefs()` reads the stored end time and recalculates the remaining duration. If the timer has already expired, the expired handler runs immediately (logs time and starts the break, or resets to idle).
+
+**SharedPreferences keys:**
+
+| Key | Type | Description |
+|---|---|---|
+| `sprint_active_task_id` | String | ID of the task being sprinted |
+| `sprint_active_task_title` | String | Cached task title for restore |
+| `sprint_end_time` | ISO-8601 datetime | Absolute end time of the current timer |
+| `sprint_phase` | `'focus'` \| `'break'` | Current phase |
+| `sprint_sprint_number` | int | 1-indexed sprint number |
+| `sprint_total_sprints` | int | Total sprints for the task |
+| `sprint_is_paused` | bool | Whether the timer is paused |
+| `sprint_remaining_seconds` | int | Seconds remaining when paused |
+
+### Notifications
+
+Two stable notification IDs are reserved in `NotificationService`:
+
+- `_kSprintEndNotificationId = 2` — fires when the focus sprint expires.
+- `_kBreakEndNotificationId = 3` — fires when the break expires.
+
+Both use `AndroidScheduleMode.exactAllowWhileIdle` (one-shot, not repeating).
+
+### Sprint count
+
+Sprint count for a task is derived from its `timeEstimate`:
+
+```
+totalSprints = max(1, ceil(timeEstimate / 20))
+currentSprint = floor(timeSpentMinutes / 20) + 1
+```
+
+### Time tracking
+
+When a sprint completes normally (`completeSprint`) or the timer expires while the app is backgrounded, the notifier writes `timeSpentMinutes += 20` directly to the `todos` row via Drift. This is best-effort: failures are silently ignored so the UI remains responsive.
+
+### Batching suggestion
+
+`findBatchingCandidates(List<Todo>)` scans today's tasks for micro-tasks (estimate ≤ 15 min) whose combined total fits within one sprint (≤ 20 min). If 2 or more such tasks are found, Focus Mode shows a dismissible suggestion banner to batch them into a single sprint.
+
+### UI
+
+- `lib/widgets/sprint_timer_widget.dart` — progress ring (custom `CustomPainter`), MM:SS countdown, phase badge, sprint-dot progress indicator, and playback controls (pause/resume, done, stop / skip break).
+- `lib/screens/focus_screen.dart` — mounts `SprintTimerWidget` above the task list; each task row shows a "Sprint" start button when no other sprint is active; the active task row is highlighted.
+
 ## Navigation & Global Filter State
 
 ### Tag Cloud Navigation Filter

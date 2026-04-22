@@ -16,6 +16,8 @@ import 'package:timezone/timezone.dart' as tz;
 // Stable notification IDs.
 const _kPlanningNotificationId = 0;
 const _kPlanningSnoozeNotificationId = 1;
+const _kSprintEndNotificationId = 2;
+const _kBreakEndNotificationId = 3;
 
 // Action identifiers sent back via onDidReceiveNotificationResponse.
 const kNotificationActionOpen = 'open';
@@ -159,6 +161,71 @@ class NotificationService {
 
   Future<void> cancelAll() async {
     await _plugin.cancelAll();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sprint timer notifications
+  // ---------------------------------------------------------------------------
+
+  /// Schedules a one-off notification at [endTime] for the end of a focus sprint.
+  Future<void> scheduleSprintEndNotification({
+    required DateTime endTime,
+    required String taskTitle,
+  }) async {
+    await _plugin.cancel(id: _kSprintEndNotificationId);
+    final scheduled = tz.TZDateTime.from(endTime, tz.local);
+    await _plugin.zonedSchedule(
+      id: _kSprintEndNotificationId,
+      title: 'Sprint complete!',
+      body: 'Time\'s up on "$taskTitle". Mark it done or keep going.',
+      scheduledDate: scheduled,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'sprint_timer',
+          'Sprint Timer',
+          channelDescription: 'Pomodoro sprint start/end alerts',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentSound: true,
+        ),
+      ),
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+    );
+  }
+
+  /// Schedules a one-off notification at [endTime] for the end of a break.
+  Future<void> scheduleBreakEndNotification({
+    required DateTime endTime,
+  }) async {
+    await _plugin.cancel(id: _kBreakEndNotificationId);
+    final scheduled = tz.TZDateTime.from(endTime, tz.local);
+    await _plugin.zonedSchedule(
+      id: _kBreakEndNotificationId,
+      title: 'Break over — back to it!',
+      body: 'Your 3-minute break has ended. Start the next sprint.',
+      scheduledDate: scheduled,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'sprint_timer',
+          'Sprint Timer',
+          channelDescription: 'Pomodoro sprint start/end alerts',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentSound: true,
+        ),
+      ),
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+    );
+  }
+
+  /// Cancels both sprint-related notifications.
+  Future<void> cancelSprintNotifications() async {
+    await _plugin.cancel(id: _kSprintEndNotificationId);
+    await _plugin.cancel(id: _kBreakEndNotificationId);
   }
 
   // ---------------------------------------------------------------------------
