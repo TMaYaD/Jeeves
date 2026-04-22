@@ -34,6 +34,8 @@ jobs:
           # support.  The gate fires when pub.dev publishes anything higher.
           PINNED_VERSION: "4.0.3"
         run: |
+          set -euo pipefail
+
           LATEST=$(curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 --max-time 20 \
             https://pub.dev/api/packages/riverpod_generator \
             | python3 -c "import sys, json; print(json.load(sys.stdin)['latest']['version'])")

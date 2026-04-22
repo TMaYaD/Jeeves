@@ -45,11 +45,11 @@ BASE_URL="https://github.com/powersync-ja/powersync.dart/releases/download/power
 echo "Fetching PowerSync web assets for powersync v${POWERSYNC_VERSION}..."
 mkdir -p "$WEB_DIR"
 
-curl -fsSL --progress-bar \
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --progress-bar \
   "${BASE_URL}/sqlite3.wasm" \
   -o "$WEB_DIR/sqlite3.wasm"
 
-curl -fsSL --progress-bar \
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --progress-bar \
   "${BASE_URL}/powersync_db.worker.js" \
   -o "$WEB_DIR/powersync_db.worker.js"
 

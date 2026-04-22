@@ -40,7 +40,7 @@ Located in `app/`.
 - **Local Storage:** Offline-first architecture using `drift` and `sqlite3_flutter_libs` as the structured SQL engine.
 - **API Communication:** `dio` and `retrofit`.
 - **Data Models:** `freezed` and `json_serializable` for robust immutable models.
-- **Sync:** PowerSync (`powersync ^2.x` Dart package) — bidirectional sync via `JevesBackendConnector` and a self-hosted `journeyapps/powersync-service` instance.
+- **Sync:** PowerSync (`powersync ^2.x` Dart package) — bidirectional sync via `JeevesBackendConnector` and a self-hosted `journeyapps/powersync-service` instance.
 - **Web storage:** OPFS-backed SQLite via `WebPowerSyncOpenFactory` from `package:powersync/web.dart`, using the WASM worker assets in `app/web/`.
 
 ### Backend (Python/FastAPI)
