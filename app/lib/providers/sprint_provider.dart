@@ -89,6 +89,7 @@ class SprintState {
 
 class SprintNotifier extends Notifier<SprintState> {
   Timer? _ticker;
+  bool _isStarting = false;
   bool _isResolving = false;
 
   @override
@@ -102,20 +103,26 @@ class SprintNotifier extends Notifier<SprintState> {
   /// Transitions the task to `in_progress` via the DAO (which sets
   /// [inProgressSince]) so time is logged accurately when the sprint ends.
   Future<void> startSprint(Todo task) async {
+    if (state.phase != SprintPhase.idle || _isStarting || _isResolving) return;
+    _isStarting = true;
     _cancelTicker();
-    final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
+    try {
+      final db = ref.read(databaseProvider);
+      final userId = ref.read(currentUserIdProvider);
 
-    await db.todoDao.transitionState(task.id, userId, GtdState.inProgress);
+      await db.todoDao.transitionState(task.id, userId, GtdState.inProgress);
 
-    final updated = await db.todoDao.getTodo(task.id, userId);
-    state = SprintState(
-      phase: SprintPhase.running,
-      activeTask: updated ?? task,
-      remainingSeconds: kSprintDurationSeconds,
-      sprintCount: state.activeTask?.id == task.id ? state.sprintCount : 0,
-    );
-    _startTicker();
+      final updated = await db.todoDao.getTodo(task.id, userId);
+      state = SprintState(
+        phase: SprintPhase.running,
+        activeTask: updated ?? task,
+        remainingSeconds: kSprintDurationSeconds,
+        sprintCount: state.activeTask?.id == task.id ? state.sprintCount : 0,
+      );
+      _startTicker();
+    } finally {
+      _isStarting = false;
+    }
   }
 
   /// Resolves the expired sprint as "Complete": logs time and marks task done.
@@ -157,6 +164,31 @@ class SprintNotifier extends Notifier<SprintState> {
     _startTicker();
   }
 
+  /// Atomically punts [taskToPunt] (if non-null) and extends the sprint.
+  ///
+  /// Combines the two operations under [_isResolving] so there is no window
+  /// where the sprint is extended but the punt has not yet been applied.
+  Future<void> extendWithPunt(Todo? taskToPunt) async {
+    if (state.phase != SprintPhase.expired || state.activeTask == null || _isResolving) return;
+    _isResolving = true;
+    _cancelTicker();
+    try {
+      if (taskToPunt != null) {
+        final db = ref.read(databaseProvider);
+        final userId = ref.read(currentUserIdProvider);
+        await db.todoDao.unselectFromToday(taskToPunt.id, userId);
+      }
+      state = state.copyWith(
+        phase: SprintPhase.running,
+        remainingSeconds: kSprintDurationSeconds,
+        sprintCount: state.sprintCount + 1,
+      );
+      _startTicker();
+    } finally {
+      _isResolving = false;
+    }
+  }
+
   /// Punts [task] from today's plan to make room for an extended sprint.
   Future<void> puntTask(Todo task) async {
     final db = ref.read(databaseProvider);
@@ -193,6 +225,7 @@ class SprintNotifier extends Notifier<SprintState> {
   // ---------------------------------------------------------------------------
 
   void _startTicker() {
+    _cancelTicker();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
   }
 

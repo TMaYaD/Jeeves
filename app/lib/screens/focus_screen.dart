@@ -7,11 +7,35 @@ import '../providers/sprint_provider.dart';
 import '../utils/time_format.dart';
 import 'focus/sprint_resolution_dialog.dart';
 
-class FocusScreen extends ConsumerWidget {
+class FocusScreen extends ConsumerStatefulWidget {
   const FocusScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FocusScreen> createState() => _FocusScreenState();
+}
+
+class _FocusScreenState extends ConsumerState<FocusScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // If the sprint already expired while this screen was not mounted (e.g. the
+    // user navigated away and back), no transition fires via ref.listen. Show
+    // the dialog on the first frame instead.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final sprint = ref.read(sprintProvider);
+      if (sprint.phase == SprintPhase.expired && sprint.activeTask != null) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => SprintResolutionDialog(task: sprint.activeTask!),
+        );
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final asyncSelected = ref.watch(todaySelectedTasksProvider);
     final sprintState = ref.watch(sprintProvider);
 

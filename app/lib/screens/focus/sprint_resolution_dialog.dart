@@ -23,6 +23,7 @@ class _SprintResolutionDialogState
     extends ConsumerState<SprintResolutionDialog> {
   bool _showingSpillover = false;
   String? _puntedTaskId;
+  bool _submitting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -142,17 +143,19 @@ class _SprintResolutionDialogState
   }
 
   Future<void> _handleExtend(BuildContext context) async {
-    if (_puntedTaskId != null) {
-      final todayTasks =
-          ref.read(todaySelectedTasksProvider).value ?? [];
-      final punted =
-          todayTasks.where((t) => t.id == _puntedTaskId).firstOrNull;
-      if (punted != null) {
-        await ref.read(sprintProvider.notifier).puntTask(punted);
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    try {
+      Todo? punted;
+      if (_puntedTaskId != null) {
+        final todayTasks = ref.read(todaySelectedTasksProvider).value ?? [];
+        punted = todayTasks.where((t) => t.id == _puntedTaskId).firstOrNull;
       }
+      await ref.read(sprintProvider.notifier).extendWithPunt(punted);
+      if (context.mounted) Navigator.of(context).pop();
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
-    await ref.read(sprintProvider.notifier).resolveExtend();
-    if (context.mounted) Navigator.of(context).pop();
   }
 
   Future<void> _handleDefer(BuildContext context) async {
