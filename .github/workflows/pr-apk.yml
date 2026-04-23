@@ -76,7 +76,7 @@ jobs:
           restore-keys: gradle-
 
       - run: flutter pub get
-      - run: dart run flutter_launcher_icons
+      - run: dart run flutter_launcher_icons --flavor alpha
       - run: dart run build_runner build --delete-conflicting-outputs
       - run: flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor alpha
 
