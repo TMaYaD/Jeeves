@@ -64,6 +64,7 @@ class SprintTimerState {
   final Duration remaining;
   final Duration total;
   final bool isPaused;
+  final bool isProcessing;
 
   const SprintTimerState({
     this.phase = SprintPhase.idle,
@@ -74,6 +75,7 @@ class SprintTimerState {
     this.remaining = _kSprintDuration,
     this.total = _kSprintDuration,
     this.isPaused = false,
+    this.isProcessing = false,
   });
 
   bool get isActive => phase != SprintPhase.idle;
@@ -95,6 +97,7 @@ class SprintTimerState {
     Duration? remaining,
     Duration? total,
     bool? isPaused,
+    bool? isProcessing,
   }) =>
       SprintTimerState(
         phase: phase ?? this.phase,
@@ -105,6 +108,7 @@ class SprintTimerState {
         remaining: remaining ?? this.remaining,
         total: total ?? this.total,
         isPaused: isPaused ?? this.isPaused,
+        isProcessing: isProcessing ?? this.isProcessing,
       );
 }
 
@@ -128,6 +132,8 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   @override
   SprintTimerState build() {
     ref.onDispose(() => _ticker?.cancel());
+    // Fire-and-forget: runs async without blocking build(). State emitted
+    // inside _restoreFromPrefs() triggers a widget rebuild when ready.
     _restoreFromPrefs();
     return const SprintTimerState();
   }
@@ -163,58 +169,86 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
 
   /// Pauses the running timer.
   Future<void> pauseSprint() async {
-    if (!state.isActive || state.isPaused) return;
-    _ticker?.cancel();
-    HapticFeedback.lightImpact();
+    if (!state.isActive || state.isPaused || state.isProcessing) return;
+    state = state.copyWith(isProcessing: true);
+    try {
+      _ticker?.cancel();
+      HapticFeedback.lightImpact();
 
-    state = state.copyWith(isPaused: true);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kPrefIsPaused, true);
-    await prefs.setInt(_kPrefRemainingSeconds, state.remaining.inSeconds);
-    await _cancelSprintNotifications();
+      state = state.copyWith(isPaused: true, isProcessing: false);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kPrefIsPaused, true);
+      await prefs.setInt(_kPrefRemainingSeconds, state.remaining.inSeconds);
+      await _cancelSprintNotifications();
+    } finally {
+      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+    }
   }
 
   /// Resumes a paused timer.
   Future<void> resumeSprint() async {
-    if (!state.isActive || !state.isPaused) return;
-    HapticFeedback.lightImpact();
+    if (!state.isActive || !state.isPaused || state.isProcessing) return;
+    state = state.copyWith(isProcessing: true);
+    try {
+      HapticFeedback.lightImpact();
 
-    _endTime = DateTime.now().add(state.remaining);
-    state = state.copyWith(isPaused: false);
-    await _persist(isPaused: false);
-    await _scheduleEndNotification(
-      _endTime!,
-      isFocus: state.isFocus,
-      taskTitle: state.activeTaskTitle,
-    );
-    _startTicker();
+      _endTime = DateTime.now().add(state.remaining);
+      state = state.copyWith(isPaused: false, isProcessing: false);
+      await _persist(isPaused: false);
+      await _scheduleEndNotification(
+        _endTime!,
+        isFocus: state.isFocus,
+        taskTitle: state.activeTaskTitle,
+      );
+      _startTicker();
+    } finally {
+      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+    }
   }
 
   /// Stops the sprint entirely, returning to idle.
   Future<void> stopSprint() async {
-    _ticker?.cancel();
-    HapticFeedback.mediumImpact();
-    await _cancelSprintNotifications();
-    await _clearPrefs();
-    state = const SprintTimerState();
+    if (state.isProcessing) return;
+    state = state.copyWith(isProcessing: true);
+    try {
+      _ticker?.cancel();
+      HapticFeedback.mediumImpact();
+      await _cancelSprintNotifications();
+      await _clearPrefs();
+      state = const SprintTimerState();
+    } finally {
+      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+    }
   }
 
   /// Records a completed sprint, logs time to the task, then starts the break.
   Future<void> completeSprint() async {
-    _ticker?.cancel();
-    HapticFeedback.heavyImpact();
-    await _cancelSprintNotifications();
-    await _logSprintTimeToTask();
-    await _startBreak();
+    if (state.isProcessing) return;
+    state = state.copyWith(isProcessing: true);
+    try {
+      _ticker?.cancel();
+      HapticFeedback.heavyImpact();
+      await _cancelSprintNotifications();
+      await _logSprintTimeToTask();
+      await _startBreak();
+    } finally {
+      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+    }
   }
 
   /// Skips the break timer and returns to idle.
   Future<void> skipBreak() async {
-    _ticker?.cancel();
-    HapticFeedback.lightImpact();
-    await _cancelSprintNotifications();
-    await _clearPrefs();
-    state = const SprintTimerState();
+    if (state.isProcessing) return;
+    state = state.copyWith(isProcessing: true);
+    try {
+      _ticker?.cancel();
+      HapticFeedback.lightImpact();
+      await _cancelSprintNotifications();
+      await _clearPrefs();
+      state = const SprintTimerState();
+    } finally {
+      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+    }
   }
 
   // ---------------------------------------------------------------------------

@@ -196,13 +196,14 @@ class _Controls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(sprintTimerProvider.notifier);
+    final disabled = timer.isProcessing;
 
     if (timer.isBreak) {
       return Row(
         children: [
           Expanded(
             child: FilledButton(
-              onPressed: notifier.skipBreak,
+              onPressed: disabled ? null : notifier.skipBreak,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF10B981),
                 shape: RoundedRectangleBorder(
@@ -223,8 +224,9 @@ class _Controls extends ConsumerWidget {
         Tooltip(
           message: timer.isPaused ? 'Resume sprint' : 'Pause sprint',
           child: OutlinedButton(
-            onPressed:
-                timer.isPaused ? notifier.resumeSprint : notifier.pauseSprint,
+            onPressed: disabled
+                ? null
+                : (timer.isPaused ? notifier.resumeSprint : notifier.pauseSprint),
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFF2563EB),
               side: const BorderSide(color: Color(0xFFBFDBFE)),
@@ -243,7 +245,7 @@ class _Controls extends ConsumerWidget {
         // Complete
         Expanded(
           child: FilledButton(
-            onPressed: notifier.completeSprint,
+            onPressed: disabled ? null : notifier.completeSprint,
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF2563EB),
               shape: RoundedRectangleBorder(
@@ -259,7 +261,7 @@ class _Controls extends ConsumerWidget {
         Tooltip(
           message: 'Stop sprint',
           child: OutlinedButton(
-            onPressed: notifier.stopSprint,
+            onPressed: disabled ? null : notifier.stopSprint,
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFF6B7280),
               side: const BorderSide(color: Color(0xFFE5E7EB)),
