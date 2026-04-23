@@ -13,8 +13,12 @@ import 'database_provider.dart';
 
 /// Mutable search parameters. The search screen writes to this on each
 /// (debounced) keystroke and filter change.
+///
+/// autoDispose so state resets to [SearchQuery()] automatically whenever
+/// the search screen is popped and no widget is listening.
 final searchQueryProvider =
-    NotifierProvider<SearchQueryNotifier, SearchQuery>(SearchQueryNotifier.new);
+    NotifierProvider.autoDispose<SearchQueryNotifier, SearchQuery>(
+        SearchQueryNotifier.new);
 
 class SearchQueryNotifier extends Notifier<SearchQuery> {
   @override

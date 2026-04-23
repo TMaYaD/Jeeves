@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../models/search_query.dart';
 import '../../models/search_result.dart';
 import '../../models/todo.dart' show GtdState;
 import '../../providers/search_provider.dart';
@@ -29,10 +28,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     super.initState();
     _controller = TextEditingController();
     _focusNode = FocusNode();
-    // Reset synchronously so the first build sees an empty query; if this
-    // moved into a post-frame callback, reopening /search could flash a frame
-    // of stale query/filter state against an empty text field.
-    ref.read(searchQueryProvider.notifier).update(const SearchQuery());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });

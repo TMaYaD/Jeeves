@@ -2,6 +2,10 @@
 
 ## 2026-04-23
 
+- Issue #154: `ref.read(...).update()` in `initState` throws "Tried to modify a provider while the widget tree was building" on a fresh install because Riverpod guards synchronous provider writes during the build phase. Fix: make `searchQueryProvider` `autoDispose` so the state resets to `SearchQuery()` automatically when the screen is popped — no manual `initState` reset needed.
+
+
+
 - On-device Nirvana import (#151): CSV format uses UUID v5 of "name|type|parentName" as item ID (no native ID in CSV), making re-imports idempotent via INSERT OR REPLACE. JSON format uses the native Nirvana UUID. Both are then wrapped in a second UUID v5 (`jeeves://nirvana_import/<nirvana_id>`) to produce the Drift row ID.
 - `parseCsv` implements a hand-rolled RFC-4180 parser (single-pass, handles embedded newlines in quoted fields) rather than pulling in a `csv` package — keeps the import path dependency-free and avoids adding a package dependency for a once-at-onboarding feature.
 
