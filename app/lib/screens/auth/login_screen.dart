@@ -43,11 +43,13 @@ class LoginScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 40),
                   provider.buildLoginWidget(context),
-                  const SizedBox(height: 16),
-                  TextButton(
-                    onPressed: () => context.pushReplacement('/register'),
-                    child: const Text("Don't have an account? Create one"),
-                  ),
+                  if (!isSwsMode) ...[
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: () => context.pushReplacement('/register'),
+                      child: const Text("Don't have an account? Create one"),
+                    ),
+                  ],
                 ],
               ),
             ),

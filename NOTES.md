@@ -16,6 +16,10 @@
 
 ### SWS (#129)
 
+- MWA signer uses `MethodChannel('jeeves/mwa')` → `MwaPlugin.kt` → `mobile-wallet-adapter-clientlib-ktx:2.0.3`. `sign()` opens a new MWA session each call (shows wallet auth prompt twice per login); a follow-up should cache the auth token across `getPublicKey` + `sign` within a single session. The `signedPayload` field from `signMessages` is the raw signature bytes — if a wallet prepends a recovery byte, the backend's ed25519 verify will fail and the format expectation must be revisited.
+- `isSwsMode` const (in `auth_mode.dart`) is the canonical way to gate UI on auth mode — using `authImplProvider` type-checks (`is SwsAuthProvider`) is fragile because tests override the provider.
+- `LoginScreen` "Don't have an account?" is gated on `!isSwsMode`. In SWS mode the wallet is the identity; there is no registration step.
+
 - `PasswordLoginWidget` (ConsumerStatefulWidget) owns loading/error state and the conflict dialog — `LoginScreen` delegates entirely to `provider.buildLoginWidget(context)` without type-checking. All providers implement `buildLoginWidget` and manage their own state.
 - `AuthNotifier.login()` signature changed from `(String, String, {onConflict})` to `(Map<String, dynamic>, {onConflict})` — existing login_screen_test.dart fake notifiers needed updating.
 - No existing Redis client in the backend — created `backend/app/redis.py` as a thin `aioredis.from_url` wrapper with a `get_redis` FastAPI dependency, mirroring the `get_db` pattern.

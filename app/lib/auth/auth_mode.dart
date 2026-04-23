@@ -13,6 +13,12 @@ const _authMode = String.fromEnvironment(
   defaultValue: 'password',
 );
 
+/// True when the app was compiled for Sign-In With Solana mode.
+///
+/// Use this to gate UI that only applies to one auth mode (e.g. hiding the
+/// "Create account" link in SWS mode, where the wallet is the identity).
+const isSwsMode = _authMode == 'sws';
+
 /// The active [AuthProvider] implementation, selected at compile time.
 ///
 /// Override in tests:

@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:typed_data';
+
+import 'package:flutter/services.dart';
 
 /// Abstraction over a Solana wallet that can sign arbitrary messages.
 abstract interface class WalletSigner {
@@ -31,6 +34,50 @@ class StubWalletSigner implements WalletSigner {
       publicKey: publicKey,
       signature: Uint8List(64), // 64 zero bytes — accepted by the test stub
     );
+  }
+}
+
+/// Mobile Wallet Adapter signer — works with any MWA-compatible Solana wallet
+/// app installed on the device (e.g. Phantom, Solflare).
+///
+/// Communicates with the Android-side `MwaPlugin` via a [MethodChannel].
+/// The plugin uses the MWA clientlib-ktx SDK
+/// (`com.solanamobile:mobile-wallet-adapter-clientlib-ktx`) to open a local
+/// association with the wallet, authorise the app, and request message signing.
+///
+/// Both [getPublicKey] and [sign] open an MWA session, so the wallet's
+/// authorisation prompt is shown on each call. A future improvement would cache
+/// the auth token across calls within a single sign-in attempt.
+class MobileWalletAdapterSigner implements WalletSigner {
+  const MobileWalletAdapterSigner();
+
+  static const _channel = MethodChannel('jeeves/mwa');
+
+  @override
+  Future<String> getPublicKey() async {
+    try {
+      final result = await _channel.invokeMethod<String>('getPublicKey');
+      if (result == null) throw StateError('MWA: wallet returned no public key');
+      return result;
+    } on PlatformException catch (e) {
+      throw StateError('Wallet error: ${e.message}');
+    }
+  }
+
+  @override
+  Future<({String publicKey, Uint8List signature})> sign(Uint8List message) async {
+    try {
+      final result = await _channel.invokeMapMethod<String, dynamic>('sign', {
+        'message': base64.encode(message),
+      });
+      if (result == null) throw StateError('MWA: wallet returned no result');
+      return (
+        publicKey: result['publicKey'] as String,
+        signature: base64.decode(result['signature'] as String),
+      );
+    } on PlatformException catch (e) {
+      throw StateError('Wallet error: ${e.message}');
+    }
   }
 }
 

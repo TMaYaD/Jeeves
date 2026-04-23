@@ -17,7 +17,7 @@ import 'wallet_signer.dart';
 
 /// Override this in tests with a [StubWalletSigner].
 final walletSignerProvider = Provider<WalletSigner>((ref) {
-  return const SeedVaultSigner();
+  return const MobileWalletAdapterSigner();
 });
 
 // ---------------------------------------------------------------------------
