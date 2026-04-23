@@ -70,19 +70,40 @@ void main() {
     });
 
     testWidgets('query resets after leaving and reopening search', (tester) async {
-      await tester.pumpWidget(_buildScreen());
-      await tester.pump();
+      // Use a single ProviderScope so the same container persists across
+      // navigations. Without autoDispose the provider would survive the pop
+      // and the text would not clear on reopen.
+      final navigatorKey = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            searchResultsProvider.overrideWith(
+              (_) => Stream.value(<GtdState, List<SearchResult>>{}),
+            ),
+            recentSearchesProvider.overrideWith(
+              () => _EmptyRecentSearchesNotifier(),
+            ),
+          ],
+          child: MaterialApp(
+            navigatorKey: navigatorKey,
+            home: const SizedBox.shrink(),
+            routes: {'/search': (_) => const SearchScreen()},
+          ),
+        ),
+      );
+
+      navigatorKey.currentState!.pushNamed('/search');
+      await tester.pumpAndSettle();
 
       await tester.enterText(find.byType(TextField), 'inbox');
       await tester.pump();
 
-      // Dispose SearchScreen (and its autoDispose providers).
-      await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
-      await tester.pump();
+      navigatorKey.currentState!.pop();
+      await tester.pumpAndSettle();
 
-      // Reopen and verify autoDispose reset the query to empty.
-      await tester.pumpWidget(_buildScreen());
-      await tester.pump();
+      // Reopen within the same container — autoDispose must have reset the provider.
+      navigatorKey.currentState!.pushNamed('/search');
+      await tester.pumpAndSettle();
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.controller?.text ?? '', isEmpty);
     });
