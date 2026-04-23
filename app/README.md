@@ -4,14 +4,32 @@ Cross-platform frontend for mobile (iOS + Android), web, and desktop.
 
 ## Prerequisites
 
-- Flutter SDK ≥ 3.22
-- Dart SDK ≥ 3.0
+The Flutter SDK version is pinned in [`.fvmrc`](./.fvmrc) — check that file
+for the exact version. CI enforces the pin and fails any PR where
+`flutter pub get` mutates `pubspec.lock`, typically a sign that someone
+resolved against a different SDK (the Dart toolchain vendors `meta`,
+`analyzer`, `dart_style`, etc., so SDK skew silently rewrites those entries).
+
+**Recommended: FVM.** Manages the pinned SDK per-project without touching
+your system Flutter:
+
+```bash
+brew tap leoafarias/fvm && brew install fvm   # one-time
+cd app && fvm install && fvm use              # reads .fvmrc, downloads + symlinks into app/.fvm/
+```
+
+Then run Flutter via `fvm flutter …`, or point your IDE at
+`app/.fvm/flutter_sdk` (VS Code: "Dart: Flutter Sdk Path" setting; Android
+Studio: Languages & Frameworks → Flutter → Flutter SDK path).
+
+**Without FVM:** install the Flutter version listed in `.fvmrc` system-wide.
+CI will reject PRs built against a different version.
 
 ## Setup
 
 ```bash
-flutter pub get
-flutter pub run build_runner build --delete-conflicting-outputs
+fvm flutter pub get   # or: flutter pub get
+fvm flutter pub run build_runner build --delete-conflicting-outputs
 ```
 
 ## Run

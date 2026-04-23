@@ -76,11 +76,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.41.x"
+          flutter-version-file: app/.fvmrc
           channel: stable
           cache: true
 
       - run: flutter pub get
+
+      # Lockfile-drift guard. `pub get` rewrites pubspec.lock when the active
+      # Dart SDK ships different versions of vendored packages (meta, analyzer,
+      # _fe_analyzer_shared, dart_style, …) than the lockfile expects. With
+      # the SDK pinned via .fvmrc, any diff here means a developer either
+      # forgot to commit a `pub upgrade` or resolved against a different SDK.
+      - name: Verify pubspec.lock is up to date
+        run: |
+          if ! git diff --exit-code pubspec.lock; then
+            echo "::error::pubspec.lock changed after 'flutter pub get'."
+            echo "::error::Run 'flutter pub get' locally (with the Flutter version pinned in app/.fvmrc) and commit the result."
+            exit 1
+          fi
+
       - run: dart run build_runner build --delete-conflicting-outputs
       - run: flutter analyze
       - run: flutter test

@@ -15,6 +15,9 @@ build/
 *.iml
 .vscode/
 
+# FVM (Flutter Version Management) — local SDK symlink, not the pinned version itself
+.fvm/
+
 # macOS
 .DS_Store
 

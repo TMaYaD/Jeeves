@@ -119,7 +119,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.41.x"
+          flutter-version-file: app/.fvmrc
           channel: stable
           cache: true
 
@@ -152,7 +152,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.41.x"
+          flutter-version-file: app/.fvmrc
           channel: stable
           cache: true
 
