@@ -89,6 +89,7 @@ class SprintState {
 
 class SprintNotifier extends Notifier<SprintState> {
   Timer? _ticker;
+  bool _isResolving = false;
 
   @override
   SprintState build() {
@@ -105,9 +106,7 @@ class SprintNotifier extends Notifier<SprintState> {
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
 
-    if (task.state != GtdState.inProgress.value) {
-      await db.todoDao.transitionState(task.id, userId, GtdState.inProgress);
-    }
+    await db.todoDao.transitionState(task.id, userId, GtdState.inProgress);
 
     final updated = await db.todoDao.getTodo(task.id, userId);
     state = SprintState(
@@ -121,20 +120,25 @@ class SprintNotifier extends Notifier<SprintState> {
 
   /// Resolves the expired sprint as "Complete": logs time and marks task done.
   Future<void> resolveComplete() async {
+    if (state.phase != SprintPhase.expired || _isResolving) return;
     final task = state.activeTask;
     if (task == null) return;
+    _isResolving = true;
     _cancelTicker();
+    try {
+      final db = ref.read(databaseProvider);
+      final userId = ref.read(currentUserIdProvider);
+      await db.todoDao.transitionState(task.id, userId, GtdState.done);
 
-    final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    await db.todoDao.transitionState(task.id, userId, GtdState.done);
-
-    state = SprintState(
-      phase: SprintPhase.onBreak,
-      remainingSeconds: kBreakDurationSeconds,
-      sprintCount: state.sprintCount + 1,
-    );
-    _startTicker();
+      state = SprintState(
+        phase: SprintPhase.onBreak,
+        remainingSeconds: kBreakDurationSeconds,
+        sprintCount: state.sprintCount + 1,
+      );
+      _startTicker();
+    } finally {
+      _isResolving = false;
+    }
   }
 
   /// Resolves the expired sprint as "Extend": allocates another 20-min block.
@@ -142,7 +146,7 @@ class SprintNotifier extends Notifier<SprintState> {
   /// The task stays in `in_progress`; the caller is responsible for prompting
   /// the user to punt the lowest-priority remaining task via [puntTask].
   Future<void> resolveExtend() async {
-    if (state.activeTask == null) return;
+    if (state.phase != SprintPhase.expired || state.activeTask == null || _isResolving) return;
     _cancelTicker();
 
     state = state.copyWith(
@@ -162,19 +166,24 @@ class SprintNotifier extends Notifier<SprintState> {
 
   /// Resolves the expired sprint as "Defer": logs partial time and parks task.
   Future<void> resolveDefer() async {
+    if (state.phase != SprintPhase.expired || _isResolving) return;
     final task = state.activeTask;
     if (task == null) return;
+    _isResolving = true;
     _cancelTicker();
-
-    final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    await db.todoDao.resolveSprintDefer(task.id, userId);
-
-    state = const SprintState(phase: SprintPhase.idle);
+    try {
+      final db = ref.read(databaseProvider);
+      final userId = ref.read(currentUserIdProvider);
+      await db.todoDao.resolveSprintDefer(task.id, userId);
+      state = const SprintState(phase: SprintPhase.idle);
+    } finally {
+      _isResolving = false;
+    }
   }
 
   /// Ends the current break and returns to idle.
   void endBreak() {
+    if (state.phase != SprintPhase.onBreak) return;
     _cancelTicker();
     state = const SprintState(phase: SprintPhase.idle);
   }

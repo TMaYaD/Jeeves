@@ -282,9 +282,10 @@ class _TaskRow extends ConsumerWidget {
     final isActive = sprintState.activeTask?.id == todo.id;
     final isRunning = isActive && sprintState.phase == SprintPhase.running;
     final isDone = todo.state == GtdState.done.value;
-    final sprintCanStart = !isDone &&
-        sprintState.phase == SprintPhase.idle &&
-        todo.state != GtdState.inProgress.value;
+    final canEnterInProgress = todo.state == GtdState.nextAction.value ||
+        todo.state == GtdState.scheduled.value;
+    final sprintCanStart =
+        !isDone && sprintState.phase == SprintPhase.idle && canEnterInProgress;
 
     return InkWell(
       onTap: () => context.push('/task/${todo.id}'),
@@ -328,13 +329,16 @@ class _TaskRow extends ConsumerWidget {
                   Row(
                     children: [
                       if (todo.dueDate != null) ...[
-                        Text(
-                          'Due ${todo.dueDate!.year}-'
-                          '${todo.dueDate!.month.toString().padLeft(2, '0')}-'
-                          '${todo.dueDate!.day.toString().padLeft(2, '0')}',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF9CA3AF)),
-                        ),
+                        Builder(builder: (_) {
+                          final d = todo.dueDate!.toLocal();
+                          return Text(
+                            'Due ${d.year}-'
+                            '${d.month.toString().padLeft(2, '0')}-'
+                            '${d.day.toString().padLeft(2, '0')}',
+                            style: const TextStyle(
+                                fontSize: 12, color: Color(0xFF9CA3AF)),
+                          );
+                        }),
                         if (estimate != null) const Text(' · ', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
                       ],
                       if (estimate != null)

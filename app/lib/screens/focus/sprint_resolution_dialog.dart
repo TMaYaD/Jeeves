@@ -36,7 +36,7 @@ class _SprintResolutionDialogState
             t.state != GtdState.inProgress.value)
         .toList();
 
-    final spentMinutes = _spentMinutes(widget.task, sprintState.sprintCount);
+    final spentMinutes = _spentMinutes(widget.task, sprintState.sprintCount + 1);
 
     return PopScope(
       canPop: false,
