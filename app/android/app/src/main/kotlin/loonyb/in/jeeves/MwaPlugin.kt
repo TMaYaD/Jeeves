@@ -1,51 +1,38 @@
 package loonyb.`in`.jeeves
 
-import android.content.Intent
 import android.net.Uri
-import android.util.Base64
-import androidx.activity.result.ActivityResult
-import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
+import androidx.activity.ComponentActivity
 import com.solana.mobilewalletadapter.clientlib.MobileWalletAdapter
-import com.solana.mobilewalletadapter.clientlib.RpcCluster
+import com.solana.mobilewalletadapter.clientlib.Solana
+import com.solana.mobilewalletadapter.clientlib.TransactionResult
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.PluginRegistry
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.util.Base64
 
-/**
- * Flutter plugin that exposes Mobile Wallet Adapter (MWA) signing to Dart via
- * a MethodChannel ("jeeves/mwa").
- *
- * Dependency (add to app/build.gradle.kts):
- *   implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.3")
- *
- * Methods exposed on channel "jeeves/mwa":
- *   getPublicKey() → String (base58 public key)
- *   sign({message: base64String}) → {publicKey: String, signature: base64String}
- */
 class MwaPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler {
+
     private lateinit var channel: MethodChannel
     private var activityBinding: ActivityPluginBinding? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     companion object {
-        private const val CHANNEL = "jeeves/mwa"
-        private const val MWA_REQUEST_CODE = 0x4d574101
-        private val IDENTITY_URI = Uri.parse("https://jeeves.app")
-        private const val IDENTITY_NAME = "Jeeves"
+        private val ICON_URI = Uri.parse("https://jeeves.app/icon.png")
+        private const val APP_NAME = "Jeeves"
+        private const val IDENTITY_URI = "https://jeeves.app"
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        channel = MethodChannel(binding.binaryMessenger, CHANNEL)
+        channel = MethodChannel(binding.binaryMessenger, "jeeves/mwa")
         channel.setMethodCallHandler(this)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        scope.cancel()
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -64,107 +51,104 @@ class MwaPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler 
         activityBinding = null
     }
 
-    private fun makeSender(binding: ActivityPluginBinding): ActivityResultSender {
-        var pendingCallback: ((ActivityResult) -> Unit)? = null
-        val listener = PluginRegistry.ActivityResultListener { requestCode, resultCode, data ->
-            if (requestCode == MWA_REQUEST_CODE) {
-                pendingCallback?.invoke(ActivityResult(resultCode, data))
-                pendingCallback = null
-                true
-            } else {
-                false
-            }
-        }
-        binding.addActivityResultListener(listener)
-        return ActivityResultSender { intent: Intent, onResult: (ActivityResult) -> Unit ->
-            pendingCallback = onResult
-            binding.activity.startActivityForResult(intent, MWA_REQUEST_CODE)
-        }
-    }
-
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        val binding = activityBinding
-            ?: return result.error("NO_ACTIVITY", "Activity not attached", null)
-
-        val mwa = MobileWalletAdapter()
-        val sender = makeSender(binding)
+        val activity = activityBinding?.activity as? ComponentActivity
+        if (activity == null) {
+            result.error("NO_ACTIVITY", "No ComponentActivity available", null)
+            return
+        }
 
         when (call.method) {
-            "getPublicKey" -> scope.launch {
-                runCatching {
-                    mwa.transact(sender) {
-                        val auth = authorize(
-                            identityUri = IDENTITY_URI,
-                            iconUri = null,
-                            identityName = IDENTITY_NAME,
-                            rpcCluster = RpcCluster.MainnetBeta,
-                        )
-                        Base58.encode(auth.publicKey.bytes)
-                    }
-                }.onSuccess { pk ->
-                    withContext(Dispatchers.Main) { result.success(pk) }
-                }.onFailure { e ->
-                    withContext(Dispatchers.Main) {
-                        result.error("MWA_ERROR", e.message, null)
-                    }
-                }
-            }
-
+            "getPublicKey" -> getPublicKey(activity, result)
             "sign" -> {
-                val msgB64 = call.argument<String>("message")
-                    ?: return result.error("MISSING_ARG", "message required", null)
-                val msgBytes = Base64.decode(msgB64, Base64.NO_WRAP)
-
-                scope.launch {
-                    runCatching {
-                        mwa.transact(sender) {
-                            val auth = authorize(
-                                identityUri = IDENTITY_URI,
-                                iconUri = null,
-                                identityName = IDENTITY_NAME,
-                                rpcCluster = RpcCluster.MainnetBeta,
-                            )
-                            val signed = signMessages(
-                                messages = arrayOf(msgBytes),
-                                addresses = arrayOf(auth.publicKey.bytes),
-                            )
-                            mapOf(
-                                "publicKey" to Base58.encode(auth.publicKey.bytes),
-                                "signature" to Base64.encodeToString(
-                                    signed.messages[0].signedPayload,
-                                    Base64.NO_WRAP,
-                                ),
-                            )
-                        }
-                    }.onSuccess { r ->
-                        withContext(Dispatchers.Main) { result.success(r) }
-                    }.onFailure { e ->
-                        withContext(Dispatchers.Main) {
-                            result.error("MWA_ERROR", e.message, null)
-                        }
-                    }
+                val message = call.argument<String>("message")
+                if (message == null) {
+                    result.error("INVALID_ARGS", "Missing message", null)
+                    return
                 }
+                sign(activity, message, result)
             }
-
             else -> result.notImplemented()
         }
     }
-}
 
-private object Base58 {
-    private const val ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    private val BASE = java.math.BigInteger.valueOf(58)
-    private val ZERO = java.math.BigInteger.ZERO
-
-    fun encode(input: ByteArray): String {
-        var value = java.math.BigInteger(1, input)
-        val sb = StringBuilder()
-        while (value > ZERO) {
-            val (q, r) = value.divideAndRemainder(BASE)
-            sb.append(ALPHABET[r.toInt()])
-            value = q
+    private fun getPublicKey(activity: ComponentActivity, result: MethodChannel.Result) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val mwa = MobileWalletAdapter()
+            val outcome = mwa.transact(activity) {
+                authorize(
+                    identityUri = Uri.parse(IDENTITY_URI),
+                    iconUri = ICON_URI,
+                    identityName = APP_NAME,
+                    rpcCluster = Solana.Mainnet,
+                    connectionIdentity = byteArrayOf(),
+                )
+            }
+            when (outcome) {
+                is TransactionResult.Success -> {
+                    val pubKeyB64 = Base64.getEncoder().encodeToString(outcome.payload.publicKey)
+                    CoroutineScope(Dispatchers.Main).launch {
+                        result.success(pubKeyB64)
+                    }
+                }
+                is TransactionResult.Failure -> {
+                    CoroutineScope(Dispatchers.Main).launch {
+                        result.error("MWA_ERROR", outcome.e.message, null)
+                    }
+                }
+                is TransactionResult.Cancelled -> {
+                    CoroutineScope(Dispatchers.Main).launch {
+                        result.error("MWA_CANCELLED", "User cancelled wallet interaction", null)
+                    }
+                }
+            }
         }
-        repeat(input.takeWhile { it == 0.toByte() }.size) { sb.append(ALPHABET[0]) }
-        return sb.reverse().toString()
+    }
+
+    private fun sign(activity: ComponentActivity, messageB64: String, result: MethodChannel.Result) {
+        val messageBytes = Base64.getDecoder().decode(messageB64)
+        CoroutineScope(Dispatchers.IO).launch {
+            val mwa = MobileWalletAdapter()
+            val outcome = mwa.transact(activity) {
+                val auth = authorize(
+                    identityUri = Uri.parse(IDENTITY_URI),
+                    iconUri = ICON_URI,
+                    identityName = APP_NAME,
+                    rpcCluster = Solana.Mainnet,
+                    connectionIdentity = byteArrayOf(),
+                )
+                val pubKey = auth.publicKey
+
+                val signed = signMessages(
+                    messages = arrayOf(messageBytes),
+                    addresses = arrayOf(pubKey),
+                )
+
+                Pair(pubKey, signed.signedPayloads[0])
+            }
+            when (outcome) {
+                is TransactionResult.Success -> {
+                    val (pubKey, sig) = outcome.payload
+                    val encoder = Base64.getEncoder()
+                    val response = mapOf(
+                        "publicKey" to encoder.encodeToString(pubKey),
+                        "signature" to encoder.encodeToString(sig),
+                    )
+                    CoroutineScope(Dispatchers.Main).launch {
+                        result.success(response)
+                    }
+                }
+                is TransactionResult.Failure -> {
+                    CoroutineScope(Dispatchers.Main).launch {
+                        result.error("MWA_ERROR", outcome.e.message, null)
+                    }
+                }
+                is TransactionResult.Cancelled -> {
+                    CoroutineScope(Dispatchers.Main).launch {
+                        result.error("MWA_CANCELLED", "User cancelled wallet interaction", null)
+                    }
+                }
+            }
+        }
     }
 }
