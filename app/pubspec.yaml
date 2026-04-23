@@ -5,6 +5,13 @@ publish_to: none
 
 environment:
   sdk: ">=3.11.0 <4.0.0"
+  # Pinned exactly so Dependabot's pub helper (which picks the newest Flutter
+  # release matching this constraint) downloads the same Flutter we use
+  # locally and in CI — eliminating pubspec.lock drift caused by
+  # SDK-vendored packages (meta, analyzer, dart_style, …).
+  # Each Flutter release ships exactly one Dart SDK, so pinning Flutter alone
+  # fully determines the resolution. Keep in sync with .fvmrc.
+  flutter: "3.41.6"
 
 dependencies:
   flutter:
