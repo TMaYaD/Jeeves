@@ -1,0 +1,30 @@
+# Python
+.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Tests are not run inside the runtime image
+tests/
+
+# Local env files (keep the example for reference)
+.env
+.env.*
+!.env.example
+
+# VCS / build metadata
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
