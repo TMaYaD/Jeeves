@@ -1,20 +1,44 @@
 name: PR APK Build
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [main]
-    paths:
-      - 'app/**'
-      - '.github/workflows/pr-apk.yml'
+  workflow_run:
+    workflows: ["Flutter CI"]
+    types: [completed]
 
 concurrency:
-  group: pr-apk-${{ github.event.pull_request.number }}
+  group: pr-apk-${{ github.event.workflow_run.pull_requests[0].number }}
   cancel-in-progress: true
 
 jobs:
+  check-changes:
+    name: Check for relevant changes
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+
+      - name: Detect Android-relevant changes
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD)
+          if echo "$CHANGED" | grep -qE \
+            '^app/(lib|android|assets|pubspec\.(yaml|lock))|^\.github/workflows/pr-apk\.yml'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-distribute:
     name: build-and-distribute
+    needs: check-changes
+    if: needs.check-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -22,6 +46,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
@@ -45,21 +71,24 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
+            ~/.gradle/build-cache
           key: gradle-${{ hashFiles('app/android/gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle*') }}
           restore-keys: gradle-
 
       - run: flutter pub get
+      - run: dart run flutter_launcher_icons
       - run: dart run build_runner build --delete-conflicting-outputs
-      - run: flutter build apk --debug
+      - run: flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor alpha
 
       - name: Compose release notes
         id: notes
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BRANCH: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR_TITLE: ${{ github.event.workflow_run.pull_requests[0].title }}
+          PR_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
+          SHORT_SHA="${COMMIT_SHA::7}"
           NOTES="PR #${PR_NUMBER}: ${PR_TITLE} | branch: ${PR_BRANCH} | sha: ${SHORT_SHA}"
           printf 'notes=%s\n' "$NOTES" >> "$GITHUB_OUTPUT"
 
@@ -68,5 +97,5 @@ jobs:
           appId: ${{ secrets.FIREBASE_APP_ID }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           groups: qa
-          file: app/build/app/outputs/flutter-apk/app-debug.apk
+          file: app/build/app/outputs/flutter-apk/app-alpha-profile-arm64-v8a.apk
           releaseNotes: ${{ steps.notes.outputs.notes }}

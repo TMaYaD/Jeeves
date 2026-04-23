@@ -128,16 +128,17 @@ jobs:
           sed -i "s/^version: .*/version: ${{ needs.version.outputs.pubspec_version }}/" pubspec.yaml
 
       - run: flutter pub get
+      - run: dart run flutter_launcher_icons
       - run: dart run build_runner build --delete-conflicting-outputs
-      - run: flutter build apk --release
-      - run: flutter build appbundle --release
+      - run: flutter build apk --release --flavor production
+      - run: flutter build appbundle --release --flavor production
 
       - uses: actions/upload-artifact@v4
         with:
           name: android-artifacts
           path: |
-            app/build/app/outputs/flutter-apk/app-release.apk
-            app/build/app/outputs/bundle/release/app-release.aab
+            app/build/app/outputs/flutter-apk/app-production-release.apk
+            app/build/app/outputs/bundle/release/app-production-release.aab
 
   build-web:
     name: Build Web
@@ -192,9 +193,9 @@ jobs:
 
       - name: Rename artifacts with version
         run: |
-          mv artifacts/android/app-release.apk \
+          mv artifacts/android/app-production-release.apk \
             "artifacts/android/jeeves-${{ needs.version.outputs.version }}.apk"
-          mv artifacts/android/app-release.aab \
+          mv artifacts/android/app-production-release.aab \
             "artifacts/android/jeeves-${{ needs.version.outputs.version }}.aab"
 
       - name: Publish to GitHub Releases
