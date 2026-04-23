@@ -52,8 +52,10 @@ if git diff --cached --name-only | grep -q "^app/"; then
     
     cd app || exit 1
 
-    # Add Flutter to PATH if not already present.
+    # Resolve Flutter. FVM symlink wins so the hook always uses the version
+    # pinned in app/.fvmrc; system locations are fallbacks for devs not on FVM.
     for flutter_candidate in \
+        ".fvm/flutter_sdk/bin" \
         "$HOME/development/flutter/bin" \
         "$HOME/flutter/bin" \
         "/opt/flutter/bin"; do
