@@ -5,6 +5,13 @@ publish_to: none
 
 environment:
   sdk: ">=3.11.0 <4.0.0"
+  # Pinned exactly so Dependabot's pub helper (which picks the newest Flutter
+  # release matching this constraint) downloads the same Flutter we use
+  # locally and in CI — eliminating pubspec.lock drift caused by
+  # SDK-vendored packages (meta, analyzer, dart_style, …).
+  # Each Flutter release ships exactly one Dart SDK, so pinning Flutter alone
+  # fully determines the resolution. Keep in sync with .fvmrc.
+  flutter: "3.41.6"
 
 dependencies:
   flutter:
@@ -54,7 +61,7 @@ dependencies:
   # (calls backend AI endpoint via api_service)
 
   # Navigation
-  go_router: ^17.2.1
+  go_router: ^17.2.2
 
   # Connectivity
   connectivity_plus: ^7.1.1
@@ -63,7 +70,7 @@ dependencies:
   shared_preferences: ^2.3.3
 
   # File import
-  file_picker: ^8.1.2
+  file_picker: ^11.0.0
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^10.0.0
@@ -86,9 +93,9 @@ dev_dependencies:
     sdk: flutter
   sqlite3: ^3.0.0
   flutter_lints: ^6.0.0
-  build_runner: ^2.13.1
+  build_runner: ^2.14.0
   freezed: ^3.2.5
-  json_serializable: ^6.13.0
+  json_serializable: ^6.13.1
   riverpod_generator: ^4.0.3
   drift_dev: ^2.32.0
   retrofit_generator: ^10.2.5
