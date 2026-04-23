@@ -106,9 +106,14 @@ class DailyStateRefresher with WidgetsBindingObserver {
         ? todayBoundary
         : todayBoundary.add(const Duration(days: 1));
     final delay = nextBoundary.difference(now);
-    _boundaryTimer = Timer(delay, () {
-      _refresh();
-      _scheduleBoundaryTimer(); // reschedule for next boundary
+    _boundaryTimer = Timer(delay, () async {
+      try {
+        await _refresh();
+      } catch (e, st) {
+        debugPrint('DailyStateRefresher: boundary refresh failed: $e\n$st');
+      } finally {
+        _scheduleBoundaryTimer();
+      }
     });
   }
 
