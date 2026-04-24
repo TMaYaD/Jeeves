@@ -11,7 +11,7 @@ environment:
   # SDK-vendored packages (meta, analyzer, dart_style, …).
   # Each Flutter release ships exactly one Dart SDK, so pinning Flutter alone
   # fully determines the resolution. Keep in sync with .fvmrc.
-  flutter: "3.41.6"
+  flutter: "3.41.7"
 
 dependencies:
   flutter:
