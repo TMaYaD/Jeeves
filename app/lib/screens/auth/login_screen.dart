@@ -100,7 +100,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ? AppBar(
               backgroundColor: Colors.white,
               elevation: 0,
-              leading: CloseButton(onPressed: () => context.pop()),
+              leading: BackButton(onPressed: () => context.pop()),
             )
           : null,
       body: SafeArea(
