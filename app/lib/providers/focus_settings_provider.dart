@@ -3,8 +3,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/focus_settings.dart';
 
-const _kSprintDurationMinutes = 'focus_settings_sprint_duration_minutes';
-const _kBreakDurationMinutes = 'focus_settings_break_duration_minutes';
+// Public so sprint_timer_provider can read directly to avoid async-load race.
+const kFocusSprintDurationMinutesPrefKey = 'focus_settings_sprint_duration_minutes';
+const kFocusBreakDurationMinutesPrefKey = 'focus_settings_break_duration_minutes';
+
+const _kSprintDurationMinutes = kFocusSprintDurationMinutesPrefKey;
+const _kBreakDurationMinutes = kFocusBreakDurationMinutesPrefKey;
 
 final focusSettingsProvider =
     NotifierProvider<FocusSettingsNotifier, FocusSettings>(

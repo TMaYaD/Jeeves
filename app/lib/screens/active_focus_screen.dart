@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:drift/drift.dart' show Expression, Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../database/gtd_database.dart' show TodosCompanion;
 import '../providers/auth_provider.dart';
 import '../providers/daily_planning_provider.dart';
 import '../providers/database_provider.dart';
@@ -120,11 +122,10 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     context.go('/focus');
   }
 
-  Future<void> _onAbandon(String todoId) async {
-    ref.read(sprintTimerProvider.notifier).stopSprint().ignore();
-    final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    await db.todoDao.transitionState(todoId, userId, GtdState.deferred);
+  /// Stops the sprint (logs partial time) and returns to the focus list without
+  /// changing the task state — it stays in the day plan as inProgress.
+  Future<void> _onStop(String todoId) async {
+    await ref.read(sprintTimerProvider.notifier).stopSprint();
     ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
     context.go('/focus');
@@ -190,7 +191,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
             return _FocusBody(
               todo: todo,
               onComplete: () => _onComplete(todo.id),
-              onAbandon: () => _onAbandon(todo.id),
+              onStop: () => _onStop(todo.id),
               onExit: _onExit,
             );
           },
@@ -208,13 +209,13 @@ class _FocusBody extends ConsumerStatefulWidget {
   const _FocusBody({
     required this.todo,
     required this.onComplete,
-    required this.onAbandon,
+    required this.onStop,
     required this.onExit,
   });
 
   final Todo todo;
   final VoidCallback onComplete;
-  final VoidCallback onAbandon;
+  final VoidCallback onStop;
   final VoidCallback onExit;
 
   @override
@@ -224,6 +225,8 @@ class _FocusBody extends ConsumerStatefulWidget {
 class _FocusBodyState extends ConsumerState<_FocusBody>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulseCtrl;
+  late final PageController _pageController;
+  int _currentPage = 0;
 
   @override
   void initState() {
@@ -232,6 +235,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
       vsync: this,
       duration: const Duration(milliseconds: 1000),
     )..repeat(reverse: true);
+    _pageController = PageController();
 
     // Sprint starts the moment focus mode starts.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -246,6 +250,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
   @override
   void dispose() {
     _pulseCtrl.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -294,59 +299,23 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
         ),
         // Jeeves banner — sprint and break aware
         const ElapsedTimerWidget(),
-        // Sprint display — fills remaining space
+        // Carousel: sprint ring (page 0) | notes (page 1)
         Expanded(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final ringSize = math.min(
-                constraints.maxWidth - 72.0, // leave room for dots column
-                constraints.maxHeight * 0.72,
-              ).clamp(160.0, 300.0);
-
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        _SprintRing(
-                          timer: timer,
-                          size: ringSize,
-                          color: ringColor,
-                        ),
-                        const SizedBox(width: 20),
-                        _SprintDotsColumn(
-                          timer: timer,
-                          pulseCtrl: _pulseCtrl,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    // Phase label
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: ringColor.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        isBreak ? 'Break' : 'Focus Sprint',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: ringColor,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
+          child: PageView(
+            controller: _pageController,
+            onPageChanged: (p) => setState(() => _currentPage = p),
+            children: [
+              _TimerPage(
+                timer: timer,
+                ringColor: ringColor,
+                pulseCtrl: _pulseCtrl,
+              ),
+              _NotesPage(todo: todo),
+            ],
           ),
         ),
+        // Page dots
+        _PageDots(current: _currentPage),
         // Action bar: pause/resume | Done | stop
         Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -356,7 +325,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
           ),
           child: Row(
             children: [
-              // Pause → starts break; Resume (during break) → starts next sprint
+              // Pause → starts break early; play during break → starts next sprint
               Expanded(
                 child: OutlinedButton(
                   onPressed: timer.isProcessing
@@ -396,10 +365,10 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
                 ),
               ),
               const SizedBox(width: 8),
-              // Stop — abandon task
+              // Stop — keep task in plan, log partial time, return to focus list
               Expanded(
                 child: OutlinedButton(
-                  onPressed: widget.onAbandon,
+                  onPressed: widget.onStop,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.red[600],
                     side: BorderSide(color: Colors.red[300]!),
@@ -419,7 +388,178 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
 }
 
 // ---------------------------------------------------------------------------
-// Sprint ring — large countdown circle
+// Timer page — sprint ring + dots column
+// ---------------------------------------------------------------------------
+
+class _TimerPage extends StatelessWidget {
+  const _TimerPage({
+    required this.timer,
+    required this.ringColor,
+    required this.pulseCtrl,
+  });
+  final SprintTimerState timer;
+  final Color ringColor;
+  final AnimationController pulseCtrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final ringSize = math.min(
+          constraints.maxWidth - 72.0,
+          constraints.maxHeight * 0.72,
+        ).clamp(160.0, 300.0);
+
+        return Center(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _SprintRing(
+                timer: timer,
+                size: ringSize,
+                color: ringColor,
+              ),
+              const SizedBox(width: 20),
+              _SprintDotsColumn(
+                timer: timer,
+                pulseCtrl: pulseCtrl,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Notes page — inline text editor, auto-saved to DB
+// ---------------------------------------------------------------------------
+
+class _NotesPage extends ConsumerStatefulWidget {
+  const _NotesPage({required this.todo});
+  final Todo todo;
+
+  @override
+  ConsumerState<_NotesPage> createState() => _NotesPageState();
+}
+
+class _NotesPageState extends ConsumerState<_NotesPage> {
+  late final TextEditingController _ctrl;
+  Timer? _saveTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.todo.notes ?? '');
+    _ctrl.addListener(_onChanged);
+  }
+
+  @override
+  void dispose() {
+    _saveTimer?.cancel();
+    _ctrl.removeListener(_onChanged);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onChanged() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 500), _save);
+  }
+
+  Future<void> _save() async {
+    final db = ref.read(databaseProvider);
+    final userId = ref.read(currentUserIdProvider);
+    final text = _ctrl.text.trim();
+    try {
+      await (db.update(db.todos)
+            ..where((t) => Expression.and(
+                [t.id.equals(widget.todo.id), t.userId.equals(userId)])))
+          .write(TodosCompanion(
+        notes: Value(text.isEmpty ? null : text),
+        updatedAt: Value(DateTime.now()),
+      ));
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Notes',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF374151),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: TextField(
+              controller: _ctrl,
+              maxLines: null,
+              expands: true,
+              textAlignVertical: TextAlignVertical.top,
+              style: const TextStyle(
+                fontSize: 15,
+                color: Color(0xFF374151),
+                height: 1.6,
+              ),
+              decoration: const InputDecoration(
+                hintText: 'Jot down ideas, links, or sub-tasks…',
+                hintStyle: TextStyle(color: Color(0xFFD1D5DB)),
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page dots indicator
+// ---------------------------------------------------------------------------
+
+class _PageDots extends StatelessWidget {
+  const _PageDots({required this.current});
+  final int current;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(
+          2,
+          (i) => Container(
+            width: 6,
+            height: 6,
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: i == current
+                  ? const Color(0xFF2563EB)
+                  : const Color(0xFFD1D5DB),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sprint ring — countdown (full→empty) or overtime (empty→full, amber→red)
 // ---------------------------------------------------------------------------
 
 class _SprintRing extends StatelessWidget {
@@ -431,21 +571,45 @@ class _SprintRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bgColor =
-        timer.isBreak ? const Color(0xFFD1FAE5) : const Color(0xFFDBEAFE);
+    final bool overtime = timer.isOvertime;
+
+    final Color ringColor;
+    final Color trackColor;
+    final double progress;
+    final Duration displayTime;
+
+    if (overtime) {
+      final p = timer.overtimeProgress;
+      ringColor = Color.lerp(
+            const Color(0xFFF59E0B),
+            const Color(0xFFDC2626),
+            p,
+          ) ??
+          const Color(0xFFDC2626);
+      trackColor = const Color(0xFFFEF3C7);
+      progress = p;
+      displayTime = timer.overtime;
+    } else {
+      ringColor = color;
+      trackColor =
+          timer.isBreak ? const Color(0xFFD1FAE5) : const Color(0xFFDBEAFE);
+      progress = timer.progress;
+      displayTime = timer.remaining;
+    }
+
     final minutes =
-        timer.remaining.inMinutes.remainder(60).toString().padLeft(2, '0');
+        displayTime.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds =
-        timer.remaining.inSeconds.remainder(60).toString().padLeft(2, '0');
+        displayTime.inSeconds.remainder(60).toString().padLeft(2, '0');
 
     return SizedBox(
       width: size,
       height: size,
       child: CustomPaint(
         painter: _RingPainter(
-          progress: timer.progress,
-          ringColor: color,
-          trackColor: bgColor,
+          progress: progress,
+          ringColor: ringColor,
+          trackColor: trackColor,
         ),
         child: Center(
           child: Text(
@@ -453,7 +617,7 @@ class _SprintRing extends StatelessWidget {
             style: TextStyle(
               fontSize: size * 0.195,
               fontWeight: FontWeight.bold,
-              color: color,
+              color: ringColor,
               letterSpacing: -1,
             ),
           ),
@@ -475,9 +639,8 @@ class _SprintDotsColumn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final total = timer.totalSprints;
-    // During break after sprint N: N dots are completed.
-    // During focus sprint N: N-1 dots are completed, N is current (pulsing).
-    final completedCount = timer.isBreak ? timer.sprintNumber : timer.sprintNumber - 1;
+    final completedCount =
+        timer.isBreak ? timer.sprintNumber : timer.sprintNumber - 1;
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,

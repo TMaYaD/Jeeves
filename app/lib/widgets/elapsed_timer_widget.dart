@@ -27,6 +27,26 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   /// [seed] makes template selection deterministic. The widget seeds from
   /// the active task id plus the current bucket so the phrase is stable
   /// per-task-per-bucket and doesn't flip mid-glance on rebuilds.
+  /// Returns a Jeeves-flavoured phrase when the sprint or break time has elapsed
+  /// and the user has not yet transitioned (overtime / waiting state).
+  static String jeevesOvertimePhrase({required bool isFocus, int? seed}) {
+    final pool = isFocus
+        ? const [
+            'The sprint is done, sir. A break is in order.',
+            'Time is up, sir. One insists on a brief respite.',
+            'Your sprint has concluded. Might one suggest the pause button?',
+            'The work shall keep, sir. A rest is warranted.',
+          ]
+        : const [
+            'The break is over, sir. Whenever you are ready.',
+            'One trusts you are sufficiently refreshed, sir.',
+            'Back to the grindstone at your convenience, sir.',
+            'The task awaits your return, sir.',
+          ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
+  }
+
   /// Returns a Jeeves-flavoured phrase shown when < 5 min remain in a sprint.
   static String jeevesSprintNearEndPhrase(Duration remaining, {int? seed}) {
     final m = remaining.inMinutes;
@@ -277,7 +297,19 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
 
     if (!focusState.isActive) return const SizedBox.shrink();
 
-    // Break phase: show break-specific copy using the sprint timer's countdown.
+    // Break overtime — gently insist the user return to work.
+    if (sprintState.phase == SprintPhase.breakOvertime) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesOvertimePhrase(
+          isFocus: false,
+          seed: sprintState.sprintNumber,
+        ),
+        icon: Icons.self_improvement,
+        iconColor: const Color(0xFF10B981),
+      );
+    }
+
+    // Break countdown — tea and exercise copy.
     if (sprintState.isBreak) {
       final phrase = sprintState.remaining.inSeconds <= 60
           ? ElapsedTimerWidget.jeevesBreakEndingPhrase(
@@ -291,6 +323,18 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
         phrase,
         icon: Icons.self_improvement,
         iconColor: const Color(0xFF10B981),
+      );
+    }
+
+    // Focus overtime — insist on a break.
+    if (sprintState.phase == SprintPhase.focusOvertime) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesOvertimePhrase(
+          isFocus: true,
+          seed: sprintState.sprintNumber,
+        ),
+        icon: Icons.timer_outlined,
+        iconColor: const Color(0xFFF59E0B),
       );
     }
 
