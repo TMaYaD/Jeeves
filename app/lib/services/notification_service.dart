@@ -181,6 +181,7 @@ class NotificationService {
       id: _kSprintEndNotificationId,
       title: 'Sprint complete!',
       body: 'Time\'s up on "$taskTitle". Mark it done or keep going.',
+      payload: 'focus',
       scheduledDate: scheduled,
       notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
@@ -213,6 +214,7 @@ class NotificationService {
       id: _kBreakEndNotificationId,
       title: 'Break over — back to it!',
       body: 'Your 3-minute break has ended. Start the next sprint.',
+      payload: 'focus',
       scheduledDate: scheduled,
       notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
@@ -270,6 +272,7 @@ class NotificationService {
       id: _kFocusId,
       title: 'In Focus: $title',
       body: 'Elapsed: $elapsedStr',
+      payload: 'focus',
       notificationDetails: const NotificationDetails(android: android, iOS: iOS),
     );
   }

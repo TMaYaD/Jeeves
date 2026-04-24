@@ -610,6 +610,7 @@ class _SprintRing extends StatelessWidget {
           progress: progress,
           ringColor: ringColor,
           trackColor: trackColor,
+          clockwise: !timer.isBreak,
         ),
         child: Center(
           child: Text(
@@ -689,11 +690,13 @@ class _RingPainter extends CustomPainter {
     required this.progress,
     required this.ringColor,
     required this.trackColor,
+    this.clockwise = true,
   });
 
   final double progress;
   final Color ringColor;
   final Color trackColor;
+  final bool clockwise;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -715,10 +718,11 @@ class _RingPainter extends CustomPainter {
     );
 
     if (progress > 0) {
+      final sweep = (clockwise ? 1 : -1) * math.pi * 2 * progress;
       canvas.drawArc(
         Rect.fromCircle(center: center, radius: radius),
         startAngle,
-        math.pi * 2 * progress,
+        sweep,
         false,
         Paint()
           ..color = ringColor
@@ -733,5 +737,6 @@ class _RingPainter extends CustomPainter {
   bool shouldRepaint(_RingPainter old) =>
       old.progress != progress ||
       old.ringColor != ringColor ||
-      old.trackColor != trackColor;
+      old.trackColor != trackColor ||
+      old.clockwise != clockwise;
 }
