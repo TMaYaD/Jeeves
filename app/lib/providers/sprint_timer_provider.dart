@@ -212,19 +212,16 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
-  /// Pauses the running timer.
+  /// Pauses the sprint by entering a break early.
   Future<void> pauseSprint() async {
-    if (!state.isActive || state.isPaused || state.isProcessing) return;
+    if (!state.isFocus || state.isProcessing) return;
     state = state.copyWith(isProcessing: true);
     try {
       _ticker?.cancel();
       HapticFeedback.lightImpact();
-
-      state = state.copyWith(isPaused: true, isProcessing: false);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_kPrefIsPaused, true);
-      await prefs.setInt(_kPrefRemainingSeconds, state.remaining.inSeconds);
       await _cancelSprintNotifications();
+      state = state.copyWith(isProcessing: false);
+      await _startBreak();
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
     }
@@ -281,22 +278,18 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
-  /// Skips the break and returns to idle, recording the break as ended.
+  /// Skips the break and starts the next sprint immediately.
   Future<void> skipBreak() async {
-    if (state.isProcessing) return;
+    if (!state.isBreak || state.isProcessing) return;
     state = state.copyWith(isProcessing: true);
     try {
       _ticker?.cancel();
       HapticFeedback.lightImpact();
       await _cancelSprintNotifications();
-      await _clearPrefs();
       final now = DateTime.now();
       await _persistLastBreakEndedAt(now);
-      state = SprintTimerState(
-        sprintDurationMinutes: state.sprintDurationMinutes,
-        breakDurationMinutes: state.breakDurationMinutes,
-        lastBreakEndedAt: now,
-      );
+      state = state.copyWith(isProcessing: false, lastBreakEndedAt: now);
+      await _startNextSprint();
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
     }
@@ -450,6 +443,34 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     _startTicker();
   }
 
+  Future<void> _startNextSprint() async {
+    final sm = state.sprintDurationMinutes;
+    final bm = state.breakDurationMinutes;
+    final sprintDur = Duration(minutes: sm);
+    final nextNumber = state.sprintNumber + 1;
+    final total = nextNumber > state.totalSprints ? nextNumber : state.totalSprints;
+    _endTime = DateTime.now().add(sprintDur);
+    state = SprintTimerState(
+      phase: SprintPhase.focus,
+      activeTaskId: state.activeTaskId,
+      activeTaskTitle: state.activeTaskTitle,
+      sprintNumber: nextNumber,
+      totalSprints: total,
+      remaining: sprintDur,
+      total: sprintDur,
+      sprintDurationMinutes: sm,
+      breakDurationMinutes: bm,
+      lastBreakEndedAt: state.lastBreakEndedAt,
+    );
+    await _persist(isPaused: false);
+    await _scheduleEndNotification(
+      _endTime!,
+      isFocus: true,
+      taskTitle: state.activeTaskTitle ?? '',
+    );
+    _startTicker();
+  }
+
   void _startTicker() {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
@@ -471,17 +492,11 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     if (state.isFocus) {
       _logSprintTimeToTask().then((_) => _startBreak());
     } else {
-      // Break ended naturally — record timestamp.
+      // Break ended naturally — record timestamp and start next sprint.
       final now = DateTime.now();
-      final sm = state.sprintDurationMinutes;
-      final bm = state.breakDurationMinutes;
-      _clearPrefs();
       _persistLastBreakEndedAt(now);
-      state = SprintTimerState(
-        sprintDurationMinutes: sm,
-        breakDurationMinutes: bm,
-        lastBreakEndedAt: now,
-      );
+      state = state.copyWith(lastBreakEndedAt: now);
+      _startNextSprint();
     }
   }
 
