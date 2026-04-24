@@ -54,12 +54,16 @@ class FocusScreen extends ConsumerWidget {
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (err, _) => Center(child: Text('Error: $err')),
                 data: (tasks) {
-                  final withDue = tasks.where((t) => t.dueDate != null).toList()
+                  // Completed tasks leave the focus list.
+                  final active = tasks
+                      .where((t) => GtdState.fromString(t.state) != GtdState.done)
+                      .toList();
+                  final withDue = active.where((t) => t.dueDate != null).toList()
                     ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
-                  final scheduledNoDue = tasks
+                  final scheduledNoDue = active
                       .where((t) => t.dueDate == null && t.state == GtdState.scheduled.value)
                       .toList();
-                  final rest = tasks
+                  final rest = active
                       .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
                       .toList();
                   final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
@@ -123,7 +127,15 @@ class FocusScreen extends ConsumerWidget {
                                   itemBuilder: (_) => const [
                                     PopupMenuItem(
                                       value: _FocusMenuAction.planDay,
-                                      child: Text('Re-plan'),
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.wb_sunny_outlined,
+                                              size: 18,
+                                              color: Color(0xFF6B7280)),
+                                          SizedBox(width: 8),
+                                          Text('Re-plan'),
+                                        ],
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -144,11 +156,13 @@ class FocusScreen extends ConsumerWidget {
                             ...sortedTasks.map((t) => _TaskRow(todo: t)),
                           const SizedBox(height: 48),
                           if (showShutdownEntry)
-                            FilledButton(
+                            OutlinedButton(
                               onPressed: () => context.go('/shutdown'),
-                              style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF1E3A5F),
-                                foregroundColor: Colors.white,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFF1E3A5F),
+                                backgroundColor: Colors.white,
+                                side: const BorderSide(
+                                    color: Color(0xFF1E3A5F), width: 1.5),
                                 minimumSize: const Size.fromHeight(52),
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12)),
@@ -161,7 +175,8 @@ class FocusScreen extends ConsumerWidget {
                                   Text(
                                     'Begin Evening Shutdown',
                                     style: TextStyle(
-                                        fontSize: 17, fontWeight: FontWeight.bold),
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.bold),
                                   ),
                                 ],
                               ),
@@ -176,10 +191,18 @@ class FocusScreen extends ConsumerWidget {
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12)),
                               ),
-                              child: const Text(
-                                'Plan the Day',
-                                style: TextStyle(
-                                    fontSize: 17, fontWeight: FontWeight.bold),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.wb_sunny_outlined, size: 18),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Plan the Day',
+                                    style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                ],
                               ),
                             ),
                           const SizedBox(height: 32),

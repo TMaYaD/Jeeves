@@ -328,6 +328,7 @@ class _GoodNightScreenState extends State<_GoodNightScreen>
   late final AnimationController _controller;
   late final Animation<double> _slideY;
   late final Animation<double> _fade;
+  bool _fadingOut = false;
 
   static const _phrases = [
     'Another day superbly managed, sir. Pleasant dreams.',
@@ -356,7 +357,7 @@ class _GoodNightScreenState extends State<_GoodNightScreen>
     );
     _controller.forward();
     Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) SystemNavigator.pop();
+      if (mounted) setState(() => _fadingOut = true);
     });
   }
 
@@ -368,45 +369,56 @@ class _GoodNightScreenState extends State<_GoodNightScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0D1B2A),
-      body: SafeArea(
-        child: Center(
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, _) {
-              return Opacity(
-                opacity: _fade.value,
-                child: Transform.translate(
-                  offset: Offset(0, _slideY.value),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.nightlight_round,
-                          size: 88,
-                          color: Color(0xFFE2C97E),
+    return Material(
+      color: Colors.black,
+      child: AnimatedOpacity(
+        opacity: _fadingOut ? 0.0 : 1.0,
+        duration: const Duration(milliseconds: 700),
+        curve: Curves.easeIn,
+        onEnd: () {
+          if (_fadingOut && mounted) SystemNavigator.pop();
+        },
+        child: Container(
+          color: const Color(0xFF0D1B2A),
+          child: SafeArea(
+            child: Center(
+              child: AnimatedBuilder(
+                animation: _controller,
+                builder: (context, _) {
+                  return Opacity(
+                    opacity: _fade.value,
+                    child: Transform.translate(
+                      offset: Offset(0, _slideY.value),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 40),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.nightlight_round,
+                              size: 88,
+                              color: Color(0xFFE2C97E),
+                            ),
+                            const SizedBox(height: 36),
+                            Text(
+                              _phrase,
+                              style: const TextStyle(
+                                fontSize: 20,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w300,
+                                fontStyle: FontStyle.italic,
+                                height: 1.6,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 36),
-                        Text(
-                          _phrase,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            color: Colors.white,
-                            fontWeight: FontWeight.w300,
-                            fontStyle: FontStyle.italic,
-                            height: 1.6,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-              );
-            },
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ),

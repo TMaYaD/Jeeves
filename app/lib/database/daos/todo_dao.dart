@@ -96,8 +96,13 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     if (tagIds.isEmpty) {
       return _watchAllForUser(userId).map((all) {
         final byId = {for (final t in all) t.id: t};
-        final nextActions =
-            all.where((t) => t.state == GtdState.nextAction.value).toList();
+        // Exclude tasks explicitly assigned to a day's plan (selectedForToday)
+        // so rolled-over / pre-selected tasks don't pollute the general pool.
+        final nextActions = all
+            .where((t) =>
+                t.state == GtdState.nextAction.value &&
+                t.selectedForToday != true)
+            .toList();
         return _filterUnblocked(nextActions, byId);
       });
     }
@@ -109,7 +114,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       final allTodos =
           await (select(todos)..where((t) => t.userId.equals(userId))).get();
       final byId = {for (final t in allTodos) t.id: t};
-      return _filterUnblocked(filteredNextActions, byId);
+      final unassigned =
+          filteredNextActions.where((t) => t.selectedForToday != true).toList();
+      return _filterUnblocked(unassigned, byId);
     });
   }
 
@@ -416,6 +423,44 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Defers [id] to Someday/Maybe via the GTD state machine.
   Future<void> deferTaskToSomeday(String id, String userId) async {
     await transitionState(id, userId, GtdState.somedayMaybe);
+  }
+
+  /// Defers [id] to Someday/Maybe during the evening shutdown ritual.
+  ///
+  /// Bypasses the state machine to handle tasks in any state, including
+  /// [GtdState.inProgress] (logs elapsed time first). Also clears the daily
+  /// selection so the task disappears from today's unfinished list.
+  Future<void> deferTaskAtShutdown(String id, String userId,
+      {DateTime? now}) async {
+    final ts = now ?? DateTime.now();
+    await transaction(() async {
+      final row = await (select(todos)
+            ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+          .getSingleOrNull();
+      if (row == null) return;
+
+      var timeSpent = row.timeSpentMinutes;
+      if (row.state == GtdState.inProgress.value &&
+          row.inProgressSince != null) {
+        final started = DateTime.tryParse(row.inProgressSince!);
+        if (started != null) {
+          final elapsed = ts.difference(started);
+          final minutes = (elapsed.inSeconds / 60).ceil();
+          timeSpent += minutes.clamp(0, double.maxFinite.toInt());
+        }
+      }
+
+      await (update(todos)
+            ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+          .write(TodosCompanion(
+        state: Value(GtdState.somedayMaybe.value),
+        selectedForToday: const Value(false),
+        dailySelectionDate: const Value(null),
+        timeSpentMinutes: Value(timeSpent),
+        inProgressSince: const Value(null),
+        updatedAt: Value(ts),
+      ));
+    });
   }
 
   /// Updates the due date for a scheduled task (reschedule without state change).

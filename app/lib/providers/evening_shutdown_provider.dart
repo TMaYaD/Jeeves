@@ -200,9 +200,9 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   Future<void> returnToNextActions(String id) =>
       _db.todoDao.returnToNextActions(id, _userId);
 
-  /// Defers [id] to Someday/Maybe via the GTD state machine.
+  /// Defers [id] to Someday/Maybe, handling any task state including inProgress.
   Future<void> deferTask(String id) =>
-      _db.todoDao.deferTaskToSomeday(id, _userId);
+      _db.todoDao.deferTaskAtShutdown(id, _userId);
 
   // ---- Banner dismissal ------------------------------------------------------
 
