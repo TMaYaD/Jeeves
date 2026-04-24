@@ -38,7 +38,10 @@ class _SwsLoginWidgetState extends ConsumerState<SwsLoginWidget> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = 'Could not connect wallet. Please try again.';
+        // Show the underlying error text so we don't mask backend / wallet
+        // failures behind a generic "could not connect" string. The user-
+        // facing copy stays as the prefix; the detail comes from the throw.
+        _errorMessage = 'Could not sign in with wallet: $e';
       });
     } finally {
       if (mounted) setState(() => _isLoading = false);
