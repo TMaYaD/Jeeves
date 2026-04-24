@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/focus_session_provider.dart';
+import '../providers/sprint_timer_provider.dart';
 
 /// Displays a Jeeves-flavoured elapsed-time reminder sourced from
 /// [focusModeProvider]. Updates every minute; bucketed to 5-min accuracy
@@ -26,12 +27,38 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   /// [seed] makes template selection deterministic. The widget seeds from
   /// the active task id plus the current bucket so the phrase is stable
   /// per-task-per-bucket and doesn't flip mid-glance on rebuilds.
-  static String jeevesPhrase(Duration elapsed, {bool isPaused = false, int? seed}) {
+  /// Returns a Jeeves-flavoured phrase for an active break with [remaining] time.
+  static String jeevesBreakPhrase(Duration remaining, {int? seed}) {
+    final m = remaining.inMinutes;
+    final String timeStr;
+    if (remaining.inSeconds <= 10) {
+      timeStr = 'moments';
+    } else if (m == 0) {
+      timeStr = 'less than a minute';
+    } else if (m == 1) {
+      timeStr = 'one minute';
+    } else {
+      timeStr = '$m minutes';
+    }
+
+    final pool = [
+      'A brief reprieve, sir. {t} remaining.',
+      'Rest, sir — {t} of your interval remain.',
+      'The matter is in abeyance. {t} left, sir.',
+      'Step away from the desk, sir. {t} remaining.',
+      'One insists on {t} of rest, sir.',
+    ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)].replaceAll('{t}', timeStr);
+  }
+
+  static String jeevesPhrase(Duration elapsed,
+      {bool isPaused = false, int? seed, bool suppressRest = false}) {
     final m = elapsed.inMinutes;
     final duration = m < 5 ? '' : _describeDuration(m);
     final template = isPaused
         ? _pickPausedTemplate(m, seed: seed)
-        : _pickTemplate(m, seed: seed);
+        : _pickTemplate(m, seed: seed, suppressRest: suppressRest);
     var phrase = template.replaceAll('{d}', duration);
 
     // Jeeves does not begin sentences with lowercase letters.
@@ -102,7 +129,8 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
 
   /// Picks a template whose tone matches the elapsed time. Deterministic
   /// when [seed] is supplied; otherwise draws from a shared [Random].
-  static String _pickTemplate(int m, {int? seed}) {
+  /// When [suppressRest] is true, "perhaps a break" suggestions are omitted.
+  static String _pickTemplate(int m, {int? seed, bool suppressRest = false}) {
     late final List<String> pool;
 
     if (m < 5) {
@@ -132,23 +160,39 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
         'A full {d}, sir.',
       ];
     } else if (m < 180) {
-      pool = const [
-        '{d} on the matter, sir. One ventures to suggest a brief respite.',
-        "{d} elapsed, sir. Perhaps a moment's pause would not go amiss.",
-        '{d} already, sir. Might one suggest a brief interval?',
-      ];
+      pool = suppressRest
+          ? const [
+              '{d} elapsed, sir.',
+              '{d} on the task, sir.',
+              'A full {d}, sir.',
+            ]
+          : const [
+              '{d} on the matter, sir. One ventures to suggest a brief respite.',
+              "{d} elapsed, sir. Perhaps a moment's pause would not go amiss.",
+              '{d} already, sir. Might one suggest a brief interval?',
+            ];
     } else if (m < 240) {
-      pool = const [
-        '{d}, sir. I feel it my duty to gently insist on a respite.',
-        '{d} at the grindstone, sir. One really must protest.',
-        '{d}, sir. One must, regrettably, insist on a pause.',
-      ];
+      pool = suppressRest
+          ? const [
+              '{d} elapsed, sir.',
+              '{d} on the task, sir.',
+            ]
+          : const [
+              '{d}, sir. I feel it my duty to gently insist on a respite.',
+              '{d} at the grindstone, sir. One really must protest.',
+              '{d}, sir. One must, regrettably, insist on a pause.',
+            ];
     } else {
-      pool = const [
-        '{d}, sir. I really must speak plainly: do stop.',
-        '{d} at this, sir. This has gone quite far enough.',
-        '{d}, sir. I beg you — put the matter down.',
-      ];
+      pool = suppressRest
+          ? const [
+              '{d} elapsed, sir.',
+              '{d} at the task, sir.',
+            ]
+          : const [
+              '{d}, sir. I really must speak plainly: do stop.',
+              '{d} at this, sir. This has gone quite far enough.',
+              '{d}, sir. I beg you — put the matter down.',
+            ];
     }
 
     final rng = seed == null ? _random : Random(seed);
@@ -189,25 +233,41 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
   @override
   Widget build(BuildContext context) {
     final focusState = ref.watch(focusModeProvider);
+    final sprintState = ref.watch(sprintTimerProvider);
+
+    if (!focusState.isActive) return const SizedBox.shrink();
+
+    // Break phase: show break-specific copy using the sprint timer's countdown.
+    if (sprintState.isBreak) {
+      final phrase = ElapsedTimerWidget.jeevesBreakPhrase(
+        sprintState.remaining,
+        seed: sprintState.sprintNumber,
+      );
+      return _buildBanner(
+        phrase,
+        icon: Icons.self_improvement,
+        iconColor: const Color(0xFF10B981),
+      );
+    }
+
     final m = focusState.elapsed.inMinutes;
-    // Seed by task id + minute-bucket so the phrase is stable within a
-    // bucket; it re-rolls naturally when the duration crosses a threshold.
-    // Buckets mirror _describeDuration's granularity.
     final bucketSize = m < 15 ? 5 : (m < 120 ? 15 : 30);
     final bucket = m ~/ bucketSize;
-    final seed = focusState.isActive
-        ? Object.hash(focusState.activeTodoId, bucket, bucketSize)
-        : null;
-    final phrase = focusState.isActive
-        ? ElapsedTimerWidget.jeevesPhrase(
-            focusState.elapsed,
-            isPaused: focusState.isPaused,
-            seed: seed,
-          )
-        : '';
+    final seed = Object.hash(focusState.activeTodoId, bucket, bucketSize);
+    final phrase = ElapsedTimerWidget.jeevesPhrase(
+      focusState.elapsed,
+      isPaused: focusState.isPaused,
+      seed: seed,
+      suppressRest: sprintState.isPostBreakCooldown,
+    );
 
     if (phrase.isEmpty) return const SizedBox.shrink();
+    return _buildBanner(phrase);
+  }
 
+  Widget _buildBanner(String phrase,
+      {IconData icon = Icons.access_time,
+      Color iconColor = _accent}) {
     final voiceStyle = widget.style ??
         const TextStyle(
           fontFamily: 'Manrope',
@@ -235,7 +295,7 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
               scale: Tween<double>(begin: 0.92, end: 1.08).animate(
                 CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
               ),
-              child: const Icon(Icons.access_time, size: 24, color: _accent),
+              child: Icon(icon, size: 24, color: iconColor),
             ),
             const SizedBox(width: 14),
             Expanded(child: Text(phrase, style: voiceStyle)),

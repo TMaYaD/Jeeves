@@ -13,6 +13,7 @@ import '../providers/focus_session_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../services/notification_service.dart';
 import '../widgets/elapsed_timer_widget.dart';
+import '../widgets/sprint_timer_widget.dart';
 
 class ActiveFocusScreen extends ConsumerStatefulWidget {
   const ActiveFocusScreen({super.key});
@@ -234,11 +235,20 @@ class _FocusBody extends ConsumerStatefulWidget {
 
 class _FocusBodyState extends ConsumerState<_FocusBody> {
   late String _notes;
+  late final PageController _pageController;
+  int _currentPage = 0;
 
   @override
   void initState() {
     super.initState();
     _notes = widget.todo.notes ?? '';
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
 
   @override
@@ -370,16 +380,30 @@ class _FocusBodyState extends ConsumerState<_FocusBody> {
         // Jeeves elapsed reminder — parchment banner at the threshold
         // between chrome and content. "I merely observe, sir."
         const ElapsedTimerWidget(),
-        // Notes area — unshared scroll zone; the banner above doesn't scroll.
+        // Carousel: page 0 = notes, page 1 = sprint timer.
         Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (_notes.isNotEmpty) _buildNotes(),
-              ],
-            ),
+          child: Column(
+            children: [
+              Expanded(
+                child: PageView(
+                  controller: _pageController,
+                  onPageChanged: (i) => setState(() => _currentPage = i),
+                  children: [
+                    SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (_notes.isNotEmpty) _buildNotes(),
+                        ],
+                      ),
+                    ),
+                    SprintTimerWidget(todo: widget.todo),
+                  ],
+                ),
+              ),
+              _PageDots(currentPage: _currentPage, pageCount: 2),
+            ],
           ),
         ),
         // Action bar
@@ -433,6 +457,36 @@ class _FocusBodyState extends ConsumerState<_FocusBody> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _PageDots extends StatelessWidget {
+  const _PageDots({required this.currentPage, required this.pageCount});
+  final int currentPage;
+  final int pageCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(pageCount, (i) {
+          final active = i == currentPage;
+          return Container(
+            width: 7,
+            height: 7,
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: active
+                  ? const Color(0xFF2667B7)
+                  : const Color(0xFFBFDBFE),
+            ),
+          );
+        }),
+      ),
     );
   }
 }

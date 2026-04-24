@@ -4,8 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import '../providers/daily_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
-import '../providers/sprint_timer_provider.dart';
-import '../widgets/sprint_timer_widget.dart';
+import '../providers/focus_settings_provider.dart';
+import '../providers/sprint_timer_provider.dart' show findBatchingCandidates;
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
@@ -43,13 +43,13 @@ class FocusScreen extends ConsumerWidget {
                 ],
               ),
             ),
-            // Sprint timer panel (visible only when a sprint is active).
-            const SprintTimerWidget(),
             Expanded(
               child: asyncSelected.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (err, _) => Center(child: Text('Error: $err')),
                 data: (tasks) {
+                  final sprintMinutes =
+                      ref.watch(focusSettingsProvider).sprintDurationMinutes;
                   final withDue = tasks.where((t) => t.dueDate != null).toList()
                     ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
                   final scheduledNoDue = tasks
@@ -60,7 +60,10 @@ class FocusScreen extends ConsumerWidget {
                       .toList();
                   final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
 
-                  final batchCandidates = findBatchingCandidates(tasks);
+                  final batchCandidates = findBatchingCandidates(
+                    tasks,
+                    sprintMinutes: sprintMinutes,
+                  );
 
                   return ListView(
                     physics: const ClampingScrollPhysics(),
@@ -103,7 +106,10 @@ class FocusScreen extends ConsumerWidget {
                       const SizedBox(height: 8),
                       // Batching suggestion banner.
                       if (batchCandidates.isNotEmpty)
-                        _BatchSuggestionBanner(candidates: batchCandidates),
+                        _BatchSuggestionBanner(
+                          candidates: batchCandidates,
+                          sprintMinutes: sprintMinutes,
+                        ),
                       if (sortedTasks.isEmpty)
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -159,170 +165,98 @@ class _TaskRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final timerState = ref.watch(sprintTimerProvider);
-    final isActive = timerState.activeTaskId == todo.id && timerState.isActive;
+    final sprintMinutes =
+        ref.watch(focusSettingsProvider).sprintDurationMinutes;
     final estimate = todo.timeEstimate;
     final gtdState = GtdState.fromString(todo.state);
     final isDone = gtdState == GtdState.done;
     final isInProgress = gtdState == GtdState.inProgress;
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      decoration: BoxDecoration(
-        color: isActive ? const Color(0xFFEFF6FF) : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        border: isActive
-            ? Border.all(color: const Color(0xFFBFDBFE))
-            : Border.all(color: Colors.transparent),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          children: [
-            // Active sprint indicator dot.
-            if (isActive)
-              Container(
-                width: 8,
-                height: 8,
-                margin: const EdgeInsets.only(right: 10),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF2563EB),
-                  shape: BoxShape.circle,
-                ),
-              ),
-            Expanded(
-              child: InkWell(
-                onTap: () => context.push('/task/${todo.id}'),
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        todo.title,
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: isDone
-                              ? const Color(0xFF9CA3AF)
-                              : const Color(0xFF1A1A2E),
-                          fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                          decoration:
-                              isDone ? TextDecoration.lineThrough : null,
-                        ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () => context.push('/task/${todo.id}'),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      todo.title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: isDone
+                            ? const Color(0xFF9CA3AF)
+                            : const Color(0xFF1A1A2E),
+                        fontWeight: FontWeight.w500,
+                        decoration:
+                            isDone ? TextDecoration.lineThrough : null,
                       ),
-                      if (todo.dueDate != null) ...[
-                        const SizedBox(height: 2),
-                        Builder(builder: (_) {
-                          // Storage is UTC; display the user's local calendar day.
-                          final d = todo.dueDate!.toLocal();
-                          return Text(
-                            'Due ${d.year}-'
-                            '${d.month.toString().padLeft(2, '0')}-'
-                            '${d.day.toString().padLeft(2, '0')}',
+                    ),
+                    if (todo.dueDate != null) ...[
+                      const SizedBox(height: 2),
+                      Builder(builder: (_) {
+                        // Storage is UTC; display the user's local calendar day.
+                        final d = todo.dueDate!.toLocal();
+                        return Text(
+                          'Due ${d.year}-'
+                          '${d.month.toString().padLeft(2, '0')}-'
+                          '${d.day.toString().padLeft(2, '0')}',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF9CA3AF)),
+                        );
+                      }),
+                    ],
+                    if (estimate != null) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Text(
+                            estimate < 60
+                                ? '${estimate}m'
+                                : estimate % 60 == 0
+                                    ? '${estimate ~/ 60}h'
+                                    : '${estimate ~/ 60}h ${estimate % 60}m',
                             style: const TextStyle(
                                 fontSize: 12, color: Color(0xFF9CA3AF)),
-                          );
-                        }),
-                      ],
-                      if (estimate != null) ...[
-                        const SizedBox(height: 2),
-                        Row(
-                          children: [
+                          ),
+                          if (estimate > sprintMinutes) ...[
+                            const SizedBox(width: 6),
                             Text(
-                              estimate < 60
-                                  ? '${estimate}m'
-                                  : estimate % 60 == 0
-                                      ? '${estimate ~/ 60}h'
-                                      : '${estimate ~/ 60}h ${estimate % 60}m',
+                              '· ${(estimate / sprintMinutes).ceil()} sprints',
                               style: const TextStyle(
                                   fontSize: 12, color: Color(0xFF9CA3AF)),
                             ),
-                            if (estimate > 20) ...[
-                              const SizedBox(width: 6),
-                              Text(
-                                '· ${(estimate / 20).ceil()} sprints',
-                                style: const TextStyle(
-                                    fontSize: 12, color: Color(0xFF9CA3AF)),
-                              ),
-                            ],
                           ],
-                        ),
-                      ],
+                        ],
+                      ),
                     ],
-                  ),
+                  ],
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            if (isDone)
-              const Icon(Icons.check_circle,
-                  color: Color(0xFF2667B7), size: 20)
-            else if (isInProgress)
-              _StartButton(
-                label: 'Resume',
-                todoId: todo.id,
-                inProgressSince: todo.inProgressSince != null
-                    ? DateTime.tryParse(todo.inProgressSince!)
-                    : null,
-              )
-            else
-              _StartButton(label: 'Start', todoId: todo.id),
-            // Start sprint button (only when task is not done and no sprint is
-            // active for another task).
-            if (!isDone &&
-                (!timerState.isActive || timerState.activeTaskId == todo.id))
-              _StartSprintButton(todo: todo, isActive: isActive),
-            const SizedBox(width: 4),
-            const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StartSprintButton extends ConsumerWidget {
-  const _StartSprintButton({required this.todo, required this.isActive});
-  final Todo todo;
-  final bool isActive;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final notifier = ref.read(sprintTimerProvider.notifier);
-
-    // When this task has an active sprint, the controls live in SprintTimerWidget.
-    if (isActive) return const SizedBox.shrink();
-
-    return Semantics(
-      button: true,
-      label: 'Start sprint for ${todo.title}',
-      child: GestureDetector(
-        onTap: () => notifier.startSprint(todo),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          margin: const EdgeInsets.only(right: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEFF6FF),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFBFDBFE)),
           ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.play_arrow_rounded, size: 14, color: Color(0xFF2563EB)),
-              SizedBox(width: 3),
-              Text(
-                'Sprint',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF2563EB),
-                ),
-              ),
-            ],
-          ),
-        ),
+          const SizedBox(width: 8),
+          if (isDone)
+            const Icon(Icons.check_circle,
+                color: Color(0xFF2667B7), size: 20)
+          else if (isInProgress)
+            _StartButton(
+              label: 'Resume',
+              todoId: todo.id,
+              inProgressSince: todo.inProgressSince != null
+                  ? DateTime.tryParse(todo.inProgressSince!)
+                  : null,
+            )
+          else
+            _StartButton(label: 'Start', todoId: todo.id),
+          const SizedBox(width: 4),
+          const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
+        ],
       ),
     );
   }
@@ -333,8 +267,12 @@ class _StartSprintButton extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 
 class _BatchSuggestionBanner extends StatefulWidget {
-  const _BatchSuggestionBanner({required this.candidates});
+  const _BatchSuggestionBanner({
+    required this.candidates,
+    required this.sprintMinutes,
+  });
   final List<Todo> candidates;
+  final int sprintMinutes;
 
   @override
   State<_BatchSuggestionBanner> createState() => _BatchSuggestionBannerState();
@@ -379,7 +317,7 @@ class _BatchSuggestionBannerState extends State<_BatchSuggestionBanner> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$count tasks · ${total}m total — fits in one 20-min sprint.',
+                  '$count tasks · ${total}m total — fits in one ${widget.sprintMinutes}-min sprint.',
                   style: const TextStyle(
                       fontSize: 12, color: Color(0xFFB45309)),
                 ),

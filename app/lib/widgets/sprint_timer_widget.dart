@@ -3,47 +3,50 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../database/gtd_database.dart';
+import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 
-/// Compact sprint timer panel shown at the top of Focus Mode.
+/// Full-page sprint timer for the Active Focus carousel (slide left from notes).
 ///
-/// Displays a progress ring, countdown, sprint number, and controls.
+/// When idle: shows a "Start Sprint" button with configured durations.
+/// When active: shows a progress ring, countdown, phase badge, and controls.
 class SprintTimerWidget extends ConsumerWidget {
-  const SprintTimerWidget({super.key});
+  const SprintTimerWidget({super.key, required this.todo});
+
+  final Todo todo;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final timer = ref.watch(sprintTimerProvider);
+    final settings = ref.watch(focusSettingsProvider);
 
-    if (!timer.isActive) return const SizedBox.shrink();
+    if (!timer.isActive) {
+      return _IdleView(todo: todo, settings: settings);
+    }
+
+    final color =
+        timer.isBreak ? const Color(0xFF10B981) : const Color(0xFF2563EB);
+    final bgColor =
+        timer.isBreak ? const Color(0xFFECFDF5) : const Color(0xFFEFF6FF);
+    final borderColor =
+        timer.isBreak ? const Color(0xFF6EE7B7) : const Color(0xFFBFDBFE);
 
     return Container(
-      margin: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-      padding: const EdgeInsets.all(20),
+      margin: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
-        color: timer.isBreak
-            ? const Color(0xFFECFDF5)
-            : const Color(0xFFEFF6FF),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: timer.isBreak
-              ? const Color(0xFF6EE7B7)
-              : const Color(0xFFBFDBFE),
-        ),
+        color: bgColor,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: borderColor),
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              _ProgressRing(timer: timer),
-              const SizedBox(width: 20),
-              Expanded(
-                child: _TimerInfo(timer: timer),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
+          _ProgressRing(timer: timer, color: color),
+          const SizedBox(height: 24),
+          _TimerInfo(timer: timer),
+          const SizedBox(height: 28),
           _Controls(timer: timer),
         ],
       ),
@@ -51,25 +54,85 @@ class SprintTimerWidget extends ConsumerWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Idle view — shown when no sprint is active
+// ---------------------------------------------------------------------------
+
+class _IdleView extends ConsumerWidget {
+  const _IdleView({required this.todo, required this.settings});
+  final Todo todo;
+  final FocusSettings settings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(sprintTimerProvider.notifier);
+
+    return Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.timer_outlined,
+              size: 64, color: Color(0xFF2563EB)),
+          const SizedBox(height: 16),
+          const Text(
+            'Sprint Timer',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1A1A2E),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Focus for ${settings.sprintDurationMinutes} min, '
+            'then take a ${settings.breakDurationMinutes} min break.',
+            style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 28),
+          FilledButton.icon(
+            onPressed: () => notifier.startSprint(todo),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              minimumSize: const Size(200, 48),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+              textStyle: const TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            icon: const Icon(Icons.play_arrow_rounded),
+            label: const Text('Start Sprint'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Progress ring
+// ---------------------------------------------------------------------------
+
 class _ProgressRing extends StatelessWidget {
-  const _ProgressRing({required this.timer});
+  const _ProgressRing({required this.timer, required this.color});
   final SprintTimerState timer;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final color = timer.isBreak
-        ? const Color(0xFF10B981)
-        : const Color(0xFF2563EB);
     final bgColor = timer.isBreak
         ? const Color(0xFFD1FAE5)
         : const Color(0xFFDBEAFE);
 
-    final minutes = timer.remaining.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = timer.remaining.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final minutes =
+        timer.remaining.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds =
+        timer.remaining.inSeconds.remainder(60).toString().padLeft(2, '0');
 
     return SizedBox(
-      width: 88,
-      height: 88,
+      width: 120,
+      height: 120,
       child: CustomPaint(
         painter: _RingPainter(
           progress: timer.progress,
@@ -80,7 +143,7 @@ class _ProgressRing extends StatelessWidget {
           child: Text(
             '$minutes:$seconds',
             style: TextStyle(
-              fontSize: 20,
+              fontSize: 26,
               fontWeight: FontWeight.bold,
               color: color,
               letterSpacing: -0.5,
@@ -92,6 +155,10 @@ class _ProgressRing extends StatelessWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Timer info (phase badge, task title, sprint dots)
+// ---------------------------------------------------------------------------
+
 class _TimerInfo extends StatelessWidget {
   const _TimerInfo({required this.timer});
   final SprintTimerState timer;
@@ -99,17 +166,17 @@ class _TimerInfo extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final phaseLabel = timer.isBreak ? 'Break' : 'Focus Sprint';
-    final phaseColor = timer.isBreak
-        ? const Color(0xFF059669)
-        : const Color(0xFF2563EB);
+    final phaseColor =
+        timer.isBreak ? const Color(0xFF059669) : const Color(0xFF2563EB);
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
                 color: phaseColor.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(20),
@@ -117,43 +184,40 @@ class _TimerInfo extends StatelessWidget {
               child: Text(
                 phaseLabel,
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: phaseColor,
                 ),
               ),
             ),
             if (!timer.isBreak && timer.totalSprints > 1) ...[
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Text(
                 'Sprint ${timer.sprintNumber} of ${timer.totalSprints}',
                 style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF6B7280),
-                ),
+                    fontSize: 13, color: Color(0xFF6B7280)),
               ),
             ],
           ],
         ),
         if (timer.activeTaskTitle != null) ...[
-          const SizedBox(height: 6),
+          const SizedBox(height: 10),
           Text(
             timer.activeTaskTitle!,
             style: const TextStyle(
-              fontSize: 15,
+              fontSize: 16,
               fontWeight: FontWeight.w600,
               color: Color(0xFF1A1A2E),
             ),
+            textAlign: TextAlign.center,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
         ],
         if (!timer.isBreak && timer.totalSprints > 1) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           _SprintDots(
-            total: timer.totalSprints,
-            current: timer.sprintNumber,
-          ),
+              total: timer.totalSprints, current: timer.sprintNumber),
         ],
       ],
     );
@@ -168,13 +232,14 @@ class _SprintDots extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(total, (i) {
         final done = i < current - 1;
         final active = i == current - 1;
         return Container(
-          width: 8,
-          height: 8,
-          margin: const EdgeInsets.only(right: 4),
+          width: 9,
+          height: 9,
+          margin: const EdgeInsets.symmetric(horizontal: 3),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: done
@@ -189,6 +254,10 @@ class _SprintDots extends StatelessWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Controls
+// ---------------------------------------------------------------------------
+
 class _Controls extends ConsumerWidget {
   const _Controls({required this.timer});
   final SprintTimerState timer;
@@ -199,22 +268,16 @@ class _Controls extends ConsumerWidget {
     final disabled = timer.isProcessing;
 
     if (timer.isBreak) {
-      return Row(
-        children: [
-          Expanded(
-            child: FilledButton(
-              onPressed: disabled ? null : notifier.skipBreak,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF10B981),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                minimumSize: const Size.fromHeight(40),
-              ),
-              child: const Text('Skip Break',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
-            ),
-          ),
-        ],
+      return FilledButton(
+        onPressed: disabled ? null : notifier.skipBreak,
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF10B981),
+          minimumSize: const Size(double.infinity, 44),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        child: const Text('Skip Break',
+            style: TextStyle(fontWeight: FontWeight.w600)),
       );
     }
 
@@ -226,37 +289,41 @@ class _Controls extends ConsumerWidget {
           child: OutlinedButton(
             onPressed: disabled
                 ? null
-                : (timer.isPaused ? notifier.resumeSprint : notifier.pauseSprint),
+                : (timer.isPaused
+                    ? notifier.resumeSprint
+                    : notifier.pauseSprint),
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFF2563EB),
               side: const BorderSide(color: Color(0xFFBFDBFE)),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
-              minimumSize: const Size(44, 40),
+              minimumSize: const Size(48, 44),
               padding: const EdgeInsets.symmetric(horizontal: 14),
             ),
             child: Icon(
-              timer.isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-              size: 20,
+              timer.isPaused
+                  ? Icons.play_arrow_rounded
+                  : Icons.pause_rounded,
+              size: 22,
             ),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 10),
         // Complete
         Expanded(
           child: FilledButton(
             onPressed: disabled ? null : notifier.completeSprint,
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF2563EB),
+              minimumSize: const Size.fromHeight(44),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
-              minimumSize: const Size.fromHeight(40),
             ),
             child: const Text('Done',
                 style: TextStyle(fontWeight: FontWeight.w600)),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 10),
         // Stop
         Tooltip(
           message: 'Stop sprint',
@@ -267,10 +334,10 @@ class _Controls extends ConsumerWidget {
               side: const BorderSide(color: Color(0xFFE5E7EB)),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
-              minimumSize: const Size(44, 40),
+              minimumSize: const Size(48, 44),
               padding: const EdgeInsets.symmetric(horizontal: 14),
             ),
-            child: const Icon(Icons.stop_rounded, size: 20),
+            child: const Icon(Icons.stop_rounded, size: 22),
           ),
         ),
       ],
@@ -296,11 +363,10 @@ class _RingPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.shortestSide / 2) - 6;
-    const strokeWidth = 7.0;
+    final radius = (size.shortestSide / 2) - 7;
+    const strokeWidth = 8.0;
     const startAngle = -math.pi / 2;
 
-    // Track (background arc).
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius),
       0,
@@ -313,7 +379,6 @@ class _RingPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round,
     );
 
-    // Progress arc.
     if (progress > 0) {
       canvas.drawArc(
         Rect.fromCircle(center: center, radius: radius),

@@ -1,9 +1,9 @@
 /// Pomodoro sprint timer state and notifier (Issue #47).
 ///
-/// Implements a 20-minute focus sprint + 3-minute break cycle bound to a
-/// selected Focus Mode task. Timer state is persisted to SharedPreferences so
-/// it survives app backgrounding; a local notification fires at expiry even
-/// when the app is in the background.
+/// Implements a configurable focus sprint + break cycle bound to a selected
+/// Focus Mode task. Durations are read from [focusSettingsProvider] at sprint-
+/// start time. Timer state persists to SharedPreferences across app backgrounding;
+/// a local notification fires at expiry even when the app is in the background.
 library;
 
 import 'dart:async';
@@ -18,16 +18,12 @@ import '../database/gtd_database.dart';
 import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
+import 'focus_settings_provider.dart';
 
 // ---------------------------------------------------------------------------
-// Constants
+// SharedPreferences keys
 // ---------------------------------------------------------------------------
 
-const _kSprintDuration = Duration(minutes: 20);
-const _kBreakDuration = Duration(minutes: 3);
-const _kSprintMinutes = 20;
-
-// SharedPreferences keys.
 const _kPrefActiveTaskId = 'sprint_active_task_id';
 const _kPrefActiveTaskTitle = 'sprint_active_task_title';
 const _kPrefEndTime = 'sprint_end_time';
@@ -36,6 +32,9 @@ const _kPrefSprintNumber = 'sprint_sprint_number';
 const _kPrefTotalSprints = 'sprint_total_sprints';
 const _kPrefIsPaused = 'sprint_is_paused';
 const _kPrefRemainingSeconds = 'sprint_remaining_seconds';
+const _kPrefSprintMinutes = 'sprint_sprint_duration_minutes';
+const _kPrefBreakMinutes = 'sprint_break_duration_minutes';
+const _kPrefLastBreakEndedAt = 'sprint_last_break_ended_at';
 
 // Phase string values stored in SharedPreferences.
 const _kPhaseFocus = 'focus';
@@ -65,6 +64,11 @@ class SprintTimerState {
   final Duration total;
   final bool isPaused;
   final bool isProcessing;
+  // Minutes used for the current (or last) sprint/break — set at startSprint.
+  final int sprintDurationMinutes;
+  final int breakDurationMinutes;
+  // Timestamp of the most recent break completion (null if none this session).
+  final DateTime? lastBreakEndedAt;
 
   const SprintTimerState({
     this.phase = SprintPhase.idle,
@@ -72,10 +76,13 @@ class SprintTimerState {
     this.activeTaskTitle,
     this.sprintNumber = 1,
     this.totalSprints = 1,
-    this.remaining = _kSprintDuration,
-    this.total = _kSprintDuration,
+    this.remaining = const Duration(minutes: 20),
+    this.total = const Duration(minutes: 20),
     this.isPaused = false,
     this.isProcessing = false,
+    this.sprintDurationMinutes = 20,
+    this.breakDurationMinutes = 3,
+    this.lastBreakEndedAt,
   });
 
   bool get isActive => phase != SprintPhase.idle;
@@ -88,6 +95,14 @@ class SprintTimerState {
     return 1 - (remaining.inSeconds / total.inSeconds);
   }
 
+  /// True when a break ended recently enough that rest shouldn't be suggested.
+  /// The cooldown window equals the break duration itself.
+  bool get isPostBreakCooldown {
+    if (lastBreakEndedAt == null) return false;
+    return DateTime.now().difference(lastBreakEndedAt!) <
+        Duration(minutes: breakDurationMinutes);
+  }
+
   SprintTimerState copyWith({
     SprintPhase? phase,
     String? activeTaskId,
@@ -98,6 +113,9 @@ class SprintTimerState {
     Duration? total,
     bool? isPaused,
     bool? isProcessing,
+    int? sprintDurationMinutes,
+    int? breakDurationMinutes,
+    DateTime? lastBreakEndedAt,
   }) =>
       SprintTimerState(
         phase: phase ?? this.phase,
@@ -109,6 +127,10 @@ class SprintTimerState {
         total: total ?? this.total,
         isPaused: isPaused ?? this.isPaused,
         isProcessing: isProcessing ?? this.isProcessing,
+        sprintDurationMinutes:
+            sprintDurationMinutes ?? this.sprintDurationMinutes,
+        breakDurationMinutes: breakDurationMinutes ?? this.breakDurationMinutes,
+        lastBreakEndedAt: lastBreakEndedAt ?? this.lastBreakEndedAt,
       );
 }
 
@@ -139,26 +161,45 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   }
 
   // ---------------------------------------------------------------------------
+  // Convenience getters for current configured durations
+  // ---------------------------------------------------------------------------
+
+  int get _sprintMinutes =>
+      ref.read(focusSettingsProvider).sprintDurationMinutes;
+  int get _breakMinutes => ref.read(focusSettingsProvider).breakDurationMinutes;
+  Duration get _sprintDuration => Duration(minutes: _sprintMinutes);
+  Duration get _breakDuration => Duration(minutes: _breakMinutes);
+
+  // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// Starts a 20-minute focus sprint for [task].
+  /// Starts a focus sprint for [task] using the currently configured durations.
   Future<void> startSprint(Todo task) async {
     _ticker?.cancel();
     HapticFeedback.mediumImpact();
 
-    final totalSprints = _calcTotalSprints(task.timeEstimate);
-    final sprintNumber = _calcSprintNumber(task.timeSpentMinutes);
-    _endTime = DateTime.now().add(_kSprintDuration);
+    final sm = _sprintMinutes;
+    final bm = _breakMinutes;
+    final sprintDur = Duration(minutes: sm);
 
+    final totalSprints = _calcTotalSprints(task.timeEstimate, sm);
+    final sprintNumber = _calcSprintNumber(task.timeSpentMinutes, sm);
+    _endTime = DateTime.now().add(sprintDur);
+
+    // Carry forward lastBreakEndedAt so post-break cooldown survives
+    // starting a new sprint immediately after a break.
     state = SprintTimerState(
       phase: SprintPhase.focus,
       activeTaskId: task.id,
       activeTaskTitle: task.title,
       sprintNumber: sprintNumber,
       totalSprints: totalSprints,
-      remaining: _kSprintDuration,
-      total: _kSprintDuration,
+      remaining: sprintDur,
+      total: sprintDur,
+      sprintDurationMinutes: sm,
+      breakDurationMinutes: bm,
+      lastBreakEndedAt: state.lastBreakEndedAt,
     );
 
     await _persist(isPaused: false);
@@ -206,7 +247,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
-  /// Stops the sprint entirely, returning to idle.
+  /// Stops the sprint entirely, returning to idle. Does not record a break end.
   Future<void> stopSprint() async {
     if (state.isProcessing) return;
     state = state.copyWith(isProcessing: true);
@@ -236,7 +277,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
-  /// Skips the break timer and returns to idle.
+  /// Skips the break and returns to idle, recording the break as ended.
   Future<void> skipBreak() async {
     if (state.isProcessing) return;
     state = state.copyWith(isProcessing: true);
@@ -245,7 +286,13 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       HapticFeedback.lightImpact();
       await _cancelSprintNotifications();
       await _clearPrefs();
-      state = const SprintTimerState();
+      final now = DateTime.now();
+      await _persistLastBreakEndedAt(now);
+      state = SprintTimerState(
+        sprintDurationMinutes: state.sprintDurationMinutes,
+        breakDurationMinutes: state.breakDurationMinutes,
+        lastBreakEndedAt: now,
+      );
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
     }
@@ -258,7 +305,25 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   Future<void> _restoreFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     final activeTaskId = prefs.getString(_kPrefActiveTaskId);
-    if (activeTaskId == null || activeTaskId.isEmpty) return;
+
+    // Restore lastBreakEndedAt regardless of whether a sprint is active.
+    final lastBreakStr = prefs.getString(_kPrefLastBreakEndedAt);
+    final lastBreakEndedAt =
+        lastBreakStr != null ? DateTime.tryParse(lastBreakStr) : null;
+
+    if (activeTaskId == null || activeTaskId.isEmpty) {
+      if (lastBreakEndedAt != null) {
+        // No active sprint but there was a recent break — carry the cooldown.
+        final sm = prefs.getInt(_kPrefSprintMinutes) ?? 20;
+        final bm = prefs.getInt(_kPrefBreakMinutes) ?? 3;
+        state = SprintTimerState(
+          sprintDurationMinutes: sm,
+          breakDurationMinutes: bm,
+          lastBreakEndedAt: lastBreakEndedAt,
+        );
+      }
+      return;
+    }
 
     final endTimeStr = prefs.getString(_kPrefEndTime);
     final phaseStr = prefs.getString(_kPrefPhase);
@@ -269,10 +334,14 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     final isPaused = prefs.getBool(_kPrefIsPaused) ?? false;
     final remainingSeconds = prefs.getInt(_kPrefRemainingSeconds);
     final taskTitle = prefs.getString(_kPrefActiveTaskTitle) ?? '';
+    final sm = prefs.getInt(_kPrefSprintMinutes) ?? 20;
+    final bm = prefs.getInt(_kPrefBreakMinutes) ?? 3;
 
     final phase =
         phaseStr == _kPhaseBreak ? SprintPhase.break_ : SprintPhase.focus;
-    final total = phase == SprintPhase.focus ? _kSprintDuration : _kBreakDuration;
+    final total = phase == SprintPhase.focus
+        ? Duration(minutes: sm)
+        : Duration(minutes: bm);
 
     Duration remaining;
     if (isPaused && remainingSeconds != null) {
@@ -282,8 +351,8 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       if (_endTime == null) return;
       remaining = _endTime!.difference(DateTime.now());
       if (remaining.isNegative) {
-        // Timer expired while app was backgrounded.
-        _onTimerExpiredBackground(phase);
+        _onTimerExpiredBackground(phase, sm: sm, bm: bm,
+            lastBreakEndedAt: lastBreakEndedAt);
         return;
       }
     }
@@ -297,44 +366,77 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       remaining: remaining,
       total: total,
       isPaused: isPaused,
+      sprintDurationMinutes: sm,
+      breakDurationMinutes: bm,
+      lastBreakEndedAt: lastBreakEndedAt,
     );
 
     if (!isPaused) _startTicker();
   }
 
-  void _onTimerExpiredBackground(SprintPhase expiredPhase) {
+  void _onTimerExpiredBackground(SprintPhase expiredPhase,
+      {required int sm, required int bm, DateTime? lastBreakEndedAt}) {
     if (expiredPhase == SprintPhase.focus) {
       // Compute break window relative to when the sprint actually ended so
       // reopening the app 10+ minutes later doesn't grant a fresh full break.
       final focusEndedAt = _endTime;
       _logSprintTimeToTask().then((_) {
         if (focusEndedAt != null) {
-          final breakEndTime = focusEndedAt.add(_kBreakDuration);
+          final breakEndTime = focusEndedAt.add(Duration(minutes: bm));
           final remainingBreak = breakEndTime.difference(DateTime.now());
           if (remainingBreak <= Duration.zero) {
             _clearPrefs();
-            state = const SprintTimerState();
+            final now = DateTime.now();
+            _persistLastBreakEndedAt(now);
+            state = SprintTimerState(
+              sprintDurationMinutes: sm,
+              breakDurationMinutes: bm,
+              lastBreakEndedAt: now,
+            );
             return;
           }
-          _startBreak(endTime: breakEndTime, remaining: remainingBreak);
+          _startBreak(
+              endTime: breakEndTime,
+              remaining: remainingBreak,
+              sm: sm,
+              bm: bm,
+              lastBreakEndedAt: lastBreakEndedAt);
         } else {
-          _startBreak();
+          _startBreak(sm: sm, bm: bm, lastBreakEndedAt: lastBreakEndedAt);
         }
       });
     } else {
+      // Break expired in background — record it.
       _clearPrefs();
-      state = const SprintTimerState();
+      final now = DateTime.now();
+      _persistLastBreakEndedAt(now);
+      state = SprintTimerState(
+        sprintDurationMinutes: sm,
+        breakDurationMinutes: bm,
+        lastBreakEndedAt: now,
+      );
     }
   }
 
-  Future<void> _startBreak({DateTime? endTime, Duration? remaining}) async {
-    _endTime = endTime ?? DateTime.now().add(_kBreakDuration);
-    final breakRemaining = remaining ?? _kBreakDuration;
+  Future<void> _startBreak({
+    DateTime? endTime,
+    Duration? remaining,
+    int? sm,
+    int? bm,
+    DateTime? lastBreakEndedAt,
+  }) async {
+    final breakMin = bm ?? state.breakDurationMinutes;
+    final sprintMin = sm ?? state.sprintDurationMinutes;
+    final breakDur = Duration(minutes: breakMin);
+    _endTime = endTime ?? DateTime.now().add(breakDur);
+    final breakRemaining = remaining ?? breakDur;
     state = state.copyWith(
       phase: SprintPhase.break_,
       remaining: breakRemaining,
-      total: _kBreakDuration,
+      total: breakDur,
       isPaused: false,
+      sprintDurationMinutes: sprintMin,
+      breakDurationMinutes: breakMin,
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kPrefEndTime, _endTime!.toIso8601String());
@@ -365,24 +467,35 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     if (state.isFocus) {
       _logSprintTimeToTask().then((_) => _startBreak());
     } else {
+      // Break ended naturally — record timestamp.
+      final now = DateTime.now();
+      final sm = state.sprintDurationMinutes;
+      final bm = state.breakDurationMinutes;
       _clearPrefs();
-      state = const SprintTimerState();
+      _persistLastBreakEndedAt(now);
+      state = SprintTimerState(
+        sprintDurationMinutes: sm,
+        breakDurationMinutes: bm,
+        lastBreakEndedAt: now,
+      );
     }
   }
 
   Future<void> _logSprintTimeToTask() async {
     final taskId = state.activeTaskId;
     if (taskId == null) return;
+    final sprintMin = state.sprintDurationMinutes;
     try {
       final db = ref.read(databaseProvider);
       final userId = ref.read(currentUserIdProvider);
       // Single atomic SQL increment — avoids a read-modify-write race on
       // offline-first tables where a sync write could land between SELECT and UPDATE.
       await (db.update(db.todos)
-            ..where((t) => Expression.and([t.id.equals(taskId), t.userId.equals(userId)])))
+            ..where((t) => Expression.and(
+                [t.id.equals(taskId), t.userId.equals(userId)])))
           .write(RawValuesInsertable({
-        'time_spent_minutes': const CustomExpression<int>(
-            'coalesce(time_spent_minutes, 0) + $_kSprintMinutes'),
+        'time_spent_minutes': CustomExpression<int>(
+            'coalesce(time_spent_minutes, 0) + $sprintMin'),
         'updated_at': Variable(DateTime.now()),
       }));
     } catch (_) {
@@ -400,6 +513,8 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     await prefs.setInt(_kPrefSprintNumber, state.sprintNumber);
     await prefs.setInt(_kPrefTotalSprints, state.totalSprints);
     await prefs.setBool(_kPrefIsPaused, isPaused);
+    await prefs.setInt(_kPrefSprintMinutes, state.sprintDurationMinutes);
+    await prefs.setInt(_kPrefBreakMinutes, state.breakDurationMinutes);
   }
 
   Future<void> _clearPrefs() async {
@@ -412,6 +527,15 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     await prefs.remove(_kPrefTotalSprints);
     await prefs.remove(_kPrefIsPaused);
     await prefs.remove(_kPrefRemainingSeconds);
+    await prefs.remove(_kPrefSprintMinutes);
+    await prefs.remove(_kPrefBreakMinutes);
+    // _kPrefLastBreakEndedAt is intentionally NOT cleared here — it persists
+    // across sprint resets so the post-break cooldown survives idle state.
+  }
+
+  Future<void> _persistLastBreakEndedAt(DateTime t) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kPrefLastBreakEndedAt, t.toIso8601String());
   }
 
   Future<void> _scheduleEndNotification(
@@ -439,13 +563,13 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   // Calculations
   // ---------------------------------------------------------------------------
 
-  static int _calcTotalSprints(int? estimateMinutes) {
-    if (estimateMinutes == null || estimateMinutes <= _kSprintMinutes) return 1;
-    return (estimateMinutes / _kSprintMinutes).ceil();
+  static int _calcTotalSprints(int? estimateMinutes, int sprintMinutes) {
+    if (estimateMinutes == null || estimateMinutes <= sprintMinutes) return 1;
+    return (estimateMinutes / sprintMinutes).ceil();
   }
 
-  static int _calcSprintNumber(int timeSpentMinutes) {
-    return (timeSpentMinutes / _kSprintMinutes).floor() + 1;
+  static int _calcSprintNumber(int timeSpentMinutes, int sprintMinutes) {
+    return (timeSpentMinutes / sprintMinutes).floor() + 1;
   }
 }
 
@@ -453,12 +577,12 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
 // Batching suggestion helpers
 // ---------------------------------------------------------------------------
 
-/// Returns the list of micro-tasks from [todayTasks] that collectively fit
-/// within a single 20-minute sprint, making them candidates for batching.
+/// Returns micro-tasks from [todayTasks] that collectively fit in one sprint.
 ///
-/// A task is a "micro-task" when its [Todo.timeEstimate] is ≤ 15 minutes.
-/// Suggests batching when 2 or more micro-tasks fit within one sprint.
-List<Todo> findBatchingCandidates(List<Todo> todayTasks) {
+/// Micro-tasks have [Todo.timeEstimate] ≤ 15 min. Batching is suggested when
+/// 2+ micro-tasks fit within [sprintMinutes] (default 20).
+List<Todo> findBatchingCandidates(List<Todo> todayTasks,
+    {int sprintMinutes = 20}) {
   final microTasks = todayTasks
       .where((t) => t.timeEstimate != null && t.timeEstimate! <= 15)
       .toList()
@@ -466,13 +590,13 @@ List<Todo> findBatchingCandidates(List<Todo> todayTasks) {
 
   if (microTasks.length < 2) return [];
 
-  // Greedy accumulation (smallest-first) so we find the largest subset that
-  // fits in one sprint rather than requiring *all* micro-tasks to fit.
+  // Greedy accumulation (smallest-first) — finds the largest subset that fits
+  // in one sprint rather than requiring *all* micro-tasks to fit.
   var budget = 0;
   final candidates = <Todo>[];
   for (final task in microTasks) {
     final est = task.timeEstimate ?? 0;
-    if (budget + est <= _kSprintMinutes) {
+    if (budget + est <= sprintMinutes) {
       budget += est;
       candidates.add(task);
     }
