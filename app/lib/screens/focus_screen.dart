@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../providers/daily_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 
+enum _FocusMenuAction { planDay }
+
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
 
@@ -56,73 +58,128 @@ class FocusScreen extends ConsumerWidget {
                       .toList();
                   final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
 
-                  return ListView(
-                    physics: const ClampingScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    children: [
-                      const Text(
-                        "Today's Schedule",
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1A1A2E),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[50],
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.grey[200]!),
-                        ),
-                        child: const Center(
-                          child: Text(
-                            "Calendar events placeholder",
-                            style: TextStyle(color: Colors.grey),
+                  return ValueListenableBuilder<bool>(
+                    valueListenable: planningCompletionNotifier,
+                    builder: (context, planningDone, _) {
+                      final showShutdownEntry = planningDone && sortedTasks.isNotEmpty;
+
+                      return ListView(
+                        physics: const ClampingScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                        children: [
+                          const Text(
+                            "Today's Schedule",
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1A1A2E),
+                            ),
                           ),
-                        ),
-                      ),
-                      const SizedBox(height: 36),
-                      const Divider(height: 1, color: Color(0xFFF3F4F6)),
-                      const SizedBox(height: 36),
-                      const Text(
-                        "Today's Tasks",
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1A1A2E),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (sortedTasks.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: Text(
-                            'No tasks selected — plan your day to add some!',
-                            style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-                            textAlign: TextAlign.center,
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[50],
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey[200]!),
+                            ),
+                            child: const Center(
+                              child: Text(
+                                "Calendar events placeholder",
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ),
                           ),
-                        )
-                      else
-                        ...sortedTasks.map((t) => _TaskRow(todo: t)),
-                      const SizedBox(height: 48),
-                      FilledButton(
-                        onPressed: () => _replanDay(context, ref),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFEFF6FF),
-                          foregroundColor: const Color(0xFF2563EB),
-                          minimumSize: const Size.fromHeight(52),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                        ),
-                        child: const Text(
-                          'Plan the Day',
-                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                    ],
+                          const SizedBox(height: 36),
+                          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                          const SizedBox(height: 36),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Text(
+                                "Today's Tasks",
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1A1A2E),
+                                ),
+                              ),
+                              if (showShutdownEntry) ...[
+                                const Spacer(),
+                                PopupMenuButton<_FocusMenuAction>(
+                                  icon: const Icon(Icons.more_vert,
+                                      color: Color(0xFF6B7280)),
+                                  onSelected: (action) {
+                                    if (action == _FocusMenuAction.planDay) {
+                                      _replanDay(context, ref);
+                                    }
+                                  },
+                                  itemBuilder: (_) => const [
+                                    PopupMenuItem(
+                                      value: _FocusMenuAction.planDay,
+                                      child: Text('Plan the Day'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          if (sortedTasks.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              child: Text(
+                                'No tasks selected — plan your day to add some!',
+                                style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                                textAlign: TextAlign.center,
+                              ),
+                            )
+                          else
+                            ...sortedTasks.map((t) => _TaskRow(todo: t)),
+                          const SizedBox(height: 48),
+                          if (showShutdownEntry)
+                            FilledButton(
+                              onPressed: () => context.go('/shutdown'),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF1E3A5F),
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size.fromHeight(52),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.nightlight_outlined, size: 18),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Begin Evening Shutdown',
+                                    style: TextStyle(
+                                        fontSize: 17, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            FilledButton(
+                              onPressed: () => _replanDay(context, ref),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFFEFF6FF),
+                                foregroundColor: const Color(0xFF2563EB),
+                                minimumSize: const Size.fromHeight(52),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: const Text(
+                                'Plan the Day',
+                                style: TextStyle(
+                                    fontSize: 17, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          const SizedBox(height: 32),
+                        ],
+                      );
+                    },
                   );
                 },
               ),
