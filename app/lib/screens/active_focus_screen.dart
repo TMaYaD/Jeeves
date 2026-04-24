@@ -25,63 +25,58 @@ class ActiveFocusScreen extends ConsumerStatefulWidget {
 
 class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     with WidgetsBindingObserver {
-  Timer? _bgNotificationTimer;
+  Timer? _notificationTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Show notification immediately so it persists even if user navigates away.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _refreshNotification();
+    });
+    _notificationTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) _refreshNotification();
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _bgNotificationTimer?.cancel();
+    _notificationTimer?.cancel();
+    // Intentionally do NOT cancel the notification here — it persists so the
+    // user can tap back into focus via the status bar while doing something
+    // else in the app. The notification is only cancelled when the sprint ends.
     super.dispose();
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState lifecycleState) {
-    super.didChangeAppLifecycleState(lifecycleState);
-    final focusState = ref.read(focusModeProvider);
-    if (!focusState.isActive) return;
-
-    if (lifecycleState == AppLifecycleState.paused) {
-      _onBackground(focusState);
-    } else if (lifecycleState == AppLifecycleState.resumed) {
-      _onForeground();
-    }
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // Refresh after returning from another app so the phrase is up to date.
+    if (state == AppLifecycleState.resumed && mounted) _refreshNotification();
   }
 
-  void _onBackground(FocusModeState focusState) {
+  void _refreshNotification() {
+    final focusState = ref.read(focusModeProvider);
     final todoId = focusState.activeTodoId;
     if (todoId == null) return;
     final title =
         ref.read(taskDetailTodoProvider(todoId)).value?.title ?? 'Focus Task';
+    final m = focusState.elapsed.inMinutes;
+    final bucketSize = m < 15 ? 5 : (m < 120 ? 15 : 30);
+    final bucket = m ~/ bucketSize;
+    final seed = Object.hash(todoId, bucket, bucketSize);
+    final phrase = ElapsedTimerWidget.jeevesPhrase(focusState.elapsed, seed: seed);
     NotificationService.instance.showFocusNotification(
-      title: title,
-      elapsed: focusState.elapsed,
+      title: 'In Focus: $title',
+      body: phrase,
     );
-    _bgNotificationTimer?.cancel();
-    _bgNotificationTimer = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (!mounted) return;
-      final current = ref.read(focusModeProvider);
-      final currentTitle =
-          ref.read(taskDetailTodoProvider(todoId)).value?.title ?? 'Focus Task';
-      NotificationService.instance.showFocusNotification(
-        title: currentTitle,
-        elapsed: current.elapsed,
-      );
-    });
-  }
-
-  void _onForeground() {
-    _bgNotificationTimer?.cancel();
-    _bgNotificationTimer = null;
-    NotificationService.instance.cancelFocusNotification();
   }
 
   Future<void> _onComplete(String todoId) async {
+    _notificationTimer?.cancel();
+    NotificationService.instance.cancelFocusNotification();
     ref.read(sprintTimerProvider.notifier).stopSprint().ignore();
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
@@ -122,43 +117,15 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     context.go('/focus');
   }
 
-  /// Stops the sprint (logs partial time) and returns to the focus list without
-  /// changing the task state — it stays in the day plan as inProgress.
+  /// Stops the sprint and returns to the focus list without changing the task
+  /// state — it stays in the day plan as inProgress.
   Future<void> _onStop(String todoId) async {
+    _notificationTimer?.cancel();
+    NotificationService.instance.cancelFocusNotification();
     await ref.read(sprintTimerProvider.notifier).stopSprint();
     ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
     context.go('/focus');
-  }
-
-  Future<void> _onExit() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Leave Focus Mode?'),
-        content: const Text('Your sprint timer will keep running in the background.'),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Stay'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF2667B7),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-            child: const Text('Leave'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && mounted) {
-      ref.read(focusModeProvider.notifier).pauseFocus();
-      context.go('/focus');
-    }
   }
 
   @override
@@ -192,7 +159,6 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
               todo: todo,
               onComplete: () => _onComplete(todo.id),
               onStop: () => _onStop(todo.id),
-              onExit: _onExit,
             );
           },
         ),
@@ -210,13 +176,11 @@ class _FocusBody extends ConsumerStatefulWidget {
     required this.todo,
     required this.onComplete,
     required this.onStop,
-    required this.onExit,
   });
 
   final Todo todo;
   final VoidCallback onComplete;
   final VoidCallback onStop;
-  final VoidCallback onExit;
 
   @override
   ConsumerState<_FocusBody> createState() => _FocusBodyState();
@@ -267,32 +231,29 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header: task title + exit button
+        // Header: back button + task title
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 20, 4, 8),
+          padding: const EdgeInsets.fromLTRB(4, 12, 24, 4),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    todo.title,
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1A1A2E),
-                      height: 1.3,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
               IconButton(
-                tooltip: 'Exit Focus Mode',
-                icon: const Icon(Icons.close, color: Color(0xFF9CA3AF)),
-                onPressed: widget.onExit,
+                tooltip: 'Back',
+                icon: const Icon(Icons.arrow_back, color: Color(0xFF9CA3AF)),
+                onPressed: () => context.go('/focus'),
+              ),
+              Expanded(
+                child: Text(
+                  todo.title,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1A1A2E),
+                    height: 1.3,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
@@ -610,7 +571,7 @@ class _SprintRing extends StatelessWidget {
           progress: progress,
           ringColor: ringColor,
           trackColor: trackColor,
-          clockwise: !timer.isBreak,
+          clockwise: timer.isOvertime != timer.isBreak,
         ),
         child: Center(
           child: Text(

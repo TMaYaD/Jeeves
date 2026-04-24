@@ -249,13 +249,8 @@ class NotificationService {
   /// replaces the previous notification on Android.
   Future<void> showFocusNotification({
     required String title,
-    required Duration elapsed,
+    required String body,
   }) async {
-    final h = elapsed.inHours.toString().padLeft(2, '0');
-    final m = (elapsed.inMinutes % 60).toString().padLeft(2, '0');
-    final s = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
-    final elapsedStr = '$h:$m:$s';
-
     const android = AndroidNotificationDetails(
       'focus_mode',
       'Focus Mode',
@@ -270,8 +265,8 @@ class NotificationService {
 
     await _plugin.show(
       id: _kFocusId,
-      title: 'In Focus: $title',
-      body: 'Elapsed: $elapsedStr',
+      title: title,
+      body: body,
       payload: 'focus',
       notificationDetails: const NotificationDetails(android: android, iOS: iOS),
     );

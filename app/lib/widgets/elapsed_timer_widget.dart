@@ -47,66 +47,17 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     return pool[rng.nextInt(pool.length)];
   }
 
-  /// Returns a Jeeves-flavoured phrase shown when < 5 min remain in a sprint.
-  static String jeevesSprintNearEndPhrase(Duration remaining, {int? seed}) {
-    final m = remaining.inMinutes;
-    final String timeStr;
-    if (remaining.inSeconds <= 10) {
-      timeStr = 'moments';
-    } else if (m == 0) {
-      timeStr = 'less than a minute';
-    } else if (m == 1) {
-      timeStr = 'one minute';
-    } else {
-      timeStr = '$m minutes';
-    }
-
-    final pool = [
-      'Nearly there, sir. {t} remaining — a break will be in order.',
-      'The sprint draws to a close, sir. {t} to go.',
-      'Almost done, sir — {t} remaining. One shall insist on a rest.',
-      '{t} left, sir. One ventures to suggest a reprieve is imminent.',
-      'One more push, sir. {t} remains.',
-    ];
-    final rng = seed == null ? _random : Random(seed);
-    return pool[rng.nextInt(pool.length)].replaceAll('{t}', timeStr);
-  }
-
-  /// Returns a Jeeves-flavoured phrase for an active break with [remaining] time.
-  static String jeevesBreakPhrase(Duration remaining, {int? seed}) {
-    final m = remaining.inMinutes;
-    final String timeStr;
-    if (remaining.inSeconds <= 10) {
-      timeStr = 'moments';
-    } else if (m == 0) {
-      timeStr = 'less than a minute';
-    } else if (m == 1) {
-      timeStr = 'one minute';
-    } else {
-      timeStr = '$m minutes';
-    }
-
-    final pool = [
-      'A spot of tea is in order, sir. {t} remaining.',
-      'Perhaps a brief constitutional, sir. {t} remains.',
-      'Stretch the legs, sir — {t} remains.',
-      'Step away from the desk, sir. {t} of rest remain.',
-      'One insists on tea, sir. {t} remaining.',
-      'A brisk walk would serve you well, sir. {t} remains.',
-      'The kettle awaits, sir. {t} of respite remain.',
-    ];
-    final rng = seed == null ? _random : Random(seed);
-    return pool[rng.nextInt(pool.length)].replaceAll('{t}', timeStr);
-  }
-
-  /// Returns a Jeeves-flavoured phrase for the final 60 seconds of a break.
-  static String jeevesBreakEndingPhrase({int? seed}) {
-    final pool = [
-      'The task awaits, sir. Time to return.',
-      'Back to the grindstone, sir.',
-      "One's rest is concluded, sir. The work calls.",
-      'Recharged and ready, sir? The task awaits.',
-      "Break's end, sir. Onward.",
+  /// Returns a Jeeves-flavoured break encouragement with no specific time —
+  /// seeded on [sprintNumber] so the phrase changes each sprint.
+  static String jeevesBreakEncouragement({int? seed}) {
+    const pool = [
+      'A spot of tea is in order, sir.',
+      'Perhaps a brief constitutional, sir.',
+      'Stretch the legs, sir.',
+      'Step away from the desk, sir.',
+      'One insists on tea, sir.',
+      'A brisk walk would serve you well, sir.',
+      'The kettle awaits, sir.',
     ];
     final rng = seed == null ? _random : Random(seed);
     return pool[rng.nextInt(pool.length)];
@@ -309,18 +260,12 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
       );
     }
 
-    // Break countdown — tea and exercise copy.
+    // Break countdown — encouragement without a countdown.
     if (sprintState.isBreak) {
-      final phrase = sprintState.remaining.inSeconds <= 60
-          ? ElapsedTimerWidget.jeevesBreakEndingPhrase(
-              seed: sprintState.sprintNumber,
-            )
-          : ElapsedTimerWidget.jeevesBreakPhrase(
-              sprintState.remaining,
-              seed: sprintState.sprintNumber,
-            );
       return _buildBanner(
-        phrase,
+        ElapsedTimerWidget.jeevesBreakEncouragement(
+          seed: sprintState.sprintNumber,
+        ),
         icon: Icons.self_improvement,
         iconColor: const Color(0xFF10B981),
       );
@@ -335,19 +280,6 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
         ),
         icon: Icons.timer_outlined,
         iconColor: const Color(0xFFF59E0B),
-      );
-    }
-
-    // Sprint near end — suggest the coming break.
-    if (sprintState.isFocus && sprintState.remaining.inMinutes < 5) {
-      final phrase = ElapsedTimerWidget.jeevesSprintNearEndPhrase(
-        sprintState.remaining,
-        seed: sprintState.sprintNumber,
-      );
-      return _buildBanner(
-        phrase,
-        icon: Icons.timer_outlined,
-        iconColor: const Color(0xFF2563EB),
       );
     }
 
