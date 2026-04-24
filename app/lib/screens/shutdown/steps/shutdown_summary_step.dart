@@ -2,7 +2,6 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
 
@@ -10,9 +9,11 @@ import '../../../providers/evening_shutdown_provider.dart';
 ///
 /// Displays completion counts, total focus time, and estimation accuracy so
 /// the user can reflect on the day before finalising. The "Close Day" button
-/// persists completion state and returns the user to the inbox.
+/// persists completion state and triggers [onCloseDay].
 class ShutdownSummaryStep extends ConsumerWidget {
-  const ShutdownSummaryStep({super.key});
+  const ShutdownSummaryStep({super.key, required this.onCloseDay});
+
+  final VoidCallback onCloseDay;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -74,7 +75,7 @@ class ShutdownSummaryStep extends ConsumerWidget {
           _CloseDayButton(
             onTap: () async {
               await ref.read(eveningShutdownProvider.notifier).closeDay();
-              if (context.mounted) context.go('/inbox');
+              if (context.mounted) onCloseDay();
             },
           ),
           const SizedBox(height: 16),

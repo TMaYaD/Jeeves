@@ -6,7 +6,10 @@
 /// - Back / Next navigation buttons at the bottom (hidden on the last step).
 library;
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/evening_shutdown_provider.dart';
@@ -24,6 +27,9 @@ class ShutdownRitualScreen extends ConsumerStatefulWidget {
 
 class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
   late final PageController _pageController;
+
+  int? _resolveInitialTotal;
+  bool _showingGoodNight = false;
 
   static const _stepTitles = [
     'Review Your Day',
@@ -45,8 +51,12 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     super.dispose();
   }
 
+  void _triggerGoodNight() => setState(() => _showingGoodNight = true);
+
   @override
   Widget build(BuildContext context) {
+    if (_showingGoodNight) return const _GoodNightScreen();
+
     final shutdownState = ref.watch(eveningShutdownProvider);
     final notifier = ref.read(eveningShutdownProvider.notifier);
     final step = shutdownState.currentStep;
@@ -61,20 +71,43 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
       }
     });
 
+    // Latch the initial unfinished count once so the resolve progress fills correctly.
+    ref.listen<AsyncValue<List<Todo>>>(unfinishedSelectedTodayProvider,
+        (_, next) {
+      final tasks = next.asData?.value;
+      if (tasks != null && tasks.isNotEmpty && _resolveInitialTotal == null) {
+        setState(() => _resolveInitialTotal = tasks.length);
+      }
+    });
+
+    double? resolveProgress;
+    if (step == 1 && _resolveInitialTotal != null && _resolveInitialTotal! > 0) {
+      final current =
+          ref.watch(unfinishedSelectedTodayProvider).asData?.value.length;
+      if (current != null) {
+        final resolved = _resolveInitialTotal! - current;
+        resolveProgress = (resolved / _resolveInitialTotal!).clamp(0.0, 1.0);
+      }
+    }
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
         child: Column(
           children: [
-            _ShutdownHeader(step: step, stepTitle: _stepTitles[step]),
+            _ShutdownHeader(
+              step: step,
+              stepTitle: _stepTitles[step],
+              activeStepProgress: resolveProgress,
+            ),
             Expanded(
               child: PageView(
                 controller: _pageController,
                 physics: const NeverScrollableScrollPhysics(),
-                children: const [
-                  CompletedReviewStep(),
-                  UnfinishedTasksStep(),
-                  ShutdownSummaryStep(),
+                children: [
+                  const CompletedReviewStep(),
+                  const UnfinishedTasksStep(),
+                  ShutdownSummaryStep(onCloseDay: _triggerGoodNight),
                 ],
               ),
             ),
@@ -109,10 +142,15 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
 // ---------------------------------------------------------------------------
 
 class _ShutdownHeader extends StatelessWidget {
-  const _ShutdownHeader({required this.step, required this.stepTitle});
+  const _ShutdownHeader({
+    required this.step,
+    required this.stepTitle,
+    this.activeStepProgress,
+  });
 
   final int step;
   final String stepTitle;
+  final double? activeStepProgress;
 
   @override
   Widget build(BuildContext context) {
@@ -147,7 +185,11 @@ class _ShutdownHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _SegmentedProgressBar(currentStep: step, totalSteps: 3),
+          _SegmentedProgressBar(
+            currentStep: step,
+            totalSteps: 3,
+            activeStepProgress: activeStepProgress,
+          ),
           const SizedBox(height: 4),
           Text(
             'Step ${step + 1} of 3',
@@ -161,21 +203,44 @@ class _ShutdownHeader extends StatelessWidget {
 }
 
 class _SegmentedProgressBar extends StatelessWidget {
-  const _SegmentedProgressBar(
-      {required this.currentStep, required this.totalSteps});
+  const _SegmentedProgressBar({
+    required this.currentStep,
+    required this.totalSteps,
+    this.activeStepProgress,
+  });
 
   final int currentStep;
   final int totalSteps;
 
-  Widget _buildBar(bool completed, bool active) {
-    final color = completed || active
-        ? const Color(0xFF1E3A5F)
-        : const Color(0xFFE5E7EB);
+  /// If set, the active step renders as a partial fill (0.0–1.0) instead of solid.
+  final double? activeStepProgress;
 
+  Widget _buildBar(bool completed, bool active, double? progress) {
+    if (completed) {
+      return Container(
+        height: 4,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E3A5F),
+          borderRadius: BorderRadius.circular(2),
+        ),
+      );
+    }
+    if (active && progress != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(2),
+        child: LinearProgressIndicator(
+          value: progress,
+          minHeight: 4,
+          backgroundColor: const Color(0xFFE5E7EB),
+          valueColor:
+              const AlwaysStoppedAnimation<Color>(Color(0xFF1E3A5F)),
+        ),
+      );
+    }
     return Container(
       height: 4,
       decoration: BoxDecoration(
-        color: color,
+        color: active ? const Color(0xFF1E3A5F) : const Color(0xFFE5E7EB),
         borderRadius: BorderRadius.circular(2),
       ),
     );
@@ -188,7 +253,11 @@ class _SegmentedProgressBar extends StatelessWidget {
         return Expanded(
           child: Padding(
             padding: EdgeInsets.only(right: i < totalSteps - 1 ? 4 : 0),
-            child: _buildBar(i < currentStep, i == currentStep),
+            child: _buildBar(
+              i < currentStep,
+              i == currentStep,
+              i == currentStep ? activeStepProgress : null,
+            ),
           ),
         );
       }),
@@ -238,6 +307,108 @@ class _ShutdownFooter extends StatelessWidget {
             child: const Text('Next'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Good-night screen: moon rise animation + Jeeves phrase + app close
+// ---------------------------------------------------------------------------
+
+class _GoodNightScreen extends StatefulWidget {
+  const _GoodNightScreen();
+
+  @override
+  State<_GoodNightScreen> createState() => _GoodNightScreenState();
+}
+
+class _GoodNightScreenState extends State<_GoodNightScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _slideY;
+  late final Animation<double> _fade;
+
+  static const _phrases = [
+    'Another day superbly managed, sir. Pleasant dreams.',
+    'Capital effort today, sir. I shall stand down for the evening.',
+    'The books are balanced and all tasks accounted for, sir. Good night.',
+    'Rest well, sir. Tomorrow\'s battles shall wait until morning.',
+    'Everything is in order, sir. I shall dim the lights.',
+    'A productive day by any measure, sir. Sleep well.',
+  ];
+
+  late final String _phrase;
+
+  @override
+  void initState() {
+    super.initState();
+    _phrase = _phrases[Random().nextInt(_phrases.length)];
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    );
+    _slideY = Tween<double>(begin: 64, end: 0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+    );
+    _fade = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeIn),
+    );
+    _controller.forward();
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) SystemNavigator.pop();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D1B2A),
+      body: SafeArea(
+        child: Center(
+          child: AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              return Opacity(
+                opacity: _fade.value,
+                child: Transform.translate(
+                  offset: Offset(0, _slideY.value),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 40),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.nightlight_round,
+                          size: 88,
+                          color: Color(0xFFE2C97E),
+                        ),
+                        const SizedBox(height: 36),
+                        Text(
+                          _phrase,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w300,
+                            fontStyle: FontStyle.italic,
+                            height: 1.6,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
       ),
     );
   }

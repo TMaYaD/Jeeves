@@ -12,6 +12,12 @@ class FocusScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final sessionDate = ref.watch(planningSessionDateProvider);
+    if (sessionDate != planningToday()) {
+      Future.microtask(
+          () => ref.read(planningSessionDateProvider.notifier).reset());
+    }
+
     final asyncSelected = ref.watch(todaySelectedTasksProvider);
 
     return Scaffold(
@@ -117,7 +123,7 @@ class FocusScreen extends ConsumerWidget {
                                   itemBuilder: (_) => const [
                                     PopupMenuItem(
                                       value: _FocusMenuAction.planDay,
-                                      child: Text('Plan the Day'),
+                                      child: Text('Re-plan'),
                                     ),
                                   ],
                                 ),

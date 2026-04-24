@@ -22,8 +22,6 @@ class UnfinishedTasksStep extends ConsumerStatefulWidget {
 }
 
 class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
-  // Captured on first non-empty emission; never decremented so the progress
-  // bar fills correctly as tasks are resolved one by one.
   int? _initialTotal;
 
   @override
@@ -56,8 +54,6 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
 
     final unfinished = asyncUnfinished.asData!.value;
 
-    // Latch the initial total once on first non-empty data so the progress
-    // bar denominator stays stable as tasks disappear from the list.
     if (_initialTotal == null && unfinished.isNotEmpty) {
       _initialTotal = unfinished.length;
     }
@@ -66,89 +62,18 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
       return _AllResolved(total: _initialTotal ?? 0);
     }
 
-    final total = _initialTotal!;
-    final resolved = total - unfinished.length;
     final current = unfinished.first;
     final notifier = ref.read(eveningShutdownProvider.notifier);
 
-    return Column(
-      children: [
-        _ProgressHeader(resolved: resolved, total: total),
-        const Divider(height: 1, color: Color(0xFFF3F4F6)),
-        Expanded(
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-            child: _TaskResolutionCard(
-              key: ValueKey(current.id),
-              todo: current,
-              onRollOver: () => notifier.rolloverTask(current.id),
-              onReturn: () => notifier.returnToNextActions(current.id),
-              onDefer: () => notifier.deferTask(current.id),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Progress header
-// ---------------------------------------------------------------------------
-
-class _ProgressHeader extends StatelessWidget {
-  const _ProgressHeader({required this.resolved, required this.total});
-
-  final int resolved;
-  final int total;
-
-  @override
-  Widget build(BuildContext context) {
-    final progress = total > 0 ? resolved / total : 0.0;
-    final remaining = total - resolved;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.pending_actions_outlined,
-                      size: 16, color: Color(0xFFD97706)),
-                  const SizedBox(width: 6),
-                  Text(
-                    '$remaining task${remaining == 1 ? '' : 's'} remaining',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF92400E),
-                    ),
-                  ),
-                ],
-              ),
-              Text(
-                '$resolved of $total resolved',
-                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(2),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 4,
-              backgroundColor: const Color(0xFFE5E7EB),
-              valueColor:
-                  const AlwaysStoppedAnimation<Color>(Color(0xFF1E3A5F)),
-            ),
-          ),
-        ],
+    return SingleChildScrollView(
+      physics: const ClampingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+      child: _TaskResolutionCard(
+        key: ValueKey(current.id),
+        todo: current,
+        onRollOver: () => notifier.rolloverTask(current.id),
+        onReturn: () => notifier.returnToNextActions(current.id),
+        onDefer: () => notifier.deferTask(current.id),
       ),
     );
   }
@@ -265,7 +190,7 @@ class _TaskResolutionCard extends StatelessWidget {
         _ResolutionButton(
           label: 'Roll Over to Tomorrow',
           subtitle: "Add to tomorrow's plan",
-          icon: Icons.arrow_forward,
+          icon: Icons.center_focus_strong_outlined,
           color: const Color(0xFF2563EB),
           onTap: onRollOver,
         ),
@@ -273,7 +198,7 @@ class _TaskResolutionCard extends StatelessWidget {
         _ResolutionButton(
           label: 'Return to Next Actions',
           subtitle: 'Reappear in a future planning session',
-          icon: Icons.undo,
+          icon: Icons.check_circle_outline,
           color: const Color(0xFF6B7280),
           onTap: onReturn,
         ),
