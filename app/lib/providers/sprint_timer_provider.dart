@@ -174,36 +174,42 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
 
   /// Starts a focus sprint for [task] using the currently configured durations.
   Future<void> startSprint(Todo task) async {
-    _ticker?.cancel();
-    HapticFeedback.mediumImpact();
+    if (state.isProcessing) return;
+    state = state.copyWith(isProcessing: true);
+    try {
+      _ticker?.cancel();
+      HapticFeedback.mediumImpact();
 
-    final sm = _sprintMinutes;
-    final bm = _breakMinutes;
-    final sprintDur = Duration(minutes: sm);
+      final sm = _sprintMinutes;
+      final bm = _breakMinutes;
+      final sprintDur = Duration(minutes: sm);
 
-    final totalSprints = _calcTotalSprints(task.timeEstimate, sm);
-    final sprintNumber = _calcSprintNumber(task.timeSpentMinutes, sm);
-    _endTime = DateTime.now().add(sprintDur);
+      final totalSprints = _calcTotalSprints(task.timeEstimate, sm);
+      final sprintNumber = _calcSprintNumber(task.timeSpentMinutes, sm);
+      _endTime = DateTime.now().add(sprintDur);
 
-    // Carry forward lastBreakEndedAt so post-break cooldown survives
-    // starting a new sprint immediately after a break.
-    state = SprintTimerState(
-      phase: SprintPhase.focus,
-      activeTaskId: task.id,
-      activeTaskTitle: task.title,
-      sprintNumber: sprintNumber,
-      totalSprints: totalSprints,
-      remaining: sprintDur,
-      total: sprintDur,
-      sprintDurationMinutes: sm,
-      breakDurationMinutes: bm,
-      lastBreakEndedAt: state.lastBreakEndedAt,
-    );
+      // Carry forward lastBreakEndedAt so post-break cooldown survives
+      // starting a new sprint immediately after a break.
+      state = SprintTimerState(
+        phase: SprintPhase.focus,
+        activeTaskId: task.id,
+        activeTaskTitle: task.title,
+        sprintNumber: sprintNumber,
+        totalSprints: totalSprints,
+        remaining: sprintDur,
+        total: sprintDur,
+        sprintDurationMinutes: sm,
+        breakDurationMinutes: bm,
+        lastBreakEndedAt: state.lastBreakEndedAt,
+      );
 
-    await _persist(isPaused: false);
-    await _scheduleEndNotification(
-        _endTime!, isFocus: true, taskTitle: task.title);
-    _startTicker();
+      await _persist(isPaused: false);
+      await _scheduleEndNotification(
+          _endTime!, isFocus: true, taskTitle: task.title);
+      _startTicker();
+    } finally {
+      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+    }
   }
 
   /// Pauses the running timer.
