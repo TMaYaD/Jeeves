@@ -67,6 +67,7 @@ class _IdleView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(sprintTimerProvider.notifier);
+    final isProcessing = ref.watch(sprintTimerProvider).isProcessing;
 
     return Padding(
       padding: const EdgeInsets.all(32),
@@ -93,7 +94,7 @@ class _IdleView extends ConsumerWidget {
           ),
           const SizedBox(height: 28),
           FilledButton.icon(
-            onPressed: () => notifier.startSprint(todo),
+            onPressed: isProcessing ? null : () => notifier.startSprint(todo),
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF2563EB),
               minimumSize: const Size(200, 48),
