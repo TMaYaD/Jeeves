@@ -14,6 +14,17 @@
 - `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
 - Notes in `ActiveFocusScreen` are now rendered as interactive `MarkdownBody` (same `flutter_markdown_plus` stack as `TaskDetailScreen`). Checkboxes toggle and persist via `taskDetailNotifierProvider.updateNotes`; links launch via `url_launcher`. `_FocusBody` became a `ConsumerStatefulWidget` to hold `_notes` local state for optimistic checkbox updates, synced from `todo.notes` via `didUpdateWidget`.
 
+### SWS (#129)
+
+- MWA signer uses `MethodChannel('jeeves/mwa')` → `MwaPlugin.kt` → `mobile-wallet-adapter-clientlib-ktx:2.0.3`. `sign()` opens a new MWA session each call (shows wallet auth prompt twice per login); a follow-up should cache the auth token across `getPublicKey` + `sign` within a single session. The `signedPayload` field from `signMessages` is the raw signature bytes — if a wallet prepends a recovery byte, the backend's ed25519 verify will fail and the format expectation must be revisited.
+- `isSwsMode` const (in `auth_mode.dart`) is the canonical way to gate UI on auth mode — using `authImplProvider` type-checks (`is SwsAuthProvider`) is fragile because tests override the provider.
+- `LoginScreen` "Don't have an account?" is gated on `!isSwsMode`. In SWS mode the wallet is the identity; there is no registration step.
+
+- `PasswordLoginWidget` (ConsumerStatefulWidget) owns loading/error state and the conflict dialog — `LoginScreen` delegates entirely to `provider.buildLoginWidget(context)` without type-checking. All providers implement `buildLoginWidget` and manage their own state.
+- `AuthNotifier.login()` signature changed from `(String, String, {onConflict})` to `(Map<String, dynamic>, {onConflict})` — existing login_screen_test.dart fake notifiers needed updating.
+- No existing Redis client in the backend — created `backend/app/redis.py` as a thin `aioredis.from_url` wrapper with a `get_redis` FastAPI dependency, mirroring the `get_db` pattern.
+- `ProviderContainer` cannot be passed as `Ref` to auth providers in tests; override `authImplProvider` itself in the container and read from it so the `ref` captured inside the provider is the container's internal `Ref`.
+
 ## 2026-04-21
 
 - `flutter_local_notifications` v21 switched `show()` and `cancel()` from positional to named parameters. The existing `cancelReminder(id: id)` call was already correct (coincidentally); new notification methods must use `show(id:, title:, body:, notificationDetails:)` and `cancel(id:)`.

@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 
+import 'auth/auth_mode.dart';
 import 'providers/daily_planning_provider.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
@@ -22,6 +23,20 @@ final appRouter = GoRouter(
   initialLocation: '/inbox',
   refreshListenable: planningCompletionNotifier,
   redirect: (context, state) {
+    // In SWS mode the wallet is the identity — there is no email signup, so
+    // /register is meaningless. Bounce any stale deep link / nav entry back to
+    // /login where the "Connect wallet" flow lives.
+    if (isSwsMode && state.matchedLocation == '/register') {
+      return '/login';
+    }
+    // We intentionally do NOT force unauthenticated users to /login: the app
+    // is fully usable in local-only mode (logout() reassigns rows back to the
+    // 'local' user), so:
+    //   - signing out from Settings should stay on Settings
+    //   - a user on /login must be able to back out to /inbox and use the app
+    //     without creating an account
+    // /login remains reachable from Settings → "Sign in to sync" whenever the
+    // user does want to sync.
     if (state.matchedLocation.startsWith('/focus') &&
         !planningCompletionNotifier.value) {
       return '/planning';

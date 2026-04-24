@@ -52,6 +52,34 @@ The Jeeves FastAPI service is built following the [12-Factor App methodology](ht
 - **Principle:** Treat logs as event streams.
 - **Application:** The application logs to standard output/error (stdout/stderr). Log routing and storage are handled by the infrastructure layer, not the application itself.
 
+## Auth Provider Contract
+
+All authentication endpoints return the same `Token` response shape:
+
+```json
+{"access_token": "...", "refresh_token": "...", "token_type": "bearer"}
+```
+
+Existing password-based endpoints (`POST /session`, `POST /user`) are unchanged.  SWS adds two new endpoints under `/auth/sws/`:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/auth/sws/challenge` | POST | Issue a single-use Redis-backed nonce for a Solana public key |
+| `/auth/sws` | POST | Verify the ed25519 SIWS signature and return `Token` |
+
+### SWS verification
+
+1. **GETDEL nonce** — nonces are stored as `sws_nonce:{nonce}` in Redis with a 300-second TTL.  `GETDEL` is atomic: first use returns the stored data, second use returns `nil`, preventing replay.
+2. **Reconstruct the SIWS message** — the exact message format (defined in `SIWS_TEMPLATE` in `sws_strategy.py`) must match the Flutter client byte-for-byte.
+3. **Verify ed25519** — PyNaCl `VerifyKey` validates the signature; any failure raises HTTP 401.
+4. **Upsert user** — users are identified by `solana_public_key` (base58).  A new `User` row is created on first sign-in; subsequent sign-ins reuse the existing row.
+
+### User model invariants
+
+- Password users: `email` non-null, `hashed_password` non-null, `solana_public_key` null.
+- SWS users: `solana_public_key` non-null, `email` nullable, `hashed_password` nullable.
+- Both fields are nullable at the DB layer (migration 0010) to support mixed deployments.
+
 ### 12. Admin Processes
 - **Principle:** Run admin/management tasks as one-off processes.
 - **Application:** Database migrations (`alembic upgrade`) and administrative scripts are run as isolated one-off commands against a release within the same environment as the long-running processes.

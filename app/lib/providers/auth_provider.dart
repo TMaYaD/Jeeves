@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../auth/auth_mode.dart';
 import '../services/auth_service.dart';
 import '../services/migration_service.dart';
 
@@ -45,40 +46,23 @@ final authTokenProvider = AsyncNotifierProvider<AuthNotifier, String?>(
 class AuthNotifier extends AsyncNotifier<String?> {
   /// Cold-start: restore session from stored tokens.
   ///
-  /// 1. If the stored access token is still valid → use it.
-  /// 2. If it is expired (or absent) → try a silent refresh via the stored
-  ///    refresh token.
-  /// 3. If the refresh also fails → remain in local-only mode; never redirect
-  ///    to the login screen.
+  /// Delegates to the active [AuthProvider] so the restore logic is
+  /// provider-specific (password vs SWS both use JWTs but differ in how
+  /// the token was originally obtained).
   @override
   Future<String?> build() async {
-    final service = ref.watch(authServiceProvider);
-    final storedToken = await service.getToken();
+    final provider = ref.watch(authImplProvider);
+    final result = await provider.restore();
 
-    // Case 1: valid access token already in storage.
-    if (storedToken != null) {
-      final userId = _extractUserId(storedToken);
-      if (userId != null) {
-        ref.read(currentUserIdProvider.notifier).setUserId(userId);
-        authStateNotifier.value = true;
-        return storedToken;
-      }
+    if (result != null) {
+      ref.read(currentUserIdProvider.notifier).setUserId(result.userId);
+      authStateNotifier.value = true;
+      return result.accessToken;
     }
 
-    // Case 2: access token missing or expired — try silent refresh.
-    final refreshed = await service.refreshSession();
-    if (refreshed != null) {
-      final userId = _extractUserId(refreshed);
-      if (userId != null) {
-        ref.read(currentUserIdProvider.notifier).setUserId(userId);
-        authStateNotifier.value = true;
-        return refreshed;
-      }
-    }
-
-    // Case 3: no valid session — stay in local-only mode.
+    // No valid session — stay in local-only mode.
     try {
-      await service.clearTokens();
+      await ref.read(authServiceProvider).clearTokens();
     } catch (_) {}
     ref.read(currentUserIdProvider.notifier).reset();
     authStateNotifier.value = false;
@@ -87,28 +71,24 @@ class AuthNotifier extends AsyncNotifier<String?> {
 
   /// Sign in and optionally migrate local data to the authenticated account.
   ///
+  /// [params] shape depends on the active [AuthProvider]:
+  /// - password mode: `{'email': ..., 'password': ...}`
+  /// - sws mode: `{}` (the provider handles wallet interaction internally)
+  ///
   /// [onConflict] is called when the local device has data AND the server
-  /// already has data for this user.  The callback should show a dialog and
-  /// return the user's resolution choice.  If null the default is [merge].
+  /// already has data for this user.  Pass `null` to silently merge.
   Future<void> login(
-    String email,
-    String password, {
+    Map<String, dynamic> params, {
     Future<ConflictResolution> Function()? onConflict,
   }) async {
     state = const AsyncLoading();
     try {
-      final service = ref.read(authServiceProvider);
-      final (:accessToken, refreshToken: _) =
-          await service.login(email, password);
-      final userId = _extractUserId(accessToken);
-      if (userId == null) {
-        await service.clearTokens();
-        throw StateError('Server returned a token without a valid user ID.');
-      }
-      await _handleMigration(userId, onConflict: onConflict);
-      ref.read(currentUserIdProvider.notifier).setUserId(userId);
+      final provider = ref.read(authImplProvider);
+      final result = await provider.signIn(params);
+      await _handleMigration(result.userId, onConflict: onConflict);
+      ref.read(currentUserIdProvider.notifier).setUserId(result.userId);
       authStateNotifier.value = true;
-      state = AsyncData(accessToken);
+      state = AsyncData(result.accessToken);
     } catch (e, st) {
       state = AsyncError(e, st);
       rethrow;
@@ -116,6 +96,9 @@ class AuthNotifier extends AsyncNotifier<String?> {
   }
 
   /// Register a new account and migrate local data to the new user.
+  ///
+  /// Registration is still handled directly by [AuthService] because it is
+  /// password-only — SWS users are upserted on first login.
   Future<void> register(
     String email,
     String password, {
@@ -164,7 +147,9 @@ class AuthNotifier extends AsyncNotifier<String?> {
     }
 
     try {
-      await ref.read(authServiceProvider).logout();
+      final refreshToken =
+          await ref.read(authServiceProvider).getRefreshToken() ?? '';
+      await ref.read(authImplProvider).signOut(refreshToken);
     } catch (_) {
       // Best-effort; proceed with local state reset regardless.
     }

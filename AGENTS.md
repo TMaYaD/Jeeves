@@ -9,7 +9,7 @@ Generic instructions for AI agents. Copy-pasteable to any project.
    - `README.md` - Project overview
    - `docs/REQUIREMENTS.md` - What we're building
    - `docs/ARCHITECTURE.md` - How it's built
-   - `docs/TESTING.md` - Testing strategy
+   - `docs/TESTING.md` - Testing strategy (+ emulator tap coordinates for manual `adb` testing)
    - `docs/DESIGN.md` - Design system
 
 3. **Update Requirements:** Whenever the user asks for new requirements, update `docs/REQUIREMENTS.md` for future reference.
