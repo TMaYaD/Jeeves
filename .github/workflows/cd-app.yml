@@ -140,6 +140,51 @@ jobs:
             app/build/app/outputs/flutter-apk/app-production-release.apk
             app/build/app/outputs/bundle/release/app-production-release.aab
 
+  build-seeker:
+    name: Build Seeker (SWS)
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: app/.fvmrc
+          channel: stable
+          cache: true
+
+      - name: Stamp version into pubspec.yaml
+        run: |
+          sed -i "s/^version: .*/version: ${{ needs.version.outputs.pubspec_version }}/" pubspec.yaml
+
+      - run: flutter pub get
+      - run: dart run flutter_launcher_icons
+      - run: dart run build_runner build --delete-conflicting-outputs
+      # Seeker targets the Solana dApp Store, which distributes APKs (not AABs)
+      # and expects Sign-In With Solana as the identity mechanism. Reuse the
+      # production flavor and flip the auth mode at compile time.
+      - run: >-
+          flutter build apk --release --flavor production
+          --dart-define=JEEVES_AUTH_MODE=sws
+
+      - name: Rename APK for seeker variant
+        run: |
+          mv build/app/outputs/flutter-apk/app-production-release.apk \
+             build/app/outputs/flutter-apk/app-production-seeker-release.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: seeker-artifact
+          path: app/build/app/outputs/flutter-apk/app-production-seeker-release.apk
+
   build-web:
     name: Build Web
     needs: version
@@ -175,7 +220,7 @@ jobs:
 
   publish:
     name: Publish Release
-    needs: [version, build-android, build-web]
+    needs: [version, build-android, build-seeker, build-web]
     if: needs.version.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -188,6 +233,11 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          name: seeker-artifact
+          path: artifacts/seeker
+
+      - uses: actions/download-artifact@v8
+        with:
           name: web-artifact
           path: artifacts/web
 
@@ -197,6 +247,8 @@ jobs:
             "artifacts/android/jeeves-${{ needs.version.outputs.version }}.apk"
           mv artifacts/android/app-production-release.aab \
             "artifacts/android/jeeves-${{ needs.version.outputs.version }}.aab"
+          mv artifacts/seeker/app-production-seeker-release.apk \
+            "artifacts/seeker/jeeves-seeker-${{ needs.version.outputs.version }}.apk"
 
       - name: Publish to GitHub Releases
         env:
@@ -213,4 +265,5 @@ jobs:
             $PRERELEASE_FLAG \
             "artifacts/android/jeeves-${{ needs.version.outputs.version }}.apk" \
             "artifacts/android/jeeves-${{ needs.version.outputs.version }}.aab" \
+            "artifacts/seeker/jeeves-seeker-${{ needs.version.outputs.version }}.apk" \
             "artifacts/web/jeeves-web-${{ needs.version.outputs.version }}.tar.gz"
