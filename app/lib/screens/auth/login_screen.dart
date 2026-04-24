@@ -17,7 +17,7 @@ class LoginScreen extends ConsumerWidget {
           ? AppBar(
               backgroundColor: Colors.white,
               elevation: 0,
-              leading: CloseButton(onPressed: () => context.pop()),
+              leading: BackButton(onPressed: () => context.pop()),
             )
           : null,
       body: SafeArea(
