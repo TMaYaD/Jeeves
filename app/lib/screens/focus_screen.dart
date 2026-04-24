@@ -54,16 +54,12 @@ class FocusScreen extends ConsumerWidget {
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (err, _) => Center(child: Text('Error: $err')),
                 data: (tasks) {
-                  // Completed tasks leave the focus list.
-                  final active = tasks
-                      .where((t) => GtdState.fromString(t.state) != GtdState.done)
-                      .toList();
-                  final withDue = active.where((t) => t.dueDate != null).toList()
+                  final withDue = tasks.where((t) => t.dueDate != null).toList()
                     ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
-                  final scheduledNoDue = active
+                  final scheduledNoDue = tasks
                       .where((t) => t.dueDate == null && t.state == GtdState.scheduled.value)
                       .toList();
-                  final rest = active
+                  final rest = tasks
                       .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
                       .toList();
                   final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
@@ -143,17 +139,20 @@ class FocusScreen extends ConsumerWidget {
                             ],
                           ),
                           const SizedBox(height: 8),
-                          if (sortedTasks.isEmpty)
+                          if (planningDone && sortedTasks.isNotEmpty)
+                            ...sortedTasks.map((t) => _TaskRow(todo: t))
+                          else if (sortedTasks.isEmpty)
                             Padding(
                               padding: const EdgeInsets.symmetric(vertical: 16),
                               child: Text(
-                                'No tasks selected — plan your day to add some!',
-                                style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                                planningDone
+                                    ? 'All tasks cleared — have a great day!'
+                                    : 'No tasks selected — plan your day to add some!',
+                                style: TextStyle(
+                                    fontSize: 14, color: Colors.grey[400]),
                                 textAlign: TextAlign.center,
                               ),
-                            )
-                          else
-                            ...sortedTasks.map((t) => _TaskRow(todo: t)),
+                            ),
                           const SizedBox(height: 48),
                           if (showShutdownEntry)
                             OutlinedButton(
@@ -205,6 +204,13 @@ class FocusScreen extends ConsumerWidget {
                                 ],
                               ),
                             ),
+                          // Tasks pre-selected before today's planning (rolled over)
+                          if (!planningDone && sortedTasks.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            const _SectionLabel('CARRIED OVER FROM YESTERDAY'),
+                            const SizedBox(height: 8),
+                            ...sortedTasks.map((t) => _CarriedOverTaskRow(todo: t)),
+                          ],
                           const SizedBox(height: 32),
                         ],
                       );
@@ -352,5 +358,65 @@ class _StartButton extends ConsumerWidget {
       ),
       child: Text(label),
     );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: const TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 1.2,
+        color: Color(0xFF9CA3AF),
+      ),
+    );
+  }
+}
+
+/// Read-only row shown for tasks that were rolled over before today's planning.
+class _CarriedOverTaskRow extends StatelessWidget {
+  const _CarriedOverTaskRow({required this.todo});
+  final Todo todo;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          const Icon(Icons.update_outlined,
+              size: 14, color: Color(0xFFD1D5DB)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              todo.title,
+              style: const TextStyle(
+                fontSize: 15,
+                color: Color(0xFF9CA3AF),
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ),
+          if (todo.timeEstimate != null)
+            Text(
+              _fmt(todo.timeEstimate!),
+              style: const TextStyle(
+                  fontSize: 12, color: Color(0xFFD1D5DB)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _fmt(int m) {
+    if (m < 60) return '${m}m';
+    if (m % 60 == 0) return '${m ~/ 60}h';
+    return '${m ~/ 60}h ${m % 60}m';
   }
 }
