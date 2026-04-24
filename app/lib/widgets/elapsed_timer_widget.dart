@@ -32,23 +32,48 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   static String jeevesOvertimePhrase({required bool isFocus, int? seed}) {
     final pool = isFocus
         ? const [
-            'The sprint is done, sir. A break is in order.',
-            'Time is up, sir. One insists on a brief respite.',
-            'Your sprint has concluded. Might one suggest the pause button?',
-            'The work shall keep, sir. A rest is warranted.',
+            'The sprint is done, sir, and one must insist — a break, if you please.',
+            'Time is up, sir. Step away from the work. One must be firm.',
+            'The sprint has concluded, sir. One is quite firm on the matter of rest.',
+            'You have exceeded the sprint, sir. Put it down.',
           ]
         : const [
-            'The break is over, sir. Whenever you are ready.',
-            'One trusts you are sufficiently refreshed, sir.',
-            'Back to the grindstone at your convenience, sir.',
-            'The task awaits your return, sir.',
+            'The break is well and truly over, sir. One must insist you return.',
+            'One must be quite firm on this, sir — back to work, if you please.',
+            'The task has waited long enough, sir. One insists on your return.',
+            'Back to it, sir. One cannot allow further delay.',
           ];
     final rng = seed == null ? _random : Random(seed);
     return pool[rng.nextInt(pool.length)];
   }
 
-  /// Returns a Jeeves-flavoured break encouragement with no specific time —
-  /// seeded on [sprintNumber] so the phrase changes each sprint.
+  /// Returns a Jeeves-flavoured sprint near-end hint (last 15% of sprint).
+  static String jeevesSprintNearEndHint({int? seed}) {
+    const pool = [
+      'Nearly there, sir. A break will be in order.',
+      'The sprint draws to a close. One shall insist on a rest.',
+      'Almost done, sir. A reprieve is imminent.',
+      'One more push, sir, and then we rest.',
+      'The end approaches, sir. A well-earned break awaits.',
+    ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
+  }
+
+  /// Returns a Jeeves-flavoured break near-end hint (last 15% of break).
+  static String jeevesBreakNearEndHint({int? seed}) {
+    const pool = [
+      'Nearly refreshed, sir. The task awaits your return.',
+      'The break draws to a close, sir. Back to the fray, shortly.',
+      'Almost time, sir. The task will not attend to itself.',
+      'Back to it shortly, sir. One trusts you are suitably restored.',
+      'The reprieve is nearly spent, sir. Onwards.',
+    ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
+  }
+
+  /// Returns a Jeeves-flavoured break encouragement with no specific time.
   static String jeevesBreakEncouragement({int? seed}) {
     const pool = [
       'A spot of tea is in order, sir.',
@@ -248,13 +273,22 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
 
     if (!focusState.isActive) return const SizedBox.shrink();
 
-    // Break overtime — gently insist the user return to work.
+    final sprintSeed =
+        Object.hash(sprintState.activeTaskId, sprintState.sprintNumber);
+
+    // Break overtime — insist the user return to work.
     if (sprintState.phase == SprintPhase.breakOvertime) {
       return _buildBanner(
-        ElapsedTimerWidget.jeevesOvertimePhrase(
-          isFocus: false,
-          seed: sprintState.sprintNumber,
-        ),
+        ElapsedTimerWidget.jeevesOvertimePhrase(isFocus: false, seed: sprintSeed),
+        icon: Icons.self_improvement,
+        iconColor: const Color(0xFF10B981),
+      );
+    }
+
+    // Break near-end (last 15%) — nudge towards returning.
+    if (sprintState.isBreak && sprintState.progress <= 0.15) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesBreakNearEndHint(seed: sprintSeed),
         icon: Icons.self_improvement,
         iconColor: const Color(0xFF10B981),
       );
@@ -263,23 +297,27 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
     // Break countdown — encouragement without a countdown.
     if (sprintState.isBreak) {
       return _buildBanner(
-        ElapsedTimerWidget.jeevesBreakEncouragement(
-          seed: sprintState.sprintNumber,
-        ),
+        ElapsedTimerWidget.jeevesBreakEncouragement(seed: sprintSeed),
         icon: Icons.self_improvement,
         iconColor: const Color(0xFF10B981),
       );
     }
 
-    // Focus overtime — insist on a break.
+    // Focus overtime — urgently insist on a break.
     if (sprintState.phase == SprintPhase.focusOvertime) {
       return _buildBanner(
-        ElapsedTimerWidget.jeevesOvertimePhrase(
-          isFocus: true,
-          seed: sprintState.sprintNumber,
-        ),
+        ElapsedTimerWidget.jeevesOvertimePhrase(isFocus: true, seed: sprintSeed),
         icon: Icons.timer_outlined,
         iconColor: const Color(0xFFF59E0B),
+      );
+    }
+
+    // Sprint near-end (last 15%) — hint about the upcoming break.
+    if (sprintState.isFocus && sprintState.progress <= 0.15) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesSprintNearEndHint(seed: sprintSeed),
+        icon: Icons.timer_outlined,
+        iconColor: const Color(0xFF2563EB),
       );
     }
 
