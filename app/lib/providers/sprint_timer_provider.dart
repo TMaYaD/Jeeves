@@ -167,8 +167,6 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   int get _sprintMinutes =>
       ref.read(focusSettingsProvider).sprintDurationMinutes;
   int get _breakMinutes => ref.read(focusSettingsProvider).breakDurationMinutes;
-  Duration get _sprintDuration => Duration(minutes: _sprintMinutes);
-  Duration get _breakDuration => Duration(minutes: _breakMinutes);
 
   // ---------------------------------------------------------------------------
   // Public API

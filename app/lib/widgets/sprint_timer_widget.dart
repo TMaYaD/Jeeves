@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/focus_settings.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 
