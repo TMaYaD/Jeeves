@@ -3,8 +3,10 @@ import 'dart:math' as math;
 
 import 'package:drift/drift.dart' show Expression, Value;
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../database/gtd_database.dart' show TodosCompanion;
 import '../providers/auth_provider.dart';
@@ -410,20 +412,29 @@ class _NotesPage extends ConsumerStatefulWidget {
 
 class _NotesPageState extends ConsumerState<_NotesPage> {
   late final TextEditingController _ctrl;
+  late final FocusNode _focusNode;
   Timer? _saveTimer;
+  bool _isEditing = false;
 
   @override
   void initState() {
     super.initState();
     _ctrl = TextEditingController(text: widget.todo.notes ?? '');
-    _ctrl.addListener(_onChanged);
+    _focusNode = FocusNode();
+    _focusNode.addListener(() {
+      if (!_focusNode.hasFocus && _isEditing) {
+        setState(() => _isEditing = false);
+        _saveTimer?.cancel();
+        _save();
+      }
+    });
   }
 
   @override
   void dispose() {
     _saveTimer?.cancel();
-    _ctrl.removeListener(_onChanged);
     _ctrl.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -447,6 +458,20 @@ class _NotesPageState extends ConsumerState<_NotesPage> {
     } catch (_) {}
   }
 
+  void _startEditing() {
+    setState(() => _isEditing = true);
+    _ctrl.addListener(_onChanged);
+    Future.delayed(const Duration(milliseconds: 50), _focusNode.requestFocus);
+  }
+
+  void _stopEditing() {
+    _ctrl.removeListener(_onChanged);
+    _focusNode.unfocus();
+    setState(() => _isEditing = false);
+    _saveTimer?.cancel();
+    _save();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -454,33 +479,142 @@ class _NotesPageState extends ConsumerState<_NotesPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Notes',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF374151),
-            ),
+          Row(
+            children: [
+              const Text(
+                'Notes',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF374151),
+                ),
+              ),
+              const Spacer(),
+              if (_isEditing)
+                IconButton(
+                  icon: const Icon(Icons.check_rounded,
+                      size: 18, color: Color(0xFF2563EB)),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: _stopEditing,
+                )
+              else
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined,
+                      size: 18, color: Color(0xFF9CA3AF)),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  onPressed: _startEditing,
+                ),
+            ],
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: TextField(
-              controller: _ctrl,
-              maxLines: null,
-              expands: true,
-              textAlignVertical: TextAlignVertical.top,
-              style: const TextStyle(
-                fontSize: 15,
-                color: Color(0xFF374151),
-                height: 1.6,
-              ),
-              decoration: const InputDecoration(
-                hintText: 'Jot down ideas, links, or sub-tasks…',
-                hintStyle: TextStyle(color: Color(0xFFD1D5DB)),
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
+            child: _isEditing
+                ? TextField(
+                    controller: _ctrl,
+                    focusNode: _focusNode,
+                    maxLines: null,
+                    expands: true,
+                    textAlignVertical: TextAlignVertical.top,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      color: Color(0xFF374151),
+                      height: 1.6,
+                    ),
+                    decoration: const InputDecoration(
+                      hintText: 'Jot down ideas, links, or sub-tasks…',
+                      hintStyle: TextStyle(color: Color(0xFFD1D5DB)),
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  )
+                : _ctrl.text.trim().isEmpty
+                    ? GestureDetector(
+                        onTap: _startEditing,
+                        child: const Text(
+                          'Jot down ideas, links, or sub-tasks…',
+                          style: TextStyle(
+                              fontSize: 15, color: Color(0xFFD1D5DB), height: 1.6),
+                        ),
+                      )
+                    : SingleChildScrollView(
+                        child: (() {
+                          int checkboxIndex = 0;
+                          return MarkdownBody(
+                            data: _ctrl.text,
+                            selectable: true,
+                            styleSheet: MarkdownStyleSheet(
+                              p: const TextStyle(
+                                  fontSize: 15,
+                                  height: 1.6,
+                                  color: Color(0xFF374151)),
+                              h1: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF1F2937)),
+                              h2: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF1F2937)),
+                              h3: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF1F2937)),
+                              strong: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF1F2937)),
+                              em: const TextStyle(fontStyle: FontStyle.italic),
+                              listBullet:
+                                  const TextStyle(color: Color(0xFF9CA3AF)),
+                            ),
+                            checkboxBuilder: (bool value) {
+                              final currentIdx = checkboxIndex++;
+                              return SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: Checkbox(
+                                  value: value,
+                                  onChanged: (v) {
+                                    if (v == null) return;
+                                    final lines = _ctrl.text.split('\n');
+                                    int found = 0;
+                                    for (int i = 0; i < lines.length; i++) {
+                                      final line = lines[i];
+                                      if (RegExp(r'^\s*[-*+]\s+\[[ xX]\]')
+                                              .hasMatch(line) ||
+                                          RegExp(r'^\s*\d+\.\s+\[[ xX]\]')
+                                              .hasMatch(line)) {
+                                        if (found == currentIdx) {
+                                          lines[i] = v
+                                              ? line
+                                                  .replaceFirst('[ ]', '[x]')
+                                                  .replaceFirst('[X]', '[x]')
+                                              : line
+                                                  .replaceFirst('[x]', '[ ]')
+                                                  .replaceFirst('[X]', '[ ]');
+                                          break;
+                                        }
+                                        found++;
+                                      }
+                                    }
+                                    final updated = lines.join('\n');
+                                    setState(() => _ctrl.text = updated);
+                                    _save();
+                                  },
+                                ),
+                              );
+                            },
+                            onTapLink: (text, href, title) {
+                              if (href != null) {
+                                launchUrl(Uri.parse(href),
+                                        mode: LaunchMode.externalApplication)
+                                    .ignore();
+                              }
+                            },
+                          );
+                        })(),
+                      ),
           ),
         ],
       ),
