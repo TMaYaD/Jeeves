@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-04-25
+
+- PR #140 (shutdown ritual) put on hold pending #185 (FocusSession entity refactor). The bypass DAO methods added here (`rolloverTask`, `returnToNextActions`, `deferTaskAtShutdown`) violate the FSM because the current model has no `Focus` state — they're workarounds that #185 will retire by making these normal session transitions. Resuming after #185 and #182 (TimeLog) land.
+
 ## 2026-04-23
 
 - Issue #154: `ref.read(...).update()` in `initState` throws "Tried to modify a provider while the widget tree was building" on a fresh install because Riverpod guards synchronous provider writes during the build phase. Fix: make `searchQueryProvider` `autoDispose` so the state resets to `SearchQuery()` automatically when the screen is popped — no manual `initState` reset needed.
