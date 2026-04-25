@@ -5,7 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../providers/daily_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
-import '../providers/sprint_timer_provider.dart' show findBatchingCandidates;
+import '../providers/sprint_timer_provider.dart'
+    show findBatchingCandidates, sprintTimerProvider;
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
@@ -356,6 +357,15 @@ class _StartButton extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return FilledButton(
       onPressed: () async {
+        // If the sprint timer is already running for this task (e.g. we are
+        // mid-break or in overtime), just navigate back to the active screen
+        // rather than resetting the session.
+        final sprint = ref.read(sprintTimerProvider);
+        if (sprint.isActive && sprint.activeTaskId == todoId) {
+          if (context.mounted) context.push('/focus/active');
+          return;
+        }
+
         final notifier = ref.read(focusModeProvider.notifier);
         if (inProgressSince != null) {
           // Task is already inProgress — restore session from DB timestamp.

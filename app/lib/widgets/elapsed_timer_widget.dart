@@ -27,6 +27,46 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   /// [seed] makes template selection deterministic. The widget seeds from
   /// the active task id plus the current bucket so the phrase is stable
   /// per-task-per-bucket and doesn't flip mid-glance on rebuilds.
+  /// Returns the phase-aware Jeeves phrase that mirrors what the widget shows
+  /// on screen. Suitable for use in notifications, which run outside the
+  /// widget tree.
+  static String phaseAwarePhrase({
+    required SprintTimerState sprintState,
+    required Duration elapsed,
+    required String? activeTodoId,
+    bool isPaused = false,
+  }) {
+    final sprintSeed =
+        Object.hash(sprintState.activeTaskId, sprintState.sprintNumber);
+
+    if (sprintState.phase == SprintPhase.breakOvertime) {
+      return jeevesOvertimePhrase(isFocus: false, seed: sprintSeed);
+    }
+    if (sprintState.isBreak && sprintState.progress <= 0.15) {
+      return jeevesBreakNearEndHint(seed: sprintSeed);
+    }
+    if (sprintState.isBreak) {
+      return jeevesBreakEncouragement(seed: sprintSeed);
+    }
+    if (sprintState.phase == SprintPhase.focusOvertime) {
+      return jeevesOvertimePhrase(isFocus: true, seed: sprintSeed);
+    }
+    if (sprintState.isFocus && sprintState.progress <= 0.15) {
+      return jeevesSprintNearEndHint(seed: sprintSeed);
+    }
+
+    final m = elapsed.inMinutes;
+    final bucketSize = m < 15 ? 5 : (m < 120 ? 15 : 30);
+    final bucket = m ~/ bucketSize;
+    final seed = Object.hash(activeTodoId, bucket, bucketSize);
+    return jeevesPhrase(
+      elapsed,
+      isPaused: isPaused,
+      seed: seed,
+      suppressRest: sprintState.isPostBreakCooldown,
+    );
+  }
+
   /// Returns a Jeeves-flavoured phrase when the sprint or break time has elapsed
   /// and the user has not yet transitioned (overtime / waiting state).
   static String jeevesOvertimePhrase({required bool isFocus, int? seed}) {
@@ -350,34 +390,50 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
           letterSpacing: 0.1,
         );
 
-    // Fixed height keeps the banner's footprint stable regardless of how many
-    // lines the phrase wraps to — short copy leaves internal whitespace,
-    // long copy fills it, but the clock ring never shifts.
-    return Container(
-      height: 90,
-      decoration: const BoxDecoration(
-        color: _bg,
-        border: Border(
-          top: BorderSide(color: Color(0x228B6B3E)),
-          bottom: BorderSide(color: Color(0x228B6B3E)),
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-      child: Row(
+    // Outer SizedBox reserves a fixed footprint so the clock ring above never
+    // shifts when the phrase changes length. Height = 3× line height (27px)
+    // plus vertical padding (18+18), with a few extra pixels for descenders
+    // ('g', 'p', 'y' bottoms). The inner parchment Container is top-anchored
+    // and auto-sizes; content that grows beyond the outer height is clipped.
+    const outerHeight = 120.0; // ~3-line budget + padding + descender margin
+    return SizedBox(
+      height: outerHeight,
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
         children: [
-          ScaleTransition(
-            scale: Tween<double>(begin: 0.92, end: 1.08).animate(
-              CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
-            ),
-            child: Icon(icon, size: 24, color: iconColor),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              phrase,
-              style: voiceStyle,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              decoration: const BoxDecoration(
+                color: _bg,
+                border: Border(
+                  top: BorderSide(color: Color(0x228B6B3E)),
+                  bottom: BorderSide(color: Color(0x228B6B3E)),
+                ),
+              ),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ScaleTransition(
+                    scale: Tween<double>(begin: 0.92, end: 1.08).animate(
+                      CurvedAnimation(
+                          parent: _pulse, curve: Curves.easeInOut),
+                    ),
+                    child: Icon(icon, size: 24, color: iconColor),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      phrase,
+                      style: voiceStyle,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

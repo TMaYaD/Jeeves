@@ -63,11 +63,13 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     if (todoId == null) return;
     final title =
         ref.read(taskDetailTodoProvider(todoId)).value?.title ?? 'Focus Task';
-    final m = focusState.elapsed.inMinutes;
-    final bucketSize = m < 15 ? 5 : (m < 120 ? 15 : 30);
-    final bucket = m ~/ bucketSize;
-    final seed = Object.hash(todoId, bucket, bucketSize);
-    final phrase = ElapsedTimerWidget.jeevesPhrase(focusState.elapsed, seed: seed);
+    final sprintState = ref.read(sprintTimerProvider);
+    final phrase = ElapsedTimerWidget.phaseAwarePhrase(
+      sprintState: sprintState,
+      elapsed: focusState.elapsed,
+      activeTodoId: todoId,
+      isPaused: focusState.isPaused,
+    );
     NotificationService.instance.showFocusNotification(
       title: 'In Focus: $title',
       body: phrase,
