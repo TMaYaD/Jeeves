@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -15,10 +15,24 @@ def _uuid() -> str:
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "(solana_public_key IS NOT NULL) OR "
+            "(email IS NOT NULL AND hashed_password IS NOT NULL)",
+            name="ck_users_has_valid_auth_identity",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(String, nullable=False)
+    # Nullable to support SWS (Solana) users who authenticate without a
+    # password.  Password users always have a non-null email + hashed_password.
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, nullable=True)
+    hashed_password: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Solana public key (base58) for Sign-In With Solana users.  Null for
+    # password-based users.
+    solana_public_key: Mapped[str | None] = mapped_column(
+        String, unique=True, index=True, nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

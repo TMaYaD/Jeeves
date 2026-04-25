@@ -1,12 +1,13 @@
 import 'package:go_router/go_router.dart';
 
-import 'providers/daily_planning_provider.dart';
+import 'auth/auth_mode.dart';
+import 'providers/focus_session_planning_provider.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next_actions/next_actions_screen.dart';
-import 'screens/planning/planning_ritual_screen.dart';
+import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/scheduled/scheduled_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
@@ -20,11 +21,26 @@ import 'screens/search/search_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
-  refreshListenable: planningCompletionNotifier,
+  refreshListenable: focusSessionPlanningCompletionNotifier,
   redirect: (context, state) {
-    if (state.matchedLocation.startsWith('/focus') &&
-        !planningCompletionNotifier.value) {
-      return '/planning';
+    // In SWS mode the wallet is the identity — there is no email signup, so
+    // /register is meaningless. Bounce any stale deep link / nav entry back to
+    // /login where the "Connect wallet" flow lives.
+    if (isSwsMode && state.matchedLocation == '/register') {
+      return '/login';
+    }
+    // We intentionally do NOT force unauthenticated users to /login: the app
+    // is fully usable in local-only mode (logout() reassigns rows back to the
+    // 'local' user), so:
+    //   - signing out from Settings should stay on Settings
+    //   - a user on /login must be able to back out to /inbox and use the app
+    //     without creating an account
+    // /login remains reachable from Settings → "Sign in to sync" whenever the
+    // user does want to sync.
+    final isFocusRoute = state.matchedLocation == '/focus' ||
+        state.matchedLocation.startsWith('/focus/');
+    if (isFocusRoute && !focusSessionPlanningCompletionNotifier.value) {
+      return '/focus-session-planning';
     }
     return null;
   },
@@ -38,8 +54,8 @@ final appRouter = GoRouter(
       builder: (context, state) => const RegisterScreen(),
     ),
     GoRoute(
-      path: '/planning',
-      builder: (context, state) => const PlanningRitualScreen(),
+      path: '/focus-session-planning',
+      builder: (context, state) => const FocusSessionPlanningScreen(),
     ),
     GoRoute(
       path: '/settings',

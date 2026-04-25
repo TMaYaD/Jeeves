@@ -2,15 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../providers/daily_planning_provider.dart';
+import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
+import '../providers/focus_settings_provider.dart';
+import '../providers/sprint_timer_provider.dart'
+    show findBatchingCandidates, sprintTimerProvider;
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncSelected = ref.watch(todaySelectedTasksProvider);
+    final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
 
     return Scaffold(
       body: SafeArea(
@@ -46,6 +49,8 @@ class FocusScreen extends ConsumerWidget {
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (err, _) => Center(child: Text('Error: $err')),
                 data: (tasks) {
+                  final sprintMinutes =
+                      ref.watch(focusSettingsProvider).sprintDurationMinutes;
                   final withDue = tasks.where((t) => t.dueDate != null).toList()
                     ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
                   final scheduledNoDue = tasks
@@ -55,6 +60,11 @@ class FocusScreen extends ConsumerWidget {
                       .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
                       .toList();
                   final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
+
+                  final batchCandidates = findBatchingCandidates(
+                    tasks,
+                    sprintMinutes: sprintMinutes,
+                  );
 
                   return ListView(
                     physics: const ClampingScrollPhysics(),
@@ -95,6 +105,12 @@ class FocusScreen extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(height: 8),
+                      // Batching suggestion banner.
+                      if (batchCandidates.isNotEmpty)
+                        _BatchSuggestionBanner(
+                          candidates: batchCandidates,
+                          sprintMinutes: sprintMinutes,
+                        ),
                       if (sortedTasks.isEmpty)
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -134,11 +150,15 @@ class FocusScreen extends ConsumerWidget {
   }
 
   Future<void> _replanDay(BuildContext context, WidgetRef ref) async {
-    await ref.read(dailyPlanningProvider.notifier).reEnterPlanning();
+    await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
     if (!context.mounted) return;
-    context.go('/planning');
+    context.go('/focus-session-planning');
   }
 }
+
+// ---------------------------------------------------------------------------
+// Task row
+// ---------------------------------------------------------------------------
 
 class _TaskRow extends ConsumerWidget {
   const _TaskRow({required this.todo});
@@ -146,6 +166,8 @@ class _TaskRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final sprintMinutes =
+        ref.watch(focusSettingsProvider).sprintDurationMinutes;
     final estimate = todo.timeEstimate;
     final gtdState = GtdState.fromString(todo.state);
     final isDone = gtdState == GtdState.done;
@@ -192,14 +214,26 @@ class _TaskRow extends ConsumerWidget {
                     ],
                     if (estimate != null) ...[
                       const SizedBox(height: 2),
-                      Text(
-                        estimate < 60
-                            ? '${estimate}m'
-                            : estimate % 60 == 0
-                                ? '${estimate ~/ 60}h'
-                                : '${estimate ~/ 60}h ${estimate % 60}m',
-                        style: const TextStyle(
-                            fontSize: 12, color: Color(0xFF9CA3AF)),
+                      Row(
+                        children: [
+                          Text(
+                            estimate < 60
+                                ? '${estimate}m'
+                                : estimate % 60 == 0
+                                    ? '${estimate ~/ 60}h'
+                                    : '${estimate ~/ 60}h ${estimate % 60}m',
+                            style: const TextStyle(
+                                fontSize: 12, color: Color(0xFF9CA3AF)),
+                          ),
+                          if (estimate > sprintMinutes) ...[
+                            const SizedBox(width: 6),
+                            Text(
+                              '· ${(estimate / sprintMinutes).ceil()} sprints',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Color(0xFF9CA3AF)),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ],
@@ -221,6 +255,85 @@ class _TaskRow extends ConsumerWidget {
             )
           else
             _StartButton(label: 'Start', todoId: todo.id),
+          const SizedBox(width: 4),
+          const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Batching suggestion banner
+// ---------------------------------------------------------------------------
+
+class _BatchSuggestionBanner extends StatefulWidget {
+  const _BatchSuggestionBanner({
+    required this.candidates,
+    required this.sprintMinutes,
+  });
+  final List<Todo> candidates;
+  final int sprintMinutes;
+
+  @override
+  State<_BatchSuggestionBanner> createState() => _BatchSuggestionBannerState();
+}
+
+class _BatchSuggestionBannerState extends State<_BatchSuggestionBanner> {
+  bool _dismissed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+
+    final count = widget.candidates.length;
+    final total = widget.candidates.fold<int>(
+        0, (sum, t) => sum + (t.timeEstimate ?? 0));
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFDE68A)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.lightbulb_outline_rounded,
+              size: 18, color: Color(0xFFD97706)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Batch $count micro-tasks into one sprint',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF92400E),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$count tasks · ${total}m total — fits in one ${widget.sprintMinutes}-min sprint.',
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFFB45309)),
+                ),
+              ],
+            ),
+          ),
+          Semantics(
+            button: true,
+            label: 'Dismiss batching suggestion',
+            child: GestureDetector(
+              onTap: () => setState(() => _dismissed = true),
+              child: const Icon(Icons.close_rounded,
+                  size: 16, color: Color(0xFFD97706)),
+            ),
+          ),
         ],
       ),
     );
@@ -244,6 +357,15 @@ class _StartButton extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return FilledButton(
       onPressed: () async {
+        // If the sprint timer is already running for this task (e.g. we are
+        // mid-break or in overtime), just navigate back to the active screen
+        // rather than resetting the session.
+        final sprint = ref.read(sprintTimerProvider);
+        if (sprint.isActive && sprint.activeTaskId == todoId) {
+          if (context.mounted) context.push('/focus/active');
+          return;
+        }
+
         final notifier = ref.read(focusModeProvider.notifier);
         if (inProgressSince != null) {
           // Task is already inProgress — restore session from DB timestamp.

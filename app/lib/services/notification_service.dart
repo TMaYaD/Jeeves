@@ -14,8 +14,10 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 // Stable notification IDs.
-const _kPlanningNotificationId = 0;
-const _kPlanningSnoozeNotificationId = 1;
+const _kFocusSessionPlanningNotificationId = 0;
+const _kFocusSessionPlanningSnoozeNotificationId = 1;
+const _kSprintEndNotificationId = 2;
+const _kBreakEndNotificationId = 3;
 
 // Action identifiers sent back via onDidReceiveNotificationResponse.
 const kNotificationActionOpen = 'open';
@@ -120,9 +122,9 @@ class NotificationService {
   /// Schedules (or re-schedules) the daily planning notification to fire at
   /// [time] every day. Uses [DateTimeComponents.time] so the OS reschedules it
   /// automatically each day without any app interaction.
-  Future<void> schedulePlanningReminder({required TimeOfDay time}) async {
+  Future<void> scheduleFocusSessionPlanningReminder({required TimeOfDay time}) async {
     await _plugin.zonedSchedule(
-      id: _kPlanningNotificationId,
+      id: _kFocusSessionPlanningNotificationId,
       title: 'Time to plan your day',
       body: 'Tap to open your Daily Planning Ritual.',
       scheduledDate: _nextInstanceOf(time),
@@ -134,12 +136,12 @@ class NotificationService {
 
   /// Schedules a one-off snooze notification [minutes] from now. Leaves the
   /// recurring daily schedule untouched so tomorrow's reminder still fires.
-  Future<void> snoozePlanningReminder(int minutes) async {
-    await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
+  Future<void> snoozeFocusSessionPlanningReminder(int minutes) async {
+    await _plugin.cancel(id: _kFocusSessionPlanningSnoozeNotificationId);
     final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
     // No matchDateTimeComponents — fires once only.
     await _plugin.zonedSchedule(
-      id: _kPlanningSnoozeNotificationId,
+      id: _kFocusSessionPlanningSnoozeNotificationId,
       title: 'Time to plan your day',
       body: 'Tap to open your Daily Planning Ritual.',
       scheduledDate: fireAt,
@@ -148,9 +150,17 @@ class NotificationService {
     );
   }
 
-  Future<void> cancelPlanningReminder() async {
-    await _plugin.cancel(id: _kPlanningNotificationId);
-    await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
+  /// Cancels both the recurring daily reminder and any pending snooze.
+  /// Use when notifications are fully disabled by the user.
+  Future<void> cancelFocusSessionPlanningReminder() async {
+    await _plugin.cancel(id: _kFocusSessionPlanningNotificationId);
+    await _plugin.cancel(id: _kFocusSessionPlanningSnoozeNotificationId);
+  }
+
+  /// Cancels only the recurring daily reminder, leaving any pending snooze
+  /// intact. Use when notifications are temporarily suppressed (skip/snooze).
+  Future<void> cancelRecurringFocusSessionPlanningReminder() async {
+    await _plugin.cancel(id: _kFocusSessionPlanningNotificationId);
   }
 
   Future<void> cancelReminder(int id) async {
@@ -162,6 +172,83 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
+  // Sprint timer notifications
+  // ---------------------------------------------------------------------------
+
+  /// Schedules a one-off notification at [endTime] for the end of a focus sprint.
+  Future<void> scheduleSprintEndNotification({
+    required DateTime endTime,
+    required String taskTitle,
+  }) async {
+    await _plugin.cancel(id: _kSprintEndNotificationId);
+    final scheduled = tz.TZDateTime.from(endTime, tz.local);
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final canExact = await android?.canScheduleExactNotifications() ?? false;
+    await _plugin.zonedSchedule(
+      id: _kSprintEndNotificationId,
+      title: 'Sprint complete!',
+      body: 'Time\'s up on "$taskTitle". Mark it done or keep going.',
+      payload: 'focus',
+      scheduledDate: scheduled,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'sprint_timer',
+          'Sprint Timer',
+          channelDescription: 'Pomodoro sprint start/end alerts',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentSound: true,
+        ),
+      ),
+      androidScheduleMode: canExact
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  /// Schedules a one-off notification at [endTime] for the end of a break.
+  Future<void> scheduleBreakEndNotification({
+    required DateTime endTime,
+  }) async {
+    await _plugin.cancel(id: _kBreakEndNotificationId);
+    final scheduled = tz.TZDateTime.from(endTime, tz.local);
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final canExact = await android?.canScheduleExactNotifications() ?? false;
+    await _plugin.zonedSchedule(
+      id: _kBreakEndNotificationId,
+      title: 'Break over — back to it!',
+      body: 'Your 3-minute break has ended. Start the next sprint.',
+      payload: 'focus',
+      scheduledDate: scheduled,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'sprint_timer',
+          'Sprint Timer',
+          channelDescription: 'Pomodoro sprint start/end alerts',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentSound: true,
+        ),
+      ),
+      androidScheduleMode: canExact
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  /// Cancels both sprint-related notifications.
+  Future<void> cancelSprintNotifications() async {
+    await _plugin.cancel(id: _kSprintEndNotificationId);
+    await _plugin.cancel(id: _kBreakEndNotificationId);
+  }
+
+  // ---------------------------------------------------------------------------
   // Focus session notification
   // ---------------------------------------------------------------------------
 
@@ -170,13 +257,8 @@ class NotificationService {
   /// replaces the previous notification on Android.
   Future<void> showFocusNotification({
     required String title,
-    required Duration elapsed,
+    required String body,
   }) async {
-    final h = elapsed.inHours.toString().padLeft(2, '0');
-    final m = (elapsed.inMinutes % 60).toString().padLeft(2, '0');
-    final s = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
-    final elapsedStr = '$h:$m:$s';
-
     const android = AndroidNotificationDetails(
       'focus_mode',
       'Focus Mode',
@@ -191,8 +273,9 @@ class NotificationService {
 
     await _plugin.show(
       id: _kFocusId,
-      title: 'In Focus: $title',
-      body: 'Elapsed: $elapsedStr',
+      title: title,
+      body: body,
+      payload: 'focus',
       notificationDetails: const NotificationDetails(android: android, iOS: iOS),
     );
   }

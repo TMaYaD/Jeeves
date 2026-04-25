@@ -1,12 +1,12 @@
-/// Providers and state management for the daily planning ritual (Issue #82).
+/// Providers and state management for the focus session planning ritual (Issue #82).
 ///
 /// Architecture:
-/// - [planningCompletionNotifier] — a [ValueNotifier] wired to GoRouter's
+/// - [focusSessionPlanningCompletionNotifier] — a [ValueNotifier] wired to GoRouter's
 ///   [refreshListenable] so the router re-evaluates the redirect on change.
-/// - [planningSessionDateProvider] — a [StateProvider] that caches today's
+/// - [focusSessionPlanningDateProvider] — a [StateProvider] that caches today's
 ///   date for the current session, preventing date-boundary inconsistencies
 ///   if the clock rolls past midnight mid-session.
-/// - [DailyPlanningNotifier] — manages step navigation and available-minutes
+/// - [FocusSessionPlanningNotifier] — manages step navigation and available-minutes
 ///   state; delegates all database writes to [TodoDao] planning methods.
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
@@ -95,27 +95,27 @@ const int _maxStepIndex = 5;
 // Router refresh notifier
 // ---------------------------------------------------------------------------
 
-/// Tracks whether the planning ritual has been completed today.
+/// Tracks whether the focus session planning ritual has been completed today.
 ///
 /// GoRouter uses this as its [refreshListenable] so the redirect guard
 /// re-evaluates whenever completion state changes (e.g. after [startDay] or
 /// [reEnterPlanning]).
-final planningCompletionNotifier = ValueNotifier<bool>(false);
+final focusSessionPlanningCompletionNotifier = ValueNotifier<bool>(false);
 
 /// Global notifier for banner dismissal state — mirrors the SharedPreferences
 /// key so widgets can react without a Riverpod container.
-final bannerDismissedNotifier = ValueNotifier<bool>(false);
+final focusSessionPlanningBannerDismissedNotifier = ValueNotifier<bool>(false);
 
-/// Initialises [planningCompletionNotifier] and [bannerDismissedNotifier] from
-/// [SharedPreferences].
+/// Initialises [focusSessionPlanningCompletionNotifier] and
+/// [focusSessionPlanningBannerDismissedNotifier] from [SharedPreferences].
 ///
 /// Must be called once in [main] after [WidgetsFlutterBinding.ensureInitialized].
-Future<void> initPlanningCompletion() async {
+Future<void> initFocusSessionPlanningCompletion() async {
   final prefs = await SharedPreferences.getInstance();
   final today = planningToday();
-  planningCompletionNotifier.value =
+  focusSessionPlanningCompletionNotifier.value =
       prefs.getString(_kCompletedDateKey) == today;
-  bannerDismissedNotifier.value =
+  focusSessionPlanningBannerDismissedNotifier.value =
       prefs.getString(_kBannerDismissedDateKey) == today;
 }
 
@@ -126,9 +126,9 @@ Future<void> initPlanningCompletion() async {
 
 /// Returns true if the user has skipped planning notifications for today or
 /// has an active snooze that hasn't expired yet.
-bool isNotificationSuppressedToday() {
+bool isFocusSessionPlanningNotificationSuppressed() {
   // This is intentionally synchronous — callers that need the persisted value
-  // should call [loadNotificationSuppression] first.
+  // should call [loadFocusSessionPlanningNotificationSuppression] first.
   return _notificationSkippedToday || _notificationSnoozedActive;
 }
 
@@ -136,7 +136,7 @@ bool _notificationSkippedToday = false;
 bool _notificationSnoozedActive = false;
 
 /// Reads skip/snooze state from [SharedPreferences] into module-level flags.
-Future<void> loadNotificationSuppression() async {
+Future<void> loadFocusSessionPlanningNotificationSuppression() async {
   final prefs = await SharedPreferences.getInstance();
   final today = planningToday();
   _notificationSkippedToday =
@@ -153,14 +153,14 @@ Future<void> loadNotificationSuppression() async {
 }
 
 /// Persists and activates the "skip today" suppression.
-Future<void> persistSkipToday() async {
+Future<void> persistFocusSessionPlanningSkipToday() async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString(_kNotificationSkippedDateKey, planningToday());
   _notificationSkippedToday = true;
 }
 
 /// Persists and activates a snooze until [until].
-Future<void> persistSnoozedUntil(DateTime until) async {
+Future<void> persistFocusSessionPlanningSnoozedUntil(DateTime until) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString(_kNotificationSnoozedUntilKey, until.toIso8601String());
   _notificationSnoozedActive = DateTime.now().isBefore(until);
@@ -173,7 +173,7 @@ void clearNotificationSnooze() {
   _notificationSnoozedActive = false;
 }
 
-/// Called when a snooze is persisted (from [persistSnoozedUntil] callers).
+/// Called when a snooze is persisted (from [persistFocusSessionPlanningSnoozedUntil] callers).
 ///
 /// [DailyStateRefresher] sets this to schedule its one-shot snooze timer,
 /// avoiding a circular import between the two files.
@@ -188,11 +188,11 @@ void Function(DateTime until)? onSnoozeScheduled;
 Future<void> refreshPlanningState() async {
   final prefs = await SharedPreferences.getInstance();
   final today = planningToday();
-  planningCompletionNotifier.value =
+  focusSessionPlanningCompletionNotifier.value =
       prefs.getString(_kCompletedDateKey) == today;
-  bannerDismissedNotifier.value =
+  focusSessionPlanningBannerDismissedNotifier.value =
       prefs.getString(_kBannerDismissedDateKey) == today;
-  await loadNotificationSuppression();
+  await loadFocusSessionPlanningNotificationSuppression();
 }
 
 // ---------------------------------------------------------------------------
@@ -201,22 +201,22 @@ Future<void> refreshPlanningState() async {
 
 /// Caches the planning date for the current session.
 ///
-/// Initialized to today's date when first read. [DailyPlanningNotifier.reEnterPlanning]
-/// resets it via [PlanningSessionDateNotifier.reset] so the cached date stays
+/// Initialized to today's date when first read. [FocusSessionPlanningNotifier.reEnterPlanning]
+/// resets it via [FocusSessionPlanningDateNotifier.reset] so the cached date stays
 /// consistent even if the clock rolls past midnight mid-session.
-final planningSessionDateProvider =
-    NotifierProvider<PlanningSessionDateNotifier, String>(
-  PlanningSessionDateNotifier.new,
+final focusSessionPlanningDateProvider =
+    NotifierProvider<FocusSessionPlanningDateNotifier, String>(
+  FocusSessionPlanningDateNotifier.new,
 );
 
-class PlanningSessionDateNotifier extends Notifier<String> {
+class FocusSessionPlanningDateNotifier extends Notifier<String> {
   @override
   String build() => planningToday();
 
   /// Refreshes the cached date to [planningToday()].
   ///
   /// Call this at the start of a new planning session (e.g. after
-  /// [DailyPlanningNotifier.reEnterPlanning]).
+  /// [FocusSessionPlanningNotifier.reEnterPlanning]).
   void reset() => state = planningToday();
 }
 
@@ -225,52 +225,52 @@ class PlanningSessionDateNotifier extends Notifier<String> {
 // ---------------------------------------------------------------------------
 
 /// Next-action tasks not yet reviewed in today's planning session.
-final nextActionsForPlanningProvider = StreamProvider<List<Todo>>((ref) {
+final nextActionsForFocusSessionPlanningProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(planningSessionDateProvider);
+  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
   return db.todoDao.watchNextActionsForPlanning(userId, today);
 });
 
 /// Scheduled tasks with a due date on today, not yet confirmed in planning.
-final scheduledDueTodayProvider = StreamProvider<List<Todo>>((ref) {
+final focusSessionPlanningScheduledDueTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(planningSessionDateProvider);
+  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
   return db.todoDao.watchScheduledDueToday(userId, today);
 });
 
 /// Tasks selected for today (selectedForToday == true).
-final todaySelectedTasksProvider = StreamProvider<List<Todo>>((ref) {
+final focusSessionPlanningSelectedTasksProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(planningSessionDateProvider);
+  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
   return db.todoDao.watchSelectedForToday(userId, today);
 });
 
 /// Selected tasks that are still missing a time estimate (drives Step 3).
-final selectedTasksMissingEstimatesProvider = StreamProvider<List<Todo>>((ref) {
+final focusSessionPlanningTasksMissingEstimatesProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(planningSessionDateProvider);
+  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
   return db.todoDao.watchSelectedTasksMissingEstimates(userId, today);
 });
 
 /// Skipped Next Actions for today.
-final skippedNextActionsForPlanningProvider = StreamProvider<List<Todo>>((ref) {
+final skippedNextActionsForFocusSessionPlanningProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(planningSessionDateProvider);
+  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
   return db.todoDao.watchSkippedNextActionsForPlanning(userId, today);
 });
 
 // ---------------------------------------------------------------------------
-// DailyPlanningNotifier — step navigation + mutations
+// FocusSessionPlanningNotifier — step navigation + mutations
 // ---------------------------------------------------------------------------
 
-/// Immutable state for the daily planning UI.
-class DailyPlanningState {
-  const DailyPlanningState({
+/// Immutable state for the focus session planning UI.
+class FocusSessionPlanningState {
+  const FocusSessionPlanningState({
     this.currentStep = 0,
     this.availableMinutes = 480, // 8 hours default
     this.availableTimeSet = false,
@@ -293,7 +293,7 @@ class DailyPlanningState {
   final int inboxClarifiedCount;
   final int inboxSkippedCount;
 
-  DailyPlanningState copyWith({
+  FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
     bool? availableTimeSet,
@@ -303,7 +303,7 @@ class DailyPlanningState {
     int? inboxClarifiedCount,
     int? inboxSkippedCount,
   }) =>
-      DailyPlanningState(
+      FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
         availableMinutes: availableMinutes ?? this.availableMinutes,
         availableTimeSet: availableTimeSet ?? this.availableTimeSet,
@@ -314,18 +314,18 @@ class DailyPlanningState {
       );
 }
 
-final dailyPlanningProvider =
-    NotifierProvider<DailyPlanningNotifier, DailyPlanningState>(
-  DailyPlanningNotifier.new,
+final focusSessionPlanningProvider =
+    NotifierProvider<FocusSessionPlanningNotifier, FocusSessionPlanningState>(
+  FocusSessionPlanningNotifier.new,
 );
 
-class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
+class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   @override
-  DailyPlanningState build() => const DailyPlanningState();
+  FocusSessionPlanningState build() => const FocusSessionPlanningState();
 
   GtdDatabase get _db => ref.read(databaseProvider);
   String get _userId => ref.read(currentUserIdProvider);
-  String get _sessionDate => ref.read(planningSessionDateProvider);
+  String get _sessionDate => ref.read(focusSessionPlanningDateProvider);
 
   // ---- Step navigation -------------------------------------------------------
 
@@ -472,7 +472,7 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     final today = planningToday();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kBannerDismissedDateKey, today);
-    bannerDismissedNotifier.value = true;
+    focusSessionPlanningBannerDismissedNotifier.value = true;
   }
 
   // ---- Notification skip / snooze --------------------------------------------
@@ -480,16 +480,16 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
   /// Suppresses all planning nudges until the next calendar day and cancels
   /// any scheduled notification for today.
   Future<void> skipPlanningToday() async {
-    await persistSkipToday();
-    await NotificationService.instance.cancelPlanningReminder();
+    await persistFocusSessionPlanningSkipToday();
+    await NotificationService.instance.cancelFocusSessionPlanningReminder();
   }
 
   /// Snoozes the planning notification by [minutes] and reschedules it as a
   /// one-off fire.
   Future<void> snoozePlanningNotification(int minutes) async {
     final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistSnoozedUntil(until);
-    await NotificationService.instance.snoozePlanningReminder(minutes);
+    await persistFocusSessionPlanningSnoozedUntil(until);
+    await NotificationService.instance.snoozeFocusSessionPlanningReminder(minutes);
     // Notify the refresher so it can schedule a one-shot timer that clears
     // the snooze flag when it expires (avoiding a circular import).
     onSnoozeScheduled?.call(until);
@@ -503,10 +503,10 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     final prefs = await SharedPreferences.getInstance();
     try {
       await prefs.setString(_kCompletedDateKey, today);
-      planningCompletionNotifier.value = true;
+      focusSessionPlanningCompletionNotifier.value = true;
       // Reset step/inbox counters but keep energy and time so reEnterPlanning()
       // can restore them if the user replans later in the same session.
-      state = DailyPlanningState(
+      state = FocusSessionPlanningState(
         energyLevel: state.energyLevel,
         availableMinutes: state.availableMinutes,
         availableTimeSet: state.availableTimeSet,
@@ -536,9 +536,9 @@ class DailyPlanningNotifier extends Notifier<DailyPlanningState> {
     try {
       await prefs.remove(_kCompletedDateKey);
       // Reset the session date in case the clock crossed midnight.
-      ref.read(planningSessionDateProvider.notifier).reset();
-      planningCompletionNotifier.value = false;
-      state = DailyPlanningState(
+      ref.read(focusSessionPlanningDateProvider.notifier).reset();
+      focusSessionPlanningCompletionNotifier.value = false;
+      state = FocusSessionPlanningState(
         currentStep: 0,
         availableMinutes: preservedMinutes,
         availableTimeSet: preservedTimeSet,

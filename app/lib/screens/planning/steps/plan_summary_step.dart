@@ -3,18 +3,18 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../providers/daily_planning_provider.dart';
+import '../../../providers/focus_session_planning_provider.dart';
 
 class PlanSummaryStep extends ConsumerWidget {
   const PlanSummaryStep({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final planningState = ref.watch(dailyPlanningProvider);
+    final planningState = ref.watch(focusSessionPlanningProvider);
     final availableMinutes = planningState.availableMinutes;
-    final asyncSelected = ref.watch(todaySelectedTasksProvider);
-    final asyncPending = ref.watch(nextActionsForPlanningProvider);
-    final asyncSkipped = ref.watch(skippedNextActionsForPlanningProvider);
+    final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
+    final asyncPending = ref.watch(nextActionsForFocusSessionPlanningProvider);
+    final asyncSkipped = ref.watch(skippedNextActionsForFocusSessionPlanningProvider);
 
     // Simple combinations of states
     if (asyncSelected.isLoading || asyncPending.isLoading || asyncSkipped.isLoading) {
@@ -124,15 +124,15 @@ class PlanSummaryStep extends ConsumerWidget {
   }
 
   void _handleSelect(WidgetRef ref, Todo todo) {
-    ref.read(dailyPlanningProvider.notifier).selectTask(todo.id);
+    ref.read(focusSessionPlanningProvider.notifier).selectTask(todo.id);
   }
 
   void _handleSkip(WidgetRef ref, Todo todo) {
-    ref.read(dailyPlanningProvider.notifier).skipTask(todo.id);
+    ref.read(focusSessionPlanningProvider.notifier).skipTask(todo.id);
   }
 
   void _handleUndo(WidgetRef ref, Todo todo) {
-    ref.read(dailyPlanningProvider.notifier).undoTaskReview(todo.id);
+    ref.read(focusSessionPlanningProvider.notifier).undoTaskReview(todo.id);
   }
 
   List<Todo> _sortTasks(List<Todo> tasks) {

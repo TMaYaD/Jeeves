@@ -4,14 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../providers/daily_planning_provider.dart';
+import '../../../providers/focus_session_planning_provider.dart';
 
 class ScheduledReviewStep extends ConsumerWidget {
   const ScheduledReviewStep({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncSelected = ref.watch(todaySelectedTasksProvider);
+    final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
 
     return asyncSelected.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -101,7 +101,7 @@ class ScheduledReviewStep extends ConsumerWidget {
   Future<void> _startDay(BuildContext context, WidgetRef ref) async {
     Object? startError;
     try {
-      await ref.read(dailyPlanningProvider.notifier).startDay();
+      await ref.read(focusSessionPlanningProvider.notifier).startDay();
     } catch (e) {
       startError = e;
     }

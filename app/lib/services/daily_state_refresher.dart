@@ -5,7 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/planning_settings_keys.dart';
-import '../providers/daily_planning_provider.dart';
+import '../providers/focus_session_planning_provider.dart';
 import 'notification_service.dart';
 
 /// Keeps planning-day state fresh without requiring an app restart.
@@ -42,7 +42,7 @@ class DailyStateRefresher with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _scheduleBoundaryTimer();
     // Wire snooze-timer scheduling via the module-level callback to avoid a
-    // circular import between this file and daily_planning_provider.dart.
+    // circular import between this file and focus_session_planning_provider.dart.
     onSnoozeScheduled = scheduleSnoozeTimer;
   }
 
@@ -130,9 +130,9 @@ class DailyStateRefresher with WidgetsBindingObserver {
   Future<void> _rearmNotificationIfNeeded() async {
     final prefs = await SharedPreferences.getInstance();
     final notificationEnabled = prefs.getBool(kSettingsNotificationEnabled) ?? true;
-    if (notificationEnabled && !isNotificationSuppressedToday()) {
+    if (notificationEnabled && !isFocusSessionPlanningNotificationSuppressed()) {
       await NotificationService.instance
-          .schedulePlanningReminder(time: _planningTime);
+          .scheduleFocusSessionPlanningReminder(time: _planningTime);
     }
   }
 }
