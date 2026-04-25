@@ -5,8 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/auth_provider.dart';
-import 'providers/daily_planning_provider.dart';
-import 'providers/planning_settings_provider.dart';
+import 'providers/focus_session_planning_provider.dart';
+import 'providers/focus_session_planning_settings_provider.dart';
 import 'router.dart';
 import 'services/notification_service.dart';
 
@@ -15,8 +15,8 @@ Future<void> main() async {
 
   // Seed suppression flags before any notification scheduling so that a
   // previously skipped/snoozed reminder is not re-enabled on restart.
-  await initPlanningCompletion();
-  await loadNotificationSuppression();
+  await initFocusSessionPlanningCompletion();
+  await loadFocusSessionPlanningNotificationSuppression();
 
   // flutter_local_notifications uses platform channels unavailable on web.
   // Skip the entire notification stack on web; push notifications are a
@@ -30,7 +30,7 @@ Future<void> main() async {
     await NotificationService.instance.requestPermissions();
 
     // Re-establish the daily planning notification schedule after a restart.
-    await initPlanningNotificationSchedule();
+    await initFocusSessionPlanningNotificationSchedule();
 
     // Cold-start: if the user tapped a notification to launch the app from a
     // terminated state, onDidReceiveNotificationResponse will not fire; the
@@ -62,7 +62,7 @@ void _handleNotificationResponse(NotificationResponse response) async {
       if (response.payload == 'focus') {
         appRouter.go('/focus/active');
       } else {
-        appRouter.go('/planning');
+        appRouter.go('/focus-session-planning');
       }
 
     case kNotificationActionSnooze:
@@ -70,18 +70,18 @@ void _handleNotificationResponse(NotificationResponse response) async {
       // available in background-isolate notification callbacks.
       final snoozeMins = await _readDefaultSnoozeDuration();
       final until = DateTime.now().add(Duration(minutes: snoozeMins));
-      await persistSnoozedUntil(until);
-      await NotificationService.instance.snoozePlanningReminder(snoozeMins);
+      await persistFocusSessionPlanningSnoozedUntil(until);
+      await NotificationService.instance.snoozeFocusSessionPlanningReminder(snoozeMins);
 
     case kNotificationActionSkip:
-      await persistSkipToday();
-      await NotificationService.instance.cancelPlanningReminder();
+      await persistFocusSessionPlanningSkipToday();
+      await NotificationService.instance.cancelFocusSessionPlanningReminder();
   }
 }
 
 Future<int> _readDefaultSnoozeDuration() async {
   final prefs = await SharedPreferences.getInstance();
-  return prefs.getInt('planning_settings_default_snooze_duration') ?? 60;
+  return prefs.getInt('focus_session_planning_settings_default_snooze_duration') ?? 60;
 }
 
 class JeevesApp extends ConsumerWidget {

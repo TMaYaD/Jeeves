@@ -1,4 +1,4 @@
-/// Tests for TodoDao daily-planning methods added in Issue #82.
+/// Tests for TodoDao focus session planning methods added in Issue #82.
 ///
 /// All tests use an in-memory Drift database — no mocks.
 library;

@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../models/planning_settings.dart';
+import '../../models/focus_session_planning_settings.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/focus_session_planning_settings_provider.dart';
 import '../../providers/focus_settings_provider.dart';
-import '../../providers/planning_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
 import '../../widgets/jeeves_logo.dart';
 
@@ -100,7 +100,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('DAILY PLANNING'),
-          _DailyPlanningSettings(),
+          _FocusSessionPlanningSettings(),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('FOCUS MODE'),
           _FocusModeSettings(),
@@ -225,11 +225,11 @@ class SettingsScreen extends ConsumerWidget {
   }
 }
 
-class _DailyPlanningSettings extends ConsumerWidget {
+class _FocusSessionPlanningSettings extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(planningSettingsProvider);
-    final notifier = ref.read(planningSettingsProvider.notifier);
+    final settings = ref.watch(focusSessionPlanningSettingsProvider);
+    final notifier = ref.read(focusSessionPlanningSettingsProvider.notifier);
 
     return Column(
       children: [
@@ -308,7 +308,7 @@ class _DailyPlanningSettings extends ConsumerWidget {
   Future<void> _pickSnoozeDuration(
     BuildContext context,
     WidgetRef ref,
-    PlanningSettings settings,
+    FocusSessionPlanningSettings settings,
   ) async {
     final durations = settings.snoozeDurations;
     final picked = await showDialog<int>(
@@ -325,7 +325,7 @@ class _DailyPlanningSettings extends ConsumerWidget {
     );
     if (picked != null) {
       await ref
-          .read(planningSettingsProvider.notifier)
+          .read(focusSessionPlanningSettingsProvider.notifier)
           .setDefaultSnoozeDuration(picked);
     }
   }

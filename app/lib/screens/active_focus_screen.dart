@@ -10,7 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../database/gtd_database.dart' show TodosCompanion;
 import '../providers/auth_provider.dart';
-import '../providers/daily_planning_provider.dart';
+import '../providers/focus_session_planning_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
@@ -88,7 +88,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
 
-    final allSelected = await ref.read(todaySelectedTasksProvider.future);
+    final allSelected = await ref.read(focusSessionPlanningSelectedTasksProvider.future);
     if (!mounted) return;
 
     final nextTask = allSelected

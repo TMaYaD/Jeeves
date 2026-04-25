@@ -1,4 +1,4 @@
-/// Daily planning ritual — outer container screen (Issue #82).
+/// Focus session planning ritual — outer container screen (Issue #82).
 ///
 /// Renders a full-screen, drawer-free scaffold with:
 /// - A 4-segment progress bar (Inbox → Energy → Time → Plan Summary).
@@ -10,7 +10,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../providers/daily_planning_provider.dart';
+import '../../providers/focus_session_planning_provider.dart';
 import '../../providers/inbox_provider.dart';
 import 'steps/day_checkin_energy_step.dart';
 import 'steps/day_checkin_time_step.dart';
@@ -18,15 +18,16 @@ import 'steps/inbox_clarification_step.dart';
 import 'steps/plan_summary_step.dart';
 import 'steps/scheduled_review_step.dart';
 
-class PlanningRitualScreen extends ConsumerStatefulWidget {
-  const PlanningRitualScreen({super.key});
+class FocusSessionPlanningScreen extends ConsumerStatefulWidget {
+  const FocusSessionPlanningScreen({super.key});
 
   @override
-  ConsumerState<PlanningRitualScreen> createState() =>
-      _PlanningRitualScreenState();
+  ConsumerState<FocusSessionPlanningScreen> createState() =>
+      _FocusSessionPlanningScreenState();
 }
 
-class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
+class _FocusSessionPlanningScreenState
+    extends ConsumerState<FocusSessionPlanningScreen> {
   late final PageController _pageController;
 
   static const _stepTitles = [
@@ -41,7 +42,7 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
   void initState() {
     super.initState();
     _pageController = PageController(
-      initialPage: ref.read(dailyPlanningProvider).currentStep,
+      initialPage: ref.read(focusSessionPlanningProvider).currentStep,
     );
     // Auto-advance from inbox step if inbox is already empty on first load.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -54,21 +55,21 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
   /// Called both on first load (via [addPostFrameCallback] in [initState]) and
   /// whenever [inboxItemsProvider] emits a new value (via [ref.listen]).
   void _maybeAutoAdvanceInbox(AsyncValue<List<Todo>> inboxAsync) {
-    if (ref.read(dailyPlanningProvider).currentStep != 0) return;
+    if (ref.read(focusSessionPlanningProvider).currentStep != 0) return;
     final items = inboxAsync.asData?.value;
     if (items == null) return; // still loading
-    final sessionDate = ref.read(planningSessionDateProvider);
+    final sessionDate = ref.read(focusSessionPlanningDateProvider);
     final hasPending = items.any(
       (i) => !(i.selectedForToday == false && i.dailySelectionDate == sessionDate),
     );
     if (!hasPending) {
-      ref.read(dailyPlanningProvider.notifier).advanceStep();
+      ref.read(focusSessionPlanningProvider.notifier).advanceStep();
     }
   }
 
   /// Handles the Next button tap, inserting any step-specific side-effects.
   void _handleNext(int step) {
-    final notifier = ref.read(dailyPlanningProvider.notifier);
+    final notifier = ref.read(focusSessionPlanningProvider.notifier);
     if (step == 1) {
       // Energy → Time: auto-skip tasks that exceed today's energy.
       notifier.autoSkipByEnergy().then((_) => notifier.advanceStep());
@@ -85,12 +86,13 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final planningState = ref.watch(dailyPlanningProvider);
-    final notifier = ref.read(dailyPlanningProvider.notifier);
+    final planningState = ref.watch(focusSessionPlanningProvider);
+    final notifier = ref.read(focusSessionPlanningProvider.notifier);
     final step = planningState.currentStep;
 
     // Animate the PageView only when currentStep actually changes.
-    ref.listen<DailyPlanningState>(dailyPlanningProvider, (prev, next) {
+    ref.listen<FocusSessionPlanningState>(focusSessionPlanningProvider,
+        (prev, next) {
       if (prev?.currentStep != next.currentStep && _pageController.hasClients) {
         _pageController.animateToPage(
           next.currentStep,
@@ -144,7 +146,7 @@ class _PlanningRitualScreenState extends ConsumerState<PlanningRitualScreen> {
   bool _canAdvance(int step, WidgetRef ref) {
     return switch (step) {
       // Step 0: inbox empty or skipped out of queue
-      0 => ref.watch(inboxItemsProvider).asData?.value.where((i) => !(i.selectedForToday == false && i.dailySelectionDate == ref.read(planningSessionDateProvider))).isEmpty ?? false,
+      0 => ref.watch(inboxItemsProvider).asData?.value.where((i) => !(i.selectedForToday == false && i.dailySelectionDate == ref.read(focusSessionPlanningDateProvider))).isEmpty ?? false,
       // Step 1: energy check in
       1 => true,
       // Step 2: time check in
@@ -212,7 +214,7 @@ class _PlanningHeader extends ConsumerWidget {
 
   Widget _buildSubtitle(int step, WidgetRef ref) {
     if (step == 0) {
-      final state = ref.watch(dailyPlanningProvider);
+      final state = ref.watch(focusSessionPlanningProvider);
       final initial = state.initialInboxCount ?? 0;
       final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
       final skipped = state.inboxSkippedCount;
@@ -249,7 +251,7 @@ class _SegmentedProgressBar extends StatelessWidget {
   /// - Step 1 (energy): 1.0 when an energy level has been chosen, else 0.0.
   /// - Step 2 (time): 1.0 when the user has explicitly set available time.
   /// - All other steps: 0.0 (segment stays empty until the step is completed).
-  double _currentStepFraction(int step, DailyPlanningState state) {
+  double _currentStepFraction(int step, FocusSessionPlanningState state) {
     switch (step) {
       case 0:
         final initial = state.initialInboxCount ?? 1;
@@ -309,7 +311,7 @@ class _SegmentedProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(dailyPlanningProvider);
+    final state = ref.watch(focusSessionPlanningProvider);
 
     return Row(
       children: List.generate(totalSteps, (i) {

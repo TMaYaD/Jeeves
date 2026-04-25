@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../providers/daily_planning_provider.dart';
+import '../../../providers/focus_session_planning_provider.dart';
 
 class DayCheckinTimeStep extends ConsumerStatefulWidget {
   const DayCheckinTimeStep({super.key});
@@ -20,7 +20,7 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
   @override
   void initState() {
     super.initState();
-    final available = ref.read(dailyPlanningProvider).availableMinutes;
+    final available = ref.read(focusSessionPlanningProvider).availableMinutes;
     _hoursCtrl = TextEditingController(text: (available ~/ 60).toString());
     _minutesCtrl = TextEditingController(text: (available % 60).toString());
   }
@@ -38,7 +38,7 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
     final totalMinutes = h * 60 + m;
     if (totalMinutes == 0) return;
     ref
-        .read(dailyPlanningProvider.notifier)
+        .read(focusSessionPlanningProvider.notifier)
         .setAvailableTime(totalMinutes.clamp(1, 1440));
   }
 

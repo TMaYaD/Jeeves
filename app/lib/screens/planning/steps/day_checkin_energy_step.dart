@@ -3,14 +3,14 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../providers/daily_planning_provider.dart';
+import '../../../providers/focus_session_planning_provider.dart';
 
 class DayCheckinEnergyStep extends ConsumerWidget {
   const DayCheckinEnergyStep({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final energyLevel = ref.watch(dailyPlanningProvider.select((s) => s.energyLevel));
+    final energyLevel = ref.watch(focusSessionPlanningProvider.select((s) => s.energyLevel));
 
     return ListView(
       physics: const ClampingScrollPhysics(),
@@ -27,7 +27,7 @@ class DayCheckinEnergyStep extends ConsumerWidget {
         _EnergyLevelPicker(
           selected: energyLevel,
           onSelect: (level) =>
-              ref.read(dailyPlanningProvider.notifier).setEnergyLevel(level),
+              ref.read(focusSessionPlanningProvider.notifier).setEnergyLevel(level),
         ),
       ],
     );
