@@ -90,10 +90,10 @@ class FocusSessionPlanningSettingsNotifier
 
 /// Restores the planning notification schedule on app startup.
 ///
-/// Must be called in [main] after [NotificationService.initialize] and
-/// [initFocusSessionPlanningCompletion] so skip-state and settings are loaded
-/// first.
+/// Must be called in [main] after [NotificationService.initialize].
+/// Loads skip/snooze suppression state itself before checking it.
 Future<void> initFocusSessionPlanningNotificationSchedule() async {
+  await loadFocusSessionPlanningNotificationSuppression();
   final prefs = await SharedPreferences.getInstance();
   final svc = NotificationService.instance;
   final notificationEnabled =
