@@ -4,7 +4,6 @@
 
 - Terminology rename: date-keyed SharedPreferences flags (`planning_ritual_completed_date`, `planning_banner_dismissed_date`, etc.) were NOT renamed — they are date-encoded and will be deleted by #185 (FocusSession refactor), not renamed. Renaming them would entrench the bug class under a new label.
 - DAO methods `watchNextActionsForPlanning` / `watchSkippedNextActionsForPlanning` were NOT renamed — they accept a `String today` date parameter sourced from `planningToday()`, so the parameterisation itself is what is date-encoded.
-- Inline one-time migration added to `FocusSessionPlanningSettingsNotifier.build()` copies old `planning_settings_*` prefs keys to `focus_session_planning_settings_*` then deletes the old keys. No-op on fresh install or after migration already ran.
 
 ## 2026-04-25
 

@@ -37,8 +37,9 @@ final appRouter = GoRouter(
     //     without creating an account
     // /login remains reachable from Settings → "Sign in to sync" whenever the
     // user does want to sync.
-    if (state.matchedLocation.startsWith('/focus') &&
-        !focusSessionPlanningCompletionNotifier.value) {
+    final isFocusRoute = state.matchedLocation == '/focus' ||
+        state.matchedLocation.startsWith('/focus/');
+    if (isFocusRoute && !focusSessionPlanningCompletionNotifier.value) {
       return '/focus-session-planning';
     }
     return null;

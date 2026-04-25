@@ -25,32 +25,12 @@ class FocusSessionPlanningSettingsNotifier
   @override
   FocusSessionPlanningSettings build() {
     // Async init; starts from defaults synchronously.
-    _migrateAndLoadFromPrefs();
+    _loadFromPrefs();
     return const FocusSessionPlanningSettings();
   }
 
-  Future<void> _migrateAndLoadFromPrefs() async {
+  Future<void> _loadFromPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-
-    // One-time migration from old planning_settings_* keys.
-    // No-op on fresh install or after migration already ran.
-    const migrations = {
-      'planning_settings_time_hour': _kTimeHour,
-      'planning_settings_time_minute': _kTimeMinute,
-      'planning_settings_notification_enabled': _kNotificationEnabled,
-      'planning_settings_banner_enabled': _kBannerEnabled,
-      'planning_settings_default_snooze_duration': _kDefaultSnoozeDuration,
-    };
-    for (final entry in migrations.entries) {
-      final oldKey = entry.key;
-      final newKey = entry.value;
-      if (prefs.containsKey(oldKey) && !prefs.containsKey(newKey)) {
-        final value = prefs.get(oldKey);
-        if (value is int) await prefs.setInt(newKey, value);
-        if (value is bool) await prefs.setBool(newKey, value);
-        await prefs.remove(oldKey);
-      }
-    }
 
     final hour = prefs.getInt(_kTimeHour) ?? 8;
     final minute = prefs.getInt(_kTimeMinute) ?? 0;

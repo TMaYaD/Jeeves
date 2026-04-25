@@ -274,10 +274,10 @@ The ritual can no longer be auto-launched. Users are nudged through two opt-in m
 
 | Key | Value | Description |
 |---|---|---|
-| `planning_ritual_completed_date` | `yyyy-MM-dd` | Date of last completed ritual (date-keyed; deferred to #185) |
-| `planning_banner_dismissed_date` | `yyyy-MM-dd` | Date banner was last dismissed (date-keyed; deferred to #185) |
-| `planning_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" (date-keyed; deferred to #185) |
-| `planning_notification_snoozed_until` | ISO-8601 datetime | When the snoozed notification will fire (date-keyed; deferred to #185) |
+| `planning_ritual_completed_date` | `yyyy-MM-dd` | Date of last completed ritual |
+| `planning_banner_dismissed_date` | `yyyy-MM-dd` | Date banner was last dismissed |
+| `planning_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" |
+| `planning_notification_snoozed_until` | ISO-8601 datetime | When the snoozed notification will fire |
 | `focus_session_planning_settings_time_hour` | `int` | Planning time hour |
 | `focus_session_planning_settings_time_minute` | `int` | Planning time minute |
 | `focus_session_planning_settings_notification_enabled` | `bool` | Notification toggle |
