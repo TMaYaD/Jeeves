@@ -2,16 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../providers/daily_planning_provider.dart';
-import '../providers/planning_settings_provider.dart';
+import '../providers/focus_session_planning_provider.dart';
+import '../providers/focus_session_planning_settings_provider.dart';
 
 /// A dismissible banner shown at the top of shell views when the daily
 /// planning ritual is incomplete and the user hasn't dismissed it today.
 ///
 /// Tapping opens the ritual at step 1. The × button hides the banner for
 /// the rest of the day. Both state changes survive app restarts.
-class PlanningBanner extends ConsumerWidget {
-  const PlanningBanner({super.key});
+class FocusSessionPlanningBanner extends ConsumerWidget {
+  const FocusSessionPlanningBanner({super.key});
 
   /// Jeevesian quips — picked deterministically per day so the copy is stable
   /// within a session but refreshes each morning.
@@ -19,37 +19,37 @@ class PlanningBanner extends ConsumerWidget {
     _Quip(
       'Shall we, sir?',
       'One prefers the day with a touch of forethought.',
-      'Very good  \u2192',
+      'Very good  →',
     ),
     _Quip(
       'A moment to plan, sir?',
       'The day has a way of escaping unsupervised.',
-      'At once  \u2192',
+      'At once  →',
     ),
     _Quip(
-      'If I may, sir\u2026',
+      'If I may, sir…',
       'The day is not, regrettably, going to plan itself.',
-      'Indeed  \u2192',
+      'Indeed  →',
     ),
     _Quip(
       'Might I suggest, sir?',
       'One finds the day more obliging when given instructions.',
-      'Quite  \u2192',
+      'Quite  →',
     ),
     _Quip(
       'Pardon me, sir.',
       'I have taken the liberty of reserving a moment for planning.',
-      'Very good  \u2192',
+      'Very good  →',
     ),
     _Quip(
       'Sir?',
       'A trifling five minutes before the day absconds with you.',
-      'At once  \u2192',
+      'At once  →',
     ),
     _Quip(
       'Ahem, sir.',
       'The day awaits your instructions.',
-      'Indeed  \u2192',
+      'Indeed  →',
     ),
   ];
 
@@ -62,23 +62,24 @@ class PlanningBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(planningSettingsProvider);
+    final settings = ref.watch(focusSessionPlanningSettingsProvider);
     if (!settings.bannerEnabled) return const SizedBox.shrink();
 
     return ValueListenableBuilder<bool>(
-      valueListenable: planningCompletionNotifier,
+      valueListenable: focusSessionPlanningCompletionNotifier,
       builder: (context, completed, _) {
         if (completed) return const SizedBox.shrink();
         return ValueListenableBuilder<bool>(
-          valueListenable: bannerDismissedNotifier,
+          valueListenable: focusSessionPlanningBannerDismissedNotifier,
           builder: (context, dismissed, _) {
             if (dismissed) return const SizedBox.shrink();
             return _BannerContent(
               key: const Key('planning_banner_visible'),
               quip: _quipForToday(),
-              onTap: () => context.go('/planning'),
-              onDismiss: () =>
-                  ref.read(dailyPlanningProvider.notifier).dismissBannerForToday(),
+              onTap: () => context.go('/focus-session-planning'),
+              onDismiss: () => ref
+                  .read(focusSessionPlanningProvider.notifier)
+                  .dismissBannerForToday(),
             );
           },
         );

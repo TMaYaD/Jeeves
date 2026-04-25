@@ -14,8 +14,8 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 // Stable notification IDs.
-const _kPlanningNotificationId = 0;
-const _kPlanningSnoozeNotificationId = 1;
+const _kFocusSessionPlanningNotificationId = 0;
+const _kFocusSessionPlanningSnoozeNotificationId = 1;
 const _kSprintEndNotificationId = 2;
 const _kBreakEndNotificationId = 3;
 
@@ -122,9 +122,9 @@ class NotificationService {
   /// Schedules (or re-schedules) the daily planning notification to fire at
   /// [time] every day. Uses [DateTimeComponents.time] so the OS reschedules it
   /// automatically each day without any app interaction.
-  Future<void> schedulePlanningReminder({required TimeOfDay time}) async {
+  Future<void> scheduleFocusSessionPlanningReminder({required TimeOfDay time}) async {
     await _plugin.zonedSchedule(
-      id: _kPlanningNotificationId,
+      id: _kFocusSessionPlanningNotificationId,
       title: 'Time to plan your day',
       body: 'Tap to open your Daily Planning Ritual.',
       scheduledDate: _nextInstanceOf(time),
@@ -136,12 +136,12 @@ class NotificationService {
 
   /// Schedules a one-off snooze notification [minutes] from now. Leaves the
   /// recurring daily schedule untouched so tomorrow's reminder still fires.
-  Future<void> snoozePlanningReminder(int minutes) async {
-    await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
+  Future<void> snoozeFocusSessionPlanningReminder(int minutes) async {
+    await _plugin.cancel(id: _kFocusSessionPlanningSnoozeNotificationId);
     final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
     // No matchDateTimeComponents — fires once only.
     await _plugin.zonedSchedule(
-      id: _kPlanningSnoozeNotificationId,
+      id: _kFocusSessionPlanningSnoozeNotificationId,
       title: 'Time to plan your day',
       body: 'Tap to open your Daily Planning Ritual.',
       scheduledDate: fireAt,
@@ -150,9 +150,17 @@ class NotificationService {
     );
   }
 
-  Future<void> cancelPlanningReminder() async {
-    await _plugin.cancel(id: _kPlanningNotificationId);
-    await _plugin.cancel(id: _kPlanningSnoozeNotificationId);
+  /// Cancels both the recurring daily reminder and any pending snooze.
+  /// Use when notifications are fully disabled by the user.
+  Future<void> cancelFocusSessionPlanningReminder() async {
+    await _plugin.cancel(id: _kFocusSessionPlanningNotificationId);
+    await _plugin.cancel(id: _kFocusSessionPlanningSnoozeNotificationId);
+  }
+
+  /// Cancels only the recurring daily reminder, leaving any pending snooze
+  /// intact. Use when notifications are temporarily suppressed (skip/snooze).
+  Future<void> cancelRecurringFocusSessionPlanningReminder() async {
+    await _plugin.cancel(id: _kFocusSessionPlanningNotificationId);
   }
 
   Future<void> cancelReminder(int id) async {

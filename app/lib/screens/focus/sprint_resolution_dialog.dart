@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../providers/daily_planning_provider.dart';
+import '../../providers/focus_session_planning_provider.dart';
 import '../../providers/sprint_provider.dart';
 import '../../utils/time_format.dart';
 
@@ -28,7 +28,7 @@ class _SprintResolutionDialogState
   @override
   Widget build(BuildContext context) {
     final sprintState = ref.watch(sprintProvider);
-    final todayTasks = ref.watch(todaySelectedTasksProvider).value ?? [];
+    final todayTasks = ref.watch(focusSessionPlanningSelectedTasksProvider).value ?? [];
 
     final otherTasks = todayTasks
         .where((t) =>
@@ -148,7 +148,7 @@ class _SprintResolutionDialogState
     try {
       Todo? punted;
       if (_puntedTaskId != null) {
-        final todayTasks = ref.read(todaySelectedTasksProvider).value ?? [];
+        final todayTasks = ref.read(focusSessionPlanningSelectedTasksProvider).value ?? [];
         punted = todayTasks.where((t) => t.id == _puntedTaskId).firstOrNull;
       }
       await ref.read(sprintProvider.notifier).extendWithPunt(punted);

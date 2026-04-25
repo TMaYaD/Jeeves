@@ -7,14 +7,14 @@ import 'package:jeeves/widgets/tag_text.dart';
 
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/connectivity_provider.dart';
-import 'package:jeeves/providers/daily_planning_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
-import 'package:jeeves/providers/planning_settings_provider.dart';
 import 'package:jeeves/providers/tag_filter_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/database/gtd_database.dart' show Tag;
-import 'package:jeeves/models/planning_settings.dart';
+import 'package:jeeves/models/focus_session_planning_settings.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import '../test_helpers.dart';
 
@@ -29,16 +29,17 @@ class _MockAuthNotifier extends AuthNotifier {
   Future<void> logout() async {}
 }
 
-class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
+class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
   Future<void> reEnterPlanning() async {}
 }
 
 /// Disables the planning banner so its infinite pulse animation doesn't
 /// prevent [WidgetTester.pumpAndSettle] from completing.
-class _NoBannerSettingsNotifier extends PlanningSettingsNotifier {
+class _NoBannerSettingsNotifier extends FocusSessionPlanningSettingsNotifier {
   @override
-  PlanningSettings build() => const PlanningSettings(bannerEnabled: false);
+  FocusSessionPlanningSettings build() =>
+      const FocusSessionPlanningSettings(bannerEnabled: false);
 }
 
 // ---------------------------------------------------------------------------
@@ -70,9 +71,9 @@ Widget _buildShell({
           .overrideWith((_) => Stream.value(contextTags)),
       contextTagsWithCountProvider
           .overrideWith((_) => Stream.value(contextTagsWithCount)),
-      todaySelectedTasksProvider.overrideWith((_) => Stream.value([])),
-      dailyPlanningProvider.overrideWith(() => _MockDailyPlanningNotifier()),
-      planningSettingsProvider
+      focusSessionPlanningSelectedTasksProvider.overrideWith((_) => Stream.value([])),
+      focusSessionPlanningProvider.overrideWith(() => _MockFocusSessionPlanningNotifier()),
+      focusSessionPlanningSettingsProvider
           .overrideWith(() => _NoBannerSettingsNotifier()),
     ],
     child: MaterialApp(
@@ -216,10 +217,10 @@ void main() {
           contextTagsProvider.overrideWith((_) => Stream.value([tag])),
           contextTagsWithCountProvider
               .overrideWith((_) => Stream.value([_twc(tag, 2)])),
-          todaySelectedTasksProvider.overrideWith((_) => Stream.value([])),
-          dailyPlanningProvider
-              .overrideWith(() => _MockDailyPlanningNotifier()),
-          planningSettingsProvider
+          focusSessionPlanningSelectedTasksProvider.overrideWith((_) => Stream.value([])),
+          focusSessionPlanningProvider
+              .overrideWith(() => _MockFocusSessionPlanningNotifier()),
+          focusSessionPlanningSettingsProvider
               .overrideWith(() => _NoBannerSettingsNotifier()),
         ],
         child: Consumer(builder: (ctx, ref, _) {

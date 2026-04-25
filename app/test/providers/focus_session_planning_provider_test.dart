@@ -4,30 +4,30 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/providers/daily_planning_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import '../test_helpers.dart';
 
 // Minimal stub — avoids hitting NotificationService platform channels in unit tests.
-class _StubDailyPlanningNotifier extends DailyPlanningNotifier {
+class _StubFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
   Future<void> dismissBannerForToday() async {
     final today = planningToday();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('planning_banner_dismissed_date', today);
-    bannerDismissedNotifier.value = true;
+    focusSessionPlanningBannerDismissedNotifier.value = true;
   }
 
   @override
   Future<void> skipPlanningToday() async {
-    await persistSkipToday();
+    await persistFocusSessionPlanningSkipToday();
     // NotificationService not called in tests.
   }
 
   @override
   Future<void> snoozePlanningNotification(int minutes) async {
     final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistSnoozedUntil(until);
+    await persistFocusSessionPlanningSnoozedUntil(until);
     // NotificationService not called in tests.
   }
 }
@@ -35,7 +35,8 @@ class _StubDailyPlanningNotifier extends DailyPlanningNotifier {
 ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),
-        dailyPlanningProvider.overrideWith(() => _StubDailyPlanningNotifier()),
+        focusSessionPlanningProvider
+            .overrideWith(() => _StubFocusSessionPlanningNotifier()),
       ],
     );
 
@@ -46,7 +47,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  group('DailyPlanningNotifier', () {
+  group('FocusSessionPlanningNotifier', () {
     late GtdDatabase db;
     late ProviderContainer container;
 
@@ -58,19 +59,19 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      planningCompletionNotifier.value = false;
-      bannerDismissedNotifier.value = false;
+      focusSessionPlanningCompletionNotifier.value = false;
+      focusSessionPlanningBannerDismissedNotifier.value = false;
     });
 
     test('startDay preserves energyLevel and availableMinutes', () async {
-      final notifier = container.read(dailyPlanningProvider.notifier);
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       notifier.setEnergyLevel('medium');
       notifier.setAvailableTime(300); // 5 hours
 
       await notifier.startDay();
 
-      final stateAfterStart = container.read(dailyPlanningProvider);
+      final stateAfterStart = container.read(focusSessionPlanningProvider);
       expect(stateAfterStart.energyLevel, 'medium',
           reason: 'startDay should not clear energy level');
       expect(stateAfterStart.availableMinutes, 300,
@@ -80,7 +81,7 @@ void main() {
     });
 
     test('reEnterPlanning restores energy and time after startDay', () async {
-      final notifier = container.read(dailyPlanningProvider.notifier);
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       notifier.setEnergyLevel('high');
       notifier.setAvailableTime(360); // 6 hours
@@ -88,7 +89,7 @@ void main() {
       await notifier.startDay();
       await notifier.reEnterPlanning();
 
-      final state = container.read(dailyPlanningProvider);
+      final state = container.read(focusSessionPlanningProvider);
       expect(state.energyLevel, 'high',
           reason: 'reEnterPlanning should restore energy from before startDay');
       expect(state.availableMinutes, 360,
@@ -100,7 +101,7 @@ void main() {
     });
 
     test('startDay resets step and inbox counters', () async {
-      final notifier = container.read(dailyPlanningProvider.notifier);
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       notifier.setInitialInboxCount(5);
       notifier.advanceStep();
@@ -108,7 +109,7 @@ void main() {
 
       await notifier.startDay();
 
-      final state = container.read(dailyPlanningProvider);
+      final state = container.read(focusSessionPlanningProvider);
       expect(state.currentStep, 0);
       expect(state.initialInboxCount, isNull);
       expect(state.inboxClarifiedCount, 0);
@@ -116,7 +117,7 @@ void main() {
     });
   });
 
-  group('DailyPlanningNotifier — banner dismissal', () {
+  group('FocusSessionPlanningNotifier — banner dismissal', () {
     late GtdDatabase db;
     late ProviderContainer container;
 
@@ -128,37 +129,37 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      bannerDismissedNotifier.value = false;
-      planningCompletionNotifier.value = false;
+      focusSessionPlanningBannerDismissedNotifier.value = false;
+      focusSessionPlanningCompletionNotifier.value = false;
     });
 
-    test('dismissBannerForToday sets bannerDismissedNotifier and persists',
+    test('dismissBannerForToday sets focusSessionPlanningBannerDismissedNotifier and persists',
         () async {
-      final notifier = container.read(dailyPlanningProvider.notifier);
-      expect(bannerDismissedNotifier.value, isFalse);
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      expect(focusSessionPlanningBannerDismissedNotifier.value, isFalse);
 
       await notifier.dismissBannerForToday();
 
-      expect(bannerDismissedNotifier.value, isTrue);
+      expect(focusSessionPlanningBannerDismissedNotifier.value, isTrue);
 
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('planning_banner_dismissed_date'),
           equals(planningToday()));
     });
 
-    test('bannerDismissedNotifier resets to false for a different day',
+    test('focusSessionPlanningBannerDismissedNotifier resets to false for a different day',
         () async {
       // Simulate yesterday's dismissal persisted.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('planning_banner_dismissed_date', '2000-01-01');
-      await initPlanningCompletion();
+      await initFocusSessionPlanningCompletion();
 
       // Today does not match '2000-01-01'.
-      expect(bannerDismissedNotifier.value, isFalse);
+      expect(focusSessionPlanningBannerDismissedNotifier.value, isFalse);
     });
   });
 
-  group('DailyPlanningNotifier — skip and snooze', () {
+  group('FocusSessionPlanningNotifier — skip and snooze', () {
     late GtdDatabase db;
     late ProviderContainer container;
 
@@ -172,14 +173,14 @@ void main() {
       await db.close();
       // Reset SharedPreferences mock and reload suppression flags to clear state.
       SharedPreferences.setMockInitialValues({});
-      await loadNotificationSuppression();
+      await loadFocusSessionPlanningNotificationSuppression();
     });
 
     test('skipPlanningToday sets skipped flag for today', () async {
-      final notifier = container.read(dailyPlanningProvider.notifier);
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
       await notifier.skipPlanningToday();
 
-      expect(isNotificationSuppressedToday(), isTrue);
+      expect(isFocusSessionPlanningNotificationSuppressed(), isTrue);
 
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('planning_notification_skipped_date'),
@@ -188,10 +189,10 @@ void main() {
 
     test('snoozePlanningNotification sets snoozed-until in the future',
         () async {
-      final notifier = container.read(dailyPlanningProvider.notifier);
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
       await notifier.snoozePlanningNotification(60);
 
-      expect(isNotificationSuppressedToday(), isTrue);
+      expect(isFocusSessionPlanningNotificationSuppressed(), isTrue);
 
       final prefs = await SharedPreferences.getInstance();
       final stored =
@@ -200,22 +201,22 @@ void main() {
       expect(stored!.isAfter(DateTime.now()), isTrue);
     });
 
-    test('loadNotificationSuppression reflects skipped state', () async {
-      // Persist the skip date directly without going through persistSkipToday
-      // so we can independently verify loadNotificationSuppression picks it up.
+    test('loadFocusSessionPlanningNotificationSuppression reflects skipped state', () async {
+      // Persist the skip date directly without going through persistFocusSessionPlanningSkipToday
+      // so we can independently verify loadFocusSessionPlanningNotificationSuppression picks it up.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('planning_notification_skipped_date', planningToday());
 
-      await loadNotificationSuppression();
-      expect(isNotificationSuppressedToday(), isTrue);
+      await loadFocusSessionPlanningNotificationSuppression();
+      expect(isFocusSessionPlanningNotificationSuppressed(), isTrue);
     });
 
     test('skip state from a previous day does not suppress today', () async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('planning_notification_skipped_date', '2000-01-01');
-      await loadNotificationSuppression();
+      await loadFocusSessionPlanningNotificationSuppression();
 
-      expect(isNotificationSuppressedToday(), isFalse);
+      expect(isFocusSessionPlanningNotificationSuppressed(), isFalse);
     });
   });
 }
