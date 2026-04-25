@@ -150,9 +150,17 @@ class NotificationService {
     );
   }
 
+  /// Cancels both the recurring daily reminder and any pending snooze.
+  /// Use when notifications are fully disabled by the user.
   Future<void> cancelFocusSessionPlanningReminder() async {
     await _plugin.cancel(id: _kFocusSessionPlanningNotificationId);
     await _plugin.cancel(id: _kFocusSessionPlanningSnoozeNotificationId);
+  }
+
+  /// Cancels only the recurring daily reminder, leaving any pending snooze
+  /// intact. Use when notifications are temporarily suppressed (skip/snooze).
+  Future<void> cancelRecurringFocusSessionPlanningReminder() async {
+    await _plugin.cancel(id: _kFocusSessionPlanningNotificationId);
   }
 
   Future<void> cancelReminder(int id) async {

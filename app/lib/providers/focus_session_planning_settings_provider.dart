@@ -82,8 +82,13 @@ class FocusSessionPlanningSettingsNotifier
     if (state.notificationEnabled &&
         !isFocusSessionPlanningNotificationSuppressed()) {
       await svc.scheduleFocusSessionPlanningReminder(time: state.planningTime);
-    } else {
+    } else if (!state.notificationEnabled) {
+      // Fully disabled: cancel both the recurring reminder and any snooze.
       await svc.cancelFocusSessionPlanningReminder();
+    } else {
+      // Temporarily suppressed (skip/snooze): cancel only the recurring
+      // reminder so an active snooze notification is not wiped.
+      await svc.cancelRecurringFocusSessionPlanningReminder();
     }
   }
 }
@@ -98,11 +103,15 @@ Future<void> initFocusSessionPlanningNotificationSchedule() async {
   final svc = NotificationService.instance;
   final notificationEnabled =
       prefs.getBool(_kNotificationEnabled) ?? true;
-  if (!notificationEnabled || isFocusSessionPlanningNotificationSuppressed()) {
-    // Clear any reminder left scheduled from a previous session so the
-    // current (disabled/suppressed) settings are honoured even if the app
-    // was killed before [_rescheduleFocusSessionPlanningReminder] could run.
+  if (!notificationEnabled) {
+    // Fully disabled: cancel both the recurring reminder and any snooze.
     await svc.cancelFocusSessionPlanningReminder();
+    return;
+  }
+  if (isFocusSessionPlanningNotificationSuppressed()) {
+    // Temporarily suppressed (skip/snooze): cancel only the recurring
+    // reminder so an active snooze notification survives the restart.
+    await svc.cancelRecurringFocusSessionPlanningReminder();
     return;
   }
 
