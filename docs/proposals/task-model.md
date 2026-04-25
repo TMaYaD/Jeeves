@@ -561,11 +561,13 @@ Rename the internal concepts to be session-relative:
 |-----------------------------|----------------------------|----------------------------|
 | Daily Planning Ritual / DPR | `focus_session_planning`   | "Plan today" / similar     |
 | Evening Shutdown            | `focus_session_review`     | "Wrap up the day" / similar|
-| (future) Weekly Planning    | `periodic_planning`        | "Plan this week"           |
-| (future) Weekly Retro       | `periodic_review`          | "Reflect on this week"     |
 
-Side benefit: `focus_session_*` and `periodic_session_*` make the §6.1
-distinction structurally obvious in code.
+The PeriodicSession concept (§6.1) doesn't exist in code yet — it will be
+born as part of #54 (Weekly Review wizard). That work should land with
+`periodic_session_*` naming from day one; there's nothing to rename.
+
+Side benefit: `focus_session_*` (now) and `periodic_session_*` (when #54
+ships) make the §6.1 distinction structurally obvious in code.
 
 ---
 
