@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../models/planning_settings.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/focus_settings_provider.dart';
 import '../../providers/planning_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
 import '../../widgets/jeeves_logo.dart';
@@ -100,6 +101,9 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('DAILY PLANNING'),
           _DailyPlanningSettings(),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+          _sectionHeader('FOCUS MODE'),
+          _FocusModeSettings(),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
           Padding(
@@ -324,5 +328,94 @@ class _DailyPlanningSettings extends ConsumerWidget {
           .read(planningSettingsProvider.notifier)
           .setDefaultSnoozeDuration(picked);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Focus mode settings
+// ---------------------------------------------------------------------------
+
+class _FocusModeSettings extends ConsumerWidget {
+  const _FocusModeSettings();
+
+  static const _sprintOptions = [5, 10, 15, 20, 25, 30];
+  static const _breakOptions = [1, 2, 3, 5, 10];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(focusSettingsProvider);
+    final notifier = ref.read(focusSettingsProvider.notifier);
+
+    return Column(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.timer_outlined, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Sprint duration',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: Text(
+            '${settings.sprintDurationMinutes} minutes',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () => _pickDuration(
+            context,
+            title: 'Sprint duration',
+            options: _sprintOptions,
+            current: settings.sprintDurationMinutes,
+            onPicked: notifier.setSprintDurationMinutes,
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.self_improvement, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Break duration',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: Text(
+            '${settings.breakDurationMinutes} minutes',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () => _pickDuration(
+            context,
+            title: 'Break duration',
+            options: _breakOptions,
+            current: settings.breakDurationMinutes,
+            onPicked: notifier.setBreakDurationMinutes,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickDuration(
+    BuildContext context, {
+    required String title,
+    required List<int> options,
+    required int current,
+    required Future<void> Function(int) onPicked,
+  }) async {
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(title),
+        children: options
+            .map((m) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(ctx, m),
+                  child: Text(
+                    '$m minutes',
+                    style: TextStyle(
+                      fontWeight: m == current
+                          ? FontWeight.w700
+                          : FontWeight.normal,
+                    ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked != null) await onPicked(picked);
   }
 }

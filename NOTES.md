@@ -15,6 +15,8 @@
 
 ## 2026-04-22
 
+- Sprint timer (issue #47): batching suggestion can't group by context tags because the Drift-generated `Todo` data class doesn't carry joined `tags` — those come from the `todo_tags` junction and require a separate join query. Simplified to "any 2+ micro-tasks (≤ 15 min each) whose combined total fits in one sprint" for the initial implementation; per-context grouping would require a `watchSelectedForTodayWithTags` DAO method returning joined rows.
+- `AndroidScheduleMode.exactAllowWhileIdle` is required for sprint-end notifications so they fire while the device is in Doze mode. The planning reminder uses `inexactAllowWhileIdle` (daily nudge, precision not critical), but sprint alerts need to be exact since users are actively watching the timer.
 - `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
 - Notes in `ActiveFocusScreen` are now rendered as interactive `MarkdownBody` (same `flutter_markdown_plus` stack as `TaskDetailScreen`). Checkboxes toggle and persist via `taskDetailNotifierProvider.updateNotes`; links launch via `url_launcher`. `_FocusBody` became a `ConsumerStatefulWidget` to hold `_notes` local state for optimistic checkbox updates, synced from `todo.notes` via `didUpdateWidget`.
 
