@@ -1,0 +1,115 @@
+# Dependabot configuration.
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Strategy:
+#   - Weekly cadence (Monday) so fresh PRs land at the start of the work week.
+#   - Minor + patch updates per ecosystem are bundled into a single grouped PR
+#     to minimize review churn; major versions still open as individual PRs.
+#   - Commit prefix `chore(deps)` matches the project's conventional-commit
+#     style so the Flutter CI lockfile guard and other gates don't need to
+#     special-case Dependabot branches.
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------
+  # GitHub Actions — keeps subosito/flutter-action, actions/checkout,
+  # actions/setup-java, actions/cache, and wzieba/Firebase-Distribution fresh.
+  # Dependabot updates the pinned SHA and the trailing `# v4` comment together.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      github-actions:
+        update-types: [minor, patch]
+
+  # ---------------------------------------------------------------------------
+  # Backend — Python via uv (pyproject.toml + uv.lock).
+  # Dependabot's `pip` ecosystem supports uv lockfiles.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      backend-python:
+        update-types: [minor, patch]
+
+  # ---------------------------------------------------------------------------
+  # Backend container image base (backend/Dockerfile).
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      backend-docker:
+        update-types: [minor, patch]
+
+  # ---------------------------------------------------------------------------
+  # Infra docker-compose services (infra/docker-compose.yml).
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: docker-compose
+    directory: /infra
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      infra-compose:
+        update-types: [minor, patch]
+
+  # ---------------------------------------------------------------------------
+  # Flutter app (app/pubspec.yaml).
+  # The exact `flutter:` pin in pubspec.yaml's environment block makes
+  # Dependabot's pub helper resolve against the same Flutter+Dart we use
+  # locally and in CI, so the lockfile guard in flutter-ci.yml passes without
+  # manual intervention.
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: pub
+    directory: /app
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      app-flutter:
+        update-types: [minor, patch]
+    ignore:
+      # Pinned to a git SHA on purpose; the release watcher in
+      # flutter-ci.yml (riverpod-generator-stable-watch) handles this.
+      - dependency-name: riverpod_generator
+      - dependency-name: riverpod_analyzer_utils
+
+  # ---------------------------------------------------------------------------
+  # Android side of the Flutter app (app/android/build.gradle.kts).
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: gradle
+    directory: /app/android
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      app-android:
+        update-types: [minor, patch]

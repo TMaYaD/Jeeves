@@ -1,14 +1,35 @@
 # Notes
 
+## 2026-04-25
+
+- Task-model domain-modelling review (see `docs/proposals/task-model.md`): current implementation is a global Task FSM with orthogonal flags bolted on (`selected_for_today`, `in_progress_since`, `blocked_by_todo_id`); proposal is to retire the global FSM in favour of orthogonal decomposition (intent enum, polymorphic blockers, first-class `FocusSession`, timer with local state machine). Filed: #181 (polymorphic blockers epic — Task/Person/Time/Location variants), #182 (TimeLog), #183 (terminology rename), #184 (Clarify & Organise rework), #185 (FocusSession refactor). #134 superseded by #185. PR #140 on hold pending #185.
+
 ## 2026-04-23
+
+- Issue #154: `ref.read(...).update()` in `initState` throws "Tried to modify a provider while the widget tree was building" on a fresh install because Riverpod guards synchronous provider writes during the build phase. Fix: make `searchQueryProvider` `autoDispose` so the state resets to `SearchQuery()` automatically when the screen is popped — no manual `initState` reset needed.
+
+
 
 - On-device Nirvana import (#151): CSV format uses UUID v5 of "name|type|parentName" as item ID (no native ID in CSV), making re-imports idempotent via INSERT OR REPLACE. JSON format uses the native Nirvana UUID. Both are then wrapped in a second UUID v5 (`jeeves://nirvana_import/<nirvana_id>`) to produce the Drift row ID.
 - `parseCsv` implements a hand-rolled RFC-4180 parser (single-pass, handles embedded newlines in quoted fields) rather than pulling in a `csv` package — keeps the import path dependency-free and avoids adding a package dependency for a once-at-onboarding feature.
 
 ## 2026-04-22
 
+- Sprint timer (issue #47): batching suggestion can't group by context tags because the Drift-generated `Todo` data class doesn't carry joined `tags` — those come from the `todo_tags` junction and require a separate join query. Simplified to "any 2+ micro-tasks (≤ 15 min each) whose combined total fits in one sprint" for the initial implementation; per-context grouping would require a `watchSelectedForTodayWithTags` DAO method returning joined rows.
+- `AndroidScheduleMode.exactAllowWhileIdle` is required for sprint-end notifications so they fire while the device is in Doze mode. The planning reminder uses `inexactAllowWhileIdle` (daily nudge, precision not critical), but sprint alerts need to be exact since users are actively watching the timer.
 - `ElapsedTimerWidget` no longer shows a live HH:MM:SS clock (anxiety-inducing). It now shows a Jeeves-flavoured bucketed phrase updated every minute: 5-min buckets under 15 min, 15-min buckets up to 2 h, 30-min buckets beyond. The static `jeevesPhrase(Duration, {isPaused})` method is public so unit tests can cover all bucket boundaries without a widget harness.
 - Notes in `ActiveFocusScreen` are now rendered as interactive `MarkdownBody` (same `flutter_markdown_plus` stack as `TaskDetailScreen`). Checkboxes toggle and persist via `taskDetailNotifierProvider.updateNotes`; links launch via `url_launcher`. `_FocusBody` became a `ConsumerStatefulWidget` to hold `_notes` local state for optimistic checkbox updates, synced from `todo.notes` via `didUpdateWidget`.
+
+### SWS (#129)
+
+- MWA signer uses `MethodChannel('jeeves/mwa')` → `MwaPlugin.kt` → `mobile-wallet-adapter-clientlib-ktx:2.0.3`. `sign()` opens a new MWA session each call (shows wallet auth prompt twice per login); a follow-up should cache the auth token across `getPublicKey` + `sign` within a single session. The `signedPayload` field from `signMessages` is the raw signature bytes — if a wallet prepends a recovery byte, the backend's ed25519 verify will fail and the format expectation must be revisited.
+- `isSwsMode` const (in `auth_mode.dart`) is the canonical way to gate UI on auth mode — using `authImplProvider` type-checks (`is SwsAuthProvider`) is fragile because tests override the provider.
+- `LoginScreen` "Don't have an account?" is gated on `!isSwsMode`. In SWS mode the wallet is the identity; there is no registration step.
+
+- `PasswordLoginWidget` (ConsumerStatefulWidget) owns loading/error state and the conflict dialog — `LoginScreen` delegates entirely to `provider.buildLoginWidget(context)` without type-checking. All providers implement `buildLoginWidget` and manage their own state.
+- `AuthNotifier.login()` signature changed from `(String, String, {onConflict})` to `(Map<String, dynamic>, {onConflict})` — existing login_screen_test.dart fake notifiers needed updating.
+- No existing Redis client in the backend — created `backend/app/redis.py` as a thin `aioredis.from_url` wrapper with a `get_redis` FastAPI dependency, mirroring the `get_db` pattern.
+- `ProviderContainer` cannot be passed as `Ref` to auth providers in tests; override `authImplProvider` itself in the container and read from it so the `ref` captured inside the provider is the container's internal `Ref`.
 
 ## 2026-04-21
 

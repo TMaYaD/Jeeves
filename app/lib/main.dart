@@ -56,9 +56,14 @@ void _handleNotificationResponse(NotificationResponse response) async {
   switch (actionId) {
     case kNotificationActionOpen:
     case null:
-      // Null actionId means the notification body was tapped — both cases
-      // navigate to the planning ritual.
-      appRouter.go('/planning');
+      // Null actionId means the notification body was tapped.
+      // Focus/sprint notifications carry payload 'focus' and return to the
+      // active focus screen; all others go to the planning ritual.
+      if (response.payload == 'focus') {
+        appRouter.go('/focus/active');
+      } else {
+        appRouter.go('/planning');
+      }
 
     case kNotificationActionSnooze:
       // Read snooze duration directly from SharedPreferences; Riverpod is not

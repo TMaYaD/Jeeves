@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../providers/daily_planning_provider.dart';
+import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_provider.dart';
+import '../providers/sprint_timer_provider.dart' show findBatchingCandidates;
 import '../utils/time_format.dart';
 import 'focus/sprint_resolution_dialog.dart';
 
@@ -95,6 +97,8 @@ class _FocusScreenState extends ConsumerState<FocusScreen> {
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (err, _) => Center(child: Text('Error: $err')),
                 data: (tasks) {
+                  final sprintMinutes =
+                      ref.watch(focusSettingsProvider).sprintDurationMinutes;
                   final withDue = tasks.where((t) => t.dueDate != null).toList()
                     ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
                   final scheduledNoDue = tasks
@@ -104,6 +108,11 @@ class _FocusScreenState extends ConsumerState<FocusScreen> {
                       .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
                       .toList();
                   final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
+
+                  final batchCandidates = findBatchingCandidates(
+                    tasks,
+                    sprintMinutes: sprintMinutes,
+                  );
 
                   return ListView(
                     physics: const ClampingScrollPhysics(),
@@ -144,6 +153,12 @@ class _FocusScreenState extends ConsumerState<FocusScreen> {
                         ),
                       ),
                       const SizedBox(height: 8),
+                      // Batching suggestion banner.
+                      if (batchCandidates.isNotEmpty)
+                        _BatchSuggestionBanner(
+                          candidates: batchCandidates,
+                          sprintMinutes: sprintMinutes,
+                        ),
                       if (sortedTasks.isEmpty)
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -396,7 +411,6 @@ class _TaskRow extends ConsumerWidget {
       ),
     );
   }
-
 }
 
 class _StartSprintButton extends ConsumerWidget {
@@ -430,6 +444,83 @@ class _StartSprintButton extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Batching suggestion banner
+// ---------------------------------------------------------------------------
+
+class _BatchSuggestionBanner extends StatefulWidget {
+  const _BatchSuggestionBanner({
+    required this.candidates,
+    required this.sprintMinutes,
+  });
+  final List<Todo> candidates;
+  final int sprintMinutes;
+
+  @override
+  State<_BatchSuggestionBanner> createState() => _BatchSuggestionBannerState();
+}
+
+class _BatchSuggestionBannerState extends State<_BatchSuggestionBanner> {
+  bool _dismissed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+
+    final count = widget.candidates.length;
+    final total = widget.candidates.fold<int>(
+        0, (sum, t) => sum + (t.timeEstimate ?? 0));
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFDE68A)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.lightbulb_outline_rounded,
+              size: 18, color: Color(0xFFD97706)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Batch $count micro-tasks into one sprint',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF92400E),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$count tasks · ${total}m total — fits in one ${widget.sprintMinutes}-min sprint.',
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFFB45309)),
+                ),
+              ],
+            ),
+          ),
+          Semantics(
+            button: true,
+            label: 'Dismiss batching suggestion',
+            child: GestureDetector(
+              onTap: () => setState(() => _dismissed = true),
+              child: const Icon(Icons.close_rounded,
+                  size: 16, color: Color(0xFFD97706)),
+            ),
+          ),
+        ],
       ),
     );
   }

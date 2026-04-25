@@ -16,6 +16,8 @@ import 'package:timezone/timezone.dart' as tz;
 // Stable notification IDs.
 const _kPlanningNotificationId = 0;
 const _kPlanningSnoozeNotificationId = 1;
+const _kSprintEndNotificationId = 2;
+const _kBreakEndNotificationId = 3;
 
 // Action identifiers sent back via onDidReceiveNotificationResponse.
 const kNotificationActionOpen = 'open';
@@ -162,6 +164,83 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
+  // Sprint timer notifications
+  // ---------------------------------------------------------------------------
+
+  /// Schedules a one-off notification at [endTime] for the end of a focus sprint.
+  Future<void> scheduleSprintEndNotification({
+    required DateTime endTime,
+    required String taskTitle,
+  }) async {
+    await _plugin.cancel(id: _kSprintEndNotificationId);
+    final scheduled = tz.TZDateTime.from(endTime, tz.local);
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final canExact = await android?.canScheduleExactNotifications() ?? false;
+    await _plugin.zonedSchedule(
+      id: _kSprintEndNotificationId,
+      title: 'Sprint complete!',
+      body: 'Time\'s up on "$taskTitle". Mark it done or keep going.',
+      payload: 'focus',
+      scheduledDate: scheduled,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'sprint_timer',
+          'Sprint Timer',
+          channelDescription: 'Pomodoro sprint start/end alerts',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentSound: true,
+        ),
+      ),
+      androidScheduleMode: canExact
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  /// Schedules a one-off notification at [endTime] for the end of a break.
+  Future<void> scheduleBreakEndNotification({
+    required DateTime endTime,
+  }) async {
+    await _plugin.cancel(id: _kBreakEndNotificationId);
+    final scheduled = tz.TZDateTime.from(endTime, tz.local);
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final canExact = await android?.canScheduleExactNotifications() ?? false;
+    await _plugin.zonedSchedule(
+      id: _kBreakEndNotificationId,
+      title: 'Break over — back to it!',
+      body: 'Your 3-minute break has ended. Start the next sprint.',
+      payload: 'focus',
+      scheduledDate: scheduled,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'sprint_timer',
+          'Sprint Timer',
+          channelDescription: 'Pomodoro sprint start/end alerts',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentSound: true,
+        ),
+      ),
+      androidScheduleMode: canExact
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  /// Cancels both sprint-related notifications.
+  Future<void> cancelSprintNotifications() async {
+    await _plugin.cancel(id: _kSprintEndNotificationId);
+    await _plugin.cancel(id: _kBreakEndNotificationId);
+  }
+
+  // ---------------------------------------------------------------------------
   // Focus session notification
   // ---------------------------------------------------------------------------
 
@@ -170,13 +249,8 @@ class NotificationService {
   /// replaces the previous notification on Android.
   Future<void> showFocusNotification({
     required String title,
-    required Duration elapsed,
+    required String body,
   }) async {
-    final h = elapsed.inHours.toString().padLeft(2, '0');
-    final m = (elapsed.inMinutes % 60).toString().padLeft(2, '0');
-    final s = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
-    final elapsedStr = '$h:$m:$s';
-
     const android = AndroidNotificationDetails(
       'focus_mode',
       'Focus Mode',
@@ -191,8 +265,9 @@ class NotificationService {
 
     await _plugin.show(
       id: _kFocusId,
-      title: 'In Focus: $title',
-      body: 'Elapsed: $elapsedStr',
+      title: title,
+      body: body,
+      payload: 'focus',
       notificationDetails: const NotificationDetails(android: android, iOS: iOS),
     );
   }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/focus_session_provider.dart';
+import '../providers/sprint_timer_provider.dart';
 
 /// Displays a Jeeves-flavoured elapsed-time reminder sourced from
 /// [focusModeProvider]. Updates every minute; bucketed to 5-min accuracy
@@ -26,12 +27,114 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   /// [seed] makes template selection deterministic. The widget seeds from
   /// the active task id plus the current bucket so the phrase is stable
   /// per-task-per-bucket and doesn't flip mid-glance on rebuilds.
-  static String jeevesPhrase(Duration elapsed, {bool isPaused = false, int? seed}) {
+  /// Returns the phase-aware Jeeves phrase that mirrors what the widget shows
+  /// on screen. Suitable for use in notifications, which run outside the
+  /// widget tree.
+  static String phaseAwarePhrase({
+    required SprintTimerState sprintState,
+    required Duration elapsed,
+    required String? activeTodoId,
+    bool isPaused = false,
+  }) {
+    final sprintSeed =
+        Object.hash(sprintState.activeTaskId, sprintState.sprintNumber);
+
+    if (sprintState.phase == SprintPhase.breakOvertime) {
+      return jeevesOvertimePhrase(isFocus: false, seed: sprintSeed);
+    }
+    if (sprintState.isBreak && sprintState.progress <= 0.15) {
+      return jeevesBreakNearEndHint(seed: sprintSeed);
+    }
+    if (sprintState.isBreak) {
+      return jeevesBreakEncouragement(seed: sprintSeed);
+    }
+    if (sprintState.phase == SprintPhase.focusOvertime) {
+      return jeevesOvertimePhrase(isFocus: true, seed: sprintSeed);
+    }
+    if (sprintState.isFocus && sprintState.progress <= 0.15) {
+      return jeevesSprintNearEndHint(seed: sprintSeed);
+    }
+
+    final m = elapsed.inMinutes;
+    final bucketSize = m < 15 ? 5 : (m < 120 ? 15 : 30);
+    final bucket = m ~/ bucketSize;
+    final seed = Object.hash(activeTodoId, bucket, bucketSize);
+    return jeevesPhrase(
+      elapsed,
+      isPaused: isPaused,
+      seed: seed,
+      suppressRest: sprintState.isPostBreakCooldown,
+    );
+  }
+
+  /// Returns a Jeeves-flavoured phrase when the sprint or break time has elapsed
+  /// and the user has not yet transitioned (overtime / waiting state).
+  static String jeevesOvertimePhrase({required bool isFocus, int? seed}) {
+    final pool = isFocus
+        ? const [
+            'The sprint is done, sir, and one must insist — a break, if you please.',
+            'Time is up, sir. Step away from the work. One must be firm.',
+            'The sprint has concluded, sir. One is quite firm on the matter of rest.',
+            'You have exceeded the sprint, sir. Put it down.',
+          ]
+        : const [
+            'The break is well and truly over, sir. One must insist you return.',
+            'One must be quite firm on this, sir — back to work, if you please.',
+            'The task has waited long enough, sir. One insists on your return.',
+            'Back to it, sir. One cannot allow further delay.',
+          ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
+  }
+
+  /// Returns a Jeeves-flavoured sprint near-end hint (last 15% of sprint).
+  static String jeevesSprintNearEndHint({int? seed}) {
+    const pool = [
+      'Nearly there, sir. A break will be in order.',
+      'The sprint draws to a close. One shall insist on a rest.',
+      'Almost done, sir. A reprieve is imminent.',
+      'One more push, sir, and then we rest.',
+      'The end approaches, sir. A well-earned break awaits.',
+    ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
+  }
+
+  /// Returns a Jeeves-flavoured break near-end hint (last 15% of break).
+  static String jeevesBreakNearEndHint({int? seed}) {
+    const pool = [
+      'Nearly refreshed, sir. The task awaits your return.',
+      'The break draws to a close, sir. Back to the fray, shortly.',
+      'Almost time, sir. The task will not attend to itself.',
+      'Back to it shortly, sir. One trusts you are suitably restored.',
+      'The reprieve is nearly spent, sir. Onwards.',
+    ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
+  }
+
+  /// Returns a Jeeves-flavoured break encouragement with no specific time.
+  static String jeevesBreakEncouragement({int? seed}) {
+    const pool = [
+      'A spot of tea is in order, sir.',
+      'Perhaps a brief constitutional, sir.',
+      'Stretch the legs, sir.',
+      'Step away from the desk, sir.',
+      'One insists on tea, sir.',
+      'A brisk walk would serve you well, sir.',
+      'The kettle awaits, sir.',
+    ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
+  }
+
+  static String jeevesPhrase(Duration elapsed,
+      {bool isPaused = false, int? seed, bool suppressRest = false}) {
     final m = elapsed.inMinutes;
     final duration = m < 5 ? '' : _describeDuration(m);
     final template = isPaused
         ? _pickPausedTemplate(m, seed: seed)
-        : _pickTemplate(m, seed: seed);
+        : _pickTemplate(m, seed: seed, suppressRest: suppressRest);
     var phrase = template.replaceAll('{d}', duration);
 
     // Jeeves does not begin sentences with lowercase letters.
@@ -102,7 +205,8 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
 
   /// Picks a template whose tone matches the elapsed time. Deterministic
   /// when [seed] is supplied; otherwise draws from a shared [Random].
-  static String _pickTemplate(int m, {int? seed}) {
+  /// When [suppressRest] is true, "perhaps a break" suggestions are omitted.
+  static String _pickTemplate(int m, {int? seed, bool suppressRest = false}) {
     late final List<String> pool;
 
     if (m < 5) {
@@ -132,23 +236,39 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
         'A full {d}, sir.',
       ];
     } else if (m < 180) {
-      pool = const [
-        '{d} on the matter, sir. One ventures to suggest a brief respite.',
-        "{d} elapsed, sir. Perhaps a moment's pause would not go amiss.",
-        '{d} already, sir. Might one suggest a brief interval?',
-      ];
+      pool = suppressRest
+          ? const [
+              '{d} elapsed, sir.',
+              '{d} on the task, sir.',
+              'A full {d}, sir.',
+            ]
+          : const [
+              '{d} on the matter, sir. One ventures to suggest a brief respite.',
+              "{d} elapsed, sir. Perhaps a moment's pause would not go amiss.",
+              '{d} already, sir. Might one suggest a brief interval?',
+            ];
     } else if (m < 240) {
-      pool = const [
-        '{d}, sir. I feel it my duty to gently insist on a respite.',
-        '{d} at the grindstone, sir. One really must protest.',
-        '{d}, sir. One must, regrettably, insist on a pause.',
-      ];
+      pool = suppressRest
+          ? const [
+              '{d} elapsed, sir.',
+              '{d} on the task, sir.',
+            ]
+          : const [
+              '{d}, sir. I feel it my duty to gently insist on a respite.',
+              '{d} at the grindstone, sir. One really must protest.',
+              '{d}, sir. One must, regrettably, insist on a pause.',
+            ];
     } else {
-      pool = const [
-        '{d}, sir. I really must speak plainly: do stop.',
-        '{d} at this, sir. This has gone quite far enough.',
-        '{d}, sir. I beg you — put the matter down.',
-      ];
+      pool = suppressRest
+          ? const [
+              '{d} elapsed, sir.',
+              '{d} at the task, sir.',
+            ]
+          : const [
+              '{d}, sir. I really must speak plainly: do stop.',
+              '{d} at this, sir. This has gone quite far enough.',
+              '{d}, sir. I beg you — put the matter down.',
+            ];
     }
 
     final rng = seed == null ? _random : Random(seed);
@@ -189,25 +309,76 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
   @override
   Widget build(BuildContext context) {
     final focusState = ref.watch(focusModeProvider);
+    final sprintState = ref.watch(sprintTimerProvider);
+
+    if (!focusState.isActive) return const SizedBox.shrink();
+
+    final sprintSeed =
+        Object.hash(sprintState.activeTaskId, sprintState.sprintNumber);
+
+    // Break overtime — insist the user return to work.
+    if (sprintState.phase == SprintPhase.breakOvertime) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesOvertimePhrase(isFocus: false, seed: sprintSeed),
+        icon: Icons.self_improvement,
+        iconColor: const Color(0xFF10B981),
+      );
+    }
+
+    // Break near-end (last 15%) — nudge towards returning.
+    if (sprintState.isBreak && sprintState.progress <= 0.15) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesBreakNearEndHint(seed: sprintSeed),
+        icon: Icons.self_improvement,
+        iconColor: const Color(0xFF10B981),
+      );
+    }
+
+    // Break countdown — encouragement without a countdown.
+    if (sprintState.isBreak) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesBreakEncouragement(seed: sprintSeed),
+        icon: Icons.self_improvement,
+        iconColor: const Color(0xFF10B981),
+      );
+    }
+
+    // Focus overtime — urgently insist on a break.
+    if (sprintState.phase == SprintPhase.focusOvertime) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesOvertimePhrase(isFocus: true, seed: sprintSeed),
+        icon: Icons.timer_outlined,
+        iconColor: const Color(0xFFF59E0B),
+      );
+    }
+
+    // Sprint near-end (last 15%) — hint about the upcoming break.
+    if (sprintState.isFocus && sprintState.progress <= 0.15) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesSprintNearEndHint(seed: sprintSeed),
+        icon: Icons.timer_outlined,
+        iconColor: const Color(0xFF2563EB),
+      );
+    }
+
     final m = focusState.elapsed.inMinutes;
-    // Seed by task id + minute-bucket so the phrase is stable within a
-    // bucket; it re-rolls naturally when the duration crosses a threshold.
-    // Buckets mirror _describeDuration's granularity.
     final bucketSize = m < 15 ? 5 : (m < 120 ? 15 : 30);
     final bucket = m ~/ bucketSize;
-    final seed = focusState.isActive
-        ? Object.hash(focusState.activeTodoId, bucket, bucketSize)
-        : null;
-    final phrase = focusState.isActive
-        ? ElapsedTimerWidget.jeevesPhrase(
-            focusState.elapsed,
-            isPaused: focusState.isPaused,
-            seed: seed,
-          )
-        : '';
+    final seed = Object.hash(focusState.activeTodoId, bucket, bucketSize);
+    final phrase = ElapsedTimerWidget.jeevesPhrase(
+      focusState.elapsed,
+      isPaused: focusState.isPaused,
+      seed: seed,
+      suppressRest: sprintState.isPostBreakCooldown,
+    );
 
     if (phrase.isEmpty) return const SizedBox.shrink();
+    return _buildBanner(phrase);
+  }
 
+  Widget _buildBanner(String phrase,
+      {IconData icon = Icons.access_time,
+      Color iconColor = _accent}) {
     final voiceStyle = widget.style ??
         const TextStyle(
           fontFamily: 'Manrope',
@@ -219,28 +390,53 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
           letterSpacing: 0.1,
         );
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: _bg,
-        border: Border(
-          top: BorderSide(color: Color(0x228B6B3E)),
-          bottom: BorderSide(color: Color(0x228B6B3E)),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
-        child: Row(
-          children: [
-            ScaleTransition(
-              scale: Tween<double>(begin: 0.92, end: 1.08).animate(
-                CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
+    // Outer SizedBox reserves a fixed footprint so the clock ring above never
+    // shifts when the phrase changes length. Height = 3× line height (27px)
+    // plus vertical padding (18+18), with a few extra pixels for descenders
+    // ('g', 'p', 'y' bottoms). The inner parchment Container is top-anchored
+    // and auto-sizes; content that grows beyond the outer height is clipped.
+    const outerHeight = 120.0; // ~3-line budget + padding + descender margin
+    return SizedBox(
+      height: outerHeight,
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
+        children: [
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              decoration: const BoxDecoration(
+                color: _bg,
+                border: Border(
+                  top: BorderSide(color: Color(0x228B6B3E)),
+                  bottom: BorderSide(color: Color(0x228B6B3E)),
+                ),
               ),
-              child: const Icon(Icons.access_time, size: 24, color: _accent),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ScaleTransition(
+                    scale: Tween<double>(begin: 0.92, end: 1.08).animate(
+                      CurvedAnimation(
+                          parent: _pulse, curve: Curves.easeInOut),
+                    ),
+                    child: Icon(icon, size: 24, color: iconColor),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      phrase,
+                      style: voiceStyle,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(width: 14),
-            Expanded(child: Text(phrase, style: voiceStyle)),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -5,6 +5,22 @@ from datetime import datetime
 from pydantic import BaseModel, field_validator
 
 
+class SWSChallengeRequest(BaseModel):
+    public_key: str
+
+
+class SWSChallengeResponse(BaseModel):
+    nonce: str
+    issued_at: str
+    domain: str
+
+
+class SWSLoginRequest(BaseModel):
+    public_key: str
+    signature: str  # base64-encoded ed25519 signature
+    nonce: str
+
+
 class Token(BaseModel):
     access_token: str
     refresh_token: str
@@ -38,7 +54,8 @@ class UserCreate(BaseModel):
 
 class UserRead(BaseModel):
     id: str
-    email: str
+    # Nullable for SWS (Solana) users who authenticate without an email.
+    email: str | None
     is_active: bool
     created_at: datetime
 
