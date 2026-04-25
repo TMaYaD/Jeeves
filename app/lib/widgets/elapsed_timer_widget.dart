@@ -350,7 +350,11 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
           letterSpacing: 0.1,
         );
 
+    // Fixed height keeps the banner's footprint stable regardless of how many
+    // lines the phrase wraps to — short copy leaves internal whitespace,
+    // long copy fills it, but the clock ring never shifts.
     return Container(
+      height: 90,
       decoration: const BoxDecoration(
         color: _bg,
         border: Border(
@@ -358,20 +362,25 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
           bottom: BorderSide(color: Color(0x228B6B3E)),
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
-        child: Row(
-          children: [
-            ScaleTransition(
-              scale: Tween<double>(begin: 0.92, end: 1.08).animate(
-                CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
-              ),
-              child: Icon(icon, size: 24, color: iconColor),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      child: Row(
+        children: [
+          ScaleTransition(
+            scale: Tween<double>(begin: 0.92, end: 1.08).animate(
+              CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
             ),
-            const SizedBox(width: 14),
-            Expanded(child: Text(phrase, style: voiceStyle)),
-          ],
-        ),
+            child: Icon(icon, size: 24, color: iconColor),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(
+              phrase,
+              style: voiceStyle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
