@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-04-25
+
+- Task-model domain-modelling review (see `docs/proposals/task-model.md`): current implementation is a global Task FSM with orthogonal flags bolted on (`selected_for_today`, `in_progress_since`, `blocked_by_todo_id`); proposal is to retire the global FSM in favour of orthogonal decomposition (intent enum, polymorphic blockers, first-class `FocusSession`, timer with local state machine). Filed: #181 (polymorphic blockers epic — Task/Person/Time/Location variants), #182 (TimeLog), #183 (terminology rename), #184 (Clarify & Organise rework), #185 (FocusSession refactor). #134 superseded by #185. PR #140 on hold pending #185.
+
 ## 2026-04-23
 
 - Issue #154: `ref.read(...).update()` in `initState` throws "Tried to modify a provider while the widget tree was building" on a fresh install because Riverpod guards synchronous provider writes during the build phase. Fix: make `searchQueryProvider` `autoDispose` so the state resets to `SearchQuery()` automatically when the screen is popped — no manual `initState` reset needed.
