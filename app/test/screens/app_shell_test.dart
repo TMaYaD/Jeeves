@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
-import 'package:jeeves/models/planning_settings.dart';
+import 'package:jeeves/models/focus_session_planning_settings.dart';
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/connectivity_provider.dart';
-import 'package:jeeves/providers/daily_planning_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
-import 'package:jeeves/providers/planning_settings_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,7 +18,7 @@ import '../test_helpers.dart';
 // Mock notifiers — no-ops async operations that touch platform channels
 // ---------------------------------------------------------------------------
 
-class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
+class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
   Future<void> reEnterPlanning() async {}
 
@@ -32,12 +32,13 @@ class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
   Future<void> snoozePlanningNotification(int minutes) async {}
 }
 
-class _MockPlanningSettingsNotifier extends PlanningSettingsNotifier {
-  _MockPlanningSettingsNotifier(this._settings);
-  final PlanningSettings _settings;
+class _MockFocusSessionPlanningSettingsNotifier
+    extends FocusSessionPlanningSettingsNotifier {
+  _MockFocusSessionPlanningSettingsNotifier(this._settings);
+  final FocusSessionPlanningSettings _settings;
 
   @override
-  PlanningSettings build() => _settings;
+  FocusSessionPlanningSettings build() => _settings;
 }
 
 class _MockAuthNotifier extends AuthNotifier {
@@ -58,7 +59,8 @@ class _MockAuthNotifier extends AuthNotifier {
 Widget _buildShellOnly({
   List<Todo> items = const [],
   VoidCallback? onLogout,
-  PlanningSettings planningSettings = const PlanningSettings(bannerEnabled: false),
+  FocusSessionPlanningSettings planningSettings =
+      const FocusSessionPlanningSettings(bannerEnabled: false),
 }) {
   return ProviderScope(
     overrides: [
@@ -72,10 +74,11 @@ Widget _buildShellOnly({
       scheduledProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
-      todaySelectedTasksProvider.overrideWith((_) => Stream.value([])),
-      dailyPlanningProvider.overrideWith(() => _MockDailyPlanningNotifier()),
-      planningSettingsProvider.overrideWith(
-          () => _MockPlanningSettingsNotifier(planningSettings)),
+      focusSessionPlanningSelectedTasksProvider.overrideWith((_) => Stream.value([])),
+      focusSessionPlanningProvider
+          .overrideWith(() => _MockFocusSessionPlanningNotifier()),
+      focusSessionPlanningSettingsProvider.overrideWith(
+          () => _MockFocusSessionPlanningSettingsNotifier(planningSettings)),
     ],
     child: MaterialApp(
       home: Builder(
@@ -83,10 +86,11 @@ Widget _buildShellOnly({
           final router = GoRouter(
             initialLocation: '/inbox',
             routes: [
-              // /planning is outside the ShellRoute — matches production router
-              // where PlanningRitualScreen renders without the AppShell wrapper.
+              // /focus-session-planning is outside the ShellRoute — matches
+              // production router where FocusSessionPlanningScreen renders
+              // without the AppShell wrapper.
               GoRoute(
-                path: '/planning',
+                path: '/focus-session-planning',
                 builder: (_, _) => const Scaffold(body: Text('Planning body')),
               ),
               ShellRoute(
@@ -152,8 +156,8 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    planningCompletionNotifier.value = false;
-    bannerDismissedNotifier.value = false;
+    focusSessionPlanningCompletionNotifier.value = false;
+    focusSessionPlanningBannerDismissedNotifier.value = false;
   });
 
   testWidgets('AppShell renders CustomDrawer that can be opened', (tester) async {

@@ -1,5 +1,11 @@
 # Notes
 
+## 2026-04-25 (issue #183)
+
+- Terminology rename: date-keyed SharedPreferences flags (`planning_ritual_completed_date`, `planning_banner_dismissed_date`, etc.) were NOT renamed — they are date-encoded and will be deleted by #185 (FocusSession refactor), not renamed. Renaming them would entrench the bug class under a new label.
+- DAO methods `watchNextActionsForPlanning` / `watchSkippedNextActionsForPlanning` were NOT renamed — they accept a `String today` date parameter sourced from `planningToday()`, so the parameterisation itself is what is date-encoded.
+- Inline one-time migration added to `FocusSessionPlanningSettingsNotifier.build()` copies old `planning_settings_*` prefs keys to `focus_session_planning_settings_*` then deletes the old keys. No-op on fresh install or after migration already ran.
+
 ## 2026-04-25
 
 - Task-model domain-modelling review (see `docs/proposals/task-model.md`): current implementation is a global Task FSM with orthogonal flags bolted on (`selected_for_today`, `in_progress_since`, `blocked_by_todo_id`); proposal is to retire the global FSM in favour of orthogonal decomposition (intent enum, polymorphic blockers, first-class `FocusSession`, timer with local state machine). Filed: #181 (polymorphic blockers epic — Task/Person/Time/Location variants), #182 (TimeLog), #183 (terminology rename), #184 (Clarify & Organise rework), #185 (FocusSession refactor). #134 superseded by #185. PR #140 on hold pending #185.

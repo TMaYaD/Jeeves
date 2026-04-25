@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../providers/daily_planning_provider.dart';
+import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
@@ -13,7 +13,7 @@ class FocusScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncSelected = ref.watch(todaySelectedTasksProvider);
+    final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
 
     return Scaffold(
       body: SafeArea(
@@ -150,9 +150,9 @@ class FocusScreen extends ConsumerWidget {
   }
 
   Future<void> _replanDay(BuildContext context, WidgetRef ref) async {
-    await ref.read(dailyPlanningProvider.notifier).reEnterPlanning();
+    await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
     if (!context.mounted) return;
-    context.go('/planning');
+    context.go('/focus-session-planning');
   }
 }
 

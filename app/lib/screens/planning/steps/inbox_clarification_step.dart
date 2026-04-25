@@ -12,7 +12,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../providers/daily_planning_provider.dart';
+import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/inbox_provider.dart';
 
 class InboxClarificationStep extends ConsumerWidget {
@@ -21,7 +21,7 @@ class InboxClarificationStep extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncItems = ref.watch(inboxItemsProvider);
-    final sessionDate = ref.watch(planningSessionDateProvider);
+    final sessionDate = ref.watch(focusSessionPlanningDateProvider);
 
     return asyncItems.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -30,9 +30,9 @@ class InboxClarificationStep extends ConsumerWidget {
         final pendingItems = items.where((i) => !(i.selectedForToday == false && i.dailySelectionDate == sessionDate)).toList();
 
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          final state = ref.read(dailyPlanningProvider);
+          final state = ref.read(focusSessionPlanningProvider);
           if (state.initialInboxCount == null) {
-            ref.read(dailyPlanningProvider.notifier).setInitialInboxCount(pendingItems.length);
+            ref.read(focusSessionPlanningProvider.notifier).setInitialInboxCount(pendingItems.length);
           }
         });
 
@@ -109,7 +109,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       return false;
     }
     final notes = _notesCtrl.text.trim();
-    await ref.read(dailyPlanningProvider.notifier).updateInboxItemFields(
+    await ref.read(focusSessionPlanningProvider.notifier).updateInboxItemFields(
           widget.todo.id,
           title: title,
           notes: notes.isNotEmpty ? notes : null,
@@ -135,7 +135,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       final saved = await _saveFields(context);
       if (!saved || !context.mounted) return;
       await ref
-          .read(dailyPlanningProvider.notifier)
+          .read(focusSessionPlanningProvider.notifier)
           .processInboxItem(widget.todo.id, destination);
     } catch (e) {
       error = e;
@@ -343,7 +343,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           icon: Icons.next_plan_outlined,
           color: const Color(0xFF6B7280),
           onTap: () {
-            ref.read(dailyPlanningProvider.notifier).skipInboxItem(widget.todo.id);
+            ref.read(focusSessionPlanningProvider.notifier).skipInboxItem(widget.todo.id);
           },
         ),
       ],

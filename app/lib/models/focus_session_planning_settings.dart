@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// User-configurable settings for the Daily Planning feature.
-class PlanningSettings {
-  const PlanningSettings({
+/// User-configurable settings for the Focus Session Planning feature.
+class FocusSessionPlanningSettings {
+  const FocusSessionPlanningSettings({
     this.planningTime = const TimeOfDay(hour: 8, minute: 0),
     this.notificationEnabled = true,
     this.bannerEnabled = true,
@@ -20,14 +20,14 @@ class PlanningSettings {
   /// Available snooze durations in minutes (15 min, 1 hr, tomorrow).
   final List<int> snoozeDurations;
 
-  PlanningSettings copyWith({
+  FocusSessionPlanningSettings copyWith({
     TimeOfDay? planningTime,
     bool? notificationEnabled,
     bool? bannerEnabled,
     int? defaultSnoozeDuration,
     List<int>? snoozeDurations,
   }) =>
-      PlanningSettings(
+      FocusSessionPlanningSettings(
         planningTime: planningTime ?? this.planningTime,
         notificationEnabled: notificationEnabled ?? this.notificationEnabled,
         bannerEnabled: bannerEnabled ?? this.bannerEnabled,

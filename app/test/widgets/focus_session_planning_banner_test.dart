@@ -4,11 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/planning_settings.dart';
-import 'package:jeeves/providers/daily_planning_provider.dart';
+import 'package:jeeves/models/focus_session_planning_settings.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/providers/planning_settings_provider.dart';
-import 'package:jeeves/widgets/planning_banner.dart';
+import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
+import 'package:jeeves/widgets/focus_session_planning_banner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
 
@@ -16,13 +16,13 @@ import '../test_helpers.dart';
 // Mock notifiers
 // ---------------------------------------------------------------------------
 
-class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
+class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   bool bannerDismissed = false;
 
   @override
   Future<void> dismissBannerForToday() async {
     bannerDismissed = true;
-    bannerDismissedNotifier.value = true;
+    focusSessionPlanningBannerDismissedNotifier.value = true;
   }
 
   @override
@@ -32,12 +32,13 @@ class _MockDailyPlanningNotifier extends DailyPlanningNotifier {
   Future<void> snoozePlanningNotification(int minutes) async {}
 }
 
-class _MockPlanningSettingsNotifier extends PlanningSettingsNotifier {
-  _MockPlanningSettingsNotifier(this._settings);
-  final PlanningSettings _settings;
+class _MockFocusSessionPlanningSettingsNotifier
+    extends FocusSessionPlanningSettingsNotifier {
+  _MockFocusSessionPlanningSettingsNotifier(this._settings);
+  final FocusSessionPlanningSettings _settings;
 
   @override
-  PlanningSettings build() => _settings;
+  FocusSessionPlanningSettings build() => _settings;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,13 +49,14 @@ Widget _buildBanner({
   required bool planningComplete,
   required bool bannerDismissed,
   required bool bannerEnabled,
-  _MockDailyPlanningNotifier? planningNotifier,
+  _MockFocusSessionPlanningNotifier? planningNotifier,
 }) {
-  planningCompletionNotifier.value = planningComplete;
-  bannerDismissedNotifier.value = bannerDismissed;
+  focusSessionPlanningCompletionNotifier.value = planningComplete;
+  focusSessionPlanningBannerDismissedNotifier.value = bannerDismissed;
 
-  final settings = PlanningSettings(bannerEnabled: bannerEnabled);
-  final mockPlanning = planningNotifier ?? _MockDailyPlanningNotifier();
+  final settings = FocusSessionPlanningSettings(bannerEnabled: bannerEnabled);
+  final mockPlanning =
+      planningNotifier ?? _MockFocusSessionPlanningNotifier();
 
   final router = GoRouter(
     initialLocation: '/',
@@ -63,7 +65,7 @@ Widget _buildBanner({
         builder: (context, state, child) => Scaffold(
           body: Column(
             children: [
-              const PlanningBanner(),
+              const FocusSessionPlanningBanner(),
               Expanded(child: child),
             ],
           ),
@@ -76,7 +78,7 @@ Widget _buildBanner({
         ],
       ),
       GoRoute(
-        path: '/planning',
+        path: '/focus-session-planning',
         builder: (_, _) => const Scaffold(body: Text('planning')),
       ),
     ],
@@ -84,9 +86,9 @@ Widget _buildBanner({
 
   return ProviderScope(
     overrides: [
-      planningSettingsProvider
-          .overrideWith(() => _MockPlanningSettingsNotifier(settings)),
-      dailyPlanningProvider.overrideWith(() => mockPlanning),
+      focusSessionPlanningSettingsProvider.overrideWith(
+          () => _MockFocusSessionPlanningSettingsNotifier(settings)),
+      focusSessionPlanningProvider.overrideWith(() => mockPlanning),
       databaseProvider.overrideWithValue(GtdDatabase(NativeDatabase.memory())),
     ],
     child: MaterialApp.router(routerConfig: router),
@@ -102,8 +104,8 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    planningCompletionNotifier.value = false;
-    bannerDismissedNotifier.value = false;
+    focusSessionPlanningCompletionNotifier.value = false;
+    focusSessionPlanningBannerDismissedNotifier.value = false;
   });
 
   testWidgets('banner visible when ritual incomplete and not dismissed',
@@ -151,7 +153,8 @@ void main() {
     expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
   });
 
-  testWidgets('tapping banner navigates to /planning', (tester) async {
+  testWidgets('tapping banner navigates to /focus-session-planning',
+      (tester) async {
     await tester.pumpWidget(_buildBanner(
       planningComplete: false,
       bannerDismissed: false,
@@ -166,7 +169,7 @@ void main() {
   });
 
   testWidgets('dismiss button hides banner', (tester) async {
-    final mockPlanning = _MockDailyPlanningNotifier();
+    final mockPlanning = _MockFocusSessionPlanningNotifier();
 
     await tester.pumpWidget(_buildBanner(
       planningComplete: false,
@@ -196,7 +199,7 @@ void main() {
     expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
 
     // Simulate ritual completion.
-    planningCompletionNotifier.value = true;
+    focusSessionPlanningCompletionNotifier.value = true;
     await tester.pump();
 
     expect(find.byKey(const Key('planning_banner_visible')), findsNothing);

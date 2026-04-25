@@ -1,13 +1,13 @@
 import 'package:go_router/go_router.dart';
 
 import 'auth/auth_mode.dart';
-import 'providers/daily_planning_provider.dart';
+import 'providers/focus_session_planning_provider.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next_actions/next_actions_screen.dart';
-import 'screens/planning/planning_ritual_screen.dart';
+import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/scheduled/scheduled_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
@@ -21,7 +21,7 @@ import 'screens/search/search_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
-  refreshListenable: planningCompletionNotifier,
+  refreshListenable: focusSessionPlanningCompletionNotifier,
   redirect: (context, state) {
     // In SWS mode the wallet is the identity — there is no email signup, so
     // /register is meaningless. Bounce any stale deep link / nav entry back to
@@ -38,8 +38,8 @@ final appRouter = GoRouter(
     // /login remains reachable from Settings → "Sign in to sync" whenever the
     // user does want to sync.
     if (state.matchedLocation.startsWith('/focus') &&
-        !planningCompletionNotifier.value) {
-      return '/planning';
+        !focusSessionPlanningCompletionNotifier.value) {
+      return '/focus-session-planning';
     }
     return null;
   },
@@ -53,8 +53,8 @@ final appRouter = GoRouter(
       builder: (context, state) => const RegisterScreen(),
     ),
     GoRoute(
-      path: '/planning',
-      builder: (context, state) => const PlanningRitualScreen(),
+      path: '/focus-session-planning',
+      builder: (context, state) => const FocusSessionPlanningScreen(),
     ),
     GoRoute(
       path: '/settings',

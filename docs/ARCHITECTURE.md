@@ -136,7 +136,7 @@ Focus Mode is the task execution layer activated after daily planning. Its archi
 
 `/focus/active` is a top-level `GoRoute` registered **outside** the `ShellRoute`, so `AppShell` (drawer, navigation) is not rendered. The user sees only the active task. `/focus` (the daily plan list) remains inside the `ShellRoute`.
 
-The router has a `redirect` callback that checks `planningCompletionNotifier.value`; any path starting with `/focus` redirects to `/planning` when daily planning has not been completed. `planningCompletionNotifier` is also set as `refreshListenable` so the guard re-evaluates reactively when planning state changes.
+The router has a `redirect` callback that checks `focusSessionPlanningCompletionNotifier.value`; any path starting with `/focus` redirects to `/focus-session-planning` when daily planning has not been completed. `focusSessionPlanningCompletionNotifier` is also set as `refreshListenable` so the guard re-evaluates reactively when planning state changes.
 
 ### FocusModeNotifier (`providers/focus_session_provider.dart`)
 
@@ -247,42 +247,42 @@ The search screen lives at `/search` outside the `ShellRoute` (full-screen, no d
 - The **Search** entry in the drawer navigation (visible on every GTD list screen).
 - **Ctrl+K** or **/** keyboard shortcuts registered in `AppShell` via Flutter's `Shortcuts` + `Actions` API.
 
-## Daily Planning State
+## Focus Session Planning State
 
-The daily planning feature uses a mix of global `ValueNotifier` objects (for cross-widget reactivity without a Riverpod container) and `SharedPreferences` for persistence across restarts.
+The focus session planning feature uses a mix of global `ValueNotifier` objects (for cross-widget reactivity without a Riverpod container) and `SharedPreferences` for persistence across restarts.
 
 ### Key objects
 
 | Object | Type | Purpose |
 |---|---|---|
-| `planningCompletionNotifier` | `ValueNotifier<bool>` | `true` when the ritual has been completed today |
-| `bannerDismissedNotifier` | `ValueNotifier<bool>` | `true` when the banner has been dismissed today |
-| `DailyPlanningNotifier` | Riverpod `NotifierProvider` | Step navigation, task mutations, banner dismiss, skip/snooze |
-| `PlanningSettingsNotifier` | Riverpod `NotifierProvider` | User preferences: planning time, notification/banner toggles, snooze duration |
+| `focusSessionPlanningCompletionNotifier` | `ValueNotifier<bool>` | `true` when the ritual has been completed today |
+| `focusSessionPlanningBannerDismissedNotifier` | `ValueNotifier<bool>` | `true` when the banner has been dismissed today |
+| `FocusSessionPlanningNotifier` | Riverpod `NotifierProvider` | Step navigation, task mutations, banner dismiss, skip/snooze |
+| `FocusSessionPlanningSettingsNotifier` | Riverpod `NotifierProvider` | User preferences: planning time, notification/banner toggles, snooze duration |
 
-Both `ValueNotifier` objects are initialised from `SharedPreferences` in `initPlanningCompletion()`, which is called in `main()` before `runApp`.
+Both `ValueNotifier` objects are initialised from `SharedPreferences` in `initFocusSessionPlanningCompletion()`, which is called in `main()` before `runApp`.
 
 ### Planning nudges
 
 The ritual can no longer be auto-launched. Users are nudged through two opt-in mechanisms:
 
-1. **`PlanningBanner`** (`lib/widgets/planning_banner.dart`) — rendered at the top of `AppShell` (all shell-hosted routes). Visible when `planningCompletionNotifier == false && !bannerDismissedNotifier && planningSettings.bannerEnabled`. Tapping navigates to `/planning`; the × button calls `DailyPlanningNotifier.dismissBannerForToday()`.
+1. **`FocusSessionPlanningBanner`** (`lib/widgets/focus_session_planning_banner.dart`) — rendered at the top of `AppShell` (all shell-hosted routes). Visible when `focusSessionPlanningCompletionNotifier == false && !focusSessionPlanningBannerDismissedNotifier && planningSettings.bannerEnabled`. Tapping navigates to `/focus-session-planning`; the × button calls `FocusSessionPlanningNotifier.dismissBannerForToday()`.
 
-2. **Local notification** — scheduled daily at the user's configured planning time via `NotificationService.schedulePlanningReminder()`. Uses `flutter_local_notifications` `zonedSchedule` with `matchDateTimeComponents: time` so the OS re-fires it every day without app interaction. Notification actions: Open (→ `/planning`), Snooze (one-off reschedule), Skip today (cancel until tomorrow). Handled in `_handleNotificationResponse` in `main.dart`. `matchDateTimeComponents: time` means the OS reschedules the notification daily automatically — snooze cancels the repeating schedule and registers a one-off fire instead.
+2. **Local notification** — scheduled daily at the user's configured planning time via `NotificationService.scheduleFocusSessionPlanningReminder()`. Uses `flutter_local_notifications` `zonedSchedule` with `matchDateTimeComponents: time` so the OS re-fires it every day without app interaction. Notification actions: Open (→ `/focus-session-planning`), Snooze (one-off reschedule), Skip today (cancel until tomorrow). Handled in `_handleNotificationResponse` in `main.dart`. `matchDateTimeComponents: time` means the OS reschedules the notification daily automatically — snooze cancels the repeating schedule and registers a one-off fire instead.
 
 ### SharedPreferences keys
 
 | Key | Value | Description |
 |---|---|---|
-| `planning_ritual_completed_date` | `yyyy-MM-dd` | Date of last completed ritual |
-| `planning_banner_dismissed_date` | `yyyy-MM-dd` | Date banner was last dismissed |
-| `planning_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" |
-| `planning_notification_snoozed_until` | ISO-8601 datetime | When the snoozed notification will fire |
-| `planning_settings_time_hour` | `int` | Planning time hour |
-| `planning_settings_time_minute` | `int` | Planning time minute |
-| `planning_settings_notification_enabled` | `bool` | Notification toggle |
-| `planning_settings_banner_enabled` | `bool` | Banner toggle |
-| `planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |
+| `planning_ritual_completed_date` | `yyyy-MM-dd` | Date of last completed ritual (date-keyed; deferred to #185) |
+| `planning_banner_dismissed_date` | `yyyy-MM-dd` | Date banner was last dismissed (date-keyed; deferred to #185) |
+| `planning_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" (date-keyed; deferred to #185) |
+| `planning_notification_snoozed_until` | ISO-8601 datetime | When the snoozed notification will fire (date-keyed; deferred to #185) |
+| `focus_session_planning_settings_time_hour` | `int` | Planning time hour |
+| `focus_session_planning_settings_time_minute` | `int` | Planning time minute |
+| `focus_session_planning_settings_notification_enabled` | `bool` | Notification toggle |
+| `focus_session_planning_settings_banner_enabled` | `bool` | Banner toggle |
+| `focus_session_planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |
 
 ## Sprint Timer (Pomodoro Engine)
 
