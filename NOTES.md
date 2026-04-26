@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-04-26
+
+- Task-model rollout decisions locked (see `docs/proposals/task-model-rollout.md`): #185 ships as 11 sequential vertical-slice PRs (A–K), state column shrinks one allowed value per PR, FocusSession lands in a single load-bearing PR I (no FSM↔FocusSession coexistence). Polymorphic blockers (#181) explicitly NOT a prerequisite — `scheduled`/`blocked`/`waiting_for` strip first and lose `blocked_by_todo_id` (lossy, alpha-acceptable). TimeLog (#182, PR D) ships without `focus_session_id` (added in PR I). Pomodoro sprints stop writing time directly. `completed_at` renamed to `done_at` (not parallel-added). `intent` enum 3-value at column level day one (`{next, maybe, trash}`); UI surfaces next+maybe only. PR I scope is "wire don't rewrite" — new ritual UX (#180) is out of scope. Decisions mirrored into proposal §4.5/§6/§7.1/§7.2/§8/§9.1.
+
 ## 2026-04-26 (issue #183)
 
 - Issue-author comments override review-bot scope interpretations when the two conflict on the same point. CodeRabbit flagged the `planning_settings_*` → `focus_session_planning_settings_*` prefs migration as a "no backwards-compatibility shims" scope violation, but the issue author had explicitly authorized that exact migration in the #183 comment thread — a comment the bot cannot read. Capitulating to the bot's reading erased a sanctioned migration and shipped a silent settings-loss regression (planning time, notification/banner toggles, snooze duration silently reset to defaults on upgrade). Future: re-read the full comment thread on the referenced issue before treating a CI reviewer's scope objection as authoritative.

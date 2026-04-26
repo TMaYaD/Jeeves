@@ -3,9 +3,10 @@
 > **Status:** Domain-modelling proposal & discussion record. Not current-state
 > architecture. Implementation is unchanged at the time of writing;
 > `docs/ARCHITECTURE.md` remains the source of truth for what is built today.
-> Decisions captured here will land through follow-up issues.
+> Decisions captured here land through the rollout in
+> `docs/proposals/task-model-rollout.md` (PRs A–K against TMaYaD/Jeeves#185).
 >
-> **Date:** 2026-04-25
+> **Date:** 2026-04-25 (initial); 2026-04-26 (rollout decisions appended in §9).
 > **Origin:** Session reviewing the original Task FSM (reference SVG)
 > against the implemented FSM in `app/lib/models/gtd_state_machine.dart` and
 > `app/lib/database/daos/todo_dao.dart`.
@@ -182,20 +183,45 @@ reference FSM shows this as a labeled transition without specifying who
 triggers it. Automation is the correct call; the manual alternative leaves
 orphaned blocked tasks.
 
-### 4.5 `deferred` state — **OPEN, leaning NOISE**
+### 4.5 `deferred` state — **DECIDED — NOISE, evaporates**
 
-Used for `in_progress → deferred` (Abandon mid-day). Two readings:
+Used for `in_progress → deferred` (Abandon mid-day). Two readings were on the
+table:
 
 1. *Necessary refinement.* Distinguishes "abandoned today, still a Next
    Action" from "Someday/Maybe."
 2. *Spurious.* Equivalent to "Stop + clear `selected_for_today`," which the
    reference FSM's `Focus → Next (Return to Next)` already covers.
 
-In the proposed model (§7) the question dissolves: "abandoned today" is
+In the proposed model the question dissolves: "abandoned today" is
 expressed as `intent=next` + remove from current `FocusSession.tasks` (which
 the user may or may not actually do — see §6.3) + (optionally) `intent=maybe`
 if the user is permanently abandoning. Three values of intent + session
 membership cover the space without a `deferred` bucket.
+
+**Decided (2026-04-26 rollout planning):** `deferred` evaporates with no
+replacement column. Rows collapse to `state = 'next_action'` and the verb
+"defer" gets repurposed to mean `setIntent(maybe)` once `intent` exists.
+Lands as PR C (then E) in `docs/proposals/task-model-rollout.md`.
+
+**Sibling decisions on the other "blocker-flavoured" states** (also
+2026-04-26, also lossy-acceptable in alpha — polymorphic blockers per §6.2 /
+TMaYaD/Jeeves#181 are **not** a prerequisite for the FSM strip):
+
+- `scheduled` collapses to `state = 'next_action'` with `due_date` retained.
+  Investigation found the state half-baked: list view exists but no
+  auto-transition, no notification, and `ScheduledReviewStep` doesn't
+  consult `scheduledDueTodayProvider`. Comes back as a `TimeBlocker` under
+  TMaYaD/Jeeves#181 if needed. Lands as PR A.
+- `blocked` collapses to `state = 'next_action'`. The
+  `blocked_by_todo_id` column is **dropped** (not preserved as a hint), and
+  the cascade-unblock side effect on `done` retires with it. Lossy on the
+  task-task dependency, acceptable in alpha; comes back via TMaYaD/Jeeves#181
+  later. Lands as PR B.
+- `waiting_for` collapses to `state = 'next_action'`. The existing
+  `waiting_for` text column is kept verbatim (no rename); the "Waiting For"
+  list re-sources from `WHERE waiting_for IS NOT NULL` plus the standard
+  actionable filters. Lands as PR H.
 
 ### 4.6 Permissive direct edges — **OPEN**
 
@@ -234,7 +260,7 @@ The reason: the axes the FSM is trying to encode are genuinely orthogonal.
 |-----------------------------|-----------------------------------------------|----------------|
 | Has it been clarified?      | `state == 'inbox'`                            | boolean        |
 | Does the user want to do it?| `state == 'next_action'` vs `'someday_maybe'` | enum / intent  |
-| Is it complete?             | `state == 'done'` (and/or `completed`)        | timestamp      |
+| Is it complete?             | `state == 'done'` + `completed_at` timestamp  | timestamp (`done_at`, renamed from `completed_at`) |
 | What's blocking it?         | `state` ∈ {`waiting_for`, `scheduled`, `blocked`} + `blocked_by_todo_id`, `waiting_for` text | list of blockers |
 | Is it on today's plan?      | `selected_for_today`                          | session-membership |
 | Is it the active task?      | `state == 'in_progress'`                      | session pointer + timer |
@@ -275,17 +301,39 @@ Blocker  (polymorphic — see §6.2 for nuance)
   LocationBlocker { place }                   # e.g. "fix garage door at home"
 
 FocusSession
-  id, started_at, ended_at
+  id:              UUID PK
+  user_id          (partial unique index WHERE ended_at IS NULL — at most
+                    one open session per user at any moment; see §7.1)
+  started_at, ended_at
   tasks:           List<TaskRef>              # locked at session start
   current_task_id: TaskRef?                   # the "in progress" pointer
 
 PeriodicSession                               # NOT a generalization of Focus
   (separate entity — see §6.1)
 
-Timer  (per FocusSession)
-  state:     {idle, running, paused}          # small local FSM — fine
-  intervals: List<{start, end}>               # appended on stop; sums to task.time_spent
+TimeLog                                       # one contiguous task-focus span
+  id, user_id, task_id, focus_session_id?
+  started_at, ended_at?                       # ended_at NULL = currently active
+  (partial unique index WHERE ended_at IS NULL — at most one open log per
+   user; mirrors the FocusSession invariant at the time-tracking layer)
+
+Timer  (per FocusSession — display-side construct)
+  state: {idle, running, paused}              # small local FSM, no DB rows
 ```
+
+**TimeLog framing (revised 2026-04-26).** A `TimeLog` row IS a (start, end)
+pair scoped to one task. A `FocusSession`'s "intervals" are simply its
+`TimeLog` rows. Switching focus from task A → B → A inside one session
+writes three rows. **Pauses do not split rows** — they are client-side
+cosmetic per the existing `focus_session_provider.dart:111-125` pattern;
+breaks count as work. **Pomodoro sprints do not write `TimeLog` rows
+either** — sprints are an orthogonal display loop on top of the running
+log; the existing `_logSprintTimeToTask` write path retires when `TimeLog`
+ships (otherwise it would double-count).
+
+Earlier drafts of this section described `Timer.intervals: List<{start,
+end}>` as a per-task, per-pause-split construct. That framing is
+superseded.
 
 Wins relative to the current FSM:
 
@@ -300,8 +348,12 @@ Wins relative to the current FSM:
 - **Day-boundary date arithmetic disappears.** `FocusSession` owns its own
   `started_at`/`ended_at`; "today" is UI copy. The bug class flagged in the
   `project_day_boundary` memory is structurally impossible.
-- **Polymorphic blockers** subsume `waiting_for`, `scheduled`, and `blocked`
-  with cleaner semantics — including multiple simultaneous blockers (§6.2).
+- **Polymorphic blockers** *will* subsume `waiting_for`, `scheduled`, and
+  `blocked` with cleaner semantics — including multiple simultaneous blockers
+  (§6.2). The rollout (§4.5 sibling decisions, 2026-04-26) strips those
+  blocker-flavoured states *first* and lets the polymorphic-blocker epic
+  (TMaYaD/Jeeves#181) reintroduce them later — alpha tolerates the lossy
+  middle.
 - **Ritual-bypass methods retire** because the FSM they were bypassing no
   longer exists.
 
@@ -505,26 +557,97 @@ Independently:
 
 ---
 
+## 7.1 FocusSession PK and uniqueness (decided 2026-04-26)
+
+```text
+focus_sessions
+  id          UUID PRIMARY KEY
+  user_id     UUID NOT NULL
+  started_at  TIMESTAMPTZ NOT NULL
+  ended_at    TIMESTAMPTZ NULL
+  current_task_id UUID NULL  REFERENCES todos(id)
+
+  CREATE UNIQUE INDEX focus_sessions_one_open_per_user
+    ON focus_sessions(user_id) WHERE ended_at IS NULL;
+
+focus_session_tasks
+  focus_session_id UUID NOT NULL REFERENCES focus_sessions(id)
+  task_id          UUID NOT NULL REFERENCES todos(id)
+  position         INT  NOT NULL
+  PRIMARY KEY (focus_session_id, task_id)
+```
+
+**Why this shape.**
+
+- Many sessions per user over time, exactly one open at any moment. The
+  partial unique index enforces structurally what the FSM enforced
+  imperatively ("at most one in-progress task").
+- Multiple task-focus spans per session (`focus_session_tasks` membership) and
+  multiple sessions per day are both supported.
+- Session lifecycle is owned by `started_at` / `ended_at`; "today" is UI
+  copy. The day-boundary bug class flagged in the `project_day_boundary`
+  memory is structurally impossible.
+
+## 7.2 `Intent` enum is 3-value at the column level (decided 2026-04-26)
+
+```text
+intent ∈ {next, maybe, trash}
+```
+
+`'trash'` is included in the column domain from PR E (the strip-someday PR
+that introduces the column). UI surfaces only `next` and `maybe` for now;
+the `trash` UX is a separate design.
+
+The lossy alternative — landing the column 2-valued and altering it to
+3-valued later — would force a second migration and a brittle
+column-with-shifting-domain. Cheaper to land the final domain on day one and
+gate the third value behind UI.
+
+---
+
 ## 8. Open questions
 
-These are *not* decided:
+Still *not* decided:
 
 1. **Projects vs. TaskBlockers.** Does the model need a first-class Project
    entity? If yes, how heavy? If no, how do we handle non-trivial
-   dependency chains?
+   dependency chains? *(Owned by TMaYaD/Jeeves#181 — polymorphic blockers
+   epic.)*
 2. **Recurring-window TimeBlockers.** Schema and evaluation strategy. RRULE
-   subset vs. our own enum vs. cron-like syntax.
+   subset vs. our own enum vs. cron-like syntax. *(Owned by
+   TMaYaD/Jeeves#181.)*
 3. **Permissiveness of intent transitions.** Should the model enforce
    ritual-gated changes (e.g. "you can only move a task from `next` to
    `maybe` during a periodic session"), or allow ad-hoc edits anytime? The
-   current FSM is lax; the reference FSM was strict.
+   current FSM is lax; the reference FSM was strict. *(Picked up after the
+   FSM strip lands; the rollout treats `intent` as a free-edit field for
+   now.)*
 4. **Lifecycle of `clarified=false` Inbox items.** Same row as Task or
-   separate `InboxItem` entity? Affects future split/merge UX.
-5. **Multiple FocusSessions per day.** Allowed? Probably yes — morning
-   session, afternoon session — but UX implications for "rollover" need a
-   pass.
-6. **Migration plan.** Phased path from current FSM to proposed model. Not
-   yet specified.
+   separate `InboxItem` entity? Affects future split/merge UX. *(Owned by
+   TMaYaD/Jeeves#184 — Clarify & Organise rework. The PR F strip keeps
+   `clarified` as a Task column treated as an internal detail per §6.4 so
+   this remains reversible.)*
+
+Resolved since the original draft (2026-04-26 rollout planning — full
+record in `docs/proposals/task-model-rollout.md`):
+
+- ~~5. Multiple FocusSessions per day.~~ **Decided yes.** A user may open and
+  close arbitrarily many sessions in a calendar day; the partial unique
+  index in §7.1 only forbids two *open* sessions concurrently.
+- ~~6. Migration plan.~~ **Decided.** Eleven-PR phased rollout (PRs A–K) in
+  `docs/proposals/task-model-rollout.md`. Each PR is a full-stack atomic
+  vertical slice; the `state` column shrinks one allowed value per PR and
+  drops in PR J.
+- **Intent enum domain.** `{next, maybe, trash}` at the column level from
+  PR E (§7.2). UI surfaces only `next` / `maybe`.
+- **Done timestamp.** `completed_at` is *renamed* to `done_at` in PR G, not
+  parallel-added — same semantics, one fewer column to retire later.
+- **TimeLog backfill.** None. PR D treats `time_spent_minutes` as a frozen
+  cache for pre-existing time; new time logs through `TimeLog` and updates
+  the cache. The cache may be inconsistent for tasks with both pre- and
+  post-cutover time; that is acceptable in alpha and instrumentation later
+  decides whether to drop the cache and switch to live `SUM(TimeLog)`
+  reads.
 
 ---
 
@@ -544,6 +667,40 @@ discussion as committed (subject to written-down rebuttal):
   session-relative names; UI copy retains user-facing "today" / "this week"
   language (§10).
 
+### 9.1 Rollout-planning decisions (2026-04-26)
+
+A separate session locked the *rollout* shape — how the proposal lands as a
+sequence of mergeable PRs. Detailed plan in
+`docs/proposals/task-model-rollout.md`. The technical decisions (the ones
+that constrain the *model*, not just the rollout sequence) are captured
+inline in §4.5, §6, §7.1, §7.2, and §8 above. Summarised here for
+convenience:
+
+- **Each PR is a full-stack atomic vertical slice** (schema + DAO + UI +
+  tests for one concept), landing **sequentially**, not in parallel.
+- **No feature flags, no FSM↔FocusSession coexistence period.** Backwards-
+  compat shims and deprecated-column shadows are out of scope. The codebase
+  moves forward in lockstep — alpha tolerates this.
+- **The `state` column shrinks one allowed value per PR**, then drops in
+  PR J when only `next_action` is left. No big-bang migration.
+- **Polymorphic blockers (TMaYaD/Jeeves#181) are not a prerequisite.**
+  `scheduled` / `blocked` / `waiting_for` strip first (§4.5); blockers
+  reintroduce later. Lossy on `blocked_by_todo_id` — accepted in alpha.
+- **TimeLog (PR D) ships without `focus_session_id`**; the FK is added in
+  PR I when `FocusSession` exists.
+- **A `TimeLog` row is one contiguous task-focus span.** Pauses are
+  cosmetic and do not split rows; Pomodoro sprints do not write `TimeLog`
+  rows (§6 revised framing). The existing `_logSprintTimeToTask` write
+  path retires when PR D ships.
+- **`completed_at` is renamed to `done_at` in PR G**, not parallel-added.
+- **`time_spent_minutes` is kept as a denormalized cache** of `SUM(TimeLog)`
+  with no historical backfill. Drop decision deferred to instrumentation.
+- **PR I's UI scope is "wire, don't rewrite."** The new ritual UX from
+  TMaYaD/Jeeves#180 is out of scope for PR I — PR I threads the existing
+  screens through `FocusSessionDao` and removes more LoC than it adds.
+- **PR #140 (Evening Shutdown) is held**; salvage-or-rewrite decided after
+  PR I lands. The session-review wrap-up flow is PR K.
+
 ---
 
 ## 10. Terminology — internal vs. UI
@@ -561,11 +718,13 @@ Rename the internal concepts to be session-relative:
 |-----------------------------|----------------------------|----------------------------|
 | Daily Planning Ritual / DPR | `focus_session_planning`   | "Plan today" / similar     |
 | Evening Shutdown            | `focus_session_review`     | "Wrap up the day" / similar|
-| (future) Weekly Planning    | `periodic_planning`        | "Plan this week"           |
-| (future) Weekly Retro       | `periodic_review`          | "Reflect on this week"     |
 
-Side benefit: `focus_session_*` and `periodic_session_*` make the §6.1
-distinction structurally obvious in code.
+The PeriodicSession concept (§6.1) doesn't exist in code yet — it will be
+born as part of #54 (Weekly Review wizard). That work should land with
+`periodic_session_*` naming from day one; there's nothing to rename.
+
+Side benefit: `focus_session_*` (now) and `periodic_session_*` (when #54
+ships) make the §6.1 distinction structurally obvious in code.
 
 ---
 
