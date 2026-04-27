@@ -319,8 +319,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> undoTaskReview(String id) =>
       _db.todoDao.undoReview(id, _userId);
 
+  // TODO(PR-E): replace with deferTaskToMaybe once intent column ships
   Future<void> deferTask(String id) =>
-      _db.todoDao.deferTaskToSomeday(id, _userId);
+      _db.todoDao.transitionState(id, _userId, GtdState.somedayMaybe);
 
   // ---- Task mutations (Step 3 — Scheduled review) ----------------------------
 

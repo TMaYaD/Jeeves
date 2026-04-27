@@ -235,10 +235,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       timeSpentMinutes: Value(timeSpent),
       inProgressSince: Value(newInProgressSince),
       updatedAt: Value(now),
-      // Transitioning to deferred removes the task from today's focus list.
-      selectedForToday: newState == GtdState.deferred
-          ? const Value(false)
-          : const Value.absent(),
+      selectedForToday: const Value.absent(),
     );
   }
 
@@ -330,11 +327,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       dailySelectionDate: Value(null),
       updatedAt: Value(ts),
     ));
-  }
-
-  /// Defers [id] to Someday/Maybe via the GTD state machine.
-  Future<void> deferTaskToSomeday(String id, String userId) async {
-    await transitionState(id, userId, GtdState.somedayMaybe);
   }
 
   /// Updates the due date for a scheduled task (reschedule without state change).
