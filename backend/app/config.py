@@ -18,7 +18,9 @@ class Settings(BaseSettings):
         validation_alias="APP_ENV",
     )
 
-    # Database
+    # Database.  Dokku-postgres (and Heroku) inject `postgres://...`, but
+    # SQLAlchemy 2.x only accepts `postgresql://`; we also need the `+asyncpg`
+    # driver suffix.  Both are handled by `_normalize_database_url` below.
     database_url: str = "postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves"
 
     # PowerSync
@@ -26,6 +28,13 @@ class Settings(BaseSettings):
 
     # Auth
     secret_key: str = "insecure-dev-key"
+
+    @model_validator(mode="after")
+    def _normalize_database_url(self) -> "Settings":
+        scheme, _, rest = self.database_url.partition("://")
+        if scheme == "postgres" or scheme == "postgresql":
+            self.database_url = f"postgresql+asyncpg://{rest}"
+        return self
 
     @model_validator(mode="after")
     def _validate_secret_key(self) -> "Settings":
