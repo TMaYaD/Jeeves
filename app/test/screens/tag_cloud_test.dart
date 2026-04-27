@@ -65,7 +65,6 @@ Widget _buildShell({
       waitingForProvider.overrideWith((_) => Stream.value([])),
       blockedTasksProvider.overrideWith((_) => Stream.value([])),
       somedayMaybeProvider.overrideWith((_) => Stream.value([])),
-      scheduledProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider
           .overrideWith((_) => Stream.value(contextTags)),
@@ -212,7 +211,6 @@ void main() {
           waitingForProvider.overrideWith((_) => Stream.value([])),
           blockedTasksProvider.overrideWith((_) => Stream.value([])),
           somedayMaybeProvider.overrideWith((_) => Stream.value([])),
-          scheduledProvider.overrideWith((_) => Stream.value([])),
           projectTagsProvider.overrideWith((_) => Stream.value([])),
           contextTagsProvider.overrideWith((_) => Stream.value([tag])),
           contextTagsWithCountProvider

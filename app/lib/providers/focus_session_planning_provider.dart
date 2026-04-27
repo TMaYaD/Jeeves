@@ -156,14 +156,6 @@ final nextActionsForFocusSessionPlanningProvider = StreamProvider<List<Todo>>((r
   return db.todoDao.watchNextActionsForPlanning(userId, today);
 });
 
-/// Scheduled tasks with a due date on today, not yet confirmed in planning.
-final focusSessionPlanningScheduledDueTodayProvider = StreamProvider<List<Todo>>((ref) {
-  final db = ref.watch(databaseProvider);
-  final today = ref.watch(focusSessionPlanningDateProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchScheduledDueToday(userId, today);
-});
-
 /// Tasks selected for today (selectedForToday == true).
 final focusSessionPlanningSelectedTasksProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -297,26 +289,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       );
 
   /// Processes an inbox item to a GTD list (transitions out of inbox state).
-  ///
-  /// The GTD state machine deliberately forbids `inbox → scheduled` as a
-  /// single hop (see `GtdStateMachine`); scheduling requires first clarifying
-  /// the item as a next action. When [newState] is [GtdState.scheduled], this
-  /// method uses the atomic [InboxDao.transitionInboxToScheduled] to perform
-  /// the two-hop transition `inbox → nextAction → scheduled` in a single
-  /// transaction.
   Future<void> processInboxItem(String id, GtdState newState) async {
-    if (newState == GtdState.scheduled) {
-      await _db.inboxDao.transitionInboxToScheduled(
-        id,
-        userId: _userId,
-      );
-    } else {
-      await _db.inboxDao.processInboxItem(
-        id,
-        userId: _userId,
-        newState: newState.value,
-      );
-    }
+    await _db.inboxDao.processInboxItem(
+      id,
+      userId: _userId,
+      newState: newState.value,
+    );
     state = state.copyWith(
       inboxClarifiedCount: state.inboxClarifiedCount + 1,
     );

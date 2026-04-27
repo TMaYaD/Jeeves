@@ -8,7 +8,6 @@ import 'screens/auth/register_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next_actions/next_actions_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
-import 'screens/scheduled/scheduled_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
@@ -83,10 +82,6 @@ final appRouter = GoRouter(
         GoRoute(
           path: '/blocked',
           builder: (context, state) => const BlockedScreen(),
-        ),
-        GoRoute(
-          path: '/scheduled',
-          builder: (context, state) => const ScheduledScreen(),
         ),
         GoRoute(
           path: '/focus',

@@ -35,7 +35,6 @@ class GtdStateMachine {
     },
     GtdState.nextAction: {
       GtdState.inProgress,
-      GtdState.scheduled,
       GtdState.waitingFor,
       GtdState.somedayMaybe,
       GtdState.blocked,
@@ -46,12 +45,6 @@ class GtdStateMachine {
       GtdState.somedayMaybe,
       GtdState.blocked,
       GtdState.done,
-    },
-    GtdState.scheduled: {
-      GtdState.inProgress,
-      GtdState.waitingFor,
-      GtdState.somedayMaybe,
-      GtdState.blocked,
     },
     GtdState.inProgress: {
       GtdState.deferred,

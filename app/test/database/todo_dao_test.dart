@@ -60,7 +60,7 @@ void main() {
     });
 
     test('entering inProgress sets inProgressSince', () async {
-      await _insertTodo(db, id: 'c', title: 'Task C', state: 'scheduled');
+      await _insertTodo(db, id: 'c', title: 'Task C', state: 'next_action');
       final startTime = DateTime(2024, 1, 1, 10, 0, 0);
       await db.todoDao
           .transitionState('c', _userId, GtdState.inProgress, now: startTime);
@@ -71,7 +71,7 @@ void main() {
     });
 
     test('leaving inProgress logs elapsed minutes (rounded up)', () async {
-      await _insertTodo(db, id: 'd', title: 'Task D', state: 'scheduled');
+      await _insertTodo(db, id: 'd', title: 'Task D', state: 'next_action');
       final start = DateTime(2024, 1, 1, 10, 0, 0);
       await db.todoDao
           .transitionState('d', _userId, GtdState.inProgress, now: start);
@@ -88,7 +88,7 @@ void main() {
     });
 
     test('multiple inProgress stints accumulate correctly', () async {
-      await _insertTodo(db, id: 'e', title: 'Task E', state: 'scheduled');
+      await _insertTodo(db, id: 'e', title: 'Task E', state: 'next_action');
 
       // First stint: 30 seconds → rounds up to 1 minute.
       final start1 = DateTime(2024, 1, 1, 9, 0, 0);
@@ -98,9 +98,9 @@ void main() {
       await db.todoDao
           .transitionState('e', _userId, GtdState.deferred, now: end1);
 
-      // Move back to scheduled → inProgress for a second stint.
+      // Move back to nextAction → inProgress for a second stint.
       await (db.update(db.todos)..where((t) => t.id.equals('e')))
-          .write(const TodosCompanion(state: Value('scheduled')));
+          .write(const TodosCompanion(state: Value('next_action')));
 
       // Second stint: 120 seconds → 2 minutes exactly.
       final start2 = DateTime(2024, 1, 2, 10, 0, 0);
@@ -116,7 +116,7 @@ void main() {
     });
 
     test('inProgressSince is cleared after exiting inProgress', () async {
-      await _insertTodo(db, id: 'f', title: 'Task F', state: 'scheduled');
+      await _insertTodo(db, id: 'f', title: 'Task F', state: 'next_action');
       final start = DateTime(2024, 1, 1, 8, 0, 0);
       await db.todoDao
           .transitionState('f', _userId, GtdState.inProgress, now: start);

@@ -53,13 +53,8 @@ class FocusScreen extends ConsumerWidget {
                       ref.watch(focusSettingsProvider).sprintDurationMinutes;
                   final withDue = tasks.where((t) => t.dueDate != null).toList()
                     ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
-                  final scheduledNoDue = tasks
-                      .where((t) => t.dueDate == null && t.state == GtdState.scheduled.value)
-                      .toList();
-                  final rest = tasks
-                      .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
-                      .toList();
-                  final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
+                  final rest = tasks.where((t) => t.dueDate == null).toList();
+                  final sortedTasks = [...withDue, ...rest];
 
                   final batchCandidates = findBatchingCandidates(
                     tasks,

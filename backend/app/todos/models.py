@@ -27,7 +27,7 @@ from app.database import Base
 # Canonical constant sets — single source of truth shared with schemas.py
 # ---------------------------------------------------------------------------
 
-GTD_STATES = ("inbox", "next_action", "waiting_for", "scheduled", "someday_maybe", "done")
+GTD_STATES = ("inbox", "next_action", "waiting_for", "someday_maybe", "done")
 TAG_TYPES = ("context", "project", "area", "label")
 ENERGY_LEVELS = ("low", "medium", "high")
 
@@ -78,7 +78,7 @@ class Todo(Base):
     __table_args__ = (
         Index("ix_todos_user_state", "user_id", "state"),
         CheckConstraint(
-            "state IN ('inbox','next_action','waiting_for','scheduled','someday_maybe','done')",
+            "state IN ('inbox','next_action','waiting_for','someday_maybe','done')",
             name="ck_todos_state",
         ),
         CheckConstraint(

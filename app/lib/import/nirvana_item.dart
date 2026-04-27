@@ -25,7 +25,7 @@ class NirvanaItem {
   final String type;
 
   /// Normalised GTD state: 'inbox' | 'next_action' | 'done' | 'waiting_for' |
-  /// 'someday_maybe' | 'scheduled'
+  /// 'someday_maybe'
   final String state;
 
   final bool completed;
