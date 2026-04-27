@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+# One-shot bootstrap for a PowerSync Dokku app.
+# Run as root on the Dokku host.  Idempotent — safe to re-run.
+#
+# Usage:
+#   sudo ./deploy-powersync.sh <powersync-app> <backend-app> <domain>
+#   e.g.: sudo ./deploy-powersync.sh jeeves-powersync jeeves powersync.jeeves.loonyb.in
+#
+# Optional env overrides:
+#   PS_IMAGE   PowerSync image to deploy
+#              (default: pinned by digest below)
+#   DOKKU_UID  herokuish container UID for storage volume chown
+#              (default: 32767 — current Dokku default; set if your
+#              install uses a different UID)
+#
+# What it does, in order (each step idempotent):
+#   1. Storage dir + sync-config.yaml + chown to dokku UID
+#   2. Create the dokku app, set ports + resource limit
+#   3. Pull SECRET_KEY from <backend-app>; derive postgres service from its
+#      DATABASE_URL and link the same postgres service to the powersync app
+#      (this puts the powersync container on the postgres docker network and
+#      injects DATABASE_URL automatically)
+#   4. Set PowerSync env: PS_SECRET_KEY_B64 (base64url, no padding, no
+#      newlines), PS_DATA_SOURCE_URI, NODE_OPTIONS, POWERSYNC_CONFIG_PATH
+#   5. Mount the config volume at /config
+#   6. Add the public domain
+#   7. Deploy the PowerSync image (env/network/storage/domain are in place
+#      first so the first container start comes up healthy)
+#   8. Enable Let's Encrypt
+#   9. Wire <backend-app>: set POWERSYNC_URL, restart only if changed
+#  10. Smoke-test the public endpoint
+#
+# Sync rules: the embedded heredoc must stay in lock-step with
+# infra/powersync/sync-config.yaml (the local-dev source of truth).  The
+# duplication goes away when the dokku-powersync plugin lands (#201).
+set -euo pipefail
+
+if [ $# -ne 3 ]; then
+  echo "Usage: $0 <powersync-app> <backend-app> <domain>" >&2
+  echo "  e.g.: $0 jeeves-powersync jeeves powersync.jeeves.loonyb.in" >&2
+  exit 2
+fi
+
+PS_APP="$1"
+BACKEND_APP="$2"
+PS_DOMAIN="$3"
+PS_IMAGE="${PS_IMAGE:-journeyapps/powersync-service:1.20.5@sha256:dfdb914b1d7a160dad9b8743af8f5f931552b1a210b890216a08c09e054dae76}"
+CONFIG_STORAGE="/var/lib/dokku/data/storage/${PS_APP}"
+DOKKU_UID="${DOKKU_UID:-32767}"
+
+# ----- Preconditions ---------------------------------------------------------
+if [ "$(id -u)" -ne 0 ]; then
+  echo "ERROR: must run as root (or via sudo)." >&2
+  exit 1
+fi
+if ! command -v dokku >/dev/null 2>&1; then
+  echo "ERROR: dokku not found in PATH." >&2
+  exit 1
+fi
+
+echo "==> Bootstrap target: ${PS_APP} (backend: ${BACKEND_APP}, domain: ${PS_DOMAIN})"
+
+# ----- 1. Storage dir + sync-config.yaml -------------------------------------
+echo "==> [1/9] Storage dir + sync-config.yaml"
+mkdir -p "${CONFIG_STORAGE}"
+cat > "${CONFIG_STORAGE}/sync-config.yaml" <<'YAML'
+# PowerSync Service configuration.
+#
+# Docs: https://docs.powersync.com/self-hosting/configuration
+# Reference: https://github.com/powersync-ja/self-host-demo
+#
+# Top-level keys (replication, storage, client_auth, api) are parsed by
+# PowerSync directly.  Only the sync rules live under `sync_config.content`
+# (a string the service parses as its own YAML document).
+
+# --- Replication source -------------------------------------------------------
+replication:
+  connections:
+    - type: postgresql
+      # Connects to the same Postgres instance used by the backend.
+      uri: !env PS_DATA_SOURCE_URI
+      sslmode: disable
+      # Required: enable logical replication slot for change capture.
+      slot_name: powersync_slot
+
+# --- Sync rules ---------------------------------------------------------------
+# Three user-scoped buckets — todos, tags, and todo_tags.
+#
+# The parameter query below relies on the JWT carrying a `user_id` claim —
+# `token_parameters.user_id` is read directly and no users-table lookup is
+# required.
+#
+# todo_tags carries a denormalized `user_id` column (migration 0008) following
+# PowerSync's "Denormalize Foreign Key onto Child Table" pattern for many-to-
+# many join tables [1], so the junction can be filtered per-user without the
+# JOINs that PowerSync rejects in parameter buckets.  The SELECT lists columns
+# explicitly because PowerSync manages `id` itself for the junction table and
+# declaring it on the client would duplicate the column.
+#
+# [1] https://docs.powersync.com/sync/rules/many-to-many-join-tables
+sync_config:
+  content: |
+    bucket_definitions:
+      by_user_todos:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM todos WHERE user_id = bucket.user_id
+
+      by_user_tags:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM tags WHERE user_id = bucket.user_id
+
+      by_user_todo_tags:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT id, todo_id, tag_id, user_id FROM todo_tags WHERE user_id = bucket.user_id
+
+# --- Client auth --------------------------------------------------------------
+# Validate JWTs signed by the backend using the shared secret.
+# PowerSync requires symmetric keys to be declared in JWKS format.  `kid`
+# must match the `kid` header set when the backend signs a token.
+client_auth:
+  audience: ["jeeves"]
+  jwks:
+    keys:
+      - kty: oct
+        alg: HS256
+        k: !env PS_SECRET_KEY_B64
+        kid: jeeves-dev
+
+# --- Internal storage (bucket state) ------------------------------------------
+# Uses the same Postgres instance — no MongoDB required.
+storage:
+  type: postgresql
+  uri: !env PS_DATA_SOURCE_URI
+  sslmode: disable
+
+# --- API server ---------------------------------------------------------------
+api:
+  port: 8080
+YAML
+chown -R "${DOKKU_UID}:${DOKKU_UID}" "${CONFIG_STORAGE}"
+
+# ----- 2. Create app + ports + resource --------------------------------------
+echo "==> [2/9] App + ports + resource limit"
+if ! dokku apps:list 2>/dev/null | grep -qx "${PS_APP}"; then
+  dokku apps:create "${PS_APP}"
+else
+  echo "    App ${PS_APP} already exists"
+fi
+if ! dokku ports:list "${PS_APP}" 2>/dev/null | grep -q "80:8080"; then
+  dokku ports:set "${PS_APP}" http:80:8080
+fi
+if dokku resource:limit --memory 400m "${PS_APP}" 2>/dev/null; then
+  echo "    Resource limit set (400m)"
+else
+  echo "    WARN: resource:limit failed (plugin not installed?)"
+fi
+
+# ----- 3. Link the same postgres service that the backend uses ---------------
+# Without the link, the powersync container isn't on the postgres docker
+# network and can't resolve the `dokku-postgres-<svc>` hostname — pgwire
+# then fails with an opaque "postgres query failed" (no PG-level error,
+# because the connection never reaches Postgres).
+echo "==> [3/9] Link postgres service (auto-derived from ${BACKEND_APP})"
+SECRET_KEY=$(dokku config:get "${BACKEND_APP}" SECRET_KEY 2>/dev/null || true)
+BACKEND_DB_URL=$(dokku config:get "${BACKEND_APP}" DATABASE_URL 2>/dev/null || true)
+if [ -z "${SECRET_KEY}" ]; then
+  echo "ERROR: ${BACKEND_APP} has no SECRET_KEY set." >&2
+  exit 1
+fi
+if [ -z "${BACKEND_DB_URL}" ]; then
+  echo "ERROR: ${BACKEND_APP} has no DATABASE_URL — link a postgres service to it first." >&2
+  exit 1
+fi
+# Hostname looks like `dokku-postgres-<service-name>` — strip the prefix.
+PG_HOST=$(printf '%s' "${BACKEND_DB_URL}" | sed -E 's|^[a-z+]+://[^@]+@([^:/]+).*|\1|')
+PG_SERVICE="${PG_HOST#dokku-postgres-}"
+if [ "${PG_SERVICE}" = "${PG_HOST}" ]; then
+  echo "ERROR: could not derive postgres service from DATABASE_URL hostname '${PG_HOST}'." >&2
+  echo "       Expected hostname of the form 'dokku-postgres-<service>'." >&2
+  exit 1
+fi
+echo "    Postgres service: ${PG_SERVICE}"
+if ! dokku postgres:info "${PG_SERVICE}" 2>/dev/null | awk '/^[[:space:]]*Links:/' | grep -qw "${PS_APP}"; then
+  dokku postgres:link "${PG_SERVICE}" "${PS_APP}" --no-restart
+else
+  echo "    ${PS_APP} already linked to ${PG_SERVICE}"
+fi
+
+# ----- 4. Set PowerSync env vars ---------------------------------------------
+# sync-config.yaml's JWKS block reads PS_SECRET_KEY_B64 (base64url, no padding).
+# Strip embedded newlines: GNU base64 wraps at 76 cols; both GNU and BSD add a
+# trailing newline.  Either would corrupt PS_SECRET_KEY_B64 and silently break
+# every JWT validation with `invalid token signature`.
+SECRET_KEY_B64=$(printf '%s' "${SECRET_KEY}" | base64 | tr -d '\n=' | tr '/+' '_-')
+
+# PS_DATA_SOURCE_URI uses the link-injected DATABASE_URL (now visible after
+# the postgres:link above).  Re-fetch in case the link rewrote it.
+DATABASE_URL=$(dokku config:get "${PS_APP}" DATABASE_URL 2>/dev/null || true)
+if [ -z "${DATABASE_URL}" ]; then
+  echo "ERROR: ${PS_APP} has no DATABASE_URL after postgres:link." >&2
+  exit 1
+fi
+
+echo "==> [4/9] Set env vars on ${PS_APP}"
+dokku config:set --no-restart "${PS_APP}" \
+  POWERSYNC_CONFIG_PATH=/config/sync-config.yaml \
+  NODE_OPTIONS="--max-old-space-size=400" \
+  PS_SECRET_KEY_B64="${SECRET_KEY_B64}" \
+  PS_DATA_SOURCE_URI="${DATABASE_URL}" > /dev/null
+# Drop legacy keys if present (no-op on fresh deploys).
+dokku config:unset --no-restart "${PS_APP}" \
+  JEEVES_SECRET_KEY SECRET_KEY PS_JEEVES_SECRET_KEY PS_JEEVES_SECRET_KEY_B64 \
+  >/dev/null 2>&1 || true
+
+# ----- 5. Mount the config volume --------------------------------------------
+echo "==> [5/9] Mount ${CONFIG_STORAGE} -> /config"
+if ! dokku storage:list "${PS_APP}" 2>/dev/null | grep -qE ":/config$"; then
+  dokku storage:mount "${PS_APP}" "${CONFIG_STORAGE}:/config"
+else
+  echo "    Already mounted"
+fi
+
+# ----- 6. Public domain -------------------------------------------------------
+echo "==> [6/9] Domain ${PS_DOMAIN}"
+if ! dokku domains:report "${PS_APP}" --domains-app-vhosts 2>/dev/null | grep -qw "${PS_DOMAIN}"; then
+  dokku domains:set "${PS_APP}" "${PS_DOMAIN}"
+else
+  echo "    Domain already configured"
+fi
+
+# ----- 7. Deploy the PowerSync image -----------------------------------------
+echo "==> [7/9] Deploy image"
+dokku git:from-image "${PS_APP}" "${PS_IMAGE}"
+
+# ----- 8. Let's Encrypt ------------------------------------------------------
+echo "==> [8/9] Let's Encrypt"
+if ! dokku certs:report "${PS_APP}" --certs-ssl-installed 2>/dev/null | grep -qi true; then
+  dokku letsencrypt:enable "${PS_APP}"
+else
+  echo "    Cert already installed"
+fi
+
+# ----- 9. Wire backend -------------------------------------------------------
+echo "==> [9/9] Wire ${BACKEND_APP} → POWERSYNC_URL"
+PS_URL="https://${PS_DOMAIN}"
+CURRENT_URL=$(dokku config:get "${BACKEND_APP}" POWERSYNC_URL 2>/dev/null || true)
+if [ "${CURRENT_URL}" != "${PS_URL}" ]; then
+  dokku config:set "${BACKEND_APP}" POWERSYNC_URL="${PS_URL}"
+else
+  echo "    POWERSYNC_URL already set, skipping restart"
+fi
+
+# ----- Smoke test ------------------------------------------------------------
+echo ""
+echo "==> Smoke test: ${PS_URL}/api/v1/status"
+sleep 5
+if curl -fsS --max-time 10 "${PS_URL}/api/v1/status" 2>&1 | head -20; then
+  echo ""
+  echo "==> Done: ${PS_APP} deployed and reachable at ${PS_URL}"
+else
+  echo "WARN: smoke test failed.  Inspect with:"
+  echo "  dokku logs ${PS_APP} --tail 100"
+  echo "  dokku ps:report ${PS_APP}"
+  exit 1
+fi
