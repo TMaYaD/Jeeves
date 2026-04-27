@@ -63,7 +63,7 @@ client_auth:
     keys:
       - kty: oct
         alg: HS256
-        k: !env PS_JEEVES_SECRET_KEY_B64
+        k: !env PS_SECRET_KEY_B64
         kid: jeeves-dev
 
 # --- Internal storage (bucket state) ------------------------------------------
