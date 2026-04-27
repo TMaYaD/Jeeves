@@ -147,10 +147,10 @@ chown -R "${DOKKU_UID}:${DOKKU_UID}" "${CONFIG_STORAGE}"
 
 # ----- 2. Create app + ports + resource --------------------------------------
 echo "==> [2/9] App + ports + resource limit"
-if ! dokku apps:list 2>/dev/null | grep -qx "${PS_APP}"; then
-  dokku apps:create "${PS_APP}"
-else
+if dokku apps:exists "${PS_APP}" >/dev/null 2>&1; then
   echo "    App ${PS_APP} already exists"
+else
+  dokku apps:create "${PS_APP}"
 fi
 if ! dokku ports:list "${PS_APP}" 2>/dev/null | grep -q "80:8080"; then
   dokku ports:set "${PS_APP}" http:80:8080
