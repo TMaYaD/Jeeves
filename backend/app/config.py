@@ -1,17 +1,22 @@
 import logging
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="JEEVES_", env_file=".env")
+    # Env vars are read unprefixed (DATABASE_URL, REDIS_URL, SECRET_KEY, ...)
+    # to align with platform conventions (dokku service-link, Anthropic SDK, etc.).
+    model_config = SettingsConfigDict(env_file=".env")
 
-    # Environment
-    env: Literal["development", "test", "production"] = "development"
+    # Environment. Use APP_ENV rather than the too-generic ENV.
+    env: Literal["development", "test", "production"] = Field(
+        default="development",
+        validation_alias="APP_ENV",
+    )
 
     # Database
     database_url: str = "postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves"
@@ -26,9 +31,7 @@ class Settings(BaseSettings):
     def _validate_secret_key(self) -> "Settings":
         if self.secret_key == "insecure-dev-key":
             if self.env not in ("development", "test"):
-                raise ValueError(
-                    f"JEEVES_SECRET_KEY must be explicitly set when JEEVES_ENV={self.env!r}"
-                )
+                raise ValueError(f"SECRET_KEY must be explicitly set when APP_ENV={self.env!r}")
             _logger.warning(
                 "Using insecure default secret_key — this is only acceptable in development/test"
             )

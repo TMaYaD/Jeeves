@@ -9,7 +9,7 @@ All scripts are idempotent and safe to re-run.
 |--------|---------|
 | `provision-powersync.sh` | Create the Dokku app and deploy `journeyapps/powersync-service` |
 | `configure-powersync.sh` | Set env vars, mount config volume, copy `sync-config.yaml` |
-| `link-services.sh` | Set `JEEVES_POWERSYNC_URL` on the backend and restart both apps |
+| `link-services.sh` | Set `POWERSYNC_URL` on the backend and restart both apps |
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ All scripts are idempotent and safe to re-run.
 
 | Variable | Description |
 |----------|-------------|
-| `JEEVES_SECRET_KEY` | Shared JWT secret — must match the backend |
+| `SECRET_KEY` | Shared JWT secret — must match the backend |
 | `DATABASE_URL` | Postgres connection string for PowerSync bucket storage |
 
 ## Deployment order
@@ -33,7 +33,7 @@ Run the scripts in this order (once per environment setup):
 ./provision-powersync.sh
 
 # 2. Configure env vars, copy sync config, mount volume
-JEEVES_SECRET_KEY=<secret> DATABASE_URL=<pg-url> ./configure-powersync.sh
+SECRET_KEY=<secret> DATABASE_URL=<pg-url> ./configure-powersync.sh
 
 # 3. Wire backend → PowerSync URL and restart both apps
 ./link-services.sh

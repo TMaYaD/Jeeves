@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-os.environ.setdefault("JEEVES_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 import jwt
 
