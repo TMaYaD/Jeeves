@@ -20,15 +20,17 @@
 #      DATABASE_URL and link the same postgres service to the powersync app
 #      (this puts the powersync container on the postgres docker network and
 #      injects DATABASE_URL automatically)
-#   4. Set PowerSync env: PS_SECRET_KEY_B64 (base64url, no padding, no
+#   4. Configure the linked postgres for logical replication
+#      (`wal_level=logical`); restarts the postgres service if needed
+#   5. Set PowerSync env: PS_SECRET_KEY_B64 (base64url, no padding, no
 #      newlines), PS_DATA_SOURCE_URI, NODE_OPTIONS, POWERSYNC_CONFIG_PATH
-#   5. Mount the config volume at /config
-#   6. Add the public domain
-#   7. Deploy the PowerSync image (env/network/storage/domain are in place
+#   6. Mount the config volume at /config
+#   7. Add the public domain
+#   8. Deploy the PowerSync image (env/network/storage/domain are in place
 #      first so the first container start comes up healthy)
-#   8. Enable Let's Encrypt
-#   9. Wire <backend-app>: set POWERSYNC_URL, restart only if changed
-#  10. Smoke-test the public endpoint
+#   9. Enable Let's Encrypt
+#  10. Wire <backend-app>: set POWERSYNC_URL, restart only if changed
+#  11. Smoke-test the public endpoint
 #
 # Sync rules: the embedded heredoc must stay in lock-step with
 # infra/powersync/sync-config.yaml (the local-dev source of truth).  The
@@ -61,7 +63,7 @@ fi
 echo "==> Bootstrap target: ${PS_APP} (backend: ${BACKEND_APP}, domain: ${PS_DOMAIN})"
 
 # ----- 1. Storage dir + sync-config.yaml -------------------------------------
-echo "==> [1/10] Storage dir + sync-config.yaml"
+echo "==> [1/11] Storage dir + sync-config.yaml"
 mkdir -p "${CONFIG_STORAGE}"
 cat > "${CONFIG_STORAGE}/sync-config.yaml" <<'YAML'
 # PowerSync Service configuration.
@@ -146,7 +148,7 @@ YAML
 chown -R "${DOKKU_UID}:${DOKKU_UID}" "${CONFIG_STORAGE}"
 
 # ----- 2. Create app + ports + resource --------------------------------------
-echo "==> [2/10] App + ports + resource limit"
+echo "==> [2/11] App + ports + resource limit"
 if dokku apps:exists "${PS_APP}" >/dev/null 2>&1; then
   echo "    App ${PS_APP} already exists"
 else
@@ -166,7 +168,7 @@ fi
 # network and can't resolve the `dokku-postgres-<svc>` hostname — pgwire
 # then fails with an opaque "postgres query failed" (no PG-level error,
 # because the connection never reaches Postgres).
-echo "==> [3/10] Link postgres service (auto-derived from ${BACKEND_APP})"
+echo "==> [3/11] Link postgres service (auto-derived from ${BACKEND_APP})"
 SECRET_KEY=$(dokku config:get "${BACKEND_APP}" SECRET_KEY 2>/dev/null || true)
 BACKEND_DB_URL=$(dokku config:get "${BACKEND_APP}" DATABASE_URL 2>/dev/null || true)
 if [ -z "${SECRET_KEY}" ]; then
@@ -200,7 +202,42 @@ else
   dokku postgres:link "${PG_SERVICE}" "${PS_APP}" --no-restart
 fi
 
-# ----- 4. Set PowerSync env vars ---------------------------------------------
+# ----- 4. Configure postgres for logical replication -------------------------
+# PowerSync's WAL-streaming replicator needs `wal_level=logical`; dokku-postgres
+# ships with the PG default (`replica`) and PowerSync fails fast at startup with
+# "wal_level must be set to 'logical'".  ALTER SYSTEM writes to
+# postgresql.auto.conf so the change persists across restarts, and a server
+# restart is required for wal_level to take effect.
+#
+# This restarts the postgres service, which briefly disconnects every linked
+# app (backend included).  The cost is one-time: subsequent runs short-circuit.
+echo "==> [4/11] Configure postgres for logical replication"
+PG_WAL_LEVEL=$(echo "SHOW wal_level;" | dokku postgres:connect "${PG_SERVICE}" 2>/dev/null \
+                 | awk '/^[[:space:]]+(replica|logical|minimal)[[:space:]]*$/ {print $1; exit}')
+if [ "${PG_WAL_LEVEL}" = "logical" ]; then
+  echo "    wal_level already 'logical'"
+else
+  echo "    wal_level is '${PG_WAL_LEVEL:-unknown}' — switching to 'logical' and restarting ${PG_SERVICE}"
+  echo "ALTER SYSTEM SET wal_level = logical;" | dokku postgres:connect "${PG_SERVICE}" >/dev/null
+  dokku postgres:restart "${PG_SERVICE}"
+  # Wait for the restarted service to accept connections again before the
+  # later steps try to talk to it (or return success too eagerly).
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 3
+    if echo "SELECT 1;" | dokku postgres:connect "${PG_SERVICE}" >/dev/null 2>&1; then
+      break
+    fi
+  done
+  PG_WAL_LEVEL=$(echo "SHOW wal_level;" | dokku postgres:connect "${PG_SERVICE}" 2>/dev/null \
+                   | awk '/^[[:space:]]+(replica|logical|minimal)[[:space:]]*$/ {print $1; exit}')
+  if [ "${PG_WAL_LEVEL}" != "logical" ]; then
+    echo "ERROR: wal_level is '${PG_WAL_LEVEL:-unknown}' after restart — expected 'logical'." >&2
+    exit 1
+  fi
+  echo "    wal_level set to 'logical'"
+fi
+
+# ----- 5. Set PowerSync env vars ---------------------------------------------
 # sync-config.yaml's JWKS block reads PS_SECRET_KEY_B64 (base64url, no padding).
 # Strip embedded newlines: GNU base64 wraps at 76 cols; both GNU and BSD add a
 # trailing newline.  Either would corrupt PS_SECRET_KEY_B64 and silently break
@@ -215,7 +252,7 @@ if [ -z "${DATABASE_URL}" ]; then
   exit 1
 fi
 
-echo "==> [4/10] Set env vars on ${PS_APP}"
+echo "==> [5/11] Set env vars on ${PS_APP}"
 dokku config:set --no-restart "${PS_APP}" \
   POWERSYNC_CONFIG_PATH=/config/sync-config.yaml \
   NODE_OPTIONS="--max-old-space-size=400" \
@@ -226,27 +263,27 @@ dokku config:unset --no-restart "${PS_APP}" \
   JEEVES_SECRET_KEY SECRET_KEY PS_JEEVES_SECRET_KEY PS_JEEVES_SECRET_KEY_B64 \
   >/dev/null 2>&1 || true
 
-# ----- 5. Mount the config volume --------------------------------------------
-echo "==> [5/10] Mount ${CONFIG_STORAGE} -> /config"
+# ----- 6. Mount the config volume --------------------------------------------
+echo "==> [6/11] Mount ${CONFIG_STORAGE} -> /config"
 if ! dokku storage:list "${PS_APP}" 2>/dev/null | grep -qE ":/config$"; then
   dokku storage:mount "${PS_APP}" "${CONFIG_STORAGE}:/config"
 else
   echo "    Already mounted"
 fi
 
-# ----- 6. Public domain -------------------------------------------------------
-echo "==> [6/10] Domain ${PS_DOMAIN}"
+# ----- 7. Public domain -------------------------------------------------------
+echo "==> [7/11] Domain ${PS_DOMAIN}"
 if ! dokku domains:report "${PS_APP}" --domains-app-vhosts 2>/dev/null | grep -qw "${PS_DOMAIN}"; then
   dokku domains:set "${PS_APP}" "${PS_DOMAIN}"
 else
   echo "    Domain already configured"
 fi
 
-# ----- 7. Deploy the PowerSync image -----------------------------------------
+# ----- 8. Deploy the PowerSync image -----------------------------------------
 # git:from-image exits non-zero with "No changes detected" when the image
 # digest already matches the deployed one — that's a success state for
 # idempotence, not a failure.  Capture output and treat that case as a no-op.
-echo "==> [7/10] Deploy image"
+echo "==> [8/11] Deploy image"
 PS_DEPLOY_OUT=$(dokku git:from-image "${PS_APP}" "${PS_IMAGE}" 2>&1) || PS_DEPLOY_RC=$?
 printf '%s\n' "${PS_DEPLOY_OUT}"
 if [ "${PS_DEPLOY_RC:-0}" -ne 0 ]; then
@@ -258,8 +295,8 @@ if [ "${PS_DEPLOY_RC:-0}" -ne 0 ]; then
 fi
 unset PS_DEPLOY_OUT PS_DEPLOY_RC
 
-# ----- 8. Let's Encrypt ------------------------------------------------------
-echo "==> [8/10] Let's Encrypt"
+# ----- 9. Let's Encrypt ------------------------------------------------------
+echo "==> [9/11] Let's Encrypt"
 # Always run letsencrypt:enable, even when a cert is already issued: other
 # dokku operations (config:set restart, ps:rebuild, domains:set) regenerate
 # the nginx vhost and can drop the SSL listener binding, leaving the host
@@ -276,8 +313,8 @@ if [ -n "${LETSENCRYPT_EMAIL:-}" ]; then
 fi
 dokku letsencrypt:enable "${PS_APP}"
 
-# ----- 9. Wire backend -------------------------------------------------------
-echo "==> [9/10] Wire ${BACKEND_APP} → POWERSYNC_URL"
+# ----- 10. Wire backend ------------------------------------------------------
+echo "==> [10/11] Wire ${BACKEND_APP} → POWERSYNC_URL"
 PS_URL="https://${PS_DOMAIN}"
 CURRENT_URL=$(dokku config:get "${BACKEND_APP}" POWERSYNC_URL 2>/dev/null || true)
 if [ "${CURRENT_URL}" != "${PS_URL}" ]; then
@@ -297,7 +334,7 @@ fi
 # bad SSL binding fails loudly.  Retry briefly because the container can
 # need a few seconds after deploy to be ready.
 echo ""
-echo "==> [10/10] Smoke test: container status"
+echo "==> [11/11] Smoke test: container status"
 SMOKE_OK=0
 for attempt in 1 2 3 4 5 6; do
   sleep 5
@@ -315,7 +352,7 @@ if [ "${SMOKE_OK}" -ne 1 ]; then
 fi
 echo "    OK (web 1 running)"
 
-echo "==> [10/10] Smoke test: ${PS_URL}/probes/readiness"
+echo "==> [11/11] Smoke test: ${PS_URL}/probes/readiness"
 SMOKE_OK=0
 SMOKE_LAST=""
 for attempt in 1 2 3 4 5 6; do
