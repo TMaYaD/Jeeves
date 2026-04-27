@@ -6,10 +6,16 @@ FastAPI app before each test session.
 """
 
 import os
+from collections.abc import AsyncIterator
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 # Provide a dummy secret key for tests (before app code reads settings at import time).
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
@@ -21,7 +27,7 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest_asyncio.fixture
-async def engine():
+async def engine() -> AsyncIterator[AsyncEngine]:
     _engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -30,7 +36,7 @@ async def engine():
 
 
 @pytest_asyncio.fixture
-async def db(engine):
+async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     async_session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with async_session() as session:
         yield session
@@ -38,8 +44,8 @@ async def db(engine):
 
 
 @pytest_asyncio.fixture
-async def client(db):
-    async def override_get_db():
+async def client(db: AsyncSession) -> AsyncIterator[AsyncClient]:
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db
 
     app.dependency_overrides[get_db] = override_get_db
@@ -51,7 +57,8 @@ async def client(db):
 async def register(client: AsyncClient, email: str, password: str = "secret") -> str:
     """Register a user and return the access token."""
     reg = await client.post("/user", json={"email": email, "password": password})
-    return reg.json()["access_token"]
+    token: str = reg.json()["access_token"]
+    return token
 
 
 async def register_full(

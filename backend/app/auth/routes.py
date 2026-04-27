@@ -50,6 +50,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    assert user is not None  # narrowed by pw_ok above
 
     access_token = create_access_token({"sub": user.id})
     raw_refresh, refresh_record = create_refresh_token(user.id)
