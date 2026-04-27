@@ -288,13 +288,20 @@ fi
 # Readiness is the strictest of the three (verifies replication + storage)
 # so it's the most informative single check.  Retry briefly because the
 # container may not be ready immediately after a fresh deploy.
+#
+# Connect to localhost with SNI/Host override instead of resolving the public
+# DNS name — sidesteps NAT-loopback / Cloudflare-proxy issues where the host
+# can't reach its own external hostname with the right cert.
 echo ""
-echo "==> Smoke test: ${PS_URL}/probes/readiness"
+echo "==> Smoke test: ${PS_URL}/probes/readiness (via 127.0.0.1)"
 SMOKE_OK=0
 SMOKE_LAST=""
 for attempt in 1 2 3 4 5 6; do
   sleep 5
-  if SMOKE_LAST=$(curl -sS --max-time 10 -w "HTTP %{http_code}" -o /dev/null "${PS_URL}/probes/readiness" 2>&1); then
+  if SMOKE_LAST=$(curl -sS --max-time 10 \
+       --resolve "${PS_DOMAIN}:443:127.0.0.1" \
+       -w "HTTP %{http_code}" -o /dev/null \
+       "${PS_URL}/probes/readiness" 2>&1); then
     if printf '%s' "${SMOKE_LAST}" | grep -q "HTTP 200"; then
       SMOKE_OK=1
       break
