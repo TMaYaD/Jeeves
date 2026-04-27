@@ -196,9 +196,11 @@ void main() {
 
       final updated = await db.todoDao.getTodo(todo.id, _userId);
       expect(updated?.state, GtdState.inProgress.value);
-      expect(updated?.inProgressSince, isNotNull);
-      // DB timestamp and in-memory session start must match (shared now).
-      expect(DateTime.parse(updated!.inProgressSince!), s.sessionStart);
+      // inProgressSince is inert; TimeLog.startedAt is canonical.
+      expect(updated?.inProgressSince, isNull);
+      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      expect(log, isNotNull);
+      expect(DateTime.parse(log!.startedAt), s.sessionStart!.toUtc());
     });
 
     test('throws StateError when a different task is already active', () async {
