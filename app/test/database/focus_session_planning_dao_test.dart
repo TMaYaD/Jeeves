@@ -206,7 +206,7 @@ void main() {
 
     test('transitions a next_action task to someday_maybe', () async {
       await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.deferTaskToSomeday('a', _userId);
+      await db.todoDao.transitionState('a', _userId, GtdState.somedayMaybe);
 
       final row = await db.todoDao.getTodo('a', _userId);
       expect(row?.state, GtdState.somedayMaybe.value);
@@ -215,7 +215,7 @@ void main() {
     test('task no longer appears in watchNextActionsForPlanning after deferral',
         () async {
       await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.deferTaskToSomeday('a', _userId);
+      await db.todoDao.transitionState('a', _userId, GtdState.somedayMaybe);
 
       final items =
           await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;

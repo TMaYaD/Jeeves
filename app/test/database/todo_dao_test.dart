@@ -96,7 +96,7 @@ void main() {
           .transitionState('e', _userId, GtdState.inProgress, now: start1);
       final end1 = start1.add(const Duration(seconds: 30));
       await db.todoDao
-          .transitionState('e', _userId, GtdState.deferred, now: end1);
+          .transitionState('e', _userId, GtdState.done, now: end1);
 
       // Move back to next_action → inProgress for a second stint.
       await (db.update(db.todos)..where((t) => t.id.equals('e')))

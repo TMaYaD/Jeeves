@@ -27,7 +27,7 @@ class Todos extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
-  /// GTD state: inbox | next_action | waiting_for | in_progress | someday_maybe | deferred | done
+  /// GTD state: inbox | next_action | waiting_for | in_progress | someday_maybe | done
   TextColumn get state =>
       text().withDefault(const Constant('inbox')).clientDefault(() => 'inbox')();
 

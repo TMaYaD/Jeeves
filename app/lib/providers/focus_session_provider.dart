@@ -126,7 +126,7 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   }
 
   /// Clears focus session state. The caller is responsible for the DB
-  /// state transition (done / deferred) before calling this.
+  /// state transition (e.g. done) before calling this.
   void endFocus() => state = const FocusModeState();
 }
 

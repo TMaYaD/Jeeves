@@ -44,16 +44,10 @@ class GtdStateMachine {
       GtdState.done,
     },
     GtdState.inProgress: {
-      GtdState.deferred,
       GtdState.done,
     },
     GtdState.somedayMaybe: {
       GtdState.nextAction,
-      GtdState.done,
-    },
-    GtdState.deferred: {
-      GtdState.nextAction,
-      GtdState.somedayMaybe,
       GtdState.done,
     },
     GtdState.done: {},

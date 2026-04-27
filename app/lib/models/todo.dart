@@ -12,7 +12,6 @@ enum GtdState {
   waitingFor,
   inProgress,
   somedayMaybe,
-  deferred,
   done;
 
   String get value => switch (this) {
@@ -21,7 +20,6 @@ enum GtdState {
         GtdState.waitingFor => 'waiting_for',
         GtdState.inProgress => 'in_progress',
         GtdState.somedayMaybe => 'someday_maybe',
-        GtdState.deferred => 'deferred',
         GtdState.done => 'done',
       };
 
@@ -36,7 +34,8 @@ enum GtdState {
       'scheduled' => GtdState.nextAction,
       'in_progress' => GtdState.inProgress,
       'someday_maybe' => GtdState.somedayMaybe,
-      'deferred' => GtdState.deferred,
+      // Legacy: deferred rows were collapsed to next_action in migration 0013.
+      'deferred' => GtdState.nextAction,
       'done' => GtdState.done,
       _ => () {
           assert(false, 'Unknown GtdState value: $value');
@@ -52,7 +51,6 @@ enum GtdState {
         GtdState.waitingFor => 'Waiting For',
         GtdState.inProgress => 'In Progress',
         GtdState.somedayMaybe => 'Someday / Maybe',
-        GtdState.deferred => 'Deferred',
         GtdState.done => 'Done',
       };
 }
