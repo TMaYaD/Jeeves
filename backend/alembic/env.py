@@ -1,5 +1,4 @@
 import asyncio
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import pool, text
@@ -9,15 +8,18 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 import app.auth.models  # noqa: F401  -- register all models
 import app.todos.models  # noqa: F401
 from alembic import context
+from app.config import settings
 from app.database import Base
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Allow env var to override alembic.ini database URL
-if db_url := os.environ.get("DATABASE_URL"):
-    config.set_main_option("sqlalchemy.url", db_url)
+# Use the same normalized URL the app uses — Settings rewrites the dokku-postgres
+# `postgres://` scheme to `postgresql+asyncpg://` so SQLAlchemy 2.x can load the
+# dialect.  Reading os.environ directly here would bypass that normalization and
+# fail the release task with NoSuchModuleError.
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 target_metadata = Base.metadata
 
