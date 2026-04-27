@@ -60,7 +60,7 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // Mobile Wallet Adapter client — lets SWS sign-in work with any MWA-compatible
     // Solana wallet app installed on the device (Phantom, Solflare, etc.).
-    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.0.3")
+    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.1.0")
 }
 
 flutter {
