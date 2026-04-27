@@ -18,7 +18,7 @@ replication:
       slot_name: powersync_slot
 
 # --- Sync rules ---------------------------------------------------------------
-# Three user-scoped buckets — todos, tags, and todo_tags.
+# Four user-scoped buckets — todos, tags, todo_tags, and time_logs.
 #
 # The parameter query below relies on the JWT carrying a `user_id` claim —
 # `token_parameters.user_id` is read directly and no users-table lookup is
@@ -52,6 +52,12 @@ sync_config:
           - SELECT token_parameters.user_id AS user_id
         data:
           - SELECT id, todo_id, tag_id, user_id FROM todo_tags WHERE user_id = bucket.user_id
+
+      by_user_time_logs:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM time_logs WHERE user_id = bucket.user_id
 
 # --- Client auth --------------------------------------------------------------
 # Validate JWTs signed by the backend using the shared secret.

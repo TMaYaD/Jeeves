@@ -159,13 +159,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // State transitions
   // ---------------------------------------------------------------------------
 
-  /// General-purpose state transition with time-logging side effects.
+  /// General-purpose state transition with TimeLog side effects.
   ///
   /// - Validates [newState] via [GtdStateMachine].
-  /// - When transitioning **to** [GtdState.inProgress]: sets [inProgressSince].
-  /// - When transitioning **from** [GtdState.inProgress]: computes elapsed
-  ///   minutes (rounded up) since [inProgressSince] and accumulates into
-  ///   [timeSpentMinutes]; clears [inProgressSince].
+  /// - When transitioning **to** [GtdState.inProgress]: opens a [TimeLog] row.
+  /// - When transitioning **from** [GtdState.inProgress]: closes the open
+  ///   [TimeLog] row and recomputes [timeSpentMinutes] from the SUM.
   ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<void> transitionState(
@@ -198,7 +197,25 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       }
 
       final effectiveNow = now ?? DateTime.now();
-      final companion = _buildTransitionCompanion(row, newState, effectiveNow);
+      final leavingInProgress = from == GtdState.inProgress;
+      final enteringInProgress = newState == GtdState.inProgress;
+
+      if (leavingInProgress) {
+        await attachedDatabase.timeLogDao
+            .closeLog(taskId: todoId, now: effectiveNow);
+      }
+      if (enteringInProgress) {
+        await attachedDatabase.timeLogDao
+            .openLog(taskId: todoId, userId: userId, now: effectiveNow);
+      }
+
+      var companion = _buildTransitionCompanion(row, newState, effectiveNow);
+
+      if (leavingInProgress) {
+        final total =
+            await attachedDatabase.timeLogDao.totalMinutesForTask(todoId);
+        companion = companion.copyWith(timeSpentMinutes: Value(total));
+      }
 
       await (update(todos)
             ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
@@ -211,29 +228,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     GtdState newState,
     DateTime now,
   ) {
-    var timeSpent = row.timeSpentMinutes;
-    String? newInProgressSince = row.inProgressSince;
-
-    if (GtdState.fromString(row.state) == GtdState.inProgress &&
-        row.inProgressSince != null) {
-      // Leaving inProgress — log elapsed time (rounded up to nearest minute).
-      final started = DateTime.tryParse(row.inProgressSince!);
-      if (started != null) {
-        final elapsed = now.difference(started);
-        final minutes = (elapsed.inSeconds / 60).ceil();
-        timeSpent += minutes.clamp(0, double.maxFinite.toInt());
-      }
-      newInProgressSince = null;
-    }
-
-    if (newState == GtdState.inProgress) {
-      newInProgressSince = now.toIso8601String();
-    }
-
+    // inProgressSince is inert after this PR; TimeLog.startedAt is canonical.
+    // timeSpentMinutes is conditionally overwritten by transitionState via
+    // copyWith when leaving inProgress (recomputed from TimeLog SUM).
     return TodosCompanion(
       state: Value(newState.value),
-      timeSpentMinutes: Value(timeSpent),
-      inProgressSince: Value(newInProgressSince),
+      inProgressSince: const Value(null),
       updatedAt: Value(now),
       selectedForToday: const Value.absent(),
     );

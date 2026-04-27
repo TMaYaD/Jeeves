@@ -1,4 +1,4 @@
-// PowerSync schema — mirrors the three tables that are replicated.
+// PowerSync schema — mirrors the four tables that are replicated.
 //
 // Column names must match the PostgreSQL column names (snake_case) because
 // PowerSync receives rows directly from Postgres via logical replication.
@@ -31,6 +31,12 @@ const powersyncSchema = ps.Schema([
     ps.Column.integer('time_spent_minutes'),
     ps.Column.integer('selected_for_today'),
     ps.Column.text('daily_selection_date'),
+  ]),
+  ps.Table('time_logs', [
+    ps.Column.text('user_id'),
+    ps.Column.text('task_id'),
+    ps.Column.text('started_at'),
+    ps.Column.text('ended_at'),
   ]),
   ps.Table('tags', [
     ps.Column.text('name'),

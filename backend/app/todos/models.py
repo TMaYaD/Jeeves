@@ -118,11 +118,30 @@ class Todo(Base):
     daily_selection_date: Mapped[str | None] = mapped_column(Text)
 
     tags: Mapped[list["Tag"]] = relationship("Tag", secondary="todo_tags", back_populates="todos")
+    time_logs: Mapped[list["TimeLog"]] = relationship("TimeLog", back_populates="todo")
     reminders: Mapped[list["Reminder"]] = relationship("Reminder", back_populates="todo")
     recurrence_rule: Mapped["RecurrenceRule | None"] = relationship(
         "RecurrenceRule", back_populates="todo", uselist=False
     )
     location: Mapped["Location | None"] = relationship("Location", back_populates="todos")
+
+
+class TimeLog(Base):
+    __tablename__ = "time_logs"
+    __table_args__ = (
+        Index("ix_time_logs_user_id", "user_id"),
+        Index("ix_time_logs_task_id", "task_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("todos.id", ondelete="CASCADE"), nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    todo: Mapped["Todo"] = relationship("Todo", back_populates="time_logs")
 
 
 class Reminder(Base):

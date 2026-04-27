@@ -20,6 +20,7 @@ import 'package:powersync/powersync.dart' show uuid;
 import 'daos/inbox_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
+import 'daos/time_log_dao.dart';
 import 'daos/todo_dao.dart';
 import 'tables.dart';
 
@@ -28,8 +29,8 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags],
-  daos: [InboxDao, TagDao, TodoDao],
+  tables: [Todos, Tags, TodoTags, TimeLogs],
+  daos: [InboxDao, TagDao, TodoDao, TimeLogDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor);
@@ -38,7 +39,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -109,6 +110,19 @@ class GtdDatabase extends _$GtdDatabase {
                   'ALTER TABLE todos DROP COLUMN blocked_by_todo_id',
                 );
               }
+            }
+          }
+          if (from < 9) {
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'time_logs'",
+            ).get();
+            // Only create the real table when it doesn't exist yet.
+            // On production PowerSync will have already created a view named
+            // 'time_logs' from powersyncSchema — calling createTable on a
+            // view would fail.  When rows is empty the object doesn't exist
+            // at all (NativeDatabase test path), so we create it.
+            if (rows.isEmpty) {
+              await m.createTable(timeLogs);
             }
           }
         },
