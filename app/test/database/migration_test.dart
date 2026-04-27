@@ -32,10 +32,9 @@ void main() {
       expect(items.length, 1);
       expect(items.first.timeSpentMinutes, 0);
       expect(items.first.inProgressSince, equals(null));
-      expect(items.first.blockedByTodoId, equals(null));
     });
 
-    test('v2 schema: inProgressSince and blockedByTodoId can be set', () async {
+    test('v2 schema: inProgressSince and timeSpentMinutes can be set', () async {
       final db = _openInMemory();
       addTearDown(db.close);
 
@@ -43,17 +42,16 @@ void main() {
       final nowIso = now.toIso8601String();
       await db.customInsert(
         'INSERT INTO todos (id, title, state, user_id, created_at, '
-        'in_progress_since, time_spent_minutes, blocked_by_todo_id) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'in_progress_since, time_spent_minutes) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
         variables: [
           Variable.withString('b'),
-          Variable.withString('Blocked task'),
+          Variable.withString('In-progress task'),
           Variable.withString('next_action'),
           Variable.withString(_userId),
           Variable.withDateTime(now),
           Variable.withString(nowIso),
           Variable.withInt(15),
-          Variable.withString('other-id'),
         ],
       );
 
@@ -63,7 +61,6 @@ void main() {
       expect(todos.length, 1);
       expect(todos.first.inProgressSince, nowIso);
       expect(todos.first.timeSpentMinutes, 15);
-      expect(todos.first.blockedByTodoId, 'other-id');
     });
 
     test('v2 schema: old data (no new columns) survives intact', () async {
@@ -90,7 +87,6 @@ void main() {
       expect(items.first.title, 'Legacy task');
       expect(items.first.timeSpentMinutes, 0);
       expect(items.first.inProgressSince, equals(null));
-      expect(items.first.blockedByTodoId, equals(null));
     });
 
     test('v6→v7 migration: null-color tags get backfilled; post-migration updateColor(null) is not overwritten', () async {
@@ -221,7 +217,11 @@ void main() {
       final m = db.createMigrator();
       await m.addColumn(db.todos, db.todos.inProgressSince);
       await m.addColumn(db.todos, db.todos.timeSpentMinutes);
-      await m.addColumn(db.todos, db.todos.blockedByTodoId);
+      // blocked_by_todo_id existed v2→v7; use raw SQL since the Drift
+      // accessor no longer exists after schema v8.
+      await db.customStatement(
+        'ALTER TABLE todos ADD COLUMN blocked_by_todo_id TEXT',
+      );
 
       // Legacy data must survive and new columns must carry correct defaults.
       final items = await db.inboxDao.watchInbox(_userId).first;
@@ -229,7 +229,49 @@ void main() {
       expect(items.first.title, 'Legacy v1 task');
       expect(items.first.timeSpentMinutes, 0);
       expect(items.first.inProgressSince, equals(null));
-      expect(items.first.blockedByTodoId, equals(null));
+    });
+
+    test('v7→v8 migration drops blocked_by_todo_id column', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a pre-v8 database by adding the column that v8 drops.
+      await db.customStatement(
+        'ALTER TABLE todos ADD COLUMN blocked_by_todo_id TEXT',
+      );
+
+      // Insert a row that previously had a blocker set.
+      final now = DateTime.now();
+      await db.customInsert(
+        'INSERT INTO todos (id, title, state, blocked_by_todo_id, user_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        variables: [
+          Variable.withString('was-blocked'),
+          Variable.withString('Was blocked task'),
+          Variable.withString('next_action'),
+          Variable.withString('some-blocker-id'),
+          Variable.withString(_userId),
+          Variable.withDateTime(now),
+        ],
+      );
+
+      // Drive the real v8 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 7, 8);
+
+      // Column must be gone.
+      final cols =
+          await db.customSelect('PRAGMA table_info(todos)').get();
+      final colNames = cols.map((r) => r.read<String>('name')).toList();
+      expect(colNames, isNot(contains('blocked_by_todo_id')));
+
+      // Row data must have survived.
+      final rows = await db.customSelect(
+        'SELECT * FROM todos WHERE id = ?',
+        variables: [Variable.withString('was-blocked')],
+      ).get();
+      expect(rows.length, 1);
+      expect(rows.first.read<String>('title'), 'Was blocked task');
     });
   });
 }

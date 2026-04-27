@@ -99,20 +99,6 @@ void main() {
           await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
       expect(items, isEmpty);
     });
-
-    test('excludes tasks blocked by an incomplete blocker', () async {
-      await _insert(db, id: 'blocker', title: 'Blocker', state: 'next_action');
-      await _insert(db, id: 'blocked', title: 'Blocked task',
-          state: 'next_action');
-      await (db.update(db.todos)..where((t) => t.id.equals('blocked'))).write(
-        const TodosCompanion(blockedByTodoId: Value('blocker')),
-      );
-
-      final items =
-          await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
-      expect(items.map((t) => t.id), isNot(contains('blocked')));
-      expect(items.map((t) => t.id), contains('blocker'));
-    });
   });
 
   // ---------------------------------------------------------------------------

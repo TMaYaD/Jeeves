@@ -30,16 +30,6 @@ final taskTagsProvider =
   return query.map((row) => row.readTable(db.tags)).watch();
 });
 
-/// Watches potential blocker todos for [todoId] (next_action or blocked todos, excluding self).
-final taskBlockersProvider =
-    StreamProvider.autoDispose.family<List<Todo>, String>((ref, todoId) {
-  final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao
-      .watchNextActionsAndBlocked(userId)
-      .map((items) => items.where((t) => t.id != todoId).toList());
-});
-
 /// Provides mutation operations for the task detail screen.
 ///
 /// The notifier captures the [GtdDatabase] and current user id eagerly
@@ -162,15 +152,6 @@ class TaskDetailNotifier {
         .go();
   }
 
-  Future<void> setBlockedBy(String? blockingTodoId) async {
-    if (blockingTodoId == null) {
-      await _db.todoDao.updateFields(_todoId, _userId, clearBlockedBy: true);
-    } else {
-      await _db.todoDao
-          .updateFields(_todoId, _userId, blockedByTodoId: blockingTodoId);
-    }
-  }
-
   /// Returns the GTD states that are valid next states from [currentState].
   List<GtdState> validNextStates(GtdState currentState) {
     return (GtdStateMachine.allowedTransitions[currentState] ?? {}).toList()
@@ -183,14 +164,6 @@ class TaskDetailNotifier {
   /// the updated [timeSpentMinutes] from [taskDetailTodoProvider] afterwards.
   Future<void> transition(GtdState newState, {DateTime? now}) =>
       _db.todoDao.transitionState(_todoId, _userId, newState, now: now);
-
-  /// Watch all next-action todos for this user (excluding this task itself),
-  /// as candidates for the blocked-by picker.
-  Stream<List<Todo>> watchPotentialBlockers() {
-    return _db.todoDao
-        .watchNextActionsAndBlocked(_userId)
-        .map((items) => items.where((t) => t.id != _todoId).toList());
-  }
 
   /// Watch all tag associations for this todo (returns Drift [Tag] rows),
   /// scoped to the current user.

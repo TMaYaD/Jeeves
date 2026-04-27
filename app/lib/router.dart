@@ -12,7 +12,6 @@ import 'screens/settings/settings_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
-import 'screens/blocked/blocked_screen.dart';
 import 'screens/active_focus_screen.dart';
 import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
@@ -78,10 +77,6 @@ final appRouter = GoRouter(
         GoRoute(
           path: '/someday-maybe',
           builder: (context, state) => const SomedayMaybeScreen(),
-        ),
-        GoRoute(
-          path: '/blocked',
-          builder: (context, state) => const BlockedScreen(),
         ),
         GoRoute(
           path: '/focus',

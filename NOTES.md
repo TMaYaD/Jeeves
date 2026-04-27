@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-04-28
+
+- Stripped `blocked` state and `blocked_by_todo_id` column (PR B, #190); all rows collapsed to `next_action`; cascade-unblock side effect on `done` removed; Drift schema bumped to v8; legacy `'blocked'` string in `GtdState.fromString` maps to `nextAction` for any SQLite rows not yet migrated.
+
 ## 2026-04-27
 
 - Stripped `scheduled` state (PR A, #189); all rows collapsed to `next_action` with `due_date` retained; `inbox → scheduled` two-hop workaround (see 2026-04-21) retires with it.

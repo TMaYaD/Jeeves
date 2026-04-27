@@ -7,7 +7,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../database/gtd_database.dart';
 import '../../models/todo.dart' show GtdState;
 import '../../providers/task_detail_provider.dart';
-import '../../widgets/blocked_by_picker.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
@@ -78,7 +77,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Widget build(BuildContext context) {
     final todoAsync = ref.watch(taskDetailTodoProvider(widget.todoId));
     final tagsAsync = ref.watch(taskTagsProvider(widget.todoId));
-    final blockersAsync = ref.watch(taskBlockersProvider(widget.todoId));
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
@@ -113,7 +111,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           final tags = tagsAsync.asData?.value ?? [];
           final projectTag = tags.where((t) => t.type == 'project').firstOrNull;
           final contextTags = tags.where((t) => t.type == 'context').toList();
-          final blockers = blockersAsync.asData?.value ?? [];
 
           return Scaffold(
             backgroundColor: Colors.white,
@@ -392,18 +389,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                         }
                                       },
                                     ),
-                                    const SizedBox(height: 20),
-                                    _buildInfoSection(
-                                      icon: Icons.block,
-                                      iconBg: const Color(0xFFFFF7ED),
-                                      iconColor: const Color(0xFFF97316),
-                                      title: 'BLOCKED BY',
-                                      contentWidget: BlockedByPickerWidget(
-                                        potentialBlockers: blockers,
-                                        currentBlockerId: todo.blockedByTodoId,
-                                        onChanged: (id) => _notifier.setBlockedBy(id).ignore(),
-                                      ),
-                                    ),
                                   ],
                                 ),
                               ),
@@ -457,7 +442,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
               decoration: BoxDecoration(
                 color: switch (currentState) {
                   GtdState.inbox => const Color(0xFF3B82F6),
-                  GtdState.blocked => const Color(0xFFF97316),
                   _ => const Color(0xFF10B981),
                 },
                 shape: BoxShape.circle,

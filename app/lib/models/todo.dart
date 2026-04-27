@@ -11,7 +11,6 @@ enum GtdState {
   nextAction,
   waitingFor,
   inProgress,
-  blocked,
   somedayMaybe,
   deferred,
   done;
@@ -21,28 +20,30 @@ enum GtdState {
         GtdState.nextAction => 'next_action',
         GtdState.waitingFor => 'waiting_for',
         GtdState.inProgress => 'in_progress',
-        GtdState.blocked => 'blocked',
         GtdState.somedayMaybe => 'someday_maybe',
         GtdState.deferred => 'deferred',
         GtdState.done => 'done',
       };
 
-  static GtdState fromString(String value) => switch (value) {
-        'inbox' => GtdState.inbox,
-        'next_action' => GtdState.nextAction,
-        'waiting_for' => GtdState.waitingFor,
-        // Legacy: scheduled rows were collapsed to next_action in migration 0011.
-        'scheduled' => GtdState.nextAction,
-        'in_progress' => GtdState.inProgress,
-        'blocked' => GtdState.blocked,
-        'someday_maybe' => GtdState.somedayMaybe,
-        'deferred' => GtdState.deferred,
-        'done' => GtdState.done,
-        _ => () {
-            assert(false, 'Unknown GtdState value: $value');
-            return GtdState.inbox;
-          }(),
-      };
+  static GtdState fromString(String value) {
+    // Legacy: blocked rows are collapsed to next_action (migration 0012).
+    if (value == 'blocked') return GtdState.nextAction;
+    return switch (value) {
+      'inbox' => GtdState.inbox,
+      'next_action' => GtdState.nextAction,
+      'waiting_for' => GtdState.waitingFor,
+      // Legacy: scheduled rows were collapsed to next_action in migration 0011.
+      'scheduled' => GtdState.nextAction,
+      'in_progress' => GtdState.inProgress,
+      'someday_maybe' => GtdState.somedayMaybe,
+      'deferred' => GtdState.deferred,
+      'done' => GtdState.done,
+      _ => () {
+          assert(false, 'Unknown GtdState value: $value');
+          return GtdState.inbox;
+        }(),
+    };
+  }
 
   /// Human-readable display label.
   String get displayName => switch (this) {
@@ -50,7 +51,6 @@ enum GtdState {
         GtdState.nextAction => 'Next Actions',
         GtdState.waitingFor => 'Waiting For',
         GtdState.inProgress => 'In Progress',
-        GtdState.blocked => 'Blocked',
         GtdState.somedayMaybe => 'Someday / Maybe',
         GtdState.deferred => 'Deferred',
         GtdState.done => 'Done',

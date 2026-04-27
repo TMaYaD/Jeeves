@@ -162,43 +162,6 @@ void main() {
       expect(items.first.id, 's1');
     });
 
-    test('watchNextActions excludes tasks blocked by incomplete tasks', () async {
-      // Blocker in next_action (not done).
-      await _insertTodo(db, id: 'blocker', title: 'Blocker');
-      await (db.update(db.todos)..where((t) => t.id.equals('blocker')))
-          .write(const TodosCompanion(state: Value('next_action')));
-
-      // Blocked task also in next_action.
-      await _insertTodo(db, id: 'blocked', title: 'Blocked task');
-      await (db.update(db.todos)..where((t) => t.id.equals('blocked'))).write(
-        const TodosCompanion(
-          state: Value('next_action'),
-          blockedByTodoId: Value('blocker'),
-        ),
-      );
-
-      final items = await db.todoDao.watchNextActions(_userId).first;
-      // Only 'blocker' should appear; 'blocked' is hidden.
-      expect(items.where((t) => t.id == 'blocked'), isEmpty);
-      expect(items.where((t) => t.id == 'blocker'), hasLength(1));
-    });
-
-    test('watchNextActions shows blocked task once blocker is done', () async {
-      await _insertTodo(db, id: 'blocker2', title: 'Blocker 2');
-      await (db.update(db.todos)..where((t) => t.id.equals('blocker2')))
-          .write(const TodosCompanion(state: Value('done')));
-
-      await _insertTodo(db, id: 'unblocked', title: 'Now visible');
-      await (db.update(db.todos)..where((t) => t.id.equals('unblocked'))).write(
-        const TodosCompanion(
-          state: Value('next_action'),
-          blockedByTodoId: Value('blocker2'),
-        ),
-      );
-
-      final items = await db.todoDao.watchNextActions(_userId).first;
-      expect(items.where((t) => t.id == 'unblocked'), hasLength(1));
-    });
   });
 
   group('TodoDao — updateFields', () {
@@ -214,16 +177,6 @@ void main() {
       final row = await db.todoDao.getTodo('u1', _userId);
       expect(row?.title, 'Updated');
       expect(row?.notes, 'Some notes');
-    });
-
-    test('clearBlockedBy removes blockedByTodoId', () async {
-      await _insertTodo(db, id: 'u2', title: 'Blocked task');
-      await (db.update(db.todos)..where((t) => t.id.equals('u2')))
-          .write(const TodosCompanion(blockedByTodoId: Value('other')));
-
-      await db.todoDao.updateFields('u2', _userId, clearBlockedBy: true);
-      final row = await db.todoDao.getTodo('u2', _userId);
-      expect(row?.blockedByTodoId, equals(null));
     });
   });
 }

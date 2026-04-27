@@ -27,7 +27,7 @@ class Todos extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
-  /// GTD state: inbox | next_action | waiting_for | scheduled | someday_maybe | done
+  /// GTD state: inbox | next_action | waiting_for | in_progress | someday_maybe | deferred | done
   TextColumn get state =>
       text().withDefault(const Constant('inbox')).clientDefault(() => 'inbox')();
 
@@ -52,9 +52,6 @@ class Todos extends Table {
   /// Cumulative time spent in minutes across all in_progress stints.
   IntColumn get timeSpentMinutes =>
       integer().withDefault(const Constant(0)).clientDefault(() => 0)();
-
-  /// ID of another todo that must be completed before this one is actionable.
-  TextColumn get blockedByTodoId => text().nullable()();
 
   /// Whether this todo was selected (true), skipped (false), or not yet
   /// reviewed (null) during the daily planning ritual for [dailySelectionDate].

@@ -71,7 +71,6 @@ class CustomDrawer extends ConsumerWidget {
     final inboxCount = ref.watch(inboxItemsProvider).asData?.value.length ?? 0;
     final nextActionsCount = ref.watch(nextActionsProvider).asData?.value.length ?? 0;
     final waitingForCount = ref.watch(waitingForProvider).asData?.value.length ?? 0;
-    final blockedCount = ref.watch(blockedTasksProvider).asData?.value.length ?? 0;
     final somedayCount = ref.watch(somedayMaybeProvider).asData?.value.length ?? 0;
     final syncAsync = ref.watch(syncStatusProvider);
     final syncStatus = syncAsync.hasError
@@ -155,12 +154,6 @@ class CustomDrawer extends ConsumerWidget {
                       path: '/waiting-for',
                       location: location,
                       count: waitingForCount),
-                  _buildNavItem(context,
-                      icon: Icons.block,
-                      title: 'Blocked',
-                      path: '/blocked',
-                      location: location,
-                      count: blockedCount),
                   _buildNavItem(context,
                       icon: Icons.star_border,
                       title: 'Someday/Maybe',
