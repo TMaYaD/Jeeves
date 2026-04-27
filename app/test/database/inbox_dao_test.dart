@@ -103,18 +103,6 @@ void main() {
       expect(items.any((t) => t.id == 'bad' && t.state == 'inbox'), isTrue);
     });
 
-    test('processInboxItem rejects invalid transition (inbox → scheduled)', () async {
-      await db.inboxDao.insertTodo(_companion(id: 'bad2', title: 'Also bad'));
-      await expectLater(
-        db.inboxDao.processInboxItem(
-            'bad2', userId: _userId, newState: 'scheduled'),
-        throwsA(isA<InvalidStateTransitionException>()),
-      );
-      // State must remain unchanged after the rejected transition.
-      final items = await db.inboxDao.watchInbox(_userId).first;
-      expect(items.any((t) => t.id == 'bad2' && t.state == 'inbox'), isTrue);
-    });
-
     test('watchInbox returns newest first', () async {
       final earlier = DateTime(2024, 1, 1);
       final later = DateTime(2024, 6, 1);

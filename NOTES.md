@@ -2,6 +2,7 @@
 
 ## 2026-04-27
 
+- Stripped `scheduled` state (PR A, #189); all rows collapsed to `next_action` with `due_date` retained; `inbox → scheduled` two-hop workaround (see 2026-04-21) retires with it.
 - Backend `Settings` env vars no longer use the `JEEVES_` prefix. Renamed: `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, `POWERSYNC_URL`, `FIREBASE_CREDENTIALS_PATH`, `ALLOWED_ORIGINS`. The single exception is `APP_ENV` (not `ENV`) because the unprefixed form is too generic. Reason: align with platform/SDK conventions (dokku service-link injects `DATABASE_URL`/`REDIS_URL`; Anthropic SDK reads `ANTHROPIC_API_KEY`). Implemented by dropping `env_prefix="JEEVES_"` from `model_config`; `env` field carries `validation_alias="APP_ENV"`. Flutter dart-defines (`JEEVES_AUTH_MODE`, `JEEVES_API_URL`) keep the prefix — they're compile-time app constants, not platform env vars. PowerSync's `PS_JEEVES_SECRET_KEY[_B64]` was NOT renamed in this pass (would require a coordinated PowerSync deploy).
 
 ## 2026-04-26

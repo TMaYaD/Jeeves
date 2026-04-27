@@ -71,7 +71,6 @@ Widget _buildShellOnly({
       waitingForProvider.overrideWith((_) => Stream.value([])),
       blockedTasksProvider.overrideWith((_) => Stream.value([])),
       somedayMaybeProvider.overrideWith((_) => Stream.value([])),
-      scheduledProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       focusSessionPlanningSelectedTasksProvider.overrideWith((_) => Stream.value([])),
@@ -127,10 +126,6 @@ Widget _buildShellOnly({
                   GoRoute(
                     path: '/blocked',
                     builder: (_, _) => const Scaffold(body: Text('Blocked body')),
-                  ),
-                  GoRoute(
-                    path: '/scheduled',
-                    builder: (_, _) => const Scaffold(body: Text('Scheduled body')),
                   ),
                   GoRoute(
                     path: '/focus',
@@ -195,7 +190,6 @@ void main() {
 
     expect(find.text('Inbox'), findsOneWidget); // Plus "Inbox body" outside, but 'Inbox' list tile
     expect(find.text('Next Actions'), findsOneWidget);
-    expect(find.text('Scheduled'), findsOneWidget);
     expect(find.text('Waiting For'), findsOneWidget);
     expect(find.text('Someday/Maybe'), findsOneWidget);
     expect(find.text('Focus'), findsOneWidget);
@@ -255,20 +249,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Blocked body'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 100));
-  });
-
-  testWidgets('AppShell navigates to Scheduled on drawer tap', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Scheduled'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Scheduled body'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
   });
 

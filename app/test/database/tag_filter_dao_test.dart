@@ -299,13 +299,13 @@ void main() {
     test('watchByState with tagIds filters correctly', () async {
       await _insertTag(db, id: 'ctx1', name: 'errand');
       final t1 = await _insertTodo(db,
-          id: 't1', title: 'Scheduled tagged', state: 'scheduled');
+          id: 't1', title: 'Blocked tagged', state: 'next_action');
       await _insertTodo(db,
-          id: 't2', title: 'Scheduled untagged', state: 'scheduled');
+          id: 't2', title: 'Blocked untagged', state: 'next_action');
       await _assignTag(db, t1, 'ctx1');
 
       final results = await db.todoDao
-          .watchByState(_userId, 'scheduled', tagIds: {'ctx1'}).first;
+          .watchByState(_userId, 'next_action', tagIds: {'ctx1'}).first;
       expect(results, hasLength(1));
       expect(results.first.id, t1);
     });

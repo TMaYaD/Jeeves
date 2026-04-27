@@ -19,13 +19,8 @@ class ScheduledReviewStep extends ConsumerWidget {
       data: (tasks) {
         final withDue = tasks.where((t) => t.dueDate != null).toList()
           ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
-        final scheduledNoDue = tasks
-            .where((t) => t.dueDate == null && t.state == GtdState.scheduled.value)
-            .toList();
-        final rest = tasks
-            .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
-            .toList();
-        final sortedTasks = [...withDue, ...scheduledNoDue, ...rest];
+        final noDue = tasks.where((t) => t.dueDate == null).toList();
+        final sortedTasks = [...withDue, ...noDue];
 
         return ListView(
           physics: const ClampingScrollPhysics(),
