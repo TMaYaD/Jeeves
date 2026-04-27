@@ -28,8 +28,8 @@ echo "    PowerSync URL: ${PS_URL}"
 
 # Set the PowerSync URL on the backend.
 dokku config:set --no-restart "${BACKEND_APP}" \
-  JEEVES_POWERSYNC_URL="${PS_URL}"
-echo "    Set JEEVES_POWERSYNC_URL on ${BACKEND_APP}"
+  POWERSYNC_URL="${PS_URL}"
+echo "    Set POWERSYNC_URL on ${BACKEND_APP}"
 
 # Restart both apps to pick up the new config.
 dokku ps:restart "${POWERSYNC_APP}"

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from nacl.signing import SigningKey
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-os.environ.setdefault("JEEVES_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app.auth.providers.sws_nonce import create_nonce
 from app.auth.providers.sws_strategy import SIWS_TEMPLATE, verify_sws

@@ -3,15 +3,15 @@
 # Idempotent: safe to re-run at any time.
 #
 # Required environment variables (set before running):
-#   JEEVES_SECRET_KEY   — shared JWT secret (same as backend)
-#   DATABASE_URL        — Postgres connection string for PowerSync bucket storage
-#                         e.g. postgresql://user:pass@host:5432/dbname
+#   SECRET_KEY      — shared JWT secret (same as backend)
+#   DATABASE_URL    — Postgres connection string for PowerSync bucket storage
+#                     e.g. postgresql://user:pass@host:5432/dbname
 set -euo pipefail
 
 APP=powersync
 CONFIG_STORAGE=/var/lib/dokku/data/storage/${APP}
 
-: "${JEEVES_SECRET_KEY:?ERROR: JEEVES_SECRET_KEY must be set}"
+: "${SECRET_KEY:?ERROR: SECRET_KEY must be set}"
 : "${DATABASE_URL:?ERROR: DATABASE_URL must be set}"
 
 echo "==> Configuring Dokku app: ${APP}"
@@ -22,12 +22,12 @@ echo "==> Configuring Dokku app: ${APP}"
 dokku config:set --no-restart "${APP}" \
   POWERSYNC_CONFIG_PATH=/config/sync-config.yaml \
   NODE_OPTIONS="--max-old-space-size=400" \
-  PS_JEEVES_SECRET_KEY="${JEEVES_SECRET_KEY}" \
+  PS_JEEVES_SECRET_KEY="${SECRET_KEY}" \
   DATABASE_URL="${DATABASE_URL}" \
   PS_DATA_SOURCE_URI="${DATABASE_URL}" > /dev/null
 
-# Remove legacy key if present (safe on re-runs)
-dokku config:unset --no-restart "${APP}" JEEVES_SECRET_KEY >/dev/null 2>&1 || true
+# Remove legacy keys if present (safe on re-runs)
+dokku config:unset --no-restart "${APP}" JEEVES_SECRET_KEY SECRET_KEY >/dev/null 2>&1 || true
 echo "    Environment variables set"
 
 # Create storage directory for sync-config.yaml if it doesn't exist.

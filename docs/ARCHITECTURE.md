@@ -60,7 +60,7 @@ PowerSync provides bidirectional offline-first sync between the Flutter SQLite s
 
 - The Flutter app connects to a self-hosted `journeyapps/powersync-service` instance.
 - Three sync shapes are replicated per user: `todos`, `tags`, `todo_tags` (all filtered by `user_id`).
-- The backend issues short-lived JWTs from `GET /powersync/credentials`; PowerSync validates them using the shared `JEEVES_SECRET_KEY`.
+- The backend issues short-lived JWTs from `GET /powersync/credentials`; PowerSync validates them using the shared `SECRET_KEY`.
 - Local writes made through the PowerSync client are queued and uploaded to the backend REST API via `JevesBackendConnector.uploadData()`.
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.
 - Conflict resolution: last-write-wins (acceptable for v1).

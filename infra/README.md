@@ -16,7 +16,7 @@ Local development stack using Docker Compose.
 ```bash
 cd infra
 # Optional: set a custom secret key (defaults to insecure-dev-key for local dev)
-export JEEVES_SECRET_KEY=your-dev-secret
+export SECRET_KEY=your-dev-secret
 docker compose up -d
 ```
 
@@ -44,5 +44,5 @@ docker compose down -v
 ## PowerSync configuration
 
 The sync rules and auth config live in `powersync/sync-config.yaml`.
-PowerSync uses the same `JEEVES_SECRET_KEY` as the backend to validate client JWTs.
+PowerSync uses the same `SECRET_KEY` as the backend to validate client JWTs.
 Bucket storage is colocated in Postgres — no additional database is required.

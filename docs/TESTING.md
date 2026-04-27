@@ -61,7 +61,7 @@ For flows that are impractical to cover with `flutter_test` / integration tests 
   ```
   flutter build apk --flavor alpha --debug \
     --dart-define=JEEVES_AUTH_MODE=sws \
-    --dart-define=JEEVES_API_BASE_URL=http://10.0.2.2:8000
+    --dart-define=JEEVES_API_URL=http://10.0.2.2:8000
   ```
 
 ### How to drive `adb` efficiently

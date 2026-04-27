@@ -4,7 +4,7 @@
 // conflict resolution), AI requests, and settings.
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'platform_helper.dart'
@@ -149,6 +149,8 @@ class _AuthRetryInterceptor extends Interceptor {
 String _defaultBaseUrl() {
   const override = String.fromEnvironment('JEEVES_API_URL');
   if (override.isNotEmpty) return override;
+
+  if (kReleaseMode) return 'https://jeeves.loonyb.in';
 
   // Android emulator routes 10.0.2.2 to the host machine's loopback.
   final host =

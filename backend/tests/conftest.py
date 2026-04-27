@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Provide a dummy secret key for tests (before app code reads settings at import time).
-os.environ.setdefault("JEEVES_SECRET_KEY", "test-secret-key")
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402

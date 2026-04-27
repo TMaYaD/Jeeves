@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-04-27
+
+- Backend `Settings` env vars no longer use the `JEEVES_` prefix. Renamed: `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, `POWERSYNC_URL`, `FIREBASE_CREDENTIALS_PATH`, `ALLOWED_ORIGINS`. The single exception is `APP_ENV` (not `ENV`) because the unprefixed form is too generic. Reason: align with platform/SDK conventions (dokku service-link injects `DATABASE_URL`/`REDIS_URL`; Anthropic SDK reads `ANTHROPIC_API_KEY`). Implemented by dropping `env_prefix="JEEVES_"` from `model_config`; `env` field carries `validation_alias="APP_ENV"`. Flutter dart-defines (`JEEVES_AUTH_MODE`, `JEEVES_API_URL`) keep the prefix — they're compile-time app constants, not platform env vars. PowerSync's `PS_JEEVES_SECRET_KEY[_B64]` was NOT renamed in this pass (would require a coordinated PowerSync deploy).
+
 ## 2026-04-26
 
 - Task-model rollout decisions locked (see `docs/proposals/task-model-rollout.md`): #185 ships as 11 sequential vertical-slice PRs (A–K), state column shrinks one allowed value per PR, FocusSession lands in a single load-bearing PR I (no FSM↔FocusSession coexistence). Polymorphic blockers (#181) explicitly NOT a prerequisite — `scheduled`/`blocked`/`waiting_for` strip first and lose `blocked_by_todo_id` (lossy, alpha-acceptable). TimeLog (#182, PR D) ships without `focus_session_id` (added in PR I). Pomodoro sprints stop writing time directly. `completed_at` renamed to `done_at` (not parallel-added). `intent` enum 3-value at column level day one (`{next, maybe, trash}`); UI surfaces next+maybe only. PR I scope is "wire don't rewrite" — new ritual UX (#180) is out of scope. Decisions mirrored into proposal §4.5/§6/§7.1/§7.2/§8/§9.1.
