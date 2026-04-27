@@ -260,20 +260,14 @@ unset PS_DEPLOY_OUT PS_DEPLOY_RC
 
 # ----- 8. Let's Encrypt ------------------------------------------------------
 echo "==> [8/9] Let's Encrypt"
+# dokku-letsencrypt stores email via plugn properties (not app config), so
+# there's no reliable pre-check.  Just trust letsencrypt:enable to fail with
+# its own clear message if no email is set.  LETSENCRYPT_EMAIL from the
+# script env seeds the per-app value when present.
 if dokku letsencrypt:list 2>/dev/null | awk '{print $1}' | grep -qx "${PS_APP}"; then
   echo "    Cert already issued for ${PS_APP}"
 else
-  # letsencrypt:enable requires an email — check app-specific, then global.
-  # Accept LETSENCRYPT_EMAIL from the script env to seed it on first run.
-  APP_EMAIL=$(dokku config:get "${PS_APP}" DOKKU_LETSENCRYPT_EMAIL 2>/dev/null || true)
-  GLOBAL_EMAIL=$(dokku config:get --global DOKKU_LETSENCRYPT_EMAIL 2>/dev/null || true)
-  if [ -z "${APP_EMAIL}" ] && [ -z "${GLOBAL_EMAIL}" ] && [ -z "${LETSENCRYPT_EMAIL:-}" ]; then
-    echo "ERROR: no Let's Encrypt email configured." >&2
-    echo "       Set one globally:  dokku letsencrypt:set --global email you@example.com" >&2
-    echo "       Or re-run this script with LETSENCRYPT_EMAIL=you@example.com" >&2
-    exit 1
-  fi
-  if [ -n "${LETSENCRYPT_EMAIL:-}" ] && [ "${APP_EMAIL}" != "${LETSENCRYPT_EMAIL}" ]; then
+  if [ -n "${LETSENCRYPT_EMAIL:-}" ]; then
     dokku letsencrypt:set "${PS_APP}" email "${LETSENCRYPT_EMAIL}"
   fi
   dokku letsencrypt:enable "${PS_APP}"
