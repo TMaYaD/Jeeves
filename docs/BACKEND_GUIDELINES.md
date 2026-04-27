@@ -83,4 +83,5 @@ Existing password-based endpoints (`POST /session`, `POST /user`) are unchanged.
 ### 12. Admin Processes
 - **Principle:** Run admin/management tasks as one-off processes.
 - **Application:** Database migrations (`alembic upgrade`) and administrative scripts are run as isolated one-off commands against a release within the same environment as the long-running processes.
-- **Local dev exception:** `infra/docker-compose.yml` runs `alembic upgrade head` inline before `uvicorn` for convenience. This is acceptable only for single-instance local dev. An advisory lock in `backend/alembic/env.py` prevents concurrent migration races. For production-like deployments, run migrations as a separate one-off job or init container.
+- **Production:** `backend/Procfile` declares `release: alembic upgrade head`. Dokku runs this in a one-off container after each successful build and only promotes the new image to web traffic if the migration exits cleanly — so a failed migration aborts the deploy and prod stays on the previous release.
+- **Local dev exception:** `infra/docker-compose.yml` runs `alembic upgrade head` inline before `uvicorn` for convenience. This is acceptable only for single-instance local dev. An advisory lock in `backend/alembic/env.py` prevents concurrent migration races.
