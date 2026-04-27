@@ -284,6 +284,54 @@ The ritual can no longer be auto-launched. Users are nudged through two opt-in m
 | `focus_session_planning_settings_banner_enabled` | `bool` | Banner toggle |
 | `focus_session_planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |
 
+## Sprint Timer & Resolution Protocol
+
+The sprint execution layer implements Epic 3 / Epic 4 of the requirements. It is entirely client-side with no backend involvement; time tracking is persisted via the existing `inProgressSince` / `timeSpentMinutes` columns.
+
+### State machine extension
+
+`GtdState.inProgress → GtdState.nextAction` is now a valid transition. This enables the "Defer" sprint resolution to atomically log elapsed time and return the task to Next Actions in a single `transitionState` call.
+
+### SprintNotifier (`lib/providers/sprint_provider.dart`)
+
+A plain `NotifierProvider<SprintNotifier, SprintState>` (not `autoDispose`) so the timer survives navigation.
+
+| Phase | Meaning |
+|---|---|
+| `idle` | No sprint running |
+| `running` | 20-min countdown active |
+| `expired` | Timer hit zero — resolution required |
+| `onBreak` | 3-min break between sprints |
+
+**`startSprint(task)`**: transitions the task to `in_progress` (setting `inProgressSince`), then starts a 1-second `dart:async Timer.periodic` ticker that decrements `remainingSeconds`.
+
+**Resolution methods:**
+- `resolveComplete()` — calls `transitionState(done)`, which logs elapsed time from `inProgressSince`. Enters `onBreak` phase.
+- `extendWithPunt(taskToPunt?)` — atomically punts an optional task from today's plan and restarts the 20-min countdown under `_isResolving` guard. Increments `sprintCount` so the UI shows "Sprint 2", "Sprint 3", etc.
+- `resolveDefer()` — calls `TodoDao.resolveSprintDefer` which transitions `inProgress → nextAction` and clears `selectedForToday` in one transaction.
+
+### DAO additions (`TodoDao`)
+
+- **`resolveSprintDefer(todoId, userId)`**: wraps `transitionState(nextAction)` + clear `selectedForToday` in a single Drift transaction. The time-logging side effect happens inside `transitionState` via `_buildTransitionCompanion`.
+- **`unselectFromToday(todoId, userId)`**: sets `selectedForToday = null` and `dailySelectionDate = null` without touching `state`.
+
+### Focus screen integration (`lib/screens/focus_screen.dart`)
+
+- `FocusScreen` is a `ConsumerStatefulWidget`. `initState` adds a post-frame callback to show the resolution dialog if the sprint was already expired when the screen mounts (e.g. after navigating away and back).
+- `ref.listen(sprintProvider, ...)` catches live `idle → expired` transitions and shows `SprintResolutionDialog` with `barrierDismissible: false`.
+- A `_SprintCountdown` chip in the AppBar row shows `MM:SS` in amber (running) or green (break).
+- A `_BreakBanner` strip below the header is visible during the break phase with a "Skip Break" shortcut.
+- Each `_TaskRow` shows a **Sprint** button when the sprint is idle and the task is in `nextAction` or `scheduled` state. The button transitions to a timer icon while that task is active.
+- Partial time spent is shown inline: `"20m spent"` — derived from `Todo.timeSpentMinutes`.
+- A `_BatchSuggestionBanner` appears when `findBatchingCandidates` identifies two or more micro-tasks that fit inside one sprint (from `focusSettingsProvider.sprintDurationMinutes`).
+
+### SprintResolutionDialog (`lib/screens/focus/sprint_resolution_dialog.dart`)
+
+- Wrapped in `PopScope(canPop: false)` so back-gesture cannot dismiss it.
+- Default view shows three action buttons (Complete / Extend / Defer) with a brief hint description for each.
+- Tapping **Extend** switches to the **spillover matrix** view: a scrollable list of today's remaining tasks with their estimates. The user taps a task to mark it for removal; tapping "Extend & Continue" calls `extendWithPunt` which atomically punts the selected task and restarts the timer.
+- Time spent is computed as `task.timeSpentMinutes + (sprintCount × 20 min)` and shown as `"20m / 60m spent"` next to the task title.
+
 ## Sprint Timer (Pomodoro Engine)
 
 Focus Mode includes an optional Pomodoro sprint timer bound to the active task. It is not a separate mode — it lives inside the Active Focus Screen as a carousel page revealed by swiping the notes view left. Sprint and break durations are user-configurable (default 20/3 min). The timer persists across app backgrounding via SharedPreferences and fires a local notification at expiry.
@@ -368,7 +416,7 @@ When a sprint completes normally (`completeSprint`) or the timer expires while t
 
 - `lib/widgets/sprint_timer_widget.dart` — full carousel page with an idle view ("Start Sprint" button) and an active view (progress ring, MM:SS countdown, phase badge, sprint-dot indicator, playback controls).
 - `lib/screens/active_focus_screen.dart` — `PageView` carousel: page 0 = notes (markdown with checkbox support), page 1 = `SprintTimerWidget`. A `_PageDots` indicator sits below the page view. Swipe left from notes to reach the sprint timer.
-- `lib/screens/focus_screen.dart` — task list only; no sprint controls. Sprint count badges on task rows use `focusSettingsProvider.sprintDurationMinutes`.
+- `lib/screens/focus_screen.dart` — task list with sprint controls. Sprint count badges on task rows use `focusSettingsProvider.sprintDurationMinutes`.
 
 ## Navigation & Global Filter State
 

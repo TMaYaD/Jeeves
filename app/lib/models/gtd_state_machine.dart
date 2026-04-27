@@ -54,6 +54,7 @@ class GtdStateMachine {
       GtdState.blocked,
     },
     GtdState.inProgress: {
+      GtdState.nextAction,
       GtdState.deferred,
       GtdState.blocked,
       GtdState.done,

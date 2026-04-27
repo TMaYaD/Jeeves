@@ -51,6 +51,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    assert user is not None  # narrowed: pw_ok=True implies user is not None
     access_token = create_access_token({"sub": user.id})
     raw_refresh, refresh_record = create_refresh_token(user.id)
     db.add(refresh_record)

@@ -3,17 +3,56 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../providers/focus_session_planning_provider.dart';
-import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
-import '../providers/sprint_timer_provider.dart'
-    show findBatchingCandidates, sprintTimerProvider;
+import '../providers/sprint_provider.dart';
+import '../providers/sprint_timer_provider.dart' show findBatchingCandidates;
+import '../utils/time_format.dart';
+import 'focus/sprint_resolution_dialog.dart';
 
-class FocusScreen extends ConsumerWidget {
+class FocusScreen extends ConsumerStatefulWidget {
   const FocusScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FocusScreen> createState() => _FocusScreenState();
+}
+
+class _FocusScreenState extends ConsumerState<FocusScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // If the sprint already expired while this screen was not mounted (e.g. the
+    // user navigated away and back), no transition fires via ref.listen. Show
+    // the dialog on the first frame instead.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final sprint = ref.read(sprintProvider);
+      if (sprint.phase == SprintPhase.expired && sprint.activeTask != null) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => SprintResolutionDialog(task: sprint.activeTask!),
+        );
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
+    final sprintState = ref.watch(sprintProvider);
+
+    // Show mandatory resolution dialog when a sprint expires.
+    ref.listen(sprintProvider, (prev, next) {
+      if (next.phase == SprintPhase.expired &&
+          next.activeTask != null &&
+          (prev?.phase != SprintPhase.expired)) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => SprintResolutionDialog(task: next.activeTask!),
+        );
+      }
+    });
 
     return Scaffold(
       body: SafeArea(
@@ -41,9 +80,18 @@ class FocusScreen extends ConsumerWidget {
                       color: Color(0xFF1A1A2E),
                     ),
                   ),
+                  const Spacer(),
+                  if (sprintState.phase == SprintPhase.running ||
+                      sprintState.phase == SprintPhase.onBreak)
+                    _SprintCountdown(sprintState: sprintState),
                 ],
               ),
             ),
+            if (sprintState.phase == SprintPhase.onBreak)
+              _BreakBanner(
+                remainingSeconds: sprintState.remainingSeconds,
+                onEnd: () => ref.read(sprintProvider.notifier).endBreak(),
+              ),
             Expanded(
               child: asyncSelected.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
@@ -157,107 +205,245 @@ class FocusScreen extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Task row
+// Sprint countdown chip shown in the app bar
+// ---------------------------------------------------------------------------
+
+class _SprintCountdown extends StatelessWidget {
+  const _SprintCountdown({required this.sprintState});
+
+  final SprintState sprintState;
+
+  @override
+  Widget build(BuildContext context) {
+    final isBreak = sprintState.phase == SprintPhase.onBreak;
+    final seconds = sprintState.remainingSeconds;
+    final mm = (seconds ~/ 60).toString().padLeft(2, '0');
+    final ss = (seconds % 60).toString().padLeft(2, '0');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: isBreak
+            ? const Color(0xFFDCFCE7)
+            : const Color(0xFFFEF3C7),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isBreak ? Icons.coffee : Icons.timer,
+            size: 14,
+            color: isBreak
+                ? const Color(0xFF16A34A)
+                : const Color(0xFFD97706),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '$mm:$ss',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: isBreak
+                  ? const Color(0xFF16A34A)
+                  : const Color(0xFFD97706),
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Break banner
+// ---------------------------------------------------------------------------
+
+class _BreakBanner extends StatelessWidget {
+  const _BreakBanner({
+    required this.remainingSeconds,
+    required this.onEnd,
+  });
+
+  final int remainingSeconds;
+  final VoidCallback onEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    final mm = (remainingSeconds ~/ 60).toString().padLeft(2, '0');
+    final ss = (remainingSeconds % 60).toString().padLeft(2, '0');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      color: const Color(0xFFDCFCE7),
+      child: Row(
+        children: [
+          const Icon(Icons.coffee, size: 16, color: Color(0xFF16A34A)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Break time — $mm:$ss remaining',
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF15803D)),
+            ),
+          ),
+          TextButton(
+            onPressed: onEnd,
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF15803D),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: const Text('Skip Break',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Task row with sprint controls
 // ---------------------------------------------------------------------------
 
 class _TaskRow extends ConsumerWidget {
   const _TaskRow({required this.todo});
+
   final Todo todo;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final sprintMinutes =
-        ref.watch(focusSettingsProvider).sprintDurationMinutes;
+    final sprintState = ref.watch(sprintProvider);
     final estimate = todo.timeEstimate;
-    final gtdState = GtdState.fromString(todo.state);
-    final isDone = gtdState == GtdState.done;
-    final isInProgress = gtdState == GtdState.inProgress;
+    final isActive = sprintState.activeTask?.id == todo.id;
+    final isRunning = isActive && sprintState.phase == SprintPhase.running;
+    final isDone = todo.state == GtdState.done.value;
+    final canEnterInProgress = todo.state == GtdState.nextAction.value ||
+        todo.state == GtdState.scheduled.value;
+    final sprintCanStart =
+        !isDone && sprintState.phase == SprintPhase.idle && canEnterInProgress;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: InkWell(
-              onTap: () => context.push('/task/${todo.id}'),
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      todo.title,
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: isDone
-                            ? const Color(0xFF9CA3AF)
-                            : const Color(0xFF1A1A2E),
-                        fontWeight: FontWeight.w500,
-                        decoration:
-                            isDone ? TextDecoration.lineThrough : null,
+    return InkWell(
+      onTap: () => context.push('/task/${todo.id}'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      if (isRunning)
+                        Container(
+                          width: 8,
+                          height: 8,
+                          margin: const EdgeInsets.only(right: 6),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFD97706),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      Expanded(
+                        child: Text(
+                          todo.title,
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: isDone
+                                ? const Color(0xFF9CA3AF)
+                                : const Color(0xFF1A1A2E),
+                            fontWeight: FontWeight.w500,
+                            decoration:
+                                isDone ? TextDecoration.lineThrough : null,
+                          ),
+                        ),
                       ),
-                    ),
-                    if (todo.dueDate != null) ...[
-                      const SizedBox(height: 2),
-                      Builder(builder: (_) {
-                        // Storage is UTC; display the user's local calendar day.
-                        final d = todo.dueDate!.toLocal();
-                        return Text(
-                          'Due ${d.year}-'
-                          '${d.month.toString().padLeft(2, '0')}-'
-                          '${d.day.toString().padLeft(2, '0')}',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF9CA3AF)),
-                        );
-                      }),
                     ],
-                    if (estimate != null) ...[
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Text(
-                            estimate < 60
-                                ? '${estimate}m'
-                                : estimate % 60 == 0
-                                    ? '${estimate ~/ 60}h'
-                                    : '${estimate ~/ 60}h ${estimate % 60}m',
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      if (todo.dueDate != null) ...[
+                        Builder(builder: (_) {
+                          final d = todo.dueDate!.toLocal();
+                          return Text(
+                            'Due ${d.year}-'
+                            '${d.month.toString().padLeft(2, '0')}-'
+                            '${d.day.toString().padLeft(2, '0')}',
                             style: const TextStyle(
                                 fontSize: 12, color: Color(0xFF9CA3AF)),
-                          ),
-                          if (estimate > sprintMinutes) ...[
-                            const SizedBox(width: 6),
-                            Text(
-                              '· ${(estimate / sprintMinutes).ceil()} sprints',
-                              style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF9CA3AF)),
-                            ),
-                          ],
-                        ],
-                      ),
+                          );
+                        }),
+                        if (estimate != null) const Text(' · ', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                      ],
+                      if (estimate != null)
+                        Text(
+                          formatMinutes(estimate),
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF9CA3AF)),
+                        ),
+                      if (todo.timeSpentMinutes > 0) ...[
+                        const Text(' · ', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                        Text(
+                          '${formatMinutes(todo.timeSpentMinutes)} spent',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF6B7280)),
+                        ),
+                      ],
                     ],
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          if (isDone)
-            const Icon(Icons.check_circle,
-                color: Color(0xFF2667B7), size: 20)
-          else if (isInProgress)
-            _StartButton(
-              label: 'Resume',
-              todoId: todo.id,
-              inProgressSince: todo.inProgressSince != null
-                  ? DateTime.tryParse(todo.inProgressSince!)
-                  : null,
-            )
-          else
-            _StartButton(label: 'Start', todoId: todo.id),
-          const SizedBox(width: 4),
-          const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
-        ],
+            const SizedBox(width: 8),
+            if (sprintCanStart)
+              _StartSprintButton(todo: todo)
+            else if (isRunning)
+              const Icon(Icons.timer, size: 20, color: Color(0xFFD97706))
+            else
+              const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StartSprintButton extends ConsumerWidget {
+  const _StartSprintButton({required this.todo});
+
+  final Todo todo;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return GestureDetector(
+      onTap: () => ref.read(sprintProvider.notifier).startSprint(todo),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF3C7),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFFDE68A)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.play_arrow, size: 14, color: Color(0xFFD97706)),
+            SizedBox(width: 4),
+            Text(
+              'Sprint',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFFD97706),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -336,57 +522,6 @@ class _BatchSuggestionBannerState extends State<_BatchSuggestionBanner> {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _StartButton extends ConsumerWidget {
-  const _StartButton({
-    required this.label,
-    required this.todoId,
-    this.inProgressSince,
-  });
-
-  final String label;
-  final String todoId;
-
-  /// Non-null only when the task is already inProgress (Resume path).
-  final DateTime? inProgressSince;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return FilledButton(
-      onPressed: () async {
-        // If the sprint timer is already running for this task (e.g. we are
-        // mid-break or in overtime), just navigate back to the active screen
-        // rather than resetting the session.
-        final sprint = ref.read(sprintTimerProvider);
-        if (sprint.isActive && sprint.activeTaskId == todoId) {
-          if (context.mounted) context.push('/focus/active');
-          return;
-        }
-
-        final notifier = ref.read(focusModeProvider.notifier);
-        if (inProgressSince != null) {
-          // Task is already inProgress — restore session from DB timestamp.
-          notifier.resumeFrom(todoId, inProgressSince!);
-        } else {
-          await notifier.startFocus(todoId);
-        }
-        if (context.mounted) {
-          context.push('/focus/active');
-        }
-      },
-      style: FilledButton.styleFrom(
-        backgroundColor: const Color(0xFF2667B7),
-        minimumSize: const Size(72, 36),
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        textStyle:
-            const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-      ),
-      child: Text(label),
     );
   }
 }
