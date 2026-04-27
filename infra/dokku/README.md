@@ -51,7 +51,7 @@ What it does, in order — every step is idempotent:
 8. `letsencrypt:enable <ps-app>`
 9. Set `POWERSYNC_URL=https://<domain>` on the backend (restart only if
    the value changed)
-10. Smoke-test `https://<domain>/api/v1/status`
+10. Smoke-test `https://<domain>/probes/readiness`
 
 ## Re-running
 

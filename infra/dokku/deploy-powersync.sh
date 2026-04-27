@@ -284,11 +284,14 @@ else
 fi
 
 # ----- Smoke test ------------------------------------------------------------
+# PowerSync's HTTP probes live under /probes/{liveness,readiness,startup}.
+# Readiness is the strictest of the three (verifies replication + storage)
+# so it's the most informative single check.
 echo ""
-echo "==> Smoke test: ${PS_URL}/api/v1/status"
+echo "==> Smoke test: ${PS_URL}/probes/readiness"
 sleep 5
-if curl -fsS --max-time 10 "${PS_URL}/api/v1/status" 2>&1 | head -20; then
-  echo ""
+if curl -fsS --max-time 10 "${PS_URL}/probes/readiness" >/dev/null 2>&1; then
+  echo "    OK"
   echo "==> Done: ${PS_APP} deployed and reachable at ${PS_URL}"
 else
   echo "WARN: smoke test failed.  Inspect with:"
