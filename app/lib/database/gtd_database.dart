@@ -38,7 +38,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -47,7 +47,17 @@ class GtdDatabase extends _$GtdDatabase {
           if (from < 2) {
             await _addColumnIfTable(m, todos, todos.inProgressSince);
             await _addColumnIfTable(m, todos, todos.timeSpentMinutes);
-            await _addColumnIfTable(m, todos, todos.blockedByTodoId);
+            // blocked_by_todo_id existed from v2 to v7; add it here so the
+            // v1→v8 upgrade path is consistent, then drop it in the v8 step.
+            final todosInfo = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'todos'",
+            ).get();
+            if (todosInfo.isNotEmpty &&
+                todosInfo.first.read<String>('type') == 'table') {
+              await customStatement(
+                'ALTER TABLE todos ADD COLUMN blocked_by_todo_id TEXT',
+              );
+            }
           }
           if (from < 3) {
             await _addColumnIfTable(m, todos, todos.selectedForToday);
@@ -83,6 +93,23 @@ class GtdDatabase extends _$GtdDatabase {
             // on every startup means a later updateColor(tagId, null) that
             // intentionally clears a color is never overwritten.
             await tagDao.backfillAllMissingColors();
+          }
+          if (from < 8) {
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'todos'",
+            ).get();
+            if (rows.isNotEmpty && rows.first.read<String>('type') == 'table') {
+              final cols =
+                  await customSelect('PRAGMA table_info(todos)').get();
+              final hasCol = cols.any(
+                (r) => r.read<String>('name') == 'blocked_by_todo_id',
+              );
+              if (hasCol) {
+                await customStatement(
+                  'ALTER TABLE todos DROP COLUMN blocked_by_todo_id',
+                );
+              }
+            }
           }
         },
       );

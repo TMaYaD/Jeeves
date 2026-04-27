@@ -114,7 +114,6 @@ class Todo(Base):
     waiting_for: Mapped[str | None] = mapped_column(Text)
     in_progress_since: Mapped[str | None] = mapped_column(Text)
     time_spent_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    blocked_by_todo_id: Mapped[str | None] = mapped_column(Text)
     selected_for_today: Mapped[bool | None] = mapped_column(Boolean)
     daily_selection_date: Mapped[str | None] = mapped_column(Text)
 

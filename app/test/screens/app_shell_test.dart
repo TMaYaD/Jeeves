@@ -69,7 +69,6 @@ Widget _buildShellOnly({
       inboxItemsProvider.overrideWith((_) => Stream.value(items)),
       nextActionsProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
-      blockedTasksProvider.overrideWith((_) => Stream.value([])),
       somedayMaybeProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
@@ -122,10 +121,6 @@ Widget _buildShellOnly({
                   GoRoute(
                     path: '/someday-maybe',
                     builder: (_, _) => const Scaffold(body: Text('Someday body')),
-                  ),
-                  GoRoute(
-                    path: '/blocked',
-                    builder: (_, _) => const Scaffold(body: Text('Blocked body')),
                   ),
                   GoRoute(
                     path: '/focus',
@@ -235,20 +230,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Someday body'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 100));
-  });
-
-  testWidgets('AppShell navigates to Blocked on drawer tap', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Blocked'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Blocked body'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
   });
 

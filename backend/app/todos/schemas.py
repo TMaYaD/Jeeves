@@ -95,7 +95,6 @@ class TodoCreate(BaseModel):
     waiting_for: str | None = None  # who/what the task is waiting on
     in_progress_since: str | None = None
     time_spent_minutes: int = Field(default=0, ge=0)
-    blocked_by_todo_id: str | None = None
     selected_for_today: bool | None = None
     daily_selection_date: str | None = None
 
@@ -131,7 +130,6 @@ class TodoUpdate(BaseModel):
     waiting_for: str | None = None
     in_progress_since: str | None = None
     time_spent_minutes: int | None = Field(default=None, ge=0)
-    blocked_by_todo_id: str | None = None
     selected_for_today: bool | None = None
     daily_selection_date: str | None = None
 
@@ -178,7 +176,6 @@ class TodoOut(BaseModel):
     waiting_for: str | None
     in_progress_since: str | None
     time_spent_minutes: int
-    blocked_by_todo_id: str | None
     selected_for_today: bool | None
     daily_selection_date: str | None
 

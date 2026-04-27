@@ -119,7 +119,6 @@ class _StateChip extends StatelessWidget {
       GtdState.nextAction => ('Next', const Color(0xFF16A34A)),
       GtdState.waitingFor => ('Waiting', const Color(0xFFD97706)),
       GtdState.inProgress => ('In Progress', const Color(0xFF7C3AED)),
-      GtdState.blocked => ('Blocked', const Color(0xFFDC2626)),
       GtdState.somedayMaybe => ('Someday', const Color(0xFF9CA3AF)),
       GtdState.deferred => ('Deferred', const Color(0xFF9CA3AF)),
       GtdState.done => ('Done', const Color(0xFF6B7280)),

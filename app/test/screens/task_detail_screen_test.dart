@@ -46,7 +46,6 @@ Future<Todo> _insertAt(
   String todoId, {
   Todo? initialTodo,
   List<Tag> initialTags = const [],
-  List<Todo> initialBlockers = const [],
 }) {
   final router = GoRouter(
     initialLocation: '/inbox',
@@ -73,8 +72,6 @@ Future<Todo> _insertAt(
           .overrideWith((_) => Stream.value(initialTodo)),
       taskTagsProvider(todoId)
           .overrideWith((_) => Stream.value(initialTags)),
-      taskBlockersProvider(todoId)
-          .overrideWith((_) => Stream.value(initialBlockers)),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
     ],
@@ -123,7 +120,6 @@ void main() {
       expect(find.byIcon(Icons.add), findsOneWidget);
       expect(find.text('NOTES'), findsOneWidget);
       expect(find.text('DUE DATE'), findsOneWidget);
-      expect(find.text('BLOCKED BY'), findsWidgets);
     });
 
     testWidgets('shows status pill', (tester) async {
@@ -147,7 +143,6 @@ void main() {
       expect(find.text('Next Actions'), findsOneWidget);
       expect(find.text('Waiting For'), findsOneWidget);
       expect(find.text('Someday / Maybe'), findsOneWidget);
-      expect(find.text('Blocked'), findsOneWidget);
       expect(find.text('Done'), findsOneWidget);
 
       expect(find.text('In Progress'), findsNothing);
@@ -185,12 +180,5 @@ void main() {
       expect(find.text('High'), findsOneWidget);
     });
 
-    testWidgets('blocked-by picker renders with None default', (tester) async {
-      final todo = await _insertAt(db, id: 'task7', title: 'Blocked task');
-      final (widget, router) = _buildScreen(db, 'task7', initialTodo: todo);
-      await _showTaskDetail(tester, widget, router, 'task7');
-
-      expect(find.text('None'), findsWidgets);
-    });
   });
 }

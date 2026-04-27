@@ -127,7 +127,7 @@ UPDATE todos SET state = 'next_action' WHERE state = 'scheduled';
 
 **Reversibility:** if we want `scheduled` back later, it returns as a `TimeBlocker` under TMaYaD/Jeeves#181 — a much cleaner home than its current FSM perch.
 
-## PR B — Strip `blocked` state and blocker functionality
+## PR B — Strip `blocked` state and blocker functionality ✓ done (migration 0012, schema v8)
 
 **Goal:** retire the `blocked` state and the `blocked_by_todo_id` column. The cascade-unblock side effect on `done` retires with them. Lossy on the dependency hint between tasks — acceptable in alpha.
 

@@ -36,24 +36,11 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // GTD list watchers
   // ---------------------------------------------------------------------------
 
-  /// Stream of all [userId] todos, watched for reactive blocked-by filtering.
   Stream<List<Todo>> _watchAllForUser(String userId) {
     return (select(todos)
           ..where((t) => t.userId.equals(userId))
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
         .watch();
-  }
-
-  /// Returns items from [allItems] that are unblocked in [byId].
-  ///
-  /// A todo is unblocked when [Todo.blockedByTodoId] is null OR the blocking
-  /// todo no longer exists or is in the 'done' state.
-  List<Todo> _filterUnblocked(List<Todo> items, Map<String, Todo> byId) {
-    return items.where((t) {
-      if (t.blockedByTodoId == null) return true;
-      final blocker = byId[t.blockedByTodoId];
-      return blocker == null || blocker.state == GtdState.done.value;
-    }).toList();
   }
 
   /// Returns a stream of [Todo]s with [state] belonging to [userId] whose
@@ -87,30 +74,20 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
-  /// Stream of next-action todos for [userId], excluding blocked tasks.
+  /// Stream of next-action todos for [userId].
   ///
   /// When [tagIds] is non-empty only todos carrying **all** specified tags are
   /// returned (AND semantics).
   Stream<List<Todo>> watchNextActions(String userId,
       {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
-      return _watchAllForUser(userId).map((all) {
-        final byId = {for (final t in all) t.id: t};
-        final nextActions =
-            all.where((t) => t.state == GtdState.nextAction.value).toList();
-        return _filterUnblocked(nextActions, byId);
-      });
+      return _watchAllForUser(userId).map(
+        (all) =>
+            all.where((t) => t.state == GtdState.nextAction.value).toList(),
+      );
     }
-
-    // Tag-filtered: use SQL-level AND filter, then apply blocked-by in memory.
     return _watchFilteredByStateAndTags(
-            userId, GtdState.nextAction.value, tagIds)
-        .asyncMap((filteredNextActions) async {
-      final allTodos =
-          await (select(todos)..where((t) => t.userId.equals(userId))).get();
-      final byId = {for (final t in allTodos) t.id: t};
-      return _filterUnblocked(filteredNextActions, byId);
-    });
+        userId, GtdState.nextAction.value, tagIds);
   }
 
   /// Stream of waiting-for todos for [userId].
@@ -158,17 +135,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
           .watch();
     }
     return _watchFilteredByStateAndTags(userId, state, tagIds);
-  }
-
-  /// Stream of todos matching either next_action or blocked state for [userId].
-  Stream<List<Todo>> watchNextActionsAndBlocked(String userId) {
-    return (select(todos)
-          ..where((t) =>
-              t.userId.equals(userId) &
-              (t.state.equals(GtdState.nextAction.value) |
-                  t.state.equals(GtdState.blocked.value)))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-        .watch();
   }
 
   /// Stream of todos associated with a specific project tag [projectTagId].
@@ -237,22 +203,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       await (update(todos)
             ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
           .write(companion);
-
-      if (newState == GtdState.done) {
-        // Unblock any tasks that were blocked by this one
-        final dependents = await (select(todos)
-              ..where((t) => t.blockedByTodoId.equals(todoId) & t.userId.equals(userId)))
-            .get();
-        for (final dep in dependents) {
-          if (dep.state == GtdState.blocked.value) {
-            await (update(todos)..where((t) => t.id.equals(dep.id)))
-                .write(TodosCompanion(
-              state: Value(GtdState.nextAction.value),
-              updatedAt: Value(effectiveNow),
-            ));
-          }
-        }
-      }
     });
   }
 
@@ -299,32 +249,23 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Stream of next-action todos for [userId] not yet reviewed today.
   ///
   /// A task is "not yet reviewed" when its [dailySelectionDate] is null or
-  /// does not equal [today] (ISO-8601 date string). Blocked tasks are excluded
-  /// to match the standard next-actions view.
+  /// does not equal [today] (ISO-8601 date string).
   Stream<List<Todo>> watchNextActionsForPlanning(String userId, String today) {
-    return _watchAllForUser(userId).map((all) {
-      final byId = {for (final t in all) t.id: t};
-      final pending = all
-          .where((t) =>
-              t.state == GtdState.nextAction.value &&
-              (t.dailySelectionDate == null || t.dailySelectionDate != today))
-          .toList();
-      return _filterUnblocked(pending, byId);
-    });
+    return _watchAllForUser(userId).map((all) => all
+        .where((t) =>
+            t.state == GtdState.nextAction.value &&
+            (t.dailySelectionDate == null || t.dailySelectionDate != today))
+        .toList());
   }
 
   /// Stream of next-action todos for [userId] skipped today.
   Stream<List<Todo>> watchSkippedNextActionsForPlanning(String userId, String today) {
-    return _watchAllForUser(userId).map((all) {
-      final byId = {for (final t in all) t.id: t};
-      final skipped = all
-          .where((t) =>
-              t.state == GtdState.nextAction.value &&
-              t.selectedForToday == false &&
-              t.dailySelectionDate == today)
-          .toList();
-      return _filterUnblocked(skipped, byId);
-    });
+    return _watchAllForUser(userId).map((all) => all
+        .where((t) =>
+            t.state == GtdState.nextAction.value &&
+            t.selectedForToday == false &&
+            t.dailySelectionDate == today)
+        .toList());
   }
 
   /// Stream of todos selected for [today] (selectedForToday == true and
@@ -458,7 +399,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ));
   }
 
-  /// Update mutable todo fields (title, notes, energy level, time estimate).
+  /// Update mutable todo fields (title, notes, energy level, time estimate, due date).
   Future<void> updateFields(
     String todoId,
     String userId, {
@@ -466,53 +407,20 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     String? notes,
     String? energyLevel,
     int? timeEstimate,
-    String? blockedByTodoId,
-    bool clearBlockedBy = false,
     DateTime? dueDate,
     bool clearDueDate = false,
   }) async {
-    if (!clearBlockedBy && blockedByTodoId != null) {
-      if (blockedByTodoId == todoId) {
-        throw ArgumentError.value(
-          blockedByTodoId,
-          'blockedByTodoId',
-          'A todo cannot block itself',
-        );
-      }
-      final blocker = await (select(todos)
-            ..where(
-                (t) => t.id.equals(blockedByTodoId) & t.userId.equals(userId)))
-          .getSingleOrNull();
-      if (blocker == null) {
-        throw ArgumentError.value(
-          blockedByTodoId,
-          'blockedByTodoId',
-          'Blocking todo was not found for this user',
-        );
-      }
-    }
-
-    final newState = clearBlockedBy
-        ? GtdState.nextAction.value
-        : (blockedByTodoId != null ? GtdState.blocked.value : null);
-
     final companion = TodosCompanion(
       updatedAt: Value(DateTime.now()),
       title: title != null ? Value(title) : const Value.absent(),
       notes: notes != null ? Value(notes) : const Value.absent(),
       energyLevel: energyLevel != null ? Value(energyLevel) : const Value.absent(),
       timeEstimate: timeEstimate != null ? Value(timeEstimate) : const Value.absent(),
-      state: newState != null ? Value(newState) : const Value.absent(),
       // Normalise to UTC; see rescheduleTask for rationale.
       dueDate: clearDueDate
           ? const Value(null)
           : dueDate != null
               ? Value(dueDate.toUtc())
-              : const Value.absent(),
-      blockedByTodoId: clearBlockedBy
-          ? const Value(null)
-          : blockedByTodoId != null
-              ? Value(blockedByTodoId)
               : const Value.absent(),
     );
     await (update(todos)
