@@ -61,7 +61,7 @@ fi
 echo "==> Bootstrap target: ${PS_APP} (backend: ${BACKEND_APP}, domain: ${PS_DOMAIN})"
 
 # ----- 1. Storage dir + sync-config.yaml -------------------------------------
-echo "==> [1/9] Storage dir + sync-config.yaml"
+echo "==> [1/10] Storage dir + sync-config.yaml"
 mkdir -p "${CONFIG_STORAGE}"
 cat > "${CONFIG_STORAGE}/sync-config.yaml" <<'YAML'
 # PowerSync Service configuration.
@@ -146,13 +146,13 @@ YAML
 chown -R "${DOKKU_UID}:${DOKKU_UID}" "${CONFIG_STORAGE}"
 
 # ----- 2. Create app + ports + resource --------------------------------------
-echo "==> [2/9] App + ports + resource limit"
+echo "==> [2/10] App + ports + resource limit"
 if dokku apps:exists "${PS_APP}" >/dev/null 2>&1; then
   echo "    App ${PS_APP} already exists"
 else
   dokku apps:create "${PS_APP}"
 fi
-if ! dokku ports:list "${PS_APP}" 2>/dev/null | grep -q "80:8080"; then
+if ! dokku ports:list "${PS_APP}" 2>/dev/null | grep -qE "^http[[:space:]]+80[[:space:]]+8080$"; then
   dokku ports:set "${PS_APP}" http:80:8080
 fi
 if dokku resource:limit --memory 400m "${PS_APP}" 2>/dev/null; then
@@ -166,7 +166,7 @@ fi
 # network and can't resolve the `dokku-postgres-<svc>` hostname — pgwire
 # then fails with an opaque "postgres query failed" (no PG-level error,
 # because the connection never reaches Postgres).
-echo "==> [3/9] Link postgres service (auto-derived from ${BACKEND_APP})"
+echo "==> [3/10] Link postgres service (auto-derived from ${BACKEND_APP})"
 SECRET_KEY=$(dokku config:get "${BACKEND_APP}" SECRET_KEY 2>/dev/null || true)
 BACKEND_DB_URL=$(dokku config:get "${BACKEND_APP}" DATABASE_URL 2>/dev/null || true)
 if [ -z "${SECRET_KEY}" ]; then
@@ -215,7 +215,7 @@ if [ -z "${DATABASE_URL}" ]; then
   exit 1
 fi
 
-echo "==> [4/9] Set env vars on ${PS_APP}"
+echo "==> [4/10] Set env vars on ${PS_APP}"
 dokku config:set --no-restart "${PS_APP}" \
   POWERSYNC_CONFIG_PATH=/config/sync-config.yaml \
   NODE_OPTIONS="--max-old-space-size=400" \
@@ -227,7 +227,7 @@ dokku config:unset --no-restart "${PS_APP}" \
   >/dev/null 2>&1 || true
 
 # ----- 5. Mount the config volume --------------------------------------------
-echo "==> [5/9] Mount ${CONFIG_STORAGE} -> /config"
+echo "==> [5/10] Mount ${CONFIG_STORAGE} -> /config"
 if ! dokku storage:list "${PS_APP}" 2>/dev/null | grep -qE ":/config$"; then
   dokku storage:mount "${PS_APP}" "${CONFIG_STORAGE}:/config"
 else
@@ -235,7 +235,7 @@ else
 fi
 
 # ----- 6. Public domain -------------------------------------------------------
-echo "==> [6/9] Domain ${PS_DOMAIN}"
+echo "==> [6/10] Domain ${PS_DOMAIN}"
 if ! dokku domains:report "${PS_APP}" --domains-app-vhosts 2>/dev/null | grep -qw "${PS_DOMAIN}"; then
   dokku domains:set "${PS_APP}" "${PS_DOMAIN}"
 else
@@ -246,7 +246,7 @@ fi
 # git:from-image exits non-zero with "No changes detected" when the image
 # digest already matches the deployed one — that's a success state for
 # idempotence, not a failure.  Capture output and treat that case as a no-op.
-echo "==> [7/9] Deploy image"
+echo "==> [7/10] Deploy image"
 PS_DEPLOY_OUT=$(dokku git:from-image "${PS_APP}" "${PS_IMAGE}" 2>&1) || PS_DEPLOY_RC=$?
 printf '%s\n' "${PS_DEPLOY_OUT}"
 if [ "${PS_DEPLOY_RC:-0}" -ne 0 ]; then
@@ -259,7 +259,7 @@ fi
 unset PS_DEPLOY_OUT PS_DEPLOY_RC
 
 # ----- 8. Let's Encrypt ------------------------------------------------------
-echo "==> [8/9] Let's Encrypt"
+echo "==> [8/10] Let's Encrypt"
 # Always run letsencrypt:enable, even when a cert is already issued: other
 # dokku operations (config:set restart, ps:rebuild, domains:set) regenerate
 # the nginx vhost and can drop the SSL listener binding, leaving the host
@@ -277,7 +277,7 @@ fi
 dokku letsencrypt:enable "${PS_APP}"
 
 # ----- 9. Wire backend -------------------------------------------------------
-echo "==> [9/9] Wire ${BACKEND_APP} → POWERSYNC_URL"
+echo "==> [9/10] Wire ${BACKEND_APP} → POWERSYNC_URL"
 PS_URL="https://${PS_DOMAIN}"
 CURRENT_URL=$(dokku config:get "${BACKEND_APP}" POWERSYNC_URL 2>/dev/null || true)
 if [ "${CURRENT_URL}" != "${PS_URL}" ]; then
@@ -297,7 +297,7 @@ fi
 # bad SSL binding fails loudly.  Retry briefly because the container can
 # need a few seconds after deploy to be ready.
 echo ""
-echo "==> Smoke test: container status"
+echo "==> [10/10] Smoke test: container status"
 SMOKE_OK=0
 for attempt in 1 2 3 4 5 6; do
   sleep 5
@@ -315,7 +315,7 @@ if [ "${SMOKE_OK}" -ne 1 ]; then
 fi
 echo "    OK (web 1 running)"
 
-echo "==> Smoke test: ${PS_URL}/probes/readiness"
+echo "==> [10/10] Smoke test: ${PS_URL}/probes/readiness"
 SMOKE_OK=0
 SMOKE_LAST=""
 for attempt in 1 2 3 4 5 6; do
