@@ -249,6 +249,19 @@ dokku git:from-image "${PS_APP}" "${PS_IMAGE}"
 # ----- 8. Let's Encrypt ------------------------------------------------------
 echo "==> [8/9] Let's Encrypt"
 if ! dokku certs:report "${PS_APP}" --certs-ssl-installed 2>/dev/null | grep -qi true; then
+  # letsencrypt requires an email.  Use the global default if set; otherwise
+  # accept LETSENCRYPT_EMAIL from the script env and seed both global + app.
+  if ! dokku letsencrypt:list 2>/dev/null | grep -q "${PS_APP}" && \
+     ! dokku letsencrypt:set --global email 2>/dev/null | grep -q "@" && \
+     [ -z "${LETSENCRYPT_EMAIL:-}" ]; then
+    echo "ERROR: no Let's Encrypt email configured." >&2
+    echo "       Set one globally:  dokku letsencrypt:set --global email you@example.com" >&2
+    echo "       Or re-run this script with LETSENCRYPT_EMAIL=you@example.com" >&2
+    exit 1
+  fi
+  if [ -n "${LETSENCRYPT_EMAIL:-}" ]; then
+    dokku letsencrypt:set "${PS_APP}" email "${LETSENCRYPT_EMAIL}"
+  fi
   dokku letsencrypt:enable "${PS_APP}"
 else
   echo "    Cert already installed"
