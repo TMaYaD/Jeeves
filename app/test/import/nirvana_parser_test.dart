@@ -117,6 +117,13 @@ void main() {
       expect(items.first.notes, contains('Line1'));
       expect(items.first.notes, contains('Line2'));
     });
+
+    test('scheduled state maps to next_action (not raw scheduled)', () {
+      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Scheduled task,Scheduled,,,,,,,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.state, 'next_action');
+    });
   });
 
   group('parseJson', () {
@@ -195,6 +202,12 @@ void main() {
 
     test('non-list JSON root throws ParseError', () {
       expect(() => parseJson('{}'), throwsA(isA<ParseError>()));
+    });
+
+    test('state=3 (Nirvana scheduled) maps to next_action (not raw scheduled)', () {
+      const json = '[{"cancelled":0,"deleted":0,"name":"Scheduled task","type":0,"state":3}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.state, 'next_action');
     });
   });
 

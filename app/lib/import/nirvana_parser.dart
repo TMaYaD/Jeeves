@@ -33,14 +33,14 @@ const _csvStateMap = <String, String>{
   'someday': 'someday_maybe',
   'later': 'someday_maybe',
   'focus': 'next_action',
-  'scheduled': 'scheduled',
+  'scheduled': 'next_action',
   'reference': 'someday_maybe',
 };
 
 const _jsonStateMap = <int, String>{
   0: 'inbox',
   1: 'next_action',
-  3: 'scheduled',
+  3: 'next_action',
   5: 'someday_maybe',
   7: 'done',
   9: 'waiting_for',
