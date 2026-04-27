@@ -176,6 +176,23 @@ void main() {
       expect(result.projectTagsCreated, 0);
     });
 
+    test('CSV task with scheduled state is persisted as next_action', () async {
+      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Scheduled task,Scheduled,,,,,,,,\n';
+      await importNirvanaLocally(
+        bytes: _bytes(csv),
+        filename: 'test.csv',
+        format: 'csv',
+        userId: _userId,
+        db: db,
+      );
+
+      final all = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      expect(all.first.state, 'next_action');
+    });
+
     test('latin-1 bytes are decoded without error', () async {
       // Build a minimal CSV with a latin-1 encoded character (é = 0xE9)
       final latin1Bytes = Uint8List.fromList([
@@ -262,6 +279,22 @@ void main() {
 
       final tags = await db.tagDao.watchByType(_userId, 'project').first;
       expect(tags.length, 1);
+    });
+
+    test('JSON task with state=3 (scheduled) is persisted as next_action', () async {
+      const json = '[{"cancelled":0,"deleted":0,"name":"Scheduled task","type":0,"state":3}]';
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+
+      final all = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      expect(all.first.state, 'next_action');
     });
 
     test('invalid JSON throws ParseError wrapped in descriptive message', () async {

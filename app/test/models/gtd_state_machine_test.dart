@@ -20,7 +20,6 @@ void main() {
       test('inbox → done', () => expectValid(GtdState.inbox, GtdState.done));
 
       test('nextAction → inProgress', () => expectValid(GtdState.nextAction, GtdState.inProgress));
-      test('nextAction → scheduled', () => expectValid(GtdState.nextAction, GtdState.scheduled));
       test('nextAction → waitingFor', () => expectValid(GtdState.nextAction, GtdState.waitingFor));
       test('nextAction → somedayMaybe', () => expectValid(GtdState.nextAction, GtdState.somedayMaybe));
       test('nextAction → done', () => expectValid(GtdState.nextAction, GtdState.done));
@@ -28,10 +27,6 @@ void main() {
       test('waitingFor → nextAction', () => expectValid(GtdState.waitingFor, GtdState.nextAction));
       test('waitingFor → somedayMaybe', () => expectValid(GtdState.waitingFor, GtdState.somedayMaybe));
       test('waitingFor → done', () => expectValid(GtdState.waitingFor, GtdState.done));
-
-      test('scheduled → inProgress', () => expectValid(GtdState.scheduled, GtdState.inProgress));
-      test('scheduled → waitingFor', () => expectValid(GtdState.scheduled, GtdState.waitingFor));
-      test('scheduled → somedayMaybe', () => expectValid(GtdState.scheduled, GtdState.somedayMaybe));
 
       test('inProgress → deferred', () => expectValid(GtdState.inProgress, GtdState.deferred));
       test('inProgress → done', () => expectValid(GtdState.inProgress, GtdState.done));
@@ -56,9 +51,6 @@ void main() {
       // Key boundary: inbox cannot go directly to inProgress
       test('inbox → inProgress is rejected', () => expectInvalid(GtdState.inbox, GtdState.inProgress));
 
-      // inbox cannot go to scheduled without passing through nextAction
-      test('inbox → scheduled is rejected', () => expectInvalid(GtdState.inbox, GtdState.scheduled));
-
       // inbox cannot go to deferred
       test('inbox → deferred is rejected', () => expectInvalid(GtdState.inbox, GtdState.deferred));
 
@@ -66,16 +58,15 @@ void main() {
       test('done → nextAction is rejected', () => expectInvalid(GtdState.done, GtdState.nextAction));
       test('done → inbox is rejected', () => expectInvalid(GtdState.done, GtdState.inbox));
 
-      // inProgress cannot go back to inbox, nextAction, or scheduled
+      // inProgress cannot go back to inbox or nextAction
       test('inProgress → inbox is rejected', () => expectInvalid(GtdState.inProgress, GtdState.inbox));
       test('inProgress → nextAction is rejected', () => expectInvalid(GtdState.inProgress, GtdState.nextAction));
-      test('inProgress → scheduled is rejected', () => expectInvalid(GtdState.inProgress, GtdState.scheduled));
     });
 
     group('isValid', () {
       test('returns true for valid transitions', () {
         expect(GtdStateMachine.isValid(GtdState.inbox, GtdState.nextAction), isTrue);
-        expect(GtdStateMachine.isValid(GtdState.scheduled, GtdState.inProgress), isTrue);
+        expect(GtdStateMachine.isValid(GtdState.nextAction, GtdState.inProgress), isTrue);
       });
 
       test('returns false for invalid transitions', () {

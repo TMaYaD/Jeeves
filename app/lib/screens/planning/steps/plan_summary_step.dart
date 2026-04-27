@@ -138,13 +138,8 @@ class PlanSummaryStep extends ConsumerWidget {
   List<Todo> _sortTasks(List<Todo> tasks) {
     final withDue = tasks.where((t) => t.dueDate != null).toList()
       ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
-    final scheduledNoDue = tasks
-        .where((t) => t.dueDate == null && t.state == GtdState.scheduled.value)
-        .toList();
-    final rest = tasks
-        .where((t) => t.dueDate == null && t.state != GtdState.scheduled.value)
-        .toList();
-    return [...withDue, ...scheduledNoDue, ...rest];
+    final noDue = tasks.where((t) => t.dueDate == null).toList();
+    return [...withDue, ...noDue];
   }
 
   String _capacitySummary(int count, int totalMinutes, int availableMinutes) {

@@ -116,65 +116,6 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // watchScheduledDueToday
-  // ---------------------------------------------------------------------------
-
-  group('watchScheduledDueToday', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('returns scheduled tasks with dueDate on today', () async {
-      final todayDt = DateTime(2026, 4, 16);
-      await _insert(db,
-          id: 'a',
-          title: 'Today event',
-          state: 'scheduled',
-          dueDate: todayDt);
-
-      final items =
-          await db.todoDao.watchScheduledDueToday(_userId, _today).first;
-      expect(items.length, 1);
-      expect(items.first.id, 'a');
-    });
-
-    test('excludes scheduled tasks due on a different day', () async {
-      await _insert(db,
-          id: 'a',
-          title: 'Tomorrow event',
-          state: 'scheduled',
-          dueDate: DateTime(2026, 4, 17));
-
-      final items =
-          await db.todoDao.watchScheduledDueToday(_userId, _today).first;
-      expect(items, isEmpty);
-    });
-
-    test('excludes tasks already confirmed today', () async {
-      final todayDt = DateTime(2026, 4, 16);
-      await _insert(db,
-          id: 'a',
-          title: 'Today event',
-          state: 'scheduled',
-          dueDate: todayDt);
-      await db.todoDao.selectForToday('a', _userId, _today);
-
-      final items =
-          await db.todoDao.watchScheduledDueToday(_userId, _today).first;
-      expect(items, isEmpty);
-    });
-
-    test('excludes tasks without a due date', () async {
-      await _insert(db, id: 'a', title: 'No date', state: 'scheduled');
-
-      final items =
-          await db.todoDao.watchScheduledDueToday(_userId, _today).first;
-      expect(items, isEmpty);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // watchSelectedForToday
   // ---------------------------------------------------------------------------
 
@@ -312,65 +253,16 @@ void main() {
       await _insert(db,
           id: 'a',
           title: 'A',
-          state: 'scheduled',
+          state: 'next_action',
           dueDate: todayDt);
 
       await db.todoDao.rescheduleTask('a', _userId, newDate);
 
       final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.state, GtdState.scheduled.value);
+      expect(row?.state, GtdState.nextAction.value);
       // rescheduleTask normalises to UTC so Drift emits a standard ISO-8601
       // offset that asyncpg's TIMESTAMPTZ encoder can parse.
       expect(row?.dueDate, newDate.toUtc());
-    });
-
-    test('rescheduled task disappears from watchScheduledDueToday', () async {
-      final todayDt = DateTime(2026, 4, 16);
-      await _insert(db,
-          id: 'a',
-          title: 'A',
-          state: 'scheduled',
-          dueDate: todayDt);
-      await db.todoDao
-          .rescheduleTask('a', _userId, DateTime(2026, 4, 20));
-
-      final items =
-          await db.todoDao.watchScheduledDueToday(_userId, _today).first;
-      expect(items, isEmpty);
-    });
-
-    test('rescheduled task (UTC-normalised write) appears on its local day',
-        () async {
-      // Regression: rescheduleTask stores UTC to keep asyncpg happy, so the
-      // row is read back as UTC.  watchScheduledDueToday must convert back to
-      // local before formatting or non-UTC devices miss the task.
-      //
-      // The bug only manifests when the UTC-day of the chosen local moment
-      // differs from its local-day (e.g. IST +5:30, where local midnight is
-      // the previous UTC day).  In UTC and in negative-offset zones the two
-      // agree, so both the pre-fix and post-fix code paths return the same
-      // answer and the regression cannot be observed.  Skip in that case
-      // rather than silently pass — run under `TZ=Asia/Kolkata` (or any
-      // positive-offset zone) to exercise this.
-      final localMidnight = DateTime(2026, 4, 16);
-      final utcMidnight = localMidnight.toUtc();
-      if (localMidnight.year == utcMidnight.year &&
-          localMidnight.month == utcMidnight.month &&
-          localMidnight.day == utcMidnight.day) {
-        markTestSkipped(
-            'Host TZ does not exercise the UTC-vs-local-day mismatch; '
-            'run with TZ=Asia/Kolkata (or any positive-offset zone).');
-        return;
-      }
-      await _insert(db, id: 'a', title: 'A', state: 'scheduled');
-      // Local midnight on the session's "today" — the instant a user picks
-      // when they reschedule a task to today's date.
-      await db.todoDao.rescheduleTask('a', _userId, localMidnight);
-
-      final items =
-          await db.todoDao.watchScheduledDueToday(_userId, _today).first;
-      expect(items.length, 1);
-      expect(items.first.id, 'a');
     });
   });
 

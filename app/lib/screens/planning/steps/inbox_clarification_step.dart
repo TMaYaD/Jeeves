@@ -122,14 +122,6 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   }
 
   Future<void> _process(BuildContext context, GtdState destination) async {
-    // Scheduled requires a due date.
-    if (destination == GtdState.scheduled && _dueDate == null) {
-      final picked = await _pickDate(context);
-      if (picked == null) return; // user cancelled — stay on card
-      if (!context.mounted) return;
-      setState(() => _dueDate = picked);
-    }
-
     Object? error;
     try {
       final saved = await _saveFields(context);
@@ -308,13 +300,6 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           icon: Icons.check_circle_outline,
           color: const Color(0xFF16A34A),
           onTap: () => _process(context, GtdState.nextAction),
-        ),
-        const SizedBox(height: 8),
-        _DestinationButton(
-          label: 'Scheduled',
-          icon: Icons.event_outlined,
-          color: const Color(0xFF2563EB),
-          onTap: () => _process(context, GtdState.scheduled),
         ),
         const SizedBox(height: 8),
         _DestinationButton(

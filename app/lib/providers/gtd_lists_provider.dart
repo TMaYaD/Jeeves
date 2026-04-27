@@ -41,11 +41,3 @@ final blockedTasksProvider = StreamProvider<List<Todo>>((ref) {
   final tagIds = ref.watch(tagFilterProvider);
   return db.todoDao.watchByState(userId, 'blocked', tagIds: tagIds);
 });
-
-/// Stream of scheduled todos (all, for the Scheduled list screen).
-final scheduledProvider = StreamProvider<List<Todo>>((ref) {
-  final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchByState(userId, 'scheduled', tagIds: tagIds);
-});

@@ -296,12 +296,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // Daily planning queries
   // ---------------------------------------------------------------------------
 
-  /// Formats a [DateTime] as an ISO-8601 date string (yyyy-MM-dd).
-  static String _fmtDate(DateTime dt) =>
-      '${dt.year.toString().padLeft(4, '0')}-'
-      '${dt.month.toString().padLeft(2, '0')}-'
-      '${dt.day.toString().padLeft(2, '0')}';
-
   /// Stream of next-action todos for [userId] not yet reviewed today.
   ///
   /// A task is "not yet reviewed" when its [dailySelectionDate] is null or
@@ -331,22 +325,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
           .toList();
       return _filterUnblocked(skipped, byId);
     });
-  }
-
-  /// Stream of scheduled todos with a due date on [today] that have not yet
-  /// been confirmed (i.e. [dailySelectionDate] is null or != [today]).
-  Stream<List<Todo>> watchScheduledDueToday(String userId, String today) {
-    return _watchAllForUser(userId).map((all) => all
-        .where((t) =>
-            t.state == GtdState.scheduled.value &&
-            t.dueDate != null &&
-            // Storage is UTC (see TodoDao.rescheduleTask / updateFields) but
-            // [today] is a *local* calendar day from planningToday().  Convert
-            // back before formatting so the comparison is local-day vs
-            // local-day; otherwise non-UTC devices drop tasks a day early.
-            _fmtDate(t.dueDate!.toLocal()) == today &&
-            (t.dailySelectionDate == null || t.dailySelectionDate != today))
-        .toList());
   }
 
   /// Stream of todos selected for [today] (selectedForToday == true and
