@@ -22,7 +22,12 @@ def upgrade() -> None:
     op.create_table(
         "time_logs",
         sa.Column("id", sa.String, primary_key=True),
-        sa.Column("user_id", sa.String, nullable=False),
+        sa.Column(
+            "user_id",
+            sa.String,
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column(
             "task_id",
             sa.String,

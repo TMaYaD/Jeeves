@@ -134,7 +134,7 @@ class TimeLog(Base):
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     task_id: Mapped[str] = mapped_column(ForeignKey("todos.id", ondelete="CASCADE"), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
