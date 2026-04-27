@@ -212,8 +212,13 @@ fi
 # This restarts the postgres service, which briefly disconnects every linked
 # app (backend included).  The cost is one-time: subsequent runs short-circuit.
 echo "==> [4/11] Configure postgres for logical replication"
-PG_WAL_LEVEL=$(echo "SHOW wal_level;" | dokku postgres:connect "${PG_SERVICE}" 2>/dev/null \
-                 | awk '/^[[:space:]]+(replica|logical|minimal)[[:space:]]*$/ {print $1; exit}')
+# psql output via `dokku postgres:connect` includes the column header, a dash
+# separator, the value row, and a row count.  Extract just the value row.
+pg_wal_level() {
+  echo "SHOW wal_level;" | dokku postgres:connect "$1" 2>/dev/null \
+    | awk '/^[[:space:]]+(replica|logical|minimal)[[:space:]]*$/ {print $1; exit}'
+}
+PG_WAL_LEVEL=$(pg_wal_level "${PG_SERVICE}")
 if [ "${PG_WAL_LEVEL}" = "logical" ]; then
   echo "    wal_level already 'logical'"
 else
@@ -221,15 +226,23 @@ else
   echo "ALTER SYSTEM SET wal_level = logical;" | dokku postgres:connect "${PG_SERVICE}" >/dev/null
   dokku postgres:restart "${PG_SERVICE}"
   # Wait for the restarted service to accept connections again before the
-  # later steps try to talk to it (or return success too eagerly).
+  # later steps try to talk to it (or return success too eagerly).  Track the
+  # probe explicitly so a silent timeout reports "didn't come back" rather
+  # than misleading the operator with a downstream `wal_level=unknown` error.
+  PG_READY=0
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
     sleep 3
     if echo "SELECT 1;" | dokku postgres:connect "${PG_SERVICE}" >/dev/null 2>&1; then
+      PG_READY=1
       break
     fi
   done
-  PG_WAL_LEVEL=$(echo "SHOW wal_level;" | dokku postgres:connect "${PG_SERVICE}" 2>/dev/null \
-                   | awk '/^[[:space:]]+(replica|logical|minimal)[[:space:]]*$/ {print $1; exit}')
+  if [ "${PG_READY}" -ne 1 ]; then
+    echo "ERROR: ${PG_SERVICE} did not accept connections within 30s after restart." >&2
+    echo "       Inspect with: dokku postgres:info ${PG_SERVICE} ; dokku postgres:logs ${PG_SERVICE} --tail 100" >&2
+    exit 1
+  fi
+  PG_WAL_LEVEL=$(pg_wal_level "${PG_SERVICE}")
   if [ "${PG_WAL_LEVEL}" != "logical" ]; then
     echo "ERROR: wal_level is '${PG_WAL_LEVEL:-unknown}' after restart — expected 'logical'." >&2
     exit 1
