@@ -2,13 +2,20 @@
 
 import base64
 import os
+from collections.abc import AsyncIterator
 
 import fakeredis.aioredis
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from nacl.signing import SigningKey
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
@@ -21,7 +28,7 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest_asyncio.fixture
-async def engine():
+async def engine() -> AsyncIterator[AsyncEngine]:
     _engine = create_async_engine(TEST_DB_URL, echo=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -30,7 +37,7 @@ async def engine():
 
 
 @pytest_asyncio.fixture
-async def db(engine):
+async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with factory() as session:
         yield session
@@ -38,16 +45,16 @@ async def db(engine):
 
 
 @pytest_asyncio.fixture
-async def fake_redis():
+async def fake_redis() -> Redis:
     return fakeredis.aioredis.FakeRedis(decode_responses=True)
 
 
 @pytest_asyncio.fixture
-async def client(db, fake_redis):
-    async def override_get_db():
+async def client(db: AsyncSession, fake_redis: Redis) -> AsyncIterator[AsyncClient]:
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db
 
-    async def override_get_redis():
+    async def override_get_redis() -> AsyncIterator[Redis]:
         yield fake_redis
 
     app.dependency_overrides[get_db] = override_get_db
@@ -58,7 +65,7 @@ async def client(db, fake_redis):
 
 
 @pytest.fixture
-def signing_key():
+def signing_key() -> SigningKey:
     return SigningKey.generate()
 
 
@@ -74,7 +81,7 @@ def _b58encode(data: bytes) -> str:
 
 
 @pytest.mark.asyncio
-async def test_sws_challenge_returns_nonce(client, signing_key):
+async def test_sws_challenge_returns_nonce(client: AsyncClient, signing_key: SigningKey) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
     response = await client.post("/auth/sws/challenge", json={"public_key": public_key_b58})
     assert response.status_code == 200
@@ -85,7 +92,7 @@ async def test_sws_challenge_returns_nonce(client, signing_key):
 
 
 @pytest.mark.asyncio
-async def test_sws_login_happy_path(client, signing_key):
+async def test_sws_login_happy_path(client: AsyncClient, signing_key: SigningKey) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
 
     # Step 1: get challenge.
@@ -121,7 +128,9 @@ async def test_sws_login_happy_path(client, signing_key):
 
 
 @pytest.mark.asyncio
-async def test_sws_login_bad_signature_returns_401(client, signing_key):
+async def test_sws_login_bad_signature_returns_401(
+    client: AsyncClient, signing_key: SigningKey
+) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
 
     challenge = await client.post("/auth/sws/challenge", json={"public_key": public_key_b58})
@@ -140,7 +149,9 @@ async def test_sws_login_bad_signature_returns_401(client, signing_key):
 
 
 @pytest.mark.asyncio
-async def test_sws_login_missing_nonce_returns_401(client, signing_key):
+async def test_sws_login_missing_nonce_returns_401(
+    client: AsyncClient, signing_key: SigningKey
+) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
     bad_sig = base64.b64encode(b"\x00" * 64).decode()
 

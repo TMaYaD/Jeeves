@@ -2,13 +2,20 @@
 
 import base64
 import os
+from collections.abc import AsyncIterator
 
 import fakeredis.aioredis
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 from nacl.signing import SigningKey
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
@@ -20,7 +27,7 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest_asyncio.fixture
-async def engine():
+async def engine() -> AsyncIterator[AsyncEngine]:
     _engine = create_async_engine(TEST_DB_URL, echo=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -29,7 +36,7 @@ async def engine():
 
 
 @pytest_asyncio.fixture
-async def db(engine):
+async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with factory() as session:
         yield session
@@ -37,12 +44,12 @@ async def db(engine):
 
 
 @pytest_asyncio.fixture
-async def redis():
+async def redis() -> Redis:
     return fakeredis.aioredis.FakeRedis(decode_responses=True)
 
 
 @pytest.fixture
-def signing_key():
+def signing_key() -> SigningKey:
     """Real ed25519 keypair generated fresh for each test."""
     return SigningKey.generate()
 
@@ -59,7 +66,7 @@ def _b58encode(data: bytes) -> str:
     return _base58.b58encode(data).decode()
 
 
-async def _make_challenge(redis, public_key_b58: str) -> tuple[str, str]:
+async def _make_challenge(redis: Redis, public_key_b58: str) -> tuple[str, str]:
     return await create_nonce(redis, public_key_b58)
 
 
@@ -81,7 +88,9 @@ def _sign_message(signing_key: SigningKey, public_key_b58: str, nonce: str, issu
 
 
 @pytest.mark.asyncio
-async def test_valid_signature_returns_user(db, redis, signing_key):
+async def test_valid_signature_returns_user(
+    db: AsyncSession, redis: Redis, signing_key: SigningKey
+) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
     nonce, issued_at = await _make_challenge(redis, public_key_b58)
     signature_b64 = _sign_message(signing_key, public_key_b58, nonce, issued_at)
@@ -94,7 +103,9 @@ async def test_valid_signature_returns_user(db, redis, signing_key):
 
 
 @pytest.mark.asyncio
-async def test_valid_signature_upserts_existing_user(db, redis, signing_key):
+async def test_valid_signature_upserts_existing_user(
+    db: AsyncSession, redis: Redis, signing_key: SigningKey
+) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
 
     # First sign-in creates the user.
@@ -111,7 +122,9 @@ async def test_valid_signature_upserts_existing_user(db, redis, signing_key):
 
 
 @pytest.mark.asyncio
-async def test_invalid_signature_raises_401(db, redis, signing_key):
+async def test_invalid_signature_raises_401(
+    db: AsyncSession, redis: Redis, signing_key: SigningKey
+) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
     nonce, _ = await _make_challenge(redis, public_key_b58)
     bad_sig = base64.b64encode(b"\x00" * 64).decode()
@@ -123,7 +136,9 @@ async def test_invalid_signature_raises_401(db, redis, signing_key):
 
 
 @pytest.mark.asyncio
-async def test_missing_nonce_raises_401(db, redis, signing_key):
+async def test_missing_nonce_raises_401(
+    db: AsyncSession, redis: Redis, signing_key: SigningKey
+) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
     sig = base64.b64encode(b"\x00" * 64).decode()
 
@@ -134,7 +149,9 @@ async def test_missing_nonce_raises_401(db, redis, signing_key):
 
 
 @pytest.mark.asyncio
-async def test_replay_attack_raises_401(db, redis, signing_key):
+async def test_replay_attack_raises_401(
+    db: AsyncSession, redis: Redis, signing_key: SigningKey
+) -> None:
     public_key_b58 = _b58encode(bytes(signing_key.verify_key))
     nonce, issued_at = await _make_challenge(redis, public_key_b58)
     sig = _sign_message(signing_key, public_key_b58, nonce, issued_at)

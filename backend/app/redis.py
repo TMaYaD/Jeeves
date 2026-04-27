@@ -13,7 +13,7 @@ _redis_pool: aioredis.Redis | None = None
 def _get_pool() -> aioredis.Redis:
     global _redis_pool
     if _redis_pool is None:
-        _redis_pool = aioredis.from_url(
+        _redis_pool = aioredis.from_url(  # type: ignore[no-untyped-call]
             settings.redis_url,
             encoding="utf-8",
             decode_responses=True,

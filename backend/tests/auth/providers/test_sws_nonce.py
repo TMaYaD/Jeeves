@@ -2,18 +2,19 @@
 
 import fakeredis.aioredis
 import pytest
+from redis.asyncio import Redis
 
 from app.auth.providers.sws_nonce import NONCE_TTL, consume_nonce, create_nonce
 
 
 @pytest.fixture
-async def redis():
+async def redis() -> Redis:
     """In-memory Redis substitute — no running Redis required."""
     return fakeredis.aioredis.FakeRedis(decode_responses=True)
 
 
 @pytest.mark.asyncio
-async def test_create_nonce_stores_key_with_ttl(redis):
+async def test_create_nonce_stores_key_with_ttl(redis: Redis) -> None:
     nonce, issued_at = await create_nonce(redis, "pubkey123")
 
     assert nonce
@@ -28,7 +29,7 @@ async def test_create_nonce_stores_key_with_ttl(redis):
 
 
 @pytest.mark.asyncio
-async def test_consume_nonce_returns_data_and_deletes_key(redis):
+async def test_consume_nonce_returns_data_and_deletes_key(redis: Redis) -> None:
     nonce, _ = await create_nonce(redis, "pubkey_abc")
 
     data = await consume_nonce(redis, nonce)
@@ -42,7 +43,7 @@ async def test_consume_nonce_returns_data_and_deletes_key(redis):
 
 
 @pytest.mark.asyncio
-async def test_consume_nonce_second_call_returns_none(redis):
+async def test_consume_nonce_second_call_returns_none(redis: Redis) -> None:
     nonce, _ = await create_nonce(redis, "pubkey_xyz")
 
     first = await consume_nonce(redis, nonce)
@@ -53,6 +54,6 @@ async def test_consume_nonce_second_call_returns_none(redis):
 
 
 @pytest.mark.asyncio
-async def test_consume_nonce_nonexistent_returns_none(redis):
+async def test_consume_nonce_nonexistent_returns_none(redis: Redis) -> None:
     result = await consume_nonce(redis, "does-not-exist")
     assert result is None

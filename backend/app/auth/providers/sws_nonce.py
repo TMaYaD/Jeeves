@@ -3,6 +3,7 @@
 import json
 import secrets
 from datetime import UTC, datetime
+from typing import Any, cast
 
 # TTL for each nonce in seconds.  After this window the client must request
 # a new challenge.  Five minutes is generous for a mobile wallet interaction.
@@ -29,7 +30,7 @@ async def create_nonce(redis: object, public_key: str) -> tuple[str, str]:
     return nonce, issued_at
 
 
-async def consume_nonce(redis: object, nonce: str) -> dict | None:
+async def consume_nonce(redis: object, nonce: str) -> dict[str, Any] | None:
     """Atomically retrieve and delete the nonce entry.
 
     Returns the stored ``{"public_key": ..., "issued_at": ...}`` dict on the
@@ -42,4 +43,4 @@ async def consume_nonce(redis: object, nonce: str) -> dict | None:
     raw: str | None = await redis.getdel(f"sws_nonce:{nonce}")  # type: ignore[attr-defined]
     if raw is None:
         return None
-    return json.loads(raw)
+    return cast(dict[str, Any], json.loads(raw))
