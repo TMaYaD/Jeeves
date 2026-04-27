@@ -40,18 +40,25 @@ What it does, in order — every step is idempotent:
    service name from the backend's `DATABASE_URL` hostname and runs
    `dokku postgres:link`. Without this the PowerSync container can't
    resolve `dokku-postgres-<svc>` and pgwire fails with no PG-level error.
-4. Set PowerSync env: `PS_SECRET_KEY_B64` (derived from backend's
+4. **Configure the linked Postgres for logical replication** — runs
+   `ALTER SYSTEM SET wal_level = logical;` and `dokku postgres:restart`
+   if the current `wal_level` isn't already `logical`. dokku-postgres
+   ships with PG's default (`replica`) and PowerSync refuses to start
+   without logical replication. Setting persists in `postgresql.auto.conf`,
+   so subsequent runs short-circuit. Note: the restart briefly disconnects
+   every app linked to this Postgres service (the backend included).
+5. Set PowerSync env: `PS_SECRET_KEY_B64` (derived from backend's
    `SECRET_KEY`, base64url with no padding or embedded newlines),
    `PS_DATA_SOURCE_URI`, `NODE_OPTIONS`, `POWERSYNC_CONFIG_PATH`
-5. Mount `/var/lib/dokku/data/storage/<ps-app>` at `/config`
-6. `domains:set <ps-app> <domain>`
-7. `git:from-image <ps-app> journeyapps/powersync-service:<pinned>` — env,
+6. Mount `/var/lib/dokku/data/storage/<ps-app>` at `/config`
+7. `domains:set <ps-app> <domain>`
+8. `git:from-image <ps-app> journeyapps/powersync-service:<pinned>` — env,
    network, storage, domain are all in place first so the first start
    comes up healthy
-8. `letsencrypt:enable <ps-app>`
-9. Set `POWERSYNC_URL=https://<domain>` on the backend (restart only if
-   the value changed)
-10. Smoke-test `https://<domain>/probes/readiness`
+9. `letsencrypt:enable <ps-app>`
+10. Set `POWERSYNC_URL=https://<domain>` on the backend (restart only if
+    the value changed)
+11. Smoke-test `https://<domain>/probes/readiness`
 
 ## Re-running
 
