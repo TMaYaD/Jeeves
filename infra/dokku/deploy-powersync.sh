@@ -243,28 +243,40 @@ else
 fi
 
 # ----- 7. Deploy the PowerSync image -----------------------------------------
+# git:from-image exits non-zero with "No changes detected" when the image
+# digest already matches the deployed one — that's a success state for
+# idempotence, not a failure.  Capture output and treat that case as a no-op.
 echo "==> [7/9] Deploy image"
-dokku git:from-image "${PS_APP}" "${PS_IMAGE}"
+PS_DEPLOY_OUT=$(dokku git:from-image "${PS_APP}" "${PS_IMAGE}" 2>&1) || PS_DEPLOY_RC=$?
+printf '%s\n' "${PS_DEPLOY_OUT}"
+if [ "${PS_DEPLOY_RC:-0}" -ne 0 ]; then
+  if printf '%s' "${PS_DEPLOY_OUT}" | grep -q "No changes detected"; then
+    echo "    Image unchanged — already deployed"
+  else
+    exit "${PS_DEPLOY_RC}"
+  fi
+fi
+unset PS_DEPLOY_OUT PS_DEPLOY_RC
 
 # ----- 8. Let's Encrypt ------------------------------------------------------
 echo "==> [8/9] Let's Encrypt"
-if ! dokku certs:report "${PS_APP}" --certs-ssl-installed 2>/dev/null | grep -qi true; then
-  # letsencrypt requires an email.  Use the global default if set; otherwise
-  # accept LETSENCRYPT_EMAIL from the script env and seed both global + app.
-  if ! dokku letsencrypt:list 2>/dev/null | grep -q "${PS_APP}" && \
-     ! dokku letsencrypt:set --global email 2>/dev/null | grep -q "@" && \
-     [ -z "${LETSENCRYPT_EMAIL:-}" ]; then
+if dokku letsencrypt:list 2>/dev/null | awk '{print $1}' | grep -qx "${PS_APP}"; then
+  echo "    Cert already issued for ${PS_APP}"
+else
+  # letsencrypt:enable requires an email — check app-specific, then global.
+  # Accept LETSENCRYPT_EMAIL from the script env to seed it on first run.
+  APP_EMAIL=$(dokku config:get "${PS_APP}" DOKKU_LETSENCRYPT_EMAIL 2>/dev/null || true)
+  GLOBAL_EMAIL=$(dokku config:get --global DOKKU_LETSENCRYPT_EMAIL 2>/dev/null || true)
+  if [ -z "${APP_EMAIL}" ] && [ -z "${GLOBAL_EMAIL}" ] && [ -z "${LETSENCRYPT_EMAIL:-}" ]; then
     echo "ERROR: no Let's Encrypt email configured." >&2
     echo "       Set one globally:  dokku letsencrypt:set --global email you@example.com" >&2
     echo "       Or re-run this script with LETSENCRYPT_EMAIL=you@example.com" >&2
     exit 1
   fi
-  if [ -n "${LETSENCRYPT_EMAIL:-}" ]; then
+  if [ -n "${LETSENCRYPT_EMAIL:-}" ] && [ "${APP_EMAIL}" != "${LETSENCRYPT_EMAIL}" ]; then
     dokku letsencrypt:set "${PS_APP}" email "${LETSENCRYPT_EMAIL}"
   fi
   dokku letsencrypt:enable "${PS_APP}"
-else
-  echo "    Cert already installed"
 fi
 
 # ----- 9. Wire backend -------------------------------------------------------
