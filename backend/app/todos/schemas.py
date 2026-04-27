@@ -159,6 +159,16 @@ class TagOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TimeLogOut(BaseModel):
+    id: str
+    user_id: str
+    task_id: str
+    started_at: datetime
+    ended_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
 class TodoOut(BaseModel):
     id: str
     title: str

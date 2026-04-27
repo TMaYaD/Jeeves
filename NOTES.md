@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-04-27 (issue #182)
+
+- TimeLog (#182, PR D): `openLog`/`closeLog` accept an optional `DateTime? now` parameter (injected via `transitionState`'s existing `now` argument) so elapsed time is computed from the same logical clock as the companion's `updatedAt` — without this, fast tests compute ≈0s elapsed and the ceiling formula produces 0 minutes instead of 2. `+ 0.9999` before `CAST AS INTEGER` is the SQLite ceiling trick (no native CEIL()). Timestamps are UTC (`.toUtc().toIso8601String()`) so `datetime('now')` in the open-interval query matches.
+
 ## 2026-04-28
 
 - Stripped `blocked` state and `blocked_by_todo_id` column (PR B, #190); all rows collapsed to `next_action`; cascade-unblock side effect on `done` removed; Drift schema bumped to v8; legacy `'blocked'` string in `GtdState.fromString` maps to `nextAction` for any SQLite rows not yet migrated.

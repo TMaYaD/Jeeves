@@ -8,15 +8,12 @@ library;
 
 import 'dart:async';
 
-import 'package:drift/drift.dart'
-    show CustomExpression, Expression, RawValuesInsertable, Variable;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
 import '../services/notification_service.dart';
-import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'focus_settings_provider.dart';
 
@@ -210,7 +207,11 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       final sprintDur = Duration(minutes: sm);
 
       final totalSprints = _calcTotalSprints(task.timeEstimate, sm);
-      final sprintNumber = _calcSprintNumber(task.timeSpentMinutes, sm);
+      final totalMinutes = await ref
+          .read(databaseProvider)
+          .timeLogDao
+          .totalMinutesForTask(task.id);
+      final sprintNumber = _calcSprintNumber(totalMinutes, sm);
       _endTime = DateTime.now().add(sprintDur);
 
       // Carry forward lastBreakEndedAt so post-break cooldown survives
@@ -298,7 +299,6 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       _ticker?.cancel();
       HapticFeedback.heavyImpact();
       await _cancelSprintNotifications();
-      await _logSprintTimeToTask();
       await _startBreak();
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
@@ -441,32 +441,31 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     if (expiredPhase == SprintPhase.focus) {
       // Compute break window relative to when the sprint actually ended so
       // reopening the app 10+ minutes later doesn't grant a fresh full break.
+      // Time is tracked via TimeLog; no explicit logging needed here.
       final focusEndedAt = _endTime;
-      _logSprintTimeToTask().then((_) {
-        if (focusEndedAt != null) {
-          final breakEndTime = focusEndedAt.add(Duration(minutes: bm));
-          final remainingBreak = breakEndTime.difference(DateTime.now());
-          if (remainingBreak <= Duration.zero) {
-            _clearPrefs();
-            final now = DateTime.now();
-            _persistLastBreakEndedAt(now);
-            state = SprintTimerState(
-              sprintDurationMinutes: sm,
-              breakDurationMinutes: bm,
-              lastBreakEndedAt: now,
-            );
-            return;
-          }
-          _startBreak(
-              endTime: breakEndTime,
-              remaining: remainingBreak,
-              sm: sm,
-              bm: bm,
-              lastBreakEndedAt: lastBreakEndedAt);
-        } else {
-          _startBreak(sm: sm, bm: bm, lastBreakEndedAt: lastBreakEndedAt);
+      if (focusEndedAt != null) {
+        final breakEndTime = focusEndedAt.add(Duration(minutes: bm));
+        final remainingBreak = breakEndTime.difference(DateTime.now());
+        if (remainingBreak <= Duration.zero) {
+          _clearPrefs();
+          final now = DateTime.now();
+          _persistLastBreakEndedAt(now);
+          state = SprintTimerState(
+            sprintDurationMinutes: sm,
+            breakDurationMinutes: bm,
+            lastBreakEndedAt: now,
+          );
+          return;
         }
-      });
+        _startBreak(
+            endTime: breakEndTime,
+            remaining: remainingBreak,
+            sm: sm,
+            bm: bm,
+            lastBreakEndedAt: lastBreakEndedAt);
+      } else {
+        _startBreak(sm: sm, bm: bm, lastBreakEndedAt: lastBreakEndedAt);
+      }
     } else {
       // Break expired in background — record it and go idle.
       _clearPrefs();
@@ -601,33 +600,12 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   void _onTimerExpired() {
     HapticFeedback.heavyImpact();
     if (state.phase == SprintPhase.focus) {
-      // Countdown ended: log time, then wait in overtime (no auto-break).
-      _logSprintTimeToTask().then((_) => _startFocusOvertime());
+      // Countdown ended: wait in overtime (no auto-break).
+      // Time is tracked via TimeLog; transitionState closes it on task exit.
+      _startFocusOvertime();
     } else if (state.phase == SprintPhase.break_) {
       // Break ended: wait in overtime (no auto-sprint).
       _startBreakOvertime();
-    }
-  }
-
-  Future<void> _logSprintTimeToTask() async {
-    final taskId = state.activeTaskId;
-    if (taskId == null) return;
-    final sprintMin = state.sprintDurationMinutes;
-    try {
-      final db = ref.read(databaseProvider);
-      final userId = ref.read(currentUserIdProvider);
-      // Single atomic SQL increment — avoids a read-modify-write race on
-      // offline-first tables where a sync write could land between SELECT and UPDATE.
-      await (db.update(db.todos)
-            ..where((t) => Expression.and(
-                [t.id.equals(taskId), t.userId.equals(userId)])))
-          .write(RawValuesInsertable({
-        'time_spent_minutes': CustomExpression<int>(
-            'coalesce(time_spent_minutes, 0) + $sprintMin'),
-        'updated_at': Variable(DateTime.now()),
-      }));
-    } catch (_) {
-      // Non-fatal: time tracking is best-effort.
     }
   }
 

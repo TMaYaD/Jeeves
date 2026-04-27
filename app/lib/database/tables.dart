@@ -65,6 +65,30 @@ class Todos extends Table {
 }
 
 // ---------------------------------------------------------------------------
+// time_logs
+// ---------------------------------------------------------------------------
+
+/// One row per focus stint on a task. PowerSync manages `id`.
+///
+/// Timestamps are ISO-8601 UTC text strings (same convention as [Todos.inProgressSince]).
+/// `ended_at` is null while the stint is still running.
+class TimeLogs extends Table {
+  /// PowerSync-managed primary key — no clientDefault.
+  TextColumn get id => text()();
+  TextColumn get userId => text()();
+  TextColumn get taskId => text().references(Todos, #id)();
+
+  /// ISO-8601 UTC string: when the stint started.
+  TextColumn get startedAt => text()();
+
+  /// ISO-8601 UTC string: when the stint ended; null while still running.
+  TextColumn get endedAt => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
 // tags
 // ---------------------------------------------------------------------------
 
