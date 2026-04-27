@@ -18,7 +18,12 @@ echo "==> Configuring Dokku app: ${APP}"
 
 # sync-config.yaml's JWKS block reads `PS_SECRET_KEY_B64` (base64url-encoded,
 # no padding) — symmetric JWKs declare the key material as a base64url string.
-SECRET_KEY_B64=$(printf '%s' "${SECRET_KEY}" | base64 | tr -d '=' | tr '/+' '_-')
+# Strip embedded newlines too: GNU `base64` wraps at 76 columns by default, and
+# both GNU and BSD `base64` add a trailing newline.  Either would corrupt the
+# encoded value (e.g. `openssl rand -hex 32` produces an 88-char base64 string
+# that GNU would split across two lines), and PowerSync would silently fail
+# every JWT validation with `invalid token signature`.
+SECRET_KEY_B64=$(printf '%s' "${SECRET_KEY}" | base64 | tr -d '\n=' | tr '/+' '_-')
 
 # Set environment variables on the app (--no-restart allows batching).
 # PS_DATA_SOURCE_URI is the PowerSync-required name for the Postgres URI
