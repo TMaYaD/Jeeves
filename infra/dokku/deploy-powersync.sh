@@ -287,13 +287,15 @@ else
 fi
 
 # ----- Smoke test ------------------------------------------------------------
-# Verify the container is up via dokku itself.  We don't HTTP-probe from the
-# host because nginx's loopback (127.0.0.1) and NAT-loopback (public IP)
-# paths can both return a non-matching default vhost, so curling the public
-# hostname from the host is unreliable.  External reachability is already
-# proven by letsencrypt:enable having succeeded (HTTP-01 requires public
-# access), so functional verification of /probes/readiness should be done
-# from a real external client (your laptop, CI), not from the deploy host.
+# Two checks, both real:
+#   (1) container is running (`dokku ps:report`)
+#   (2) external HTTPS reaches PowerSync's readiness probe with a valid cert
+#
+# (2) catches the regressions we hit during bring-up: nginx vhost rebuilds
+# can drop the SSL binding so the host serves a different cert + routes to
+# the wrong app.  We probe via public DNS with full cert verification so a
+# bad SSL binding fails loudly.  Retry briefly because the container can
+# need a few seconds after deploy to be ready.
 echo ""
 echo "==> Smoke test: container status"
 SMOKE_OK=0
@@ -305,13 +307,35 @@ for attempt in 1 2 3 4 5 6; do
   fi
   echo "    attempt ${attempt}: web 1 not yet running"
 done
-if [ "${SMOKE_OK}" -eq 1 ]; then
-  echo "    OK (web 1 running)"
-  echo "==> Done: ${PS_APP} deployed."
-  echo "    Verify externally:  curl -fsS ${PS_URL}/probes/readiness"
-else
+if [ "${SMOKE_OK}" -ne 1 ]; then
   echo "WARN: container not running after retries.  Inspect with:"
   echo "  dokku logs ${PS_APP} --tail 100"
   echo "  dokku ps:report ${PS_APP}"
+  exit 1
+fi
+echo "    OK (web 1 running)"
+
+echo "==> Smoke test: ${PS_URL}/probes/readiness"
+SMOKE_OK=0
+SMOKE_LAST=""
+for attempt in 1 2 3 4 5 6; do
+  sleep 5
+  if SMOKE_LAST=$(curl -fsS --max-time 10 \
+       -w "HTTP %{http_code}" -o /dev/null \
+       "${PS_URL}/probes/readiness" 2>&1); then
+    SMOKE_OK=1
+    break
+  fi
+  echo "    attempt ${attempt}: ${SMOKE_LAST}"
+done
+if [ "${SMOKE_OK}" -eq 1 ]; then
+  echo "    OK (${SMOKE_LAST})"
+  echo "==> Done: ${PS_APP} deployed and reachable at ${PS_URL}"
+else
+  echo "WARN: external HTTPS smoke test failed (last: ${SMOKE_LAST})."
+  echo "  - cert mismatch usually means the nginx vhost lost its SSL binding;"
+  echo "    re-run this script or 'dokku letsencrypt:enable ${PS_APP}'"
+  echo "  - 404 from a different app means routing fell through to the default vhost"
+  echo "  - inspect:  dokku logs ${PS_APP} --tail 100"
   exit 1
 fi
