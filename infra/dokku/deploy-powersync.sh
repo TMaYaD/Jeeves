@@ -186,10 +186,18 @@ if [ "${PG_SERVICE}" = "${PG_HOST}" ]; then
   exit 1
 fi
 echo "    Postgres service: ${PG_SERVICE}"
-if ! dokku postgres:info "${PG_SERVICE}" 2>/dev/null | awk '/^[[:space:]]*Links:/' | grep -qw "${PS_APP}"; then
-  dokku postgres:link "${PG_SERVICE}" "${PS_APP}" --no-restart
-else
+# dokku-postgres considers an app "linked" iff <ALIAS>_URL exists in the app's
+# config — it doesn't verify the docker network alias actually exists.  If a
+# prior run set DATABASE_URL via config:set without a real link, postgres:link
+# bails with "Already linked as DATABASE_URL" and the network alias never gets
+# added, so the container can't resolve dokku-postgres-<svc>.  Use the Links
+# field of postgres:info as the source of truth, and clear any phantom
+# DATABASE_URL before linking.
+if dokku postgres:info "${PG_SERVICE}" 2>/dev/null | awk '/^[[:space:]]*Links:/' | grep -qw "${PS_APP}"; then
   echo "    ${PS_APP} already linked to ${PG_SERVICE}"
+else
+  dokku config:unset --no-restart "${PS_APP}" DATABASE_URL >/dev/null 2>&1 || true
+  dokku postgres:link "${PG_SERVICE}" "${PS_APP}" --no-restart
 fi
 
 # ----- 4. Set PowerSync env vars ---------------------------------------------
