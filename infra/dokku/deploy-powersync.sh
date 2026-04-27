@@ -286,15 +286,27 @@ fi
 # ----- Smoke test ------------------------------------------------------------
 # PowerSync's HTTP probes live under /probes/{liveness,readiness,startup}.
 # Readiness is the strictest of the three (verifies replication + storage)
-# so it's the most informative single check.
+# so it's the most informative single check.  Retry briefly because the
+# container may not be ready immediately after a fresh deploy.
 echo ""
 echo "==> Smoke test: ${PS_URL}/probes/readiness"
-sleep 5
-if curl -fsS --max-time 10 "${PS_URL}/probes/readiness" >/dev/null 2>&1; then
+SMOKE_OK=0
+SMOKE_LAST=""
+for attempt in 1 2 3 4 5 6; do
+  sleep 5
+  if SMOKE_LAST=$(curl -sS --max-time 10 -w "HTTP %{http_code}" -o /dev/null "${PS_URL}/probes/readiness" 2>&1); then
+    if printf '%s' "${SMOKE_LAST}" | grep -q "HTTP 200"; then
+      SMOKE_OK=1
+      break
+    fi
+  fi
+  echo "    attempt ${attempt}: ${SMOKE_LAST}"
+done
+if [ "${SMOKE_OK}" -eq 1 ]; then
   echo "    OK"
   echo "==> Done: ${PS_APP} deployed and reachable at ${PS_URL}"
 else
-  echo "WARN: smoke test failed.  Inspect with:"
+  echo "WARN: smoke test failed after retries (last: ${SMOKE_LAST}).  Inspect with:"
   echo "  dokku logs ${PS_APP} --tail 100"
   echo "  dokku ps:report ${PS_APP}"
   exit 1
