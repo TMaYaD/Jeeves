@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/providers/focus_session_review_provider.dart';
 import 'package:jeeves/screens/review/focus_session_review_screen.dart';
@@ -64,13 +65,25 @@ class _FakeReviewNotifier extends FocusSessionReviewNotifier {
 }
 
 Widget _buildScreen(_FakeReviewNotifier notifier) {
+  final router = GoRouter(
+    initialLocation: '/review',
+    routes: [
+      GoRoute(
+        path: '/review',
+        builder: (_, _) =>
+            const FocusSessionReviewScreen(sessionId: 'session-1'),
+      ),
+      GoRoute(
+        path: '/inbox',
+        builder: (_, _) => const Scaffold(body: Text('Inbox')),
+      ),
+    ],
+  );
   return ProviderScope(
     overrides: [
       focusSessionReviewProvider.overrideWith(() => notifier),
     ],
-    child: const MaterialApp(
-      home: FocusSessionReviewScreen(sessionId: 'session-1'),
-    ),
+    child: MaterialApp.router(routerConfig: router),
   );
 }
 
