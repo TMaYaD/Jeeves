@@ -43,7 +43,11 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Bi-Directional Calendar Sync:** Split-screen UI. Left side: Today's selected tasks. Right side: Calendar (Google/Apple/Outlook sync). Users drag tasks onto the calendar to create timeboxes.
 * **Capacity Warning:** Visual indicators (e.g., progress bars or red text) if the total estimated time of selected tasks exceeds the available free time on the synced calendar.
 * **Focus Mode:** A minimalist execution UI that hides all navigation and lists, showing only the active task. Activated via a "Start" button on any task in the daily plan. Displays the task title, notes, an elapsed timer (HH:MM:SS), and an action bar with Pause, Complete, and Abandon. Complete marks the task done and returns to the daily plan; Abandon returns the task to Next Actions; Pause freezes the timer (no DB write). A persistent notification appears when the app is backgrounded during focus. The active task is tracked by `focus_sessions.current_task_id`; timer state is ephemeral and lost on app restart.
-* **Evening Shutdown:** End-of-day prompt to review completed work against estimates and roll over incomplete tasks.
+* **Session Review (Wrap-Up):** When the user taps "End Session" on the Focus screen, any unfinished tasks trigger the session review screen. For each pending task the user chooses one of three dispositions:
+    * **Roll Over** — pre-select the task for the next planning session (task keeps `intent = 'next'`; shown pre-checked in the next plan summary).
+    * **Leave** — return the task to Next Actions without any change.
+    * **Maybe** — defer the task; `intent` is set to `'maybe'` so it moves to the Someday/Maybe list.
+    Done tasks are shown in a read-only section with no chips. The "Close Session" button is disabled until all pending tasks have been assigned a disposition. If all tasks are already done, the session closes immediately without showing the review screen. Dispositions are recorded on `focus_session_tasks.disposition` (Alembic 0021, Drift migration 16) as a historical record; `NULL` means not yet reviewed.
 
 ### Epic 3: Dynamic Timeboxing & Pomodoro Engine
 **Goal:** Adapt rigid time constraints to varying task lengths.

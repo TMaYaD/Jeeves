@@ -164,7 +164,7 @@ Key methods:
 - The task currently being focused (`current_task_id`).
 - Which tasks are on today's plan (via the `FocusSessionTasks` junction table).
 
-`FocusSessionTasks` (`focus_session_id`, `task_id`, `position`) lists the ordered tasks selected during the planning ritual.
+`FocusSessionTasks` (`focus_session_id`, `task_id`, `position`, `disposition`) lists the ordered tasks selected during the planning ritual. The `disposition` column records the user's per-task choice made during session review (see below); `NULL` while the session is open or for done tasks.
 
 Accessed via `FocusSessionDao` (in `database/daos/focus_session_dao.dart`):
 - `openSession(userId, taskIds)` — atomically closes any prior open session and opens a new one with the given task list.
@@ -172,6 +172,33 @@ Accessed via `FocusSessionDao` (in `database/daos/focus_session_dao.dart`):
 - `setCurrentTask(sessionId, taskId?)` — atomically closes prior `TimeLog`, opens a new one for `taskId` (if non-null), updates `current_task_id`.
 - `watchActiveSession(userId)` / `getActiveSession(userId)` — stream/one-shot for the open session.
 - `watchSessionTasks(sessionId)` / `watchSessionTasksForUser(userId)` — ordered task list.
+- `setTaskDisposition(sessionId, taskId, disposition)` — writes a single `disposition` value; throws `StateError` if the task is not in the session.
+- `reviewAndCloseSession(sessionId, dispositions, now?)` — atomic commit for session review: writes all disposition values, updates `intent = 'maybe'` for each `'maybe'` task, closes open `TimeLog`, closes session.
+- `getLastClosedSessionRolloverTaskIds(userId)` — returns `task_id` values with `disposition = 'rollover'` from the most recently closed session.
+
+### FocusSessionReview (`screens/review/`, `providers/focus_session_review_provider.dart`)
+
+The session review screen is shown when the user taps "End Session" on `FocusScreen` and at least one task is unfinished. It lets the user assign a per-task disposition to each pending task before the session is formally closed.
+
+**Dispositions (`models/review_disposition.dart`):**
+- `rollover` — pre-select for the next planning session (task keeps `intent = 'next'`).
+- `leave` — return to Next Actions without any mutation.
+- `maybe` — defer; `reviewAndCloseSession` writes `intent = 'maybe'` to the todo.
+
+**`FocusSessionReviewState`** (managed by `FocusSessionReviewNotifier`):
+- `sessionTasks` — all tasks that were part of the session.
+- `dispositions` — in-memory `Map<taskId, ReviewDisposition>` for pending tasks.
+- `allPendingReviewed` — true when every pending task has a disposition.
+- `isSubmitting` — true while the async commit is in flight.
+
+**`FocusSessionReviewNotifier`**:
+- `initFromSession(sessionId)` — loads session tasks; called once on screen mount.
+- `setDisposition(taskId, disposition)` — updates the in-memory map.
+- `submitReview()` — calls `dao.reviewAndCloseSession`, then sets `focusSessionPlanningCompletionNotifier.value = false`.
+
+**Routing**: `/focus-session-review` is a top-level `GoRoute` outside the `ShellRoute`, accepting the session ID via `GoRouterState.extra`. The `FocusScreen` "End Session" button navigates here when unfinished tasks exist; if all tasks are done it calls `closeSession` directly and navigates to `/inbox`.
+
+**Rollover pre-population**: `FocusSessionPlanningNotifier.build()` schedules `_preloadRolloverIds()` via `Future.microtask`, which queries `getLastClosedSessionRolloverTaskIds` and prepends any rollover IDs to `pendingSelectedTaskIds`. These appear pre-selected in the Plan Summary step of the next planning ritual; the user can deselect them.
 
 ### ActiveFocusScreen (`screens/active_focus_screen.dart`)
 

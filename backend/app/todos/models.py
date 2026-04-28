@@ -141,10 +141,17 @@ class FocusSession(Base):
 
 class FocusSessionTask(Base):
     __tablename__ = "focus_session_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "disposition IS NULL OR disposition IN ('rollover', 'leave', 'maybe')",
+            name="ck_focus_session_tasks_disposition",
+        ),
+    )
 
     focus_session_id: Mapped[str] = mapped_column(ForeignKey("focus_sessions.id"), primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("todos.id"), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    disposition: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class TimeLog(Base):

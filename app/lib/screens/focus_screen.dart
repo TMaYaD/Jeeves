@@ -16,8 +16,8 @@ class FocusScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncTasks = ref.watch(activeSessionTasksProvider);
-    final currentTaskId =
-        ref.watch(activeSessionProvider).asData?.value?.currentTaskId;
+    final activeSession = ref.watch(activeSessionProvider).asData?.value;
+    final currentTaskId = activeSession?.currentTaskId;
 
     return Scaffold(
       body: SafeArea(
@@ -124,20 +124,39 @@ class FocusScreen extends ConsumerWidget {
                           (t) => _TaskRow(todo: t, currentTaskId: currentTaskId),
                         ),
                       const SizedBox(height: 48),
-                      FilledButton(
-                        onPressed: () => _replanDay(context, ref),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFEFF6FF),
-                          foregroundColor: const Color(0xFF2563EB),
-                          minimumSize: const Size.fromHeight(52),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
+                      if (activeSession != null)
+                        FilledButton(
+                          onPressed: () =>
+                              _endSession(context, ref, tasks, activeSession),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF1E3A5F),
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size.fromHeight(52),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text(
+                            'End Session',
+                            style: TextStyle(
+                                fontSize: 17, fontWeight: FontWeight.bold),
+                          ),
+                        )
+                      else
+                        FilledButton(
+                          onPressed: () => _replanDay(context, ref),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFFEFF6FF),
+                            foregroundColor: const Color(0xFF2563EB),
+                            minimumSize: const Size.fromHeight(52),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text(
+                            'Plan the Day',
+                            style: TextStyle(
+                                fontSize: 17, fontWeight: FontWeight.bold),
+                          ),
                         ),
-                        child: const Text(
-                          'Plan the Day',
-                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-                        ),
-                      ),
                       const SizedBox(height: 32),
                     ],
                   );
@@ -154,6 +173,24 @@ class FocusScreen extends ConsumerWidget {
     await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
     if (!context.mounted) return;
     context.go('/focus-session-planning');
+  }
+
+  Future<void> _endSession(
+    BuildContext context,
+    WidgetRef ref,
+    List<Todo> tasks,
+    FocusSession session,
+  ) async {
+    final allDone = tasks.every((t) => t.doneAt != null);
+    if (allDone) {
+      final db = ref.read(databaseProvider);
+      await db.focusSessionDao.closeSession(sessionId: session.id);
+      focusSessionPlanningCompletionNotifier.value = false;
+      if (!context.mounted) return;
+      context.go('/inbox');
+    } else {
+      context.push('/focus-session-review', extra: session.id);
+    }
   }
 }
 

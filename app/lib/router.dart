@@ -15,6 +15,7 @@ import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/active_focus_screen.dart';
 import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
+import 'screens/review/focus_session_review_screen.dart';
 import 'screens/search/search_screen.dart';
 
 final appRouter = GoRouter(
@@ -54,6 +55,12 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/focus-session-planning',
       builder: (context, state) => const FocusSessionPlanningScreen(),
+    ),
+    GoRoute(
+      path: '/focus-session-review',
+      builder: (context, state) => FocusSessionReviewScreen(
+        sessionId: state.extra as String,
+      ),
     ),
     GoRoute(
       path: '/settings',

@@ -117,6 +117,13 @@ class FocusSessionTasks extends Table {
   TextColumn get taskId => text().references(Todos, #id)();
   IntColumn get position => integer()();
 
+  /// Per-task disposition chosen during session review.
+  /// NULL = not yet reviewed (active session) or done task.
+  /// 'rollover' = carry forward to next session's pre-selected list.
+  /// 'leave' = return to Next Actions (no mutation on todos).
+  /// 'maybe' = defer; FocusSessionReviewNotifier writes intent='maybe' to todos.
+  TextColumn get disposition => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
 }

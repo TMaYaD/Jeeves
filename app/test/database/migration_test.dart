@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -376,6 +376,59 @@ void main() {
       ).get();
       expect(rows.length, 1);
       expect(rows.first.read<String>('title'), 'Was blocked task');
+    });
+
+    test(
+        'v15→v16 migration: disposition column added to focus_session_tasks; '
+        'existing rows have NULL disposition; accepts valid values', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a v15 database: focus_session_tasks without a disposition col.
+      // Drop and recreate the table without the disposition column.
+      await db.customStatement('DROP TABLE IF EXISTS focus_session_tasks');
+      await db.customStatement(
+        'CREATE TABLE focus_session_tasks ('
+        '  focus_session_id TEXT NOT NULL,'
+        '  task_id TEXT NOT NULL,'
+        '  position INTEGER NOT NULL,'
+        '  PRIMARY KEY (focus_session_id, task_id)'
+        ')',
+      );
+
+      // Seed a pre-migration row.
+      await db.customStatement(
+        "INSERT INTO focus_session_tasks (focus_session_id, task_id, position) "
+        "VALUES ('session1', 'task1', 0)",
+      );
+
+      // Drive the v16 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 15, 16);
+
+      // The disposition column must now exist.
+      final cols = await db
+          .customSelect('PRAGMA table_info(focus_session_tasks)')
+          .get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames, contains('disposition'));
+
+      // Existing rows have NULL disposition.
+      final rows = await db.customSelect(
+        'SELECT disposition FROM focus_session_tasks WHERE task_id = ?',
+        variables: [Variable.withString('task1')],
+      ).get();
+      expect(rows.length, 1);
+      expect(rows.first.read<String?>('disposition'), isNull);
+
+      // Valid values must be accepted.
+      for (final value in ['rollover', 'leave', 'maybe']) {
+        await db.customStatement(
+          'UPDATE focus_session_tasks SET disposition = ? '
+          "WHERE focus_session_id = 'session1' AND task_id = 'task1'",
+          [value],
+        );
+      }
     });
   });
 }

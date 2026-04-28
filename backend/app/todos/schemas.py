@@ -200,6 +200,7 @@ class FocusSessionTaskOut(BaseModel):
     focus_session_id: str
     task_id: str
     position: int
+    disposition: str | None = None
 
     model_config = {"from_attributes": True}
 

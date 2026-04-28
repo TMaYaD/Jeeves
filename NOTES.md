@@ -127,3 +127,11 @@
 - Logo.html referenced in issue #136 returned 404 from the Anthropic design URL; SVG paths and dot geometry were derived from the design-token description in the issue itself. If Logo.html becomes accessible, verify `SIG_PATH`/`APPICON_PATH` match the implemented `path d="M 50 24 L 50 80 Q 50 96 36 92"` Signature stem.
 - `JeevesLogo` wordmark variant uses a Flutter `Row(SvgPicture + Text)` rather than loading a wordmark SVG, so Manrope is always resolved through Flutter's font system rather than flutter_svg's (which doesn't see asset fonts).
 - Platform mipmap/xcasset icons are not regenerated in this commit; `dart run flutter_launcher_icons` must be run inside `app/` after `flutter pub get` to produce them.
+
+## 2026-04-28
+
+- PR K: `disposition` lives on `focus_session_tasks`, not `todos` — rollover is a session-level choice and the session row is a historical artifact; a flag on `todos` would conflate session state with task state.
+- `reviewAndCloseSession` updates `todos.intent` via raw `customUpdate` SQL rather than calling `todoDao` — avoids circular cross-DAO dependency since `FocusSessionDao` already declares `Todos` in its `@DriftAccessor` tables list.
+- `app/lib/database/gtd_database.g.dart` is committed and must be manually updated when the Drift schema changes; `build_runner` cannot be run because the dev machine doesn't have the full Flutter toolchain.
+- `Future.microtask(_preloadRolloverIds)` in `FocusSessionPlanningNotifier.build()` is the correct pattern for one-shot async side-effects in a Riverpod `Notifier` — `build()` must return synchronously, and the microtask fires exactly once per notifier lifetime.
+- Session ID is passed to `FocusSessionReviewScreen` via `GoRouterState.extra`; the review route lives outside `ShellRoute` so it gets a full-screen layout without the bottom nav bar.
