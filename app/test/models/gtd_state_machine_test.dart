@@ -16,12 +16,8 @@ void main() {
 
       test('nextAction → inProgress', () => expectValid(GtdState.nextAction, GtdState.inProgress));
       test('nextAction → waitingFor', () => expectValid(GtdState.nextAction, GtdState.waitingFor));
-      test('nextAction → done', () => expectValid(GtdState.nextAction, GtdState.done));
 
       test('waitingFor → nextAction', () => expectValid(GtdState.waitingFor, GtdState.nextAction));
-      test('waitingFor → done', () => expectValid(GtdState.waitingFor, GtdState.done));
-
-      test('inProgress → done', () => expectValid(GtdState.inProgress, GtdState.done));
     });
 
     group('invalid transitions', () {
@@ -33,10 +29,7 @@ void main() {
         );
       }
 
-      // done is terminal
-      test('done → nextAction is rejected', () => expectInvalid(GtdState.done, GtdState.nextAction));
-
-      // inProgress cannot go back to nextAction
+      // inProgress has no valid FSM exits (completion is via markDone; PR I retires it)
       test('inProgress → nextAction is rejected', () => expectInvalid(GtdState.inProgress, GtdState.nextAction));
       test('inProgress → waitingFor is rejected', () => expectInvalid(GtdState.inProgress, GtdState.waitingFor));
     });
@@ -50,7 +43,7 @@ void main() {
 
       test('returns false for invalid transitions', () {
         expect(GtdStateMachine.isValid(GtdState.inProgress, GtdState.nextAction), isFalse);
-        expect(GtdStateMachine.isValid(GtdState.done, GtdState.nextAction), isFalse);
+        expect(GtdStateMachine.isValid(GtdState.inProgress, GtdState.waitingFor), isFalse);
       });
     });
   });

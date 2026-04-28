@@ -37,10 +37,17 @@ final waitingForProvider = StreamProvider<List<Todo>>((ref) {
   return db.todoDao.watchWaitingFor(userId, tagIds: tagIds);
 });
 
-/// Stream of maybe-intent todos (intent = 'maybe', state != 'done').
+/// Stream of maybe-intent todos (intent = 'maybe', done_at IS NULL).
 final maybeProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final userId = ref.watch(currentUserIdProvider);
   final tagIds = ref.watch(tagFilterProvider);
   return db.todoDao.watchMaybe(userId, tagIds: tagIds);
+});
+
+/// Stream of completed todos ordered by done_at descending.
+final doneProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.todoDao.watchDone(userId);
 });

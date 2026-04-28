@@ -24,15 +24,16 @@ void main() {
       expect(projects.first.name, 'Brush up on GTD®');
     });
 
-    test('logbook state maps to done', () {
+    test('logbook items have doneAt set', () {
       final (items, _) = parseCsv(_fixture('nirvana_sample.csv'));
-      final done = items.where((i) => i.state == 'done').toList();
+      final done = items.where((i) => i.doneAt != null).toList();
       expect(done.length, 2);
     });
 
     test('next state maps to next_action', () {
       final (items, _) = parseCsv(_fixture('nirvana_sample.csv'));
-      final next = items.where((i) => i.state == 'next_action').toList();
+      final next =
+          items.where((i) => i.state == 'next_action' && i.doneAt == null).toList();
       expect(next.length, 2);
     });
 
@@ -102,12 +103,12 @@ void main() {
       expect(items.first.dueDate, '2024-04-03');
     });
 
-    test('completed task with non-logbook state maps to done', () {
+    test('completed task has doneAt set regardless of state column', () {
       const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           'Task,Done task,Next,2024-01-01,,,,,,, \n';
       final (items, _) = parseCsv(csv);
-      expect(items.first.state, 'done');
-      expect(items.first.completed, isTrue);
+      expect(items.first.state, 'next_action');
+      expect(items.first.doneAt, isNotNull);
     });
 
     test('notes with embedded newlines are parsed correctly', () {
@@ -140,16 +141,17 @@ void main() {
       expect(skipped, 2);
     });
 
-    test('completed items map to done state', () {
+    test('completed items have doneAt set', () {
       final (items, _) = parseJson(_fixture('nirvana_sample.json'));
-      final done = items.where((i) => i.state == 'done').toList();
+      final done = items.where((i) => i.doneAt != null).toList();
       expect(done.length, 2);
-      expect(done.every((i) => i.completed), isTrue);
+      expect(done.every((i) => i.state == 'next_action'), isTrue);
     });
 
     test('state=1 (next_action) is mapped correctly', () {
       final (items, _) = parseJson(_fixture('nirvana_sample.json'));
-      final next = items.where((i) => i.state == 'next_action').toList();
+      final next =
+          items.where((i) => i.state == 'next_action' && i.doneAt == null).toList();
       expect(next.length, 2);
     });
 

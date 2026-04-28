@@ -1,5 +1,11 @@
 # Notes
 
+## 2026-04-28 (issue #194)
+
+- Stripped `done` state, introduced `done_at TIMESTAMPTZ` column (PR G, #194). Done tasks now keep `state='next_action'` and have `done_at IS NOT NULL`. `markDone` DAO method replaces `transitionState(…, GtdState.done)` at all call sites. All list watchers guard with `AND done_at IS NULL`. `GtdState.done` enum case removed; legacy `fromString('done')` maps to `nextAction`. Drift schema bumped to v12. `completed` boolean dropped from PostgreSQL (migration 0017) but kept as a phantom column in SQLite (unreliable DROP COLUMN across OS versions).
+- `inProgress: {}` in `GtdStateMachine.allowedTransitions` — no FSM exits from `inProgress` until PR I retires it; completion is via `markDone`, TimeLog closure is the sprint timer's responsibility.
+- `_addColumnIfTable` guard-pattern used for `done_at` migration (same as v11 `clarified`). Both the `_watchFilteredByStateAndTags` SQL path and the in-memory filter paths in `watchNextActions`/`watchNextActionsForPlanning`/`watchSkippedNextActionsForPlanning` updated to guard with `done_at IS NULL`.
+
 ## 2026-04-28 (issue #193)
 
 - Stripped `inbox` state, introduced `clarified BOOLEAN` column (PR F). Inbox items are now `state='next_action', clarified=false`; all other GTD lists filter `clarified=1`. Drift schema v11. Legacy migration: `ALTER TABLE todos ADD COLUMN clarified INTEGER NOT NULL DEFAULT 1` + `UPDATE todos SET clarified=0, state='next_action' WHERE state='inbox'`. Both defaults (SQL-level `withDefault` + Dart-side `clientDefault`) intentional for PowerSync view-insert compat — same pattern as `completed`.

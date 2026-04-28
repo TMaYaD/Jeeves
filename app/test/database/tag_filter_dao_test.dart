@@ -78,7 +78,8 @@ void main() {
       final t1 = await _insertTodo(db,
           id: 't1', title: 'Task A', state: 'next_action');
       final t2 = await _insertTodo(db,
-          id: 't2', title: 'Task B', state: 'done');
+          id: 't2', title: 'Task B', state: 'next_action');
+      await db.todoDao.markDone(t2, _userId);
       final t3 = await _insertTodo(db,
           id: 't3', title: 'Task C', state: 'next_action', clarified: false);
       await _assignTag(db, t1, 'ctx1');
@@ -87,7 +88,7 @@ void main() {
 
       final results =
           await db.tagDao.watchTagsWithActiveCount(_userId, 'context').first;
-      expect(results.first.count, 1); // only t1 (clarified next_action) is counted
+      expect(results.first.count, 1); // only t1 (clarified, not done) is counted
     });
 
     test('count updates reactively when a todo is completed', () async {
@@ -103,9 +104,8 @@ void main() {
           .map((rows) => rows.first.count);
       final expectation = expectLater(counts, emitsInOrder([1, 0]));
 
-      // Complete the todo — should push a new emission on the same stream.
-      await (db.update(db.todos)..where((t) => t.id.equals(t1)))
-          .write(const TodosCompanion(state: Value('done')));
+      // Mark done — should push a new emission on the same stream.
+      await db.todoDao.markDone(t1, _userId);
 
       await expectation;
     });

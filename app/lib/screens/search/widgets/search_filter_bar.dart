@@ -76,7 +76,7 @@ class _StateFilterChip extends ConsumerWidget {
   }
 
   void _showSheet(BuildContext context, WidgetRef ref) {
-    final allStates = GtdState.values.where((s) => s != GtdState.done).toList();
+    final allStates = GtdState.values.toList();
     var selected = Set<GtdState>.from(query.states);
 
     showModalBottomSheet<void>(

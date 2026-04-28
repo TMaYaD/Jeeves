@@ -150,7 +150,9 @@ Future<ImportResult> importNirvanaLocally({
                 id: Value(todoId),
                 title: Value(item.name),
                 notes: Value(item.notes),
-                completed: Value(item.completed),
+                doneAt: item.doneAt != null
+                    ? Value(item.doneAt!.toUtc().toIso8601String())
+                    : const Value(null),
                 state: Value(effectiveState),
                 clarified: Value(isClarified),
                 dueDate: Value(dueDate),

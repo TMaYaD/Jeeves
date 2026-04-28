@@ -66,6 +66,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       'SELECT todos.* FROM todos '
       'WHERE todos.user_id = ? AND todos.state = ?$intentClause '
       'AND todos.clarified = 1 '
+      'AND todos.done_at IS NULL '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id AND user_id = ? '
       '       AND tag_id IN ($placeholders)) = $n '
@@ -94,7 +95,8 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
             .where((t) =>
                 t.state == GtdState.nextAction.value &&
                 t.intent != 'maybe' &&
-                t.clarified)
+                t.clarified &&
+                t.doneAt == null)
             .toList(),
       );
     }
@@ -122,7 +124,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         userId, GtdState.waitingFor.value, tagIds);
   }
 
-  /// Stream of maybe-intent todos for [userId] (intent = 'maybe', state != 'done').
+  /// Stream of maybe-intent todos for [userId] (intent = 'maybe', done_at IS NULL).
   ///
   /// Only clarified (processed) todos are returned.  When [tagIds] is
   /// non-empty only todos carrying **all** specified tags are returned
@@ -131,9 +133,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return customSelect(
-        'SELECT * FROM todos WHERE user_id = ? AND intent = ? AND state != ?'
+        'SELECT * FROM todos WHERE user_id = ? AND intent = ? AND done_at IS NULL'
         ' AND clarified = 1 ORDER BY created_at',
-        variables: [Variable(userId), Variable('maybe'), Variable('done')],
+        variables: [Variable(userId), Variable('maybe')],
         readsFrom: {todos},
       ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
     }
@@ -141,7 +143,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     final placeholders = List.filled(n, '?').join(', ');
     return customSelect(
       'SELECT todos.* FROM todos '
-      'WHERE todos.user_id = ? AND todos.intent = ? AND todos.state != ? '
+      'WHERE todos.user_id = ? AND todos.intent = ? AND todos.done_at IS NULL '
       'AND todos.clarified = 1 '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id AND user_id = ? '
@@ -150,7 +152,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       variables: [
         Variable(userId),
         Variable('maybe'),
-        Variable('done'),
         Variable(userId),
         ...tagIds.map(Variable.new),
       ],
@@ -189,6 +190,37 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ])
       ..where(todos.userId.equals(userId) & todoTags.tagId.equals(areaTagId));
     return query.map((row) => row.readTable(todos)).watch();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Done
+  // ---------------------------------------------------------------------------
+
+  /// Marks [todoId] as done by setting [done_at] to the current UTC timestamp.
+  ///
+  /// The task's [state] remains unchanged (typically 'next_action').  Done-ness
+  /// is represented entirely by [done_at IS NOT NULL].
+  ///
+  /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
+  Future<void> markDone(String todoId, String userId, {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
+    await customUpdate(
+      'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1 '
+      'WHERE id = ? AND user_id = ?',
+      variables: [Variable(ts), Variable(ts), Variable(todoId), Variable(userId)],
+      updates: {todos},
+      updateKind: UpdateKind.update,
+    );
+  }
+
+  /// Stream of completed todos for [userId], ordered by [done_at] descending.
+  Stream<List<Todo>> watchDone(String userId) {
+    return customSelect(
+      'SELECT * FROM todos WHERE user_id = ? AND done_at IS NOT NULL '
+      'ORDER BY done_at DESC',
+      variables: [Variable(userId)],
+      readsFrom: {todos},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
   // ---------------------------------------------------------------------------
@@ -293,6 +325,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
             t.state == GtdState.nextAction.value &&
             t.intent != 'maybe' &&
             t.clarified &&
+            t.doneAt == null &&
             (t.dailySelectionDate == null || t.dailySelectionDate != today))
         .toList());
   }
@@ -305,6 +338,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
             t.state == GtdState.nextAction.value &&
             t.intent != 'maybe' &&
             t.clarified &&
+            t.doneAt == null &&
             t.selectedForToday == false &&
             t.dailySelectionDate == today)
         .toList());

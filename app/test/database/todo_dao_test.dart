@@ -73,71 +73,13 @@ void main() {
       expect(logs.first.endedAt, isNull);
     });
 
-    test('leaving inProgress closes TimeLog row and updates time_spent_minutes cache',
-        () async {
-      await _insertTodo(db, id: 'd', title: 'Task D', state: 'next_action');
-      final start = DateTime(2024, 1, 1, 10, 0, 0);
-      await db.todoDao
-          .transitionState('d', _userId, GtdState.inProgress, now: start);
-
-      // 95 seconds → ceiling → 2 minutes.
-      final finish = start.add(const Duration(seconds: 95));
-      await db.todoDao
-          .transitionState('d', _userId, GtdState.done, now: finish);
-
-      final logs = await (db.select(db.timeLogs)
-            ..where((t) => t.taskId.equals('d')))
-          .get();
-      expect(logs.length, 1);
-      expect(logs.first.endedAt, isNotNull);
-
-      final row = await db.todoDao.getTodo('d', _userId);
-      expect(row?.state, GtdState.done.value);
-      expect(row?.timeSpentMinutes, 2);
-      expect(row?.inProgressSince, isNull);
-    });
-
-    test('multiple inProgress stints create one TimeLog row per stint; cache equals sum',
-        () async {
-      await _insertTodo(db, id: 'e', title: 'Task E', state: 'next_action');
-
-      // First stint: 30 seconds → ceiling → 1 minute.
-      final start1 = DateTime(2024, 1, 1, 9, 0, 0);
-      await db.todoDao
-          .transitionState('e', _userId, GtdState.inProgress, now: start1);
-      final end1 = start1.add(const Duration(seconds: 30));
-      await db.todoDao
-          .transitionState('e', _userId, GtdState.done, now: end1);
-
-      // Reset state for second stint.
-      await (db.update(db.todos)..where((t) => t.id.equals('e')))
-          .write(const TodosCompanion(state: Value('next_action')));
-
-      // Second stint: 120 seconds → exactly 2 minutes.
-      final start2 = DateTime(2024, 1, 2, 10, 0, 0);
-      await db.todoDao
-          .transitionState('e', _userId, GtdState.inProgress, now: start2);
-      final end2 = start2.add(const Duration(seconds: 120));
-      await db.todoDao
-          .transitionState('e', _userId, GtdState.done, now: end2);
-
-      final logs = await (db.select(db.timeLogs)
-            ..where((t) => t.taskId.equals('e')))
-          .get();
-      expect(logs.length, 2); // one row per stint
-
-      final row = await db.todoDao.getTodo('e', _userId);
-      expect(row?.timeSpentMinutes, 3); // cache = SUM(1 + 2)
-      expect(row?.inProgressSince, isNull);
-    });
-
-    test('inProgressSince is null after any state transition', () async {
+    test('inProgressSince is null after entering inProgress', () async {
       await _insertTodo(db, id: 'f', title: 'Task F', state: 'next_action');
       final start = DateTime(2024, 1, 1, 8, 0, 0);
       await db.todoDao
           .transitionState('f', _userId, GtdState.inProgress, now: start);
 
-      // inProgressSince is inert after this PR; TimeLog.startedAt is canonical.
+      // inProgressSince is inert; TimeLog.startedAt is canonical.
       final row = await db.todoDao.getTodo('f', _userId);
       expect(row?.inProgressSince, isNull);
     });
@@ -166,8 +108,7 @@ void main() {
       await _insertTodo(db, id: 'm2', title: 'Next action', state: 'next_action');
       await _insertTodo(db, id: 'm3', title: 'Maybe Done', state: 'next_action');
       await db.todoDao.deferTaskToMaybe('m3', _userId);
-      await (db.update(db.todos)..where((t) => t.id.equals('m3')))
-          .write(const TodosCompanion(state: Value('done')));
+      await db.todoDao.markDone('m3', _userId);
 
       final items = await db.todoDao.watchMaybe(_userId).first;
       expect(items.length, 1);
@@ -181,6 +122,67 @@ void main() {
       expect(items, isEmpty);
     });
 
+  });
+
+  group('TodoDao — markDone', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('markDone sets done_at and leaves state as next_action', () async {
+      await _insertTodo(db, id: 'md1', title: 'Task MD1');
+      final now = DateTime(2024, 6, 1, 12, 0, 0);
+      await db.todoDao.markDone('md1', _userId, now: now);
+
+      final row = await db.todoDao.getTodo('md1', _userId);
+      expect(row?.doneAt, isNotNull);
+      expect(row?.state, 'next_action');
+    });
+
+    test('markDone task no longer appears in watchNextActions', () async {
+      await _insertTodo(db, id: 'md2', title: 'Task MD2');
+      await db.todoDao.markDone('md2', _userId);
+
+      final items = await db.todoDao.watchNextActions(_userId).first;
+      expect(items.any((t) => t.id == 'md2'), isFalse);
+    });
+
+    test('watchDone returns done tasks ordered by done_at DESC', () async {
+      await _insertTodo(db, id: 'wd1', title: 'First done');
+      await _insertTodo(db, id: 'wd2', title: 'Second done');
+      final t1 = DateTime(2024, 6, 1, 10, 0, 0);
+      final t2 = DateTime(2024, 6, 2, 10, 0, 0);
+      await db.todoDao.markDone('wd1', _userId, now: t1);
+      await db.todoDao.markDone('wd2', _userId, now: t2);
+
+      final items = await db.todoDao.watchDone(_userId).first;
+      expect(items.length, 2);
+      expect(items.first.id, 'wd2'); // most recent first
+      expect(items.last.id, 'wd1');
+    });
+
+    test('watchNextActions excludes done tasks even when state is next_action', () async {
+      await _insertTodo(db, id: 'na1', title: 'Active next action');
+      await _insertTodo(db, id: 'na2', title: 'Done next action');
+      await db.todoDao.markDone('na2', _userId);
+
+      final items = await db.todoDao.watchNextActions(_userId).first;
+      expect(items.length, 1);
+      expect(items.first.id, 'na1');
+    });
+
+    test('watchMaybe excludes done maybe tasks', () async {
+      await _insertTodo(db, id: 'mm1', title: 'Active maybe');
+      await _insertTodo(db, id: 'mm2', title: 'Done maybe');
+      await db.todoDao.deferTaskToMaybe('mm1', _userId);
+      await db.todoDao.deferTaskToMaybe('mm2', _userId);
+      await db.todoDao.markDone('mm2', _userId);
+
+      final items = await db.todoDao.watchMaybe(_userId).first;
+      expect(items.length, 1);
+      expect(items.first.id, 'mm1');
+    });
   });
 
   group('TodoDao — setIntent / deferTaskToMaybe', () {

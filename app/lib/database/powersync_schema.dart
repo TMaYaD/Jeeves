@@ -14,7 +14,6 @@ const powersyncSchema = ps.Schema([
   ps.Table('todos', [
     ps.Column.text('title'),
     ps.Column.text('notes'),
-    ps.Column.integer('completed'),
     ps.Column.integer('priority'),
     ps.Column.text('due_date'),
     ps.Column.text('created_at'),
@@ -22,6 +21,7 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('state'),
     ps.Column.text('intent'),
     ps.Column.integer('clarified'),
+    ps.Column.text('done_at'),
     ps.Column.integer('time_estimate'),
     ps.Column.text('energy_level'),
     ps.Column.text('capture_source'),

@@ -25,20 +25,18 @@ class GtdStateMachine {
   GtdStateMachine._();
 
   /// The complete set of valid state transitions.
+  ///
+  /// `done` is no longer a GTD state — completion is recorded via `done_at`
+  /// on the todo row (see TodoDao.markDone). `inProgress` remains until PR I.
   static const Map<GtdState, Set<GtdState>> allowedTransitions = {
     GtdState.nextAction: {
       GtdState.inProgress,
       GtdState.waitingFor,
-      GtdState.done,
     },
     GtdState.waitingFor: {
       GtdState.nextAction,
-      GtdState.done,
     },
-    GtdState.inProgress: {
-      GtdState.done,
-    },
-    GtdState.done: {},
+    GtdState.inProgress: {},
   };
 
   /// Returns true when the [from] → [to] transition is permitted.

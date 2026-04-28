@@ -39,7 +39,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -164,6 +164,23 @@ class GtdDatabase extends _$GtdDatabase {
               await customStatement(
                 "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
               );
+            }
+          }
+          if (from < 12) {
+            await _addColumnIfTable(m, todos, todos.doneAt);
+            final tables = await customSelect(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name='todos'",
+            ).get();
+            if (tables.isNotEmpty) {
+              // Backfill done_at for legacy 'done' state rows.
+              await customStatement(
+                "UPDATE todos SET done_at = updated_at WHERE state = 'done'",
+              );
+              await customStatement(
+                "UPDATE todos SET state = 'next_action' WHERE state = 'done'",
+              );
+              // completed column: intentionally NOT dropped — SQLite DROP COLUMN
+              // is unreliable across OS versions; Drift treats it as invisible.
             }
           }
         },
