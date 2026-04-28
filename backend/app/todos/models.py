@@ -79,7 +79,7 @@ class Todo(Base):
     __table_args__ = (
         Index("ix_todos_user_state", "user_id", "state"),
         CheckConstraint(
-            "state IN ('inbox','next_action','waiting_for','done')",
+            "state IN ('next_action','waiting_for','done')",
             name="ck_todos_state",
         ),
         CheckConstraint(
@@ -107,7 +107,8 @@ class Todo(Base):
     )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    state: Mapped[str] = mapped_column(String(50), default="inbox")
+    clarified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    state: Mapped[str] = mapped_column(String(50), default="next_action")
     intent: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

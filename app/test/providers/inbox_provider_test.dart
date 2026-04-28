@@ -27,23 +27,24 @@ void main() {
       await db.close();
     });
 
-    test('addTodo stores item visible via DAO', () async {
+    test('addTodo stores item with clarified = false', () async {
       await container.read(inboxNotifierProvider).addTodo('Buy milk');
 
       final items = await db.inboxDao.watchInbox('local').first;
       expect(items.length, 1);
       expect(items.first.title, 'Buy milk');
-      expect(items.first.state, 'inbox');
+      expect(items.first.clarified, isFalse);
       expect(items.first.captureSource, 'manual');
     });
 
-    test('addTodo called twice yields two items', () async {
+    test('addTodo called twice yields two clarified = false items', () async {
       final notifier = container.read(inboxNotifierProvider);
       await notifier.addTodo('Task one');
       await notifier.addTodo('Task two');
 
       final items = await db.inboxDao.watchInbox('local').first;
       expect(items.length, 2);
+      expect(items.every((t) => !t.clarified), isTrue);
     });
 
     test('fresh database has no inbox items', () async {

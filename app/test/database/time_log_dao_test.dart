@@ -15,10 +15,10 @@ Future<String> _insertTodo(
   required String title,
 }) async {
   final now = DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    state: const Value('inbox'),
+    clarified: const Value(true),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),

@@ -3,7 +3,6 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/gtd_state_machine.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -13,14 +12,12 @@ const _userId = 'test-user';
 TodosCompanion _companion({
   required String id,
   required String title,
-  String state = 'inbox',
   String? captureSource = 'manual',
 }) {
   final now = DateTime.now();
   return TodosCompanion(
     id: Value(id),
     title: Value(title),
-    state: Value(state),
     captureSource: Value(captureSource),
     userId: Value(_userId),
     createdAt: Value(now),
@@ -36,6 +33,14 @@ void main() {
 
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
+
+    test('insertTodo sets clarified = false', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Buy milk'));
+
+      final items = await db.inboxDao.watchInbox(_userId).first;
+      expect(items.length, 1);
+      expect(items.first.clarified, isFalse);
+    });
 
     test('insertTodo stores row visible in watchInbox', () async {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Buy milk'));
@@ -53,34 +58,67 @@ void main() {
       );
     });
 
-    test('insertTodo rejects non-inbox state', () async {
-      expect(
-        () => db.inboxDao.insertTodo(
-          _companion(id: 'bad', title: 'Wrong state', state: 'next_action'),
-        ),
-        throwsA(isA<ArgumentError>()),
-      );
-    });
-
-    test('watchInbox filters out non-inbox states', () async {
+    test('watchInbox returns rows where clarified = false', () async {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Inbox item'));
-      await db.inboxDao.insertTodo(_companion(id: 'b', title: 'Next action'));
-      // Transition 'b' out of inbox — the real production path for non-inbox rows.
-      await db.inboxDao
-          .processInboxItem('b', userId: _userId, newState: 'next_action');
+      await db.inboxDao.insertTodo(_companion(id: 'b', title: 'Processed item'));
+      // Process 'b' — sets clarified = true
+      await db.inboxDao.processInboxItem('b', userId: _userId);
 
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items.length, 1);
       expect(items.first.id, 'a');
     });
 
+    test('watchInbox excludes rows where clarified = true', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Item'));
+      await db.inboxDao.processInboxItem('a', userId: _userId);
+
+      final items = await db.inboxDao.watchInbox(_userId).first;
+      expect(items, isEmpty);
+    });
+
+    test('processInboxItem sets clarified = true', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
+      await db.inboxDao.processInboxItem('x', userId: _userId);
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.clarified, isTrue);
+    });
+
     test('processInboxItem removes row from inbox watch', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
+      await db.inboxDao.processInboxItem('x', userId: _userId);
+
+      final items = await db.inboxDao.watchInbox(_userId).first;
+      expect(items, isEmpty);
+    });
+
+    test('processInboxItem sets optional newState', () async {
       await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
       await db.inboxDao
           .processInboxItem('x', userId: _userId, newState: 'next_action');
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
-      expect(items, isEmpty);
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.clarified, isTrue);
+      expect(row.state, 'next_action');
+    });
+
+    test('processInboxItem does not call FSM — any newState is accepted',
+        () async {
+      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
+      // 'waiting_for' is now valid even without an FSM inbox→waitingFor path.
+      await db.inboxDao
+          .processInboxItem('x', userId: _userId, newState: 'waiting_for');
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.clarified, isTrue);
+      expect(row.state, 'waiting_for');
     });
 
     test('deleteTodo removes row from inbox watch', () async {
@@ -91,18 +129,6 @@ void main() {
       expect(items, isEmpty);
     });
 
-    test('processInboxItem rejects invalid transition (inbox → inProgress)', () async {
-      await db.inboxDao.insertTodo(_companion(id: 'bad', title: 'Bad transition'));
-      await expectLater(
-        db.inboxDao.processInboxItem(
-            'bad', userId: _userId, newState: 'in_progress'),
-        throwsA(isA<InvalidStateTransitionException>()),
-      );
-      // State must remain unchanged after the rejected transition.
-      final items = await db.inboxDao.watchInbox(_userId).first;
-      expect(items.any((t) => t.id == 'bad' && t.state == 'inbox'), isTrue);
-    });
-
     test('watchInbox returns newest first', () async {
       final earlier = DateTime(2024, 1, 1);
       final later = DateTime(2024, 6, 1);
@@ -110,7 +136,6 @@ void main() {
       await db.inboxDao.insertTodo(TodosCompanion(
         id: const Value('old'),
         title: const Value('Old'),
-        state: const Value('inbox'),
         userId: Value(_userId),
         createdAt: Value(earlier),
         updatedAt: Value(earlier),
@@ -118,7 +143,6 @@ void main() {
       await db.inboxDao.insertTodo(TodosCompanion(
         id: const Value('new'),
         title: const Value('New'),
-        state: const Value('inbox'),
         userId: Value(_userId),
         createdAt: Value(later),
         updatedAt: Value(later),

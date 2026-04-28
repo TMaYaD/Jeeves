@@ -14,7 +14,7 @@ void main() {
     });
 
     test('non-empty states makes it not empty', () {
-      expect(SearchQuery(states: {GtdState.inbox}).isEmpty, isFalse);
+      expect(SearchQuery(states: {GtdState.nextAction}).isEmpty, isFalse);
     });
 
     test('includeDone=true makes it not empty', () {
@@ -53,12 +53,12 @@ void main() {
     test('preserves unchanged fields', () {
       final original = SearchQuery(
         text: 'original',
-        states: {GtdState.inbox},
+        states: {GtdState.nextAction},
         energyLevels: const {'low'},
         includeDone: true,
       );
       final updated = original.copyWith(text: 'updated');
-      expect(updated.states, {GtdState.inbox});
+      expect(updated.states, {GtdState.nextAction});
       expect(updated.energyLevels, {'low'});
       expect(updated.includeDone, isTrue);
     });

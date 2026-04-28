@@ -7,6 +7,17 @@ import 'tag_filter_provider.dart';
 
 export '../database/gtd_database.dart' show Todo;
 
+/// Stream of inbox todos (clarified = false), newest first.
+///
+/// Automatically filtered by the active context tag set from
+/// [tagFilterProvider] (AND semantics when multiple tags are selected).
+final inboxProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  final tagIds = ref.watch(tagFilterProvider);
+  return db.inboxDao.watchInbox(userId, tagIds: tagIds);
+});
+
 /// Stream of next-action todos.
 ///
 /// Automatically filtered by the active context tag set from

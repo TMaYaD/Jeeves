@@ -46,10 +46,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Returns a stream of [Todo]s with [state] belonging to [userId] whose
   /// tags include ALL of [tagIds] (AND semantics).
   ///
-  /// When [excludeIntent] is non-null, rows with that intent value are excluded.
-  /// Watches both [todos] and [todoTags] so the stream re-emits when either
-  /// table changes.  Uses `todos.map(row.data)` to produce typed [Todo]
-  /// objects without repeating the column-mapping logic.
+  /// Only clarified (processed) todos are returned.  When [excludeIntent] is
+  /// non-null, rows with that intent value are excluded.  Watches both [todos]
+  /// and [todoTags] so the stream re-emits when either table changes.
   Stream<List<Todo>> _watchFilteredByStateAndTags(
     String userId,
     String state,
@@ -66,6 +65,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return customSelect(
       'SELECT todos.* FROM todos '
       'WHERE todos.user_id = ? AND todos.state = ?$intentClause '
+      'AND todos.clarified = 1 '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id AND user_id = ? '
       '       AND tag_id IN ($placeholders)) = $n '
@@ -83,15 +83,18 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// Stream of next-action todos for [userId] (excludes intent = 'maybe').
   ///
-  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
-  /// returned (AND semantics).
+  /// Only clarified (processed) todos are returned.  When [tagIds] is
+  /// non-empty only todos carrying **all** specified tags are returned
+  /// (AND semantics).
   Stream<List<Todo>> watchNextActions(String userId,
       {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return _watchAllForUser(userId).map(
         (all) => all
             .where((t) =>
-                t.state == GtdState.nextAction.value && t.intent != 'maybe')
+                t.state == GtdState.nextAction.value &&
+                t.intent != 'maybe' &&
+                t.clarified)
             .toList(),
       );
     }
@@ -102,14 +105,17 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// Stream of waiting-for todos for [userId].
   ///
-  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
-  /// returned (AND semantics).
+  /// Only clarified (processed) todos are returned.  When [tagIds] is
+  /// non-empty only todos carrying **all** specified tags are returned
+  /// (AND semantics).
   Stream<List<Todo>> watchWaitingFor(String userId,
       {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return _watchAllForUser(userId).map(
-        (all) =>
-            all.where((t) => t.state == GtdState.waitingFor.value).toList(),
+        (all) => all
+            .where(
+                (t) => t.state == GtdState.waitingFor.value && t.clarified)
+            .toList(),
       );
     }
     return _watchFilteredByStateAndTags(
@@ -118,14 +124,15 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// Stream of maybe-intent todos for [userId] (intent = 'maybe', state != 'done').
   ///
-  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
-  /// returned (AND semantics).
+  /// Only clarified (processed) todos are returned.  When [tagIds] is
+  /// non-empty only todos carrying **all** specified tags are returned
+  /// (AND semantics).
   Stream<List<Todo>> watchMaybe(String userId,
       {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return customSelect(
         'SELECT * FROM todos WHERE user_id = ? AND intent = ? AND state != ?'
-        ' ORDER BY created_at',
+        ' AND clarified = 1 ORDER BY created_at',
         variables: [Variable(userId), Variable('maybe'), Variable('done')],
         readsFrom: {todos},
       ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
@@ -135,6 +142,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return customSelect(
       'SELECT todos.* FROM todos '
       'WHERE todos.user_id = ? AND todos.intent = ? AND todos.state != ? '
+      'AND todos.clarified = 1 '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id AND user_id = ? '
       '       AND tag_id IN ($placeholders)) = $n '
@@ -259,8 +267,11 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     // inProgressSince is inert after this PR; TimeLog.startedAt is canonical.
     // timeSpentMinutes is conditionally overwritten by transitionState via
     // copyWith when leaving inProgress (recomputed from TimeLog SUM).
+    // clarified is set to true: any explicit state transition counts as
+    // clarification so the item leaves the inbox.
     return TodosCompanion(
       state: Value(newState.value),
+      clarified: const Value(true),
       inProgressSince: const Value(null),
       updatedAt: Value(now),
       selectedForToday: const Value.absent(),
@@ -273,23 +284,27 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// Stream of next-action todos for [userId] not yet reviewed today.
   ///
-  /// A task is "not yet reviewed" when its [dailySelectionDate] is null or
-  /// does not equal [today] (ISO-8601 date string).
+  /// Only clarified (processed) todos are returned.  A task is "not yet
+  /// reviewed" when its [dailySelectionDate] is null or does not equal
+  /// [today] (ISO-8601 date string).
   Stream<List<Todo>> watchNextActionsForPlanning(String userId, String today) {
     return _watchAllForUser(userId).map((all) => all
         .where((t) =>
             t.state == GtdState.nextAction.value &&
             t.intent != 'maybe' &&
+            t.clarified &&
             (t.dailySelectionDate == null || t.dailySelectionDate != today))
         .toList());
   }
 
   /// Stream of next-action todos for [userId] skipped today.
-  Stream<List<Todo>> watchSkippedNextActionsForPlanning(String userId, String today) {
+  Stream<List<Todo>> watchSkippedNextActionsForPlanning(
+      String userId, String today) {
     return _watchAllForUser(userId).map((all) => all
         .where((t) =>
             t.state == GtdState.nextAction.value &&
             t.intent != 'maybe' &&
+            t.clarified &&
             t.selectedForToday == false &&
             t.dailySelectionDate == today)
         .toList());

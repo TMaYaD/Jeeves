@@ -23,7 +23,7 @@ Future<Todo> _insertAt(
   GtdDatabase db, {
   required String id,
   String title = 'Test task',
-  String state = 'inbox',
+  String state = 'next_action',
 }) async {
   final now = DateTime.now();
   await db.customInsert(
@@ -130,40 +130,38 @@ void main() {
       expect(find.byKey(const Key('status_pill')), findsOneWidget);
     });
 
-    testWidgets('status pill sheet lists only valid next states for inbox',
+    testWidgets('status pill sheet lists valid transitions for next_action items',
         (tester) async {
-      final todo = await _insertAt(
-          db, id: 'task4', title: 'Inbox task', state: 'inbox');
+      final todo = await _insertAt(db, id: 'task4', title: 'Next action task');
       final (widget, router) = _buildScreen(db, 'task4', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'task4');
 
       await tester.tap(find.byKey(const Key('status_pill')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Next Actions'), findsOneWidget);
+      expect(find.text('In Progress'), findsOneWidget);
       expect(find.text('Waiting For'), findsOneWidget);
       expect(find.text('Done'), findsOneWidget);
 
+      // "Next Actions" appears once in the status pill (current state label),
+      // but not as a transition target in the sheet.
+      expect(find.text('Next Actions'), findsOneWidget);
       expect(find.text('Someday / Maybe'), findsNothing);
-      expect(find.text('In Progress'), findsNothing);
-      expect(find.text('Scheduled'), findsNothing);
-      expect(find.text('Deferred'), findsNothing);
     });
 
-    testWidgets('moving task to Next Actions succeeds', (tester) async {
-      final todo = await _insertAt(
-          db, id: 'task5', title: 'Move me', state: 'inbox');
+    testWidgets('moving task to Waiting For succeeds', (tester) async {
+      final todo = await _insertAt(db, id: 'task5', title: 'Move me');
       final (widget, router) = _buildScreen(db, 'task5', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'task5');
 
       await tester.tap(find.byKey(const Key('status_pill')));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('move_to_next_action')));
+      await tester.tap(find.byKey(const Key('move_to_waiting_for')));
       await tester.pumpAndSettle();
 
       final row = await db.todoDao.getTodo('task5', _userId);
-      expect(row?.state, GtdState.nextAction.value);
+      expect(row?.state, GtdState.waitingFor.value);
     });
 
     testWidgets('energy level segmented button shows after tap',

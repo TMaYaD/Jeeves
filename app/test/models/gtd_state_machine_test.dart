@@ -14,10 +14,6 @@ void main() {
         );
       }
 
-      test('inbox → nextAction', () => expectValid(GtdState.inbox, GtdState.nextAction));
-      test('inbox → waitingFor', () => expectValid(GtdState.inbox, GtdState.waitingFor));
-      test('inbox → done', () => expectValid(GtdState.inbox, GtdState.done));
-
       test('nextAction → inProgress', () => expectValid(GtdState.nextAction, GtdState.inProgress));
       test('nextAction → waitingFor', () => expectValid(GtdState.nextAction, GtdState.waitingFor));
       test('nextAction → done', () => expectValid(GtdState.nextAction, GtdState.done));
@@ -37,27 +33,24 @@ void main() {
         );
       }
 
-      // Key boundary: inbox cannot go directly to inProgress
-      test('inbox → inProgress is rejected', () => expectInvalid(GtdState.inbox, GtdState.inProgress));
-
       // done is terminal
       test('done → nextAction is rejected', () => expectInvalid(GtdState.done, GtdState.nextAction));
-      test('done → inbox is rejected', () => expectInvalid(GtdState.done, GtdState.inbox));
 
-      // inProgress cannot go back to inbox or nextAction
-      test('inProgress → inbox is rejected', () => expectInvalid(GtdState.inProgress, GtdState.inbox));
+      // inProgress cannot go back to nextAction
       test('inProgress → nextAction is rejected', () => expectInvalid(GtdState.inProgress, GtdState.nextAction));
+      test('inProgress → waitingFor is rejected', () => expectInvalid(GtdState.inProgress, GtdState.waitingFor));
     });
 
     group('isValid', () {
       test('returns true for valid transitions', () {
-        expect(GtdStateMachine.isValid(GtdState.inbox, GtdState.nextAction), isTrue);
         expect(GtdStateMachine.isValid(GtdState.nextAction, GtdState.inProgress), isTrue);
+        expect(GtdStateMachine.isValid(GtdState.nextAction, GtdState.waitingFor), isTrue);
+        expect(GtdStateMachine.isValid(GtdState.waitingFor, GtdState.nextAction), isTrue);
       });
 
       test('returns false for invalid transitions', () {
-        expect(GtdStateMachine.isValid(GtdState.inbox, GtdState.inProgress), isFalse);
-        expect(GtdStateMachine.isValid(GtdState.done, GtdState.inbox), isFalse);
+        expect(GtdStateMachine.isValid(GtdState.inProgress, GtdState.nextAction), isFalse);
+        expect(GtdStateMachine.isValid(GtdState.done, GtdState.nextAction), isFalse);
       });
     });
   });

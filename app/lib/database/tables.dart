@@ -27,12 +27,18 @@ class Todos extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
-  /// GTD state: inbox | next_action | waiting_for | in_progress | done
+  /// GTD state: next_action | waiting_for | in_progress | done
   TextColumn get state => text()
-      .clientDefault(() => 'inbox')
+      .clientDefault(() => 'next_action')
       .customConstraint(
-        "NOT NULL DEFAULT 'inbox' CHECK (\"state\" IN ('inbox','next_action','waiting_for','in_progress','done'))",
+        "NOT NULL DEFAULT 'next_action' CHECK (\"state\" IN ('next_action','waiting_for','in_progress','done'))",
       )();
+
+  // Both defaults intentional for the same reason as `completed` above.
+  /// Whether this todo has been clarified (processed out of inbox).
+  /// false = still in inbox; true = clarified and assigned to a GTD list.
+  BoolColumn get clarified =>
+      boolean().withDefault(const Constant(true)).clientDefault(() => true)();
 
   /// Orthogonal intent: next | maybe | trash (migration 0015).
   TextColumn get intent => text()

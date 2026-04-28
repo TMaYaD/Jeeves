@@ -439,11 +439,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
             Container(
               width: 6,
               height: 6,
-              decoration: BoxDecoration(
-                color: switch (currentState) {
-                  GtdState.inbox => const Color(0xFF3B82F6),
-                  _ => const Color(0xFF10B981),
-                },
+              decoration: const BoxDecoration(
+                color: Color(0xFF10B981),
                 shape: BoxShape.circle,
               ),
             ),

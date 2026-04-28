@@ -18,13 +18,14 @@ Future<String> _insertTodo(
   required String id,
   required String title,
   required String state,
+  bool clarified = true,
 }) async {
   final now = DateTime.now();
-  // Insert directly into the todos table to avoid InboxDao's state guard.
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
     state: Value(state),
+    clarified: Value(clarified),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -72,21 +73,21 @@ void main() {
       expect(results.first.count, 0);
     });
 
-    test('counts only non-done non-inbox todos', () async {
+    test('counts only clarified non-done todos', () async {
       await _insertTag(db, id: 'ctx1', name: 'work');
       final t1 = await _insertTodo(db,
           id: 't1', title: 'Task A', state: 'next_action');
       final t2 = await _insertTodo(db,
           id: 't2', title: 'Task B', state: 'done');
       final t3 = await _insertTodo(db,
-          id: 't3', title: 'Task C', state: 'inbox');
+          id: 't3', title: 'Task C', state: 'next_action', clarified: false);
       await _assignTag(db, t1, 'ctx1');
       await _assignTag(db, t2, 'ctx1');
       await _assignTag(db, t3, 'ctx1');
 
       final results =
           await db.tagDao.watchTagsWithActiveCount(_userId, 'context').first;
-      expect(results.first.count, 1); // only t1 (next_action) is counted
+      expect(results.first.count, 1); // only t1 (clarified next_action) is counted
     });
 
     test('count updates reactively when a todo is completed', () async {

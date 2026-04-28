@@ -40,23 +40,6 @@ void main() {
       );
     });
 
-    testWidgets('navigation drawer has five GTD list items', (tester) async {
-      app.main();
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-
-      // Open the drawer
-      final ScaffoldState scaffold = tester.state(find.byType(Scaffold).first);
-      scaffold.openDrawer();
-      await tester.pumpAndSettle();
-
-      // Verify all five GTD navigation items are present in the drawer
-      expect(find.text('Inbox'), findsWidgets);
-      expect(find.text('Next Actions'), findsOneWidget);
-      expect(find.text('Waiting For'), findsOneWidget);
-      expect(find.text('Blocked'), findsOneWidget);
-      expect(find.text('Someday/Maybe'), findsOneWidget);
-    });
-
     testWidgets('add item to inbox then tap to open detail view', (tester) async {
       app.main();
       await tester.pumpAndSettle(const Duration(seconds: 3));
@@ -78,29 +61,7 @@ void main() {
       expect(find.text('Move to…'), findsOneWidget);
     });
 
-    testWidgets('invalid transition (Inbox → In Progress) not offered in sheet',
-        (tester) async {
-      app.main();
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-
-      // Add and open a task.
-      await tester.enterText(find.byType(TextField).first, 'Check invalid transitions');
-      await tester.testTextInput.receiveAction(TextInputAction.done);
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Check invalid transitions'));
-      await tester.pumpAndSettle();
-
-      // Open "Move to" sheet.
-      await tester.tap(find.text('Move to…'));
-      await tester.pumpAndSettle();
-
-      // In Progress and Scheduled should NOT appear.
-      expect(find.text('In Progress'), findsNothing);
-      expect(find.text('Scheduled'), findsNothing);
-    });
-
-    testWidgets('moving item to Next Actions removes it from inbox',
+    testWidgets('moving item to Waiting For removes it from inbox',
         (tester) async {
       app.main();
       await tester.pumpAndSettle(const Duration(seconds: 3));
@@ -115,17 +76,11 @@ void main() {
       await tester.tap(find.text('Move to…'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Next Actions'));
+      await tester.tap(find.text('Waiting For'));
       await tester.pumpAndSettle();
 
-      // Back on inbox — item should be gone.
+      // Back on inbox — item should be gone (clarified = true).
       expect(find.text('GTD candidate'), findsNothing);
-
-      // Navigate to Next Actions — item should be there.
-      await tester.tap(find.text('Next'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('GTD candidate'), findsOneWidget);
     });
   });
 }

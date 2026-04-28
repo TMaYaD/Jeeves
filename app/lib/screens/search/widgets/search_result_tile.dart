@@ -115,7 +115,6 @@ class _StateChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (state) {
-      GtdState.inbox => ('Inbox', const Color(0xFF6B7280)),
       GtdState.nextAction => ('Next', const Color(0xFF16A34A)),
       GtdState.waitingFor => ('Waiting', const Color(0xFFD97706)),
       GtdState.inProgress => ('In Progress', const Color(0xFF7C3AED)),

@@ -288,7 +288,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         clearDueDate: clearDueDate,
       );
 
-  /// Processes an inbox item to a GTD list (transitions out of inbox state).
+  /// Processes an inbox item by setting clarified = true and transitioning
+  /// to [newState].
   Future<void> processInboxItem(String id, GtdState newState) async {
     await _db.inboxDao.processInboxItem(
       id,
@@ -302,17 +303,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Processes an inbox item to the maybe list.
   ///
-  /// Moves the item to next_action state (out of inbox) then sets intent = 'maybe'
-  /// so it appears in the Maybe view rather than Next Actions.
+  /// Sets clarified = true, state = next_action, and intent = 'maybe'
+  /// so the item appears in the Maybe view rather than Next Actions.
   Future<void> processInboxItemToMaybe(String id) async {
-    await _db.transaction(() async {
-      await _db.inboxDao.processInboxItem(
-        id,
-        userId: _userId,
-        newState: GtdState.nextAction.value,
-      );
-      await _db.todoDao.deferTaskToMaybe(id, _userId);
-    });
+    await _db.inboxDao.processInboxItem(
+      id,
+      userId: _userId,
+      newState: GtdState.nextAction.value,
+      intent: 'maybe',
+    );
     state = state.copyWith(
       inboxClarifiedCount: state.inboxClarifiedCount + 1,
     );

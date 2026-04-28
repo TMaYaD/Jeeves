@@ -15,22 +15,18 @@ Future<String> _insertTodo(
   GtdDatabase db, {
   required String id,
   required String title,
-  String state = 'inbox',
+  String state = 'next_action',
 }) async {
   final now = DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    state: const Value('inbox'),
+    state: Value(state),
+    clarified: const Value(true),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
   ));
-  // If a non-inbox state is needed, transition there step by step.
-  if (state != 'inbox') {
-    await (db.update(db.todos)..where((t) => t.id.equals(id)))
-        .write(TodosCompanion(state: Value(state)));
-  }
   return id;
 }
 
@@ -45,16 +41,16 @@ void main() {
 
     test('valid transition updates state', () async {
       await _insertTodo(db, id: 'a', title: 'Task A');
-      await db.todoDao.transitionState('a', _userId, GtdState.nextAction);
+      await db.todoDao.transitionState('a', _userId, GtdState.inProgress);
 
       final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.state, GtdState.nextAction.value);
+      expect(row?.state, GtdState.inProgress.value);
     });
 
     test('invalid transition throws InvalidStateTransitionException', () async {
-      await _insertTodo(db, id: 'b', title: 'Task B');
+      await _insertTodo(db, id: 'b', title: 'Task B', state: 'in_progress');
       expect(
-        () => db.todoDao.transitionState('b', _userId, GtdState.inProgress),
+        () => db.todoDao.transitionState('b', _userId, GtdState.nextAction),
         throwsA(isA<InvalidStateTransitionException>()),
       );
     });
