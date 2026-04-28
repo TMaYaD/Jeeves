@@ -14,14 +14,12 @@ Future<String> _insertTodo(
   GtdDatabase db, {
   required String id,
   required String title,
-  String state = 'next_action',
   bool clarified = true,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    state: Value(state),
     clarified: Value(clarified),
     userId: const Value(_userId),
     createdAt: Value(now),
@@ -32,37 +30,6 @@ Future<String> _insertTodo(
 
 void main() {
   setUpAll(configureSqliteForTests);
-
-  group('TodoDao — transitionState', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('updates state and sets clarified=true', () async {
-      await _insertTodo(db, id: 'a', title: 'Task A', clarified: false);
-      await db.todoDao.transitionState('a', _userId, GtdState.nextAction);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.state, GtdState.nextAction.value);
-      expect(row?.clarified, isTrue);
-    });
-
-    test('updates updatedAt', () async {
-      await _insertTodo(db, id: 'b', title: 'Task B');
-      final now = DateTime(2024, 1, 1, 10, 0, 0);
-      await db.todoDao
-          .transitionState('b', _userId, GtdState.nextAction, now: now);
-
-      final row = await db.todoDao.getTodo('b', _userId);
-      expect(row?.updatedAt, now);
-    });
-
-    test('no-ops silently for unknown task', () async {
-      await db.todoDao.transitionState('nonexistent', _userId, GtdState.nextAction);
-      // No exception thrown.
-    });
-  });
 
   group('TodoDao — watchTodosById', () {
     late GtdDatabase db;
@@ -103,7 +70,7 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('updates dueDate without changing state', () async {
+    test('updates dueDate', () async {
       final todayDt = DateTime(2026, 4, 16);
       final newDate = DateTime(2026, 4, 20);
       await _insertTodo(db, id: 'r1', title: 'Reschedulable task');
@@ -113,7 +80,6 @@ void main() {
       await db.todoDao.rescheduleTask('r1', _userId, newDate);
 
       final row = await db.todoDao.getTodo('r1', _userId);
-      expect(row?.state, GtdState.nextAction.value);
       expect(row?.dueDate, newDate.toUtc());
     });
   });
@@ -142,7 +108,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
         id: const Value('wc1'),
         title: const Value('Unclarified waiting'),
-        state: const Value('next_action'),
         waitingFor: const Value('Bob'),
         clarified: const Value(false),
         userId: const Value(_userId),
@@ -172,10 +137,10 @@ void main() {
     });
 
     test('watchMaybe returns only intent=maybe todos (not done)', () async {
-      await _insertTodo(db, id: 'm1', title: 'Maybe 1', state: 'next_action');
+      await _insertTodo(db, id: 'm1', title: 'Maybe 1');
       await db.todoDao.deferTaskToMaybe('m1', _userId);
-      await _insertTodo(db, id: 'm2', title: 'Next action', state: 'next_action');
-      await _insertTodo(db, id: 'm3', title: 'Maybe Done', state: 'next_action');
+      await _insertTodo(db, id: 'm2', title: 'Next action');
+      await _insertTodo(db, id: 'm3', title: 'Maybe Done');
       await db.todoDao.deferTaskToMaybe('m3', _userId);
       await db.todoDao.markDone('m3', _userId);
 
@@ -185,7 +150,7 @@ void main() {
     });
 
     test('watchMaybe excludes intent=next todos', () async {
-      await _insertTodo(db, id: 'n1', title: 'Next action', state: 'next_action');
+      await _insertTodo(db, id: 'n1', title: 'Next action');
 
       final items = await db.todoDao.watchMaybe(_userId).first;
       expect(items, isEmpty);
@@ -199,14 +164,13 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('markDone sets done_at and leaves state as next_action', () async {
+    test('markDone sets done_at', () async {
       await _insertTodo(db, id: 'md1', title: 'Task MD1');
       final now = DateTime(2024, 6, 1, 12, 0, 0);
       await db.todoDao.markDone('md1', _userId, now: now);
 
       final row = await db.todoDao.getTodo('md1', _userId);
       expect(row?.doneAt, isNotNull);
-      expect(row?.state, 'next_action');
     });
 
     test('markDone task no longer appears in watchNextActions', () async {
@@ -231,7 +195,7 @@ void main() {
       expect(items.last.id, 'wd1');
     });
 
-    test('watchNextActions excludes done tasks even when state is next_action', () async {
+    test('watchNextActions excludes done tasks', () async {
       await _insertTodo(db, id: 'na1', title: 'Active next action');
       await _insertTodo(db, id: 'na2', title: 'Done next action');
       await db.todoDao.markDone('na2', _userId);
@@ -260,13 +224,12 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('deferTaskToMaybe sets intent to maybe without changing state', () async {
-      await _insertTodo(db, id: 'i1', title: 'Task I1', state: 'next_action');
+    test('deferTaskToMaybe sets intent to maybe', () async {
+      await _insertTodo(db, id: 'i1', title: 'Task I1');
       await db.todoDao.deferTaskToMaybe('i1', _userId);
 
       final row = await db.todoDao.getTodo('i1', _userId);
       expect(row?.intent, 'maybe');
-      expect(row?.state, 'next_action');
     });
 
     test('setIntent updates intent and bumps updated_at', () async {

@@ -5,7 +5,9 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.todos.models import ENERGY_LEVELS, GTD_STATES, INTENT_VALUES, TAG_TYPES
+from app.todos.models import ENERGY_LEVELS, INTENT_VALUES, TAG_TYPES
+
+STATE_VALUES = ("next_action",)
 
 
 def _normalise_drift_iso(value: object) -> object:
@@ -82,7 +84,6 @@ class TodoCreate(BaseModel):
     title: str
     notes: str | None = None
     done_at: datetime | None = None
-    state: str = "next_action"
     intent: str = "next"
     # Each item is either a plain string ("@office") or a TagInput dict.
     # Plain strings: "@" prefix → context; bare word → label.
@@ -95,16 +96,11 @@ class TodoCreate(BaseModel):
     # Client-state columns (migration 0007)
     waiting_for: str | None = None  # who/what the task is waiting on
     time_spent_minutes: int = Field(default=0, ge=0)
+    # Legacy compatibility field — only "next_action" is accepted; ignored by the DB layer.
+    state: str | None = None
 
     _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
     _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
-
-    @field_validator("state")
-    @classmethod
-    def validate_state(cls, v: str) -> str:
-        if v not in GTD_STATES:
-            raise ValueError(f"state must be one of {sorted(GTD_STATES)}")
-        return v
 
     @field_validator("intent")
     @classmethod
@@ -120,12 +116,18 @@ class TodoCreate(BaseModel):
             raise ValueError(f"energy_level must be one of {sorted(ENERGY_LEVELS)}")
         return v
 
+    @field_validator("state")
+    @classmethod
+    def validate_state(cls, v: str | None) -> str | None:
+        if v is not None and v not in STATE_VALUES:
+            raise ValueError(f"state must be one of {sorted(STATE_VALUES)}")
+        return v
+
 
 class TodoUpdate(BaseModel):
     title: str | None = None
     notes: str | None = None
     done_at: datetime | None = None
-    state: str | None = None
     intent: str | None = None
     tags: list[str | TagInput] | None = None  # Full replacement of tag set when provided
     due_date: datetime | None = None
@@ -136,16 +138,11 @@ class TodoUpdate(BaseModel):
     # Client-state columns (migration 0007)
     waiting_for: str | None = None
     time_spent_minutes: int | None = Field(default=None, ge=0)
+    # Legacy compatibility field — only "next_action" is accepted; ignored by the DB layer.
+    state: str | None = None
 
     _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
     _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
-
-    @field_validator("state")
-    @classmethod
-    def validate_state(cls, v: str | None) -> str | None:
-        if v is not None and v not in GTD_STATES:
-            raise ValueError(f"state must be one of {sorted(GTD_STATES)}")
-        return v
 
     @field_validator("intent")
     @classmethod
@@ -159,6 +156,13 @@ class TodoUpdate(BaseModel):
     def validate_energy_level(cls, v: str | None) -> str | None:
         if v is not None and v not in ENERGY_LEVELS:
             raise ValueError(f"energy_level must be one of {sorted(ENERGY_LEVELS)}")
+        return v
+
+    @field_validator("state")
+    @classmethod
+    def validate_state(cls, v: str | None) -> str | None:
+        if v is not None and v not in STATE_VALUES:
+            raise ValueError(f"state must be one of {sorted(STATE_VALUES)}")
         return v
 
 
@@ -206,7 +210,6 @@ class TodoOut(BaseModel):
     notes: str | None
     done_at: datetime | None
     priority: int | None
-    state: str
     intent: str
     tags: list[TagOut]
     due_date: datetime | None
@@ -217,5 +220,7 @@ class TodoOut(BaseModel):
     # Client-state columns (migration 0007)
     waiting_for: str | None
     time_spent_minutes: int
+    # Legacy compatibility: state column was dropped in migration 0020; always "next_action".
+    state: str = "next_action"
 
     model_config = {"from_attributes": True}

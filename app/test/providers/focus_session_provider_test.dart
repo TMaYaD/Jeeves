@@ -20,13 +20,12 @@ ProviderContainer _makeContainer(GtdDatabase db) => ProviderContainer(
       ],
     );
 
-Future<Todo> _insertTask(GtdDatabase db, {String state = 'next_action'}) async {
+Future<Todo> _insertTask(GtdDatabase db) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
     title: Value('Test Task'),
     userId: Value(_userId),
     createdAt: Value(now),
-    state: Value(state),
   ));
   final rows = await db.select(db.todos).get();
   return rows.last;
@@ -185,10 +184,6 @@ void main() {
       expect(s.activeTodoId, todo.id);
       expect(s.isActive, isTrue);
       expect(s.sessionStart, isNotNull);
-
-      // Task state stays next_action — startFocus no longer transitions it.
-      final updated = await db.todoDao.getTodo(todo.id, _userId);
-      expect(updated?.state, GtdState.nextAction.value);
 
       // A time log must have been opened by setCurrentTask.
       final log = await db.timeLogDao.watchActiveLog(_userId).first;

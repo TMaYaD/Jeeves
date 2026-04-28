@@ -25,7 +25,6 @@ Todo _todo(String id, String title) => Todo(
       dueDate: null,
       createdAt: DateTime(2024, 1, 1),
       updatedAt: null,
-      state: 'next_action',
       clarified: false,
       intent: 'next',
       timeEstimate: null,

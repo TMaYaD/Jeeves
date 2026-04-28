@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../models/search_result.dart';
-import '../../models/todo.dart' show GtdState;
 import '../../providers/search_provider.dart';
 import 'widgets/recent_searches_list.dart';
 import 'widgets/search_filter_bar.dart';
@@ -196,7 +195,7 @@ class _Results extends StatelessWidget {
     required this.queryText,
   });
 
-  final AsyncValue<Map<GtdState, List<SearchResult>>> resultsAsync;
+  final AsyncValue<List<SearchResult>> resultsAsync;
   final String queryText;
 
   @override
@@ -205,8 +204,8 @@ class _Results extends StatelessWidget {
       loading: () => const LinearProgressIndicator(),
       error: (err, _) =>
           Center(child: Text('Error: $err', style: const TextStyle(color: Color(0xFFDC2626)))),
-      data: (grouped) {
-        if (grouped.isEmpty) {
+      data: (results) {
+        if (results.isEmpty) {
           return Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -223,45 +222,11 @@ class _Results extends StatelessWidget {
           );
         }
 
-        // Sections in GTD state order
-        final orderedStates =
-            GtdState.values.where(grouped.containsKey).toList();
-
-        // Build a flat list: for each state, one header + N result tiles
-        final slivers = <Widget>[];
-        for (final state in orderedStates) {
-          final items = grouped[state]!;
-          slivers.add(_SectionHeader(state: state));
-          slivers.addAll(items.map((r) => SearchResultTile(result: r)));
-        }
-
         return ListView(
           padding: const EdgeInsets.only(bottom: 24),
-          children: slivers,
+          children: results.map((r) => SearchResultTile(result: r)).toList(),
         );
       },
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.state});
-
-  final GtdState state;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(
-        state.displayName.toUpperCase(),
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-          color: Color(0xFF9CA3AF),
-        ),
-      ),
     );
   }
 }

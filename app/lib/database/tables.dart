@@ -20,19 +20,9 @@ class Todos extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
-  /// GTD state: next_action only.
-  /// (done retired → use done_at; waiting_for retired → use waiting_for column;
-  ///  in_progress retired → use focus_sessions.current_task_id)
-  TextColumn get state => text()
-      .clientDefault(() => 'next_action')
-      .customConstraint(
-        "NOT NULL DEFAULT 'next_action' CHECK (\"state\" IN ('next_action'))",
-      )();
-
   /// ISO-8601 UTC timestamp; non-null when the task has been completed.
   TextColumn get doneAt => text().nullable()();
 
-  // Both defaults intentional: see comment on `state` column above.
   /// Whether this todo has been clarified (processed out of inbox).
   /// false = still in inbox; true = clarified and assigned to a GTD list.
   BoolColumn get clarified =>

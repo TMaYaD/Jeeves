@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/search_query.dart';
 import '../models/search_result.dart';
-import '../models/todo.dart' show GtdState;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -31,30 +30,21 @@ class SearchQueryNotifier extends Notifier<SearchQuery> {
 // Results
 // ---------------------------------------------------------------------------
 
-/// Reactive stream of search results grouped by GTD state.
+/// Reactive stream of search results.
 ///
-/// Emits an empty map immediately when [searchQueryProvider] is empty (no
+/// Emits an empty list immediately when [searchQueryProvider] is empty (no
 /// active query). Uses [StreamProvider.autoDispose] so the Drift stream is
 /// cancelled when the search screen is popped.
 final searchResultsProvider =
-    StreamProvider.autoDispose<Map<GtdState, List<SearchResult>>>((ref) {
+    StreamProvider.autoDispose<List<SearchResult>>((ref) {
   final query = ref.watch(searchQueryProvider);
-  if (query.isEmpty) return Stream.value({});
+  if (query.isEmpty) return Stream.value([]);
 
   final db = ref.watch(databaseProvider);
   final userId = ref.watch(currentUserIdProvider);
 
-  return db.searchDao.search(userId, query).map(_groupByState);
+  return db.searchDao.search(userId, query);
 });
-
-Map<GtdState, List<SearchResult>> _groupByState(List<SearchResult> results) {
-  final grouped = <GtdState, List<SearchResult>>{};
-  for (final r in results) {
-    final state = GtdState.fromString(r.todo.state);
-    grouped.putIfAbsent(state, () => []).add(r);
-  }
-  return grouped;
-}
 
 // ---------------------------------------------------------------------------
 // Recent searches

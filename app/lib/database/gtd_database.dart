@@ -40,7 +40,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -155,10 +155,14 @@ class GtdDatabase extends _$GtdDatabase {
                   "ALTER TABLE todos ADD COLUMN intent TEXT NOT NULL DEFAULT 'next'",
                 );
               }
-              await customStatement(
-                "UPDATE todos SET intent = 'maybe', state = 'next_action' "
-                "WHERE state = 'someday_maybe'",
-              );
+              final hasStateV10 =
+                  cols.any((r) => r.read<String>('name') == 'state');
+              if (hasStateV10) {
+                await customStatement(
+                  "UPDATE todos SET intent = 'maybe', state = 'next_action' "
+                  "WHERE state = 'someday_maybe'",
+                );
+              }
             }
           }
           if (from < 11) {
@@ -175,10 +179,14 @@ class GtdDatabase extends _$GtdDatabase {
                   "ALTER TABLE todos ADD COLUMN clarified INTEGER NOT NULL DEFAULT 1",
                 );
               }
-              // Always normalize legacy inbox rows (idempotent).
-              await customStatement(
-                "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
-              );
+              // Normalize legacy inbox rows (state column exists until v15).
+              final hasStateV11 =
+                  cols.any((r) => r.read<String>('name') == 'state');
+              if (hasStateV11) {
+                await customStatement(
+                  "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
+                );
+              }
             }
           }
           if (from < 12) {
@@ -197,34 +205,48 @@ class GtdDatabase extends _$GtdDatabase {
               // Backfill done_at only for rows where it is not already set.
               // Mirror the Postgres backfill: also cover rows where completed=1
               // but state diverged (nothing enforced co-setting of both fields).
+              final hasStateV12 =
+                  cols.any((r) => r.read<String>('name') == 'state');
               final hasCompleted =
                   cols.any((r) => r.read<String>('name') == 'completed');
-              if (hasCompleted) {
+              if (hasStateV12) {
+                if (hasCompleted) {
+                  await customStatement(
+                    "UPDATE todos "
+                    "SET done_at = COALESCE(done_at, updated_at) "
+                    "WHERE (state = 'done' OR completed = 1) AND done_at IS NULL",
+                  );
+                } else {
+                  await customStatement(
+                    "UPDATE todos "
+                    "SET done_at = COALESCE(done_at, updated_at) "
+                    "WHERE state = 'done' AND done_at IS NULL",
+                  );
+                }
                 await customStatement(
-                  "UPDATE todos "
-                  "SET done_at = COALESCE(done_at, updated_at) "
-                  "WHERE (state = 'done' OR completed = 1) AND done_at IS NULL",
+                  "UPDATE todos SET state = 'next_action' WHERE state = 'done'",
                 );
-              } else {
+              } else if (hasCompleted) {
                 await customStatement(
                   "UPDATE todos "
                   "SET done_at = COALESCE(done_at, updated_at) "
-                  "WHERE state = 'done' AND done_at IS NULL",
+                  "WHERE completed = 1 AND done_at IS NULL",
                 );
               }
-              await customStatement(
-                "UPDATE todos SET state = 'next_action' WHERE state = 'done'",
-              );
               // completed column: intentionally NOT dropped — SQLite DROP COLUMN
               // is unreliable across OS versions; Drift treats it as invisible.
             }
           }
           if (from < 13) {
             // Collapse legacy waiting_for state rows before PowerSync re-syncs
-            // the rewritten rows from Postgres.
-            await customStatement(
-              "UPDATE todos SET state = 'next_action' WHERE state = 'waiting_for'",
-            );
+            // the rewritten rows from Postgres (state column dropped in v15).
+            final v13Cols =
+                await customSelect('PRAGMA table_info(todos)').get();
+            if (v13Cols.any((r) => r.read<String>('name') == 'state')) {
+              await customStatement(
+                "UPDATE todos SET state = 'next_action' WHERE state = 'waiting_for'",
+              );
+            }
           }
           if (from < 14) {
             // Create FocusSessions/FocusSessionTasks tables in test only;
@@ -250,10 +272,18 @@ class GtdDatabase extends _$GtdDatabase {
             await _dropColumnIfTable('todos', 'selected_for_today');
             await _dropColumnIfTable('todos', 'daily_selection_date');
 
-            // Collapse in_progress → next_action (safe on both real table and view).
-            await customStatement(
-              "UPDATE todos SET state = 'next_action' WHERE state = 'in_progress'",
-            );
+            // Collapse in_progress → next_action (state column dropped in v15).
+            final v14Cols =
+                await customSelect('PRAGMA table_info(todos)').get();
+            if (v14Cols.any((r) => r.read<String>('name') == 'state')) {
+              await customStatement(
+                "UPDATE todos SET state = 'next_action' WHERE state = 'in_progress'",
+              );
+            }
+          }
+          if (from < 15) {
+            // Drop the now-constant state column (all rows hold 'next_action').
+            await _dropColumnIfTable('todos', 'state');
           }
         },
       );

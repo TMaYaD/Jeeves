@@ -39,15 +39,14 @@ void main() {
 
       final now = DateTime.now();
       // Insert a row omitting the v2+ columns (they use DB defaults).
-      // Uses state='next_action' + clarified=0 to simulate a post-migration
-      // inbox item (pre-v2 'inbox' rows are transformed by the v11 migration).
+      // Uses clarified=0 to simulate a post-migration inbox item (pre-v2
+      // 'inbox' rows had state='inbox'; v15 removed the state column entirely).
       await db.customInsert(
-        'INSERT INTO todos (id, title, state, clarified, user_id, created_at, updated_at) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO todos (id, title, clarified, user_id, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
         variables: [
           Variable.withString('legacy'),
           Variable.withString('Legacy task'),
-          Variable.withString('next_action'),
           Variable.withInt(0),
           Variable.withString(_userId),
           Variable.withDateTime(now),
@@ -223,15 +222,16 @@ void main() {
       final db = _openInMemory();
       addTearDown(db.close);
 
-      // Insert a row that simulates a pre-v13 waiting_for state row.
+      // Insert a row with a waiting_for value to verify the column survives v13.
+      // State column was dropped in v15; waiting_for text column is the durable
+      // record of delegation and must be preserved through this migration.
       final now = DateTime.now();
       await db.customInsert(
-        'INSERT INTO todos (id, title, state, waiting_for, clarified, user_id, created_at) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO todos (id, title, waiting_for, clarified, user_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
         variables: [
           Variable.withString('wf1'),
           Variable.withString('Waiting task'),
-          Variable.withString('next_action'), // current schema is already v13 on open
           Variable.withString('Alice'),
           Variable.withInt(1),
           Variable.withString(_userId),
@@ -243,46 +243,13 @@ void main() {
       final m = db.createMigrator();
       await db.migration.onUpgrade(m, 12, 13);
 
-      // Rows that had state='waiting_for' should now be next_action.
-      // (In this test the row already has next_action; verify it is untouched.)
+      // waiting_for column must be preserved through the migration.
       final rows = await db.customSelect(
-        'SELECT state, waiting_for FROM todos WHERE id = ?',
+        'SELECT waiting_for FROM todos WHERE id = ?',
         variables: [Variable.withString('wf1')],
       ).get();
       expect(rows.length, 1);
-      expect(rows.first.read<String>('state'), 'next_action');
       expect(rows.first.read<String?>('waiting_for'), 'Alice');
-    });
-
-    test('v12→v13 migration: state=waiting_for is collapsed to next_action', () async {
-      final db = _openInMemory();
-      addTearDown(db.close);
-
-      // The v13 CHECK constraint rejects 'waiting_for', so we can't INSERT or
-      // UPDATE to that value directly. Swap todos with a constraint-free CTAS
-      // copy (CREATE TABLE … AS SELECT creates no constraints), insert the
-      // legacy row there, then run the real migration against it.
-      await db.customStatement('ALTER TABLE todos RENAME TO _todos_v13');
-      await db.customStatement(
-        'CREATE TABLE todos AS SELECT * FROM _todos_v13 LIMIT 0',
-      );
-      final now = DateTime.now();
-      await db.customStatement(
-        "INSERT INTO todos (id, title, state, waiting_for, clarified, user_id, created_at) "
-        "VALUES ('wf2', 'Legacy waiting', 'waiting_for', 'Bob', 1, '$_userId', '${now.toIso8601String()}')",
-      );
-
-      // Drive the real v13 migration.
-      final m = db.createMigrator();
-      await db.migration.onUpgrade(m, 12, 13);
-
-      final rows = await db.customSelect(
-        'SELECT state, waiting_for FROM todos WHERE id = ?',
-        variables: [Variable.withString('wf2')],
-      ).get();
-      expect(rows.length, 1);
-      expect(rows.first.read<String>('state'), 'next_action');
-      expect(rows.first.read<String?>('waiting_for'), 'Bob');
     });
 
     test('v13→v14 migration: in_progress rows become next_action; retired columns dropped; new tables created',
@@ -301,12 +268,14 @@ void main() {
         'ALTER TABLE todos ADD COLUMN daily_selection_date TEXT',
       );
 
-      // The v14 CHECK constraint rejects 'in_progress', so we use a
-      // constraint-free CTAS copy to seed the legacy row.
+      // Use a constraint-free CTAS copy to add the legacy state column (removed
+      // in v15) so we can seed in_progress rows and exercise the v14 collapse.
       await db.customStatement('ALTER TABLE todos RENAME TO _todos_v13');
       await db.customStatement(
         'CREATE TABLE todos AS SELECT * FROM _todos_v13 LIMIT 0',
       );
+      // Add state column back (it existed pre-v15) to seed legacy rows.
+      await db.customStatement('ALTER TABLE todos ADD COLUMN state TEXT');
       final now = DateTime.now();
       await db.customStatement(
         "INSERT INTO todos (id, title, state, clarified, user_id, created_at) "
@@ -339,12 +308,9 @@ void main() {
       final m = db.createMigrator();
       await db.migration.onUpgrade(m, 13, 14);
 
-      // in_progress → next_action.
-      final rows = await db.customSelect(
-        'SELECT id, state FROM todos ORDER BY id',
-      ).get();
+      // Both rows must have survived (state column is dropped by v15 in the same run).
+      final rows = await db.customSelect('SELECT id FROM todos ORDER BY id').get();
       expect(rows.length, 2);
-      expect(rows.every((r) => r.read<String>('state') == 'next_action'), isTrue);
 
       // Retired columns must be gone.
       final cols = await db.customSelect('PRAGMA table_info(todos)').get();
@@ -382,12 +348,11 @@ void main() {
       // Insert a row that previously had a blocker set.
       final now = DateTime.now();
       await db.customInsert(
-        'INSERT INTO todos (id, title, state, blocked_by_todo_id, user_id, created_at) '
-        'VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO todos (id, title, blocked_by_todo_id, user_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?)',
         variables: [
           Variable.withString('was-blocked'),
           Variable.withString('Was blocked task'),
-          Variable.withString('next_action'),
           Variable.withString('some-blocker-id'),
           Variable.withString(_userId),
           Variable.withDateTime(now),

@@ -21,7 +21,6 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('due_date'),
     ps.Column.text('created_at'),
     ps.Column.text('updated_at'),
-    ps.Column.text('state'),
     ps.Column.text('intent'),
     ps.Column.integer('clarified'),
     ps.Column.text('done_at'),

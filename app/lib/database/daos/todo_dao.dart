@@ -1,10 +1,9 @@
-/// DAO for GTD views: next actions, waiting for, maybe, by-project,
-/// by-area, and the general-purpose [transitionState] method.
+/// DAO for GTD views: next actions, waiting for, maybe, by-project, by-area.
 library;
 
 import 'package:drift/drift.dart';
 
-import '../../models/todo.dart' show GtdState, Intent;
+import '../../models/todo.dart' show Intent;
 import '../gtd_database.dart';
 
 part 'todo_dao.g.dart';
@@ -42,15 +41,14 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         .watch();
   }
 
-  /// Returns a stream of [Todo]s with [state] belonging to [userId] whose
+  /// Returns a stream of clarified, non-done [Todo]s for [userId] whose
   /// tags include ALL of [tagIds] (AND semantics).
   ///
-  /// Only clarified (processed) todos are returned.  When [excludeIntent] is
-  /// non-null, rows with that intent value are excluded.  Watches both [todos]
-  /// and [todoTags] so the stream re-emits when either table changes.
-  Stream<List<Todo>> _watchFilteredByStateAndTags(
+  /// When [excludeIntent] is non-null, rows with that intent value are excluded.
+  /// Watches both [todos] and [todoTags] so the stream re-emits when either
+  /// table changes.
+  Stream<List<Todo>> _watchFilteredByTags(
     String userId,
-    String state,
     Set<String> tagIds, {
     String? excludeIntent,
   }) {
@@ -63,7 +61,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         excludeIntent != null ? [Variable(excludeIntent)] : <Variable>[];
     return customSelect(
       'SELECT todos.* FROM todos '
-      'WHERE todos.user_id = ? AND todos.state = ?$intentClause '
+      'WHERE todos.user_id = ?$intentClause '
       'AND todos.clarified = 1 '
       'AND todos.done_at IS NULL '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
@@ -72,7 +70,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       'ORDER BY todos.created_at',
       variables: [
         Variable(userId),
-        Variable(state),
         ...intentVar,
         Variable(userId),
         ...tagIds.map(Variable.new),
@@ -92,16 +89,13 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       return _watchAllForUser(userId).map(
         (all) => all
             .where((t) =>
-                t.state == GtdState.nextAction.value &&
                 t.intent != 'maybe' &&
                 t.clarified &&
                 t.doneAt == null)
             .toList(),
       );
     }
-    return _watchFilteredByStateAndTags(
-        userId, GtdState.nextAction.value, tagIds,
-        excludeIntent: 'maybe');
+    return _watchFilteredByTags(userId, tagIds, excludeIntent: 'maybe');
   }
 
   /// Stream of waiting-for todos for [userId].
@@ -190,21 +184,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
-  /// Stream of todos matching an arbitrary [state] string for [userId].
-  ///
-  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
-  /// returned (AND semantics).
-  Stream<List<Todo>> watchByState(String userId, String state,
-      {Set<String> tagIds = const {}}) {
-    if (tagIds.isEmpty) {
-      return (select(todos)
-            ..where((t) => t.userId.equals(userId) & t.state.equals(state))
-            ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-          .watch();
-    }
-    return _watchFilteredByStateAndTags(userId, state, tagIds);
-  }
-
   /// Stream of todos associated with a specific project tag [projectTagId].
   Stream<List<Todo>> watchByProject(String userId, String projectTagId) {
     final query = select(todos).join([
@@ -229,9 +208,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// Marks [todoId] as done by setting [done_at] to the current UTC timestamp.
   ///
-  /// The task's [state] remains unchanged (typically 'next_action').  Done-ness
-  /// is represented entirely by [done_at IS NOT NULL].
-  ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<void> markDone(String todoId, String userId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
@@ -252,45 +228,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       variables: [Variable(userId)],
       readsFrom: {todos},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
-  }
-
-  // ---------------------------------------------------------------------------
-  // State transitions
-  // ---------------------------------------------------------------------------
-
-  /// General-purpose state transition for a todo.
-  ///
-  /// Sets [state], marks [clarified] = true, and stamps [updatedAt].
-  /// Time-log side effects are handled by [FocusSessionDao.setCurrentTask].
-  ///
-  /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
-  Future<void> transitionState(
-    String todoId,
-    String userId,
-    GtdState newState, {
-    DateTime? now,
-  }) async {
-    await transaction(() async {
-      final row = await (select(todos)
-            ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
-          .getSingleOrNull();
-      if (row == null) return;
-
-      final effectiveNow = now ?? DateTime.now();
-      final companion = _buildTransitionCompanion(newState, effectiveNow);
-
-      await (update(todos)
-            ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
-          .write(companion);
-    });
-  }
-
-  TodosCompanion _buildTransitionCompanion(GtdState newState, DateTime now) {
-    return TodosCompanion(
-      state: Value(newState.value),
-      clarified: const Value(true),
-      updatedAt: Value(now),
-    );
   }
 
   // ---------------------------------------------------------------------------

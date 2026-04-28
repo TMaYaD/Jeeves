@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-04-28 (issue #197 / PR J)
+
+- Dropped `state` column entirely (Drift schema v15, Alembic 0020). `GtdState` enum, `GtdStateMachine`, and all FSM-related code deleted. `Todo.isActionable` now derived from `doneAt == null` only. `searchResultsProvider` changed from `Map<GtdState, List<SearchResult>>` to flat `List<SearchResult>`; search screen sections replaced by a flat ListView. Historical migration blocks (v10–v14) that referenced `state` now guard each UPDATE with a column-existence check so migration tests that open a fresh v15 DB and call `onUpgrade(m, oldFrom, oldTo)` don't fail on the missing column.
+- Migration tests that asserted `state` values after `onUpgrade` calls had to be rewritten: tests that simulated pre-v15 schema by CTAS now add `ALTER TABLE todos ADD COLUMN state TEXT` to restore the column before inserting legacy rows; state-value assertions removed (v15 drops the column in the same migration run).
+
 ## 2026-04-28 (issue #196 / PR I)
 
 - `in_progress` state retired: `focus_sessions.current_task_id` is the new source of truth for which task is focused. `selected_for_today`, `daily_selection_date`, `in_progress_since` columns dropped from `todos` (Drift schema v14, Alembic 0019). `GtdStateMachine.allowedTransitions = {}` (stub; PR J removes it).

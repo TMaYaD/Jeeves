@@ -3,7 +3,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../../database/gtd_database.dart' show Tag;
 import '../../../models/search_result.dart';
-import '../../../models/todo.dart' show GtdState;
 
 /// A single row in the search result list.
 class SearchResultTile extends StatelessWidget {
@@ -62,9 +61,7 @@ class SearchResultTile extends StatelessWidget {
             if (isDone)
               const _DoneChip()
             else if (todo.waitingFor != null)
-              const _WaitingChip()
-            else
-              _StateChip(state: GtdState.fromString(todo.state)),
+              const _WaitingChip(),
           ],
         ),
       ),
@@ -157,28 +154,3 @@ class _WaitingChip extends StatelessWidget {
   }
 }
 
-class _StateChip extends StatelessWidget {
-  const _StateChip({required this.state});
-
-  final GtdState state;
-
-  @override
-  Widget build(BuildContext context) {
-    final (label, color) = switch (state) {
-      GtdState.nextAction => ('Next', const Color(0xFF16A34A)),
-    };
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color),
-      ),
-    );
-  }
-}

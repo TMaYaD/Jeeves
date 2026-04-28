@@ -30,16 +30,12 @@ async def _get_todo_with_tags(todo_id: str, db: AsyncSession) -> Todo | None:
 
 @router.get("/", response_model=list[TodoOut])
 async def list_todos(
-    state: str | None = Query(default=None, description="Filter by GTD state"),
     tag_type: str | None = Query(default=None, description="Filter by tag type"),
     tag_name: str | None = Query(default=None, description="Filter by tag name"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[Todo]:
     query = select(Todo).where(Todo.user_id == current_user.id).options(selectinload(Todo.tags))
-
-    if state is not None:
-        query = query.where(Todo.state == state)
 
     if tag_type is not None or tag_name is not None:
         # Join through todo_tags → tags
@@ -71,7 +67,6 @@ async def create_todo(
         title=body.title,
         notes=body.notes,
         done_at=body.done_at,
-        state=body.state,
         priority=body.priority,
         due_date=body.due_date,
         time_estimate=body.time_estimate,
@@ -124,6 +119,7 @@ async def update_todo(
         raise HTTPException(status_code=404, detail="Todo not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    update_data.pop("state", None)
 
     if "tags" in update_data:
         # Use the validated model field (TagInput objects), not the serialised dict
@@ -134,9 +130,6 @@ async def update_todo(
         await db.execute(delete(TodoTag).where(TodoTag.todo_id == todo.id))
         for tag in new_tags:
             db.add(TodoTag(todo_id=todo.id, tag_id=tag.id, user_id=current_user.id))
-
-    if "state" in update_data:
-        todo.state = update_data.pop("state")
 
     for field, value in update_data.items():
         setattr(todo, field, value)

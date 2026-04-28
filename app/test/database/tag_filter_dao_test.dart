@@ -17,14 +17,12 @@ Future<String> _insertTodo(
   GtdDatabase db, {
   required String id,
   required String title,
-  required String state,
   bool clarified = true,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    state: Value(state),
     clarified: Value(clarified),
     userId: const Value(_userId),
     createdAt: Value(now),
@@ -76,12 +74,12 @@ void main() {
     test('counts only clarified non-done todos', () async {
       await _insertTag(db, id: 'ctx1', name: 'work');
       final t1 = await _insertTodo(db,
-          id: 't1', title: 'Task A', state: 'next_action');
+          id: 't1', title: 'Task A');
       final t2 = await _insertTodo(db,
-          id: 't2', title: 'Task B', state: 'next_action');
+          id: 't2', title: 'Task B');
       await db.todoDao.markDone(t2, _userId);
       final t3 = await _insertTodo(db,
-          id: 't3', title: 'Task C', state: 'next_action', clarified: false);
+          id: 't3', title: 'Task C', clarified: false);
       await _assignTag(db, t1, 'ctx1');
       await _assignTag(db, t2, 'ctx1');
       await _assignTag(db, t3, 'ctx1');
@@ -94,7 +92,7 @@ void main() {
     test('count updates reactively when a todo is completed', () async {
       await _insertTag(db, id: 'ctx1', name: 'work');
       final t1 = await _insertTodo(db,
-          id: 't1', title: 'Active task', state: 'next_action');
+          id: 't1', title: 'Active task');
       await _assignTag(db, t1, 'ctx1');
 
       // Single subscription — two separate `.first` calls would create
@@ -177,7 +175,7 @@ void main() {
       await _insertTag(db, id: 'src', name: 'old');
       await _insertTag(db, id: 'tgt', name: 'new');
       final t1 = await _insertTodo(db,
-          id: 't1', title: 'Task', state: 'next_action');
+          id: 't1', title: 'Task');
       await _assignTag(db, t1, 'src');
 
       await db.tagDao.merge('src', 'tgt');
@@ -203,7 +201,7 @@ void main() {
     test('throws on self-merge without deleting data', () async {
       await _insertTag(db, id: 'src', name: 'old');
       final t1 = await _insertTodo(db,
-          id: 't1', title: 'Task', state: 'next_action');
+          id: 't1', title: 'Task');
       await _assignTag(db, t1, 'src');
 
       expect(() => db.tagDao.merge('src', 'src'), throwsArgumentError);
@@ -221,7 +219,7 @@ void main() {
       await _insertTag(db, id: 'src', name: 'old');
       await _insertTag(db, id: 'tgt', name: 'new');
       final t1 = await _insertTodo(db,
-          id: 't1', title: 'Task', state: 'next_action');
+          id: 't1', title: 'Task');
       // Assign both tags to the same todo
       await _assignTag(db, t1, 'src');
       await _assignTag(db, t1, 'tgt');
@@ -242,8 +240,8 @@ void main() {
     tearDown(() => db.close());
 
     test('watchNextActions with no tagIds returns all next actions', () async {
-      await _insertTodo(db, id: 't1', title: 'A', state: 'next_action');
-      await _insertTodo(db, id: 't2', title: 'B', state: 'next_action');
+      await _insertTodo(db, id: 't1', title: 'A');
+      await _insertTodo(db, id: 't2', title: 'B');
       final results =
           await db.todoDao.watchNextActions(_userId).first;
       expect(results, hasLength(2));
@@ -253,9 +251,9 @@ void main() {
       await _insertTag(db, id: 'ctx1', name: 'work');
       await _insertTag(db, id: 'ctx2', name: 'home');
       final t1 = await _insertTodo(db,
-          id: 't1', title: 'Work task', state: 'next_action');
+          id: 't1', title: 'Work task');
       final t2 = await _insertTodo(db,
-          id: 't2', title: 'Home task', state: 'next_action');
+          id: 't2', title: 'Home task');
       await _assignTag(db, t1, 'ctx1');
       await _assignTag(db, t2, 'ctx2');
 
@@ -270,9 +268,9 @@ void main() {
       await _insertTag(db, id: 'ctx2', name: 'phone');
       // t1 has both tags; t2 has only one
       final t1 = await _insertTodo(db,
-          id: 't1', title: 'Both', state: 'next_action');
+          id: 't1', title: 'Both');
       final t2 = await _insertTodo(db,
-          id: 't2', title: 'One', state: 'next_action');
+          id: 't2', title: 'One');
       await _assignTag(db, t1, 'ctx1');
       await _assignTag(db, t1, 'ctx2');
       await _assignTag(db, t2, 'ctx1');
@@ -290,7 +288,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
         id: const Value('t1'),
         title: const Value('Waiting tagged'),
-        state: const Value('next_action'),
         waitingFor: const Value('Alice'),
         clarified: const Value(true),
         userId: const Value(_userId),
@@ -300,7 +297,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
         id: const Value('t2'),
         title: const Value('Waiting untagged'),
-        state: const Value('next_action'),
         waitingFor: const Value('Bob'),
         clarified: const Value(true),
         userId: const Value(_userId),
@@ -315,19 +311,6 @@ void main() {
       expect(results.first.id, 't1');
     });
 
-    test('watchByState with tagIds filters correctly', () async {
-      await _insertTag(db, id: 'ctx1', name: 'errand');
-      final t1 = await _insertTodo(db,
-          id: 't1', title: 'Blocked tagged', state: 'next_action');
-      await _insertTodo(db,
-          id: 't2', title: 'Blocked untagged', state: 'next_action');
-      await _assignTag(db, t1, 'ctx1');
-
-      final results = await db.todoDao
-          .watchByState(_userId, 'next_action', tagIds: {'ctx1'}).first;
-      expect(results, hasLength(1));
-      expect(results.first.id, t1);
-    });
   });
 
   group('InboxDao tag filtering', () {
