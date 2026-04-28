@@ -25,7 +25,9 @@ class NirvanaItem {
   /// 'task' or 'project'
   final String type;
 
-  /// Normalised GTD state: 'inbox' | 'next_action' | 'waiting_for'
+  /// Normalised GTD state from the Nirvana export: 'inbox' | 'next_action' | 'waiting_for'.
+  /// The importer remaps 'waiting_for' to 'next_action' before writing to the DB;
+  /// the waiting_for text column is the source of truth for the Waiting For list.
   final String state;
 
   /// Orthogonal intent: 'next' | 'maybe' | 'trash'

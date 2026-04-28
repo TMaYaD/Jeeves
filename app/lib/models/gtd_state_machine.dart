@@ -28,14 +28,10 @@ class GtdStateMachine {
   ///
   /// `done` is no longer a GTD state — completion is recorded via `done_at`
   /// on the todo row (see TodoDao.markDone). `inProgress` remains until PR I.
+  /// `waitingFor` is no longer a GTD state — the Waiting For list is sourced
+  /// from the `waiting_for` text column (see TodoDao.watchWaitingFor).
   static const Map<GtdState, Set<GtdState>> allowedTransitions = {
-    GtdState.nextAction: {
-      GtdState.inProgress,
-      GtdState.waitingFor,
-    },
-    GtdState.waitingFor: {
-      GtdState.nextAction,
-    },
+    GtdState.nextAction: {GtdState.inProgress},
     GtdState.inProgress: {},
   };
 

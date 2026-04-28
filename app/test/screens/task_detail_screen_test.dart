@@ -140,7 +140,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('In Progress'), findsOneWidget);
-      expect(find.text('Waiting For'), findsOneWidget);
+      // Waiting For is no longer a FSM state — it is set via the waiting_for column.
+      expect(find.text('Waiting For'), findsNothing);
       // 'done' is no longer a state transition — completion is via markDone().
       expect(find.text('Done'), findsNothing);
 
@@ -150,19 +151,14 @@ void main() {
       expect(find.text('Someday / Maybe'), findsNothing);
     });
 
-    testWidgets('moving task to Waiting For succeeds', (tester) async {
-      final todo = await _insertAt(db, id: 'task5', title: 'Move me');
+    testWidgets('waiting_for section is visible on detail screen', (tester) async {
+      final todo = await _insertAt(db, id: 'task5', title: 'Waiting task');
       final (widget, router) = _buildScreen(db, 'task5', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'task5');
 
-      await tester.tap(find.byKey(const Key('status_pill')));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byKey(const Key('move_to_waiting_for')));
-      await tester.pumpAndSettle();
-
-      final row = await db.todoDao.getTodo('task5', _userId);
-      expect(row?.state, GtdState.waitingFor.value);
+      expect(find.text('WAITING FOR'), findsOneWidget);
+      // No waiting_for set yet → shows 'Not set'.
+      expect(find.text('Not set'), findsOneWidget);
     });
 
     testWidgets('energy level segmented button shows after tap',

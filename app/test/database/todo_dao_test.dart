@@ -91,15 +91,51 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('watchWaitingFor returns only waiting_for todos', () async {
+    test('watchWaitingFor returns todos with non-null waiting_for column', () async {
+      // Task with waiting_for column set → appears in Waiting For list
       await _insertTodo(db, id: 'w1', title: 'Waiting 1');
       await (db.update(db.todos)..where((t) => t.id.equals('w1')))
-          .write(const TodosCompanion(state: Value('waiting_for')));
-      await _insertTodo(db, id: 'w2', title: 'Inbox item');
+          .write(const TodosCompanion(waitingFor: Value('Alice')));
+      // Task without waiting_for → not in Waiting For list
+      await _insertTodo(db, id: 'w2', title: 'Next action');
 
       final items = await db.todoDao.watchWaitingFor(_userId).first;
       expect(items.length, 1);
       expect(items.first.id, 'w1');
+    });
+
+    test('watchWaitingFor excludes tasks where clarified = false', () async {
+      final now = DateTime.now();
+      await db.into(db.todos).insert(TodosCompanion(
+        id: const Value('wc1'),
+        title: const Value('Unclarified waiting'),
+        state: const Value('next_action'),
+        waitingFor: const Value('Bob'),
+        clarified: const Value(false),
+        userId: const Value(_userId),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+
+      final items = await db.todoDao.watchWaitingFor(_userId).first;
+      expect(items.any((t) => t.id == 'wc1'), isFalse);
+    });
+
+    test('watchWaitingFor excludes done tasks', () async {
+      await _insertTodo(db, id: 'wd1', title: 'Done waiting');
+      await (db.update(db.todos)..where((t) => t.id.equals('wd1')))
+          .write(const TodosCompanion(waitingFor: Value('Carol')));
+      await db.todoDao.markDone('wd1', _userId);
+
+      final items = await db.todoDao.watchWaitingFor(_userId).first;
+      expect(items.any((t) => t.id == 'wd1'), isFalse);
+    });
+
+    test('watchWaitingFor excludes tasks with null waiting_for', () async {
+      await _insertTodo(db, id: 'wn1', title: 'No waiting_for');
+
+      final items = await db.todoDao.watchWaitingFor(_userId).first;
+      expect(items.any((t) => t.id == 'wn1'), isFalse);
     });
 
     test('watchMaybe returns only intent=maybe todos (not done)', () async {
@@ -229,6 +265,55 @@ void main() {
       final row = await db.todoDao.getTodo('u1', _userId);
       expect(row?.title, 'Updated');
       expect(row?.notes, 'Some notes');
+    });
+  });
+
+  group('TodoDao — setWaitingFor', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('writes waiting_for text column', () async {
+      await _insertTodo(db, id: 's1', title: 'Task S1');
+      await db.todoDao.setWaitingFor('s1', _userId, 'Alice');
+
+      final row = await db.todoDao.getTodo('s1', _userId);
+      expect(row?.waitingFor, 'Alice');
+    });
+
+    test('clears waiting_for when null is passed', () async {
+      await _insertTodo(db, id: 's2', title: 'Task S2');
+      await db.todoDao.setWaitingFor('s2', _userId, 'Bob');
+      await db.todoDao.setWaitingFor('s2', _userId, null);
+
+      final row = await db.todoDao.getTodo('s2', _userId);
+      expect(row?.waitingFor, isNull);
+    });
+
+    test('empty string is coerced to null', () async {
+      await _insertTodo(db, id: 's3', title: 'Task S3');
+      await db.todoDao.setWaitingFor('s3', _userId, '');
+
+      final row = await db.todoDao.getTodo('s3', _userId);
+      expect(row?.waitingFor, isNull);
+    });
+
+    test('task appears in watchWaitingFor after setWaitingFor', () async {
+      await _insertTodo(db, id: 's4', title: 'Task S4');
+      await db.todoDao.setWaitingFor('s4', _userId, 'Carol');
+
+      final items = await db.todoDao.watchWaitingFor(_userId).first;
+      expect(items.any((t) => t.id == 's4'), isTrue);
+    });
+
+    test('task leaves watchWaitingFor after setWaitingFor(null)', () async {
+      await _insertTodo(db, id: 's5', title: 'Task S5');
+      await db.todoDao.setWaitingFor('s5', _userId, 'Dave');
+      await db.todoDao.setWaitingFor('s5', _userId, null);
+
+      final items = await db.todoDao.watchWaitingFor(_userId).first;
+      expect(items.any((t) => t.id == 's5'), isFalse);
     });
   });
 }

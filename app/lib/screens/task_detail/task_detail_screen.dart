@@ -349,6 +349,24 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                 child: Column(
                                   children: [
                                     _buildInfoSection(
+                                      icon: Icons.hourglass_empty_outlined,
+                                      iconBg: const Color(0xFFFFF7ED),
+                                      iconColor: const Color(0xFFF59E0B),
+                                      title: 'WAITING FOR',
+                                      contentWidget: Text(
+                                        todo.waitingFor ?? 'Not set',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w500,
+                                          color: todo.waitingFor != null
+                                              ? const Color(0xFF374151)
+                                              : const Color(0xFF9CA3AF),
+                                        ),
+                                      ),
+                                      onTap: () => _showWaitingForSheet(context, todo.waitingFor),
+                                    ),
+                                    const SizedBox(height: 20),
+                                    _buildInfoSection(
                                       icon: Icons.notifications_none,
                                       iconBg: const Color(0xFFF3F4F6),
                                       iconColor: const Color(0xFF9CA3AF),
@@ -632,6 +650,69 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  void _showWaitingForSheet(BuildContext context, String? current) {
+    final controller = TextEditingController(text: current ?? '');
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+          left: 24,
+          right: 24,
+          top: 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Waiting For',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'Who or what are you waiting on?',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (current != null)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _notifier.setWaitingFor(null).ignore();
+                    },
+                    child: const Text('Clear'),
+                  ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final text = controller.text.trim();
+                    Navigator.pop(ctx);
+                    _notifier
+                        .setWaitingFor(text.isEmpty ? null : text)
+                        .ignore();
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

@@ -39,7 +39,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -203,6 +203,14 @@ class GtdDatabase extends _$GtdDatabase {
               // completed column: intentionally NOT dropped — SQLite DROP COLUMN
               // is unreliable across OS versions; Drift treats it as invisible.
             }
+          }
+          if (from < 13) {
+            // Collapse legacy waiting_for state rows before PowerSync re-syncs
+            // the rewritten rows from Postgres. The waiting_for text column is
+            // the new source of truth for the Waiting For list.
+            await customStatement(
+              "UPDATE todos SET state = 'next_action' WHERE state = 'waiting_for'",
+            );
           }
         },
       );

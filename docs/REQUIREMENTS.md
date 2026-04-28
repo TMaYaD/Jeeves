@@ -23,7 +23,7 @@ To build a hybrid productivity application that merges the rigid organizational 
     * Contexts (Tags)
     * Time Estimate
     * Energy Level
-* **System Views:** Auto-generated lists for 'Next Actions', 'Waiting For', and 'Maybe' (todos with `intent = 'maybe'`).
+* **System Views:** Auto-generated lists for 'Next Actions', 'Waiting For' (todos where `waiting_for IS NOT NULL AND clarified = true AND done_at IS NULL AND intent = 'next'`), and 'Maybe' (todos with `intent = 'maybe'`).
 * **Sequential Logic:** Dependency tracking between tasks is deferred to TMaYaD/Jeeves#181 (polymorphic blockers). The `blocked` state and `blocked_by_todo_id` field have been removed in alpha (migration 0012).
 * **Context Tag Cloud:** A sticky, multi-select tag filter in the primary navigation drawer. Each chip shows the context name and its active-task count; chip weight (size/opacity) reflects relative count. Selecting one or more chips filters all list views to tasks carrying **all** selected tags (AND semantics). The filter persists across screen navigation until explicitly cleared. Long-pressing a chip opens tag management (rename, recolour, merge).
 

@@ -158,6 +158,12 @@ class TaskDetailNotifier {
       ..sort((a, b) => a.index.compareTo(b.index));
   }
 
+  /// Sets (or clears) the [waiting_for] text column.
+  ///
+  /// [text] == null clears the field; empty string is also treated as a clear.
+  Future<void> setWaitingFor(String? text) =>
+      _db.todoDao.setWaitingFor(_todoId, _userId, text);
+
   /// Transitions the task to [newState].
   ///
   /// When transitioning out of [GtdState.inProgress] the caller can read
