@@ -58,11 +58,7 @@ class _FocusSessionPlanningScreenState
     if (ref.read(focusSessionPlanningProvider).currentStep != 0) return;
     final items = inboxAsync.asData?.value;
     if (items == null) return; // still loading
-    final sessionDate = ref.read(focusSessionPlanningDateProvider);
-    final hasPending = items.any(
-      (i) => !(i.selectedForToday == false && i.dailySelectionDate == sessionDate),
-    );
-    if (!hasPending) {
+    if (items.isEmpty) {
       ref.read(focusSessionPlanningProvider.notifier).advanceStep();
     }
   }
@@ -145,13 +141,13 @@ class _FocusSessionPlanningScreenState
   /// Returns true when the user is allowed to proceed from [step].
   bool _canAdvance(int step, WidgetRef ref) {
     return switch (step) {
-      // Step 0: inbox empty or skipped out of queue
-      0 => ref.watch(inboxItemsProvider).asData?.value.where((i) => !(i.selectedForToday == false && i.dailySelectionDate == ref.read(focusSessionPlanningDateProvider))).isEmpty ?? false,
+      // Step 0: inbox empty (all items clarified or none remaining)
+      0 => ref.watch(inboxItemsProvider).asData?.value.isEmpty ?? false,
       // Step 1: energy check in
       1 => true,
       // Step 2: time check in
       2 => true,
-      // Step 3: Plan Summary and Next Actions view is fully controllable, just let them advance
+      // Step 3: Plan Summary and Next Actions view is fully controllable
       3 => true,
       // Step 4: ScheduledReviewStep is last page
       4 => false,

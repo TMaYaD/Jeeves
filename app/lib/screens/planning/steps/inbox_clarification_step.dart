@@ -23,13 +23,12 @@ class InboxClarificationStep extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncItems = ref.watch(inboxItemsProvider);
-    final sessionDate = ref.watch(focusSessionPlanningDateProvider);
 
     return asyncItems.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (err, _) => Center(child: Text('Error: $err')),
       data: (items) {
-        final pendingItems = items.where((i) => !(i.selectedForToday == false && i.dailySelectionDate == sessionDate)).toList();
+        final pendingItems = items;
 
         WidgetsBinding.instance.addPostFrameCallback((_) {
           final state = ref.read(focusSessionPlanningProvider);

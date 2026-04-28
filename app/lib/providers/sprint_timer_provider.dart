@@ -274,9 +274,8 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
-  /// Stops the sprint and returns to idle. Time is not re-logged here — the
-  /// task stays in inProgress (inProgressSince preserved) so elapsed time
-  /// accumulates correctly when it is eventually marked done.
+  /// Stops the sprint and returns to idle. The open time log is closed by
+  /// [FocusSessionDao.setCurrentTask] when [FocusModeNotifier.endFocus] is called.
   Future<void> stopSprint() async {
     if (state.isProcessing) return;
     state = state.copyWith(isProcessing: true);
@@ -601,7 +600,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     HapticFeedback.heavyImpact();
     if (state.phase == SprintPhase.focus) {
       // Countdown ended: wait in overtime (no auto-break).
-      // Time is tracked via TimeLog; transitionState closes it on task exit.
+      // Time is tracked via TimeLog; FocusSessionDao.setCurrentTask closes it.
       _startFocusOvertime();
     } else if (state.phase == SprintPhase.break_) {
       // Break ended: wait in overtime (no auto-sprint).

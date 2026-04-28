@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../models/todo.dart' show GtdState;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -60,10 +59,11 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   @override
   FocusModeState build() => const FocusModeState();
 
-  /// Transitions [todoId] to inProgress in the DB and starts the focus timer.
+  /// Sets [todoId] as the focused task on the active session and starts the
+  /// focus timer.
   ///
-  /// Throws [StateError] if a different task is already active, preventing
-  /// silent session overwrites that leave orphaned inProgress DB rows.
+  /// Throws [StateError] if a different task is already active, or if no open
+  /// session exists (planning must be completed before focusing).
   Future<void> startFocus(String todoId) async {
     if (state.activeTodoId != null && state.activeTodoId != todoId) {
       throw StateError(
@@ -74,27 +74,42 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
     final now = DateTime.now();
-    await db.todoDao.transitionState(todoId, userId, GtdState.inProgress, now: now);
+
+    final session = await db.focusSessionDao.getActiveSession(userId);
+    if (session == null) {
+      throw StateError(
+        'No active focus session — complete the daily planning ritual first.',
+      );
+    }
+
+    await db.focusSessionDao.setCurrentTask(
+      sessionId: session.id,
+      taskId: todoId,
+      now: now,
+    );
     state = FocusModeState(
       activeTodoId: todoId,
       sessionStart: now,
     );
   }
 
-  /// Restores a focus session for a task already in inProgress state
-  /// (e.g. after app restart). Does not change DB state.
+  /// Restores a focus session for a task that was already focused before the
+  /// app restarted. Does not change DB state.
+  ///
+  /// [startedAt] should be the time-log's [started_at] so the timer reflects
+  /// how long the user has been focused on this specific task.
   ///
   /// If the session is currently paused (e.g. user exited via _onExit), the
   /// pause gap is folded into [accumulated] so elapsed stays frozen correctly.
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
-  void resumeFrom(String todoId, DateTime inProgressSince, {DateTime? now}) {
+  void resumeFrom(String todoId, DateTime startedAt, {DateTime? now}) {
     if (state.activeTodoId == todoId &&
         state.isPaused &&
         state.pauseStart != null) {
       final pauseDuration = (now ?? DateTime.now()).difference(state.pauseStart!);
       state = FocusModeState(
         activeTodoId: todoId,
-        sessionStart: state.sessionStart ?? inProgressSince,
+        sessionStart: state.sessionStart ?? startedAt,
         accumulated: state.accumulated + pauseDuration,
         isPaused: false,
       );
@@ -103,7 +118,7 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
 
     state = FocusModeState(
       activeTodoId: todoId,
-      sessionStart: inProgressSince,
+      sessionStart: startedAt,
     );
   }
 
@@ -125,9 +140,22 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     );
   }
 
-  /// Clears focus session state. The caller is responsible for the DB
-  /// state transition (e.g. done) before calling this.
-  void endFocus() => state = const FocusModeState();
+  /// Clears the focused task on the active session and resets the timer.
+  ///
+  /// The caller is responsible for any prior DB side-effects (e.g. marking
+  /// the task done) before calling this.
+  Future<void> endFocus() async {
+    final db = ref.read(databaseProvider);
+    final userId = ref.read(currentUserIdProvider);
+    final session = await db.focusSessionDao.getActiveSession(userId);
+    if (session != null) {
+      await db.focusSessionDao.setCurrentTask(
+        sessionId: session.id,
+        taskId: null,
+      );
+    }
+    state = const FocusModeState();
+  }
 }
 
 final focusModeProvider =

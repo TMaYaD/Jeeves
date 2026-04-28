@@ -59,7 +59,7 @@ Located in `backend/`.
 PowerSync provides bidirectional offline-first sync between the Flutter SQLite store and PostgreSQL:
 
 - The Flutter app connects to a self-hosted `journeyapps/powersync-service` instance.
-- Three sync shapes are replicated per user: `todos`, `tags`, `todo_tags` (all filtered by `user_id`).
+- Five sync shapes are replicated per user: `todos`, `tags`, `todo_tags`, `focus_sessions`, `focus_session_tasks` (all filtered by `user_id`).
 - The backend issues short-lived JWTs from `GET /powersync/credentials`; PowerSync validates them using the shared `SECRET_KEY`.
 - Local writes made through the PowerSync client are queued and uploaded to the backend REST API via `JevesBackendConnector.uploadData()`.
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.
@@ -149,22 +149,38 @@ A `NotifierProvider<FocusModeNotifier, FocusModeState>` that holds ephemeral foc
 
 `elapsed` is derived: `now − sessionStart − accumulated`, frozen while paused.
 
-State is **ephemeral** (lost on app restart). If a task is found in `inProgress` state on app launch, the focus screen reconstructs the timer from `todo.inProgressSince` (persisted in the DB).
+State is **ephemeral** (in-memory only). The durable source of truth for the active task is `FocusSession.currentTaskId` in the DB.
 
 Key methods:
-- `startFocus(todoId)` — transitions task to `inProgress` via `TodoDao.transitionState`, sets `sessionStart`.
-- `resumeFrom(todoId, inProgressSince)` — restores session after restart; does not touch DB state.
-- `pauseFocus()` / `resumeFocus()` — UI-only timer pause; task stays `inProgress` in the DB.
-- `endFocus()` — clears all state; caller must perform the DB transition first.
+- `startFocus(todoId)` — requires an open `FocusSession`; calls `FocusSessionDao.setCurrentTask` (which opens a `TimeLog`), then sets `sessionStart`.
+- `resumeFrom(todoId, startedAt)` — restores session after restart; does not touch DB state.
+- `pauseFocus()` / `resumeFocus()` — UI-only timer pause; no DB write.
+- `endFocus()` — calls `FocusSessionDao.setCurrentTask(null)` to close the open `TimeLog`, then clears in-memory state.
+
+### FocusSession model (`database/tables.dart`)
+
+`FocusSessions` — one row per planning session. An open session (`ended_at IS NULL`) is the single source of truth for:
+
+- The task currently being focused (`current_task_id`).
+- Which tasks are on today's plan (via the `FocusSessionTasks` junction table).
+
+`FocusSessionTasks` (`focus_session_id`, `task_id`, `position`) lists the ordered tasks selected during the planning ritual.
+
+Accessed via `FocusSessionDao` (in `database/daos/focus_session_dao.dart`):
+- `openSession(userId, taskIds)` — atomically closes any prior open session and opens a new one with the given task list.
+- `closeSession(sessionId)` — closes the session and any open `TimeLog`.
+- `setCurrentTask(sessionId, taskId?)` — atomically closes prior `TimeLog`, opens a new one for `taskId` (if non-null), updates `current_task_id`.
+- `watchActiveSession(userId)` / `getActiveSession(userId)` — stream/one-shot for the open session.
+- `watchSessionTasks(sessionId)` / `watchSessionTasksForUser(userId)` — ordered task list.
 
 ### ActiveFocusScreen (`screens/active_focus_screen.dart`)
 
 A `ConsumerStatefulWidget` with `WidgetsBindingObserver` for lifecycle events:
 
-- **Complete**: `transitionState(done)` → `endFocus()` → snackbar with next task → `context.go('/focus')`.
-- **Abandon**: `transitionState(GtdState.nextAction)` → `endFocus()` → `context.go('/focus')`. Task returns to Next Actions; user replans or skips tomorrow.
+- **Complete**: `markDone` → `endFocus()` → snackbar with next task → `context.go('/focus')`.
+- **Abandon**: `endFocus()` → `context.go('/focus')`. Task returns to Next Actions.
 - **Pause/Resume**: toggled on `FocusModeNotifier` only; no DB write.
-- **Exit (×)**: confirmation dialog → `pauseFocus()` → `context.go('/focus')`. Task stays `inProgress`; the daily plan shows a "Resume" button.
+- **Exit (×)**: confirmation dialog → `pauseFocus()` → `context.go('/focus')`.
 
 ### Background Notification
 
@@ -260,7 +276,7 @@ The focus session planning feature uses a mix of global `ValueNotifier` objects 
 | `FocusSessionPlanningNotifier` | Riverpod `NotifierProvider` | Step navigation, task mutations, banner dismiss, skip/snooze |
 | `FocusSessionPlanningSettingsNotifier` | Riverpod `NotifierProvider` | User preferences: planning time, notification/banner toggles, snooze duration |
 
-Both `ValueNotifier` objects are initialised from `SharedPreferences` in `initFocusSessionPlanningCompletion()`, which is called in `main()` before `runApp`.
+`focusSessionPlanningCompletionNotifier` is set to `true` in-memory by `FocusSessionPlanningNotifier.startDay()` when the ritual ends; it is not persisted across restarts. `focusSessionPlanningBannerDismissedNotifier` is initialised from `SharedPreferences` in `initFocusSessionPlanningCompletion()`, which is called in `main()` before `runApp`.
 
 ### Planning nudges
 
@@ -274,7 +290,6 @@ The ritual can no longer be auto-launched. Users are nudged through two opt-in m
 
 | Key | Value | Description |
 |---|---|---|
-| `planning_ritual_completed_date` | `yyyy-MM-dd` | Date of last completed ritual |
 | `planning_banner_dismissed_date` | `yyyy-MM-dd` | Date banner was last dismissed |
 | `planning_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" |
 | `planning_notification_snoozed_until` | ISO-8601 datetime | When the snoozed notification will fire |
@@ -374,11 +389,9 @@ When a sprint completes normally (`completeSprint`) or the timer expires while t
 
 ### State column (`todos.state`)
 
-The `state` column drives the GTD workflow FSM. Valid values: `next_action | in_progress`. The FSM (enforced in `GtdStateMachine`) permits these transitions:
+The `state` column holds the single valid value `next_action` (enforced by a `CHECK` constraint). The former `in_progress` state is retired: the focused task is now tracked by `focus_sessions.current_task_id`.
 
-| From | To |
-|------|----|
-| `next_action` | `in_progress` |
+`GtdStateMachine.allowedTransitions` is an empty map. The class is a stub pending removal in PR J.
 
 Retired states and their current representation:
 
@@ -387,6 +400,7 @@ Retired states and their current representation:
 | `inbox` | `state = 'next_action'` + `clarified = false` |
 | `done` | `done_at IS NOT NULL` |
 | `waiting_for` | `waiting_for IS NOT NULL` (text column) |
+| `in_progress` | `focus_sessions.current_task_id IS NOT NULL` |
 
 ### Waiting For list
 

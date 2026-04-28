@@ -1,4 +1,4 @@
-// PowerSync schema — mirrors the four tables that are replicated.
+// PowerSync schema — mirrors the tables that are replicated.
 //
 // Column names must match the PostgreSQL column names (snake_case) because
 // PowerSync receives rows directly from Postgres via logical replication.
@@ -7,6 +7,9 @@
 // table and must NOT be listed here — including on todo_tags (replicated
 // via a per-user parameter bucket thanks to the denormalized `user_id`
 // column added in Alembic 0008; see infra/powersync/sync-config.yaml).
+//
+// focus_session_tasks has no `user_id` column; its sync bucket JOINs through
+// focus_sessions to apply the per-user filter (see sync-config.yaml).
 
 import 'package:powersync/powersync.dart' as ps;
 
@@ -29,16 +32,25 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('user_id'),
     // Previously client-only; now replicated (see Alembic 0007).
     ps.Column.text('waiting_for'),
-    ps.Column.text('in_progress_since'),
     ps.Column.integer('time_spent_minutes'),
-    ps.Column.integer('selected_for_today'),
-    ps.Column.text('daily_selection_date'),
   ]),
   ps.Table('time_logs', [
     ps.Column.text('user_id'),
     ps.Column.text('task_id'),
     ps.Column.text('started_at'),
     ps.Column.text('ended_at'),
+    ps.Column.text('focus_session_id'),
+  ]),
+  ps.Table('focus_sessions', [
+    ps.Column.text('user_id'),
+    ps.Column.text('started_at'),
+    ps.Column.text('ended_at'),
+    ps.Column.text('current_task_id'),
+  ]),
+  ps.Table('focus_session_tasks', [
+    ps.Column.text('focus_session_id'),
+    ps.Column.text('task_id'),
+    ps.Column.integer('position'),
   ]),
   ps.Table('tags', [
     ps.Column.text('name'),

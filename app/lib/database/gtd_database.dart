@@ -17,6 +17,7 @@ library;
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
+import 'daos/focus_session_dao.dart';
 import 'daos/inbox_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
@@ -29,8 +30,8 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs],
-  daos: [InboxDao, TagDao, TodoDao, TimeLogDao],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks],
+  daos: [InboxDao, TagDao, TodoDao, TimeLogDao, FocusSessionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor);
@@ -39,30 +40,44 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) => m.createAll(),
         onUpgrade: (m, from, to) async {
           if (from < 2) {
-            await _addColumnIfTable(m, todos, todos.inProgressSince);
             await _addColumnIfTable(m, todos, todos.timeSpentMinutes);
-            // blocked_by_todo_id existed from v2 to v7; add it here so the
-            // v1→v8 upgrade path is consistent, then drop it in the v8 step.
+            // in_progress_since existed from v2 to v13; add it here so the
+            // v1→v14 upgrade path is consistent, then drop it in the v14 step.
             final todosInfo = await customSelect(
               "SELECT type FROM sqlite_master WHERE name = 'todos'",
             ).get();
             if (todosInfo.isNotEmpty &&
                 todosInfo.first.read<String>('type') == 'table') {
               await customStatement(
+                'ALTER TABLE todos ADD COLUMN in_progress_since TEXT',
+              );
+              // blocked_by_todo_id existed from v2 to v7.
+              await customStatement(
                 'ALTER TABLE todos ADD COLUMN blocked_by_todo_id TEXT',
               );
             }
           }
           if (from < 3) {
-            await _addColumnIfTable(m, todos, todos.selectedForToday);
-            await _addColumnIfTable(m, todos, todos.dailySelectionDate);
+            // selected_for_today and daily_selection_date existed v3–v13.
+            final todosInfo = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'todos'",
+            ).get();
+            if (todosInfo.isNotEmpty &&
+                todosInfo.first.read<String>('type') == 'table') {
+              await customStatement(
+                'ALTER TABLE todos ADD COLUMN selected_for_today INTEGER',
+              );
+              await customStatement(
+                'ALTER TABLE todos ADD COLUMN daily_selection_date TEXT',
+              );
+            }
           }
           if (from < 4) {
             await _addColumnIfTable(m, todos, todos.waitingFor);
@@ -206,10 +221,38 @@ class GtdDatabase extends _$GtdDatabase {
           }
           if (from < 13) {
             // Collapse legacy waiting_for state rows before PowerSync re-syncs
-            // the rewritten rows from Postgres. The waiting_for text column is
-            // the new source of truth for the Waiting For list.
+            // the rewritten rows from Postgres.
             await customStatement(
               "UPDATE todos SET state = 'next_action' WHERE state = 'waiting_for'",
+            );
+          }
+          if (from < 14) {
+            // Create FocusSessions/FocusSessionTasks tables in test only;
+            // PowerSync creates views from powersyncSchema in production.
+            final fsRows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'focus_sessions'",
+            ).get();
+            if (fsRows.isEmpty) {
+              await m.createTable(focusSessions);
+            }
+            final fstRows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'focus_session_tasks'",
+            ).get();
+            if (fstRows.isEmpty) {
+              await m.createTable(focusSessionTasks);
+            }
+
+            // Add focus_session_id to time_logs (no-op on production view).
+            await _addColumnIfTable(m, timeLogs, timeLogs.focusSessionId);
+
+            // Drop retired columns from todos (no-op on production view).
+            await _dropColumnIfTable('todos', 'in_progress_since');
+            await _dropColumnIfTable('todos', 'selected_for_today');
+            await _dropColumnIfTable('todos', 'daily_selection_date');
+
+            // Collapse in_progress → next_action (safe on both real table and view).
+            await customStatement(
+              "UPDATE todos SET state = 'next_action' WHERE state = 'in_progress'",
             );
           }
         },
@@ -232,5 +275,19 @@ class GtdDatabase extends _$GtdDatabase {
     if (rows.isEmpty) return; // Unknown object; don't guess.
     if (rows.first.read<String>('type') != 'table') return;
     await m.addColumn(table, column);
+  }
+
+  /// Drops [columnName] from [tableName] only when the target is a real SQLite
+  /// table (not a PowerSync view). Checks column existence before dropping to
+  /// make the operation idempotent.
+  Future<void> _dropColumnIfTable(String tableName, String columnName) async {
+    final rows = await customSelect(
+      "SELECT type FROM sqlite_master WHERE name = ?",
+      variables: [Variable<String>(tableName)],
+    ).get();
+    if (rows.isEmpty || rows.first.read<String>('type') != 'table') return;
+    final cols = await customSelect('PRAGMA table_info($tableName)').get();
+    if (!cols.any((r) => r.read<String>('name') == columnName)) return;
+    await customStatement('ALTER TABLE $tableName DROP COLUMN $columnName');
   }
 }

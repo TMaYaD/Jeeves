@@ -31,36 +31,6 @@ void main() {
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items.length, 1);
       expect(items.first.timeSpentMinutes, 0);
-      expect(items.first.inProgressSince, equals(null));
-    });
-
-    test('v2 schema: inProgressSince and timeSpentMinutes can be set', () async {
-      final db = _openInMemory();
-      addTearDown(db.close);
-
-      final now = DateTime.now();
-      final nowIso = now.toIso8601String();
-      await db.customInsert(
-        'INSERT INTO todos (id, title, state, user_id, created_at, '
-        'in_progress_since, time_spent_minutes) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?)',
-        variables: [
-          Variable.withString('b'),
-          Variable.withString('In-progress task'),
-          Variable.withString('next_action'),
-          Variable.withString(_userId),
-          Variable.withDateTime(now),
-          Variable.withString(nowIso),
-          Variable.withInt(15),
-        ],
-      );
-
-      final todos = await (db.select(db.todos)
-            ..where((t) => t.id.equals('b')))
-          .get();
-      expect(todos.length, 1);
-      expect(todos.first.inProgressSince, nowIso);
-      expect(todos.first.timeSpentMinutes, 15);
     });
 
     test('v2 schema: old data (no new columns) survives intact', () async {
@@ -89,7 +59,6 @@ void main() {
       expect(items.length, 1);
       expect(items.first.title, 'Legacy task');
       expect(items.first.timeSpentMinutes, 0);
-      expect(items.first.inProgressSince, equals(null));
     });
 
     test('v6→v7 migration: null-color tags get backfilled; post-migration updateColor(null) is not overwritten', () async {
@@ -217,8 +186,12 @@ void main() {
       );
 
       // Run the production v2 migration (same addColumn calls as onUpgrade).
+      // in_progress_since used raw SQL because the Drift accessor was removed
+      // in schema v14 when the column was dropped.
       final m = db.createMigrator();
-      await m.addColumn(db.todos, db.todos.inProgressSince);
+      await db.customStatement(
+        'ALTER TABLE todos ADD COLUMN in_progress_since TEXT',
+      );
       await m.addColumn(db.todos, db.todos.timeSpentMinutes);
       // blocked_by_todo_id existed v2→v7; use raw SQL since the Drift
       // accessor no longer exists after schema v8.
@@ -243,7 +216,6 @@ void main() {
       expect(items.length, 1);
       expect(items.first.title, 'Legacy v1 task');
       expect(items.first.timeSpentMinutes, 0);
-      expect(items.first.inProgressSince, equals(null));
     });
 
     test('v12→v13 migration: state=waiting_for rows become next_action; waiting_for column intact',
@@ -311,6 +283,78 @@ void main() {
       expect(rows.length, 1);
       expect(rows.first.read<String>('state'), 'next_action');
       expect(rows.first.read<String?>('waiting_for'), 'Bob');
+    });
+
+    test('v13→v14 migration: in_progress rows become next_action; retired columns dropped; new tables created',
+        () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a v13 database by adding the columns that v14 drops.
+      await db.customStatement(
+        'ALTER TABLE todos ADD COLUMN in_progress_since TEXT',
+      );
+      await db.customStatement(
+        'ALTER TABLE todos ADD COLUMN selected_for_today INTEGER',
+      );
+      await db.customStatement(
+        'ALTER TABLE todos ADD COLUMN daily_selection_date TEXT',
+      );
+
+      // The v14 CHECK constraint rejects 'in_progress', so we use a
+      // constraint-free CTAS copy to seed the legacy row.
+      await db.customStatement('ALTER TABLE todos RENAME TO _todos_v13');
+      await db.customStatement(
+        'CREATE TABLE todos AS SELECT * FROM _todos_v13 LIMIT 0',
+      );
+      final now = DateTime.now();
+      await db.customStatement(
+        "INSERT INTO todos (id, title, state, clarified, user_id, created_at) "
+        "VALUES ('ip1', 'In-progress task', 'in_progress', 1, '$_userId', '${now.toIso8601String()}')",
+      );
+      // Also insert a normal next_action row to verify it is untouched.
+      await db.customStatement(
+        "INSERT INTO todos (id, title, state, clarified, user_id, created_at) "
+        "VALUES ('na1', 'Next action task', 'next_action', 1, '$_userId', '${now.toIso8601String()}')",
+      );
+
+      // Drop the new tables so the migration can recreate them.
+      await db.customStatement('DROP TABLE IF EXISTS focus_session_tasks');
+      await db.customStatement('DROP TABLE IF EXISTS focus_sessions');
+
+      // Drive the real v14 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 13, 14);
+
+      // in_progress → next_action.
+      final rows = await db.customSelect(
+        'SELECT id, state FROM todos ORDER BY id',
+      ).get();
+      expect(rows.length, 2);
+      expect(rows.every((r) => r.read<String>('state') == 'next_action'), isTrue);
+
+      // Retired columns must be gone.
+      final cols = await db.customSelect('PRAGMA table_info(todos)').get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames, isNot(contains('in_progress_since')));
+      expect(colNames, isNot(contains('selected_for_today')));
+      expect(colNames, isNot(contains('daily_selection_date')));
+
+      // New tables must exist.
+      final tables = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('focus_sessions','focus_session_tasks')",
+          )
+          .get();
+      final tableNames = tables.map((r) => r.read<String>('name')).toSet();
+      expect(tableNames, containsAll(['focus_sessions', 'focus_session_tasks']));
+
+      // focus_session_id must have been added to time_logs.
+      final tlCols =
+          await db.customSelect('PRAGMA table_info(time_logs)').get();
+      final tlColNames = tlCols.map((r) => r.read<String>('name')).toSet();
+      expect(tlColNames, contains('focus_session_id'));
     });
 
     test('v7→v8 migration drops blocked_by_todo_id column', () async {

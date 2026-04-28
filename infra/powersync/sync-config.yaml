@@ -18,7 +18,8 @@ replication:
       slot_name: powersync_slot
 
 # --- Sync rules ---------------------------------------------------------------
-# Four user-scoped buckets — todos, tags, todo_tags, and time_logs.
+# Six user-scoped buckets — todos, tags, todo_tags, time_logs, focus_sessions,
+# and focus_session_tasks.
 #
 # The parameter query below relies on the JWT carrying a `user_id` claim —
 # `token_parameters.user_id` is read directly and no users-table lookup is
@@ -30,6 +31,10 @@ replication:
 # JOINs that PowerSync rejects in parameter buckets.  The SELECT lists columns
 # explicitly because PowerSync manages `id` itself for the junction table and
 # declaring it on the client would duplicate the column.
+#
+# focus_session_tasks has no user_id column; its bucket JOINs through
+# focus_sessions to apply the per-user filter — the same denormalized-FK
+# pattern used by todo_tags.
 #
 # [1] https://docs.powersync.com/sync/rules/many-to-many-join-tables
 sync_config:
@@ -58,6 +63,20 @@ sync_config:
           - SELECT token_parameters.user_id AS user_id
         data:
           - SELECT * FROM time_logs WHERE user_id = bucket.user_id
+
+      by_user_focus_sessions:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM focus_sessions WHERE user_id = bucket.user_id
+
+      by_user_focus_session_tasks:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT fst.* FROM focus_session_tasks fst
+            JOIN focus_sessions fs ON fs.id = fst.focus_session_id
+            WHERE fs.user_id = bucket.user_id
 
 # --- Client auth --------------------------------------------------------------
 # Validate JWTs signed by the backend using the shared secret.

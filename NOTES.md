@@ -1,5 +1,14 @@
 # Notes
 
+## 2026-04-28 (issue #196 / PR I)
+
+- `in_progress` state retired: `focus_sessions.current_task_id` is the new source of truth for which task is focused. `selected_for_today`, `daily_selection_date`, `in_progress_since` columns dropped from `todos` (Drift schema v14, Alembic 0019). `GtdStateMachine.allowedTransitions = {}` (stub; PR J removes it).
+- `FocusSession` model: one row per planning session; open session (`ended_at IS NULL`) = today's plan is active. `FocusSessionTask` junction table stores ordered task list. `FocusSessionDao` provides `openSession`/`closeSession`/`setCurrentTask`/`watchActiveSession`/`watchSessionTasks`.
+- `setCurrentTask` atomic choreography: closes prior `TimeLog` → opens new `TimeLog` → updates `current_task_id`. Works for null (unfocus) and non-null (focus) task IDs.
+- Task selection during the planning ritual is now in-memory (`pendingSelectedTaskIds` / `reviewedTaskIds` in `FocusSessionPlanningState`). `startDay()` commits them atomically via `openSession`.
+- `_addColumnIfTable`/`_dropColumnIfTable` pattern: both are no-ops on PowerSync views; only run on real SQLite tables in tests. v14 migration uses both.
+- Five PowerSync sync buckets: `todos`, `tags`, `todo_tags`, `focus_sessions`, `focus_session_tasks`.
+
 ## 2026-04-28 (issue #194)
 
 - Stripped `done` state, introduced `done_at TIMESTAMPTZ` column (PR G, #194). Done tasks now keep `state='next_action'` and have `done_at IS NOT NULL`. `markDone` DAO method replaces `transitionState(…, GtdState.done)` at all call sites. All list watchers guard with `AND done_at IS NULL`. `GtdState.done` enum case removed; legacy `fromString('done')` maps to `nextAction`. Drift schema bumped to v12. `completed` boolean dropped from PostgreSQL (migration 0017) but kept as a phantom column in SQLite (unreliable DROP COLUMN across OS versions).

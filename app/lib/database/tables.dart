@@ -20,12 +20,13 @@ class Todos extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
-  /// GTD state: next_action | in_progress
-  /// (done retired → use done_at; waiting_for retired → use waiting_for column)
+  /// GTD state: next_action only.
+  /// (done retired → use done_at; waiting_for retired → use waiting_for column;
+  ///  in_progress retired → use focus_sessions.current_task_id)
   TextColumn get state => text()
       .clientDefault(() => 'next_action')
       .customConstraint(
-        "NOT NULL DEFAULT 'next_action' CHECK (\"state\" IN ('next_action','in_progress'))",
+        "NOT NULL DEFAULT 'next_action' CHECK (\"state\" IN ('next_action'))",
       )();
 
   /// ISO-8601 UTC timestamp; non-null when the task has been completed.
@@ -59,19 +60,9 @@ class Todos extends Table {
   /// Who or what a `waiting_for`-state task is waiting on (freeform).
   TextColumn get waitingFor => text().nullable()();
 
-  /// ISO-8601 timestamp; set when entering in_progress, cleared on exit.
-  TextColumn get inProgressSince => text().nullable()();
-
-  /// Cumulative time spent in minutes across all in_progress stints.
+  /// Cumulative time spent in minutes across all focus stints.
   IntColumn get timeSpentMinutes =>
       integer().withDefault(const Constant(0)).clientDefault(() => 0)();
-
-  /// Whether this todo was selected (true), skipped (false), or not yet
-  /// reviewed (null) during the daily planning ritual for [dailySelectionDate].
-  BoolColumn get selectedForToday => boolean().nullable()();
-
-  /// ISO-8601 date string (yyyy-MM-dd) on which the planning selection was made.
-  TextColumn get dailySelectionDate => text().nullable()();
 
   @override
   Set<Column<Object>> get primaryKey => {id};
@@ -83,7 +74,7 @@ class Todos extends Table {
 
 /// One row per focus stint on a task. PowerSync manages `id`.
 ///
-/// Timestamps are ISO-8601 UTC text strings (same convention as [Todos.inProgressSince]).
+/// Timestamps are ISO-8601 UTC text strings.
 /// `ended_at` is null while the stint is still running.
 class TimeLogs extends Table {
   /// PowerSync-managed primary key — no clientDefault.
@@ -97,8 +88,45 @@ class TimeLogs extends Table {
   /// ISO-8601 UTC string: when the stint ended; null while still running.
   TextColumn get endedAt => text().nullable()();
 
+  /// UUID of the focus session this log row belongs to; null for pre-FocusSession rows.
+  TextColumn get focusSessionId => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
+// focus_sessions
+// ---------------------------------------------------------------------------
+
+/// One row per planning session. An open session (ended_at IS NULL) is the
+/// single source of truth for "what tasks are on today's plan" and
+/// "which task is currently focused."
+class FocusSessions extends Table {
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+  TextColumn get startedAt => text()();
+  TextColumn get endedAt => text().nullable()();
+
+  /// The task currently being focused on; null when no task is active.
+  TextColumn get currentTaskId => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
+// focus_session_tasks
+// ---------------------------------------------------------------------------
+
+/// Junction table: which todos are part of a focus session, in what order.
+class FocusSessionTasks extends Table {
+  TextColumn get focusSessionId => text().references(FocusSessions, #id)();
+  TextColumn get taskId => text().references(Todos, #id)();
+  IntColumn get position => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
 }
 
 // ---------------------------------------------------------------------------

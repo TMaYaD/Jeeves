@@ -4,7 +4,6 @@ library;
 
 import 'package:drift/drift.dart';
 
-import '../../models/gtd_state_machine.dart';
 import '../../models/todo.dart' show GtdState, Intent;
 import '../gtd_database.dart';
 
@@ -259,12 +258,10 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // State transitions
   // ---------------------------------------------------------------------------
 
-  /// General-purpose state transition with TimeLog side effects.
+  /// General-purpose state transition for a todo.
   ///
-  /// - Validates [newState] via [GtdStateMachine].
-  /// - When transitioning **to** [GtdState.inProgress]: opens a [TimeLog] row.
-  /// - When transitioning **from** [GtdState.inProgress]: closes the open
-  ///   [TimeLog] row and recomputes [timeSpentMinutes] from the SUM.
+  /// Sets [state], marks [clarified] = true, and stamps [updatedAt].
+  /// Time-log side effects are handled by [FocusSessionDao.setCurrentTask].
   ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<void> transitionState(
@@ -279,43 +276,8 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
           .getSingleOrNull();
       if (row == null) return;
 
-      final from = GtdState.fromString(row.state);
-      GtdStateMachine.validate(from, newState);
-
-      if (newState == GtdState.inProgress) {
-        final existing = await (select(todos)
-              ..where((t) =>
-                  t.userId.equals(userId) &
-                  t.state.equals(GtdState.inProgress.value) &
-                  t.id.isNotValue(todoId)))
-            .getSingleOrNull();
-        if (existing != null) {
-          throw StateError(
-            'Cannot transition to inProgress: task ${existing.id} is already inProgress.',
-          );
-        }
-      }
-
       final effectiveNow = now ?? DateTime.now();
-      final leavingInProgress = from == GtdState.inProgress;
-      final enteringInProgress = newState == GtdState.inProgress;
-
-      if (leavingInProgress) {
-        await attachedDatabase.timeLogDao
-            .closeLog(taskId: todoId, now: effectiveNow);
-      }
-      if (enteringInProgress) {
-        await attachedDatabase.timeLogDao
-            .openLog(taskId: todoId, userId: userId, now: effectiveNow);
-      }
-
-      var companion = _buildTransitionCompanion(row, newState, effectiveNow);
-
-      if (leavingInProgress) {
-        final total =
-            await attachedDatabase.timeLogDao.totalMinutesForTask(todoId);
-        companion = companion.copyWith(timeSpentMinutes: Value(total));
-      }
+      final companion = _buildTransitionCompanion(newState, effectiveNow);
 
       await (update(todos)
             ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
@@ -323,121 +285,30 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     });
   }
 
-  TodosCompanion _buildTransitionCompanion(
-    Todo row,
-    GtdState newState,
-    DateTime now,
-  ) {
-    // inProgressSince is inert after this PR; TimeLog.startedAt is canonical.
-    // timeSpentMinutes is conditionally overwritten by transitionState via
-    // copyWith when leaving inProgress (recomputed from TimeLog SUM).
-    // clarified is set to true: any explicit state transition counts as
-    // clarification so the item leaves the inbox.
+  TodosCompanion _buildTransitionCompanion(GtdState newState, DateTime now) {
     return TodosCompanion(
       state: Value(newState.value),
       clarified: const Value(true),
-      inProgressSince: const Value(null),
       updatedAt: Value(now),
-      selectedForToday: const Value.absent(),
     );
   }
 
   // ---------------------------------------------------------------------------
-  // Daily planning queries
+  // Bulk id lookup
   // ---------------------------------------------------------------------------
 
-  /// Stream of next-action todos for [userId] not yet reviewed today.
+  /// Stream of [Todo] rows whose [id] is in [ids], ordered by creation date.
   ///
-  /// Only clarified (processed) todos are returned.  A task is "not yet
-  /// reviewed" when its [dailySelectionDate] is null or does not equal
-  /// [today] (ISO-8601 date string).
-  Stream<List<Todo>> watchNextActionsForPlanning(String userId, String today) {
-    return _watchAllForUser(userId).map((all) => all
-        .where((t) =>
-            t.state == GtdState.nextAction.value &&
-            t.intent != 'maybe' &&
-            t.clarified &&
-            t.doneAt == null &&
-            (t.dailySelectionDate == null || t.dailySelectionDate != today))
-        .toList());
-  }
-
-  /// Stream of next-action todos for [userId] skipped today.
-  Stream<List<Todo>> watchSkippedNextActionsForPlanning(
-      String userId, String today) {
-    return _watchAllForUser(userId).map((all) => all
-        .where((t) =>
-            t.state == GtdState.nextAction.value &&
-            t.intent != 'maybe' &&
-            t.clarified &&
-            t.doneAt == null &&
-            t.selectedForToday == false &&
-            t.dailySelectionDate == today)
-        .toList());
-  }
-
-  /// Stream of todos selected for [today] (selectedForToday == true and
-  /// dailySelectionDate == [today]).
-  Stream<List<Todo>> watchSelectedForToday(String userId, String today) {
-    return _watchAllForUser(userId).map((all) => all
-        .where((t) =>
-            t.selectedForToday == true && t.dailySelectionDate == today)
-        .toList());
-  }
-
-  /// Stream of todos selected for [today] that are missing a time estimate.
-  Stream<List<Todo>> watchSelectedTasksMissingEstimates(
-      String userId, String today) {
-    return watchSelectedForToday(userId, today)
-        .map((selected) => selected.where((t) => t.timeEstimate == null).toList());
-  }
-
-  /// Marks [id] as selected for [today].
-  ///
-  /// [now] overrides the timestamp used for [updatedAt]; defaults to
-  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
-  Future<void> selectForToday(String id, String userId, String date,
-      {DateTime? now}) async {
-    final ts = now ?? DateTime.now();
-    await (update(todos)
-          ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
-        .write(TodosCompanion(
-      selectedForToday: const Value(true),
-      dailySelectionDate: Value(date),
-      updatedAt: Value(ts),
-    ));
-  }
-
-  /// Marks [id] as skipped for [today].
-  ///
-  /// [now] overrides the timestamp used for [updatedAt]; defaults to
-  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
-  Future<void> skipForToday(String id, String userId, String date,
-      {DateTime? now}) async {
-    final ts = now ?? DateTime.now();
-    await (update(todos)
-          ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
-        .write(TodosCompanion(
-      selectedForToday: const Value(false),
-      dailySelectionDate: Value(date),
-      updatedAt: Value(ts),
-    ));
-  }
-
-  /// Undoes a review decision — resets [selectedForToday] and
-  /// [dailySelectionDate] so the task reappears in the planning list.
-  ///
-  /// [now] overrides the timestamp used for [updatedAt]; defaults to
-  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
-  Future<void> undoReview(String id, String userId, {DateTime? now}) async {
-    final ts = now ?? DateTime.now();
-    await (update(todos)
-          ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
-        .write(TodosCompanion(
-      selectedForToday: Value(null),
-      dailySelectionDate: Value(null),
-      updatedAt: Value(ts),
-    ));
+  /// Returns an empty stream when [ids] is empty.
+  Stream<List<Todo>> watchTodosById(String userId, List<String> ids) {
+    if (ids.isEmpty) return Stream.value([]);
+    final placeholders = ids.map((_) => '?').join(', ');
+    return customSelect(
+      'SELECT * FROM todos WHERE user_id = ? AND id IN ($placeholders) '
+      'ORDER BY created_at',
+      variables: [Variable(userId), ...ids.map(Variable.new)],
+      readsFrom: {todos},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
   /// Updates the due date for a scheduled task (reschedule without state change).
@@ -455,49 +326,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       // uploads "...000 +05:30" which asyncpg's TIMESTAMPTZ encoder
       // rejects, poisoning the CRUD queue.
       dueDate: Value(newDueDate.toUtc()),
-      updatedAt: Value(ts),
-    ));
-  }
-
-  /// Resets planning selections for all todos reviewed on [date].
-  ///
-  /// Used when re-entering the planning ritual mid-day so the user can
-  /// re-evaluate each task from scratch.
-  ///
-  /// [now] overrides the timestamp used for [updatedAt]; defaults to
-  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
-  Future<void> clearTodaySelections(String userId, String date,
-      {DateTime? now}) async {
-    final ts = now ?? DateTime.now();
-    await (update(todos)
-          ..where(
-              (t) => t.userId.equals(userId) & t.dailySelectionDate.equals(date)))
-        .write(TodosCompanion(
-      selectedForToday: Value(null),
-      dailySelectionDate: Value(null),
-      updatedAt: Value(ts),
-    ));
-  }
-
-  /// Resets planning selections only for todos that were **skipped** on [date].
-  ///
-  /// Used when re-entering the planning ritual so that already-selected tasks
-  /// remain in the day's plan while skipped tasks are returned to the
-  /// pending-review queue.
-  ///
-  /// [now] overrides the timestamp used for [updatedAt]; defaults to
-  /// [DateTime.now()]. Pass an explicit value in tests for determinism.
-  Future<void> clearTodaySkippedSelections(String userId, String date,
-      {DateTime? now}) async {
-    final ts = now ?? DateTime.now();
-    await (update(todos)
-          ..where((t) =>
-              t.userId.equals(userId) &
-              t.dailySelectionDate.equals(date) &
-              t.selectedForToday.equals(false)))
-        .write(TodosCompanion(
-      selectedForToday: Value(null),
-      dailySelectionDate: Value(null),
       updatedAt: Value(ts),
     ));
   }

@@ -26,14 +26,10 @@ class GtdStateMachine {
 
   /// The complete set of valid state transitions.
   ///
-  /// `done` is no longer a GTD state — completion is recorded via `done_at`
-  /// on the todo row (see TodoDao.markDone). `inProgress` remains until PR I.
-  /// `waitingFor` is no longer a GTD state — the Waiting For list is sourced
-  /// from the `waiting_for` text column (see TodoDao.watchWaitingFor).
-  static const Map<GtdState, Set<GtdState>> allowedTransitions = {
-    GtdState.nextAction: {GtdState.inProgress},
-    GtdState.inProgress: {},
-  };
+  /// `done` is no longer a GTD state — completion is recorded via `done_at`.
+  /// `inProgress` was retired in migration 0019 — the focused task is now
+  /// tracked by `focus_sessions.current_task_id`. PR J removes this file.
+  static const Map<GtdState, Set<GtdState>> allowedTransitions = {};
 
   /// Returns true when the [from] → [to] transition is permitted.
   static bool isValid(GtdState from, GtdState to) =>
