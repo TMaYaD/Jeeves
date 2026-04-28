@@ -412,42 +412,49 @@ When a sprint completes normally (`completeSprint`) or the timer expires while t
 - `lib/screens/active_focus_screen.dart` — `PageView` carousel: page 0 = notes (markdown with checkbox support), page 1 = `SprintTimerWidget`. A `_PageDots` indicator sits below the page view. Swipe left from notes to reach the sprint timer.
 - `lib/screens/focus_screen.dart` — task list only; no sprint controls. Sprint count badges on task rows use `focusSettingsProvider.sprintDurationMinutes`.
 
-## GTD State & Intent Model
+## Task Domain Model
 
-### State column (`todos.state`)
+A task's lifecycle decomposes along orthogonal axes — each axis is a separate column or relation, and they combine freely. There is no `state` field; each list view is a SQL filter on these columns.
 
-The `state` column holds the single valid value `next_action` (enforced by a `CHECK` constraint). The former `in_progress` state is retired: the focused task is now tracked by `focus_sessions.current_task_id`.
+| Axis | Column / relation | Semantics |
+|---|---|---|
+| Clarified | `todos.clarified` (bool) | `false` = inbox item; `true` = ready to act on |
+| Intent | `todos.intent` (`next` \| `maybe` \| `trash`) | What the user wants to do with this task |
+| Completion | `todos.done_at` (timestamp, nullable) | Non-null = done; value = when |
+| Schedule | `todos.due_date` (date, nullable) | Specific calendar date |
+| Waiting on | `todos.waiting_for` (text, nullable) | Who/what is blocking; non-null surfaces the row in Waiting For |
+| Active focus | `focus_sessions.current_task_id` | Which task is currently in progress |
+| Today's plan | `focus_session_tasks` rows | Membership in the open session |
 
-`GtdStateMachine.allowedTransitions` is an empty map. The class is a stub pending removal in PR J.
+A task is **actionable** when:
 
-Retired states and their current representation:
+```text
+clarified = true ∧ done_at IS NULL ∧ intent = 'next'
+```
 
-| Former state | Current representation |
-|---|---|
-| `inbox` | `state = 'next_action'` + `clarified = false` |
-| `done` | `done_at IS NOT NULL` |
-| `waiting_for` | `waiting_for IS NOT NULL` (text column) |
-| `in_progress` | `focus_sessions.current_task_id IS NOT NULL` |
+Polymorphic blockers (Task / Person / Time / Location) are tracked in TMaYaD/Jeeves#181; when they land they will replace the implicit `due_date` / `waiting_for` hints with a typed blocker list.
 
 ### Waiting For list
 
-The Waiting For view sources from the `waiting_for` text column rather than a state value. A task appears in the Waiting For list when:
+A task appears in the Waiting For view when:
 
 ```sql
 waiting_for IS NOT NULL AND clarified = true AND done_at IS NULL AND intent = 'next'
 ```
 
-`TodoDao.setWaitingFor(todoId, userId, text)` writes (or clears) the column. Empty string is coerced to `NULL` so the `IS NOT NULL` predicate never produces phantom rows.
+`TodoDao.setWaitingFor(todoId, userId, text)` writes (or clears) the column. Empty string is coerced to `NULL` so the predicate never produces phantom rows.
 
-### Intent column (`todos.intent`)
+### Intent semantics
 
-The `intent` column is **orthogonal to state** — it is not a state transition. Valid values: `next | maybe | trash` (migration 0015). Default: `next`.
+- `next` — normal actionable item; appears in Next Actions / Waiting For views.
+- `maybe` — deferred for later consideration; surfaces in the Maybe view; excluded from Next Actions and planning reviews.
+- `trash` — marked for deletion (UX deferred; column domain enforced at DB level).
 
-- `next`: normal actionable item; appears in Next Actions / Waiting For views.
-- `maybe`: deferred for later consideration; appears in the Maybe view regardless of `state`. Items with `intent = 'maybe'` are excluded from Next Actions and planning reviews.
-- `trash`: marked for deletion (UX deferred to a later PR; column enforced at DB level from day one).
+`TodoDao.setIntent(todoId, userId, intent)` writes the column. `deferTaskToMaybe` is the canonical "defer" verb.
 
-`setIntent(todoId, userId, intent)` in `TodoDao` writes `intent` without touching `state`. `deferTaskToMaybe` is the canonical "defer" verb: it calls `setIntent(id, userId, 'maybe')`.
+### Internal vs UI terminology
+
+Code names planning and review steps **session-relative** (`focus_session_planning`, `focus_session_review`), not date-relative. UI copy retains user-facing "today" / "this week" language. The split is deliberate: dates belong in copy and timezone-aware UI logic, not in entity names. `FocusSession.started_at` / `ended_at` own session lifecycle; "today" is a derived UI concept.
 
 ## Navigation & Global Filter State
 
