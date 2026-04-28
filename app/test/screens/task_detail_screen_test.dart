@@ -129,24 +129,22 @@ void main() {
       expect(find.byKey(const Key('status_pill')), findsOneWidget);
     });
 
-    testWidgets('status pill sheet lists valid transitions for next_action items',
+    testWidgets('status pill shows no-transition snackbar for next_action items',
         (tester) async {
       final todo = await _insertAt(db, id: 'task4', title: 'Next action task');
       final (widget, router) = _buildScreen(db, 'task4', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'task4');
 
+      // in_progress retired (migration 0019): next_action is the only state;
+      // tapping the pill shows a snackbar rather than a transition sheet.
+      expect(find.text('Next Actions'), findsOneWidget);
       await tester.tap(find.byKey(const Key('status_pill')));
       await tester.pumpAndSettle();
 
-      expect(find.text('In Progress'), findsOneWidget);
-      // Waiting For is no longer a FSM state — it is set via the waiting_for column.
+      expect(find.text('No further transitions available'), findsOneWidget);
+      expect(find.text('In Progress'), findsNothing);
       expect(find.text('Waiting For'), findsNothing);
-      // 'done' is no longer a state transition — completion is via markDone().
       expect(find.text('Done'), findsNothing);
-
-      // "Next Actions" appears once in the status pill (current state label),
-      // but not as a transition target in the sheet.
-      expect(find.text('Next Actions'), findsOneWidget);
       expect(find.text('Someday / Maybe'), findsNothing);
     });
 

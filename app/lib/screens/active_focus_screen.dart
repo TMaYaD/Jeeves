@@ -8,7 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../database/gtd_database.dart' show TodosCompanion;
+import '../database/gtd_database.dart' show Todo, TodosCompanion;
 import '../providers/auth_provider.dart';
 import '../providers/focus_session_planning_provider.dart'
     show activeSessionTasksProvider;

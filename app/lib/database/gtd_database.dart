@@ -274,6 +274,9 @@ class GtdDatabase extends _$GtdDatabase {
     ).get();
     if (rows.isEmpty) return; // Unknown object; don't guess.
     if (rows.first.read<String>('type') != 'table') return;
+    final cols =
+        await customSelect('PRAGMA table_info(${table.actualTableName})').get();
+    if (cols.any((r) => r.read<String>('name') == column.name)) return;
     await m.addColumn(table, column);
   }
 
