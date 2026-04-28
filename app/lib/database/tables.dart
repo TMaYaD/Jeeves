@@ -15,26 +15,22 @@ class Todos extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get title => text().withLength(max: 500)();
   TextColumn get notes => text().nullable()();
-  // Both defaults are intentional: `withDefault` wires the SQL-level DEFAULT
-  // (honoured on raw `customInsert` paths and by migration tests), while
-  // `clientDefault` makes Drift *materialise* the value on companion inserts
-  // where the column is `Value.absent()` — critical because PowerSync replaces
-  // the table with a view whose INSERT does not honour SQL DEFAULTs.
-  BoolColumn get completed =>
-      boolean().withDefault(const Constant(false)).clientDefault(() => false)();
   IntColumn get priority => integer().nullable()();
   DateTimeColumn get dueDate => dateTime().nullable()();
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
-  /// GTD state: next_action | waiting_for | in_progress | done
+  /// GTD state: next_action | waiting_for | in_progress (done retired → use done_at)
   TextColumn get state => text()
       .clientDefault(() => 'next_action')
       .customConstraint(
-        "NOT NULL DEFAULT 'next_action' CHECK (\"state\" IN ('next_action','waiting_for','in_progress','done'))",
+        "NOT NULL DEFAULT 'next_action' CHECK (\"state\" IN ('next_action','waiting_for','in_progress'))",
       )();
 
-  // Both defaults intentional for the same reason as `completed` above.
+  /// ISO-8601 UTC timestamp; non-null when the task has been completed.
+  TextColumn get doneAt => text().nullable()();
+
+  // Both defaults intentional: see comment on `state` column above.
   /// Whether this todo has been clarified (processed out of inbox).
   /// false = still in inbox; true = clarified and assigned to a GTD list.
   BoolColumn get clarified =>

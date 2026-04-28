@@ -84,7 +84,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     ref.read(sprintTimerProvider.notifier).stopSprint().ignore();
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
-    await db.todoDao.transitionState(todoId, userId, GtdState.done);
+    await db.todoDao.markDone(todoId, userId);
     ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
 
@@ -94,7 +94,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     final nextTask = allSelected
         .where((t) =>
             t.id != todoId &&
-            t.state != GtdState.done.value &&
+            t.doneAt == null &&
             t.state != GtdState.inProgress.value)
         .firstOrNull;
 

@@ -9,7 +9,6 @@ import 'package:drift/drift.dart';
 
 import '../../models/search_query.dart';
 import '../../models/search_result.dart';
-import '../../models/todo.dart' show GtdState;
 import '../gtd_database.dart';
 
 class SearchDao {
@@ -51,7 +50,7 @@ class SearchDao {
             query.states.map((s) => s.value).toList(),
           );
     } else if (!query.includeDone) {
-      where = where & _db.todos.state.isNotIn([GtdState.done.value]);
+      where = where & _db.todos.doneAt.isNull();
     }
 
     if (query.energyLevels.isNotEmpty) {

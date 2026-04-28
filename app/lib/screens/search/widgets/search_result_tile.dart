@@ -15,6 +15,8 @@ class SearchResultTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final todo = result.todo;
 
+    final isDone = todo.doneAt != null;
+
     return InkWell(
       onTap: () => context.push('/task/${todo.id}'),
       child: Padding(
@@ -57,7 +59,10 @@ class SearchResultTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            _StateChip(state: GtdState.fromString(todo.state)),
+            if (isDone)
+              const _DoneChip()
+            else
+              _StateChip(state: GtdState.fromString(todo.state)),
           ],
         ),
       ),
@@ -107,6 +112,27 @@ class _MatchHint extends StatelessWidget {
   }
 }
 
+class _DoneChip extends StatelessWidget {
+  const _DoneChip();
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFF6B7280);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: const Text(
+        'Done',
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color),
+      ),
+    );
+  }
+}
+
 class _StateChip extends StatelessWidget {
   const _StateChip({required this.state});
 
@@ -118,7 +144,6 @@ class _StateChip extends StatelessWidget {
       GtdState.nextAction => ('Next', const Color(0xFF16A34A)),
       GtdState.waitingFor => ('Waiting', const Color(0xFFD97706)),
       GtdState.inProgress => ('In Progress', const Color(0xFF7C3AED)),
-      GtdState.done => ('Done', const Color(0xFF6B7280)),
     };
 
     return Container(

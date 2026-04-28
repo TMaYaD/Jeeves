@@ -46,7 +46,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Stream of tags of [type] for [userId] paired with their active-task count.
   ///
-  /// "Active" means clarified=1 (not in inbox) and state is not `done`.  Tags
+  /// "Active" means clarified=1 (not in inbox) and done_at IS NULL.  Tags
   /// with zero active tasks return count = 0 and are still included so the
   /// cloud can show them as demoted/faded rather than vanishing mid-session.
   Stream<List<TagWithCount>> watchTagsWithActiveCount(
@@ -56,12 +56,11 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       'COUNT(t.id) AS active_count '
       'FROM tags '
       'LEFT JOIN todo_tags tt ON tt.tag_id = tags.id '
-      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.state != ? AND t.clarified = 1 '
+      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.done_at IS NULL AND t.clarified = 1 '
       'WHERE tags.user_id = ? AND tags.type = ? '
       'GROUP BY tags.id '
       'ORDER BY tags.name',
       variables: [
-        Variable('done'),
         Variable(userId),
         Variable(type),
       ],

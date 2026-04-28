@@ -70,7 +70,7 @@ async def create_todo(
         **({"id": body.id} if body.id is not None else {}),
         title=body.title,
         notes=body.notes,
-        completed=body.completed,
+        done_at=body.done_at,
         state=body.state,
         priority=body.priority,
         due_date=body.due_date,

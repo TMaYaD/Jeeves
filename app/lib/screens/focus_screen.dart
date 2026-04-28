@@ -164,9 +164,8 @@ class _TaskRow extends ConsumerWidget {
     final sprintMinutes =
         ref.watch(focusSettingsProvider).sprintDurationMinutes;
     final estimate = todo.timeEstimate;
-    final gtdState = GtdState.fromString(todo.state);
-    final isDone = gtdState == GtdState.done;
-    final isInProgress = gtdState == GtdState.inProgress;
+    final isDone = todo.doneAt != null;
+    final isInProgress = todo.state == GtdState.inProgress.value;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),

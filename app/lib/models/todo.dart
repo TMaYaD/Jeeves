@@ -9,14 +9,12 @@ part 'todo.g.dart';
 enum GtdState {
   nextAction,
   waitingFor,
-  inProgress,
-  done;
+  inProgress;
 
   String get value => switch (this) {
         GtdState.nextAction => 'next_action',
         GtdState.waitingFor => 'waiting_for',
         GtdState.inProgress => 'in_progress',
-        GtdState.done => 'done',
       };
 
   static GtdState fromString(String value) {
@@ -24,6 +22,8 @@ enum GtdState {
     if (value == 'inbox') return GtdState.nextAction;
     // Legacy: blocked rows are collapsed to next_action (migration 0012).
     if (value == 'blocked') return GtdState.nextAction;
+    // Legacy: done rows became next_action + done_at IS NOT NULL after migration 0017.
+    if (value == 'done') return GtdState.nextAction;
     return switch (value) {
       'next_action' => GtdState.nextAction,
       'waiting_for' => GtdState.waitingFor,
@@ -34,7 +34,6 @@ enum GtdState {
       'someday_maybe' => GtdState.nextAction,
       // Legacy: deferred rows were collapsed to next_action in migration 0013.
       'deferred' => GtdState.nextAction,
-      'done' => GtdState.done,
       _ => () {
           assert(false, 'Unknown GtdState value: $value');
           return GtdState.nextAction;
@@ -47,7 +46,6 @@ enum GtdState {
         GtdState.nextAction => 'Next Actions',
         GtdState.waitingFor => 'Waiting For',
         GtdState.inProgress => 'In Progress',
-        GtdState.done => 'Done',
       };
 }
 
@@ -81,7 +79,10 @@ abstract class Todo with _$Todo {
     required String id,
     required String title,
     String? notes,
-    required bool completed,
+
+    /// ISO-8601 UTC timestamp; non-null when the task has been completed.
+    String? doneAt,
+
     required DateTime createdAt,
     DateTime? updatedAt,
     DateTime? dueDate,
@@ -112,8 +113,11 @@ abstract class Todo with _$Todo {
 
   factory Todo.fromJson(Map<String, dynamic> json) => _$TodoFromJson(json);
 
-  /// True when the todo is actionable (state is next_action).
-  bool get isActionable => state == GtdState.nextAction.value;
+  /// True when the task has been marked done.
+  bool get isDone => doneAt != null;
+
+  /// True when the todo is actionable (next_action state and not yet done).
+  bool get isActionable => state == GtdState.nextAction.value && doneAt == null;
 
   /// Convenience accessor for the typed GTD state.
   GtdState get gtdState => GtdState.fromString(state);

@@ -243,7 +243,8 @@ void main() {
     });
 
     test('done tasks excluded by default', () async {
-      await _insertTodo(db, id: 'a', title: 'Done thing', state: 'done');
+      await _insertTodo(db, id: 'a', title: 'Done thing');
+      await db.todoDao.markDone('a', _user);
       await _insertTodo(db, id: 'b', title: 'Active thing');
 
       final results = await db.searchDao
@@ -255,7 +256,8 @@ void main() {
     });
 
     test('includeDone shows done tasks', () async {
-      await _insertTodo(db, id: 'a', title: 'Done thing', state: 'done');
+      await _insertTodo(db, id: 'a', title: 'Done thing');
+      await db.todoDao.markDone('a', _user);
 
       final results = await db.searchDao
           .search(_user, const SearchQuery(text: 'thing', includeDone: true))

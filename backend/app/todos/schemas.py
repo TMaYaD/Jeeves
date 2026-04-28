@@ -81,7 +81,7 @@ class TodoCreate(BaseModel):
     id: str | None = None  # Client-side UUID for idempotency (PowerSync offline-first)
     title: str
     notes: str | None = None
-    completed: bool = False
+    done_at: datetime | None = None
     state: str = "next_action"
     intent: str = "next"
     # Each item is either a plain string ("@office") or a TagInput dict.
@@ -100,6 +100,7 @@ class TodoCreate(BaseModel):
     daily_selection_date: str | None = None
 
     _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
+    _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
 
     @field_validator("state")
     @classmethod
@@ -126,7 +127,7 @@ class TodoCreate(BaseModel):
 class TodoUpdate(BaseModel):
     title: str | None = None
     notes: str | None = None
-    completed: bool | None = None
+    done_at: datetime | None = None
     state: str | None = None
     intent: str | None = None
     tags: list[str | TagInput] | None = None  # Full replacement of tag set when provided
@@ -143,6 +144,7 @@ class TodoUpdate(BaseModel):
     daily_selection_date: str | None = None
 
     _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
+    _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
 
     @field_validator("state")
     @classmethod
@@ -189,7 +191,7 @@ class TodoOut(BaseModel):
     id: str
     title: str
     notes: str | None
-    completed: bool
+    done_at: datetime | None
     priority: int | None
     state: str
     intent: str

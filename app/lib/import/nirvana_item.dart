@@ -8,7 +8,7 @@ class NirvanaItem {
     required this.type,
     required this.state,
     required this.intent,
-    required this.completed,
+    required this.doneAt,
     required this.notes,
     required this.tags,
     required this.energyLevel,
@@ -25,13 +25,14 @@ class NirvanaItem {
   /// 'task' or 'project'
   final String type;
 
-  /// Normalised GTD state: 'inbox' | 'next_action' | 'done' | 'waiting_for'
+  /// Normalised GTD state: 'inbox' | 'next_action' | 'waiting_for'
   final String state;
 
   /// Orthogonal intent: 'next' | 'maybe' | 'trash'
   final String intent;
 
-  final bool completed;
+  /// Non-null when the item was completed in Nirvana; stored as done_at.
+  final DateTime? doneAt;
   final String? notes;
   final List<String> tags;
 

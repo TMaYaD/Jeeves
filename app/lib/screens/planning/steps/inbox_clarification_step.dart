@@ -12,6 +12,8 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../providers/auth_provider.dart';
+import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/inbox_provider.dart';
 
@@ -137,6 +139,21 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     if (error != null) {
       debugPrint('Error: $error');
     }
+  }
+
+  Future<void> _processToDone(BuildContext context) async {
+    Object? error;
+    try {
+      final saved = await _saveFields(context);
+      if (!saved || !context.mounted) return;
+      final db = ref.read(databaseProvider);
+      final userId = ref.read(currentUserIdProvider);
+      await db.todoDao.markDone(widget.todo.id, userId);
+    } catch (e) {
+      error = e;
+    }
+    if (!context.mounted) return;
+    if (error != null) debugPrint('Error: $error');
   }
 
   Future<void> _processToMaybe(BuildContext context) async {
@@ -338,7 +355,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           label: 'Done (discard)',
           icon: Icons.delete_outline,
           color: const Color(0xFFDC2626),
-          onTap: () => _process(context, GtdState.done),
+          onTap: () => _processToDone(context),
         ),
         const SizedBox(height: 20),
         _DestinationButton(

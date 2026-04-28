@@ -28,7 +28,7 @@ const _csvStateMap = <String, String>{
   'inbox': 'inbox',
   'next': 'next_action',
   'active': 'inbox',
-  'logbook': 'done',
+  'logbook': 'next_action',
   'waiting': 'waiting_for',
   'someday': 'next_action',
   'later': 'next_action',
@@ -45,7 +45,7 @@ const _jsonStateMap = <int, String>{
   1: 'next_action',
   3: 'next_action',
   5: 'next_action',
-  7: 'done',
+  7: 'next_action',
   9: 'waiting_for',
   11: 'inbox',
   13: 'inbox',
@@ -237,11 +237,14 @@ List<List<String>> _parseCsvRaw(String content) {
     final rawCompleted = field(row, completedIdx);
     final completed = rawCompleted.isNotEmpty;
 
-    final String state;
-    if (completed && rawState.toLowerCase() != 'logbook') {
-      state = 'done';
-    } else {
-      state = _normaliseState(rawState);
+    // Completed items are stored as next_action + done_at (not state='done').
+    final String state = _normaliseState(rawState);
+    DateTime? doneAt;
+    if (completed) {
+      final parsedDate = _parseCsvDate(rawCompleted);
+      doneAt = parsedDate != null
+          ? DateTime.parse('${parsedDate}T00:00:00Z')
+          : DateTime.now().toUtc();
     }
     final String intent = (!completed &&
             _csvMaybeStates.contains(rawState.trim().toLowerCase()))
@@ -264,7 +267,7 @@ List<List<String>> _parseCsvRaw(String content) {
       type: itemType,
       state: state,
       intent: intent,
-      completed: completed,
+      doneAt: doneAt,
       notes: notesIdx >= 0 && notesIdx < row.length
           ? (row[notesIdx].trim().isNotEmpty ? row[notesIdx].trim() : null)
           : null,
@@ -335,12 +338,18 @@ List<List<String>> _parseCsvRaw(String content) {
 
     final rawState = row['state'];
     final rawStateInt = rawState is int ? rawState : 0;
-    var state = _jsonStateMap[rawStateInt] ?? 'inbox';
+    final state = _jsonStateMap[rawStateInt] ?? 'inbox';
 
     final completedTs = row['completed'];
     final completed =
         completedTs != null && completedTs != 0 && completedTs != false;
-    if (completed) state = 'done';
+    // Completed items are stored as next_action + done_at (not state='done').
+    DateTime? doneAt;
+    if (completed) {
+      doneAt = completedTs is int && completedTs > 0
+          ? DateTime.fromMillisecondsSinceEpoch(completedTs * 1000, isUtc: true)
+          : DateTime.now().toUtc();
+    }
     final String intent =
         (!completed && _jsonMaybeStateInts.contains(rawStateInt)) ? 'maybe' : 'next';
 
@@ -389,7 +398,7 @@ List<List<String>> _parseCsvRaw(String content) {
       type: itemType,
       state: state,
       intent: intent,
-      completed: completed,
+      doneAt: doneAt,
       notes: notes,
       tags: tags,
       energyLevel: energyLevel,

@@ -20,7 +20,7 @@ Todo _todo(String id, String title) => Todo(
       id: id,
       title: title,
       notes: null,
-      completed: false,
+      doneAt: null,
       priority: null,
       dueDate: null,
       createdAt: DateTime(2024, 1, 1),

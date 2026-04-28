@@ -39,7 +39,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -164,6 +164,44 @@ class GtdDatabase extends _$GtdDatabase {
               await customStatement(
                 "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
               );
+            }
+          }
+          if (from < 12) {
+            final tables = await customSelect(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name='todos'",
+            ).get();
+            if (tables.isNotEmpty) {
+              final cols = await customSelect("PRAGMA table_info(todos)").get();
+              final hasDoneAt =
+                  cols.any((r) => r.read<String>('name') == 'done_at');
+              if (!hasDoneAt) {
+                await customStatement(
+                  'ALTER TABLE todos ADD COLUMN done_at TEXT',
+                );
+              }
+              // Backfill done_at only for rows where it is not already set.
+              // Mirror the Postgres backfill: also cover rows where completed=1
+              // but state diverged (nothing enforced co-setting of both fields).
+              final hasCompleted =
+                  cols.any((r) => r.read<String>('name') == 'completed');
+              if (hasCompleted) {
+                await customStatement(
+                  "UPDATE todos "
+                  "SET done_at = COALESCE(done_at, updated_at) "
+                  "WHERE (state = 'done' OR completed = 1) AND done_at IS NULL",
+                );
+              } else {
+                await customStatement(
+                  "UPDATE todos "
+                  "SET done_at = COALESCE(done_at, updated_at) "
+                  "WHERE state = 'done' AND done_at IS NULL",
+                );
+              }
+              await customStatement(
+                "UPDATE todos SET state = 'next_action' WHERE state = 'done'",
+              );
+              // completed column: intentionally NOT dropped — SQLite DROP COLUMN
+              // is unreliable across OS versions; Drift treats it as invisible.
             }
           }
         },
