@@ -305,12 +305,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Moves the item to next_action state (out of inbox) then sets intent = 'maybe'
   /// so it appears in the Maybe view rather than Next Actions.
   Future<void> processInboxItemToMaybe(String id) async {
-    await _db.inboxDao.processInboxItem(
-      id,
-      userId: _userId,
-      newState: GtdState.nextAction.value,
-    );
-    await _db.todoDao.deferTaskToMaybe(id, _userId);
+    await _db.transaction(() async {
+      await _db.inboxDao.processInboxItem(
+        id,
+        userId: _userId,
+        newState: GtdState.nextAction.value,
+      );
+      await _db.todoDao.deferTaskToMaybe(id, _userId);
+    });
     state = state.copyWith(
       inboxClarifiedCount: state.inboxClarifiedCount + 1,
     );

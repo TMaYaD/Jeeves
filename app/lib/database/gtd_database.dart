@@ -139,11 +139,11 @@ class GtdDatabase extends _$GtdDatabase {
                 await customStatement(
                   "ALTER TABLE todos ADD COLUMN intent TEXT NOT NULL DEFAULT 'next'",
                 );
-                await customStatement(
-                  "UPDATE todos SET intent = 'maybe', state = 'next_action' "
-                  "WHERE state = 'someday_maybe'",
-                );
               }
+              await customStatement(
+                "UPDATE todos SET intent = 'maybe', state = 'next_action' "
+                "WHERE state = 'someday_maybe'",
+              );
             }
           }
         },

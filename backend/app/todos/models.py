@@ -108,7 +108,12 @@ class Todo(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     state: Mapped[str] = mapped_column(String(50), default="inbox")
-    intent: Mapped[str] = mapped_column(String(20), nullable=False, default="next")
+    intent: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="next",
+        server_default="next",
+    )
     time_estimate: Mapped[int | None] = mapped_column(Integer)  # minutes
     energy_level: Mapped[str | None] = mapped_column(String(20))
     capture_source: Mapped[str | None] = mapped_column(String(50))

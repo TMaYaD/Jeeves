@@ -71,7 +71,7 @@ class CustomDrawer extends ConsumerWidget {
     final inboxCount = ref.watch(inboxItemsProvider).asData?.value.length ?? 0;
     final nextActionsCount = ref.watch(nextActionsProvider).asData?.value.length ?? 0;
     final waitingForCount = ref.watch(waitingForProvider).asData?.value.length ?? 0;
-    final somedayCount = ref.watch(maybeProvider).asData?.value.length ?? 0;
+    final maybeCount = ref.watch(maybeProvider).asData?.value.length ?? 0;
     final syncAsync = ref.watch(syncStatusProvider);
     final syncStatus = syncAsync.hasError
         ? SyncStatus.error
@@ -159,7 +159,7 @@ class CustomDrawer extends ConsumerWidget {
                       title: 'Maybe',
                       path: '/someday-maybe',
                       location: location,
-                      count: somedayCount),
+                      count: maybeCount),
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 8),

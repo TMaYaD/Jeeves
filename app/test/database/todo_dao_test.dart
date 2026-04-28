@@ -205,7 +205,7 @@ void main() {
     test('setIntent updates intent and bumps updated_at', () async {
       await _insertTodo(db, id: 'i2', title: 'Task I2');
       final before = (await db.todoDao.getTodo('i2', _userId))?.updatedAt;
-      await db.todoDao.setIntent('i2', _userId, 'trash');
+      await db.todoDao.setIntent('i2', _userId, Intent.trash);
 
       final row = await db.todoDao.getTodo('i2', _userId);
       expect(row?.intent, 'trash');

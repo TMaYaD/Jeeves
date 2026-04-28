@@ -162,7 +162,7 @@ Key methods:
 A `ConsumerStatefulWidget` with `WidgetsBindingObserver` for lifecycle events:
 
 - **Complete**: `transitionState(done)` → `endFocus()` → snackbar with next task → `context.go('/focus')`.
-- **Abandon**: `transitionState(nextAction)` → `endFocus()` → `context.go('/focus')`. Task returns to Next Actions; user replans or skips tomorrow.
+- **Abandon**: `transitionState(GtdState.nextAction)` → `endFocus()` → `context.go('/focus')`. Task returns to Next Actions; user replans or skips tomorrow.
 - **Pause/Resume**: toggled on `FocusModeNotifier` only; no DB write.
 - **Exit (×)**: confirmation dialog → `pauseFocus()` → `context.go('/focus')`. Task stays `inProgress`; the daily plan shows a "Resume" button.
 

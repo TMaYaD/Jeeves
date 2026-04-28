@@ -40,4 +40,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise NotImplementedError("Migration 0015 is intentionally irreversible (alpha build).")
+    # Data loss: someday_maybe rows cannot be restored from intent='maybe' alone.
+    op.drop_constraint("ck_todos_intent", "todos")
+    op.drop_column("todos", "intent")
+    op.drop_constraint("ck_todos_state", "todos")
+    op.create_check_constraint(
+        "ck_todos_state",
+        "todos",
+        "state IN ('inbox','next_action','waiting_for','someday_maybe','done')",
+    )

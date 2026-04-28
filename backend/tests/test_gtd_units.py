@@ -55,6 +55,10 @@ class TestTodoIntentValidator:
         t = TodoUpdate(intent=None)
         assert t.intent is None
 
+    def test_update_invalid_intent_raises(self) -> None:
+        with pytest.raises(ValidationError, match="intent must be one of"):
+            TodoUpdate(intent="someday")
+
 
 # ── Energy level validator ────────────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ library;
 import 'package:drift/drift.dart';
 
 import '../../models/gtd_state_machine.dart';
-import '../../models/todo.dart' show GtdState;
+import '../../models/todo.dart' show GtdState, Intent;
 import '../gtd_database.dart';
 
 part 'todo_dao.g.dart';
@@ -429,13 +429,13 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   ///
   /// [intent] must be one of: next | maybe | trash.
   /// [now] overrides the timestamp used for [updatedAt]; defaults to [DateTime.now()].
-  Future<void> setIntent(String todoId, String userId, String intent,
+  Future<void> setIntent(String todoId, String userId, Intent intent,
       {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
     await customUpdate(
       'UPDATE todos SET intent = ?, updated_at = ? WHERE id = ? AND user_id = ?',
       variables: [
-        Variable(intent),
+        Variable(intent.value),
         Variable(ts),
         Variable(todoId),
         Variable(userId),
@@ -449,7 +449,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   ///
   /// Does not alter the GTD state — intent is orthogonal to state.
   Future<void> deferTaskToMaybe(String todoId, String userId, {DateTime? now}) =>
-      setIntent(todoId, userId, 'maybe', now: now);
+      setIntent(todoId, userId, Intent.maybe, now: now);
 
   /// Update mutable todo fields (title, notes, energy level, time estimate, due date).
   Future<void> updateFields(
