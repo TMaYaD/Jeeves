@@ -432,7 +432,7 @@ A task is **actionable** when:
 clarified = true ∧ done_at IS NULL ∧ intent = 'next'
 ```
 
-Polymorphic blockers (Task / Person / Time / Location) are tracked in TMaYaD/Jeeves#181; when they land they will replace the implicit `due_date` / `waiting_for` hints with a typed blocker list.
+Polymorphic blockers (Task / Person / Time / Location) are currently tracked separately in TMaYaD/Jeeves#181 and are not part of this model yet.
 
 ### Waiting For list
 
