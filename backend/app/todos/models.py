@@ -78,6 +78,7 @@ class Todo(Base):
     __tablename__ = "todos"
     __table_args__ = (
         Index("ix_todos_user_state", "user_id", "state"),
+        Index("ix_todos_user_done_at", "user_id", "done_at"),
         CheckConstraint(
             "state IN ('next_action','waiting_for','in_progress')",
             name="ck_todos_state",

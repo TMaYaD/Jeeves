@@ -34,6 +34,7 @@ def upgrade() -> None:
     # in_progress stays until PR I retires it.
     op.drop_index("ix_todos_completed", table_name="todos", if_exists=True)
     op.drop_column("todos", "completed")
+    op.create_index("ix_todos_user_done_at", "todos", ["user_id", "done_at"])
 
 
 def downgrade() -> None:
@@ -49,6 +50,7 @@ def downgrade() -> None:
         "state IN ('next_action','waiting_for','in_progress','done')",
     )
     op.execute("UPDATE todos SET state = 'done' WHERE done_at IS NOT NULL")
+    op.drop_index("ix_todos_user_done_at", table_name="todos")
     op.drop_column("todos", "done_at")
     op.alter_column("todos", "completed", server_default=None)
     op.create_index("ix_todos_completed", "todos", ["completed"])

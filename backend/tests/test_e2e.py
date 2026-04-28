@@ -47,11 +47,13 @@ async def test_full_user_journey(client: AsyncClient) -> None:
     assert len(listing.json()) == 2
 
     # 6. Update first todo as completed
+    done_at_sent = "2026-01-01T00:00:00Z"
     update = await client.patch(
-        f"/todos/{todo1_id}", json={"done_at": "2026-01-01T00:00:00Z"}, headers=headers
+        f"/todos/{todo1_id}", json={"done_at": done_at_sent}, headers=headers
     )
     assert update.status_code == 200
-    assert update.json()["done_at"] is not None
+    returned_done_at = update.json()["done_at"]
+    assert datetime.fromisoformat(returned_done_at) == datetime.fromisoformat(done_at_sent)
 
     # 7. Delete second todo
     todo2_id = todo2.json()["id"]

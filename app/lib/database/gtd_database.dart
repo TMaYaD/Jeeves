@@ -179,10 +179,24 @@ class GtdDatabase extends _$GtdDatabase {
                   'ALTER TABLE todos ADD COLUMN done_at TEXT',
                 );
               }
-              // Backfill done_at for legacy 'done' state rows.
-              await customStatement(
-                "UPDATE todos SET done_at = updated_at WHERE state = 'done'",
-              );
+              // Backfill done_at only for rows where it is not already set.
+              // Mirror the Postgres backfill: also cover rows where completed=1
+              // but state diverged (nothing enforced co-setting of both fields).
+              final hasCompleted =
+                  cols.any((r) => r.read<String>('name') == 'completed');
+              if (hasCompleted) {
+                await customStatement(
+                  "UPDATE todos "
+                  "SET done_at = COALESCE(done_at, updated_at) "
+                  "WHERE (state = 'done' OR completed = 1) AND done_at IS NULL",
+                );
+              } else {
+                await customStatement(
+                  "UPDATE todos "
+                  "SET done_at = COALESCE(done_at, updated_at) "
+                  "WHERE state = 'done' AND done_at IS NULL",
+                );
+              }
               await customStatement(
                 "UPDATE todos SET state = 'next_action' WHERE state = 'done'",
               );

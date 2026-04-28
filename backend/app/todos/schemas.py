@@ -100,6 +100,7 @@ class TodoCreate(BaseModel):
     daily_selection_date: str | None = None
 
     _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
+    _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
 
     @field_validator("state")
     @classmethod
@@ -143,6 +144,7 @@ class TodoUpdate(BaseModel):
     daily_selection_date: str | None = None
 
     _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
+    _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
 
     @field_validator("state")
     @classmethod
