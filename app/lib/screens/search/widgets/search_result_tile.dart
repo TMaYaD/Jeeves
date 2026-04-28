@@ -166,7 +166,6 @@ class _StateChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final (label, color) = switch (state) {
       GtdState.nextAction => ('Next', const Color(0xFF16A34A)),
-      GtdState.inProgress => ('In Progress', const Color(0xFF7C3AED)),
     };
 
     return Container(

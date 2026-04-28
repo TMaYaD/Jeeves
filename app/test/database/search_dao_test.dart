@@ -205,40 +205,26 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('single state filter', () async {
-      await _insertTodo(db, id: 'a', title: 'In-progress item', state: 'in_progress');
-      await _insertTodo(db, id: 'b', title: 'Next item', state: 'next_action');
+    test('state filter bypasses done-task exclusion', () async {
+      // Default search excludes done tasks; an explicit state filter overrides
+      // that so callers can search completed items by passing states explicitly.
+      await _insertTodo(db, id: 'a', title: 'Active task');
+      await _insertTodo(db, id: 'b', title: 'Done task');
+      await db.todoDao.markDone('b', _user);
 
-      final results = await db.searchDao
+      final withoutFilter =
+          await db.searchDao.search(_user, const SearchQuery(text: 'task')).first;
+      expect(withoutFilter.length, 1);
+      expect(withoutFilter.first.todo.id, 'a');
+
+      final withFilter = await db.searchDao
           .search(
             _user,
-            SearchQuery(
-              text: 'item',
-              states: {GtdState.nextAction},
-            ),
+            SearchQuery(text: 'task', states: {GtdState.nextAction}),
           )
           .first;
-
-      expect(results.length, 1);
-      expect(results.first.todo.id, 'b');
-    });
-
-    test('multiple state filter', () async {
-      await _insertTodo(db, id: 'a', title: 'Task A', state: 'in_progress');
-      await _insertTodo(db, id: 'b', title: 'Task B', state: 'next_action');
-
-      final results = await db.searchDao
-          .search(
-            _user,
-            SearchQuery(
-              text: 'Task',
-              states: {GtdState.nextAction, GtdState.inProgress},
-            ),
-          )
-          .first;
-
-      expect(results.length, 2);
-      expect(results.map((r) => r.todo.id), containsAll(['a', 'b']));
+      expect(withFilter.length, 2);
+      expect(withFilter.map((r) => r.todo.id), containsAll(['a', 'b']));
     });
 
     test('done tasks excluded by default', () async {

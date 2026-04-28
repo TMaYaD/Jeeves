@@ -4,40 +4,22 @@ import 'package:jeeves/models/gtd_state_machine.dart';
 import 'package:jeeves/models/todo.dart';
 
 void main() {
+  // GtdStateMachine.allowedTransitions is now empty — in_progress was retired
+  // in migration 0019 and is tracked via focus_sessions.current_task_id.
+  // PR J will remove this file entirely.
   group('GtdStateMachine', () {
-    group('valid transitions', () {
-      void expectValid(GtdState from, GtdState to) {
-        expect(
-          () => GtdStateMachine.validate(from, to),
-          returnsNormally,
-          reason: 'Expected ${from.value} → ${to.value} to be valid',
-        );
-      }
-
-      test('nextAction → inProgress', () => expectValid(GtdState.nextAction, GtdState.inProgress));
+    test('validate always throws: no transitions remain', () {
+      expect(
+        () => GtdStateMachine.validate(GtdState.nextAction, GtdState.nextAction),
+        throwsA(isA<InvalidStateTransitionException>()),
+      );
     });
 
-    group('invalid transitions', () {
-      void expectInvalid(GtdState from, GtdState to) {
-        expect(
-          () => GtdStateMachine.validate(from, to),
-          throwsA(isA<InvalidStateTransitionException>()),
-          reason: 'Expected ${from.value} → ${to.value} to be invalid',
-        );
-      }
-
-      // inProgress has no valid FSM exits (completion is via markDone; PR I retires it)
-      test('inProgress → nextAction is rejected', () => expectInvalid(GtdState.inProgress, GtdState.nextAction));
-    });
-
-    group('isValid', () {
-      test('returns true for valid transitions', () {
-        expect(GtdStateMachine.isValid(GtdState.nextAction, GtdState.inProgress), isTrue);
-      });
-
-      test('returns false for invalid transitions', () {
-        expect(GtdStateMachine.isValid(GtdState.inProgress, GtdState.nextAction), isFalse);
-      });
+    test('isValid always returns false', () {
+      expect(
+        GtdStateMachine.isValid(GtdState.nextAction, GtdState.nextAction),
+        isFalse,
+      );
     });
   });
 }

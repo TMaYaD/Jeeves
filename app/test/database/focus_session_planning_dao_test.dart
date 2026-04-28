@@ -1,483 +1,316 @@
-/// Tests for TodoDao focus session planning methods added in Issue #82.
-///
-/// All tests use an in-memory Drift database — no mocks.
+/// Tests for FocusSessionDao — open/close sessions, current-task management,
+/// and session-task queries.
 library;
 
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 const _userId = 'test-user';
-const _today = '2026-04-16';
-const _yesterday = '2026-04-15';
 
-/// Inserts a todo directly into [db] with the given [state] (clarified=true).
-///
-/// This helper bypasses [InboxDao.insertTodo] so tests can seed todos in any
-/// target state without going through the inbox flow.  All inserted rows are
-/// clarified by default; use [InboxDao.insertTodo] directly when you need an
-/// unclarified (inbox) item.
-Future<String> _insert(
-  GtdDatabase db, {
-  required String id,
-  required String title,
-  String state = 'next_action',
-  DateTime? dueDate,
-  int? timeEstimate,
-}) async {
+Future<void> _insertTodo(GtdDatabase db,
+    {required String id, required String title}) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    state: Value(state),
+    state: const Value('next_action'),
     clarified: const Value(true),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
-    dueDate: dueDate != null ? Value(dueDate) : const Value.absent(),
-    timeEstimate:
-        timeEstimate != null ? Value(timeEstimate) : const Value.absent(),
   ));
-  return id;
 }
 
 void main() {
   setUpAll(configureSqliteForTests);
 
   // ---------------------------------------------------------------------------
-  // watchNextActionsForPlanning
+  // openSession
   // ---------------------------------------------------------------------------
 
-  group('watchNextActionsForPlanning', () {
+  group('FocusSessionDao — openSession', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('returns next_action tasks not yet reviewed today', () async {
-      await _insert(db, id: 'a', title: 'Action A', state: 'next_action');
-      await _insert(db, id: 'b', title: 'Action B', state: 'next_action');
+    test('creates an open session with no tasks when taskIds is empty', () async {
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
 
-      final items =
-          await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
-      expect(items.map((t) => t.id), containsAll(['a', 'b']));
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session, isNotNull);
+      expect(session!.id, sessionId);
+      expect(session.userId, _userId);
+      expect(session.endedAt, isNull);
+      expect(session.currentTaskId, isNull);
     });
 
-    test('excludes tasks already reviewed today (any selection value)',
-        () async {
-      await _insert(db, id: 'a', title: 'Action A', state: 'next_action');
-      await _insert(db, id: 'b', title: 'Action B', state: 'next_action');
-
-      // Mark 'a' as selected for today
-      await db.todoDao.selectForToday('a', _userId, _today);
-
-      final items =
-          await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
-      expect(items.map((t) => t.id), isNot(contains('a')));
-      expect(items.map((t) => t.id), contains('b'));
-    });
-
-    test('shows tasks reviewed on a different day (stale selection)', () async {
-      await _insert(db, id: 'a', title: 'Action A', state: 'next_action');
-      await db.todoDao.selectForToday('a', _userId, _yesterday);
-
-      final items =
-          await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
-      // Yesterday's selection is stale — the task appears again.
-      expect(items.map((t) => t.id), contains('a'));
-    });
-
-    test('excludes unclarified (inbox) tasks', () async {
-      // Insert as inbox item (clarified=false) via the DAO.
-      final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
-        id: const Value('a'),
-        title: const Value('Inbox item'),
-        userId: const Value(_userId),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
-      await _insert(db, id: 'b', title: 'Maybe item', state: 'next_action');
-      await db.todoDao.deferTaskToMaybe('b', _userId);
-
-      final items =
-          await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
-      expect(items, isEmpty);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // watchSelectedForToday
-  // ---------------------------------------------------------------------------
-
-  group('watchSelectedForToday', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('returns only tasks selected for today', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await _insert(db, id: 'b', title: 'B', state: 'next_action');
-      await db.todoDao.selectForToday('a', _userId, _today);
-
-      final items =
-          await db.todoDao.watchSelectedForToday(_userId, _today).first;
-      expect(items.length, 1);
-      expect(items.first.id, 'a');
-    });
-
-    test('skipped tasks (selectedForToday=false) do not appear', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.skipForToday('a', _userId, _today);
-
-      final items =
-          await db.todoDao.watchSelectedForToday(_userId, _today).first;
-      expect(items, isEmpty);
-    });
-
-    test('stale selections from yesterday do not appear', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.selectForToday('a', _userId, _yesterday);
-
-      final items =
-          await db.todoDao.watchSelectedForToday(_userId, _today).first;
-      expect(items, isEmpty);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // selectForToday / skipForToday
-  // ---------------------------------------------------------------------------
-
-  group('selectForToday and skipForToday', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('selectForToday sets selectedForToday=true and dailySelectionDate',
-        () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.selectForToday('a', _userId, _today);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.selectedForToday, true);
-      expect(row?.dailySelectionDate, _today);
-    });
-
-    test('skipForToday sets selectedForToday=false and dailySelectionDate',
-        () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.skipForToday('a', _userId, _today);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.selectedForToday, false);
-      expect(row?.dailySelectionDate, _today);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // undoReview
-  // ---------------------------------------------------------------------------
-
-  group('undoReview', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('resets selectedForToday and dailySelectionDate to null', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.selectForToday('a', _userId, _today);
-
-      await db.todoDao.undoReview('a', _userId);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.selectedForToday, equals(null));
-      expect(row?.dailySelectionDate, equals(null));
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // deferTaskToMaybe
-  // ---------------------------------------------------------------------------
-
-  group('deferTaskToMaybe', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('sets intent=maybe without changing state', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.deferTaskToMaybe('a', _userId);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.intent, 'maybe');
-      expect(row?.state, 'next_action');
-    });
-
-    test('task no longer appears in watchNextActionsForPlanning after deferral',
-        () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.deferTaskToMaybe('a', _userId);
-
-      final items =
-          await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
-      expect(items, isEmpty);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // rescheduleTask
-  // ---------------------------------------------------------------------------
-
-  group('rescheduleTask', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('updates dueDate without changing state', () async {
-      final todayDt = DateTime(2026, 4, 16);
-      final newDate = DateTime(2026, 4, 20);
-      await _insert(db,
-          id: 'a',
-          title: 'A',
-          state: 'next_action',
-          dueDate: todayDt);
-
-      await db.todoDao.rescheduleTask('a', _userId, newDate);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.state, GtdState.nextAction.value);
-      // rescheduleTask normalises to UTC so Drift emits a standard ISO-8601
-      // offset that asyncpg's TIMESTAMPTZ encoder can parse.
-      expect(row?.dueDate, newDate.toUtc());
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // clearTodaySelections
-  // ---------------------------------------------------------------------------
-
-  group('clearTodaySelections', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('resets all selections for the given date', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await _insert(db, id: 'b', title: 'B', state: 'next_action');
-      await db.todoDao.selectForToday('a', _userId, _today);
-      await db.todoDao.skipForToday('b', _userId, _today);
-
-      await db.todoDao.clearTodaySelections(_userId, _today);
-
-      final rowA = await db.todoDao.getTodo('a', _userId);
-      final rowB = await db.todoDao.getTodo('b', _userId);
-      expect(rowA?.selectedForToday, equals(null));
-      expect(rowA?.dailySelectionDate, equals(null));
-      expect(rowB?.selectedForToday, equals(null));
-      expect(rowB?.dailySelectionDate, equals(null));
-    });
-
-    test('does not reset selections from a different date', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.selectForToday('a', _userId, _yesterday);
-
-      await db.todoDao.clearTodaySelections(_userId, _today);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      // Yesterday's selection is untouched.
-      expect(row?.selectedForToday, true);
-      expect(row?.dailySelectionDate, _yesterday);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // clearTodaySkippedSelections
-  // ---------------------------------------------------------------------------
-
-  group('clearTodaySkippedSelections', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('resets only skipped tasks, leaving selected tasks intact', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await _insert(db, id: 'b', title: 'B', state: 'next_action');
-      await db.todoDao.selectForToday('a', _userId, _today);
-      await db.todoDao.skipForToday('b', _userId, _today);
-
-      await db.todoDao.clearTodaySkippedSelections(_userId, _today);
-
-      final rowA = await db.todoDao.getTodo('a', _userId);
-      final rowB = await db.todoDao.getTodo('b', _userId);
-      // Selected task 'a' is untouched.
-      expect(rowA?.selectedForToday, true);
-      expect(rowA?.dailySelectionDate, _today);
-      // Skipped task 'b' is reset.
-      expect(rowB?.selectedForToday, equals(null));
-      expect(rowB?.dailySelectionDate, equals(null));
-    });
-
-    test('does not reset tasks from a different date', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.skipForToday('a', _userId, _yesterday);
-
-      await db.todoDao.clearTodaySkippedSelections(_userId, _today);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      // Yesterday's skip is untouched.
-      expect(row?.selectedForToday, false);
-      expect(row?.dailySelectionDate, _yesterday);
-    });
-
-    test('does not reset tasks that were not reviewed today', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-
-      await db.todoDao.clearTodaySkippedSelections(_userId, _today);
-
-      final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.selectedForToday, equals(null));
-      expect(row?.dailySelectionDate, equals(null));
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // watchSelectedTasksMissingEstimates
-  // ---------------------------------------------------------------------------
-
-  group('watchSelectedTasksMissingEstimates', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('returns selected tasks with no time estimate', () async {
-      await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await _insert(db,
-          id: 'b', title: 'B', state: 'next_action', timeEstimate: 30);
-      await db.todoDao.selectForToday('a', _userId, _today);
-      await db.todoDao.selectForToday('b', _userId, _today);
-
-      final items = await db.todoDao
-          .watchSelectedTasksMissingEstimates(_userId, _today)
-          .first;
-      expect(items.length, 1);
-      expect(items.first.id, 'a');
-    });
-
-    test('returns empty list when all selected tasks have estimates', () async {
-      await _insert(db,
-          id: 'a', title: 'A', state: 'next_action', timeEstimate: 15);
-      await db.todoDao.selectForToday('a', _userId, _today);
-
-      final items = await db.todoDao
-          .watchSelectedTasksMissingEstimates(_userId, _today)
-          .first;
-      expect(items, isEmpty);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // v3 migration
-  // ---------------------------------------------------------------------------
-
-  group('v3 migration', () {
-    test('new columns default to null for existing rows', () async {
-      final db = _openInMemory();
-      addTearDown(db.close);
-
-      final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
-        id: const Value('legacy'),
-        title: const Value('Legacy task'),
-        userId: const Value(_userId),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
-
-      final row = await db.todoDao.getTodo('legacy', _userId);
-      expect(row?.selectedForToday, equals(null));
-      expect(row?.dailySelectionDate, equals(null));
-    });
-
-    test('v2→v3 migration: addColumn restores schema with null defaults',
-        () async {
-      final db = _openInMemory();
-      addTearDown(db.close);
-
-      // Simulate a v2 database (no selectedForToday / dailySelectionDate cols).
-      await db.customStatement('DROP TABLE IF EXISTS todos');
-      await db.customStatement(
-        'CREATE TABLE todos ('
-        '  id TEXT NOT NULL PRIMARY KEY,'
-        '  title TEXT NOT NULL,'
-        '  notes TEXT,'
-        '  completed INTEGER NOT NULL DEFAULT 0,'
-        '  priority INTEGER,'
-        '  due_date INTEGER,'
-        '  created_at INTEGER NOT NULL,'
-        '  updated_at INTEGER,'
-        '  state TEXT NOT NULL DEFAULT \'inbox\','
-        '  time_estimate INTEGER,'
-        '  energy_level TEXT,'
-        '  capture_source TEXT,'
-        '  location_id TEXT,'
-        '  user_id TEXT NOT NULL,'
-        '  in_progress_since TEXT,'
-        '  time_spent_minutes INTEGER NOT NULL DEFAULT 0,'
-        '  blocked_by_todo_id TEXT'
-        ')',
+    test('creates task rows in position order', () async {
+      await _insertTodo(db, id: 't1', title: 'Task 1');
+      await _insertTodo(db, id: 't2', title: 'Task 2');
+      await _insertTodo(db, id: 't3', title: 'Task 3');
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['t1', 't2', 't3'],
       );
 
-      // Insert a v2 row.
-      final now = DateTime.now();
-      await db.customInsert(
-        'INSERT INTO todos (id, title, state, user_id, created_at, updated_at) '
-        'VALUES (?, ?, ?, ?, ?, ?)',
-        variables: [
-          Variable.withString('v2-row'),
-          Variable.withString('v2 task'),
-          Variable.withString('inbox'),
-          Variable.withString(_userId),
-          Variable.withDateTime(now),
-          Variable.withDateTime(now),
-        ],
+      final tasks =
+          await db.focusSessionDao.watchSessionTasks(sessionId).first;
+      expect(tasks.map((t) => t.id), orderedEquals(['t1', 't2', 't3']));
+    });
+
+    test('closes prior open session before opening a new one', () async {
+      final firstId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      final secondId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+
+      final allSessions = await db.select(db.focusSessions).get();
+      final first = allSessions.firstWhere((s) => s.id == firstId);
+      final second = allSessions.firstWhere((s) => s.id == secondId);
+      expect(first.endedAt, isNotNull);
+      expect(second.endedAt, isNull);
+
+      final active = await db.focusSessionDao.getActiveSession(_userId);
+      expect(active?.id, secondId);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // closeSession
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — closeSession', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('sets ended_at and session no longer appears as active', () async {
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+
+      final session = await (db.select(db.focusSessions)
+            ..where((s) => s.id.equals(sessionId)))
+          .getSingle();
+      expect(session.endedAt, isNotNull);
+
+      final active = await db.focusSessionDao.getActiveSession(_userId);
+      expect(active, isNull);
+    });
+
+    test('closes any open time log for the session user', () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['task1'],
+      );
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'task1');
+
+      final logBefore =
+          await db.timeLogDao.watchActiveLog(_userId).first;
+      expect(logBefore, isNotNull);
+
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+
+      final logAfter = await db.timeLogDao.watchActiveLog(_userId).first;
+      expect(logAfter, isNull);
+    });
+
+    test('no-ops for an already-closed session', () async {
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+      // Calling again must not throw.
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // setCurrentTask
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — setCurrentTask', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('opens a time log for the focused task', () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['task1'],
+      );
+      final startTime = DateTime(2026, 4, 28, 9, 0, 0);
+      await db.focusSessionDao.setCurrentTask(
+        sessionId: sessionId,
+        taskId: 'task1',
+        now: startTime,
       );
 
-      // Run the v3 migration steps.
-      final m = db.createMigrator();
-      await m.addColumn(db.todos, db.todos.selectedForToday);
-      await m.addColumn(db.todos, db.todos.dailySelectionDate);
-      // intent was introduced in v10.
-      await db.customStatement(
-        "ALTER TABLE todos ADD COLUMN intent TEXT NOT NULL DEFAULT 'next'",
+      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      expect(log, isNotNull);
+      expect(log!.taskId, 'task1');
+      expect(DateTime.parse(log.startedAt), startTime.toUtc());
+      expect(log.endedAt, isNull);
+    });
+
+    test('closes prior time log when switching tasks', () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      await _insertTodo(db, id: 'task2', title: 'Task 2');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['task1', 'task2'],
       );
-      // clarified was introduced in v11.
-      await db.customStatement(
-        "ALTER TABLE todos ADD COLUMN clarified INTEGER NOT NULL DEFAULT 1",
+      final t1 = DateTime(2026, 4, 28, 9, 0, 0);
+      final t2 = DateTime(2026, 4, 28, 9, 30, 0);
+
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'task1', now: t1);
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'task2', now: t2);
+
+      final allLogs = await (db.select(db.timeLogs)
+            ..where((l) => l.userId.equals(_userId)))
+          .get();
+      expect(allLogs.length, 2);
+
+      final logForTask1 = allLogs.firstWhere((l) => l.taskId == 'task1');
+      expect(logForTask1.endedAt, isNotNull);
+
+      final activeLog = await db.timeLogDao.watchActiveLog(_userId).first;
+      expect(activeLog?.taskId, 'task2');
+    });
+
+    test('updates current_task_id on the session row', () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['task1'],
       );
-      await db.customStatement(
-        "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'task1');
+
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session?.currentTaskId, 'task1');
+    });
+
+    test('null taskId clears current_task_id and closes open time log',
+        () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['task1'],
+      );
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'task1');
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: null);
+
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session?.currentTaskId, isNull);
+
+      final activeLog = await db.timeLogDao.watchActiveLog(_userId).first;
+      expect(activeLog, isNull);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // watchActiveSession / getActiveSession
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — watchActiveSession / getActiveSession', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('returns null when no session is open', () async {
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session, isNull);
+    });
+
+    test('returns the open session by id', () async {
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session?.id, sessionId);
+    });
+
+    test('returns null after the session is closed', () async {
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session, isNull);
+    });
+
+    test('watchActiveSession emits the new session after openSession', () async {
+      final initial =
+          await db.focusSessionDao.watchActiveSession(_userId).first;
+      expect(initial, isNull);
+
+      // Subscribe BEFORE mutating to capture the reactive emission.
+      final nextEmission =
+          db.focusSessionDao.watchActiveSession(_userId).skip(1).first;
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      final emitted = await nextEmission;
+      expect(emitted?.id, sessionId);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // watchSessionTasksForUser
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — watchSessionTasksForUser', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('returns empty list when no session is open', () async {
+      final tasks =
+          await db.focusSessionDao.watchSessionTasksForUser(_userId).first;
+      expect(tasks, isEmpty);
+    });
+
+    test('returns tasks for the open session in position order', () async {
+      await _insertTodo(db, id: 'a', title: 'Task A');
+      await _insertTodo(db, id: 'b', title: 'Task B');
+      await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['a', 'b'],
       );
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
-      expect(items.length, 1);
-      expect(items.first.title, 'v2 task');
-      expect(items.first.selectedForToday, equals(null));
-      expect(items.first.dailySelectionDate, equals(null));
+      final tasks =
+          await db.focusSessionDao.watchSessionTasksForUser(_userId).first;
+      expect(tasks.map((t) => t.id), orderedEquals(['a', 'b']));
+    });
+
+    test('returns empty list after the session is closed', () async {
+      await _insertTodo(db, id: 'a', title: 'Task A');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['a'],
+      );
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+
+      final tasks =
+          await db.focusSessionDao.watchSessionTasksForUser(_userId).first;
+      expect(tasks, isEmpty);
     });
   });
 }

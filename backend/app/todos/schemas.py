@@ -94,10 +94,7 @@ class TodoCreate(BaseModel):
     capture_source: str | None = None  # 'manual' | 'share_sheet' | 'voice' | 'ai_parse'
     # Client-state columns (migration 0007)
     waiting_for: str | None = None  # who/what the task is waiting on
-    in_progress_since: str | None = None
     time_spent_minutes: int = Field(default=0, ge=0)
-    selected_for_today: bool | None = None
-    daily_selection_date: str | None = None
 
     _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
     _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
@@ -138,10 +135,7 @@ class TodoUpdate(BaseModel):
     capture_source: str | None = None
     # Client-state columns (migration 0007)
     waiting_for: str | None = None
-    in_progress_since: str | None = None
     time_spent_minutes: int | None = Field(default=None, ge=0)
-    selected_for_today: bool | None = None
-    daily_selection_date: str | None = None
 
     _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
     _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
@@ -183,6 +177,25 @@ class TimeLogOut(BaseModel):
     task_id: str
     started_at: datetime
     ended_at: datetime | None
+    focus_session_id: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class FocusSessionOut(BaseModel):
+    id: str
+    user_id: str
+    started_at: datetime
+    ended_at: datetime | None
+    current_task_id: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class FocusSessionTaskOut(BaseModel):
+    focus_session_id: str
+    task_id: str
+    position: int
 
     model_config = {"from_attributes": True}
 
@@ -203,9 +216,6 @@ class TodoOut(BaseModel):
     capture_source: str | None
     # Client-state columns (migration 0007)
     waiting_for: str | None
-    in_progress_since: str | None
     time_spent_minutes: int
-    selected_for_today: bool | None
-    daily_selection_date: str | None
 
     model_config = {"from_attributes": True}

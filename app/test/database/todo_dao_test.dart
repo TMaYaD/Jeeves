@@ -3,7 +3,6 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/gtd_state_machine.dart';
 import 'package:jeeves/models/todo.dart';
 import '../test_helpers.dart';
 
@@ -16,13 +15,14 @@ Future<String> _insertTodo(
   required String id,
   required String title,
   String state = 'next_action',
+  bool clarified = true,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
     state: Value(state),
-    clarified: const Value(true),
+    clarified: Value(clarified),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -39,49 +39,82 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('valid transition updates state', () async {
-      await _insertTodo(db, id: 'a', title: 'Task A');
-      await db.todoDao.transitionState('a', _userId, GtdState.inProgress);
+    test('updates state and sets clarified=true', () async {
+      await _insertTodo(db, id: 'a', title: 'Task A', clarified: false);
+      await db.todoDao.transitionState('a', _userId, GtdState.nextAction);
 
       final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.state, GtdState.inProgress.value);
+      expect(row?.state, GtdState.nextAction.value);
+      expect(row?.clarified, isTrue);
     });
 
-    test('invalid transition throws InvalidStateTransitionException', () async {
-      await _insertTodo(db, id: 'b', title: 'Task B', state: 'in_progress');
-      expect(
-        () => db.todoDao.transitionState('b', _userId, GtdState.nextAction),
-        throwsA(isA<InvalidStateTransitionException>()),
-      );
-    });
-
-    test('entering inProgress opens a TimeLog row with started_at set',
-        () async {
-      await _insertTodo(db, id: 'c', title: 'Task C', state: 'next_action');
-      final startTime = DateTime(2024, 1, 1, 10, 0, 0);
+    test('updates updatedAt', () async {
+      await _insertTodo(db, id: 'b', title: 'Task B');
+      final now = DateTime(2024, 1, 1, 10, 0, 0);
       await db.todoDao
-          .transitionState('c', _userId, GtdState.inProgress, now: startTime);
+          .transitionState('b', _userId, GtdState.nextAction, now: now);
 
-      final row = await db.todoDao.getTodo('c', _userId);
-      expect(row?.state, GtdState.inProgress.value);
-
-      final logs = await (db.select(db.timeLogs)
-            ..where((t) => t.taskId.equals('c')))
-          .get();
-      expect(logs.length, 1);
-      expect(logs.first.startedAt, startTime.toUtc().toIso8601String());
-      expect(logs.first.endedAt, isNull);
+      final row = await db.todoDao.getTodo('b', _userId);
+      expect(row?.updatedAt, now);
     });
 
-    test('inProgressSince is null after entering inProgress', () async {
-      await _insertTodo(db, id: 'f', title: 'Task F', state: 'next_action');
-      final start = DateTime(2024, 1, 1, 8, 0, 0);
-      await db.todoDao
-          .transitionState('f', _userId, GtdState.inProgress, now: start);
+    test('no-ops silently for unknown task', () async {
+      await db.todoDao.transitionState('nonexistent', _userId, GtdState.nextAction);
+      // No exception thrown.
+    });
+  });
 
-      // inProgressSince is inert; TimeLog.startedAt is canonical.
-      final row = await db.todoDao.getTodo('f', _userId);
-      expect(row?.inProgressSince, isNull);
+  group('TodoDao — watchTodosById', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('returns todos matching the given ids', () async {
+      await _insertTodo(db, id: 'x1', title: 'Task X1');
+      await _insertTodo(db, id: 'x2', title: 'Task X2');
+      await _insertTodo(db, id: 'x3', title: 'Task X3');
+
+      final items =
+          await db.todoDao.watchTodosById(_userId, ['x1', 'x3']).first;
+      expect(items.map((t) => t.id), containsAll(['x1', 'x3']));
+      expect(items.any((t) => t.id == 'x2'), isFalse);
+    });
+
+    test('returns empty list for empty ids', () async {
+      await _insertTodo(db, id: 'y1', title: 'Task Y1');
+
+      final items = await db.todoDao.watchTodosById(_userId, []).first;
+      expect(items, isEmpty);
+    });
+
+    test('does not return todos belonging to another user', () async {
+      await _insertTodo(db, id: 'z1', title: 'Task Z1');
+
+      final items =
+          await db.todoDao.watchTodosById('other-user', ['z1']).first;
+      expect(items, isEmpty);
+    });
+  });
+
+  group('TodoDao — rescheduleTask', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('updates dueDate without changing state', () async {
+      final todayDt = DateTime(2026, 4, 16);
+      final newDate = DateTime(2026, 4, 20);
+      await _insertTodo(db, id: 'r1', title: 'Reschedulable task');
+      await (db.update(db.todos)..where((t) => t.id.equals('r1')))
+          .write(TodosCompanion(dueDate: Value(todayDt)));
+
+      await db.todoDao.rescheduleTask('r1', _userId, newDate);
+
+      final row = await db.todoDao.getTodo('r1', _userId);
+      expect(row?.state, GtdState.nextAction.value);
+      expect(row?.dueDate, newDate.toUtc());
     });
   });
 

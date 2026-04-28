@@ -158,18 +158,9 @@ void main() {
       expect(container.read(focusModeProvider).accumulated, Duration.zero);
     });
 
-    test('endFocus clears all state', () {
-      final since = DateTime.now().subtract(const Duration(minutes: 5));
-      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
-      container.read(focusModeProvider.notifier).endFocus();
-      final s = container.read(focusModeProvider);
-      expect(s.isActive, isFalse);
-      expect(s.sessionStart, isNull);
-      expect(s.accumulated, Duration.zero);
-    });
   });
 
-  group('FocusModeNotifier.startFocus', () {
+  group('FocusModeNotifier — startFocus / endFocus (integration)', () {
     late GtdDatabase db;
     late ProviderContainer container;
 
@@ -183,35 +174,78 @@ void main() {
       await db.close();
     });
 
-    test('transitions task to inProgress and activates session', () async {
+    test('activates session and opens a time log', () async {
       final todo = await _insertTask(db);
-      await container
-          .read(focusModeProvider.notifier)
-          .startFocus(todo.id);
+      // An open session must exist before startFocus is called.
+      await db.focusSessionDao.openSession(userId: _userId, taskIds: [todo.id]);
+
+      await container.read(focusModeProvider.notifier).startFocus(todo.id);
 
       final s = container.read(focusModeProvider);
       expect(s.activeTodoId, todo.id);
       expect(s.isActive, isTrue);
       expect(s.sessionStart, isNotNull);
 
+      // Task state stays next_action — startFocus no longer transitions it.
       final updated = await db.todoDao.getTodo(todo.id, _userId);
-      expect(updated?.state, GtdState.inProgress.value);
-      // inProgressSince is inert; TimeLog.startedAt is canonical.
-      expect(updated?.inProgressSince, isNull);
+      expect(updated?.state, GtdState.nextAction.value);
+
+      // A time log must have been opened by setCurrentTask.
       final log = await db.timeLogDao.watchActiveLog(_userId).first;
       expect(log, isNotNull);
-      expect(DateTime.parse(log!.startedAt), s.sessionStart!.toUtc());
+      expect(log!.taskId, todo.id);
+      expect(DateTime.parse(log.startedAt), s.sessionStart!.toUtc());
+
+      // Session's current_task_id must point to the focused task.
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session?.currentTaskId, todo.id);
+
+      // The time log must be linked to the session.
+      expect(log.focusSessionId, session?.id);
     });
 
     test('throws StateError when a different task is already active', () async {
       final todo1 = await _insertTask(db);
       final todo2 = await _insertTask(db);
+      await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: [todo1.id, todo2.id]);
+
       await container.read(focusModeProvider.notifier).startFocus(todo1.id);
 
       expect(
         () => container.read(focusModeProvider.notifier).startFocus(todo2.id),
         throwsA(isA<StateError>()),
       );
+    });
+
+    test('throws StateError when no open focus session exists', () async {
+      final todo = await _insertTask(db);
+      // No session opened — startFocus should reject immediately.
+      expect(
+        () => container.read(focusModeProvider.notifier).startFocus(todo.id),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('endFocus clears provider state and closes time log', () async {
+      final todo = await _insertTask(db);
+      await db.focusSessionDao.openSession(userId: _userId, taskIds: [todo.id]);
+      await container.read(focusModeProvider.notifier).startFocus(todo.id);
+
+      await container.read(focusModeProvider.notifier).endFocus();
+
+      final s = container.read(focusModeProvider);
+      expect(s.isActive, isFalse);
+      expect(s.sessionStart, isNull);
+      expect(s.accumulated, Duration.zero);
+
+      // Time log must be closed.
+      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      expect(log, isNull);
+
+      // Session's current_task_id must be cleared.
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session?.currentTaskId, isNull);
     });
   });
 }

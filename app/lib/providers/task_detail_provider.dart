@@ -165,9 +165,6 @@ class TaskDetailNotifier {
       _db.todoDao.setWaitingFor(_todoId, _userId, text);
 
   /// Transitions the task to [newState].
-  ///
-  /// When transitioning out of [GtdState.inProgress] the caller can read
-  /// the updated [timeSpentMinutes] from [taskDetailTodoProvider] afterwards.
   Future<void> transition(GtdState newState, {DateTime? now}) =>
       _db.todoDao.transitionState(_todoId, _userId, newState, now: now);
 

@@ -42,7 +42,7 @@ To build a hybrid productivity application that merges the rigid organizational 
     6. **Today's Plan (Step 6):** Summary showing tasks sorted by priority — due date (ascending) → scheduled → next actions. Capacity bar warns if planned time exceeds available time. "Start Day" finalises the plan.
 * **Bi-Directional Calendar Sync:** Split-screen UI. Left side: Today's selected tasks. Right side: Calendar (Google/Apple/Outlook sync). Users drag tasks onto the calendar to create timeboxes.
 * **Capacity Warning:** Visual indicators (e.g., progress bars or red text) if the total estimated time of selected tasks exceeds the available free time on the synced calendar.
-* **Focus Mode:** A minimalist execution UI that hides all navigation and lists, showing only the active task. Activated via a "Start" button on any task in the daily plan. Displays the task title, notes, an elapsed timer (HH:MM:SS), and an action bar with Pause, Complete, and Abandon. Complete transitions the task to `done` and returns to the daily plan; Abandon transitions to `deferred` and returns to the daily plan; Pause freezes the timer (task stays `inProgress`). A persistent notification appears when the app is backgrounded during focus. If the app is restarted mid-session the timer is restored from the `inProgressSince` DB field.
+* **Focus Mode:** A minimalist execution UI that hides all navigation and lists, showing only the active task. Activated via a "Start" button on any task in the daily plan. Displays the task title, notes, an elapsed timer (HH:MM:SS), and an action bar with Pause, Complete, and Abandon. Complete marks the task done and returns to the daily plan; Abandon returns the task to Next Actions; Pause freezes the timer (no DB write). A persistent notification appears when the app is backgrounded during focus. The active task is tracked by `focus_sessions.current_task_id`; timer state is ephemeral and lost on app restart.
 * **Evening Shutdown:** End-of-day prompt to review completed work against estimates and roll over incomplete tasks.
 
 ### Epic 3: Dynamic Timeboxing & Pomodoro Engine
@@ -57,7 +57,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Resolution Matrix:**
     * **Complete:** Log 20 mins, mark task Done.
     * **Extend (Bump & Continue):** Allocate another 20-minute block to the current task. The system automatically prompts the user to "punt" the lowest-priority remaining task from the day's plan to prevent calendar overrun.
-    * **Defer (Log & Park):** Log 20 mins, mark task "In Progress," remove from today's plan, and return it to 'Next Actions'.
+    * **Defer (Log & Park):** Log 20 mins, remove from today's plan, and return it to 'Next Actions'.
 * **Estimation Analytics:** System tracks the delta between estimated and actual pomodoros to improve future AI estimations.
 
 ### Epic 5: System Integrity & The Review Guardrails
@@ -125,7 +125,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 ## 5. Architectural Directives
 
-* **Engineering:** Prioritize Local-First data storage to eliminate UI latency. Manage the state transitions (Scheduled -> In Progress -> Deferred) rigidly to ensure accurate time tracking.
+* **Engineering:** Prioritize Local-First data storage to eliminate UI latency. Manage the state transitions (Scheduled -> Next Action) and focus tracking (`focus_sessions.current_task_id`) rigidly to ensure accurate time logging.
 * **Design:** Maintain a strict visual dichotomy. High information density for the GTD Inventory (planning phase) and extreme minimalism for Focus Mode (execution phase). Ensure Guardrail interruptions are clear, explaining the *why* behind the restriction.
 * **Optional Authentication:** The app must be fully functional without login. Authentication is only required for cross-device sync via PowerSync. Users can operate indefinitely in local-only mode, with opt-in sign-up to enable sync. Local data must be preserved and migrated on first sign-in.
 * **Sync:** Real-time bidirectional sync between local SQLite (Drift) and PostgreSQL via self-hosted PowerSync. The sync layer activates only after authentication and must handle offline write queuing and conflict resolution (last-write-wins for v1).

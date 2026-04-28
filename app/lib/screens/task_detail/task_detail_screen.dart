@@ -732,7 +732,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       builder: (ctx) => _MoveToSheet(
         currentState: currentState,
         validStates: valid,
-        timeSpent: todo.timeSpentMinutes,
         onMove: (newState) async {
           Navigator.of(ctx).pop();
           try {
@@ -751,17 +750,17 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
 class _MoveToSheet extends StatelessWidget {
   const _MoveToSheet({
-    required this.currentState, required this.validStates, required this.timeSpent, required this.onMove,
+    required this.currentState,
+    required this.validStates,
+    required this.onMove,
   });
 
   final GtdState currentState;
   final List<GtdState> validStates;
-  final int timeSpent;
   final ValueChanged<GtdState> onMove;
 
   @override
   Widget build(BuildContext context) {
-    final leavingInProgress = currentState == GtdState.inProgress;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
@@ -770,8 +769,6 @@ class _MoveToSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Padding(padding: EdgeInsets.all(16), child: Text('Move to…', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-              if (leavingInProgress && timeSpent > 0)
-                Padding(padding: const EdgeInsets.only(bottom: 8), child: Text('Time logged so far: $timeSpent min', style: const TextStyle(color: Color(0xFF6B7280)))),
               for (final state in validStates)
                 ListTile(
                   key: Key('move_to_${state.value}'),

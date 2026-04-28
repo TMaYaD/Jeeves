@@ -27,7 +27,7 @@ from app.database import Base
 # Canonical constant sets — single source of truth shared with schemas.py
 # ---------------------------------------------------------------------------
 
-GTD_STATES = ("next_action", "in_progress")
+GTD_STATES = ("next_action",)
 INTENT_VALUES = ("next", "maybe", "trash")
 TAG_TYPES = ("context", "project", "area", "label")
 ENERGY_LEVELS = ("low", "medium", "high")
@@ -80,7 +80,7 @@ class Todo(Base):
         Index("ix_todos_user_state", "user_id", "state"),
         Index("ix_todos_user_done_at", "user_id", "done_at"),
         CheckConstraint(
-            "state IN ('next_action','in_progress')",
+            "state IN ('next_action')",
             name="ck_todos_state",
         ),
         CheckConstraint(
@@ -125,10 +125,7 @@ class Todo(Base):
 
     # Client-state columns replicated via PowerSync (migration 0007).
     waiting_for: Mapped[str | None] = mapped_column(Text)
-    in_progress_since: Mapped[str | None] = mapped_column(Text)
     time_spent_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    selected_for_today: Mapped[bool | None] = mapped_column(Boolean)
-    daily_selection_date: Mapped[str | None] = mapped_column(Text)
 
     tags: Mapped[list["Tag"]] = relationship("Tag", secondary="todo_tags", back_populates="todos")
     time_logs: Mapped[list["TimeLog"]] = relationship("TimeLog", back_populates="todo")
@@ -137,6 +134,24 @@ class Todo(Base):
         "RecurrenceRule", back_populates="todo", uselist=False
     )
     location: Mapped["Location | None"] = relationship("Location", back_populates="todos")
+
+
+class FocusSession(Base):
+    __tablename__ = "focus_sessions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_task_id: Mapped[str | None] = mapped_column(ForeignKey("todos.id"), nullable=True)
+
+
+class FocusSessionTask(Base):
+    __tablename__ = "focus_session_tasks"
+
+    focus_session_id: Mapped[str] = mapped_column(ForeignKey("focus_sessions.id"), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("todos.id"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class TimeLog(Base):
@@ -151,6 +166,9 @@ class TimeLog(Base):
     task_id: Mapped[str] = mapped_column(ForeignKey("todos.id", ondelete="CASCADE"), nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    focus_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("focus_sessions.id"), nullable=True
+    )
 
     todo: Mapped["Todo"] = relationship("Todo", back_populates="time_logs")
 

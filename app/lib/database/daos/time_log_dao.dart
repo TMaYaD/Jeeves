@@ -16,13 +16,17 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
   /// Opens a new focus log for [taskId] / [userId].
   ///
   /// If another log is already open for [userId] it is defensively closed first
-  /// (the FSM normally prevents two simultaneous in-progress tasks, but offline
-  /// edge-cases can produce stale open rows).
+  /// to handle offline edge-cases with stale open rows.
+  ///
+  /// [focusSessionId] links this log to the active [FocusSession] row; callers
+  /// that manage sessions directly (e.g. [FocusSessionDao.setCurrentTask]) pass
+  /// it; legacy callers omit it and the field is left null.
   ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<void> openLog({
     required String taskId,
     required String userId,
+    String? focusSessionId,
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
@@ -38,6 +42,7 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         taskId: Value(taskId),
         startedAt: Value(ts.toIso8601String()),
         endedAt: const Value(null),
+        focusSessionId: Value(focusSessionId),
       ));
     });
   }

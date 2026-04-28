@@ -3,11 +3,11 @@
 /// Architecture:
 /// - [focusSessionPlanningCompletionNotifier] — a [ValueNotifier] wired to GoRouter's
 ///   [refreshListenable] so the router re-evaluates the redirect on change.
-/// - [focusSessionPlanningDateProvider] — a [StateProvider] that caches today's
-///   date for the current session, preventing date-boundary inconsistencies
-///   if the clock rolls past midnight mid-session.
-/// - [FocusSessionPlanningNotifier] — manages step navigation and available-minutes
-///   state; delegates all database writes to [TodoDao] planning methods.
+/// - [FocusSessionPlanningNotifier] — manages step navigation and task selection
+///   state; delegates database writes to [FocusSessionDao] and [TodoDao].
+/// - Task selection during the ritual is accumulated in-memory
+///   ([pendingSelectedTaskIds] / [reviewedTaskIds]); [startDay] commits them
+///   atomically by calling [FocusSessionDao.openSession].
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
@@ -21,7 +21,7 @@ import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
-export '../database/gtd_database.dart' show Todo;
+export '../database/gtd_database.dart' show Todo, FocusSession;
 export '../models/todo.dart' show GtdState;
 
 // ---------------------------------------------------------------------------
@@ -36,7 +36,6 @@ String planningToday() {
       '${now.day.toString().padLeft(2, '0')}';
 }
 
-const _kCompletedDateKey = 'planning_ritual_completed_date';
 const _kBannerDismissedDateKey = 'planning_banner_dismissed_date';
 const _kNotificationSkippedDateKey = 'planning_notification_skipped_date';
 const _kNotificationSnoozedUntilKey = 'planning_notification_snoozed_until';
@@ -59,15 +58,16 @@ final focusSessionPlanningCompletionNotifier = ValueNotifier<bool>(false);
 /// key so widgets can react without a Riverpod container.
 final focusSessionPlanningBannerDismissedNotifier = ValueNotifier<bool>(false);
 
-/// Initialises [focusSessionPlanningCompletionNotifier] and
-/// [focusSessionPlanningBannerDismissedNotifier] from [SharedPreferences].
+/// Initialises [focusSessionPlanningBannerDismissedNotifier] from
+/// [SharedPreferences].
+///
+/// Completion state is not persisted across restarts — [startDay] sets it
+/// in-memory when the user finishes the ritual.
 ///
 /// Must be called once in [main] after [WidgetsFlutterBinding.ensureInitialized].
 Future<void> initFocusSessionPlanningCompletion() async {
   final prefs = await SharedPreferences.getInstance();
   final today = planningToday();
-  focusSessionPlanningCompletionNotifier.value =
-      prefs.getString(_kCompletedDateKey) == today;
   focusSessionPlanningBannerDismissedNotifier.value =
       prefs.getString(_kBannerDismissedDateKey) == today;
 }
@@ -120,64 +120,83 @@ Future<void> persistFocusSessionPlanningSnoozedUntil(DateTime until) async {
 }
 
 // ---------------------------------------------------------------------------
-// Session date cache
+// Session providers
 // ---------------------------------------------------------------------------
 
-/// Caches the planning date for the current session.
-///
-/// Initialized to today's date when first read. [FocusSessionPlanningNotifier.reEnterPlanning]
-/// resets it via [FocusSessionPlanningDateNotifier.reset] so the cached date stays
-/// consistent even if the clock rolls past midnight mid-session.
-final focusSessionPlanningDateProvider =
-    NotifierProvider<FocusSessionPlanningDateNotifier, String>(
-  FocusSessionPlanningDateNotifier.new,
-);
+/// Stream of the user's currently open [FocusSession], or null.
+final activeSessionProvider = StreamProvider<FocusSession?>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.focusSessionDao.watchActiveSession(userId);
+});
 
-class FocusSessionPlanningDateNotifier extends Notifier<String> {
-  @override
-  String build() => planningToday();
-
-  /// Refreshes the cached date to [planningToday()].
-  ///
-  /// Call this at the start of a new planning session (e.g. after
-  /// [FocusSessionPlanningNotifier.reEnterPlanning]).
-  void reset() => state = planningToday();
-}
+/// Stream of [Todo] rows that are part of the user's active session, ordered
+/// by their session position.
+final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.focusSessionDao.watchSessionTasksForUser(userId);
+});
 
 // ---------------------------------------------------------------------------
 // Stream providers — planning data
 // ---------------------------------------------------------------------------
 
 /// Next-action tasks not yet reviewed in today's planning session.
-final nextActionsForFocusSessionPlanningProvider = StreamProvider<List<Todo>>((ref) {
+final nextActionsForFocusSessionPlanningProvider =
+    StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchNextActionsForPlanning(userId, today);
+  final planningState = ref.watch(focusSessionPlanningProvider);
+  final reviewed = {
+    ...planningState.reviewedTaskIds,
+    ...planningState.pendingSelectedTaskIds,
+  };
+  return db.todoDao
+      .watchNextActions(userId)
+      .map((all) => all.where((t) => !reviewed.contains(t.id)).toList());
 });
 
-/// Tasks selected for today (selectedForToday == true).
-final focusSessionPlanningSelectedTasksProvider = StreamProvider<List<Todo>>((ref) {
+/// Tasks selected for today (in-memory pending list, ordered by selection).
+final focusSessionPlanningSelectedTasksProvider =
+    StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchSelectedForToday(userId, today);
+  final ids = ref.watch(
+    focusSessionPlanningProvider.select((s) => s.pendingSelectedTaskIds),
+  );
+  return db.todoDao.watchTodosById(userId, ids).map((tasks) {
+    final indexById = {for (var i = 0; i < ids.length; i++) ids[i]: i};
+    final ordered = [...tasks];
+    ordered.sort((a, b) =>
+        (indexById[a.id] ?? 1 << 30).compareTo(indexById[b.id] ?? 1 << 30));
+    return ordered;
+  });
 });
 
 /// Selected tasks that are still missing a time estimate (drives Step 3).
-final focusSessionPlanningTasksMissingEstimatesProvider = StreamProvider<List<Todo>>((ref) {
+final focusSessionPlanningTasksMissingEstimatesProvider =
+    StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchSelectedTasksMissingEstimates(userId, today);
+  final ids = ref.watch(
+    focusSessionPlanningProvider.select((s) => s.pendingSelectedTaskIds),
+  );
+  return db.todoDao.watchTodosById(userId, ids).map(
+        (tasks) => tasks.where((t) => t.timeEstimate == null).toList(),
+      );
 });
 
-/// Skipped Next Actions for today.
-final skippedNextActionsForFocusSessionPlanningProvider = StreamProvider<List<Todo>>((ref) {
+/// Tasks reviewed today but not selected (skipped / deferred).
+final skippedNextActionsForFocusSessionPlanningProvider =
+    StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final today = ref.watch(focusSessionPlanningDateProvider);
   final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchSkippedNextActionsForPlanning(userId, today);
+  final planningState = ref.watch(focusSessionPlanningProvider);
+  final skippedIds = planningState.reviewedTaskIds
+      .where((id) => !planningState.pendingSelectedTaskIds.contains(id))
+      .toList();
+  return db.todoDao.watchTodosById(userId, skippedIds);
 });
 
 // ---------------------------------------------------------------------------
@@ -194,6 +213,8 @@ class FocusSessionPlanningState {
     this.initialInboxCount,
     this.inboxClarifiedCount = 0,
     this.inboxSkippedCount = 0,
+    this.pendingSelectedTaskIds = const [],
+    this.reviewedTaskIds = const [],
   });
 
   final int currentStep;
@@ -209,6 +230,14 @@ class FocusSessionPlanningState {
   final int inboxClarifiedCount;
   final int inboxSkippedCount;
 
+  /// Task IDs the user has selected for today's plan (in selection order).
+  /// Committed to the DB atomically when [FocusSessionPlanningNotifier.startDay]
+  /// is called.
+  final List<String> pendingSelectedTaskIds;
+
+  /// Task IDs the user has reviewed but skipped (not selected).
+  final List<String> reviewedTaskIds;
+
   FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
@@ -218,6 +247,8 @@ class FocusSessionPlanningState {
     int? initialInboxCount,
     int? inboxClarifiedCount,
     int? inboxSkippedCount,
+    List<String>? pendingSelectedTaskIds,
+    List<String>? reviewedTaskIds,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -227,6 +258,9 @@ class FocusSessionPlanningState {
         initialInboxCount: initialInboxCount ?? this.initialInboxCount,
         inboxClarifiedCount: inboxClarifiedCount ?? this.inboxClarifiedCount,
         inboxSkippedCount: inboxSkippedCount ?? this.inboxSkippedCount,
+        pendingSelectedTaskIds:
+            pendingSelectedTaskIds ?? this.pendingSelectedTaskIds,
+        reviewedTaskIds: reviewedTaskIds ?? this.reviewedTaskIds,
       );
 }
 
@@ -241,7 +275,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   GtdDatabase get _db => ref.read(databaseProvider);
   String get _userId => ref.read(currentUserIdProvider);
-  String get _sessionDate => ref.read(focusSessionPlanningDateProvider);
 
   // ---- Step navigation -------------------------------------------------------
 
@@ -339,7 +372,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Skips an inbox item for today without clarifying it.
   Future<void> skipInboxItem(String id) async {
-    await _db.todoDao.skipForToday(id, _userId, _sessionDate);
     state = state.copyWith(
       inboxSkippedCount: state.inboxSkippedCount + 1,
     );
@@ -347,21 +379,42 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Task mutations (Step 2 — Next Actions review) -------------------------
 
-  Future<void> selectTask(String id) =>
-      _db.todoDao.selectForToday(id, _userId, _sessionDate);
+  /// Adds [id] to the pending day's plan (in-memory; committed by [startDay]).
+  void selectTask(String id) {
+    if (state.pendingSelectedTaskIds.contains(id)) return;
+    state = state.copyWith(
+      pendingSelectedTaskIds: [...state.pendingSelectedTaskIds, id],
+      // Remove from skipped list if the user previously skipped this task.
+      reviewedTaskIds: state.reviewedTaskIds.where((t) => t != id).toList(),
+    );
+  }
 
-  Future<void> skipTask(String id) =>
-      _db.todoDao.skipForToday(id, _userId, _sessionDate);
+  /// Records [id] as skipped (reviewed but not selected).
+  void skipTask(String id) {
+    if (state.reviewedTaskIds.contains(id)) return;
+    state = state.copyWith(
+      reviewedTaskIds: [...state.reviewedTaskIds, id],
+      // Remove from selected list if the user previously selected this task.
+      pendingSelectedTaskIds:
+          state.pendingSelectedTaskIds.where((t) => t != id).toList(),
+    );
+  }
 
-  Future<void> undoTaskReview(String id) =>
-      _db.todoDao.undoReview(id, _userId);
+  /// Returns [id] to the unreviewed pool by removing it from both lists.
+  void undoTaskReview(String id) {
+    state = state.copyWith(
+      pendingSelectedTaskIds:
+          state.pendingSelectedTaskIds.where((t) => t != id).toList(),
+      reviewedTaskIds: state.reviewedTaskIds.where((t) => t != id).toList(),
+    );
+  }
 
   Future<void> deferTask(String id) => _db.todoDao.deferTaskToMaybe(id, _userId);
 
   // ---- Task mutations (Step 3 — Scheduled review) ----------------------------
 
-  Future<void> confirmScheduledTask(String id) =>
-      _db.todoDao.selectForToday(id, _userId, _sessionDate);
+  /// Adds [id] to the pending day's plan (same as [selectTask]).
+  void confirmScheduledTask(String id) => selectTask(id);
 
   Future<void> rescheduleTask(String id, DateTime newDate) =>
       _db.todoDao.rescheduleTask(id, _userId, newDate);
@@ -389,17 +442,25 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
     const energyOrder = {'low': 1, 'medium': 2, 'high': 3};
     final dayLevel = energyOrder[dayEnergy] ?? 0;
-    final today = _sessionDate;
 
-    final pending =
-        await _db.todoDao.watchNextActionsForPlanning(_userId, today).first;
-    for (final task in pending) {
-      if (task.energyLevel != null) {
-        final taskLevel = energyOrder[task.energyLevel] ?? 0;
-        if (taskLevel > dayLevel) {
-          await _db.todoDao.skipForToday(task.id, _userId, today);
-        }
-      }
+    final allNextActions = await _db.todoDao.watchNextActions(_userId).first;
+    final alreadyReviewed = {
+      ...state.reviewedTaskIds,
+      ...state.pendingSelectedTaskIds,
+    };
+
+    final toSkip = allNextActions
+        .where((t) =>
+            !alreadyReviewed.contains(t.id) &&
+            t.energyLevel != null &&
+            (energyOrder[t.energyLevel!] ?? 0) > dayLevel)
+        .map((t) => t.id)
+        .toList();
+
+    if (toSkip.isNotEmpty) {
+      state = state.copyWith(
+        reviewedTaskIds: [...state.reviewedTaskIds, ...toSkip],
+      );
     }
   }
 
@@ -432,58 +493,35 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Ritual lifecycle ------------------------------------------------------
 
-  /// Marks the ritual as complete for today and unlocks execution features.
+  /// Opens a new [FocusSession] with the pending task list and marks the
+  /// ritual as complete for today.
   Future<void> startDay() async {
-    final today = _sessionDate;
-    final prefs = await SharedPreferences.getInstance();
-    try {
-      await prefs.setString(_kCompletedDateKey, today);
-      focusSessionPlanningCompletionNotifier.value = true;
-      // Reset step/inbox counters but keep energy and time so reEnterPlanning()
-      // can restore them if the user replans later in the same session.
-      state = FocusSessionPlanningState(
-        energyLevel: state.energyLevel,
-        availableMinutes: state.availableMinutes,
-        availableTimeSet: state.availableTimeSet,
-      );
-    } catch (e) {
-      // Attempt rollback of prefs on failure so persisted state stays
-      // consistent with the in-memory notifier.
-      await prefs.remove(_kCompletedDateKey);
-      rethrow;
-    }
+    await _db.focusSessionDao.openSession(
+      userId: _userId,
+      taskIds: state.pendingSelectedTaskIds,
+    );
+    focusSessionPlanningCompletionNotifier.value = true;
+    state = FocusSessionPlanningState(
+      energyLevel: state.energyLevel,
+      availableMinutes: state.availableMinutes,
+      availableTimeSet: state.availableTimeSet,
+    );
   }
 
   /// Clears completion state and returns the user to the planning ritual.
   ///
-  /// All existing task selections (selected and skipped) are **preserved** so
-  /// the day's plan is unchanged on re-entry.  The user can adjust individual
-  /// tasks via the Plan Summary screen's action buttons.  Energy level and
-  /// available time are also preserved so the user doesn't have to re-enter
-  /// them.
+  /// Task selections are **cleared** so the user can re-plan from scratch.
+  /// Energy level and available time are preserved.
   Future<void> reEnterPlanning() async {
-    final today = _sessionDate;
-    final prefs = await SharedPreferences.getInstance();
-    // Snapshot state values to restore in the new planning session.
     final preservedEnergy = state.energyLevel;
     final preservedMinutes = state.availableMinutes;
     final preservedTimeSet = state.availableTimeSet;
-    try {
-      await prefs.remove(_kCompletedDateKey);
-      // Reset the session date in case the clock crossed midnight.
-      ref.read(focusSessionPlanningDateProvider.notifier).reset();
-      focusSessionPlanningCompletionNotifier.value = false;
-      state = FocusSessionPlanningState(
-        currentStep: 0,
-        availableMinutes: preservedMinutes,
-        availableTimeSet: preservedTimeSet,
-        energyLevel: preservedEnergy,
-      );
-    } catch (e) {
-      // Restore the completion flag so the router guard doesn't block
-      // re-entry on the next attempt.
-      await prefs.setString(_kCompletedDateKey, today);
-      rethrow;
-    }
+    focusSessionPlanningCompletionNotifier.value = false;
+    state = FocusSessionPlanningState(
+      currentStep: 0,
+      availableMinutes: preservedMinutes,
+      availableTimeSet: preservedTimeSet,
+      energyLevel: preservedEnergy,
+    );
   }
 }

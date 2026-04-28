@@ -8,9 +8,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../database/gtd_database.dart' show TodosCompanion;
+import '../database/gtd_database.dart' show Todo, TodosCompanion;
 import '../providers/auth_provider.dart';
-import '../providers/focus_session_planning_provider.dart';
+import '../providers/focus_session_planning_provider.dart'
+    show activeSessionTasksProvider;
 import '../providers/database_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
@@ -85,17 +86,14 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
     await db.todoDao.markDone(todoId, userId);
-    ref.read(focusModeProvider.notifier).endFocus();
+    await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
 
-    final allSelected = await ref.read(focusSessionPlanningSelectedTasksProvider.future);
+    final allSessionTasks = await ref.read(activeSessionTasksProvider.future);
     if (!mounted) return;
 
-    final nextTask = allSelected
-        .where((t) =>
-            t.id != todoId &&
-            t.doneAt == null &&
-            t.state != GtdState.inProgress.value)
+    final nextTask = allSessionTasks
+        .where((t) => t.id != todoId && t.doneAt == null)
         .firstOrNull;
 
     final message = nextTask != null
@@ -121,13 +119,12 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     context.go('/focus');
   }
 
-  /// Stops the sprint and returns to the focus list without changing the task
-  /// state — it stays in the day plan as inProgress.
+  /// Stops the sprint and returns to the focus list without completing the task.
   Future<void> _onStop(String todoId) async {
     _notificationTimer?.cancel();
     NotificationService.instance.cancelFocusNotification();
     await ref.read(sprintTimerProvider.notifier).stopSprint();
-    ref.read(focusModeProvider.notifier).endFocus();
+    await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
     context.go('/focus');
   }
