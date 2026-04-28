@@ -51,6 +51,33 @@ void main() {
       expect(session.currentTaskId, isNull);
     });
 
+    test('inserts task rows with non-null id (regression: SqliteException 1811)',
+        () async {
+      await _insertTodo(db, id: 'tA', title: 'Task A');
+      await _insertTodo(db, id: 'tB', title: 'Task B');
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['tA', 'tB'],
+      );
+
+      final rows = await db.customSelect(
+        'SELECT id, task_id FROM focus_session_tasks '
+        'WHERE focus_session_id = ? ORDER BY position',
+        variables: [Variable(sessionId)],
+      ).get();
+
+      expect(rows.length, 2);
+      expect(rows[0].read<String>('task_id'), 'tA');
+      expect(rows[1].read<String>('task_id'), 'tB');
+      // Each row must have a non-null, non-empty id for PowerSync compatibility.
+      for (final row in rows) {
+        final id = row.read<String?>('id');
+        expect(id, isNotNull);
+        expect(id, isNotEmpty);
+      }
+    });
+
     test('creates task rows in position order', () async {
       await _insertTodo(db, id: 't1', title: 'Task 1');
       await _insertTodo(db, id: 't2', title: 'Task 2');

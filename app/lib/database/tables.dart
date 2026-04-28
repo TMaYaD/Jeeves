@@ -113,6 +113,8 @@ class FocusSessions extends Table {
 
 /// Junction table: which todos are part of a focus session, in what order.
 class FocusSessionTasks extends Table {
+  /// PowerSync sync row identifier — not the domain key.
+  TextColumn get id => text().unique().clientDefault(() => uuid.v4())();
   TextColumn get focusSessionId => text().references(FocusSessions, #id)();
   TextColumn get taskId => text().references(Todos, #id)();
   IntColumn get position => integer()();
