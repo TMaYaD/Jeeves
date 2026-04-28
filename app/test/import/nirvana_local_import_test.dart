@@ -77,7 +77,7 @@ void main() {
       expect(names, containsAll(['computer', 'Personal', 'anywhere']));
     });
 
-    test('done tasks are stored with state=done', () async {
+    test('done tasks are stored with doneAt set', () async {
       await importNirvanaLocally(
         bytes: _fixtureBytes('nirvana_sample.csv'),
         filename: 'nirvana_sample.csv',
@@ -86,12 +86,11 @@ void main() {
         db: db,
       );
 
-      final done =
-          await db.todoDao.watchByState(_userId, 'done').first;
+      final done = await db.todoDao.watchDone(_userId).first;
       expect(done.length, 2);
     });
 
-    test('next-action tasks are stored with state=next_action', () async {
+    test('non-done tasks are stored with doneAt null', () async {
       await importNirvanaLocally(
         bytes: _fixtureBytes('nirvana_sample.csv'),
         filename: 'nirvana_sample.csv',
@@ -100,9 +99,11 @@ void main() {
         db: db,
       );
 
-      final next =
-          await db.todoDao.watchByState(_userId, 'next_action').first;
-      expect(next.length, 2);
+      final all = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      final notDone = all.where((t) => t.doneAt == null).toList();
+      expect(notDone.length, 2);
     });
 
     test('capture_source is set to nirvana_import', () async {

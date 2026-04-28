@@ -141,7 +141,8 @@ void main() {
 
       expect(find.text('In Progress'), findsOneWidget);
       expect(find.text('Waiting For'), findsOneWidget);
-      expect(find.text('Done'), findsOneWidget);
+      // 'done' is no longer a state transition — completion is via markDone().
+      expect(find.text('Done'), findsNothing);
 
       // "Next Actions" appears once in the status pill (current state label),
       // but not as a transition target in the sheet.

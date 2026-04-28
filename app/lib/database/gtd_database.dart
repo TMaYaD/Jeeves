@@ -167,11 +167,18 @@ class GtdDatabase extends _$GtdDatabase {
             }
           }
           if (from < 12) {
-            await _addColumnIfTable(m, todos, todos.doneAt);
             final tables = await customSelect(
               "SELECT name FROM sqlite_master WHERE type='table' AND name='todos'",
             ).get();
             if (tables.isNotEmpty) {
+              final cols = await customSelect("PRAGMA table_info(todos)").get();
+              final hasDoneAt =
+                  cols.any((r) => r.read<String>('name') == 'done_at');
+              if (!hasDoneAt) {
+                await customStatement(
+                  'ALTER TABLE todos ADD COLUMN done_at TEXT',
+                );
+              }
               // Backfill done_at for legacy 'done' state rows.
               await customStatement(
                 "UPDATE todos SET done_at = updated_at WHERE state = 'done'",

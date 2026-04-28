@@ -30,7 +30,7 @@ Widget _buildScreen(Stream<List<Todo>> stream) {
 Todo _todo(String id, String title, {String state = 'next_action'}) => Todo(
       id: id,
       title: title,
-      completed: false,
+      doneAt: null,
       createdAt: DateTime(2024, 1, 1),
       state: state,
       clarified: true,
