@@ -269,10 +269,31 @@ final focusSessionPlanningProvider =
 
 class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   @override
-  FocusSessionPlanningState build() => const FocusSessionPlanningState();
+  FocusSessionPlanningState build() {
+    Future.microtask(_preloadRolloverIds);
+    return const FocusSessionPlanningState();
+  }
 
   GtdDatabase get _db => ref.read(databaseProvider);
   String get _userId => ref.read(currentUserIdProvider);
+
+  /// Pre-populates [pendingSelectedTaskIds] with rollover tasks from the most
+  /// recently closed session so they appear pre-selected in the plan summary.
+  Future<void> _preloadRolloverIds() async {
+    final ids = await _db.focusSessionDao
+        .getLastClosedSessionRolloverTaskIds(_userId);
+    if (ids.isEmpty) return;
+    final current = Set.of(state.pendingSelectedTaskIds);
+    final newIds = ids.where((id) => !current.contains(id)).toList();
+    if (newIds.isNotEmpty) {
+      state = state.copyWith(
+        pendingSelectedTaskIds: [
+          ...newIds,
+          ...state.pendingSelectedTaskIds,
+        ],
+      );
+    }
+  }
 
   // ---- Step navigation -------------------------------------------------------
 

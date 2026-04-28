@@ -40,7 +40,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -284,6 +284,10 @@ class GtdDatabase extends _$GtdDatabase {
           if (from < 15) {
             // Drop the now-constant state column (all rows hold 'next_action').
             await _dropColumnIfTable('todos', 'state');
+          }
+          if (from < 16) {
+            await _addColumnIfTable(
+                m, focusSessionTasks, focusSessionTasks.disposition);
           }
         },
       );

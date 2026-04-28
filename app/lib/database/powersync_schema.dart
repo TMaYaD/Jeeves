@@ -50,6 +50,7 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('focus_session_id'),
     ps.Column.text('task_id'),
     ps.Column.integer('position'),
+    ps.Column.text('disposition'),
   ]),
   ps.Table('tags', [
     ps.Column.text('name'),

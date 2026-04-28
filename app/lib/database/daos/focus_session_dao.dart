@@ -173,6 +173,131 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
+  /// Writes [disposition] to a single [focus_session_tasks] row.
+  ///
+  /// Throws [StateError] if [taskId] is not a member of [sessionId].
+  /// Idempotent — calling twice with the same value is a no-op.
+  ///
+  /// [disposition] must be one of: 'rollover' | 'leave' | 'maybe'.
+  Future<void> setTaskDisposition({
+    required String sessionId,
+    required String taskId,
+    required String disposition,
+  }) async {
+    final membership = await (select(focusSessionTasks)
+          ..where((fst) =>
+              fst.focusSessionId.equals(sessionId) &
+              fst.taskId.equals(taskId)))
+        .getSingleOrNull();
+    if (membership == null) {
+      throw StateError('Task $taskId is not part of session $sessionId');
+    }
+    await (update(focusSessionTasks)
+          ..where((fst) =>
+              fst.focusSessionId.equals(sessionId) &
+              fst.taskId.equals(taskId)))
+        .write(FocusSessionTasksCompanion(disposition: Value(disposition)));
+  }
+
+  /// Atomically records per-task dispositions and closes [sessionId].
+  ///
+  /// [dispositions] maps task IDs to 'rollover' | 'leave' | 'maybe'.
+  /// Done tasks (those with doneAt != null) must not appear in this map —
+  /// the caller is responsible for filtering them out.
+  ///
+  /// Side effects:
+  /// - Each 'maybe' task has its intent updated to 'maybe' on [todos].
+  /// - All disposition values are persisted to [focus_session_tasks].
+  /// - The session is closed (ended_at set, current_task_id cleared).
+  /// - Any open time log for the session is closed.
+  ///
+  /// [now] is injectable for deterministic testing.
+  Future<void> reviewAndCloseSession({
+    required String sessionId,
+    required Map<String, String> dispositions,
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
+
+    await transaction(() async {
+      final session = await (select(focusSessions)
+            ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
+          .getSingleOrNull();
+      if (session == null) return;
+
+      // Persist dispositions on focus_session_tasks rows.
+      for (final entry in dispositions.entries) {
+        await (update(focusSessionTasks)
+              ..where((fst) =>
+                  fst.focusSessionId.equals(sessionId) &
+                  fst.taskId.equals(entry.key)))
+            .write(FocusSessionTasksCompanion(
+          disposition: Value(entry.value),
+        ));
+      }
+
+      // Update intent to 'maybe' for each 'maybe' disposition task.
+      for (final entry in dispositions.entries) {
+        if (entry.value == 'maybe') {
+          await customUpdate(
+            'UPDATE todos SET intent = ?, updated_at = ? '
+            'WHERE id = ? AND user_id = ?',
+            variables: [
+              Variable('maybe'),
+              Variable(ts),
+              Variable(entry.key),
+              Variable(session.userId),
+            ],
+            updates: {todos},
+            updateKind: UpdateKind.update,
+          );
+        }
+      }
+
+      // Close any open time log for this session.
+      await (update(timeLogs)
+            ..where((t) =>
+                t.userId.equals(session.userId) &
+                t.endedAt.isNull() &
+                t.focusSessionId.equals(sessionId)))
+          .write(TimeLogsCompanion(endedAt: Value(ts)));
+
+      // Close the session.
+      await (update(focusSessions)..where((s) => s.id.equals(sessionId)))
+          .write(FocusSessionsCompanion(
+        endedAt: Value(ts),
+        currentTaskId: const Value(null),
+      ));
+    });
+  }
+
+  /// Returns the task IDs with [disposition] = 'rollover' from the most
+  /// recently closed session for [userId].
+  ///
+  /// Returns an empty list when no closed session exists or none has rollover
+  /// tasks.
+  Future<List<String>> getLastClosedSessionRolloverTaskIds(
+      String userId) async {
+    final rows = await customSelect(
+      'SELECT fst.task_id FROM focus_session_tasks fst '
+      'JOIN focus_sessions fs ON fs.id = fst.focus_session_id '
+      'WHERE fs.user_id = ? '
+      'AND fs.ended_at IS NOT NULL '
+      'AND fst.disposition = ? '
+      'AND fs.ended_at = ('
+      '  SELECT MAX(ended_at) FROM focus_sessions '
+      '  WHERE user_id = ? AND ended_at IS NOT NULL'
+      ')',
+      variables: [
+        Variable(userId),
+        Variable('rollover'),
+        Variable(userId),
+      ],
+      readsFrom: {focusSessions, focusSessionTasks},
+    ).get();
+    return rows.map((r) => r.read<String>('task_id')).toList();
+  }
+
   /// Stream of [Todo] rows in the user's currently open session.
   ///
   /// Joins through [focus_sessions] so no session-ID plumbing is needed at
