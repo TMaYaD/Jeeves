@@ -114,16 +114,16 @@ async def test_gtd_inbox_capture_and_process(client: AsyncClient) -> None:
     reg = await client.post("/user", json={"email": "gtd-inbox@example.com", "password": "secret"})
     headers = auth_header(reg.json()["access_token"])
 
-    # 1. Capture to inbox
+    # 1. Capture as next_action (inbox is Flutter-only via clarified column)
     create = await client.post(
         "/todos/",
-        json={"title": "Buy paint", "state": "inbox", "capture_source": "manual"},
+        json={"title": "Buy paint", "state": "next_action", "capture_source": "manual"},
         headers=headers,
     )
     assert create.status_code == 201
     todo = create.json()
     todo_id = todo["id"]
-    assert todo["state"] == "inbox"
+    assert todo["state"] == "next_action"
     assert todo["capture_source"] == "manual"
     assert todo["energy_level"] is None
     assert todo["time_estimate"] is None

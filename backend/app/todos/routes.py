@@ -39,10 +39,7 @@ async def list_todos(
     query = select(Todo).where(Todo.user_id == current_user.id).options(selectinload(Todo.tags))
 
     if state is not None:
-        if state == "inbox":
-            query = query.where(Todo.clarified.is_(False))
-        else:
-            query = query.where(Todo.state == state, Todo.clarified.is_(True))
+        query = query.where(Todo.state == state)
 
     if tag_type is not None or tag_name is not None:
         # Join through todo_tags → tags
@@ -69,16 +66,12 @@ async def create_todo(
         existing = await _get_todo_with_tags(body.id, db)
         if existing and existing.user_id == current_user.id:
             return existing
-    # "inbox" is a virtual API state: stored as next_action + clarified=False.
-    db_state = "next_action" if body.state == "inbox" else body.state
-    clarified = body.state != "inbox"
     todo = Todo(
         **({"id": body.id} if body.id is not None else {}),
         title=body.title,
         notes=body.notes,
         completed=body.completed,
-        state=db_state,
-        clarified=clarified,
+        state=body.state,
         priority=body.priority,
         due_date=body.due_date,
         time_estimate=body.time_estimate,
@@ -146,13 +139,7 @@ async def update_todo(
             db.add(TodoTag(todo_id=todo.id, tag_id=tag.id, user_id=current_user.id))
 
     if "state" in update_data:
-        new_state = update_data.pop("state")
-        if new_state == "inbox":
-            todo.state = "next_action"
-            todo.clarified = False
-        elif new_state is not None:
-            todo.state = new_state
-            todo.clarified = True
+        todo.state = update_data.pop("state")
 
     for field, value in update_data.items():
         setattr(todo, field, value)

@@ -27,7 +27,7 @@ from app.database import Base
 # Canonical constant sets — single source of truth shared with schemas.py
 # ---------------------------------------------------------------------------
 
-GTD_STATES = ("inbox", "next_action", "waiting_for", "done")
+GTD_STATES = ("next_action", "waiting_for", "done")
 INTENT_VALUES = ("next", "maybe", "trash")
 TAG_TYPES = ("context", "project", "area", "label")
 ENERGY_LEVELS = ("low", "medium", "high")

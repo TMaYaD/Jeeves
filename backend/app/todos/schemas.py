@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app.todos.models import ENERGY_LEVELS, GTD_STATES, INTENT_VALUES, TAG_TYPES
 
@@ -82,7 +82,7 @@ class TodoCreate(BaseModel):
     title: str
     notes: str | None = None
     completed: bool = False
-    state: str = "inbox"
+    state: str = "next_action"
     intent: str = "next"
     # Each item is either a plain string ("@office") or a TagInput dict.
     # Plain strings: "@" prefix → context; bare word → label.
@@ -192,7 +192,6 @@ class TodoOut(BaseModel):
     completed: bool
     priority: int | None
     state: str
-    clarified: bool
     intent: str
     tags: list[TagOut]
     due_date: datetime | None
@@ -208,9 +207,3 @@ class TodoOut(BaseModel):
     daily_selection_date: str | None
 
     model_config = {"from_attributes": True}
-
-    @model_validator(mode="after")
-    def derive_inbox_state(self) -> "TodoOut":
-        if not self.clarified:
-            self.state = "inbox"
-        return self
