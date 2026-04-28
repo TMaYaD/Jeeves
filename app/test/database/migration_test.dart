@@ -322,6 +322,19 @@ void main() {
       await db.customStatement('DROP TABLE IF EXISTS focus_session_tasks');
       await db.customStatement('DROP TABLE IF EXISTS focus_sessions');
 
+      // Simulate pre-v14 time_logs: no focus_session_id column yet.
+      await db.customStatement(
+          'ALTER TABLE time_logs RENAME TO _time_logs_v13');
+      await db.customStatement(
+        'CREATE TABLE time_logs ('
+        '  id TEXT NOT NULL PRIMARY KEY,'
+        '  user_id TEXT NOT NULL,'
+        '  task_id TEXT NOT NULL,'
+        '  started_at TEXT NOT NULL,'
+        '  ended_at TEXT'
+        ')',
+      );
+
       // Drive the real v14 migration path.
       final m = db.createMigrator();
       await db.migration.onUpgrade(m, 13, 14);

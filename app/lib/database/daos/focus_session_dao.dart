@@ -74,14 +74,16 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
 
     await transaction(() async {
       final session = await (select(focusSessions)
-            ..where((s) => s.id.equals(sessionId)))
+            ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
       if (session == null) return;
 
-      // Close any open time log for this user.
+      // Close only the open time log that belongs to this session.
       await (update(timeLogs)
-            ..where(
-                (t) => t.userId.equals(session.userId) & t.endedAt.isNull()))
+            ..where((t) =>
+                t.userId.equals(session.userId) &
+                t.endedAt.isNull() &
+                t.focusSessionId.equals(sessionId)))
           .write(TimeLogsCompanion(endedAt: Value(ts)));
 
       await (update(focusSessions)..where((s) => s.id.equals(sessionId)))
@@ -108,9 +110,20 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
 
     await transaction(() async {
       final session = await (select(focusSessions)
-            ..where((s) => s.id.equals(sessionId)))
+            ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
       if (session == null) return;
+
+      if (taskId != null) {
+        final membership = await (select(focusSessionTasks)
+              ..where((fst) =>
+                  fst.focusSessionId.equals(sessionId) &
+                  fst.taskId.equals(taskId)))
+            .getSingleOrNull();
+        if (membership == null) {
+          throw StateError('Task is not part of this focus session');
+        }
+      }
 
       // Close any open time log for this user.
       await (update(timeLogs)

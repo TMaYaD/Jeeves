@@ -257,16 +257,17 @@ void main() {
     });
 
     test('watchActiveSession emits the new session after openSession', () async {
-      final first =
+      final initial =
           await db.focusSessionDao.watchActiveSession(_userId).first;
-      expect(first, isNull);
+      expect(initial, isNull);
 
+      // Subscribe BEFORE mutating to capture the reactive emission.
+      final nextEmission =
+          db.focusSessionDao.watchActiveSession(_userId).skip(1).first;
       final sessionId =
           await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
-
-      final second =
-          await db.focusSessionDao.watchActiveSession(_userId).first;
-      expect(second?.id, sessionId);
+      final emitted = await nextEmission;
+      expect(emitted?.id, sessionId);
     });
   });
 

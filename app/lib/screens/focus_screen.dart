@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../providers/auth_provider.dart';
+import '../providers/database_provider.dart';
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
@@ -244,10 +246,8 @@ class _TaskRow extends ConsumerWidget {
           if (isDone)
             const Icon(Icons.check_circle,
                 color: Color(0xFF2667B7), size: 20)
-          else if (isCurrentTask)
-            _StartButton(label: 'Resume', todoId: todo.id)
           else
-            _StartButton(label: 'Start', todoId: todo.id),
+            _StartButton(todoId: todo.id, isResume: isCurrentTask),
           const SizedBox(width: 4),
           const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
         ],
@@ -334,10 +334,10 @@ class _BatchSuggestionBannerState extends State<_BatchSuggestionBanner> {
 }
 
 class _StartButton extends ConsumerWidget {
-  const _StartButton({required this.label, required this.todoId});
+  const _StartButton({required this.todoId, required this.isResume});
 
-  final String label;
   final String todoId;
+  final bool isResume;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -357,6 +357,22 @@ class _StartButton extends ConsumerWidget {
           return;
         }
 
+        if (isResume) {
+          // After a restart the in-memory focus state is cleared, but the DB
+          // session still has current_task_id set. Re-attach to the open time
+          // log rather than opening a new one.
+          final db = ref.read(databaseProvider);
+          final userId = ref.read(currentUserIdProvider);
+          final log = await db.timeLogDao.watchActiveLog(userId).first;
+          if (log != null && log.taskId == todoId) {
+            ref
+                .read(focusModeProvider.notifier)
+                .resumeFrom(todoId, DateTime.parse(log.startedAt));
+            if (context.mounted) context.push('/focus/active');
+            return;
+          }
+        }
+
         await ref.read(focusModeProvider.notifier).startFocus(todoId);
         if (context.mounted) {
           context.push('/focus/active');
@@ -371,7 +387,7 @@ class _StartButton extends ConsumerWidget {
         textStyle:
             const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
       ),
-      child: Text(label),
+      child: Text(isResume ? 'Resume' : 'Start'),
     );
   }
 }

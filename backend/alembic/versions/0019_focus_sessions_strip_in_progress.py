@@ -29,7 +29,7 @@ def upgrade() -> None:
     op.create_table(
         "focus_sessions",
         sa.Column("id", sa.String, primary_key=True),
-        sa.Column("user_id", sa.String, nullable=False),
+        sa.Column("user_id", sa.String, sa.ForeignKey("users.id"), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -154,9 +154,17 @@ def upgrade() -> None:
         "state IN ('next_action')",
     )
 
-    # 10. Add new tables to the PowerSync publication
-    op.execute("ALTER PUBLICATION powersync ADD TABLE focus_sessions")
-    op.execute("ALTER PUBLICATION powersync ADD TABLE focus_session_tasks")
+    # 10. Add new tables to the PowerSync publication (no-op when the
+    #     publication does not exist, e.g. in test environments).
+    op.execute("""
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync') THEN
+    ALTER PUBLICATION powersync ADD TABLE focus_sessions;
+    ALTER PUBLICATION powersync ADD TABLE focus_session_tasks;
+  END IF;
+END $$;
+""")
 
 
 def downgrade() -> None:

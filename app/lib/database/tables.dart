@@ -89,7 +89,8 @@ class TimeLogs extends Table {
   TextColumn get endedAt => text().nullable()();
 
   /// UUID of the focus session this log row belongs to; null for pre-FocusSession rows.
-  TextColumn get focusSessionId => text().nullable()();
+  TextColumn get focusSessionId =>
+      text().nullable().references(FocusSessions, #id)();
 
   @override
   Set<Column<Object>> get primaryKey => {id};
@@ -109,7 +110,8 @@ class FocusSessions extends Table {
   TextColumn get endedAt => text().nullable()();
 
   /// The task currently being focused on; null when no task is active.
-  TextColumn get currentTaskId => text().nullable()();
+  TextColumn get currentTaskId =>
+      text().nullable().references(Todos, #id)();
 
   @override
   Set<Column<Object>> get primaryKey => {id};

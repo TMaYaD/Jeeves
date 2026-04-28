@@ -195,6 +195,13 @@ void main() {
       expect(log, isNotNull);
       expect(log!.taskId, todo.id);
       expect(DateTime.parse(log.startedAt), s.sessionStart!.toUtc());
+
+      // Session's current_task_id must point to the focused task.
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session?.currentTaskId, todo.id);
+
+      // The time log must be linked to the session.
+      expect(log.focusSessionId, session?.id);
     });
 
     test('throws StateError when a different task is already active', () async {
@@ -235,6 +242,10 @@ void main() {
       // Time log must be closed.
       final log = await db.timeLogDao.watchActiveLog(_userId).first;
       expect(log, isNull);
+
+      // Session's current_task_id must be cleared.
+      final session = await db.focusSessionDao.getActiveSession(_userId);
+      expect(session?.currentTaskId, isNull);
     });
   });
 }

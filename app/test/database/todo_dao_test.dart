@@ -15,13 +15,14 @@ Future<String> _insertTodo(
   required String id,
   required String title,
   String state = 'next_action',
+  bool clarified = true,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
     state: Value(state),
-    clarified: const Value(true),
+    clarified: Value(clarified),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -39,7 +40,7 @@ void main() {
     tearDown(() async => db.close());
 
     test('updates state and sets clarified=true', () async {
-      await _insertTodo(db, id: 'a', title: 'Task A');
+      await _insertTodo(db, id: 'a', title: 'Task A', clarified: false);
       await db.todoDao.transitionState('a', _userId, GtdState.nextAction);
 
       final row = await db.todoDao.getTodo('a', _userId);
@@ -54,7 +55,7 @@ void main() {
           .transitionState('b', _userId, GtdState.nextAction, now: now);
 
       final row = await db.todoDao.getTodo('b', _userId);
-      expect(row?.updatedAt, isNotNull);
+      expect(row?.updatedAt, now);
     });
 
     test('no-ops silently for unknown task', () async {

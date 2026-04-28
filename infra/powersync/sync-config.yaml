@@ -33,8 +33,8 @@ replication:
 # declaring it on the client would duplicate the column.
 #
 # focus_session_tasks has no user_id column; its bucket JOINs through
-# focus_sessions to apply the per-user filter — the same denormalized-FK
-# pattern used by todo_tags.
+# focus_sessions to apply the per-user filter (JOIN-scoped, distinct from
+# the denormalized-FK pattern used by todo_tags).
 #
 # [1] https://docs.powersync.com/sync/rules/many-to-many-join-tables
 sync_config:

@@ -59,7 +59,7 @@ Located in `backend/`.
 PowerSync provides bidirectional offline-first sync between the Flutter SQLite store and PostgreSQL:
 
 - The Flutter app connects to a self-hosted `journeyapps/powersync-service` instance.
-- Five sync shapes are replicated per user: `todos`, `tags`, `todo_tags`, `focus_sessions`, `focus_session_tasks` (all filtered by `user_id`).
+- Six sync shapes are replicated per user: `todos`, `tags`, `todo_tags`, `time_logs`, `focus_sessions`, `focus_session_tasks` (all filtered by `user_id`). `focus_session_tasks` has no `user_id` column; its bucket joins through `focus_sessions` (JOIN-scoped), unlike `todo_tags` which carries a denormalized `user_id`.
 - The backend issues short-lived JWTs from `GET /powersync/credentials`; PowerSync validates them using the shared `SECRET_KEY`.
 - Local writes made through the PowerSync client are queued and uploaded to the backend REST API via `JevesBackendConnector.uploadData()`.
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.

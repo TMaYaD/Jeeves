@@ -57,7 +57,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Resolution Matrix:**
     * **Complete:** Log 20 mins, mark task Done.
     * **Extend (Bump & Continue):** Allocate another 20-minute block to the current task. The system automatically prompts the user to "punt" the lowest-priority remaining task from the day's plan to prevent calendar overrun.
-    * **Defer (Log & Park):** Log 20 mins, mark task "In Progress," remove from today's plan, and return it to 'Next Actions'.
+    * **Defer (Log & Park):** Log 20 mins, remove from today's plan, and return it to 'Next Actions'.
 * **Estimation Analytics:** System tracks the delta between estimated and actual pomodoros to improve future AI estimations.
 
 ### Epic 5: System Integrity & The Review Guardrails

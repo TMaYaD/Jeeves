@@ -59,7 +59,7 @@ final focusSessionPlanningCompletionNotifier = ValueNotifier<bool>(false);
 final focusSessionPlanningBannerDismissedNotifier = ValueNotifier<bool>(false);
 
 /// Initialises [focusSessionPlanningBannerDismissedNotifier] from
-/// [SharedPreferences] and loads notification suppression state.
+/// [SharedPreferences].
 ///
 /// Completion state is not persisted across restarts — [startDay] sets it
 /// in-memory when the user finishes the ritual.
@@ -165,7 +165,13 @@ final focusSessionPlanningSelectedTasksProvider =
   final ids = ref.watch(
     focusSessionPlanningProvider.select((s) => s.pendingSelectedTaskIds),
   );
-  return db.todoDao.watchTodosById(userId, ids);
+  return db.todoDao.watchTodosById(userId, ids).map((tasks) {
+    final indexById = {for (var i = 0; i < ids.length; i++) ids[i]: i};
+    final ordered = [...tasks];
+    ordered.sort((a, b) =>
+        (indexById[a.id] ?? 1 << 30).compareTo(indexById[b.id] ?? 1 << 30));
+    return ordered;
+  });
 });
 
 /// Selected tasks that are still missing a time estimate (drives Step 3).
