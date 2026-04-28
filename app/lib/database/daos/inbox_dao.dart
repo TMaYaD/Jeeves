@@ -76,7 +76,12 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
     DateTime? dueDate,
   }) async {
     await (update(todos)
-          ..where((t) => t.id.equals(id) & t.userId.equals(userId)))
+          ..where(
+            (t) =>
+                t.id.equals(id) &
+                t.userId.equals(userId) &
+                t.clarified.equals(false),
+          ))
         .write(TodosCompanion(
       clarified: const Value(true),
       state: newState != null ? Value(newState) : const Value.absent(),

@@ -159,11 +159,11 @@ class GtdDatabase extends _$GtdDatabase {
                 await customStatement(
                   "ALTER TABLE todos ADD COLUMN clarified INTEGER NOT NULL DEFAULT 1",
                 );
-                // Migrate legacy inbox rows: clarified=0, state→next_action
-                await customStatement(
-                  "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
-                );
               }
+              // Always normalize legacy inbox rows (idempotent).
+              await customStatement(
+                "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
+              );
             }
           }
         },
