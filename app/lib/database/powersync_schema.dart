@@ -21,6 +21,7 @@ const powersyncSchema = ps.Schema([
     ps.Column.text('updated_at'),
     ps.Column.text('state'),
     ps.Column.text('intent'),
+    ps.Column.integer('clarified'),
     ps.Column.integer('time_estimate'),
     ps.Column.text('energy_level'),
     ps.Column.text('capture_source'),

@@ -1,10 +1,8 @@
-/// DAO for the GTD inbox — todos with state = 'inbox'.
+/// DAO for the GTD inbox — todos with clarified = false.
 library;
 
 import 'package:drift/drift.dart';
 
-import '../../models/gtd_state_machine.dart';
-import '../../models/todo.dart' show GtdState;
 import '../gtd_database.dart';
 
 part 'inbox_dao.g.dart';
@@ -15,13 +13,12 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
 
   /// Stream of all inbox todos for [userId], ordered by createdAt descending.
   ///
-  /// When [tagIds] is non-empty only todos carrying **all** specified tags are
-  /// returned (AND semantics).
+  /// Inbox items are those with clarified = false.  When [tagIds] is non-empty
+  /// only todos carrying **all** specified tags are returned (AND semantics).
   Stream<List<Todo>> watchInbox(String userId, {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return (select(todos)
-            ..where((t) =>
-                t.userId.equals(userId) & t.state.equals(GtdState.inbox.value))
+            ..where((t) => t.userId.equals(userId) & t.clarified.equals(false))
             ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
           .watch();
     }
@@ -30,14 +27,13 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
     final placeholders = List.filled(n, '?').join(', ');
     return customSelect(
       'SELECT todos.* FROM todos '
-      'WHERE todos.user_id = ? AND todos.state = ? '
+      'WHERE todos.user_id = ? AND todos.clarified = 0 '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id AND user_id = ? '
       '       AND tag_id IN ($placeholders)) = $n '
       'ORDER BY todos.created_at DESC',
       variables: [
         Variable(userId),
-        Variable(GtdState.inbox.value),
         Variable(userId),
         ...tagIds.map(Variable.new),
       ],
@@ -45,83 +41,53 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
+  /// Inserts a new inbox item (sets clarified = false).
   Future<void> insertTodo(TodosCompanion companion) {
-    final state = companion.state.present
-        ? companion.state.value
-        : GtdState.inbox.value;
-    if (state != GtdState.inbox.value) {
-      throw ArgumentError.value(
-        state,
-        'state',
-        'InboxDao only accepts todos with state = inbox',
-      );
-    }
     return into(todos).insert(
-      companion.copyWith(state: Value(GtdState.inbox.value)),
+      companion.copyWith(clarified: const Value(false)),
     );
   }
 
+  /// Deletes an inbox item scoped to [userId].
+  ///
+  /// Only removes rows where clarified = false so clarified items are
+  /// not accidentally deleted via this path.
   Future<int> deleteTodo(String id, {required String userId}) {
     return (delete(todos)
           ..where(
             (t) =>
                 t.id.equals(id) &
                 t.userId.equals(userId) &
-                t.state.equals(GtdState.inbox.value),
+                t.clarified.equals(false),
           ))
         .go();
   }
 
-  /// Transition a todo out of inbox to [newState].
+  /// Sets clarified = true on the given inbox item, optionally updating
+  /// [newState], [intent], and [dueDate].
   ///
-  /// - Scoped to [userId] to prevent cross-user mutations.
-  /// - Rejects the operation if the row is not currently in the inbox state.
-  /// - Validates the transition via [GtdStateMachine] before writing.
-  /// - Runs the read, validation, and write atomically inside a transaction to
-  ///   prevent check-then-write races. The UPDATE's WHERE clause pins the
-  ///   row to its observed state, acting as an optimistic lock.
-  /// - Throws [InvalidStateTransitionException] for invalid moves.
-  /// - Returns `true` if a row was updated, `false` if the optimistic lock failed
-  ///   (the row changed state since we read it).
-  ///
-  /// Note: in production `todos` is a PowerSync view with INSTEAD OF UPDATE
-  /// triggers. SQLite reports 0 changes for UPDATE statements handled by a trigger
-  /// body (`sqlite3_changes()` excludes lower-level trigger writes), so the
-  /// return value may be unreliable in that environment. Use this return value
-  /// for detecting concurrent updates in tests or non-PowerSync environments.
-  Future<bool> processInboxItem(
-    String todoId, {
+  /// Scoped to [userId] to prevent cross-user mutations.  No FSM validation
+  /// is performed — the caller is responsible for choosing a valid state.
+  Future<void> processInboxItem(
+    String id, {
     required String userId,
-    required String newState,
+    String? newState,
+    String? intent,
+    DateTime? dueDate,
   }) async {
-    return await transaction(() async {
-      final row = await (select(todos)
-            ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
-          .getSingleOrNull();
-      if (row == null) return false;
-
-      final from = GtdState.fromString(row.state);
-      if (from != GtdState.inbox) {
-        throw ArgumentError.value(
-          row.state,
-          'state',
-          'Todo is not in inbox',
-        );
-      }
-      final to = GtdState.fromString(newState);
-      GtdStateMachine.validate(from, to);
-
-      final rows = await (update(todos)
-            ..where((t) =>
-                t.id.equals(todoId) &
+    await (update(todos)
+          ..where(
+            (t) =>
+                t.id.equals(id) &
                 t.userId.equals(userId) &
-                t.state.equals(row.state)))
-          .write(TodosCompanion(
-        state: Value(newState),
-        updatedAt: Value(DateTime.now()),
-      ));
-
-      return rows > 0;
-    });
+                t.clarified.equals(false),
+          ))
+        .write(TodosCompanion(
+      clarified: const Value(true),
+      state: newState != null ? Value(newState) : const Value.absent(),
+      intent: intent != null ? Value(intent) : const Value.absent(),
+      dueDate: dueDate != null ? Value(dueDate) : const Value.absent(),
+      updatedAt: Value(DateTime.now()),
+    ));
   }
 }

@@ -39,7 +39,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -143,6 +143,26 @@ class GtdDatabase extends _$GtdDatabase {
               await customStatement(
                 "UPDATE todos SET intent = 'maybe', state = 'next_action' "
                 "WHERE state = 'someday_maybe'",
+              );
+            }
+          }
+          if (from < 11) {
+            // Guard: only ADD COLUMN if todos table exists and clarified column doesn't.
+            final tables = await customSelect(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name='todos'",
+            ).get();
+            if (tables.isNotEmpty) {
+              final cols = await customSelect("PRAGMA table_info(todos)").get();
+              final hasClarified =
+                  cols.any((r) => r.read<String>('name') == 'clarified');
+              if (!hasClarified) {
+                await customStatement(
+                  "ALTER TABLE todos ADD COLUMN clarified INTEGER NOT NULL DEFAULT 1",
+                );
+              }
+              // Always normalize legacy inbox rows (idempotent).
+              await customStatement(
+                "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
               );
             }
           }

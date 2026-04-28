@@ -140,13 +140,19 @@ Future<ImportResult> importNirvanaLocally({
             ? DateTime.tryParse(item.dueDate!)?.toUtc()
             : null;
 
+        // Items imported with state='inbox' become next_action + clarified=false
+        // so they appear in the inbox clarification step.
+        final isClarified = item.state != 'inbox';
+        final effectiveState = isClarified ? item.state : 'next_action';
+
         await db.into(db.todos).insert(
               TodosCompanion(
                 id: Value(todoId),
                 title: Value(item.name),
                 notes: Value(item.notes),
                 completed: Value(item.completed),
-                state: Value(item.state),
+                state: Value(effectiveState),
+                clarified: Value(isClarified),
                 dueDate: Value(dueDate),
                 timeEstimate: Value(item.timeEstimate),
                 energyLevel: Value(item.energyLevel),

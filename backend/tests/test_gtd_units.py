@@ -11,10 +11,14 @@ from app.todos.utils import _infer_tag_type
 
 class TestTodoStateValidator:
     def test_valid_states_are_accepted(self) -> None:
-        valid = ["inbox", "next_action", "waiting_for", "done"]
+        valid = ["next_action", "waiting_for", "done"]
         for state in valid:
             t = TodoCreate(title="x", state=state)
             assert t.state == state
+
+    def test_inbox_is_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="state must be one of"):
+            TodoCreate(title="x", state="inbox")
 
     def test_someday_maybe_is_rejected(self) -> None:
         with pytest.raises(ValidationError, match="state must be one of"):

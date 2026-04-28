@@ -82,7 +82,7 @@ class TodoCreate(BaseModel):
     title: str
     notes: str | None = None
     completed: bool = False
-    state: str = "inbox"
+    state: str = "next_action"
     intent: str = "next"
     # Each item is either a plain string ("@office") or a TagInput dict.
     # Plain strings: "@" prefix → context; bare word → label.

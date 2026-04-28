@@ -19,7 +19,7 @@ Future<void> _insertTodo(
   GtdDatabase db, {
   required String id,
   required String title,
-  String state = 'inbox',
+  String state = 'next_action',
   String? notes,
   String? energyLevel,
   int? timeEstimate,
@@ -27,21 +27,19 @@ Future<void> _insertTodo(
   String userId = _user,
 }) async {
   final now = DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
     notes: Value(notes),
     energyLevel: Value(energyLevel),
     timeEstimate: Value(timeEstimate),
     dueDate: Value(dueDate),
+    state: Value(state),
+    clarified: const Value(true),
     userId: Value(userId),
     createdAt: Value(now),
     updatedAt: Value(now),
   ));
-  if (state != 'inbox') {
-    await (db.update(db.todos)..where((t) => t.id.equals(id)))
-        .write(TodosCompanion(state: Value(state)));
-  }
 }
 
 Future<String> _insertTag(
@@ -208,7 +206,7 @@ void main() {
     tearDown(() async => db.close());
 
     test('single state filter', () async {
-      await _insertTodo(db, id: 'a', title: 'Inbox item'); // state=inbox
+      await _insertTodo(db, id: 'a', title: 'Waiting item', state: 'waiting_for');
       await _insertTodo(db, id: 'b', title: 'Next item', state: 'next_action');
 
       final results = await db.searchDao
@@ -226,7 +224,7 @@ void main() {
     });
 
     test('multiple state filter', () async {
-      await _insertTodo(db, id: 'a', title: 'Task A'); // inbox
+      await _insertTodo(db, id: 'a', title: 'Task A', state: 'in_progress');
       await _insertTodo(db, id: 'b', title: 'Task B', state: 'next_action');
       await _insertTodo(db, id: 'c', title: 'Task C', state: 'waiting_for');
 

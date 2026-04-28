@@ -68,14 +68,17 @@ void main() {
       addTearDown(db.close);
 
       final now = DateTime.now();
-      // Insert a row simulating "pre-v2" data by omitting the new columns.
+      // Insert a row omitting the v2+ columns (they use DB defaults).
+      // Uses state='next_action' + clarified=0 to simulate a post-migration
+      // inbox item (pre-v2 'inbox' rows are transformed by the v11 migration).
       await db.customInsert(
-        'INSERT INTO todos (id, title, state, user_id, created_at, updated_at) '
-        'VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO todos (id, title, state, clarified, user_id, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
         variables: [
           Variable.withString('legacy'),
           Variable.withString('Legacy task'),
-          Variable.withString('inbox'),
+          Variable.withString('next_action'),
+          Variable.withInt(0),
           Variable.withString(_userId),
           Variable.withDateTime(now),
           Variable.withDateTime(now),
@@ -225,6 +228,14 @@ void main() {
       // intent was introduced in v10.
       await db.customStatement(
         "ALTER TABLE todos ADD COLUMN intent TEXT NOT NULL DEFAULT 'next'",
+      );
+      // clarified was introduced in v11.
+      await db.customStatement(
+        "ALTER TABLE todos ADD COLUMN clarified INTEGER NOT NULL DEFAULT 1",
+      );
+      // Migrate legacy inbox rows to next_action + clarified=0 (v11 semantics).
+      await db.customStatement(
+        "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
       );
 
       // Legacy data must survive and new columns must carry correct defaults.

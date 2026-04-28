@@ -138,6 +138,9 @@ async def update_todo(
         for tag in new_tags:
             db.add(TodoTag(todo_id=todo.id, tag_id=tag.id, user_id=current_user.id))
 
+    if "state" in update_data:
+        todo.state = update_data.pop("state")
+
     for field, value in update_data.items():
         setattr(todo, field, value)
 

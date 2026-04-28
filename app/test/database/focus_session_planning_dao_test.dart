@@ -17,20 +17,26 @@ const _userId = 'test-user';
 const _today = '2026-04-16';
 const _yesterday = '2026-04-15';
 
-/// Inserts a todo and optionally transitions it to a target state.
+/// Inserts a todo directly into [db] with the given [state] (clarified=true).
+///
+/// This helper bypasses [InboxDao.insertTodo] so tests can seed todos in any
+/// target state without going through the inbox flow.  All inserted rows are
+/// clarified by default; use [InboxDao.insertTodo] directly when you need an
+/// unclarified (inbox) item.
 Future<String> _insert(
   GtdDatabase db, {
   required String id,
   required String title,
-  String state = 'inbox',
+  String state = 'next_action',
   DateTime? dueDate,
   int? timeEstimate,
 }) async {
   final now = DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    state: const Value('inbox'),
+    state: Value(state),
+    clarified: const Value(true),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -38,10 +44,6 @@ Future<String> _insert(
     timeEstimate:
         timeEstimate != null ? Value(timeEstimate) : const Value.absent(),
   ));
-  if (state != 'inbox') {
-    await (db.update(db.todos)..where((t) => t.id.equals(id)))
-        .write(TodosCompanion(state: Value(state)));
-  }
   return id;
 }
 
@@ -91,8 +93,16 @@ void main() {
       expect(items.map((t) => t.id), contains('a'));
     });
 
-    test('excludes non-next_action tasks', () async {
-      await _insert(db, id: 'a', title: 'Inbox item', state: 'inbox');
+    test('excludes unclarified (inbox) tasks', () async {
+      // Insert as inbox item (clarified=false) via the DAO.
+      final now = DateTime.now();
+      await db.inboxDao.insertTodo(TodosCompanion(
+        id: const Value('a'),
+        title: const Value('Inbox item'),
+        userId: const Value(_userId),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
       await _insert(db, id: 'b', title: 'Maybe item', state: 'next_action');
       await db.todoDao.deferTaskToMaybe('b', _userId);
 
@@ -454,6 +464,13 @@ void main() {
       // intent was introduced in v10.
       await db.customStatement(
         "ALTER TABLE todos ADD COLUMN intent TEXT NOT NULL DEFAULT 'next'",
+      );
+      // clarified was introduced in v11.
+      await db.customStatement(
+        "ALTER TABLE todos ADD COLUMN clarified INTEGER NOT NULL DEFAULT 1",
+      );
+      await db.customStatement(
+        "UPDATE todos SET clarified = 0, state = 'next_action' WHERE state = 'inbox'",
       );
 
       final items = await db.inboxDao.watchInbox(_userId).first;

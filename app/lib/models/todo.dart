@@ -7,14 +7,12 @@ part 'todo.g.dart';
 
 /// Canonical GTD states — mirrors the backend GTD_STATES constant tuple.
 enum GtdState {
-  inbox,
   nextAction,
   waitingFor,
   inProgress,
   done;
 
   String get value => switch (this) {
-        GtdState.inbox => 'inbox',
         GtdState.nextAction => 'next_action',
         GtdState.waitingFor => 'waiting_for',
         GtdState.inProgress => 'in_progress',
@@ -22,10 +20,11 @@ enum GtdState {
       };
 
   static GtdState fromString(String value) {
+    // Legacy: inbox rows are treated as next_action after migration 0016.
+    if (value == 'inbox') return GtdState.nextAction;
     // Legacy: blocked rows are collapsed to next_action (migration 0012).
     if (value == 'blocked') return GtdState.nextAction;
     return switch (value) {
-      'inbox' => GtdState.inbox,
       'next_action' => GtdState.nextAction,
       'waiting_for' => GtdState.waitingFor,
       // Legacy: scheduled rows were collapsed to next_action in migration 0011.
@@ -38,14 +37,13 @@ enum GtdState {
       'done' => GtdState.done,
       _ => () {
           assert(false, 'Unknown GtdState value: $value');
-          return GtdState.inbox;
+          return GtdState.nextAction;
         }(),
     };
   }
 
   /// Human-readable display label.
   String get displayName => switch (this) {
-        GtdState.inbox => 'Inbox',
         GtdState.nextAction => 'Next Actions',
         GtdState.waitingFor => 'Waiting For',
         GtdState.inProgress => 'In Progress',
@@ -93,10 +91,14 @@ abstract class Todo with _$Todo {
     int? priority,
 
     /// GTD workflow state.
-    @Default('inbox') String state,
+    @Default('next_action') String state,
 
     /// Orthogonal intent: next | maybe | trash (migration 0015).
     @Default('next') String intent,
+
+    /// Whether this todo has been processed through the inbox clarification step.
+    /// false = still in inbox; true = clarified and assigned to a GTD list.
+    @Default(true) bool clarified,
 
     /// Estimated effort in minutes.
     int? timeEstimate,

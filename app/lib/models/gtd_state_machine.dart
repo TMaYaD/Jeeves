@@ -26,11 +26,6 @@ class GtdStateMachine {
 
   /// The complete set of valid state transitions.
   static const Map<GtdState, Set<GtdState>> allowedTransitions = {
-    GtdState.inbox: {
-      GtdState.nextAction,
-      GtdState.waitingFor,
-      GtdState.done,
-    },
     GtdState.nextAction: {
       GtdState.inProgress,
       GtdState.waitingFor,

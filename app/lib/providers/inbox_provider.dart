@@ -2,7 +2,6 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' hide Todo;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'tag_filter_provider.dart';
@@ -41,7 +40,6 @@ class InboxNotifier {
     await db.inboxDao.insertTodo(TodosCompanion(
       title: Value(normalizedTitle),
       notes: Value(notes),
-      state: Value(GtdState.inbox.value),
       captureSource: const Value('manual'),
       userId: Value(userId),
       createdAt: Value(now),

@@ -1,5 +1,11 @@
 # Notes
 
+## 2026-04-28 (issue #193)
+
+- Stripped `inbox` state, introduced `clarified BOOLEAN` column (PR F). Inbox items are now `state='next_action', clarified=false`; all other GTD lists filter `clarified=1`. Drift schema v11. Legacy migration: `ALTER TABLE todos ADD COLUMN clarified INTEGER NOT NULL DEFAULT 1` + `UPDATE todos SET clarified=0, state='next_action' WHERE state='inbox'`. Both defaults (SQL-level `withDefault` + Dart-side `clientDefault`) intentional for PowerSync view-insert compat — same pattern as `completed`.
+- All test helpers that previously created `state='inbox'` rows (todo_dao_test, search_dao_test, time_log_dao_test, task_detail_screen_test) rewritten to use direct `db.into(db.todos).insert()` with `clarified=true, state='next_action'`. `inboxDao.insertTodo()` used only where a `clarified=false` row is explicitly needed.
+- tag_dao's `watchTagsWithActiveCount` updated to filter `clarified=1 AND state != 'done'` instead of the old `state NOT IN ('done','inbox')`.
+
 ## 2026-04-28 (issue #192)
 
 - `intent` column is 3-value (`next | maybe | trash`) from day one (Decision 13); `trash` UX is deferred but enforced at the DB level (`ck_todos_intent`) and schema validator from the start. `someday_maybe` state removed (migration 0015); Drift schema bumped to v10; legacy `'someday_maybe'` string in `GtdState.fromString` maps to `nextAction` for un-migrated clients.

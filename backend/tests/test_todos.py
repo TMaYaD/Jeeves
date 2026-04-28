@@ -63,7 +63,7 @@ async def test_gtd_fields_roundtrip(client: AsyncClient) -> None:
         "/todos/",
         json={
             "title": "Plan sprint",
-            "state": "inbox",
+            "state": "next_action",
             "energy_level": "high",
             "time_estimate": 60,
             "capture_source": "manual",
@@ -76,7 +76,7 @@ async def test_gtd_fields_roundtrip(client: AsyncClient) -> None:
     assert todo["energy_level"] == "high"
     assert todo["time_estimate"] == 60
     assert todo["capture_source"] == "manual"
-    assert todo["state"] == "inbox"
+    assert todo["state"] == "next_action"
 
     # Update GTD fields
     patch = await client.patch(
