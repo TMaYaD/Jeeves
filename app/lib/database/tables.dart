@@ -27,9 +27,19 @@ class Todos extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
-  /// GTD state: inbox | next_action | waiting_for | in_progress | someday_maybe | done
-  TextColumn get state =>
-      text().withDefault(const Constant('inbox')).clientDefault(() => 'inbox')();
+  /// GTD state: inbox | next_action | waiting_for | in_progress | done
+  TextColumn get state => text()
+      .clientDefault(() => 'inbox')
+      .customConstraint(
+        "NOT NULL DEFAULT 'inbox' CHECK (\"state\" IN ('inbox','next_action','waiting_for','in_progress','done'))",
+      )();
+
+  /// Orthogonal intent: next | maybe | trash (migration 0015).
+  TextColumn get intent => text()
+      .clientDefault(() => 'next')
+      .customConstraint(
+        "NOT NULL DEFAULT 'next' CHECK (\"intent\" IN ('next','maybe','trash'))",
+      )();
 
   /// Estimated effort in minutes (nullable).
   IntColumn get timeEstimate => integer().nullable()();

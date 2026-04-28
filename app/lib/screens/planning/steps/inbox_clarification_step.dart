@@ -139,6 +139,24 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     }
   }
 
+  Future<void> _processToMaybe(BuildContext context) async {
+    Object? error;
+    try {
+      final saved = await _saveFields(context);
+      if (!saved || !context.mounted) return;
+      await ref
+          .read(focusSessionPlanningProvider.notifier)
+          .processInboxItemToMaybe(widget.todo.id);
+    } catch (e) {
+      error = e;
+    }
+
+    if (!context.mounted) return;
+    if (error != null) {
+      debugPrint('Error: $error');
+    }
+  }
+
   Future<DateTime?> _pickDate(BuildContext context) {
     final now = DateTime.now();
     return showDatePicker(
@@ -310,10 +328,10 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         ),
         const SizedBox(height: 8),
         _DestinationButton(
-          label: 'Someday / Maybe',
+          label: 'Maybe',
           icon: Icons.star_border,
           color: const Color(0xFF6B7280),
-          onTap: () => _process(context, GtdState.somedayMaybe),
+          onTap: () => _processToMaybe(context),
         ),
         const SizedBox(height: 8),
         _DestinationButton(

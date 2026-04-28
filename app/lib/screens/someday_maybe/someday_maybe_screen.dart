@@ -9,8 +9,8 @@ class SomedayMaybeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GtdListScreen(
-      title: 'Someday / Maybe',
-      provider: somedayMaybeProvider,
+      title: 'Maybe',
+      provider: maybeProvider,
     );
   }
 }

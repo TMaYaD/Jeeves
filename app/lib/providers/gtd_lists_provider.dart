@@ -26,10 +26,10 @@ final waitingForProvider = StreamProvider<List<Todo>>((ref) {
   return db.todoDao.watchWaitingFor(userId, tagIds: tagIds);
 });
 
-/// Stream of someday/maybe todos.
-final somedayMaybeProvider = StreamProvider<List<Todo>>((ref) {
+/// Stream of maybe-intent todos (intent = 'maybe', state != 'done').
+final maybeProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final userId = ref.watch(currentUserIdProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchSomedayMaybe(userId, tagIds: tagIds);
+  return db.todoDao.watchMaybe(userId, tagIds: tagIds);
 });

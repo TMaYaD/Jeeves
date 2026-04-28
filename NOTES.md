@@ -1,5 +1,11 @@
 # Notes
 
+## 2026-04-28 (issue #192)
+
+- `intent` column is 3-value (`next | maybe | trash`) from day one (Decision 13); `trash` UX is deferred but enforced at the DB level (`ck_todos_intent`) and schema validator from the start. `someday_maybe` state removed (migration 0015); Drift schema bumped to v10; legacy `'someday_maybe'` string in `GtdState.fromString` maps to `nextAction` for un-migrated clients.
+- Drift migration blocks use `if (from < N)` which run cumulatively for any `from < N`, not just `from == N-1`. Guard idempotent-sensitive `ALTER TABLE ADD COLUMN` blocks with `PRAGMA table_info(todos)` column-existence checks (same as v8 did for `blocked_by_todo_id`) to prevent "duplicate column" errors when migration tests open fresh DBs via `onCreate` and then call `onUpgrade` with a low `from` value.
+- Migration tests that manually recreate `todos` with an old schema must also manually add any subsequently-introduced non-nullable columns (currently: `intent`), otherwise Drift's generated `map` method will null-check-fail when reading rows.
+
 ## 2026-04-27 (issue #182)
 
 - TimeLog (#182, PR D): `openLog`/`closeLog` accept an optional `DateTime? now` parameter (injected via `transitionState`'s existing `now` argument) so elapsed time is computed from the same logical clock as the companion's `updatedAt` — without this, fast tests compute ≈0s elapsed and the ceiling formula produces 0 minutes instead of 2. `+ 0.9999` before `CAST AS INTEGER` is the SQLite ceiling trick (no native CEIL()). Timestamps are UTC (`.toUtc().toIso8601String()`) so `datetime('now')` in the open-interval query matches.

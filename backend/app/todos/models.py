@@ -27,7 +27,8 @@ from app.database import Base
 # Canonical constant sets — single source of truth shared with schemas.py
 # ---------------------------------------------------------------------------
 
-GTD_STATES = ("inbox", "next_action", "waiting_for", "someday_maybe", "done")
+GTD_STATES = ("inbox", "next_action", "waiting_for", "done")
+INTENT_VALUES = ("next", "maybe", "trash")
 TAG_TYPES = ("context", "project", "area", "label")
 ENERGY_LEVELS = ("low", "medium", "high")
 
@@ -78,8 +79,12 @@ class Todo(Base):
     __table_args__ = (
         Index("ix_todos_user_state", "user_id", "state"),
         CheckConstraint(
-            "state IN ('inbox','next_action','waiting_for','someday_maybe','done')",
+            "state IN ('inbox','next_action','waiting_for','done')",
             name="ck_todos_state",
+        ),
+        CheckConstraint(
+            "intent IN ('next','maybe','trash')",
+            name="ck_todos_intent",
         ),
         CheckConstraint(
             "energy_level IS NULL OR energy_level IN ('low','medium','high')",
@@ -103,6 +108,12 @@ class Todo(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     state: Mapped[str] = mapped_column(String(50), default="inbox")
+    intent: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="next",
+        server_default="next",
+    )
     time_estimate: Mapped[int | None] = mapped_column(Integer)  # minutes
     energy_level: Mapped[str | None] = mapped_column(String(20))
     capture_source: Mapped[str | None] = mapped_column(String(50))

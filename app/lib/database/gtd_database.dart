@@ -39,7 +39,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -123,6 +123,27 @@ class GtdDatabase extends _$GtdDatabase {
             // at all (NativeDatabase test path), so we create it.
             if (rows.isEmpty) {
               await m.createTable(timeLogs);
+            }
+          }
+          if (from < 10) {
+            final todosInfo = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'todos'",
+            ).get();
+            if (todosInfo.isNotEmpty &&
+                todosInfo.first.read<String>('type') == 'table') {
+              final cols =
+                  await customSelect('PRAGMA table_info(todos)').get();
+              final hasIntent =
+                  cols.any((r) => r.read<String>('name') == 'intent');
+              if (!hasIntent) {
+                await customStatement(
+                  "ALTER TABLE todos ADD COLUMN intent TEXT NOT NULL DEFAULT 'next'",
+                );
+              }
+              await customStatement(
+                "UPDATE todos SET intent = 'maybe', state = 'next_action' "
+                "WHERE state = 'someday_maybe'",
+              );
             }
           }
         },

@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.todos.models import ENERGY_LEVELS, GTD_STATES, TAG_TYPES
+from app.todos.models import ENERGY_LEVELS, GTD_STATES, INTENT_VALUES, TAG_TYPES
 
 
 def _normalise_drift_iso(value: object) -> object:
@@ -83,6 +83,7 @@ class TodoCreate(BaseModel):
     notes: str | None = None
     completed: bool = False
     state: str = "inbox"
+    intent: str = "next"
     # Each item is either a plain string ("@office") or a TagInput dict.
     # Plain strings: "@" prefix → context; bare word → label.
     tags: list[str | TagInput] = []
@@ -107,6 +108,13 @@ class TodoCreate(BaseModel):
             raise ValueError(f"state must be one of {sorted(GTD_STATES)}")
         return v
 
+    @field_validator("intent")
+    @classmethod
+    def validate_intent(cls, v: str) -> str:
+        if v not in INTENT_VALUES:
+            raise ValueError(f"intent must be one of {sorted(INTENT_VALUES)}")
+        return v
+
     @field_validator("energy_level")
     @classmethod
     def validate_energy_level(cls, v: str | None) -> str | None:
@@ -120,6 +128,7 @@ class TodoUpdate(BaseModel):
     notes: str | None = None
     completed: bool | None = None
     state: str | None = None
+    intent: str | None = None
     tags: list[str | TagInput] | None = None  # Full replacement of tag set when provided
     due_date: datetime | None = None
     priority: int | None = None
@@ -140,6 +149,13 @@ class TodoUpdate(BaseModel):
     def validate_state(cls, v: str | None) -> str | None:
         if v is not None and v not in GTD_STATES:
             raise ValueError(f"state must be one of {sorted(GTD_STATES)}")
+        return v
+
+    @field_validator("intent")
+    @classmethod
+    def validate_intent(cls, v: str | None) -> str | None:
+        if v is not None and v not in INTENT_VALUES:
+            raise ValueError(f"intent must be one of {sorted(INTENT_VALUES)}")
         return v
 
     @field_validator("energy_level")
@@ -176,6 +192,7 @@ class TodoOut(BaseModel):
     completed: bool
     priority: int | None
     state: str
+    intent: str
     tags: list[TagOut]
     due_date: datetime | None
     created_at: datetime

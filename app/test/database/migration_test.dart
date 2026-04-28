@@ -222,6 +222,10 @@ void main() {
       await db.customStatement(
         'ALTER TABLE todos ADD COLUMN blocked_by_todo_id TEXT',
       );
+      // intent was introduced in v10.
+      await db.customStatement(
+        "ALTER TABLE todos ADD COLUMN intent TEXT NOT NULL DEFAULT 'next'",
+      );
 
       // Legacy data must survive and new columns must carry correct defaults.
       final items = await db.inboxDao.watchInbox(_userId).first;

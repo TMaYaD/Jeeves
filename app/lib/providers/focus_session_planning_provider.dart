@@ -300,6 +300,24 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
   }
 
+  /// Processes an inbox item to the maybe list.
+  ///
+  /// Moves the item to next_action state (out of inbox) then sets intent = 'maybe'
+  /// so it appears in the Maybe view rather than Next Actions.
+  Future<void> processInboxItemToMaybe(String id) async {
+    await _db.transaction(() async {
+      await _db.inboxDao.processInboxItem(
+        id,
+        userId: _userId,
+        newState: GtdState.nextAction.value,
+      );
+      await _db.todoDao.deferTaskToMaybe(id, _userId);
+    });
+    state = state.copyWith(
+      inboxClarifiedCount: state.inboxClarifiedCount + 1,
+    );
+  }
+
   /// Skips an inbox item for today without clarifying it.
   Future<void> skipInboxItem(String id) async {
     await _db.todoDao.skipForToday(id, _userId, _sessionDate);
@@ -319,9 +337,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> undoTaskReview(String id) =>
       _db.todoDao.undoReview(id, _userId);
 
-  // TODO(PR-E): replace with deferTaskToMaybe once intent column ships
-  Future<void> deferTask(String id) =>
-      _db.todoDao.transitionState(id, _userId, GtdState.somedayMaybe);
+  Future<void> deferTask(String id) => _db.todoDao.deferTaskToMaybe(id, _userId);
 
   // ---- Task mutations (Step 3 — Scheduled review) ----------------------------
 
