@@ -286,16 +286,18 @@ void main() {
       final db = _openInMemory();
       addTearDown(db.close);
 
-      // Bypass the CHECK constraint by inserting directly with raw SQL, simulating
-      // a row written before migration 0018 ran.
+      // The v13 CHECK constraint rejects 'waiting_for', so we can't INSERT or
+      // UPDATE to that value directly. Swap todos with a constraint-free CTAS
+      // copy (CREATE TABLE … AS SELECT creates no constraints), insert the
+      // legacy row there, then run the real migration against it.
+      await db.customStatement('ALTER TABLE todos RENAME TO _todos_v13');
+      await db.customStatement(
+        'CREATE TABLE todos AS SELECT * FROM _todos_v13 LIMIT 0',
+      );
       final now = DateTime.now();
       await db.customStatement(
         "INSERT INTO todos (id, title, state, waiting_for, clarified, user_id, created_at) "
-        "VALUES ('wf2', 'Legacy waiting', 'next_action', 'Bob', 1, '$_userId', '${now.toIso8601String()}')",
-      );
-      // Force the state to 'waiting_for' bypassing Drift's column check.
-      await db.customStatement(
-        "UPDATE todos SET state = 'waiting_for' WHERE id = 'wf2'",
+        "VALUES ('wf2', 'Legacy waiting', 'waiting_for', 'Bob', 1, '$_userId', '${now.toIso8601String()}')",
       );
 
       // Drive the real v13 migration.
