@@ -125,7 +125,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 ## 5. Architectural Directives
 
-* **Engineering:** Prioritize Local-First data storage to eliminate UI latency. Manage the state transitions (Scheduled -> In Progress -> Deferred) rigidly to ensure accurate time tracking.
+* **Engineering:** Prioritize Local-First data storage to eliminate UI latency. Manage the state transitions (Scheduled -> Next Action) and focus tracking (`focus_sessions.current_task_id`) rigidly to ensure accurate time logging.
 * **Design:** Maintain a strict visual dichotomy. High information density for the GTD Inventory (planning phase) and extreme minimalism for Focus Mode (execution phase). Ensure Guardrail interruptions are clear, explaining the *why* behind the restriction.
 * **Optional Authentication:** The app must be fully functional without login. Authentication is only required for cross-device sync via PowerSync. Users can operate indefinitely in local-only mode, with opt-in sign-up to enable sync. Local data must be preserved and migrated on first sign-in.
 * **Sync:** Real-time bidirectional sync between local SQLite (Drift) and PostgreSQL via self-hosted PowerSync. The sync layer activates only after authentication and must handle offline write queuing and conflict resolution (last-write-wins for v1).
