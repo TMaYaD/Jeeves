@@ -141,6 +141,50 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     }
   }
 
+  Future<void> _processToWaitingFor(BuildContext context) async {
+    final controller = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Waiting for…'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(
+            hintText: 'Who or what are you waiting on?',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (text == null || text.isEmpty || !context.mounted) return;
+
+    Object? error;
+    try {
+      final saved = await _saveFields(context);
+      if (!saved || !context.mounted) return;
+      await ref
+          .read(focusSessionPlanningProvider.notifier)
+          .processInboxItemToWaitingFor(widget.todo.id, text);
+    } catch (e) {
+      error = e;
+    }
+
+    if (!context.mounted) return;
+    if (error != null) debugPrint('Error: $error');
+  }
+
   Future<void> _processToDone(BuildContext context) async {
     Object? error;
     try {
@@ -341,7 +385,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           label: 'Waiting For',
           icon: Icons.hourglass_empty,
           color: const Color(0xFFF59E0B),
-          onTap: () => _process(context, GtdState.waitingFor),
+          onTap: () => _processToWaitingFor(context),
         ),
         const SizedBox(height: 8),
         _DestinationButton(

@@ -246,6 +246,73 @@ void main() {
       expect(items.first.inProgressSince, equals(null));
     });
 
+    test('v12→v13 migration: state=waiting_for rows become next_action; waiting_for column intact',
+        () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Insert a row that simulates a pre-v13 waiting_for state row.
+      final now = DateTime.now();
+      await db.customInsert(
+        'INSERT INTO todos (id, title, state, waiting_for, clarified, user_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        variables: [
+          Variable.withString('wf1'),
+          Variable.withString('Waiting task'),
+          Variable.withString('next_action'), // current schema is already v13 on open
+          Variable.withString('Alice'),
+          Variable.withInt(1),
+          Variable.withString(_userId),
+          Variable.withDateTime(now),
+        ],
+      );
+
+      // Drive the v13 migration path directly (simulating upgrade from v12).
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 12, 13);
+
+      // Rows that had state='waiting_for' should now be next_action.
+      // (In this test the row already has next_action; verify it is untouched.)
+      final rows = await db.customSelect(
+        'SELECT state, waiting_for FROM todos WHERE id = ?',
+        variables: [Variable.withString('wf1')],
+      ).get();
+      expect(rows.length, 1);
+      expect(rows.first.read<String>('state'), 'next_action');
+      expect(rows.first.read<String?>('waiting_for'), 'Alice');
+    });
+
+    test('v12→v13 migration: state=waiting_for is collapsed to next_action', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // The v13 CHECK constraint rejects 'waiting_for', so we can't INSERT or
+      // UPDATE to that value directly. Swap todos with a constraint-free CTAS
+      // copy (CREATE TABLE … AS SELECT creates no constraints), insert the
+      // legacy row there, then run the real migration against it.
+      await db.customStatement('ALTER TABLE todos RENAME TO _todos_v13');
+      await db.customStatement(
+        'CREATE TABLE todos AS SELECT * FROM _todos_v13 LIMIT 0',
+      );
+      final now = DateTime.now();
+      await db.customStatement(
+        "INSERT INTO todos (id, title, state, waiting_for, clarified, user_id, created_at) "
+        "VALUES ('wf2', 'Legacy waiting', 'waiting_for', 'Bob', 1, '$_userId', '${now.toIso8601String()}')",
+      );
+
+      // Drive the real v13 migration.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 12, 13);
+
+      final rows = await db.customSelect(
+        'SELECT state, waiting_for FROM todos WHERE id = ?',
+        variables: [Variable.withString('wf2')],
+      ).get();
+      expect(rows.length, 1);
+      expect(rows.first.read<String>('state'), 'next_action');
+      expect(rows.first.read<String?>('waiting_for'), 'Bob');
+    });
+
     test('v7→v8 migration drops blocked_by_todo_id column', () async {
       final db = _openInMemory();
       addTearDown(db.close);

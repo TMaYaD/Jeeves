@@ -107,7 +107,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// Stream of waiting-for todos for [userId].
   ///
-  /// Only clarified (processed) todos are returned.  When [tagIds] is
+  /// Sources from the [waiting_for] text column rather than the retired
+  /// `state = 'waiting_for'` value. Returns clarified, non-done, intent='next'
+  /// todos that have a non-null [waiting_for] value. When [tagIds] is
   /// non-empty only todos carrying **all** specified tags are returned
   /// (AND semantics).
   Stream<List<Todo>> watchWaitingFor(String userId,
@@ -115,13 +117,43 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     if (tagIds.isEmpty) {
       return _watchAllForUser(userId).map(
         (all) => all
-            .where(
-                (t) => t.state == GtdState.waitingFor.value && t.clarified)
+            .where((t) =>
+                t.waitingFor != null &&
+                t.clarified &&
+                t.doneAt == null &&
+                t.intent == 'next')
             .toList(),
       );
     }
-    return _watchFilteredByStateAndTags(
-        userId, GtdState.waitingFor.value, tagIds);
+    return _watchFilteredByWaitingForColumn(userId, tagIds);
+  }
+
+  /// Tag-filtered variant of [watchWaitingFor] that uses the [waiting_for]
+  /// text column as the list membership criterion.
+  Stream<List<Todo>> _watchFilteredByWaitingForColumn(
+      String userId, Set<String> tagIds) {
+    assert(tagIds.isNotEmpty);
+    final n = tagIds.length;
+    final placeholders = List.filled(n, '?').join(', ');
+    return customSelect(
+      'SELECT todos.* FROM todos '
+      'WHERE todos.user_id = ? '
+      'AND todos.waiting_for IS NOT NULL '
+      'AND todos.clarified = 1 '
+      'AND todos.done_at IS NULL '
+      'AND todos.intent = ? '
+      'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
+      '     WHERE todo_id = todos.id AND user_id = ? '
+      '       AND tag_id IN ($placeholders)) = $n '
+      'ORDER BY todos.created_at',
+      variables: [
+        Variable(userId),
+        Variable('next'),
+        Variable(userId),
+        ...tagIds.map(Variable.new),
+      ],
+      readsFrom: {todos, todoTags},
+    ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
   /// Stream of maybe-intent todos for [userId] (intent = 'maybe', done_at IS NULL).
@@ -499,6 +531,26 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Does not alter the GTD state — intent is orthogonal to state.
   Future<void> deferTaskToMaybe(String todoId, String userId, {DateTime? now}) =>
       setIntent(todoId, userId, Intent.maybe, now: now);
+
+  /// Sets (or clears) the [waiting_for] text column for a todo.
+  ///
+  /// [text] == null or empty string clears the field; empty string is
+  /// coerced to null so `IS NOT NULL` does not produce phantom Waiting For rows.
+  Future<void> setWaitingFor(String todoId, String userId, String? text) async {
+    final effective = (text == null || text.isEmpty) ? null : text;
+    final ts = DateTime.now().toUtc().toIso8601String();
+    await customUpdate(
+      'UPDATE todos SET waiting_for = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+      variables: [
+        Variable(effective),
+        Variable(ts),
+        Variable(todoId),
+        Variable(userId),
+      ],
+      updates: {todos},
+      updateKind: UpdateKind.update,
+    );
+  }
 
   /// Update mutable todo fields (title, notes, energy level, time estimate, due date).
   Future<void> updateFields(

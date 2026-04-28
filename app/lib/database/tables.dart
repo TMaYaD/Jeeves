@@ -20,11 +20,12 @@ class Todos extends Table {
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
-  /// GTD state: next_action | waiting_for | in_progress (done retired → use done_at)
+  /// GTD state: next_action | in_progress
+  /// (done retired → use done_at; waiting_for retired → use waiting_for column)
   TextColumn get state => text()
       .clientDefault(() => 'next_action')
       .customConstraint(
-        "NOT NULL DEFAULT 'next_action' CHECK (\"state\" IN ('next_action','waiting_for','in_progress'))",
+        "NOT NULL DEFAULT 'next_action' CHECK (\"state\" IN ('next_action','in_progress'))",
       )();
 
   /// ISO-8601 UTC timestamp; non-null when the task has been completed.

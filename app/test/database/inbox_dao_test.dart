@@ -107,18 +107,20 @@ void main() {
       expect(row.state, 'next_action');
     });
 
-    test('processInboxItem does not call FSM — any newState is accepted',
+    test('processInboxItemToWaitingFor: sets clarified, state=next_action, and waiting_for column',
         () async {
       await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
-      // 'waiting_for' is now valid even without an FSM inbox→waitingFor path.
+      // Mirrors what FocusSessionPlanningNotifier.processInboxItemToWaitingFor does.
       await db.inboxDao
-          .processInboxItem('x', userId: _userId, newState: 'waiting_for');
+          .processInboxItem('x', userId: _userId, newState: 'next_action');
+      await db.todoDao.setWaitingFor('x', _userId, 'Alice');
 
       final row =
           await (db.select(db.todos)..where((t) => t.id.equals('x')))
               .getSingle();
       expect(row.clarified, isTrue);
-      expect(row.state, 'waiting_for');
+      expect(row.state, 'next_action');
+      expect(row.waitingFor, 'Alice');
     });
 
     test('deleteTodo removes row from inbox watch', () async {

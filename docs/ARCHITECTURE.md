@@ -374,15 +374,29 @@ When a sprint completes normally (`completeSprint`) or the timer expires while t
 
 ### State column (`todos.state`)
 
-The `state` column drives the GTD workflow FSM. Valid values: `inbox | next_action | waiting_for | in_progress | done`. The FSM (enforced in `GtdStateMachine`) permits these transitions:
+The `state` column drives the GTD workflow FSM. Valid values: `next_action | in_progress`. The FSM (enforced in `GtdStateMachine`) permits these transitions:
 
 | From | To |
 |------|----|
-| `inbox` | `next_action`, `waiting_for`, `done` |
-| `next_action` | `in_progress`, `waiting_for`, `done` |
-| `waiting_for` | `next_action`, `done` |
-| `in_progress` | `done` |
-| `done` | — (terminal) |
+| `next_action` | `in_progress` |
+
+Retired states and their current representation:
+
+| Former state | Current representation |
+|---|---|
+| `inbox` | `state = 'next_action'` + `clarified = false` |
+| `done` | `done_at IS NOT NULL` |
+| `waiting_for` | `waiting_for IS NOT NULL` (text column) |
+
+### Waiting For list
+
+The Waiting For view sources from the `waiting_for` text column rather than a state value. A task appears in the Waiting For list when:
+
+```sql
+waiting_for IS NOT NULL AND clarified = true AND done_at IS NULL AND intent = 'next'
+```
+
+`TodoDao.setWaitingFor(todoId, userId, text)` writes (or clears) the column. Empty string is coerced to `NULL` so the `IS NOT NULL` predicate never produces phantom rows.
 
 ### Intent column (`todos.intent`)
 

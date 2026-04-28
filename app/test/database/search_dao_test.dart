@@ -206,7 +206,7 @@ void main() {
     tearDown(() async => db.close());
 
     test('single state filter', () async {
-      await _insertTodo(db, id: 'a', title: 'Waiting item', state: 'waiting_for');
+      await _insertTodo(db, id: 'a', title: 'In-progress item', state: 'in_progress');
       await _insertTodo(db, id: 'b', title: 'Next item', state: 'next_action');
 
       final results = await db.searchDao
@@ -226,20 +226,19 @@ void main() {
     test('multiple state filter', () async {
       await _insertTodo(db, id: 'a', title: 'Task A', state: 'in_progress');
       await _insertTodo(db, id: 'b', title: 'Task B', state: 'next_action');
-      await _insertTodo(db, id: 'c', title: 'Task C', state: 'waiting_for');
 
       final results = await db.searchDao
           .search(
             _user,
             SearchQuery(
               text: 'Task',
-              states: {GtdState.nextAction, GtdState.waitingFor},
+              states: {GtdState.nextAction, GtdState.inProgress},
             ),
           )
           .first;
 
       expect(results.length, 2);
-      expect(results.map((r) => r.todo.id), containsAll(['b', 'c']));
+      expect(results.map((r) => r.todo.id), containsAll(['a', 'b']));
     });
 
     test('done tasks excluded by default', () async {
