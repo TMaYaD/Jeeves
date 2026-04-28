@@ -379,15 +379,14 @@ The `state` column drives the GTD workflow FSM. Valid values: `next_action | in_
 | From | To |
 |------|----|
 | `next_action` | `in_progress` |
-| `in_progress` | — (completion via `markDone`; PR I retires the state) |
 
-Retired states and their migration:
+Retired states and their current representation:
 
-| Former state | Retired in | Current representation |
-|---|---|---|
-| `inbox` | migration 0016 | `state = 'next_action'` + `clarified = false` |
-| `done` | migration 0017 | `done_at IS NOT NULL` |
-| `waiting_for` | migration 0018 | `waiting_for IS NOT NULL` (text column) |
+| Former state | Current representation |
+|---|---|
+| `inbox` | `state = 'next_action'` + `clarified = false` |
+| `done` | `done_at IS NOT NULL` |
+| `waiting_for` | `waiting_for IS NOT NULL` (text column) |
 
 ### Waiting For list
 

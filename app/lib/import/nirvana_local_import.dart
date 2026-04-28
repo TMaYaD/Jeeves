@@ -148,6 +148,14 @@ Future<ImportResult> importNirvanaLocally({
         var effectiveState = isClarified ? item.state : 'next_action';
         if (effectiveState == 'waiting_for') effectiveState = 'next_action';
 
+        // Normalize at the import boundary: blank/whitespace → null so IS NOT
+        // NULL checks don't produce phantom Waiting For items.
+        final trimmedWaitingFor = item.waitingFor?.trim();
+        final effectiveWaitingFor =
+            (trimmedWaitingFor == null || trimmedWaitingFor.isEmpty)
+                ? null
+                : trimmedWaitingFor;
+
         await db.into(db.todos).insert(
               TodosCompanion(
                 id: Value(todoId),
@@ -161,7 +169,7 @@ Future<ImportResult> importNirvanaLocally({
                 dueDate: Value(dueDate),
                 timeEstimate: Value(item.timeEstimate),
                 energyLevel: Value(item.energyLevel),
-                waitingFor: Value(item.waitingFor),
+                waitingFor: Value(effectiveWaitingFor),
                 captureSource: const Value('nirvana_import'),
                 userId: Value(userId),
                 createdAt: Value(now),

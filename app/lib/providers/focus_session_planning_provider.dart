@@ -307,12 +307,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// to the waiting_for column so the item appears in the Waiting For view.
   Future<void> processInboxItemToWaitingFor(
       String id, String waitingForText) async {
-    await _db.inboxDao.processInboxItem(
-      id,
-      userId: _userId,
-      newState: GtdState.nextAction.value,
-    );
-    await _db.todoDao.setWaitingFor(id, _userId, waitingForText);
+    final normalizedWaitingFor = waitingForText.trim();
+    await _db.transaction(() async {
+      await _db.inboxDao.processInboxItem(
+        id,
+        userId: _userId,
+        newState: GtdState.nextAction.value,
+      );
+      await _db.todoDao.setWaitingFor(id, _userId, normalizedWaitingFor);
+    });
     state = state.copyWith(
       inboxClarifiedCount: state.inboxClarifiedCount + 1,
     );

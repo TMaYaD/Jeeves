@@ -33,7 +33,6 @@ def downgrade() -> None:
         "todos",
         "state IN ('next_action','waiting_for','in_progress')",
     )
-    # Recover categorisation where data allows; rows that previously had
-    # state='waiting_for' with a NULL waiting_for text column cannot be
-    # recovered and stay as next_action. Alpha-acceptable.
-    op.execute("UPDATE todos SET state = 'waiting_for' WHERE waiting_for IS NOT NULL")
+    raise NotImplementedError(
+        "Migration 0018 is irreversible: prior waiting_for state cannot be reconstructed safely."
+    )
