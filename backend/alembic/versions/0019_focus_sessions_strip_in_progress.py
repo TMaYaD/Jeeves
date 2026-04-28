@@ -14,8 +14,9 @@ Revision ID: 0019
 Revises: 0018
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0019"
 down_revision = "0018"
@@ -154,10 +155,8 @@ def upgrade() -> None:
     )
 
     # 10. Add new tables to the PowerSync publication
-    op.execute("ALTER PUBLICATION powersync_publication ADD TABLE focus_sessions")
-    op.execute(
-        "ALTER PUBLICATION powersync_publication ADD TABLE focus_session_tasks"
-    )
+    op.execute("ALTER PUBLICATION powersync ADD TABLE focus_sessions")
+    op.execute("ALTER PUBLICATION powersync ADD TABLE focus_session_tasks")
 
 
 def downgrade() -> None:

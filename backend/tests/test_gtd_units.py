@@ -11,7 +11,7 @@ from app.todos.utils import _infer_tag_type
 
 class TestTodoStateValidator:
     def test_valid_states_are_accepted(self) -> None:
-        valid = ["next_action", "in_progress"]
+        valid = ["next_action"]
         for state in valid:
             t = TodoCreate(title="x", state=state)
             assert t.state == state

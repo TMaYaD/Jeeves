@@ -149,9 +149,7 @@ class FocusSession(Base):
 class FocusSessionTask(Base):
     __tablename__ = "focus_session_tasks"
 
-    focus_session_id: Mapped[str] = mapped_column(
-        ForeignKey("focus_sessions.id"), primary_key=True
-    )
+    focus_session_id: Mapped[str] = mapped_column(ForeignKey("focus_sessions.id"), primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("todos.id"), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 

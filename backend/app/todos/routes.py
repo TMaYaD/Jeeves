@@ -78,10 +78,7 @@ async def create_todo(
         energy_level=body.energy_level,
         capture_source=body.capture_source,
         waiting_for=body.waiting_for,
-        in_progress_since=body.in_progress_since,
         time_spent_minutes=body.time_spent_minutes,
-        selected_for_today=body.selected_for_today,
-        daily_selection_date=body.daily_selection_date,
         user_id=current_user.id,
     )
     db.add(todo)
