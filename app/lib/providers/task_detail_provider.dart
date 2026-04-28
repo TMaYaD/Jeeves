@@ -3,8 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
-import '../models/gtd_state_machine.dart';
-import '../models/todo.dart' show GtdState;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -152,21 +150,11 @@ class TaskDetailNotifier {
         .go();
   }
 
-  /// Returns the GTD states that are valid next states from [currentState].
-  List<GtdState> validNextStates(GtdState currentState) {
-    return (GtdStateMachine.allowedTransitions[currentState] ?? {}).toList()
-      ..sort((a, b) => a.index.compareTo(b.index));
-  }
-
   /// Sets (or clears) the [waiting_for] text column.
   ///
   /// [text] == null clears the field; empty string is also treated as a clear.
   Future<void> setWaitingFor(String? text) =>
       _db.todoDao.setWaitingFor(_todoId, _userId, text);
-
-  /// Transitions the task to [newState].
-  Future<void> transition(GtdState newState, {DateTime? now}) =>
-      _db.todoDao.transitionState(_todoId, _userId, newState, now: now);
 
   /// Watch all tag associations for this todo (returns Drift [Tag] rows),
   /// scoped to the current user.

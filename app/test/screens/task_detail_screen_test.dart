@@ -22,16 +22,14 @@ Future<Todo> _insertAt(
   GtdDatabase db, {
   required String id,
   String title = 'Test task',
-  String state = 'next_action',
 }) async {
   final now = DateTime.now();
   await db.customInsert(
-    'INSERT INTO todos (id, title, state, user_id, created_at, time_spent_minutes) '
-    'VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO todos (id, title, user_id, created_at, time_spent_minutes) '
+    'VALUES (?, ?, ?, ?, ?)',
     variables: [
       Variable.withString(id),
       Variable.withString(title),
-      Variable.withString(state),
       Variable.withString(_userId),
       Variable.withDateTime(now),
       Variable.withInt(0),
@@ -127,25 +125,6 @@ void main() {
       await _showTaskDetail(tester, widget, router, 'task3');
 
       expect(find.byKey(const Key('status_pill')), findsOneWidget);
-    });
-
-    testWidgets('status pill shows no-transition snackbar for next_action items',
-        (tester) async {
-      final todo = await _insertAt(db, id: 'task4', title: 'Next action task');
-      final (widget, router) = _buildScreen(db, 'task4', initialTodo: todo);
-      await _showTaskDetail(tester, widget, router, 'task4');
-
-      // in_progress retired (migration 0019): next_action is the only state;
-      // tapping the pill shows a snackbar rather than a transition sheet.
-      expect(find.text('Next Actions'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('status_pill')));
-      await tester.pumpAndSettle();
-
-      expect(find.text('No further transitions available'), findsOneWidget);
-      expect(find.text('In Progress'), findsNothing);
-      expect(find.text('Waiting For'), findsNothing);
-      expect(find.text('Done'), findsNothing);
-      expect(find.text('Someday / Maybe'), findsNothing);
     });
 
     testWidgets('waiting_for section is visible on detail screen', (tester) async {

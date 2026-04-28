@@ -16,13 +16,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show GtdState;
 import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession;
-export '../models/todo.dart' show GtdState;
 
 // ---------------------------------------------------------------------------
 // Date helpers
@@ -321,13 +319,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         clearDueDate: clearDueDate,
       );
 
-  /// Processes an inbox item by setting clarified = true and transitioning
-  /// to [newState].
-  Future<void> processInboxItem(String id, GtdState newState) async {
+  /// Processes an inbox item by setting clarified = true.
+  Future<void> processInboxItem(String id) async {
     await _db.inboxDao.processInboxItem(
       id,
       userId: _userId,
-      newState: newState.value,
     );
     state = state.copyWith(
       inboxClarifiedCount: state.inboxClarifiedCount + 1,
@@ -336,8 +332,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Processes an inbox item to the Waiting For list.
   ///
-  /// Sets clarified = true, state = next_action, and writes [waitingForText]
-  /// to the waiting_for column so the item appears in the Waiting For view.
+  /// Sets clarified = true and writes [waitingForText] to the waiting_for
+  /// column so the item appears in the Waiting For view.
   Future<void> processInboxItemToWaitingFor(
       String id, String waitingForText) async {
     final normalizedWaitingFor = waitingForText.trim();
@@ -345,7 +341,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _db.inboxDao.processInboxItem(
         id,
         userId: _userId,
-        newState: GtdState.nextAction.value,
       );
       await _db.todoDao.setWaitingFor(id, _userId, normalizedWaitingFor);
     });
@@ -356,13 +351,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Processes an inbox item to the maybe list.
   ///
-  /// Sets clarified = true, state = next_action, and intent = 'maybe'
-  /// so the item appears in the Maybe view rather than Next Actions.
+  /// Sets clarified = true and intent = 'maybe' so the item appears in the
+  /// Maybe view rather than Next Actions.
   Future<void> processInboxItemToMaybe(String id) async {
     await _db.inboxDao.processInboxItem(
       id,
       userId: _userId,
-      newState: GtdState.nextAction.value,
       intent: 'maybe',
     );
     state = state.copyWith(

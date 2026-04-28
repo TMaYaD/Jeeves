@@ -27,7 +27,6 @@ from app.database import Base
 # Canonical constant sets — single source of truth shared with schemas.py
 # ---------------------------------------------------------------------------
 
-GTD_STATES = ("next_action",)
 INTENT_VALUES = ("next", "maybe", "trash")
 TAG_TYPES = ("context", "project", "area", "label")
 ENERGY_LEVELS = ("low", "medium", "high")
@@ -77,12 +76,7 @@ class TodoTag(Base):
 class Todo(Base):
     __tablename__ = "todos"
     __table_args__ = (
-        Index("ix_todos_user_state", "user_id", "state"),
         Index("ix_todos_user_done_at", "user_id", "done_at"),
-        CheckConstraint(
-            "state IN ('next_action')",
-            name="ck_todos_state",
-        ),
         CheckConstraint(
             "intent IN ('next','maybe','trash')",
             name="ck_todos_intent",
@@ -109,7 +103,6 @@ class Todo(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     clarified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    state: Mapped[str] = mapped_column(String(50), default="next_action")
     intent: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

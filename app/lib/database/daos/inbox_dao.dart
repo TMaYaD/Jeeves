@@ -64,14 +64,12 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   }
 
   /// Sets clarified = true on the given inbox item, optionally updating
-  /// [newState], [intent], and [dueDate].
+  /// [intent] and [dueDate].
   ///
-  /// Scoped to [userId] to prevent cross-user mutations.  No FSM validation
-  /// is performed — the caller is responsible for choosing a valid state.
+  /// Scoped to [userId] to prevent cross-user mutations.
   Future<void> processInboxItem(
     String id, {
     required String userId,
-    String? newState,
     String? intent,
     DateTime? dueDate,
   }) async {
@@ -84,7 +82,6 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
           ))
         .write(TodosCompanion(
       clarified: const Value(true),
-      state: newState != null ? Value(newState) : const Value.absent(),
       intent: intent != null ? Value(intent) : const Value.absent(),
       dueDate: dueDate != null ? Value(dueDate) : const Value.absent(),
       updatedAt: Value(DateTime.now()),

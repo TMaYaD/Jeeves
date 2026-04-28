@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/models/search_result.dart';
-import 'package:jeeves/models/todo.dart' show GtdState;
 import 'package:jeeves/providers/search_provider.dart';
 import 'package:jeeves/screens/search/search_screen.dart';
 
@@ -16,7 +15,7 @@ Widget _buildScreen() {
     overrides: [
       // Bypass database + auth; always return empty results.
       searchResultsProvider.overrideWith(
-        (_) => Stream.value(<GtdState, List<SearchResult>>{}),
+        (_) => Stream.value(<SearchResult>[]),
       ),
       // Bypass SharedPreferences; start with no recent searches.
       recentSearchesProvider.overrideWith(
@@ -78,7 +77,7 @@ void main() {
         ProviderScope(
           overrides: [
             searchResultsProvider.overrideWith(
-              (_) => Stream.value(<GtdState, List<SearchResult>>{}),
+              (_) => Stream.value(<SearchResult>[]),
             ),
             recentSearchesProvider.overrideWith(
               () => _EmptyRecentSearchesNotifier(),

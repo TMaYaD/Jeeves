@@ -95,31 +95,17 @@ void main() {
       expect(items, isEmpty);
     });
 
-    test('processInboxItem sets optional newState', () async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
-      await db.inboxDao
-          .processInboxItem('x', userId: _userId, newState: 'next_action');
-
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.clarified, isTrue);
-      expect(row.state, 'next_action');
-    });
-
-    test('processInboxItemToWaitingFor: sets clarified, state=next_action, and waiting_for column',
+    test('processInboxItemToWaitingFor: sets clarified and waiting_for column',
         () async {
       await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
       // Mirrors what FocusSessionPlanningNotifier.processInboxItemToWaitingFor does.
-      await db.inboxDao
-          .processInboxItem('x', userId: _userId, newState: 'next_action');
+      await db.inboxDao.processInboxItem('x', userId: _userId);
       await db.todoDao.setWaitingFor('x', _userId, 'Alice');
 
       final row =
           await (db.select(db.todos)..where((t) => t.id.equals('x')))
               .getSingle();
       expect(row.clarified, isTrue);
-      expect(row.state, 'next_action');
       expect(row.waitingFor, 'Alice');
     });
 

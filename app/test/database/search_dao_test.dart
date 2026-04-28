@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/search_query.dart';
 import 'package:jeeves/models/search_result.dart';
-import 'package:jeeves/models/todo.dart' show GtdState;
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -19,7 +18,6 @@ Future<void> _insertTodo(
   GtdDatabase db, {
   required String id,
   required String title,
-  String state = 'next_action',
   String? notes,
   String? energyLevel,
   int? timeEstimate,
@@ -34,7 +32,6 @@ Future<void> _insertTodo(
     energyLevel: Value(energyLevel),
     timeEstimate: Value(timeEstimate),
     dueDate: Value(dueDate),
-    state: Value(state),
     clarified: const Value(true),
     userId: Value(userId),
     createdAt: Value(now),
@@ -123,7 +120,7 @@ void main() {
     });
 
     test('tag name match (context tag)', () async {
-      await _insertTodo(db, id: 'a', title: 'Task A', state: 'next_action');
+      await _insertTodo(db, id: 'a', title: 'Task A');
       final tagId = await _insertTag(db, name: 'office', type: 'context');
       await db.tagDao.assignTag('a', tagId, _user);
 
@@ -137,7 +134,7 @@ void main() {
     });
 
     test('project tag match', () async {
-      await _insertTodo(db, id: 'a', title: 'Write spec', state: 'next_action');
+      await _insertTodo(db, id: 'a', title: 'Write spec');
       final tagId = await _insertTag(db, name: 'WebProject', type: 'project');
       await db.tagDao.assignTag('a', tagId, _user);
 
@@ -150,7 +147,7 @@ void main() {
     });
 
     test('area tag match', () async {
-      await _insertTodo(db, id: 'a', title: 'Review docs', state: 'next_action');
+      await _insertTodo(db, id: 'a', title: 'Review docs');
       final tagId = await _insertTag(db, name: 'Health', type: 'area');
       await db.tagDao.assignTag('a', tagId, _user);
 
@@ -184,7 +181,7 @@ void main() {
     });
 
     test('all tags for matched todo are returned, not just matching tag', () async {
-      await _insertTodo(db, id: 'a', title: 'Multi-tag task', state: 'next_action');
+      await _insertTodo(db, id: 'a', title: 'Multi-tag task');
       final ctx = await _insertTag(db, name: 'phone', type: 'context');
       final proj = await _insertTag(db, name: 'MyProject', type: 'project');
       await db.tagDao.assignTag('a', ctx, _user);
@@ -200,32 +197,10 @@ void main() {
     });
   });
 
-  group('SearchDao — state filter', () {
+  group('SearchDao — done filtering', () {
     late GtdDatabase db;
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
-
-    test('state filter bypasses done-task exclusion', () async {
-      // Default search excludes done tasks; an explicit state filter overrides
-      // that so callers can search completed items by passing states explicitly.
-      await _insertTodo(db, id: 'a', title: 'Active task');
-      await _insertTodo(db, id: 'b', title: 'Done task');
-      await db.todoDao.markDone('b', _user);
-
-      final withoutFilter =
-          await db.searchDao.search(_user, const SearchQuery(text: 'task')).first;
-      expect(withoutFilter.length, 1);
-      expect(withoutFilter.first.todo.id, 'a');
-
-      final withFilter = await db.searchDao
-          .search(
-            _user,
-            SearchQuery(text: 'task', states: {GtdState.nextAction}),
-          )
-          .first;
-      expect(withFilter.length, 2);
-      expect(withFilter.map((r) => r.todo.id), containsAll(['a', 'b']));
-    });
 
     test('done tasks excluded by default', () async {
       await _insertTodo(db, id: 'a', title: 'Done thing');
@@ -291,8 +266,8 @@ void main() {
     });
 
     test('tag-scope filter (tagIds)', () async {
-      await _insertTodo(db, id: 'a', title: 'Tagged', state: 'next_action');
-      await _insertTodo(db, id: 'b', title: 'Untagged', state: 'next_action');
+      await _insertTodo(db, id: 'a', title: 'Tagged');
+      await _insertTodo(db, id: 'b', title: 'Untagged');
       final tagId = await _insertTag(db, name: 'work', type: 'context');
       await db.tagDao.assignTag('a', tagId, _user);
 

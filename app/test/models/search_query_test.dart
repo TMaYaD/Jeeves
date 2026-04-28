@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/models/search_query.dart';
-import 'package:jeeves/models/todo.dart' show GtdState;
 
 void main() {
   group('SearchQuery.isEmpty', () {
@@ -11,10 +10,6 @@ void main() {
 
     test('non-empty text makes it not empty', () {
       expect(const SearchQuery(text: 'hello').isEmpty, isFalse);
-    });
-
-    test('non-empty states makes it not empty', () {
-      expect(SearchQuery(states: {GtdState.nextAction}).isEmpty, isFalse);
     });
 
     test('includeDone=true makes it not empty', () {
@@ -53,12 +48,10 @@ void main() {
     test('preserves unchanged fields', () {
       final original = SearchQuery(
         text: 'original',
-        states: {GtdState.nextAction},
         energyLevels: const {'low'},
         includeDone: true,
       );
       final updated = original.copyWith(text: 'updated');
-      expect(updated.states, {GtdState.nextAction});
       expect(updated.energyLevels, {'low'});
       expect(updated.includeDone, isTrue);
     });

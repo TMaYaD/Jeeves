@@ -27,12 +27,11 @@ Widget _buildScreen(Stream<List<Todo>> stream) {
   );
 }
 
-Todo _todo(String id, String title, {String state = 'next_action'}) => Todo(
+Todo _todo(String id, String title) => Todo(
       id: id,
       title: title,
       doneAt: null,
       createdAt: DateTime(2024, 1, 1),
-      state: state,
       clarified: true,
       intent: 'next',
       userId: kLocalUserId,

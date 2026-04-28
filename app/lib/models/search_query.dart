@@ -1,10 +1,7 @@
-import 'todo.dart' show GtdState;
-
 /// Parameters for a universal search across all GTD tasks and attributes.
 class SearchQuery {
   const SearchQuery({
     this.text = '',
-    this.states = const {},
     this.tagIds = const {},
     this.energyLevels = const {},
     this.dueDateBefore,
@@ -15,9 +12,6 @@ class SearchQuery {
 
   /// Free-text substring search across title, notes, and tag names.
   final String text;
-
-  /// When non-empty, only tasks in these GTD states are returned.
-  final Set<GtdState> states;
 
   /// When non-empty, only tasks tagged with at least one of these tag IDs.
   final Set<String> tagIds;
@@ -36,7 +30,6 @@ class SearchQuery {
 
   bool get isEmpty =>
       text.trim().isEmpty &&
-      states.isEmpty &&
       tagIds.isEmpty &&
       energyLevels.isEmpty &&
       dueDateBefore == null &&
@@ -46,7 +39,6 @@ class SearchQuery {
 
   SearchQuery copyWith({
     String? text,
-    Set<GtdState>? states,
     Set<String>? tagIds,
     Set<String>? energyLevels,
     DateTime? dueDateBefore,
@@ -59,7 +51,6 @@ class SearchQuery {
   }) =>
       SearchQuery(
         text: text ?? this.text,
-        states: states ?? this.states,
         tagIds: tagIds ?? this.tagIds,
         energyLevels: energyLevels ?? this.energyLevels,
         dueDateBefore: clearDueDateBefore

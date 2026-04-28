@@ -122,14 +122,14 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     return true;
   }
 
-  Future<void> _process(BuildContext context, GtdState destination) async {
+  Future<void> _process(BuildContext context) async {
     Object? error;
     try {
       final saved = await _saveFields(context);
       if (!saved || !context.mounted) return;
       await ref
           .read(focusSessionPlanningProvider.notifier)
-          .processInboxItem(widget.todo.id, destination);
+          .processInboxItem(widget.todo.id);
     } catch (e) {
       error = e;
     }
@@ -377,7 +377,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           label: 'Next Action',
           icon: Icons.check_circle_outline,
           color: const Color(0xFF16A34A),
-          onTap: () => _process(context, GtdState.nextAction),
+          onTap: () => _process(context),
         ),
         const SizedBox(height: 8),
         _DestinationButton(

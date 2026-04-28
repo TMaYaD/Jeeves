@@ -43,13 +43,7 @@ class SearchDao {
 
     Expression<bool> where = _db.todos.userId.equals(userId);
 
-    if (query.states.isNotEmpty) {
-      // Explicit state selection overrides includeDone
-      where = where &
-          _db.todos.state.isIn(
-            query.states.map((s) => s.value).toList(),
-          );
-    } else if (!query.includeDone) {
+    if (!query.includeDone) {
       where = where & _db.todos.doneAt.isNull();
     }
 

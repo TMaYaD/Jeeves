@@ -5,7 +5,6 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../database/gtd_database.dart';
-import '../../models/todo.dart' show GtdState;
 import '../../providers/task_detail_provider.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
@@ -439,36 +438,33 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   Widget _buildStatusPill(Todo todo) {
-    final currentState = GtdState.fromString(todo.state);
-    return InkWell(
+    return Container(
       key: const Key('status_pill'),
-      onTap: () => _showMoveToSheet(context, todo),
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 6,
-              height: 6,
-              decoration: const BoxDecoration(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 6,
+            height: 6,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
                 color: Color(0xFF10B981),
                 shape: BoxShape.circle,
               ),
             ),
-            const SizedBox(width: 8),
-            Text(
-              currentState.displayName,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF4B5563)),
-            ),
-          ],
-        ),
+          ),
+          SizedBox(width: 8),
+          Text(
+            'Next Actions',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF4B5563)),
+          ),
+        ],
       ),
     );
   }
@@ -718,69 +714,4 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
-  Future<void> _showMoveToSheet(BuildContext context, Todo todo) async {
-    final currentState = GtdState.fromString(todo.state);
-    final valid = _notifier.validNextStates(currentState);
-    if (valid.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No further transitions available')));
-      return;
-    }
-
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.white,
-      builder: (ctx) => _MoveToSheet(
-        currentState: currentState,
-        validStates: valid,
-        onMove: (newState) async {
-          Navigator.of(ctx).pop();
-          try {
-            await _notifier.transition(newState);
-          } catch (e) {
-            if (!mounted) return;
-            // ignore: use_build_context_synchronously
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-            return;
-          }
-        },
-      ),
-    );
-  }
-}
-
-class _MoveToSheet extends StatelessWidget {
-  const _MoveToSheet({
-    required this.currentState,
-    required this.validStates,
-    required this.onMove,
-  });
-
-  final GtdState currentState;
-  final List<GtdState> validStates;
-  final ValueChanged<GtdState> onMove;
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(padding: EdgeInsets.all(16), child: Text('Move to…', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-              for (final state in validStates)
-                ListTile(
-                  key: Key('move_to_${state.value}'),
-                  title: Text(state.displayName),
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 14),
-                  onTap: () => onMove(state),
-                ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }

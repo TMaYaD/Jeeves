@@ -140,13 +140,9 @@ Future<ImportResult> importNirvanaLocally({
             ? DateTime.tryParse(item.dueDate!)?.toUtc()
             : null;
 
-        // Items imported with state='inbox' become next_action + clarified=false
-        // so they appear in the inbox clarification step.
-        // Items imported with state='waiting_for' are collapsed to next_action;
-        // the waiting_for text column (written below) is the source of truth.
+        // Items imported with state='inbox' become clarified=false so they
+        // appear in the inbox clarification step.
         final isClarified = item.state != 'inbox';
-        var effectiveState = isClarified ? item.state : 'next_action';
-        if (effectiveState == 'waiting_for') effectiveState = 'next_action';
 
         // Normalize at the import boundary: blank/whitespace → null so IS NOT
         // NULL checks don't produce phantom Waiting For items.
@@ -164,7 +160,6 @@ Future<ImportResult> importNirvanaLocally({
                 doneAt: item.doneAt != null
                     ? Value(item.doneAt!.toUtc().toIso8601String())
                     : const Value(null),
-                state: Value(effectiveState),
                 clarified: Value(isClarified),
                 dueDate: Value(dueDate),
                 timeEstimate: Value(item.timeEstimate),
