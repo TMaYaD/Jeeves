@@ -140,19 +140,16 @@ final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
 // Stream providers — planning data
 // ---------------------------------------------------------------------------
 
-/// Next-action tasks not yet reviewed in today's planning session.
-final nextActionsForFocusSessionPlanningProvider =
+/// All next-action tasks for the Review Next Actions step, in their original
+/// query order without filtering by selection or review state.
+///
+/// Keeps rows stable in the list while the user marks tasks as selected or
+/// skipped. Read [focusSessionPlanningProvider] to overlay selection state.
+final allNextActionsForPlanningReviewProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final userId = ref.watch(currentUserIdProvider);
-  final planningState = ref.watch(focusSessionPlanningProvider);
-  final reviewed = {
-    ...planningState.reviewedTaskIds,
-    ...planningState.pendingSelectedTaskIds,
-  };
-  return db.todoDao
-      .watchNextActions(userId)
-      .map((all) => all.where((t) => !reviewed.contains(t.id)).toList());
+  return db.todoDao.watchNextActions(userId);
 });
 
 /// Tasks selected for today (in-memory pending list, ordered by selection).
@@ -183,18 +180,6 @@ final focusSessionPlanningTasksMissingEstimatesProvider =
   return db.todoDao.watchTodosById(userId, ids).map(
         (tasks) => tasks.where((t) => t.timeEstimate == null).toList(),
       );
-});
-
-/// Tasks reviewed today but not selected (skipped / deferred).
-final skippedNextActionsForFocusSessionPlanningProvider =
-    StreamProvider<List<Todo>>((ref) {
-  final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  final planningState = ref.watch(focusSessionPlanningProvider);
-  final skippedIds = planningState.reviewedTaskIds
-      .where((id) => !planningState.pendingSelectedTaskIds.contains(id))
-      .toList();
-  return db.todoDao.watchTodosById(userId, skippedIds);
 });
 
 // ---------------------------------------------------------------------------

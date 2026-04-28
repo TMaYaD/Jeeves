@@ -12,24 +12,31 @@ class PlanSummaryStep extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final planningState = ref.watch(focusSessionPlanningProvider);
     final availableMinutes = planningState.availableMinutes;
-    final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
-    final asyncPending = ref.watch(nextActionsForFocusSessionPlanningProvider);
-    final asyncSkipped = ref.watch(skippedNextActionsForFocusSessionPlanningProvider);
+    final selectedIds = Set<String>.of(planningState.pendingSelectedTaskIds);
+    final skippedIds = Set<String>.of(planningState.reviewedTaskIds);
 
-    // Simple combinations of states
-    if (asyncSelected.isLoading || asyncPending.isLoading || asyncSkipped.isLoading) {
+    final asyncAllTasks = ref.watch(allNextActionsForPlanningReviewProvider);
+    final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
+
+    if (asyncAllTasks.isLoading || asyncSelected.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final selectedTasks = _sortTasks(asyncSelected.asData?.value ?? []);
-    final pendingTasks = asyncPending.asData?.value ?? [];
-    final skippedTasks = asyncSkipped.asData?.value ?? [];
+    final allTasks = asyncAllTasks.asData?.value ?? [];
+    final selectedTasks = asyncSelected.asData?.value ?? [];
 
     final totalMinutes =
         selectedTasks.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
     final ratio = availableMinutes > 0
         ? totalMinutes / availableMinutes
         : double.infinity;
+
+    final pendingCount = allTasks
+        .where((t) =>
+            !selectedIds.contains(t.id) && !skippedIds.contains(t.id))
+        .length;
+    final skippedCount =
+        allTasks.where((t) => skippedIds.contains(t.id)).length;
 
     return Column(
       children: [
@@ -54,7 +61,11 @@ class PlanSummaryStep extends ConsumerWidget {
         ),
         const Divider(height: 1, color: Color(0xFFF3F4F6)),
 
-        // --- Scrollable task list ---
+        // --- Scrollable flat task list ---
+        // Tasks stay in their original positions when selected or skipped;
+        // state is shown via card tint and button icons rather than section
+        // membership. This prevents the list from jumping under the user's
+        // finger during batch selection.
         Expanded(
           child: ScrollConfiguration(
             // Disable the M3 stretch (and legacy glow) overscroll indicator.
@@ -67,51 +78,37 @@ class PlanSummaryStep extends ConsumerWidget {
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
-                // Today's tasks (selected)
-                if (selectedTasks.isNotEmpty) ...[
-                  _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
-                  const SizedBox(height: 8),
-                  ...selectedTasks.map((t) => _ReviewCard(
-                        todo: t,
-                        isSelected: true,
-                        onUndo: () => _handleUndo(ref, t),
-                        onSkip: () => _handleSkip(ref, t),
-                      )),
-                  const SizedBox(height: 16),
-                ],
-
-                // Pending review
-                if (pendingTasks.isNotEmpty) ...[
-                  _SectionLabel('Pending Review (${pendingTasks.length})'),
-                  const SizedBox(height: 8),
-                  ...pendingTasks.map((t) => _ReviewCard(
-                        todo: t,
-                        onSelect: () => _handleSelect(ref, t),
-                        onSkip: () => _handleSkip(ref, t),
-                      )),
-                  const SizedBox(height: 16),
-                ],
-
-                // Skipped tasks
-                if (skippedTasks.isNotEmpty) ...[
-                  _SectionLabel('Skipped Tasks (${skippedTasks.length})'),
-                  const SizedBox(height: 8),
-                  ...skippedTasks.map((t) => _ReviewCard(
-                        todo: t,
-                        isSkipped: true,
-                        onSelect: () => _handleSelect(ref, t),
-                        onUndo: () => _handleUndo(ref, t),
-                      )),
-                ],
-
-                if (selectedTasks.isEmpty &&
-                    pendingTasks.isEmpty &&
-                    skippedTasks.isEmpty)
+                ...allTasks.map((t) {
+                  final isSelected = selectedIds.contains(t.id);
+                  final isSkipped = skippedIds.contains(t.id);
+                  return _ReviewCard(
+                    key: ValueKey(t.id),
+                    todo: t,
+                    isSelected: isSelected,
+                    isSkipped: isSkipped,
+                    onSelect: !isSelected ? () => _handleSelect(ref, t) : null,
+                    onSkip: !isSkipped ? () => _handleSkip(ref, t) : null,
+                    onUndo: (isSelected || isSkipped)
+                        ? () => _handleUndo(ref, t)
+                        : null,
+                  );
+                }),
+                if (allTasks.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
                       'No tasks to review!',
                       style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                if (allTasks.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      _reviewSummary(
+                          selectedTasks.length, pendingCount, skippedCount),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[400]),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -135,17 +132,18 @@ class PlanSummaryStep extends ConsumerWidget {
     ref.read(focusSessionPlanningProvider.notifier).undoTaskReview(todo.id);
   }
 
-  List<Todo> _sortTasks(List<Todo> tasks) {
-    final withDue = tasks.where((t) => t.dueDate != null).toList()
-      ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
-    final noDue = tasks.where((t) => t.dueDate == null).toList();
-    return [...withDue, ...noDue];
-  }
-
   String _capacitySummary(int count, int totalMinutes, int availableMinutes) {
     final planned = _formatMinutes(totalMinutes);
     final available = _formatMinutes(availableMinutes);
     return '$count task${count == 1 ? '' : 's'} · $planned planned of $available available';
+  }
+
+  String _reviewSummary(int selected, int pending, int skipped) {
+    final parts = <String>[];
+    if (selected > 0) parts.add('$selected selected');
+    if (pending > 0) parts.add('$pending pending');
+    if (skipped > 0) parts.add('$skipped skipped');
+    return parts.join(' · ');
   }
 
   String _formatMinutes(int minutes) {
@@ -217,9 +215,13 @@ class _CapacityBar extends StatelessWidget {
 ///   - pending & selected → Skip (minus icon)
 ///   - skipped → Undo (un-skip)
 ///
-/// This means "only the button that was pressed changes to Undo".
+/// Background tint distinguishes states at a glance without reordering rows:
+/// - selected → light green tint
+/// - skipped  → light grey tint
+/// - pending  → white
 class _ReviewCard extends StatelessWidget {
   const _ReviewCard({
+    super.key,
     required this.todo,
     this.isSelected = false,
     this.isSkipped = false,
@@ -238,7 +240,16 @@ class _ReviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textColor = isSkipped ? Colors.grey[500] : const Color(0xFF1A1A2E);
-    final backgroundColor = isSkipped ? const Color(0xFFF9FAFB) : Colors.white;
+    final backgroundColor = isSelected
+        ? const Color(0xFFF0FDF4)
+        : isSkipped
+            ? const Color(0xFFF9FAFB)
+            : Colors.white;
+    final borderColor = isSelected
+        ? const Color(0xFFBBF7D0)
+        : isSkipped
+            ? const Color(0xFFF3F4F6)
+            : const Color(0xFFE5E7EB);
 
     return Card(
       elevation: 0,
@@ -246,9 +257,7 @@ class _ReviewCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isSkipped ? const Color(0xFFF3F4F6) : const Color(0xFFE5E7EB),
-        ),
+        side: BorderSide(color: borderColor),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
