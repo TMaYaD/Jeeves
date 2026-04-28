@@ -93,7 +93,8 @@ void main() {
 
     test('excludes non-next_action tasks', () async {
       await _insert(db, id: 'a', title: 'Inbox item', state: 'inbox');
-      await _insert(db, id: 'b', title: 'Someday', state: 'someday_maybe');
+      await _insert(db, id: 'b', title: 'Maybe item', state: 'next_action');
+      await db.todoDao.deferTaskToMaybe('b', _userId);
 
       final items =
           await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
@@ -195,27 +196,28 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // deferTaskToSomeday
+  // deferTaskToMaybe
   // ---------------------------------------------------------------------------
 
-  group('deferTaskToSomeday', () {
+  group('deferTaskToMaybe', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('transitions a next_action task to someday_maybe', () async {
+    test('sets intent=maybe without changing state', () async {
       await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.transitionState('a', _userId, GtdState.somedayMaybe);
+      await db.todoDao.deferTaskToMaybe('a', _userId);
 
       final row = await db.todoDao.getTodo('a', _userId);
-      expect(row?.state, GtdState.somedayMaybe.value);
+      expect(row?.intent, 'maybe');
+      expect(row?.state, 'next_action');
     });
 
     test('task no longer appears in watchNextActionsForPlanning after deferral',
         () async {
       await _insert(db, id: 'a', title: 'A', state: 'next_action');
-      await db.todoDao.transitionState('a', _userId, GtdState.somedayMaybe);
+      await db.todoDao.deferTaskToMaybe('a', _userId);
 
       final items =
           await db.todoDao.watchNextActionsForPlanning(_userId, _today).first;
@@ -449,6 +451,10 @@ void main() {
       final m = db.createMigrator();
       await m.addColumn(db.todos, db.todos.selectedForToday);
       await m.addColumn(db.todos, db.todos.dailySelectionDate);
+      // intent was introduced in v10.
+      await db.customStatement(
+        "ALTER TABLE todos ADD COLUMN intent TEXT NOT NULL DEFAULT 'next'",
+      );
 
       final items = await db.inboxDao.watchInbox(_userId).first;
       expect(items.length, 1);

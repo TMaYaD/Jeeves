@@ -11,10 +11,14 @@ from app.todos.utils import _infer_tag_type
 
 class TestTodoStateValidator:
     def test_valid_states_are_accepted(self) -> None:
-        valid = ["inbox", "next_action", "waiting_for", "someday_maybe", "done"]
+        valid = ["inbox", "next_action", "waiting_for", "done"]
         for state in valid:
             t = TodoCreate(title="x", state=state)
             assert t.state == state
+
+    def test_someday_maybe_is_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="state must be one of"):
+            TodoCreate(title="x", state="someday_maybe")
 
     def test_invalid_state_raises(self) -> None:
         with pytest.raises(ValidationError, match="state must be one of"):
@@ -27,6 +31,29 @@ class TestTodoStateValidator:
     def test_update_none_state_allowed(self) -> None:
         t = TodoUpdate(state=None)
         assert t.state is None
+
+
+class TestTodoIntentValidator:
+    def test_valid_intents_are_accepted(self) -> None:
+        for intent in ["next", "maybe", "trash"]:
+            t = TodoCreate(title="x", intent=intent)
+            assert t.intent == intent
+
+    def test_default_intent_is_next(self) -> None:
+        t = TodoCreate(title="x")
+        assert t.intent == "next"
+
+    def test_invalid_intent_raises(self) -> None:
+        with pytest.raises(ValidationError, match="intent must be one of"):
+            TodoCreate(title="x", intent="someday")
+
+    def test_update_intent_accepted(self) -> None:
+        t = TodoUpdate(intent="maybe")
+        assert t.intent == "maybe"
+
+    def test_update_none_intent_allowed(self) -> None:
+        t = TodoUpdate(intent=None)
+        assert t.intent is None
 
 
 # ── Energy level validator ────────────────────────────────────────────────────

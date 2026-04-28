@@ -30,23 +30,29 @@ const _csvStateMap = <String, String>{
   'active': 'inbox',
   'logbook': 'done',
   'waiting': 'waiting_for',
-  'someday': 'someday_maybe',
-  'later': 'someday_maybe',
+  'someday': 'next_action',
+  'later': 'next_action',
   'focus': 'next_action',
   'scheduled': 'next_action',
-  'reference': 'someday_maybe',
+  'reference': 'next_action',
 };
+
+// CSV states that map to intent = 'maybe' (formerly 'someday_maybe' state).
+const _csvMaybeStates = {'someday', 'later', 'reference'};
 
 const _jsonStateMap = <int, String>{
   0: 'inbox',
   1: 'next_action',
   3: 'next_action',
-  5: 'someday_maybe',
+  5: 'next_action',
   7: 'done',
   9: 'waiting_for',
   11: 'inbox',
   13: 'inbox',
 };
+
+// JSON state ints that map to intent = 'maybe' (formerly 'someday_maybe' state).
+const _jsonMaybeStateInts = {5};
 
 const _jsonEnergyMap = <int, String?>{
   0: null,
@@ -237,6 +243,10 @@ List<List<String>> _parseCsvRaw(String content) {
     } else {
       state = _normaliseState(rawState);
     }
+    final String intent = (!completed &&
+            _csvMaybeStates.contains(rawState.trim().toLowerCase()))
+        ? 'maybe'
+        : 'next';
 
     final parentRaw = field(row, parentIdx);
     final parentName =
@@ -253,6 +263,7 @@ List<List<String>> _parseCsvRaw(String content) {
       name: name,
       type: itemType,
       state: state,
+      intent: intent,
       completed: completed,
       notes: notesIdx >= 0 && notesIdx < row.length
           ? (row[notesIdx].trim().isNotEmpty ? row[notesIdx].trim() : null)
@@ -323,12 +334,15 @@ List<List<String>> _parseCsvRaw(String content) {
     }
 
     final rawState = row['state'];
-    var state = _jsonStateMap[rawState is int ? rawState : 0] ?? 'inbox';
+    final rawStateInt = rawState is int ? rawState : 0;
+    var state = _jsonStateMap[rawStateInt] ?? 'inbox';
 
     final completedTs = row['completed'];
     final completed =
         completedTs != null && completedTs != 0 && completedTs != false;
     if (completed) state = 'done';
+    final String intent =
+        (!completed && _jsonMaybeStateInts.contains(rawStateInt)) ? 'maybe' : 'next';
 
     // Tags: Nirvana stores as ",tag1,tag2," — strip leading/trailing commas.
     final rawTagsStr = row['tags'];
@@ -374,6 +388,7 @@ List<List<String>> _parseCsvRaw(String content) {
       name: name,
       type: itemType,
       state: state,
+      intent: intent,
       completed: completed,
       notes: notes,
       tags: tags,

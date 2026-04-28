@@ -158,6 +158,9 @@ Future<ImportResult> importNirvanaLocally({
               ),
               mode: InsertMode.insertOrReplace,
             );
+        if (item.intent == 'maybe') {
+          await db.todoDao.setIntent(todoId, userId, 'maybe', now: now);
+        }
 
         // Resolve project tag for this task.
         String? projectTagId;

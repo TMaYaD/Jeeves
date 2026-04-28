@@ -26,6 +26,7 @@ Todo _todo(String id, String title) => Todo(
       createdAt: DateTime(2024, 1, 1),
       updatedAt: null,
       state: 'inbox',
+      intent: 'next',
       timeEstimate: null,
       energyLevel: null,
       captureSource: 'manual',

@@ -11,7 +11,6 @@ enum GtdState {
   nextAction,
   waitingFor,
   inProgress,
-  somedayMaybe,
   done;
 
   String get value => switch (this) {
@@ -19,7 +18,6 @@ enum GtdState {
         GtdState.nextAction => 'next_action',
         GtdState.waitingFor => 'waiting_for',
         GtdState.inProgress => 'in_progress',
-        GtdState.somedayMaybe => 'someday_maybe',
         GtdState.done => 'done',
       };
 
@@ -33,7 +31,8 @@ enum GtdState {
       // Legacy: scheduled rows were collapsed to next_action in migration 0011.
       'scheduled' => GtdState.nextAction,
       'in_progress' => GtdState.inProgress,
-      'someday_maybe' => GtdState.somedayMaybe,
+      // Legacy: someday_maybe rows became next_action + intent='maybe' in migration 0015.
+      'someday_maybe' => GtdState.nextAction,
       // Legacy: deferred rows were collapsed to next_action in migration 0013.
       'deferred' => GtdState.nextAction,
       'done' => GtdState.done,
@@ -50,8 +49,29 @@ enum GtdState {
         GtdState.nextAction => 'Next Actions',
         GtdState.waitingFor => 'Waiting For',
         GtdState.inProgress => 'In Progress',
-        GtdState.somedayMaybe => 'Someday / Maybe',
         GtdState.done => 'Done',
+      };
+}
+
+/// Orthogonal intent enum — independent of GTD state.
+///
+/// next: normal actionable item; maybe: deferred for later consideration;
+/// trash: marked for deletion (UX deferred to a future PR).
+enum Intent {
+  next,
+  maybe,
+  trash;
+
+  String get value => switch (this) {
+        Intent.next => 'next',
+        Intent.maybe => 'maybe',
+        Intent.trash => 'trash',
+      };
+
+  static Intent fromString(String value) => switch (value) {
+        'maybe' => Intent.maybe,
+        'trash' => Intent.trash,
+        _ => Intent.next,
       };
 }
 
@@ -74,6 +94,9 @@ abstract class Todo with _$Todo {
 
     /// GTD workflow state.
     @Default('inbox') String state,
+
+    /// Orthogonal intent: next | maybe | trash (migration 0015).
+    @Default('next') String intent,
 
     /// Estimated effort in minutes.
     int? timeEstimate,

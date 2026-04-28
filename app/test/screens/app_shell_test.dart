@@ -69,7 +69,7 @@ Widget _buildShellOnly({
       inboxItemsProvider.overrideWith((_) => Stream.value(items)),
       nextActionsProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
-      somedayMaybeProvider.overrideWith((_) => Stream.value([])),
+      maybeProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       focusSessionPlanningSelectedTasksProvider.overrideWith((_) => Stream.value([])),
@@ -186,7 +186,7 @@ void main() {
     expect(find.text('Inbox'), findsOneWidget); // Plus "Inbox body" outside, but 'Inbox' list tile
     expect(find.text('Next Actions'), findsOneWidget);
     expect(find.text('Waiting For'), findsOneWidget);
-    expect(find.text('Someday/Maybe'), findsOneWidget);
+    expect(find.text('Maybe'), findsOneWidget);
     expect(find.text('Focus'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
   });
@@ -219,14 +219,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
-  testWidgets('AppShell navigates to Someday on drawer tap', (tester) async {
+  testWidgets('AppShell navigates to Maybe on drawer tap', (tester) async {
     await tester.pumpWidget(_buildShellOnly());
     await tester.pump();
 
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Someday/Maybe'));
+    await tester.tap(find.text('Maybe'));
     await tester.pumpAndSettle();
 
     expect(find.text('Someday body'), findsOneWidget);

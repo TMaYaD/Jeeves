@@ -162,7 +162,7 @@ Key methods:
 A `ConsumerStatefulWidget` with `WidgetsBindingObserver` for lifecycle events:
 
 - **Complete**: `transitionState(done)` → `endFocus()` → snackbar with next task → `context.go('/focus')`.
-- **Abandon**: `transitionState(deferred)` → `endFocus()` → `context.go('/focus')`. Task lands in `deferred` state (separate from Next Actions; user replans or skips tomorrow).
+- **Abandon**: `transitionState(nextAction)` → `endFocus()` → `context.go('/focus')`. Task returns to Next Actions; user replans or skips tomorrow.
 - **Pause/Resume**: toggled on `FocusModeNotifier` only; no DB write.
 - **Exit (×)**: confirmation dialog → `pauseFocus()` → `context.go('/focus')`. Task stays `inProgress`; the daily plan shows a "Resume" button.
 
@@ -370,6 +370,30 @@ When a sprint completes normally (`completeSprint`) or the timer expires while t
 - `lib/screens/active_focus_screen.dart` — `PageView` carousel: page 0 = notes (markdown with checkbox support), page 1 = `SprintTimerWidget`. A `_PageDots` indicator sits below the page view. Swipe left from notes to reach the sprint timer.
 - `lib/screens/focus_screen.dart` — task list only; no sprint controls. Sprint count badges on task rows use `focusSettingsProvider.sprintDurationMinutes`.
 
+## GTD State & Intent Model
+
+### State column (`todos.state`)
+
+The `state` column drives the GTD workflow FSM. Valid values: `inbox | next_action | waiting_for | in_progress | done`. The FSM (enforced in `GtdStateMachine`) permits these transitions:
+
+| From | To |
+|------|----|
+| `inbox` | `next_action`, `waiting_for`, `done` |
+| `next_action` | `in_progress`, `waiting_for`, `done` |
+| `waiting_for` | `next_action`, `done` |
+| `in_progress` | `done` |
+| `done` | — (terminal) |
+
+### Intent column (`todos.intent`)
+
+The `intent` column is **orthogonal to state** — it is not a state transition. Valid values: `next | maybe | trash` (migration 0015). Default: `next`.
+
+- `next`: normal actionable item; appears in Next Actions / Waiting For views.
+- `maybe`: deferred for later consideration; appears in the Maybe view regardless of `state`. Items with `intent = 'maybe'` are excluded from Next Actions and planning reviews.
+- `trash`: marked for deletion (UX deferred to a later PR; column enforced at DB level from day one).
+
+`setIntent(todoId, userId, intent)` in `TodoDao` writes `intent` without touching `state`. `deferTaskToMaybe` is the canonical "defer" verb: it calls `setIntent(id, userId, 'maybe')`.
+
 ## Navigation & Global Filter State
 
 ### Tag Cloud Navigation Filter
@@ -384,4 +408,4 @@ A sticky, multi-select context-tag filter lives in the navigation drawer and per
 
 **DAO layer:** `TagDao.watchTagsWithActiveCount(userId, type)` uses a `customSelect` SQL query with `readsFrom: {tags, todoTags, todos}` so the count stream re-emits reactively when any of the three tables change.  Each GTD watch method in `TodoDao` and `InboxDao` accepts an optional `Set<String> tagIds` parameter; when non-empty a SQL subquery enforces AND semantics: `COUNT(DISTINCT tag_id) WHERE tag_id IN (...) = N`.
 
-**Provider wiring:** Every GTD list provider (`nextActionsProvider`, `waitingForProvider`, `somedayMaybeProvider`, `inboxItemsProvider`) watches `tagFilterProvider` and passes the current tag set to its DAO method.  When the filter changes, Riverpod automatically cancels and re-subscribes the DAO stream, so the list view re-renders without any additional work in the UI layer.
+**Provider wiring:** Every GTD list provider (`nextActionsProvider`, `waitingForProvider`, `maybeProvider`, `inboxItemsProvider`) watches `tagFilterProvider` and passes the current tag set to its DAO method.  When the filter changes, Riverpod automatically cancels and re-subscribes the DAO stream, so the list view re-renders without any additional work in the UI layer.

@@ -29,25 +29,18 @@ class GtdStateMachine {
     GtdState.inbox: {
       GtdState.nextAction,
       GtdState.waitingFor,
-      GtdState.somedayMaybe,
       GtdState.done,
     },
     GtdState.nextAction: {
       GtdState.inProgress,
       GtdState.waitingFor,
-      GtdState.somedayMaybe,
       GtdState.done,
     },
     GtdState.waitingFor: {
       GtdState.nextAction,
-      GtdState.somedayMaybe,
       GtdState.done,
     },
     GtdState.inProgress: {
-      GtdState.done,
-    },
-    GtdState.somedayMaybe: {
-      GtdState.nextAction,
       GtdState.done,
     },
     GtdState.done: {},

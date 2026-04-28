@@ -23,7 +23,7 @@ To build a hybrid productivity application that merges the rigid organizational 
     * Contexts (Tags)
     * Time Estimate
     * Energy Level
-* **System Views:** Auto-generated lists for 'Next Actions', 'Waiting For', and 'Someday/Maybe'.
+* **System Views:** Auto-generated lists for 'Next Actions', 'Waiting For', and 'Maybe' (todos with `intent = 'maybe'`).
 * **Sequential Logic:** Dependency tracking between tasks is deferred to TMaYaD/Jeeves#181 (polymorphic blockers). The `blocked` state and `blocked_by_todo_id` field have been removed in alpha (migration 0012).
 * **Context Tag Cloud:** A sticky, multi-select tag filter in the primary navigation drawer. Each chip shows the context name and its active-task count; chip weight (size/opacity) reflects relative count. Selecting one or more chips filters all list views to tasks carrying **all** selected tags (AND semantics). The filter persists across screen navigation until explicitly cleared. Long-pressing a chip opens tag management (rename, recolour, merge).
 
@@ -34,9 +34,9 @@ To build a hybrid productivity application that merges the rigid organizational 
     * **Scheduled notification:** A local push notification at the user's configured planning time (default 08:00) with actions — Open, Snooze (configurable duration: 15 min / 1 hr / tomorrow), and Skip today. Skip suppresses all nudges until the next calendar day. Snooze reschedules a one-off notification. All state persists across app restarts.
     * Settings: planning time, default snooze duration, enable/disable notification, enable/disable banner.
 * **Daily Planning Ritual:** A guided 6-step workflow:
-    1. **Clarify Inbox (Step 1):** Process every inbox item before queueing work. For each item, the user answers "What's the expected outcome?", sets fields (energy level, time estimate, due date), and routes it to the correct GTD list (Next Action, Scheduled, Waiting For, Someday/Maybe, or Done). Advancing is gated on an empty inbox.
+    1. **Clarify Inbox (Step 1):** Process every inbox item before queueing work. For each item, the user answers "What's the expected outcome?", sets fields (energy level, time estimate, due date), and routes it to the correct GTD list (Next Action, Scheduled, Waiting For, Maybe, or Done). Advancing is gated on an empty inbox.
     2. **Day Check-in (Step 2):** User reports today's energy level (Low / Medium / High) and available time (hours + minutes).
-    3. **Review Next Actions (Step 3):** Swipe-card review of unreviewed next-action tasks — select for today, skip, or defer to Someday/Maybe.
+    3. **Review Next Actions (Step 3):** Swipe-card review of unreviewed next-action tasks — select for today, skip, or defer to Maybe.
     4. **Today's Schedule (Step 4):** Confirm or reschedule tasks that are due today.
     5. **Time Estimates (Step 5):** Set time estimates on any selected task that is still missing one.
     6. **Today's Plan (Step 6):** Summary showing tasks sorted by priority — due date (ascending) → scheduled → next actions. Capacity bar warns if planned time exceeds available time. "Start Day" finalises the plan.
@@ -66,8 +66,8 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Progressive Restriction:**
     * **Level 1:** Persistent UI banner if the Weekly Review is missed.
     * **Level 2:** If Weekly Review is >48 hours overdue, or Inbox >50 items, the Daily Planning workflow (Epic 2) is disabled until the backlog is cleared.
-* **Guided Review Wizard:** A low-friction, step-by-step UI for the GTD Weekly Review (Zero Inbox -> Brain Dump -> Review Waiting For -> Review Projects -> Review Someday/Maybe).
-* **Stale Task Sweeper:** Forces a binary choice (Move to Someday/Maybe OR Delete) on tasks bypassed/rescheduled more than three times.
+* **Guided Review Wizard:** A low-friction, step-by-step UI for the GTD Weekly Review (Zero Inbox -> Brain Dump -> Review Waiting For -> Review Projects -> Review Maybe list).
+* **Stale Task Sweeper:** Forces a binary choice (Move to Maybe OR Delete) on tasks bypassed/rescheduled more than three times.
 
 ### Epic 6: Contextual & Geofenced Surfacing
 **Goal:** Reduce cognitive load by hiding irrelevant tasks based on time and physical location.

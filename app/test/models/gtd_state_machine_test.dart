@@ -16,22 +16,16 @@ void main() {
 
       test('inbox → nextAction', () => expectValid(GtdState.inbox, GtdState.nextAction));
       test('inbox → waitingFor', () => expectValid(GtdState.inbox, GtdState.waitingFor));
-      test('inbox → somedayMaybe', () => expectValid(GtdState.inbox, GtdState.somedayMaybe));
       test('inbox → done', () => expectValid(GtdState.inbox, GtdState.done));
 
       test('nextAction → inProgress', () => expectValid(GtdState.nextAction, GtdState.inProgress));
       test('nextAction → waitingFor', () => expectValid(GtdState.nextAction, GtdState.waitingFor));
-      test('nextAction → somedayMaybe', () => expectValid(GtdState.nextAction, GtdState.somedayMaybe));
       test('nextAction → done', () => expectValid(GtdState.nextAction, GtdState.done));
 
       test('waitingFor → nextAction', () => expectValid(GtdState.waitingFor, GtdState.nextAction));
-      test('waitingFor → somedayMaybe', () => expectValid(GtdState.waitingFor, GtdState.somedayMaybe));
       test('waitingFor → done', () => expectValid(GtdState.waitingFor, GtdState.done));
 
       test('inProgress → done', () => expectValid(GtdState.inProgress, GtdState.done));
-
-      test('somedayMaybe → nextAction', () => expectValid(GtdState.somedayMaybe, GtdState.nextAction));
-      test('somedayMaybe → done', () => expectValid(GtdState.somedayMaybe, GtdState.done));
     });
 
     group('invalid transitions', () {
@@ -45,9 +39,6 @@ void main() {
 
       // Key boundary: inbox cannot go directly to inProgress
       test('inbox → inProgress is rejected', () => expectInvalid(GtdState.inbox, GtdState.inProgress));
-
-      // inProgress cannot go to somedayMaybe (deferred was the bridge; now removed)
-      test('inProgress → somedayMaybe is rejected', () => expectInvalid(GtdState.inProgress, GtdState.somedayMaybe));
 
       // done is terminal
       test('done → nextAction is rejected', () => expectInvalid(GtdState.done, GtdState.nextAction));

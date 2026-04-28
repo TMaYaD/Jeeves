@@ -142,9 +142,9 @@ void main() {
 
       expect(find.text('Next Actions'), findsOneWidget);
       expect(find.text('Waiting For'), findsOneWidget);
-      expect(find.text('Someday / Maybe'), findsOneWidget);
       expect(find.text('Done'), findsOneWidget);
 
+      expect(find.text('Someday / Maybe'), findsNothing);
       expect(find.text('In Progress'), findsNothing);
       expect(find.text('Scheduled'), findsNothing);
       expect(find.text('Deferred'), findsNothing);

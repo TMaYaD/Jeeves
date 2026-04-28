@@ -1,4 +1,4 @@
-/// DAO for GTD views: next actions, waiting for, someday/maybe, by-project,
+/// DAO for GTD views: next actions, waiting for, maybe, by-project,
 /// by-area, and the general-purpose [transitionState] method.
 library;
 
@@ -46,20 +46,26 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Returns a stream of [Todo]s with [state] belonging to [userId] whose
   /// tags include ALL of [tagIds] (AND semantics).
   ///
+  /// When [excludeIntent] is non-null, rows with that intent value are excluded.
   /// Watches both [todos] and [todoTags] so the stream re-emits when either
   /// table changes.  Uses `todos.map(row.data)` to produce typed [Todo]
   /// objects without repeating the column-mapping logic.
   Stream<List<Todo>> _watchFilteredByStateAndTags(
     String userId,
     String state,
-    Set<String> tagIds,
-  ) {
+    Set<String> tagIds, {
+    String? excludeIntent,
+  }) {
     assert(tagIds.isNotEmpty);
     final n = tagIds.length;
     final placeholders = List.filled(n, '?').join(', ');
+    final intentClause =
+        excludeIntent != null ? ' AND todos.intent != ?' : '';
+    final intentVar =
+        excludeIntent != null ? [Variable(excludeIntent)] : <Variable>[];
     return customSelect(
       'SELECT todos.* FROM todos '
-      'WHERE todos.user_id = ? AND todos.state = ? '
+      'WHERE todos.user_id = ? AND todos.state = ?$intentClause '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id AND user_id = ? '
       '       AND tag_id IN ($placeholders)) = $n '
@@ -67,6 +73,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       variables: [
         Variable(userId),
         Variable(state),
+        ...intentVar,
         Variable(userId),
         ...tagIds.map(Variable.new),
       ],
@@ -74,7 +81,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
-  /// Stream of next-action todos for [userId].
+  /// Stream of next-action todos for [userId] (excludes intent = 'maybe').
   ///
   /// When [tagIds] is non-empty only todos carrying **all** specified tags are
   /// returned (AND semantics).
@@ -82,12 +89,15 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return _watchAllForUser(userId).map(
-        (all) =>
-            all.where((t) => t.state == GtdState.nextAction.value).toList(),
+        (all) => all
+            .where((t) =>
+                t.state == GtdState.nextAction.value && t.intent != 'maybe')
+            .toList(),
       );
     }
     return _watchFilteredByStateAndTags(
-        userId, GtdState.nextAction.value, tagIds);
+        userId, GtdState.nextAction.value, tagIds,
+        excludeIntent: 'maybe');
   }
 
   /// Stream of waiting-for todos for [userId].
@@ -106,20 +116,38 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         userId, GtdState.waitingFor.value, tagIds);
   }
 
-  /// Stream of someday/maybe todos for [userId].
+  /// Stream of maybe-intent todos for [userId] (intent = 'maybe', state != 'done').
   ///
   /// When [tagIds] is non-empty only todos carrying **all** specified tags are
   /// returned (AND semantics).
-  Stream<List<Todo>> watchSomedayMaybe(String userId,
+  Stream<List<Todo>> watchMaybe(String userId,
       {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
-      return _watchAllForUser(userId).map(
-        (all) =>
-            all.where((t) => t.state == GtdState.somedayMaybe.value).toList(),
-      );
+      return customSelect(
+        'SELECT * FROM todos WHERE user_id = ? AND intent = ? AND state != ?'
+        ' ORDER BY created_at',
+        variables: [Variable(userId), Variable('maybe'), Variable('done')],
+        readsFrom: {todos},
+      ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
     }
-    return _watchFilteredByStateAndTags(
-        userId, GtdState.somedayMaybe.value, tagIds);
+    final n = tagIds.length;
+    final placeholders = List.filled(n, '?').join(', ');
+    return customSelect(
+      'SELECT todos.* FROM todos '
+      'WHERE todos.user_id = ? AND todos.intent = ? AND todos.state != ? '
+      'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
+      '     WHERE todo_id = todos.id AND user_id = ? '
+      '       AND tag_id IN ($placeholders)) = $n '
+      'ORDER BY todos.created_at',
+      variables: [
+        Variable(userId),
+        Variable('maybe'),
+        Variable('done'),
+        Variable(userId),
+        ...tagIds.map(Variable.new),
+      ],
+      readsFrom: {todos, todoTags},
+    ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
   /// Stream of todos matching an arbitrary [state] string for [userId].
@@ -251,6 +279,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return _watchAllForUser(userId).map((all) => all
         .where((t) =>
             t.state == GtdState.nextAction.value &&
+            t.intent != 'maybe' &&
             (t.dailySelectionDate == null || t.dailySelectionDate != today))
         .toList());
   }
@@ -260,6 +289,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return _watchAllForUser(userId).map((all) => all
         .where((t) =>
             t.state == GtdState.nextAction.value &&
+            t.intent != 'maybe' &&
             t.selectedForToday == false &&
             t.dailySelectionDate == today)
         .toList());
@@ -390,6 +420,36 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       updatedAt: Value(ts),
     ));
   }
+
+  // ---------------------------------------------------------------------------
+  // Intent mutations (orthogonal to GTD state)
+  // ---------------------------------------------------------------------------
+
+  /// Sets the [intent] column for a todo without touching its GTD state.
+  ///
+  /// [intent] must be one of: next | maybe | trash.
+  /// [now] overrides the timestamp used for [updatedAt]; defaults to [DateTime.now()].
+  Future<void> setIntent(String todoId, String userId, String intent,
+      {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
+    await customUpdate(
+      'UPDATE todos SET intent = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+      variables: [
+        Variable(intent),
+        Variable(ts),
+        Variable(todoId),
+        Variable(userId),
+      ],
+      updates: {todos},
+      updateKind: UpdateKind.update,
+    );
+  }
+
+  /// Defers a todo to the "maybe" list by setting intent = 'maybe'.
+  ///
+  /// Does not alter the GTD state — intent is orthogonal to state.
+  Future<void> deferTaskToMaybe(String todoId, String userId, {DateTime? now}) =>
+      setIntent(todoId, userId, 'maybe', now: now);
 
   /// Update mutable todo fields (title, notes, energy level, time estimate, due date).
   Future<void> updateFields(

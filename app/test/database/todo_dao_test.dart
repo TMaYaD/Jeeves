@@ -164,17 +164,56 @@ void main() {
       expect(items.first.id, 'w1');
     });
 
-    test('watchSomedayMaybe returns only someday_maybe todos', () async {
-      await _insertTodo(db, id: 's1', title: 'Someday 1');
-      await (db.update(db.todos)..where((t) => t.id.equals('s1')))
-          .write(const TodosCompanion(state: Value('someday_maybe')));
-      await _insertTodo(db, id: 's2', title: 'Next action');
-      await (db.update(db.todos)..where((t) => t.id.equals('s2')))
-          .write(const TodosCompanion(state: Value('next_action')));
+    test('watchMaybe returns only intent=maybe todos (not done)', () async {
+      await _insertTodo(db, id: 'm1', title: 'Maybe 1', state: 'next_action');
+      await db.todoDao.deferTaskToMaybe('m1', _userId);
+      await _insertTodo(db, id: 'm2', title: 'Next action', state: 'next_action');
+      await _insertTodo(db, id: 'm3', title: 'Maybe Done', state: 'next_action');
+      await db.todoDao.deferTaskToMaybe('m3', _userId);
+      await (db.update(db.todos)..where((t) => t.id.equals('m3')))
+          .write(const TodosCompanion(state: Value('done')));
 
-      final items = await db.todoDao.watchSomedayMaybe(_userId).first;
+      final items = await db.todoDao.watchMaybe(_userId).first;
       expect(items.length, 1);
-      expect(items.first.id, 's1');
+      expect(items.first.id, 'm1');
+    });
+
+    test('watchMaybe excludes intent=next todos', () async {
+      await _insertTodo(db, id: 'n1', title: 'Next action', state: 'next_action');
+
+      final items = await db.todoDao.watchMaybe(_userId).first;
+      expect(items, isEmpty);
+    });
+
+  });
+
+  group('TodoDao — setIntent / deferTaskToMaybe', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('deferTaskToMaybe sets intent to maybe without changing state', () async {
+      await _insertTodo(db, id: 'i1', title: 'Task I1', state: 'next_action');
+      await db.todoDao.deferTaskToMaybe('i1', _userId);
+
+      final row = await db.todoDao.getTodo('i1', _userId);
+      expect(row?.intent, 'maybe');
+      expect(row?.state, 'next_action');
+    });
+
+    test('setIntent updates intent and bumps updated_at', () async {
+      await _insertTodo(db, id: 'i2', title: 'Task I2');
+      final before = (await db.todoDao.getTodo('i2', _userId))?.updatedAt;
+      await db.todoDao.setIntent('i2', _userId, 'trash');
+
+      final row = await db.todoDao.getTodo('i2', _userId);
+      expect(row?.intent, 'trash');
+      // updated_at should be set (may equal or be after before)
+      expect(row?.updatedAt, isNotNull);
+      if (before != null) {
+        expect(row!.updatedAt!.isAfter(before) || row.updatedAt == before, isTrue);
+      }
     });
 
   });
