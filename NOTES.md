@@ -5,6 +5,13 @@
 - The `/focus` → `/focus-session-planning` redirect in `router.dart` was gating the Focus screen unconditionally on `focusSessionPlanningCompletionNotifier.value`, which fires `false` at every app launch. Removed both the redirect block and `refreshListenable`; `focusSessionPlanningCompletionNotifier` no longer drives any router redirect (the banner in `AppShell` still reads it directly).
 - `FocusSession.startedAt` is stored as a `String` (ISO-8601 text in Drift's `TextColumn`), not `DateTime` — construct test instances with `.toIso8601String()`.
 
+## 2026-04-29 (issue #228)
+
+- `runs_after` is not a valid key in `build.yaml`'s `builders:` section; the supported ordering keys are `runs_before` (on the earlier builder) and `required_inputs`. build_runner infers the ordering automatically when our builder's input (`gtd_database.g.dart`) is itself a generated file — no explicit ordering directive needed.
+- A builder file under `lib/` that imports `package:build` requires `build` in `dependencies` (not `dev_dependencies`) to satisfy the `depend_on_referenced_packages` lint. build_runner still picks it up; the package is never linked into the release app since it's only imported by a builder, not by app code.
+- `source_gen:combining_builder` claims a `foo.g.dart` output for every `foo.dart` file it finds, even files with no annotations. If we want `powersync_schema.g.dart` generated from a _different_ input, the original `powersync_schema.dart` must be deleted first — otherwise the two builders collide on the same output asset.
+- `buildExtensions` with a full path key (`'lib/database/gtd_database.g.dart': [...]`) works correctly in build_runner to restrict a builder to a single input file.
+
 ## 2026-04-29 (issue #224)
 
 - `FocusSessionTasks` was missing an `id` column, causing `SqliteException(1811)` when `openSession` inserted rows — PowerSync's INSTEAD-OF INSERT trigger requires an `id` value. Fixed by adding `TextColumn get id => text().unique().clientDefault(() => uuid.v4())()` to the table; domain PK stays `{focusSessionId, taskId}`. `id` is explicitly passed in `openSession`'s companion insert (same idiom as `TimeLogs`). Drift schema v17; migration adds the column as nullable + backfills + creates a UNIQUE index (SQLite `ADD COLUMN` doesn't support NOT NULL without DEFAULT on populated tables).

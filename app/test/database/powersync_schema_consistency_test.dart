@@ -13,7 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:powersync/powersync.dart' as ps;
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/database/powersync_schema.dart';
+import 'package:jeeves/database/powersync_schema.g.dart';
 import '../test_helpers.dart';
 
 /// Maps a Drift [GeneratedColumn] to its canonical storage-type string for
