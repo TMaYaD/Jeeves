@@ -10,6 +10,8 @@ import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
 
+enum _FocusMenuAction { planDay }
+
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
 
@@ -65,100 +67,159 @@ class FocusScreen extends ConsumerWidget {
                     sprintMinutes: sprintMinutes,
                   );
 
-                  return ListView(
-                    physics: const ClampingScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                    children: [
-                      const Text(
-                        "Today's Schedule",
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1A1A2E),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[50],
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.grey[200]!),
-                        ),
-                        child: const Center(
-                          child: Text(
-                            "Calendar events placeholder",
-                            style: TextStyle(color: Colors.grey),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 36),
-                      const Divider(height: 1, color: Color(0xFFF3F4F6)),
-                      const SizedBox(height: 36),
-                      const Text(
-                        "Today's Tasks",
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1A1A2E),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      // Batching suggestion banner.
-                      if (batchCandidates.isNotEmpty)
-                        _BatchSuggestionBanner(
-                          candidates: batchCandidates,
-                          sprintMinutes: sprintMinutes,
-                        ),
-                      if (sortedTasks.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: Text(
-                            'No tasks selected — plan your day to add some!',
-                            style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-                            textAlign: TextAlign.center,
-                          ),
-                        )
-                      else
-                        ...sortedTasks.map(
-                          (t) => _TaskRow(todo: t, currentTaskId: currentTaskId),
-                        ),
-                      const SizedBox(height: 48),
-                      if (activeSession != null)
-                        FilledButton(
-                          onPressed: () =>
-                              _endSession(context, ref, tasks, activeSession),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF1E3A5F),
-                            foregroundColor: Colors.white,
-                            minimumSize: const Size.fromHeight(52),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: const Text(
-                            'End Session',
+                  return ValueListenableBuilder<bool>(
+                    valueListenable: focusSessionPlanningCompletionNotifier,
+                    builder: (context, planningDone, _) {
+                      // The "Begin Evening Shutdown" entry is shown once the
+                      // user has both completed today's planning and is in an
+                      // open focus session with at least one task on it.
+                      final showShutdownEntry =
+                          planningDone && sortedTasks.isNotEmpty;
+                      return ListView(
+                        physics: const ClampingScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 8),
+                        children: [
+                          const Text(
+                            "Today's Schedule",
                             style: TextStyle(
-                                fontSize: 17, fontWeight: FontWeight.bold),
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1A1A2E),
+                            ),
                           ),
-                        )
-                      else
-                        FilledButton(
-                          onPressed: () => _replanDay(context, ref),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFFEFF6FF),
-                            foregroundColor: const Color(0xFF2563EB),
-                            minimumSize: const Size.fromHeight(52),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[50],
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey[200]!),
+                            ),
+                            child: const Center(
+                              child: Text(
+                                "Calendar events placeholder",
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ),
                           ),
-                          child: const Text(
-                            'Plan the Day',
-                            style: TextStyle(
-                                fontSize: 17, fontWeight: FontWeight.bold),
+                          const SizedBox(height: 36),
+                          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                          const SizedBox(height: 36),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              const Text(
+                                "Today's Tasks",
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF1A1A2E),
+                                ),
+                              ),
+                              if (showShutdownEntry) ...[
+                                const Spacer(),
+                                PopupMenuButton<_FocusMenuAction>(
+                                  icon: const Icon(Icons.more_vert,
+                                      color: Color(0xFF6B7280)),
+                                  onSelected: (action) {
+                                    if (action == _FocusMenuAction.planDay) {
+                                      _replanDay(context, ref);
+                                    }
+                                  },
+                                  itemBuilder: (_) => const [
+                                    PopupMenuItem(
+                                      value: _FocusMenuAction.planDay,
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.wb_sunny_outlined,
+                                              size: 18,
+                                              color: Color(0xFF6B7280)),
+                                          SizedBox(width: 8),
+                                          Text('Re-plan'),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
                           ),
-                        ),
-                      const SizedBox(height: 32),
-                    ],
+                          const SizedBox(height: 8),
+                          // Batching suggestion banner.
+                          if (planningDone &&
+                              sortedTasks.isNotEmpty &&
+                              batchCandidates.isNotEmpty)
+                            _BatchSuggestionBanner(
+                              candidates: batchCandidates,
+                              sprintMinutes: sprintMinutes,
+                            ),
+                          if (planningDone && sortedTasks.isNotEmpty)
+                            ...sortedTasks.map(
+                              (t) => _TaskRow(
+                                  todo: t, currentTaskId: currentTaskId),
+                            )
+                          else if (sortedTasks.isEmpty)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 16),
+                              child: Text(
+                                planningDone
+                                    ? 'All tasks cleared — have a great day!'
+                                    : 'No tasks selected — plan your day to add some!',
+                                style: TextStyle(
+                                    fontSize: 14, color: Colors.grey[400]),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          const SizedBox(height: 48),
+                          if (showShutdownEntry && activeSession != null)
+                            _PrimaryCallout(
+                              kind: tasks.every((t) => t.doneAt != null)
+                                  ? _CalloutKind.endSession
+                                  : _CalloutKind.beginShutdown,
+                              onTap: () => _beginShutdown(
+                                  context, ref, tasks, activeSession),
+                            )
+                          else
+                            FilledButton(
+                              onPressed: () => _replanDay(context, ref),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFFEFF6FF),
+                                foregroundColor: const Color(0xFF2563EB),
+                                minimumSize: const Size.fromHeight(52),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.wb_sunny_outlined, size: 18),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Plan the Day',
+                                    style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          // Tasks pre-selected for tomorrow's session via
+                          // last evening's "rollover" disposition. Surfaced
+                          // before today's planning has been confirmed so
+                          // users can see what carried over.
+                          if (!planningDone && sortedTasks.isNotEmpty) ...[
+                            const SizedBox(height: 24),
+                            const _SectionLabel('CARRIED OVER FROM YESTERDAY'),
+                            const SizedBox(height: 8),
+                            ...sortedTasks
+                                .map((t) => _CarriedOverTaskRow(todo: t)),
+                          ],
+                          const SizedBox(height: 32),
+                        ],
+                      );
+                    },
                   );
                 },
               ),
@@ -175,7 +236,10 @@ class FocusScreen extends ConsumerWidget {
     context.go('/focus-session-planning');
   }
 
-  Future<void> _endSession(
+  /// Either ends the session cleanly (all tasks done) or routes the user into
+  /// the evening-shutdown ritual where they assign dispositions to unfinished
+  /// tasks. The session is only closed by [closeSession] / the ritual itself.
+  Future<void> _beginShutdown(
     BuildContext context,
     WidgetRef ref,
     List<Todo> tasks,
@@ -189,7 +253,7 @@ class FocusScreen extends ConsumerWidget {
       if (!context.mounted) return;
       context.go('/inbox');
     } else {
-      context.push('/focus-session-review', extra: session.id);
+      context.go('/shutdown');
     }
   }
 }
@@ -425,6 +489,126 @@ class _StartButton extends ConsumerWidget {
             const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
       ),
       child: Text(isResume ? 'Resume' : 'Start'),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Section label + carried-over read-only row
+// ---------------------------------------------------------------------------
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: const TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 1.2,
+        color: Color(0xFF9CA3AF),
+      ),
+    );
+  }
+}
+
+/// Read-only row for tasks pre-selected (rolled over) for today's session
+/// before the user has confirmed today's plan.
+class _CarriedOverTaskRow extends StatelessWidget {
+  const _CarriedOverTaskRow({required this.todo});
+  final Todo todo;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          const Icon(Icons.update_outlined,
+              size: 14, color: Color(0xFFD1D5DB)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              todo.title,
+              style: const TextStyle(
+                fontSize: 15,
+                color: Color(0xFF9CA3AF),
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ),
+          if (todo.timeEstimate != null)
+            Text(
+              _fmt(todo.timeEstimate!),
+              style:
+                  const TextStyle(fontSize: 12, color: Color(0xFFD1D5DB)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _fmt(int m) {
+    if (m < 60) return '${m}m';
+    if (m % 60 == 0) return '${m ~/ 60}h';
+    return '${m ~/ 60}h ${m % 60}m';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Primary call-to-action footer
+// ---------------------------------------------------------------------------
+
+enum _CalloutKind { beginShutdown, endSession }
+
+class _PrimaryCallout extends StatelessWidget {
+  const _PrimaryCallout({required this.kind, required this.onTap});
+
+  final _CalloutKind kind;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    if (kind == _CalloutKind.endSession) {
+      return FilledButton(
+        onPressed: onTap,
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF1E3A5F),
+          foregroundColor: Colors.white,
+          minimumSize: const Size.fromHeight(52),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
+        ),
+        child: const Text(
+          'End Session',
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+        ),
+      );
+    }
+    return OutlinedButton(
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFF1E3A5F),
+        backgroundColor: Colors.white,
+        side: const BorderSide(color: Color(0xFF1E3A5F), width: 1.5),
+        minimumSize: const Size.fromHeight(52),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.nightlight_outlined, size: 18),
+          SizedBox(width: 8),
+          Text(
+            'Begin Evening Shutdown',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
     );
   }
 }

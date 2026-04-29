@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/auth_provider.dart';
+import 'providers/evening_shutdown_provider.dart';
 import 'providers/focus_session_planning_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
+import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
 import 'services/notification_service.dart';
 
@@ -17,6 +19,10 @@ Future<void> main() async {
   // previously skipped/snoozed reminder is not re-enabled on restart.
   await initFocusSessionPlanningCompletion();
   await loadFocusSessionPlanningNotificationSuppression();
+
+  // Seed shutdown state from SharedPreferences before the first frame.
+  await initShutdownCompletion();
+  await loadShutdownNotificationSuppression();
 
   // flutter_local_notifications uses platform channels unavailable on web.
   // Skip the entire notification stack on web; push notifications are a
@@ -31,6 +37,9 @@ Future<void> main() async {
 
     // Re-establish the daily planning notification schedule after a restart.
     await initFocusSessionPlanningNotificationSchedule();
+
+    // Re-establish the evening shutdown notification schedule after a restart.
+    await initShutdownNotificationSchedule();
 
     // Cold-start: if the user tapped a notification to launch the app from a
     // terminated state, onDidReceiveNotificationResponse will not fire; the
@@ -76,6 +85,18 @@ void _handleNotificationResponse(NotificationResponse response) async {
     case kNotificationActionSkip:
       await persistFocusSessionPlanningSkipToday();
       await NotificationService.instance.cancelFocusSessionPlanningReminder();
+
+    case kShutdownNotificationActionOpen:
+      appRouter.go('/shutdown');
+
+    case kShutdownNotificationActionSnooze:
+      final until = DateTime.now().add(const Duration(minutes: 60));
+      await persistShutdownSnoozedUntil(until);
+      await NotificationService.instance.snoozeShutdownReminder(60);
+
+    case kShutdownNotificationActionSkip:
+      await persistShutdownSkipToday();
+      await NotificationService.instance.skipTodayShutdownReminder();
   }
 }
 
