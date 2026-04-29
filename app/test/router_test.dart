@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
-import 'package:jeeves/router.dart' show appRouterRedirect;
+import 'package:jeeves/router.dart' show appRouterRedirect, buildAppRouterRedirect;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'test_helpers.dart';
@@ -32,6 +32,27 @@ GoRouter _buildRouter() => GoRouter(
         GoRoute(
           path: '/focus-session-planning',
           builder: (_, _) => const Scaffold(body: Text('planning')),
+        ),
+      ],
+    );
+
+// Stub router with /register and /login routes that uses the redirect built
+// with swsMode: true, exercising the redirect without a separate build flavour.
+GoRouter _buildSwsRouter() => GoRouter(
+      initialLocation: '/inbox',
+      redirect: buildAppRouterRedirect(swsMode: true),
+      routes: [
+        GoRoute(
+          path: '/inbox',
+          builder: (_, _) => const Scaffold(body: Text('inbox')),
+        ),
+        GoRoute(
+          path: '/login',
+          builder: (_, _) => const Scaffold(body: Text('login')),
+        ),
+        GoRoute(
+          path: '/register',
+          builder: (_, _) => const Scaffold(body: Text('register')),
         ),
       ],
     );
@@ -87,5 +108,18 @@ void main() {
 
     expect(find.text('planning'), findsOneWidget);
     expect(find.text('focus'), findsNothing);
+  });
+
+  testWidgets('/register redirects to /login in SWS mode', (tester) async {
+    final router = _buildSwsRouter();
+
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pump();
+
+    router.go('/register');
+    await tester.pumpAndSettle();
+
+    expect(find.text('login'), findsOneWidget);
+    expect(find.text('register'), findsNothing);
   });
 }

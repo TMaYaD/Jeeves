@@ -20,6 +20,17 @@ import 'screens/import_screen.dart';
 import 'screens/review/focus_session_review_screen.dart';
 import 'screens/search/search_screen.dart';
 
+/// Creates the router redirect function with a configurable [swsMode] flag.
+///
+/// The production router uses [appRouterRedirect] which bakes in the
+/// [isSwsMode] compile-time constant. This factory lets tests simulate SWS
+/// mode without requiring a separate build flavour.
+GoRouterRedirect buildAppRouterRedirect({bool swsMode = isSwsMode}) =>
+    (context, state) {
+      if (swsMode && state.matchedLocation == '/register') return '/login';
+      return null;
+    };
+
 /// Top-level redirect callback used by [appRouter].
 ///
 /// Exported as a named symbol so router unit tests can wire up a stub-route
