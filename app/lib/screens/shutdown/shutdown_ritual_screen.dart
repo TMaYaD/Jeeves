@@ -1,20 +1,19 @@
 /// Evening shutdown ritual — outer container screen (Issue #83).
 ///
-/// Renders a full-screen, drawer-free scaffold with:
-/// - A 3-segment progress bar (Review → Resolve → Close Day).
-/// - A non-swipeable [PageView] that displays each step.
-/// - Back / Next navigation buttons at the bottom (hidden on the last step).
+/// Steps 0–1 share a header (segmented progress bar) and footer (Back/Next).
+/// Step 2 — Close Day — is rendered full-screen with the moon-rise animation;
+/// it commits dispositions, fades out, and exits the app.
+///
+/// Step 1 → Step 2 advances automatically once the user resolves the last
+/// unfinished task.
 library;
 
-import 'dart:math';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/evening_shutdown_provider.dart';
+import 'steps/close_day_step.dart';
 import 'steps/completed_review_step.dart';
-import 'steps/shutdown_summary_step.dart';
 import 'steps/unfinished_tasks_step.dart';
 
 class ShutdownRitualScreen extends ConsumerStatefulWidget {
@@ -27,21 +26,16 @@ class ShutdownRitualScreen extends ConsumerStatefulWidget {
 
 class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
   late final PageController _pageController;
-
   int? _resolveInitialTotal;
-  bool _showingGoodNight = false;
 
-  static const _stepTitles = [
-    'Review Your Day',
-    'Resolve Unfinished',
-    'Close Day',
-  ];
+  static const _stepTitles = ['Review Your Day', 'Resolve Unfinished'];
 
   @override
   void initState() {
     super.initState();
+    final initialStep = ref.read(eveningShutdownProvider).currentStep;
     _pageController = PageController(
-      initialPage: ref.read(eveningShutdownProvider).currentStep,
+      initialPage: initialStep.clamp(0, _stepTitles.length - 1),
     );
   }
 
@@ -51,18 +45,18 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     super.dispose();
   }
 
-  void _triggerGoodNight() => setState(() => _showingGoodNight = true);
-
   @override
   Widget build(BuildContext context) {
-    if (_showingGoodNight) return const _GoodNightScreen();
-
     final shutdownState = ref.watch(eveningShutdownProvider);
     final notifier = ref.read(eveningShutdownProvider.notifier);
     final step = shutdownState.currentStep;
 
+    if (step == 2) return const CloseDayStep();
+
     ref.listen<EveningShutdownState>(eveningShutdownProvider, (prev, next) {
-      if (prev?.currentStep != next.currentStep && _pageController.hasClients) {
+      if (prev?.currentStep != next.currentStep &&
+          next.currentStep < _stepTitles.length &&
+          _pageController.hasClients) {
         _pageController.animateToPage(
           next.currentStep,
           duration: const Duration(milliseconds: 300),
@@ -71,12 +65,20 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
       }
     });
 
-    // Latch the initial unfinished count once so the resolve progress fills correctly.
+    // Latch the initial unfinished count once so the resolve progress fills
+    // correctly, then auto-advance to Close Day on the transition to empty.
     ref.listen<AsyncValue<List<Todo>>>(unfinishedSelectedTodayProvider,
-        (_, next) {
+        (prev, next) {
       final tasks = next.asData?.value;
-      if (tasks != null && tasks.isNotEmpty && _resolveInitialTotal == null) {
+      if (tasks == null) return;
+      if (tasks.isNotEmpty && _resolveInitialTotal == null) {
         setState(() => _resolveInitialTotal = tasks.length);
+      }
+      final wasNonEmpty = prev?.asData?.value.isNotEmpty ?? false;
+      if (wasNonEmpty &&
+          tasks.isEmpty &&
+          ref.read(eveningShutdownProvider).currentStep == 1) {
+        notifier.advanceStep();
       }
     });
 
@@ -104,19 +106,17 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
               child: PageView(
                 controller: _pageController,
                 physics: const NeverScrollableScrollPhysics(),
-                children: [
-                  const CompletedReviewStep(),
-                  const UnfinishedTasksStep(),
-                  ShutdownSummaryStep(onCloseDay: _triggerGoodNight),
+                children: const [
+                  CompletedReviewStep(),
+                  UnfinishedTasksStep(),
                 ],
               ),
             ),
-            if (step < 2)
-              _ShutdownFooter(
-                step: step,
-                onBack: step > 0 ? () => notifier.goToStep(step - 1) : null,
-                onNext: _canAdvance(step, ref) ? () => notifier.advanceStep() : null,
-              ),
+            _ShutdownFooter(
+              step: step,
+              onBack: step > 0 ? () => notifier.goToStep(step - 1) : null,
+              onNext: _canAdvance(step, ref) ? () => notifier.advanceStep() : null,
+            ),
           ],
         ),
       ),
@@ -128,10 +128,10 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     return switch (step) {
       // Step 0: completed review — always navigable (informational).
       0 => true,
-      // Step 1: all unfinished tasks must be resolved.
+      // Step 1: only manually advanceable when there were no unfinished tasks
+      // to begin with; otherwise the auto-advance listener handles it.
       1 => ref.watch(unfinishedSelectedTodayProvider).asData?.value.isEmpty ??
           false,
-      // Step 2: Close Day is the terminal action — no Next button.
       _ => false,
     };
   }
@@ -187,12 +187,12 @@ class _ShutdownHeader extends StatelessWidget {
           const SizedBox(height: 14),
           _SegmentedProgressBar(
             currentStep: step,
-            totalSteps: 3,
+            totalSteps: 2,
             activeStepProgress: activeStepProgress,
           ),
           const SizedBox(height: 4),
           Text(
-            'Step ${step + 1} of 3',
+            'Step ${step + 1} of 2',
             style: TextStyle(fontSize: 12, color: Colors.grey[400]),
           ),
           const SizedBox(height: 8),
@@ -307,120 +307,6 @@ class _ShutdownFooter extends StatelessWidget {
             child: const Text('Next'),
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Good-night screen: moon rise animation + Jeeves phrase + app close
-// ---------------------------------------------------------------------------
-
-class _GoodNightScreen extends StatefulWidget {
-  const _GoodNightScreen();
-
-  @override
-  State<_GoodNightScreen> createState() => _GoodNightScreenState();
-}
-
-class _GoodNightScreenState extends State<_GoodNightScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late final Animation<double> _slideY;
-  late final Animation<double> _fade;
-  bool _fadingOut = false;
-
-  static const _phrases = [
-    'Another day superbly managed, sir. Pleasant dreams.',
-    'Capital effort today, sir. I shall stand down for the evening.',
-    'The books are balanced and all tasks accounted for, sir. Good night.',
-    'Rest well, sir. Tomorrow\'s battles shall wait until morning.',
-    'Everything is in order, sir. I shall dim the lights.',
-    'A productive day by any measure, sir. Sleep well.',
-  ];
-
-  late final String _phrase;
-
-  @override
-  void initState() {
-    super.initState();
-    _phrase = _phrases[Random().nextInt(_phrases.length)];
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1600),
-    );
-    _slideY = Tween<double>(begin: 64, end: 0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
-    );
-    _fade = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeIn),
-    );
-    _controller.forward();
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _fadingOut = true);
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black,
-      child: AnimatedOpacity(
-        opacity: _fadingOut ? 0.0 : 1.0,
-        duration: const Duration(milliseconds: 700),
-        curve: Curves.easeIn,
-        onEnd: () {
-          if (_fadingOut && mounted) SystemNavigator.pop();
-        },
-        child: Container(
-          color: const Color(0xFF0D1B2A),
-          child: SafeArea(
-            child: Center(
-              child: AnimatedBuilder(
-                animation: _controller,
-                builder: (context, _) {
-                  return Opacity(
-                    opacity: _fade.value,
-                    child: Transform.translate(
-                      offset: Offset(0, _slideY.value),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 40),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.nightlight_round,
-                              size: 88,
-                              color: Color(0xFFE2C97E),
-                            ),
-                            const SizedBox(height: 36),
-                            Text(
-                              _phrase,
-                              style: const TextStyle(
-                                fontSize: 20,
-                                color: Colors.white,
-                                fontWeight: FontWeight.w300,
-                                fontStyle: FontStyle.italic,
-                                height: 1.6,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }

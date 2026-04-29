@@ -22,8 +22,6 @@ class UnfinishedTasksStep extends ConsumerStatefulWidget {
 }
 
 class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
-  int? _initialTotal;
-
   @override
   Widget build(BuildContext context) {
     final asyncUnfinished = ref.watch(unfinishedSelectedTodayProvider);
@@ -53,14 +51,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
     }
 
     final unfinished = asyncUnfinished.asData!.value;
-
-    if (_initialTotal == null && unfinished.isNotEmpty) {
-      _initialTotal = unfinished.length;
-    }
-
-    if (unfinished.isEmpty) {
-      return _AllResolved(total: _initialTotal ?? 0);
-    }
+    if (unfinished.isEmpty) return const SizedBox.shrink();
 
     final current = unfinished.first;
     final notifier = ref.read(eveningShutdownProvider.notifier);
@@ -74,46 +65,6 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
         onRollOver: () => notifier.rolloverTask(current.id),
         onReturn: () => notifier.returnToNextActions(current.id),
         onDefer: () => notifier.deferTask(current.id),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// All-resolved empty state
-// ---------------------------------------------------------------------------
-
-class _AllResolved extends StatelessWidget {
-  const _AllResolved({required this.total});
-
-  final int total;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.task_alt, size: 56, color: Colors.grey[300]),
-            const SizedBox(height: 16),
-            Text(
-              total > 0 ? 'All $total tasks resolved' : 'All tasks resolved',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Colors.grey[500],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'No unfinished tasks from today\'s plan.',
-              style: TextStyle(fontSize: 13, color: Colors.grey[400]),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -207,7 +158,7 @@ class _TaskResolutionCard extends StatelessWidget {
           label: 'Defer until a later day',
           subtitle: 'Move to Someday / Maybe',
           icon: Icons.star_border,
-          color: const Color(0xFF9CA3AF),
+          color: const Color(0xFF6B7280),
           onTap: onDefer,
         ),
       ],
