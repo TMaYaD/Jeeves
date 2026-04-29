@@ -3,8 +3,10 @@
 /// fades the screen to black, and exits the app.
 library;
 
+import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -80,7 +82,16 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
         duration: const Duration(milliseconds: 700),
         curve: Curves.easeIn,
         onEnd: () {
-          if (_fadingOut && mounted) SystemNavigator.pop();
+          if (!_fadingOut || !mounted) return;
+          // On Android, SystemNavigator.pop() only finishes the activity;
+          // the process and FlutterEngine survive, so re-launching
+          // reattaches to the same widget tree and the dark Close Day
+          // screen reappears. Hard-exit so the next launch starts fresh.
+          if (!kIsWeb && Platform.isAndroid) {
+            exit(0);
+          } else {
+            SystemNavigator.pop();
+          }
         },
         child: SafeArea(
           child: Padding(
@@ -124,34 +135,37 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
                     ),
                   ),
                 ),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 600),
-                  child: _showButton
-                      ? SizedBox(
-                          key: const ValueKey('close-day-btn'),
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: _closing ? null : _onCloseDay,
-                            icon: const Icon(Icons.nightlight_round, size: 20),
-                            label: const Text(
-                              'Close Day',
-                              style: TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w600),
-                            ),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFFE2C97E),
-                              foregroundColor: const Color(0xFF0D1B2A),
-                              disabledBackgroundColor:
-                                  const Color(0xFFE2C97E).withAlpha(120),
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 18),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
+                // Render the button continuously so the moon doesn't shift
+                // when it appears; fade in via opacity instead of swapping.
+                SizedBox(
+                  width: double.infinity,
+                  child: AnimatedOpacity(
+                    opacity: _showButton ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 600),
+                    curve: Curves.easeOut,
+                    child: IgnorePointer(
+                      ignoring: !_showButton,
+                      child: FilledButton.icon(
+                        onPressed: _closing ? null : _onCloseDay,
+                        icon: const Icon(Icons.nightlight_round, size: 20),
+                        label: const Text(
+                          'Close Day',
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFFE2C97E),
+                          foregroundColor: const Color(0xFF0D1B2A),
+                          disabledBackgroundColor:
+                              const Color(0xFFE2C97E).withAlpha(120),
+                          padding: const EdgeInsets.symmetric(vertical: 18),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
                           ),
-                        )
-                      : const SizedBox.shrink(key: ValueKey('no-btn')),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),

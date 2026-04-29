@@ -55,6 +55,14 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
 
     final current = unfinished.first;
     final notifier = ref.read(eveningShutdownProvider.notifier);
+    final isLast = unfinished.length == 1;
+
+    void resolve(void Function() apply) {
+      apply();
+      // Advance immediately when the user resolves the last task; otherwise
+      // the stream-driven auto-advance leaves a one-frame blank page.
+      if (isLast) notifier.advanceStep();
+    }
 
     return SingleChildScrollView(
       physics: const ClampingScrollPhysics(),
@@ -62,9 +70,9 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
       child: _TaskResolutionCard(
         key: ValueKey(current.id),
         todo: current,
-        onRollOver: () => notifier.rolloverTask(current.id),
-        onReturn: () => notifier.returnToNextActions(current.id),
-        onDefer: () => notifier.deferTask(current.id),
+        onRollOver: () => resolve(() => notifier.rolloverTask(current.id)),
+        onReturn: () => resolve(() => notifier.returnToNextActions(current.id)),
+        onDefer: () => resolve(() => notifier.deferTask(current.id)),
       ),
     );
   }

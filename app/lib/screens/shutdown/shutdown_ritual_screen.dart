@@ -27,6 +27,7 @@ class ShutdownRitualScreen extends ConsumerStatefulWidget {
 class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
   late final PageController _pageController;
   int? _resolveInitialTotal;
+  bool _showCloseDay = false;
 
   static const _stepTitles = ['Review Your Day', 'Resolve Unfinished'];
 
@@ -51,7 +52,17 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     final notifier = ref.read(eveningShutdownProvider.notifier);
     final step = shutdownState.currentStep;
 
-    if (step == 2) return const CloseDayStep();
+    // Lock onto CloseDayStep once reached. closeDay() resets currentStep to 0
+    // mid fade-out; without this latch the parent would rebuild and unmount
+    // CloseDayStep, exposing the Review step underneath.
+    if (step == 2 && !_showCloseDay) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_showCloseDay) {
+          setState(() => _showCloseDay = true);
+        }
+      });
+    }
+    if (_showCloseDay || step == 2) return const CloseDayStep();
 
     ref.listen<EveningShutdownState>(eveningShutdownProvider, (prev, next) {
       if (prev?.currentStep != next.currentStep &&
@@ -66,7 +77,8 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     });
 
     // Latch the initial unfinished count once so the resolve progress fills
-    // correctly, then auto-advance to Close Day on the transition to empty.
+    // correctly. Auto-advance off step 1 whenever the list is empty — covers
+    // both "resolved the last task" and "nothing to resolve to begin with".
     ref.listen<AsyncValue<List<Todo>>>(unfinishedSelectedTodayProvider,
         (prev, next) {
       final tasks = next.asData?.value;
@@ -74,13 +86,25 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
       if (tasks.isNotEmpty && _resolveInitialTotal == null) {
         setState(() => _resolveInitialTotal = tasks.length);
       }
-      final wasNonEmpty = prev?.asData?.value.isNotEmpty ?? false;
-      if (wasNonEmpty &&
-          tasks.isEmpty &&
+      if (tasks.isEmpty &&
           ref.read(eveningShutdownProvider).currentStep == 1) {
         notifier.advanceStep();
       }
     });
+
+    // If we render step 1 with no unfinished tasks (e.g. user landed here
+    // directly with an empty list, so the listener above never observed a
+    // transition), skip past it on the next frame.
+    if (step == 1 &&
+        (ref.watch(unfinishedSelectedTodayProvider).asData?.value.isEmpty ??
+            false)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            ref.read(eveningShutdownProvider).currentStep == 1) {
+          notifier.advanceStep();
+        }
+      });
+    }
 
     double? resolveProgress;
     if (step == 1 && _resolveInitialTotal != null && _resolveInitialTotal! > 0) {
@@ -128,10 +152,8 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     return switch (step) {
       // Step 0: completed review — always navigable (informational).
       0 => true,
-      // Step 1: only manually advanceable when there were no unfinished tasks
-      // to begin with; otherwise the auto-advance listener handles it.
-      1 => ref.watch(unfinishedSelectedTodayProvider).asData?.value.isEmpty ??
-          false,
+      // Step 1: dispositions handle navigation; if the list was empty to
+      // begin with, auto-advance still kicks in via the stream listener.
       _ => false,
     };
   }
@@ -297,15 +319,17 @@ class _ShutdownFooter extends StatelessWidget {
               child: const Text('Back'),
             ),
           const Spacer(),
-          FilledButton(
-            onPressed: onNext,
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF1E3A5F),
-              disabledBackgroundColor: const Color(0xFFD1D5DB),
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          if (onNext != null)
+            FilledButton(
+              onPressed: onNext,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1E3A5F),
+                disabledBackgroundColor: const Color(0xFFD1D5DB),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+              ),
+              child: const Text('Next'),
             ),
-            child: const Text('Next'),
-          ),
         ],
       ),
     );
