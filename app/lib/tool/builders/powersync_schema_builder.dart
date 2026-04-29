@@ -60,7 +60,6 @@ class _PowersyncSchemaBuilder implements Builder {
       final parentClass = match.group(2)!;
 
       if (!syncedClasses.contains(parentClass)) continue;
-      matchedSyncedClasses.add(parentClass);
 
       final regionStart = match.start;
       final regionEnd =
@@ -70,8 +69,16 @@ class _PowersyncSchemaBuilder implements Builder {
       final region = gSource.substring(regionStart, regionEnd);
 
       final tableNameMatch = tableNameRegex.firstMatch(region);
-      if (tableNameMatch == null) continue;
+      if (tableNameMatch == null) {
+        throw StateError(
+          'powersync_schema_builder: matched synced class "$parentClass" but '
+          'could not extract `\$name` via tableNameRegex from its region in '
+          'gtd_database.g.dart — update tableNameRegex in '
+          'powersync_schema_builder.dart.',
+        );
+      }
       final sqlTableName = tableNameMatch.group(1)!;
+      matchedSyncedClasses.add(parentClass);
 
       // Collect columns; dedup by SQL name in case of duplicate appearances.
       final seen = <String>{};
