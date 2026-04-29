@@ -3,15 +3,14 @@
 /// fades the screen to black, and exits the app.
 library;
 
-import 'dart:io';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
+import '../../../services/platform_helper.dart'
+    if (dart.library.io) '../../../services/platform_helper_io.dart';
 
 class CloseDayStep extends ConsumerStatefulWidget {
   const CloseDayStep({super.key});
@@ -83,15 +82,7 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
         curve: Curves.easeIn,
         onEnd: () {
           if (!_fadingOut || !mounted) return;
-          // On Android, SystemNavigator.pop() only finishes the activity;
-          // the process and FlutterEngine survive, so re-launching
-          // reattaches to the same widget tree and the dark Close Day
-          // screen reappears. Hard-exit so the next launch starts fresh.
-          if (!kIsWeb && Platform.isAndroid) {
-            exit(0);
-          } else {
-            SystemNavigator.pop();
-          }
+          closeApp();
         },
         child: SafeArea(
           child: Padding(

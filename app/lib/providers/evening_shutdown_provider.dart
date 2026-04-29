@@ -27,6 +27,8 @@ import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
 
+// Re-export Todo so UI consumers (e.g. unfinished_tasks_step.dart) can use
+// the type without taking a direct dependency on the database layer.
 export '../database/gtd_database.dart' show Todo;
 
 // ---------------------------------------------------------------------------
