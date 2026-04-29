@@ -40,7 +40,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 17;
+  int get schemaVersion => 18;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -318,6 +318,21 @@ class GtdDatabase extends _$GtdDatabase {
                   'ON focus_session_tasks(id)',
                 );
               }
+            }
+          }
+          if (from < 18) {
+            // Add UNIQUE index on todo_tags.id so PowerSync triggers can rely
+            // on id uniqueness. In production todo_tags is a PowerSync-managed
+            // view — SQLite forbids indexes on views, so only run on real tables.
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'todo_tags'",
+            ).get();
+            if (rows.isNotEmpty &&
+                rows.first.read<String>('type') == 'table') {
+              await customStatement(
+                'CREATE UNIQUE INDEX IF NOT EXISTS '
+                'idx_todo_tags_id ON todo_tags(id)',
+              );
             }
           }
         },

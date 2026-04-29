@@ -162,7 +162,7 @@ class TodoTags extends Table {
   /// deterministically via `todoTagIdFor(todoId, tagId)` (see tag_dao.dart)
   /// so re-assigning the same tag collapses under INSERT OR REPLACE instead
   /// of accumulating duplicate rows.
-  TextColumn get id => text()();
+  TextColumn get id => text().unique()();
 
   TextColumn get todoId => text().references(Todos, #id)();
   TextColumn get tagId => text().references(Tags, #id)();

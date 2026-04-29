@@ -16,14 +16,6 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/database/powersync_schema.dart';
 import '../test_helpers.dart';
 
-/// Tables whose `id` column is intentionally not backed by a UNIQUE index.
-/// These are known deviations tracked as separate issues.
-///
-/// TODO(#225): todo_tags.id lacks a UNIQUE constraint — it relies on UUID v5
-/// determinism for collision avoidance instead of a DB-level guarantee.
-/// Remove from this set once a migration adds the constraint.
-const _checkBSkipTables = {'todo_tags'};
-
 /// Maps a Drift [GeneratedColumn] to its canonical storage-type string for
 /// comparison with PowerSync column types.
 ///
@@ -74,7 +66,7 @@ void main() {
         // ------------------------------------------------------------------
         // Check B — `id` is declared UNIQUE
         // ------------------------------------------------------------------
-        if (!_checkBSkipTables.contains(tableName)) {
+        {
           final indexes = await db
               .customSelect('PRAGMA index_list($tableName)')
               .get();
