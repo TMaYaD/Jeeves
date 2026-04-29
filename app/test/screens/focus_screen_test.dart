@@ -122,8 +122,15 @@ void main() {
     expect(find.text('planning'), findsOneWidget);
   });
 
-  testWidgets('FocusScreen shows End Session button when session is active',
+  testWidgets(
+      'FocusScreen shows End Session button when session is active and all tasks are done',
       (tester) async {
+    // The shutdown footer only appears once planning is complete and there is
+    // at least one task on the session. Within that footer, the "End Session"
+    // variant requires every task to be done; otherwise the screen surfaces
+    // "Begin Evening Shutdown" to route the user into the shutdown ritual.
+    focusSessionPlanningCompletionNotifier.value = true;
+
     // startedAt is stored as ISO-8601 text (TextColumn in the Drift schema).
     final fakeSession = FocusSession(
       id: 'test-session',
@@ -133,7 +140,21 @@ void main() {
       currentTaskId: null,
     );
 
-    await tester.pumpWidget(_buildScreen(activeSession: fakeSession));
+    final now = DateTime.now();
+    final doneTask = Todo(
+      id: 'task-1',
+      title: 'Done task',
+      createdAt: now,
+      doneAt: now.toUtc().toIso8601String(),
+      clarified: true,
+      intent: 'next',
+      userId: 'test-user',
+      timeSpentMinutes: 0,
+    );
+
+    await tester.pumpWidget(
+      _buildScreen(tasks: [doneTask], activeSession: fakeSession),
+    );
     await tester.pump();
 
     expect(find.text('End Session'), findsOneWidget);
