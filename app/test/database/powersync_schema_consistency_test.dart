@@ -49,7 +49,15 @@ void main() {
       for (final table in db.allTables) {
         final tableName = table.actualTableName;
         final psTable = psByName[tableName];
-        if (psTable == null) continue; // local-only table, skip
+        if (psTable == null) {
+          // A `Synced` Drift table without a PowerSync counterpart means the
+          // schema generator silently dropped it — fail loudly. Local-only
+          // tables (no `Synced` mixin) are legitimately absent and skipped.
+          if (table is Synced) {
+            failures.add('$tableName: missing from generated PowerSync schema');
+          }
+          continue;
+        }
 
         // ------------------------------------------------------------------
         // Check A — `id` column present and non-nullable TEXT

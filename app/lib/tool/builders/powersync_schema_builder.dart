@@ -50,12 +50,17 @@ class _PowersyncSchemaBuilder implements Builder {
     // Pairs of (sqlTableName, columns) for every synced table.
     final tables = <(String, List<(String, String)>)>[];
 
+    // Track which `Synced` classes the regex actually matched so we can fail
+    // the build if Drift's generated code shape changes and silently drops one.
+    final matchedSyncedClasses = <String>{};
+
     final headerMatches = classHeaderRegex.allMatches(gSource).toList();
     for (var i = 0; i < headerMatches.length; i++) {
       final match = headerMatches[i];
       final parentClass = match.group(2)!;
 
       if (!syncedClasses.contains(parentClass)) continue;
+      matchedSyncedClasses.add(parentClass);
 
       final regionStart = match.start;
       final regionEnd =
@@ -90,6 +95,17 @@ class _PowersyncSchemaBuilder implements Builder {
       }
 
       tables.add((sqlTableName, columns));
+    }
+
+    final missingSyncedClasses = syncedClasses.difference(matchedSyncedClasses);
+    if (missingSyncedClasses.isNotEmpty) {
+      throw StateError(
+        'powersync_schema_builder: failed to derive PowerSync tables for '
+        'synced Drift classes ${missingSyncedClasses.toList()..sort()}. '
+        'The generated code in gtd_database.g.dart did not match the expected '
+        'class-header / column shape — update the regexes in '
+        'powersync_schema_builder.dart.',
+      );
     }
 
     // Emit the generated file.
