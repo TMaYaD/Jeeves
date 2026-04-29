@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-04-29 (issue #224)
+
+- `FocusSessionTasks` was missing an `id` column, causing `SqliteException(1811)` when `openSession` inserted rows — PowerSync's INSTEAD-OF INSERT trigger requires an `id` value. Fixed by adding `TextColumn get id => text().unique().clientDefault(() => uuid.v4())()` to the table; domain PK stays `{focusSessionId, taskId}`. `id` is explicitly passed in `openSession`'s companion insert (same idiom as `TimeLogs`). Drift schema v17; migration adds the column as nullable + backfills + creates a UNIQUE index (SQLite `ADD COLUMN` doesn't support NOT NULL without DEFAULT on populated tables).
+- `Dart Map ==` is identity, not value equality — using `==` to compare two `Map<String, String>` instances always returns `false` even when contents are identical. The schema consistency test detected this bug during authoring; fixed by comparing keys/values explicitly.
+
 ## 2026-04-28 (issue #197 / PR J)
 
 - Dropped `state` column entirely (Drift schema v15, Alembic 0020). `GtdState` enum, `GtdStateMachine`, and all FSM-related code deleted. `Todo.isActionable` now derived from `doneAt == null` only. `searchResultsProvider` changed from `Map<GtdState, List<SearchResult>>` to flat `List<SearchResult>`; search screen sections replaced by a flat ListView. Historical migration blocks (v10–v14) that referenced `state` now guard each UPDATE with a column-existence check so migration tests that open a fresh v15 DB and call `onUpgrade(m, oldFrom, oldTo)` don't fail on the missing column.

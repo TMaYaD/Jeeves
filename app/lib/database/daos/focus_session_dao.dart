@@ -55,6 +55,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // Insert task rows.
       for (var i = 0; i < taskIds.length; i++) {
         await into(focusSessionTasks).insert(FocusSessionTasksCompanion(
+          id: Value(uuid.v4()),
           focusSessionId: Value(newId),
           taskId: Value(taskIds[i]),
           position: Value(i),

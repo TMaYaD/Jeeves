@@ -113,6 +113,8 @@ class FocusSessions extends Table {
 
 /// Junction table: which todos are part of a focus session, in what order.
 class FocusSessionTasks extends Table {
+  /// PowerSync sync row identifier — not the domain key.
+  TextColumn get id => text().unique().clientDefault(() => uuid.v4())();
   TextColumn get focusSessionId => text().references(FocusSessions, #id)();
   TextColumn get taskId => text().references(Todos, #id)();
   IntColumn get position => integer()();
@@ -160,7 +162,7 @@ class TodoTags extends Table {
   /// deterministically via `todoTagIdFor(todoId, tagId)` (see tag_dao.dart)
   /// so re-assigning the same tag collapses under INSERT OR REPLACE instead
   /// of accumulating duplicate rows.
-  TextColumn get id => text()();
+  TextColumn get id => text().unique()();
 
   TextColumn get todoId => text().references(Todos, #id)();
   TextColumn get tagId => text().references(Tags, #id)();

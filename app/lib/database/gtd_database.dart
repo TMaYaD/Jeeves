@@ -40,7 +40,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 18;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -288,6 +288,52 @@ class GtdDatabase extends _$GtdDatabase {
           if (from < 16) {
             await _addColumnIfTable(
                 m, focusSessionTasks, focusSessionTasks.disposition);
+          }
+          if (from < 17) {
+            // Add PowerSync-required `id` column to focus_session_tasks.
+            // In production this table is a PowerSync-managed view (id already
+            // auto-injected by the trigger); this block only runs on real tables
+            // (NativeDatabase path: tests and fresh local DBs).
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'focus_session_tasks'",
+            ).get();
+            if (rows.isNotEmpty &&
+                rows.first.read<String>('type') == 'table') {
+              final cols = await customSelect(
+                'PRAGMA table_info(focus_session_tasks)',
+              ).get();
+              if (!cols.any((r) => r.read<String>('name') == 'id')) {
+                // SQLite rejects NOT NULL ADD COLUMN without a DEFAULT on
+                // populated tables; add as nullable, backfill, then enforce
+                // uniqueness via index.
+                await customStatement(
+                  'ALTER TABLE focus_session_tasks ADD COLUMN id TEXT',
+                );
+                await customStatement(
+                  'UPDATE focus_session_tasks '
+                  "SET id = lower(hex(randomblob(16))) WHERE id IS NULL",
+                );
+                await customStatement(
+                  'CREATE UNIQUE INDEX idx_fst_id '
+                  'ON focus_session_tasks(id)',
+                );
+              }
+            }
+          }
+          if (from < 18) {
+            // Add UNIQUE index on todo_tags.id so PowerSync triggers can rely
+            // on id uniqueness. In production todo_tags is a PowerSync-managed
+            // view — SQLite forbids indexes on views, so only run on real tables.
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'todo_tags'",
+            ).get();
+            if (rows.isNotEmpty &&
+                rows.first.read<String>('type') == 'table') {
+              await customStatement(
+                'CREATE UNIQUE INDEX IF NOT EXISTS '
+                'idx_todo_tags_id ON todo_tags(id)',
+              );
+            }
           }
         },
       );
