@@ -136,7 +136,7 @@ Focus Mode is the task execution layer activated after daily planning. Its archi
 
 `/focus/active` is a top-level `GoRoute` registered **outside** the `ShellRoute`, so `AppShell` (drawer, navigation) is not rendered. The user sees only the active task. `/focus` (the daily plan list) remains inside the `ShellRoute`.
 
-The router has a `redirect` callback that checks `focusSessionPlanningCompletionNotifier.value`; `/focus` and `/focus/*` redirect to `/focus-session-planning` when daily planning has not been completed. `focusSessionPlanningCompletionNotifier` is also set as `refreshListenable` so the guard re-evaluates reactively when planning state changes.
+The router has a `redirect` callback only for SWS mode (redirect `/register` to `/login`). `/focus` is unconditionally accessible from the drawer; daily planning is entered explicitly via the "Plan the Day" button on the Focus screen or the amber `FocusSessionPlanningBanner` in `AppShell`.
 
 ### FocusModeNotifier (`providers/focus_session_provider.dart`)
 

@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-04-29 (issue #225)
+
+- The `/focus` → `/focus-session-planning` redirect in `router.dart` was gating the Focus screen unconditionally on `focusSessionPlanningCompletionNotifier.value`, which fires `false` at every app launch. Removed both the redirect block and `refreshListenable`; `focusSessionPlanningCompletionNotifier` no longer drives any router redirect (the banner in `AppShell` still reads it directly).
+- `FocusSession.startedAt` is stored as a `String` (ISO-8601 text in Drift's `TextColumn`), not `DateTime` — construct test instances with `.toIso8601String()`.
+
 ## 2026-04-29 (issue #224)
 
 - `FocusSessionTasks` was missing an `id` column, causing `SqliteException(1811)` when `openSession` inserted rows — PowerSync's INSTEAD-OF INSERT trigger requires an `id` value. Fixed by adding `TextColumn get id => text().unique().clientDefault(() => uuid.v4())()` to the table; domain PK stays `{focusSessionId, taskId}`. `id` is explicitly passed in `openSession`'s companion insert (same idiom as `TimeLogs`). Drift schema v17; migration adds the column as nullable + backfills + creates a UNIQUE index (SQLite `ADD COLUMN` doesn't support NOT NULL without DEFAULT on populated tables).
