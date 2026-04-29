@@ -1,7 +1,9 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
 import 'package:go_router/go_router.dart';
 
 import 'auth/auth_mode.dart';
-import 'providers/focus_session_planning_provider.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
@@ -18,31 +20,43 @@ import 'screens/import_screen.dart';
 import 'screens/search/search_screen.dart';
 import 'screens/shutdown/shutdown_ritual_screen.dart';
 
+/// Creates the router redirect function with a configurable [swsMode] flag.
+///
+/// The production router uses [appRouterRedirect] which bakes in the
+/// [isSwsMode] compile-time constant. This factory lets tests simulate SWS
+/// mode without requiring a separate build flavour.
+GoRouterRedirect buildAppRouterRedirect({bool swsMode = isSwsMode}) =>
+    (context, state) {
+      if (swsMode && state.matchedLocation == '/register') return '/login';
+      return null;
+    };
+
+/// Top-level redirect callback used by [appRouter].
+///
+/// Exported as a named symbol so router unit tests can wire up a stub-route
+/// router with the real redirect logic, catching regressions without needing
+/// every screen's provider dependencies.
+FutureOr<String?> appRouterRedirect(BuildContext context, GoRouterState state) {
+  // In SWS mode the wallet is the identity — there is no email signup, so
+  // /register is meaningless. Bounce any stale deep link / nav entry back to
+  // /login where the "Connect wallet" flow lives.
+  if (isSwsMode && state.matchedLocation == '/register') {
+    return '/login';
+  }
+  // We intentionally do NOT force unauthenticated users to /login: the app
+  // is fully usable in local-only mode (logout() reassigns rows back to the
+  // 'local' user), so:
+  //   - signing out from Settings should stay on Settings
+  //   - a user on /login must be able to back out to /inbox and use the app
+  //     without creating an account
+  // /login remains reachable from Settings → "Sign in to sync" whenever the
+  // user does want to sync.
+  return null;
+}
+
 final appRouter = GoRouter(
   initialLocation: '/inbox',
-  refreshListenable: focusSessionPlanningCompletionNotifier,
-  redirect: (context, state) {
-    // In SWS mode the wallet is the identity — there is no email signup, so
-    // /register is meaningless. Bounce any stale deep link / nav entry back to
-    // /login where the "Connect wallet" flow lives.
-    if (isSwsMode && state.matchedLocation == '/register') {
-      return '/login';
-    }
-    // We intentionally do NOT force unauthenticated users to /login: the app
-    // is fully usable in local-only mode (logout() reassigns rows back to the
-    // 'local' user), so:
-    //   - signing out from Settings should stay on Settings
-    //   - a user on /login must be able to back out to /inbox and use the app
-    //     without creating an account
-    // /login remains reachable from Settings → "Sign in to sync" whenever the
-    // user does want to sync.
-    final isFocusRoute = state.matchedLocation == '/focus' ||
-        state.matchedLocation.startsWith('/focus/');
-    if (isFocusRoute && !focusSessionPlanningCompletionNotifier.value) {
-      return '/focus-session-planning';
-    }
-    return null;
-  },
+  redirect: appRouterRedirect,
   routes: [
     GoRoute(
       path: '/login',
