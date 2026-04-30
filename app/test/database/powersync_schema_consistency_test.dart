@@ -13,7 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:powersync/powersync.dart' as ps;
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/database/powersync_schema.dart';
+import 'package:jeeves/database/powersync_schema.g.dart';
 import '../test_helpers.dart';
 
 /// Maps a Drift [GeneratedColumn] to its canonical storage-type string for
@@ -49,7 +49,15 @@ void main() {
       for (final table in db.allTables) {
         final tableName = table.actualTableName;
         final psTable = psByName[tableName];
-        if (psTable == null) continue; // local-only table, skip
+        if (psTable == null) {
+          // A `Synced` Drift table without a PowerSync counterpart means the
+          // schema generator silently dropped it — fail loudly. Local-only
+          // tables (no `Synced` mixin) are legitimately absent and skipped.
+          if (table is Synced) {
+            failures.add('$tableName: missing from generated PowerSync schema');
+          }
+          continue;
+        }
 
         // ------------------------------------------------------------------
         // Check A — `id` column present and non-nullable TEXT

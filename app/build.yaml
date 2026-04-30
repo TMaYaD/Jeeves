@@ -12,3 +12,13 @@ targets:
       drift_dev:
         options:
           store_date_time_values_as_text: true
+      jeeves|powersync_schema:
+        enabled: true
+
+builders:
+  powersync_schema:
+    import: "package:jeeves/tool/builders/powersync_schema_builder.dart"
+    builder_factories: ["powersyncSchemaBuilder"]
+    build_extensions: {"lib/database/gtd_database.g.dart": ["lib/database/powersync_schema.g.dart"]}
+    auto_apply: root_package
+    build_to: source
