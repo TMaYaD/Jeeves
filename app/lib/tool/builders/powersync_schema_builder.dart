@@ -46,6 +46,11 @@ class _PowersyncSchemaBuilder implements Builder {
     final tableNameRegex = RegExp(r"static const String \$name = '(\w+)';");
     // Matches GeneratedColumn<DartType>(\n  'sql_name', — captures type and name.
     final columnRegex = RegExp(r"GeneratedColumn<(\w+)>\s*\(\s*'([^']+)'");
+    // Detects column shapes not handled by columnRegex so they fail loudly
+    // instead of being silently skipped if Drift's code emission evolves.
+    final unsupportedColumnShapeRegex = RegExp(
+      r'GeneratedColumnWithTypeConverter<',
+    );
 
     // Pairs of (sqlTableName, columns) for every synced table.
     final tables = <(String, List<(String, String)>)>[];
@@ -79,6 +84,15 @@ class _PowersyncSchemaBuilder implements Builder {
       }
       final sqlTableName = tableNameMatch.group(1)!;
       matchedSyncedClasses.add(parentClass);
+
+      if (unsupportedColumnShapeRegex.hasMatch(region)) {
+        throw StateError(
+          'powersync_schema_builder: table "$sqlTableName" contains '
+          '`GeneratedColumnWithTypeConverter`, which is not handled by '
+          'columnRegex. Update column parsing/type mapping in '
+          'powersync_schema_builder.dart.',
+        );
+      }
 
       // Collect columns; dedup by SQL name in case of duplicate appearances.
       final seen = <String>{};
