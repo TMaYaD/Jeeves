@@ -149,6 +149,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       context,
       todoId: widget.todo.id,
       assignedPersonTagIds: const {},
+      requireSelection: true,
       onAfterConfirm: () async {
         if (!context.mounted) return;
         Object? error;

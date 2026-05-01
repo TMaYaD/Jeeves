@@ -18,6 +18,7 @@ class PersonTagPickerSheet extends ConsumerStatefulWidget {
     required this.todoId,
     required this.assignedPersonTagIds,
     this.onAfterConfirm,
+    this.requireSelection = false,
   });
 
   final String todoId;
@@ -29,6 +30,10 @@ class PersonTagPickerSheet extends ConsumerStatefulWidget {
   /// Use this to perform caller-specific side-effects (e.g., clarifying an
   /// inbox item) that should only run on explicit confirmation, not on cancel.
   final Future<void> Function()? onAfterConfirm;
+
+  /// When true, "Done" is a no-op if no person is selected — prevents routing
+  /// without a waiter (e.g., the inbox "Waiting For" destination).
+  final bool requireSelection;
 
   @override
   ConsumerState<PersonTagPickerSheet> createState() =>
@@ -175,7 +180,9 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
               ),
               const SizedBox(width: 8),
               FilledButton(
-                onPressed: _confirm,
+                onPressed: (widget.requireSelection && _selected.isEmpty)
+                    ? null
+                    : _confirm,
                 child: const Text('Done'),
               ),
             ],
@@ -229,13 +236,14 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
 
 /// Shows the [PersonTagPickerSheet] as a modal bottom sheet.
 ///
-/// [onAfterConfirm] is forwarded to [PersonTagPickerSheet] and called after
-/// tag assignments complete when the user taps "Done" — not on cancel.
+/// [onAfterConfirm] is called after tag assignments when the user taps "Done".
+/// [requireSelection] disables "Done" until at least one person is selected.
 Future<void> showPersonTagPicker(
   BuildContext context, {
   required String todoId,
   required Set<String> assignedPersonTagIds,
   Future<void> Function()? onAfterConfirm,
+  bool requireSelection = false,
 }) {
   return showModalBottomSheet(
     context: context,
@@ -245,6 +253,7 @@ Future<void> showPersonTagPicker(
       todoId: todoId,
       assignedPersonTagIds: assignedPersonTagIds,
       onAfterConfirm: onAfterConfirm,
+      requireSelection: requireSelection,
     ),
   );
 }

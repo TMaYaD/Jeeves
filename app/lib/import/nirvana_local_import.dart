@@ -153,6 +153,27 @@ Future<ImportResult> importNirvanaLocally({
                 ? null
                 : trimmedWaitingFor;
 
+        // Compare existing vs incoming person-tag set so re-importing the
+        // same export is a no-op on the todo row and junction table.
+        final existingPersonNames =
+            await _existingPersonTagNamesForTodo(db, todoId);
+        final incomingPersonNames = effectiveWaitingFor != null
+            ? {effectiveWaitingFor}
+            : <String>{};
+        final personTagsChanged = existingPersonNames != incomingPersonNames;
+
+        // Preserve lastClarifiedAt when unchanged; stamp now on any mutation
+        // (both additions and removals count as clarification events).
+        DateTime? computedLastClarifiedAt;
+        if (personTagsChanged) {
+          computedLastClarifiedAt = now.toUtc();
+        } else {
+          final existingRow = await (db.select(db.todos)
+                ..where((t) => t.id.equals(todoId)))
+              .getSingleOrNull();
+          computedLastClarifiedAt = existingRow?.lastClarifiedAt;
+        }
+
         await db.into(db.todos).insert(
               TodosCompanion(
                 id: Value(todoId),
@@ -165,9 +186,7 @@ Future<ImportResult> importNirvanaLocally({
                 dueDate: Value(dueDate),
                 timeEstimate: Value(item.timeEstimate),
                 energyLevel: Value(item.energyLevel),
-                lastClarifiedAt: effectiveWaitingFor != null
-                    ? Value(now.toUtc())
-                    : const Value(null),
+                lastClarifiedAt: Value(computedLastClarifiedAt),
                 captureSource: const Value('nirvana_import'),
                 userId: Value(userId),
                 createdAt: Value(now),
@@ -175,20 +194,23 @@ Future<ImportResult> importNirvanaLocally({
               ),
               mode: InsertMode.insertOrReplace,
             );
-        await _deletePersonTagLinksForTodo(db, todoId);
-        if (effectiveWaitingFor != null) {
-          final personTagId = personTagIds[effectiveWaitingFor] ??
-              await _upsertPersonTag(db, effectiveWaitingFor, userId);
-          personTagIds[effectiveWaitingFor] = personTagId;
-          await db.into(db.todoTags).insert(
-                TodoTagsCompanion(
-                  id: Value(todoTagIdFor(todoId, personTagId)),
-                  todoId: Value(todoId),
-                  tagId: Value(personTagId),
-                  userId: Value(userId),
-                ),
-                mode: InsertMode.insertOrReplace,
-              );
+
+        if (personTagsChanged) {
+          await _deletePersonTagLinksForTodo(db, todoId);
+          if (effectiveWaitingFor != null) {
+            final personTagId = personTagIds[effectiveWaitingFor] ??
+                await db.tagDao.createPersonTag(effectiveWaitingFor, userId);
+            personTagIds[effectiveWaitingFor] = personTagId;
+            await db.into(db.todoTags).insert(
+                  TodoTagsCompanion(
+                    id: Value(todoTagIdFor(todoId, personTagId)),
+                    todoId: Value(todoId),
+                    tagId: Value(personTagId),
+                    userId: Value(userId),
+                  ),
+                  mode: InsertMode.insertOrReplace,
+                );
+          }
         }
         if (item.intent == 'maybe') {
           await db.todoDao.deferTaskToMaybe(todoId, userId, now: now);
@@ -252,29 +274,17 @@ Future<ImportResult> importNirvanaLocally({
 String _deterministicTodoId(NirvanaItem item) =>
     uuid.v5(Namespace.url.value, 'jeeves://nirvana_import/${item.id}');
 
-/// Look up or insert a person tag by [name] for [userId].
-///
-/// Returns the tag's id.
-Future<String> _upsertPersonTag(
-    GtdDatabase db, String name, String userId) async {
-  final existing = await (db.select(db.tags)
-        ..where((t) =>
-            t.name.equals(name) &
-            t.userId.equals(userId) &
-            t.type.equals('person')))
-      .getSingleOrNull();
-  if (existing != null) return existing.id;
-
-  final tagId = uuid.v4();
-  final color = tagColorToHex(tagColorForName(name));
-  await db.tagDao.upsertTag(TagsCompanion(
-    id: Value(tagId),
-    name: Value(name),
-    type: const Value('person'),
-    color: Value(color),
-    userId: Value(userId),
-  ));
-  return tagId;
+/// Returns the set of person-tag names currently linked to [todoId].
+Future<Set<String>> _existingPersonTagNamesForTodo(
+    GtdDatabase db, String todoId) async {
+  final rows = await (db.select(db.todoTags).join([
+    innerJoin(db.tags, db.tags.id.equalsExp(db.todoTags.tagId)),
+  ])
+        ..where(
+            db.todoTags.todoId.equals(todoId) &
+            db.tags.type.equals('person')))
+      .get();
+  return {for (final r in rows) r.readTable(db.tags).name};
 }
 
 /// Look up or insert a context tag by [name] for [userId].
