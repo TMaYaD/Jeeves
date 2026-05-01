@@ -58,7 +58,7 @@ packages:
     source: hosted
     version: "2.1.2"
   build:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: build
       sha256: aadd943f4f8cc946882c954c187e6115a84c98c81ad1d9c6cbf0895a8c85da9c

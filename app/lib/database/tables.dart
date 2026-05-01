@@ -7,11 +7,16 @@ library;
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
+/// Marks a Drift table as replicated via PowerSync.
+/// The powersync_schema_builder reads this marker to decide which tables
+/// to include in the generated powersync_schema.g.dart.
+mixin Synced on Table {}
+
 // ---------------------------------------------------------------------------
 // todos
 // ---------------------------------------------------------------------------
 
-class Todos extends Table {
+class Todos extends Table with Synced {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get title => text().withLength(max: 500)();
   TextColumn get notes => text().nullable()();
@@ -66,7 +71,7 @@ class Todos extends Table {
 ///
 /// Timestamps are ISO-8601 UTC text strings.
 /// `ended_at` is null while the stint is still running.
-class TimeLogs extends Table {
+class TimeLogs extends Table with Synced {
   /// PowerSync-managed primary key — no clientDefault.
   TextColumn get id => text()();
   TextColumn get userId => text()();
@@ -93,7 +98,7 @@ class TimeLogs extends Table {
 /// One row per planning session. An open session (ended_at IS NULL) is the
 /// single source of truth for "what tasks are on today's plan" and
 /// "which task is currently focused."
-class FocusSessions extends Table {
+class FocusSessions extends Table with Synced {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get userId => text()();
   TextColumn get startedAt => text()();
@@ -112,7 +117,7 @@ class FocusSessions extends Table {
 // ---------------------------------------------------------------------------
 
 /// Junction table: which todos are part of a focus session, in what order.
-class FocusSessionTasks extends Table {
+class FocusSessionTasks extends Table with Synced {
   /// PowerSync sync row identifier — not the domain key.
   TextColumn get id => text().unique().clientDefault(() => uuid.v4())();
   TextColumn get focusSessionId => text().references(FocusSessions, #id)();
@@ -134,7 +139,7 @@ class FocusSessionTasks extends Table {
 // tags
 // ---------------------------------------------------------------------------
 
-class Tags extends Table {
+class Tags extends Table with Synced {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get name => text().withLength(max: 100)();
   TextColumn get color => text().nullable()();
@@ -154,7 +159,7 @@ class Tags extends Table {
 // todo_tags  (junction)
 // ---------------------------------------------------------------------------
 
-class TodoTags extends Table {
+class TodoTags extends Table with Synced {
   /// PowerSync exposes `todo_tags` as a view over `ps_data__todo_tags` whose
   /// INSTEAD OF INSERT trigger writes `NEW.id` into the backing table — so
   /// an explicit `id` is required even though the *logical* identity of a
