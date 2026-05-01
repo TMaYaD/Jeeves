@@ -17,12 +17,18 @@ class PersonTagPickerSheet extends ConsumerStatefulWidget {
     super.key,
     required this.todoId,
     required this.assignedPersonTagIds,
+    this.onAfterConfirm,
   });
 
   final String todoId;
 
   /// IDs of person-tags currently assigned to the todo.
   final Set<String> assignedPersonTagIds;
+
+  /// Called after tag assignments complete when the user taps "Done".
+  /// Use this to perform caller-specific side-effects (e.g., clarifying an
+  /// inbox item) that should only run on explicit confirmation, not on cancel.
+  final Future<void> Function()? onAfterConfirm;
 
   @override
   ConsumerState<PersonTagPickerSheet> createState() =>
@@ -215,15 +221,21 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
       await notifier.removePersonTag(tagId);
     }
 
+    await widget.onAfterConfirm?.call();
+
     if (mounted) Navigator.pop(context);
   }
 }
 
 /// Shows the [PersonTagPickerSheet] as a modal bottom sheet.
+///
+/// [onAfterConfirm] is forwarded to [PersonTagPickerSheet] and called after
+/// tag assignments complete when the user taps "Done" — not on cancel.
 Future<void> showPersonTagPicker(
   BuildContext context, {
   required String todoId,
   required Set<String> assignedPersonTagIds,
+  Future<void> Function()? onAfterConfirm,
 }) {
   return showModalBottomSheet(
     context: context,
@@ -232,6 +244,7 @@ Future<void> showPersonTagPicker(
     builder: (_) => PersonTagPickerSheet(
       todoId: todoId,
       assignedPersonTagIds: assignedPersonTagIds,
+      onAfterConfirm: onAfterConfirm,
     ),
   );
 }

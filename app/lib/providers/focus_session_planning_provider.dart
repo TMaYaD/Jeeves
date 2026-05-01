@@ -351,31 +351,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
   }
 
-  /// Processes an inbox item to the Waiting For list.
-  ///
-  /// Sets clarified = true, creates a person-typed tag for [waitingForText]
-  /// (or reuses an existing one with the same name), links it to the todo,
-  /// and stamps last_clarified_at.
-  Future<void> processInboxItemToWaitingFor(
-      String id, String waitingForText) async {
-    final name = waitingForText.trim();
-    if (name.isEmpty) {
-      throw ArgumentError.value(
-          waitingForText, 'waitingForText', 'cannot be blank');
-    }
-    await _db.transaction(() async {
-      await _db.inboxDao.processInboxItem(id, userId: _userId);
-      // Find or create a person-typed tag for this name.
-      final existing = await _db.tagDao.findPersonTagByName(name, _userId);
-      final tagId = existing?.id ?? await _db.tagDao.createPersonTag(name, _userId);
-      await _db.tagDao.assignTag(id, tagId, _userId);
-      await _db.todoDao.stampLastClarifiedAt(id, _userId);
-    });
-    state = state.copyWith(
-      inboxClarifiedCount: state.inboxClarifiedCount + 1,
-    );
-  }
-
   /// Processes an inbox item to the maybe list.
   ///
   /// Sets clarified = true and intent = 'maybe' so the item appears in the

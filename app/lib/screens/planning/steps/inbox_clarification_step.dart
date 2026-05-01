@@ -16,6 +16,7 @@ import '../../../providers/auth_provider.dart';
 import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/inbox_provider.dart';
+import '../../../widgets/person_tag_picker.dart';
 
 class InboxClarificationStep extends ConsumerWidget {
   const InboxClarificationStep({super.key});
@@ -141,78 +142,42 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   }
 
   Future<void> _processToWaitingFor(BuildContext context) async {
-    final controller = TextEditingController();
-    final text = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Waiting for…'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(
-            hintText: 'Who or what are you waiting on?',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
+    final saved = await _saveFields(context);
+    if (!saved || !context.mounted) return;
+
+    await showPersonTagPicker(
+      context,
+      todoId: widget.todo.id,
+      assignedPersonTagIds: const {},
+      onAfterConfirm: () async {
+        if (!context.mounted) return;
+        Object? error;
+        try {
+          await ref
+              .read(focusSessionPlanningProvider.notifier)
+              .processInboxItem(widget.todo.id);
+        } catch (e) {
+          error = e;
+        }
+        if (!context.mounted) return;
+        if (error != null) {
+          debugPrint('Error: $error');
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Save failed'),
+              content: const Text('Failed to save. Please try again.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      },
     );
-    controller.dispose();
-    if (text == null || !context.mounted) return;
-    if (text.isEmpty) {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Missing name'),
-          content: const Text('Please enter a name.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
-    Object? error;
-    try {
-      final saved = await _saveFields(context);
-      if (!saved || !context.mounted) return;
-      await ref
-          .read(focusSessionPlanningProvider.notifier)
-          .processInboxItemToWaitingFor(widget.todo.id, text);
-    } catch (e) {
-      error = e;
-    }
-
-    if (!context.mounted) return;
-    if (error != null) {
-      debugPrint('Error: $error');
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Save failed'),
-          content: const Text('Failed to save. Please try again.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    }
   }
 
   Future<void> _processToDone(BuildContext context) async {
