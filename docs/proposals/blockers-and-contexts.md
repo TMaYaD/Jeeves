@@ -2,8 +2,9 @@
 
 **Status:** Domain modelling complete, ready for engineering. Tracked under [#181](https://github.com/TMaYaD/Jeeves/issues/181).
 
-**v1 children:** [#235](https://github.com/TMaYaD/Jeeves/issues/235) PersonBlocker · [#236](https://github.com/TMaYaD/Jeeves/issues/236) TaskBlocker · [#237](https://github.com/TMaYaD/Jeeves/issues/237) Re-clarification surface
-**Deferred:** [#238](https://github.com/TMaYaD/Jeeves/issues/238) TimeContext · [#239](https://github.com/TMaYaD/Jeeves/issues/239) LocationContext
+**v1 children:** [#235](https://github.com/TMaYaD/Jeeves/issues/235) PersonBlocker · [#237](https://github.com/TMaYaD/Jeeves/issues/237) Re-clarification surface
+**Punted (no current driver):** [#236](https://github.com/TMaYaD/Jeeves/issues/236) TaskBlocker
+**Deferred (future phases):** [#238](https://github.com/TMaYaD/Jeeves/issues/238) TimeContext · [#239](https://github.com/TMaYaD/Jeeves/issues/239) LocationContext
 
 ## Problem
 
@@ -53,17 +54,22 @@ The split mirrors a deeper design tenet: **the Task is the persistent outcome; t
 - A new **Waiting List** view groups Tasks by person — same Task appears under every person it's waiting on. Reuses the Next-list item template per row.
 - Adding/removing a person-tag stamps `Task.last_clarified_at`; adding/removing organising-type tags does not (Tag-type-aware clarify-stamping — see *Clarify vs organise* below).
 
-**Why this collapse is safe.** The originally proposed separate `PersonBlocker` table was justified by `cleared_at` history, a `notes` field, and conflation prevention against "person-as-organising-tag." Each dissolved on inspection: history is Phase 4; notes have no UX home distinct from Task description; "person on Task" has no plausible non-blocker meaning. TaskBlocker still needs its own table (its referent is a Task, not a Tag), so Blocker variants are storage-asymmetric — that's fine; the unifying abstraction is the `isBlocked(task)` predicate, not the storage.
+**Why this collapse is safe.** The originally proposed separate `PersonBlocker` table was justified by `cleared_at` history, a `notes` field, and conflation prevention against "person-as-organising-tag." Each dissolved on inspection: history is Phase 4; notes have no UX home distinct from Task description; "person on Task" has no plausible non-blocker meaning. The unifying abstraction is the `isBlocked(task)` predicate, not the storage.
 
 The door is left ajar: an explicit `PersonBlocker` entity may be revisited later if a more compelling use case emerges than the ones already considered. Until then, the tag-shaped form is load-bearing.
 
-**TaskBlocker** ([#236](https://github.com/TMaYaD/Jeeves/issues/236)) — Task A blocks Task B until A is done.
+### Punted: TaskBlocker
 
-- Cleared semantics is a **live predicate**: `cleared = blocking_task.done_at IS NOT NULL`. No stored `cleared_at`. Re-engages automatically if blocking task is un-done.
-- Cycle prevention enforced at create-time (direct and transitive cycles rejected).
-- **Cascade on trash only**: when a blocking Task transitions to `trashed`, every dependent Task gets flagged for re-clarification. *Not* auto-cleared — the dependent may also be destined for trash; the user decides per dependent. Cascade does *not* fire on `someday` transitions (outcome still wanted, dependents stay blocked).
-- The clearing mechanisms differ across Blocker variants — that variation is intrinsic to the variants, not a sign that Blocker-vs-Context is the wrong split.
-- **TaskBlocker UX is deferred entirely from v1.** Plumbing only — minimal Task-detail surface for create/clear, and "no blockers" surface in daily planning. The full UX waits until the user has dogfooded the app long enough to settle the Blocker-vs-Project question (TaskBlocker chains can substitute for Project; the right framing needs lived experience). Risk accepted: clarify-step touchpoints may need rework when the answer lands.
+**TaskBlocker** ([#236](https://github.com/TMaYaD/Jeeves/issues/236), closed) — Task A blocks Task B until A is done. **Punted entirely** from v1 until a real driver emerges.
+
+The shape was designed (live-predicate `cleared = blocking_task.done_at IS NOT NULL`, create-time cycle prevention, cascade-on-trash flagging dependents for re-clarification) and could be implemented when needed. But:
+
+- No user is currently asking for it. PersonBlocker covers the load-bearing v1 use case.
+- PersonBlocker collapsed all the way to `TodoTag(type='person')` with no entity at all. Building a separate `task_blockers` table for a use case nobody is pulling on is YAGNI.
+- The TaskBlocker UX was already deferred from v1 (plumbing-only). Without a UX consumer, the plumbing has no caller.
+- Re-clarification surface ([#237](https://github.com/TMaYaD/Jeeves/issues/237)) can be specified without TaskBlocker re-engagement / trashed-cascade as inputs to its `latest_relevant_state_change`.
+
+If someone (the user or otherwise) eventually hits a workflow where "Task A blocks Task B" is genuinely the right shape — and not better served by editing Task B's outcome description or cursor — the design above is the starting point. Reopen #236 then.
 
 ### Contexts (deferred)
 
@@ -85,9 +91,9 @@ The door is left ajar: an explicit `PersonBlocker` entity may be revisited later
 
 ## Scope and sequencing
 
-- **v1 UX is throwaway** ("jugaad"). Each v1 child ships minimal placeholder UX sufficient to exercise the plumbing. Formal blocker/context UX lands in [#180](https://github.com/TMaYaD/Jeeves/issues/180)'s ritual redesign, which sits on top of stable plumbing.
-- **Variants are sequenced one-at-a-time**, not bundled. Each Blocker / Context variant gets its own consideration pass and its own PR sequence. PersonBlocker, TaskBlocker, and the re-clarification surface are the v1 trio; TimeContext and LocationContext are deferred placeholders.
-- **TaskBlocker UX deferral is deliberate, not incidental.** Plumbing ships in v1 so the model is whole; full UX waits for dogfood-driven clarity on the Blocker-vs-Project framing (see [#236](https://github.com/TMaYaD/Jeeves/issues/236)).
+- **v1 UX is throwaway** ("jugaad"). Each v1 child ships minimal placeholder UX sufficient to exercise the plumbing. Formal blocker UX lands in [#180](https://github.com/TMaYaD/Jeeves/issues/180)'s ritual redesign, which sits on top of stable plumbing.
+- **Variants are sequenced one-at-a-time**, not bundled. Each Blocker / Context variant gets its own consideration pass and its own PR sequence. PersonBlocker and the re-clarification surface are the v1 pair; TaskBlocker is punted; TimeContext and LocationContext are deferred placeholders.
+- **TaskBlocker is punted, not deferred.** No current driver — nobody is asking for cross-Task dependency tracking, and PersonBlocker covers the load-bearing v1 case. Reopen [#236](https://github.com/TMaYaD/Jeeves/issues/236) when a real workflow hits the wall without it.
 
 ## Time pre-conditions vs deadlines
 
@@ -204,7 +210,7 @@ The original epic claimed a single `actionable` predicate gating on Blockers. Mo
 
 1. **`hasNextAction(task)`** — does the Task have a current NextAction (cursor non-empty)? The clarify status: has the user thought about it enough to commit to a next move?
 2. **`isDoableNow(nextAction)`** — are all of this NextAction's Contexts satisfied right now? The context check: am I in the right place / time to do this? Empty Context list ⇒ trivially doable. (v1: trivially true since Contexts are deferred.)
-3. **`isBlocked(task)`** — does this Task have any unresolved Blockers? The descriptive state, orthogonal to whether a NextAction exists.
+3. **`isBlocked(task)`** — does this Task have any unresolved Blockers? The descriptive state, orthogonal to whether a NextAction exists. (v1: equivalent to "has any `Tag(type='person')` link," since PersonBlocker is the only Blocker variant.)
 
 The four-quadrant matrix has different planning-ritual roles:
 
@@ -215,7 +221,7 @@ The four-quadrant matrix has different planning-ritual roles:
 
 For surfacing Tasks for attention, two further derived predicates compose from the dimensions:
 
-- **Stale**: `last_clarified_at < latest_relevant_state_change`, where the latter is the max of NextAction-cursor-was-completed, TaskBlocker re-engagement, blocking-task `trashed_at` cascades. (PersonBlocker clearing is handled directly by stamping `last_clarified_at` at the moment of TodoTag deletion — no separate timestamp to compare against in v1.)
+- **Stale**: `last_clarified_at < latest_relevant_state_change`, where the latter is NextAction-cursor-was-completed in v1. (PersonBlocker add/remove stamps `last_clarified_at` directly — no separate timestamp to compare against. TaskBlocker is punted, so its re-engagement and trashed-cascade inputs don't apply.)
 - **Actionless**: same as `¬hasNextAction(task)` for non-terminal Tasks.
 
 A Task can be stale, actionless, both, or neither. Implementation may stage or denormalise as needed for query performance — the *contract* is the derivation.
