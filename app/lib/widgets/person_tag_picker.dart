@@ -182,14 +182,25 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
   Future<void> _createAndSelect() async {
     final name = _newPersonController.text.trim();
     if (name.isEmpty) return;
-    setState(() {
-      _creatingNew = false;
-      _newPersonController.clear();
-    });
-    final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    final tagId = await db.tagDao.createPersonTag(name, userId);
-    setState(() => _selected.add(tagId));
+    try {
+      final db = ref.read(databaseProvider);
+      final userId = ref.read(currentUserIdProvider);
+      final tagId = await db.tagDao.createPersonTag(name, userId);
+      if (mounted) {
+        setState(() {
+          _creatingNew = false;
+          _newPersonController.clear();
+          _selected.add(tagId);
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to create person tag: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to create tag. Please try again.')),
+        );
+      }
+    }
   }
 
   Future<void> _confirm() async {

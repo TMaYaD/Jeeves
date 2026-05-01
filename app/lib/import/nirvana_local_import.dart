@@ -282,7 +282,10 @@ Future<String> _upsertPersonTag(
 Future<String> _upsertContextTag(
     GtdDatabase db, String name, String userId) async {
   final existing = await (db.select(db.tags)
-        ..where((t) => t.name.equals(name) & t.userId.equals(userId)))
+        ..where((t) =>
+            t.name.equals(name) &
+            t.userId.equals(userId) &
+            t.type.equals('context')))
       .getSingleOrNull();
   if (existing != null) return existing.id;
 

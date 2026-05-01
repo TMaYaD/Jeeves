@@ -198,7 +198,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         children: [
                           Expanded(
                             flex: 2,
-                            child: TaskStatusRow(todo: todo, tags: tags),
+                            child: tagsAsync.asData != null
+                                ? TaskStatusRow(todo: todo, tags: tags)
+                                : const SizedBox.shrink(),
                           ),
                           const SizedBox(width: 8),
                           Expanded(flex: 1, child: _buildAttributeItem(

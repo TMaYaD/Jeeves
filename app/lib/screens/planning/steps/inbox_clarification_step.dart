@@ -167,7 +167,13 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       ),
     );
     controller.dispose();
-    if (text == null || text.isEmpty || !context.mounted) return;
+    if (text == null || !context.mounted) return;
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a name')),
+      );
+      return;
+    }
 
     Object? error;
     try {
@@ -181,7 +187,12 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     }
 
     if (!context.mounted) return;
-    if (error != null) debugPrint('Error: $error');
+    if (error != null) {
+      debugPrint('Error: $error');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to save. Please try again.')),
+      );
+    }
   }
 
   Future<void> _processToDone(BuildContext context) async {

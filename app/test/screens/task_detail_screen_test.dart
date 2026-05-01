@@ -135,6 +135,26 @@ void main() {
       expect(find.text('Next Actions'), findsOneWidget);
     });
 
+    testWidgets('status pill shows Waiting For when person tags assigned', (tester) async {
+      final todo = await _insertAt(db, id: 'task8', title: 'Task with person tag');
+      final personTag = Tag(
+        id: 'ptag1',
+        name: 'Alice',
+        type: 'person',
+        color: null,
+        userId: _userId,
+      );
+      final (widget, router) = _buildScreen(
+        db,
+        'task8',
+        initialTodo: todo,
+        initialTags: [personTag],
+      );
+      await _showTaskDetail(tester, widget, router, 'task8');
+
+      expect(find.text('Waiting For Alice'), findsOneWidget);
+    });
+
     testWidgets('energy level segmented button shows after tap',
         (tester) async {
       final todo = await _insertAt(db, id: 'task6', title: 'Energy task');

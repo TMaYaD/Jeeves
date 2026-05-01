@@ -82,7 +82,17 @@ async def delete_tag(
     tag = await db.get(Tag, tag_id)
     if not tag or tag.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Tag not found")
+    todo_ids: list[str] = []
+    if tag.type == "person":
+        rows = await db.execute(select(TodoTag.todo_id).where(TodoTag.tag_id == tag_id))
+        todo_ids = list(rows.scalars())
     await db.delete(tag)
+    await db.flush()
+    if todo_ids:
+        await db.execute(
+            sa.text("UPDATE todos SET last_clarified_at = now() WHERE id = ANY(:ids)"),
+            {"ids": todo_ids},
+        )
     await db.commit()
 
 
