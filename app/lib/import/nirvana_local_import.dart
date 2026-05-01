@@ -175,6 +175,7 @@ Future<ImportResult> importNirvanaLocally({
               ),
               mode: InsertMode.insertOrReplace,
             );
+        await _deletePersonTagLinksForTodo(db, todoId);
         if (effectiveWaitingFor != null) {
           final personTagId = personTagIds[effectiveWaitingFor] ??
               await _upsertPersonTag(db, effectiveWaitingFor, userId);
@@ -299,4 +300,21 @@ Future<String> _upsertContextTag(
     userId: Value(userId),
   ));
   return tagId;
+}
+
+/// Deletes all person-typed tag links for [todoId], leaving project/context
+/// links untouched.
+Future<void> _deletePersonTagLinksForTodo(
+    GtdDatabase db, String todoId) async {
+  final rows = await (db.select(db.todoTags).join([
+    innerJoin(db.tags, db.tags.id.equalsExp(db.todoTags.tagId)),
+  ])
+        ..where(
+            db.todoTags.todoId.equals(todoId) &
+            db.tags.type.equals('person')))
+      .get();
+  final ids = rows.map((r) => r.readTable(db.todoTags).id).toList();
+  if (ids.isNotEmpty) {
+    await (db.delete(db.todoTags)..where((tt) => tt.id.isIn(ids))).go();
+  }
 }

@@ -169,8 +169,18 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     controller.dispose();
     if (text == null || !context.mounted) return;
     if (text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a name')),
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Missing name'),
+          content: const Text('Please enter a name.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
       );
       return;
     }
@@ -189,8 +199,18 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     if (!context.mounted) return;
     if (error != null) {
       debugPrint('Error: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to save. Please try again.')),
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Save failed'),
+          content: const Text('Failed to save. Please try again.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
       );
     }
   }
