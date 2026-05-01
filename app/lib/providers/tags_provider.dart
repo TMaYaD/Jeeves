@@ -24,6 +24,13 @@ final contextTagsProvider = StreamProvider<List<Tag>>((ref) {
   return db.tagDao.watchByType(userId, 'context');
 });
 
+/// Stream of all person tags for the current user.
+final personTagsProvider = StreamProvider<List<Tag>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.tagDao.watchPersonTags(userId);
+});
+
 /// Stream of context tags paired with their active-task counts.
 final contextTagsWithCountProvider = StreamProvider<List<TagWithCount>>((ref) {
   final db = ref.watch(databaseProvider);

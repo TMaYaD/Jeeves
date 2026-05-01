@@ -217,22 +217,17 @@ void main() {
       expect(items.first.timeSpentMinutes, 0);
     });
 
-    test('v12→v13 migration: state=waiting_for rows become next_action; waiting_for column intact',
-        () async {
+    test('v12→v13 migration: todos survive the migration intact', () async {
       final db = _openInMemory();
       addTearDown(db.close);
 
-      // Insert a row with a waiting_for value to verify the column survives v13.
-      // State column was dropped in v15; waiting_for text column is the durable
-      // record of delegation and must be preserved through this migration.
       final now = DateTime.now();
       await db.customInsert(
-        'INSERT INTO todos (id, title, waiting_for, clarified, user_id, created_at) '
-        'VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO todos (id, title, clarified, user_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?)',
         variables: [
           Variable.withString('wf1'),
           Variable.withString('Waiting task'),
-          Variable.withString('Alice'),
           Variable.withInt(1),
           Variable.withString(_userId),
           Variable.withDateTime(now),
@@ -243,13 +238,60 @@ void main() {
       final m = db.createMigrator();
       await db.migration.onUpgrade(m, 12, 13);
 
-      // waiting_for column must be preserved through the migration.
+      // Row data must have survived.
       final rows = await db.customSelect(
-        'SELECT waiting_for FROM todos WHERE id = ?',
+        'SELECT title FROM todos WHERE id = ?',
         variables: [Variable.withString('wf1')],
       ).get();
       expect(rows.length, 1);
-      expect(rows.first.read<String?>('waiting_for'), 'Alice');
+      expect(rows.first.read<String>('title'), 'Waiting task');
+    });
+
+    test('v18→v19 migration: waiting_for dropped, last_clarified_at added', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a v18 database by re-adding the waiting_for column.
+      await db.customStatement(
+        'ALTER TABLE todos ADD COLUMN waiting_for TEXT',
+      );
+
+      // Seed a row with a waiting_for value.
+      final now = DateTime.now();
+      await db.customInsert(
+        'INSERT INTO todos (id, title, waiting_for, clarified, user_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        variables: [
+          Variable.withString('v19t1'),
+          Variable.withString('Delegated task'),
+          Variable.withString('Alice'),
+          Variable.withInt(1),
+          Variable.withString(_userId),
+          Variable.withDateTime(now),
+        ],
+      );
+
+      // Drive the v19 migration.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 18, 19);
+
+      // waiting_for must be gone.
+      final cols = await db.customSelect('PRAGMA table_info(todos)').get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames, isNot(contains('waiting_for')));
+
+      // last_clarified_at must exist.
+      expect(colNames, contains('last_clarified_at'));
+
+      // Row must have survived.
+      final rows = await db.customSelect(
+        'SELECT title, last_clarified_at FROM todos WHERE id = ?',
+        variables: [Variable.withString('v19t1')],
+      ).get();
+      expect(rows.length, 1);
+      expect(rows.first.read<String>('title'), 'Delegated task');
+      // last_clarified_at should default to NULL for migrated rows (no backfill).
+      expect(rows.first.read<String?>('last_clarified_at'), isNull);
     });
 
     test('v13→v14 migration: in_progress rows become next_action; retired columns dropped; new tables created',

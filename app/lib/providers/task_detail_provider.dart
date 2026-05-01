@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
+import '../models/todo.dart' show Intent;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -150,11 +151,44 @@ class TaskDetailNotifier {
         .go();
   }
 
-  /// Sets (or clears) the [waiting_for] text column.
-  ///
-  /// [text] == null clears the field; empty string is also treated as a clear.
-  Future<void> setWaitingFor(String? text) =>
-      _db.todoDao.setWaitingFor(_todoId, _userId, text);
+  /// Assigns a person-typed tag to this todo and stamps last_clarified_at.
+  Future<void> assignPersonTag(String tagId) async {
+    await _db.tagDao.assignTag(_todoId, tagId, _userId);
+    await _db.todoDao.stampLastClarifiedAt(_todoId, _userId);
+  }
+
+  /// Removes a person-typed tag from this todo and stamps last_clarified_at.
+  Future<void> removePersonTag(String tagId) async {
+    await (_db.delete(_db.todoTags)
+          ..where(
+            (jt) => jt.todoId.equals(_todoId) & jt.tagId.equals(tagId),
+          ))
+        .go();
+    await _db.todoDao.stampLastClarifiedAt(_todoId, _userId);
+  }
+
+  /// Removes all person-typed tags from this todo and stamps last_clarified_at.
+  Future<void> clearAllPersonTags() async {
+    final personTagIds = await (_db.select(_db.tags)
+          ..where((t) => t.type.equals('person')))
+        .map((t) => t.id)
+        .get();
+    if (personTagIds.isEmpty) return;
+    await (_db.delete(_db.todoTags)
+          ..where(
+            (jt) =>
+                jt.todoId.equals(_todoId) & jt.tagId.isIn(personTagIds),
+          ))
+        .go();
+    await _db.todoDao.stampLastClarifiedAt(_todoId, _userId);
+  }
+
+  Future<void> markDone() => _db.todoDao.markDone(_todoId, _userId);
+
+  Future<void> setIntent(Intent intent) =>
+      _db.todoDao.setIntent(_todoId, _userId, intent);
+
+  Future<void> restore() => _db.todoDao.restore(_todoId, _userId);
 
   /// Watch all tag associations for this todo (returns Drift [Tag] rows),
   /// scoped to the current user.

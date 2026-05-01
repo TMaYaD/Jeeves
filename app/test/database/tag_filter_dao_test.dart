@@ -281,32 +281,20 @@ void main() {
       expect(results.first.id, t1);
     });
 
-    test('watchWaitingFor with tagIds filters correctly', () async {
+    test('watchPersonTagged with tagIds filters correctly', () async {
       await _insertTag(db, id: 'ctx1', name: 'errand');
-      // Use the waiting_for text column (not state) as the membership criterion.
-      final now = DateTime.now();
-      await db.into(db.todos).insert(TodosCompanion(
-        id: const Value('t1'),
-        title: const Value('Waiting tagged'),
-        waitingFor: const Value('Alice'),
-        clarified: const Value(true),
-        userId: const Value(_userId),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
-      await db.into(db.todos).insert(TodosCompanion(
-        id: const Value('t2'),
-        title: const Value('Waiting untagged'),
-        waitingFor: const Value('Bob'),
-        clarified: const Value(true),
-        userId: const Value(_userId),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
+      await _insertTag(db, id: 'person1', name: 'Alice', type: 'person');
+      await _insertTag(db, id: 'person2', name: 'Bob', type: 'person');
+      await _insertTodo(db, id: 't1', title: 'Waiting tagged');
+      await _insertTodo(db, id: 't2', title: 'Waiting untagged');
+      // Both todos have person tags (making them Waiting For items).
+      await _assignTag(db, 't1', 'person1');
+      await _assignTag(db, 't2', 'person2');
+      // Only t1 also has the context tag filter.
       await _assignTag(db, 't1', 'ctx1');
 
       final results = await db.todoDao
-          .watchWaitingFor(_userId, tagIds: {'ctx1'}).first;
+          .watchPersonTagged(_userId, tagIds: {'ctx1'}).first;
       expect(results, hasLength(1));
       expect(results.first.id, 't1');
     });

@@ -351,25 +351,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
   }
 
-  /// Processes an inbox item to the Waiting For list.
-  ///
-  /// Sets clarified = true and writes [waitingForText] to the waiting_for
-  /// column so the item appears in the Waiting For view.
-  Future<void> processInboxItemToWaitingFor(
-      String id, String waitingForText) async {
-    final normalizedWaitingFor = waitingForText.trim();
-    await _db.transaction(() async {
-      await _db.inboxDao.processInboxItem(
-        id,
-        userId: _userId,
-      );
-      await _db.todoDao.setWaitingFor(id, _userId, normalizedWaitingFor);
-    });
-    state = state.copyWith(
-      inboxClarifiedCount: state.inboxClarifiedCount + 1,
-    );
-  }
-
   /// Processes an inbox item to the maybe list.
   ///
   /// Sets clarified = true and intent = 'maybe' so the item appears in the

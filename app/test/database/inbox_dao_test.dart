@@ -95,18 +95,27 @@ void main() {
       expect(items, isEmpty);
     });
 
-    test('processInboxItemToWaitingFor: sets clarified and waiting_for column',
+    test('processInboxItem then assign person tag: clarified + person tag linked',
         () async {
       await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
-      // Mirrors what FocusSessionPlanningNotifier.processInboxItemToWaitingFor does.
       await db.inboxDao.processInboxItem('x', userId: _userId);
-      await db.todoDao.setWaitingFor('x', _userId, 'Alice');
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('alice-tag'),
+        name: Value('Alice'),
+        type: Value('person'),
+        userId: Value(_userId),
+      ));
+      await db.tagDao.assignTag('x', 'alice-tag', _userId);
 
       final row =
           await (db.select(db.todos)..where((t) => t.id.equals('x')))
               .getSingle();
       expect(row.clarified, isTrue);
-      expect(row.waitingFor, 'Alice');
+
+      final links = await (db.select(db.todoTags)
+            ..where((tt) => tt.todoId.equals('x') & tt.tagId.equals('alice-tag')))
+          .get();
+      expect(links.length, 1);
     });
 
     test('deleteTodo removes row from inbox watch', () async {

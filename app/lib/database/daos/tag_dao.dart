@@ -44,6 +44,41 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         .watch();
   }
 
+  /// Stream of all person-typed tags for [userId], ordered by name.
+  Stream<List<Tag>> watchPersonTags(String userId) =>
+      watchByType(userId, 'person');
+
+  /// Create a new person-typed tag with the given [name] for [userId].
+  ///
+  /// Returns the tag id.  Assigns a derived color automatically.
+  /// If a person-typed tag with the same name already exists for [userId],
+  /// returns its id without creating a duplicate.
+  Future<String> createPersonTag(String name, String userId) async {
+    final trimmedName = name.trim();
+    final existing = await findPersonTagByName(trimmedName, userId);
+    if (existing != null) return existing.id;
+    final id = uuid.v4();
+    final colorHex = tagColorToHex(tagColorForName(trimmedName));
+    await upsertTag(TagsCompanion(
+      id: Value(id),
+      name: Value(trimmedName),
+      type: const Value('person'),
+      color: Value(colorHex),
+      userId: Value(userId),
+    ));
+    return id;
+  }
+
+  /// Look up an existing person-typed tag by [name] for [userId].
+  Future<Tag?> findPersonTagByName(String name, String userId) {
+    return (select(tags)
+          ..where((t) =>
+              t.name.equals(name) &
+              t.userId.equals(userId) &
+              t.type.equals('person')))
+        .getSingleOrNull();
+  }
+
   /// Stream of tags of [type] for [userId] paired with their active-task count.
   ///
   /// "Active" means clarified=1 (not in inbox) and done_at IS NULL.  Tags

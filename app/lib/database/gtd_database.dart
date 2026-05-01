@@ -40,7 +40,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final SearchDao searchDao = SearchDao(this);
 
   @override
-  int get schemaVersion => 18;
+  int get schemaVersion => 19;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -80,7 +80,21 @@ class GtdDatabase extends _$GtdDatabase {
             }
           }
           if (from < 4) {
-            await _addColumnIfTable(m, todos, todos.waitingFor);
+            // waiting_for was added in v4 and dropped in v19.
+            // Use raw SQL because the Drift accessor was removed in schema v19.
+            final todosRows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'todos'",
+            ).get();
+            if (todosRows.isNotEmpty &&
+                todosRows.first.read<String>('type') == 'table') {
+              final cols =
+                  await customSelect('PRAGMA table_info(todos)').get();
+              if (!cols.any((r) => r.read<String>('name') == 'waiting_for')) {
+                await customStatement(
+                  'ALTER TABLE todos ADD COLUMN waiting_for TEXT',
+                );
+              }
+            }
           }
           if (from < 5) {
             await _addColumnIfTable(m, todoTags, todoTags.userId);
@@ -334,6 +348,11 @@ class GtdDatabase extends _$GtdDatabase {
                 'idx_todo_tags_id ON todo_tags(id)',
               );
             }
+          }
+          if (from < 19) {
+            // Add last_clarified_at; drop waiting_for (migration 0022).
+            await _addColumnIfTable(m, todos, todos.lastClarifiedAt);
+            await _dropColumnIfTable('todos', 'waiting_for');
           }
         },
       );

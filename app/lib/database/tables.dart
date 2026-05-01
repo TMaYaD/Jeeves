@@ -52,8 +52,9 @@ class Todos extends Table with Synced {
   TextColumn get locationId => text().nullable()();
   TextColumn get userId => text()();
 
-  /// Who or what a `waiting_for`-state task is waiting on (freeform).
-  TextColumn get waitingFor => text().nullable()();
+  /// Timestamp of the last time a person-tag was assigned to or removed from this todo.
+  /// Set by the server/client whenever a TodoTag with type='person' is created or deleted.
+  DateTimeColumn get lastClarifiedAt => dateTime().nullable()();
 
   /// Cumulative time spent in minutes across all focus stints.
   IntColumn get timeSpentMinutes =>
@@ -144,7 +145,7 @@ class Tags extends Table with Synced {
   TextColumn get name => text().withLength(max: 100)();
   TextColumn get color => text().nullable()();
 
-  /// GTD discriminator: context | project | area | label
+  /// GTD discriminator: context | project | area | label | person
   TextColumn get type => text()
       .withDefault(const Constant('context'))
       .clientDefault(() => 'context')();

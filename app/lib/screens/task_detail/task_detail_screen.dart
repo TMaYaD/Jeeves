@@ -9,6 +9,7 @@ import '../../providers/task_detail_provider.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
+import '../../widgets/task_status_row.dart';
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
   const TaskDetailScreen({super.key, required this.todoId});
@@ -195,7 +196,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       // Attributes Row (Status, Time, Energy)
                       Row(
                         children: [
-                          Expanded(flex: 2, child: _buildStatusPill(todo)),
+                          Expanded(
+                            flex: 2,
+                            child: tagsAsync.asData != null
+                                ? TaskStatusRow(todo: todo, tags: tags)
+                                : const SizedBox.shrink(),
+                          ),
                           const SizedBox(width: 8),
                           Expanded(flex: 1, child: _buildAttributeItem(
                             icon: Icons.schedule,
@@ -303,7 +309,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                                             value: value,
                                                             onChanged: (v) {
                                                               if (v == null) return;
-                                                              // Toggle the nth checkbox in the markdown string
                                                               final lines = _notesController.text.split('\n');
                                                               int foundCheckboxes = 0;
                                                               for (int i = 0; i < lines.length; i++) {
@@ -338,7 +343,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                   ],
                                 ),
                               ),
-                              // Reminders, Due Date, Blockers (at the literal bottom of the viewport or content)
+                              // Reminders, Due Date (at the literal bottom of the viewport or content)
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                                 decoration: const BoxDecoration(
@@ -348,30 +353,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                 child: Column(
                                   children: [
                                     _buildInfoSection(
-                                      icon: Icons.hourglass_empty_outlined,
-                                      iconBg: const Color(0xFFFFF7ED),
-                                      iconColor: const Color(0xFFF59E0B),
-                                      title: 'WAITING FOR',
-                                      contentWidget: Text(
-                                        todo.waitingFor ?? 'Not set',
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w500,
-                                          color: todo.waitingFor != null
-                                              ? const Color(0xFF374151)
-                                              : const Color(0xFF9CA3AF),
-                                        ),
-                                      ),
-                                      onTap: () => _showWaitingForSheet(context, todo.waitingFor),
-                                    ),
-                                    const SizedBox(height: 20),
-                                    _buildInfoSection(
                                       icon: Icons.notifications_none,
                                       iconBg: const Color(0xFFF3F4F6),
                                       iconColor: const Color(0xFF9CA3AF),
                                       title: 'REMINDERS',
                                       contentWidget: const Text('Coming Soon', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
-                                      onTap: null, // Disabled and greyed
+                                      onTap: null,
                                     ),
                                     const SizedBox(height: 20),
                                     _buildInfoSection(
@@ -386,9 +373,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                       onTap: () async {
                                         final picked = await showDatePicker(
                                           context: context,
-                                          // Storage is UTC; DatePicker reads
-                                          // year/month/day verbatim, so feed
-                                          // the local-tz instant.
                                           initialDate: todo.dueDate?.toLocal() ?? DateTime.now(),
                                           firstDate: DateTime(2000),
                                           lastDate: DateTime(2100),
@@ -434,38 +418,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         onPressed: () => context.pop(),
       ),
       actions: const [],
-    );
-  }
-
-  Widget _buildStatusPill(Todo todo) {
-    return Container(
-      key: const Key('status_pill'),
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 6,
-            height: 6,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Color(0xFF10B981),
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          SizedBox(width: 8),
-          Text(
-            'Next Actions',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF4B5563)),
-          ),
-        ],
-      ),
     );
   }
 
@@ -537,12 +489,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
-      // The modal lives under the root Navigator overlay, so it does not
-      // rebuild when the task detail screen rebuilds.  Wrap in [Consumer]
-      // so FilterChip's `selected` state tracks taskTagsProvider live —
-      // otherwise the chip's "selected" flag is frozen at open time and
-      // tapping it appears to do nothing even though the DB write
-      // succeeded.
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom + 24, left: 24, right: 24, top: 24),
         child: Column(
@@ -650,68 +596,4 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       ),
     );
   }
-
-  void _showWaitingForSheet(BuildContext context, String? current) {
-    final controller = TextEditingController(text: current ?? '');
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
-          left: 24,
-          right: 24,
-          top: 24,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Waiting For',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(
-                hintText: 'Who or what are you waiting on?',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (current != null)
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _notifier.setWaitingFor(null).ignore();
-                    },
-                    child: const Text('Clear'),
-                  ),
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    final text = controller.text.trim();
-                    Navigator.pop(ctx);
-                    _notifier
-                        .setWaitingFor(text.isEmpty ? null : text)
-                        .ignore();
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
 }

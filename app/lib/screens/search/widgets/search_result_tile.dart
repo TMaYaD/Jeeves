@@ -60,7 +60,7 @@ class SearchResultTile extends StatelessWidget {
             const SizedBox(width: 8),
             if (isDone)
               const _DoneChip()
-            else if (todo.waitingFor != null)
+            else if (result.tags.any((t) => t.type == 'person'))
               const _WaitingChip(),
           ],
         ),

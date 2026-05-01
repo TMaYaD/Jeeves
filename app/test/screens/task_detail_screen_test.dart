@@ -127,14 +127,32 @@ void main() {
       expect(find.byKey(const Key('status_pill')), findsOneWidget);
     });
 
-    testWidgets('waiting_for section is visible on detail screen', (tester) async {
-      final todo = await _insertAt(db, id: 'task5', title: 'Waiting task');
+    testWidgets('status pill shows Next Actions when no person tags assigned', (tester) async {
+      final todo = await _insertAt(db, id: 'task5', title: 'Task without tags');
       final (widget, router) = _buildScreen(db, 'task5', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'task5');
 
-      expect(find.text('WAITING FOR'), findsOneWidget);
-      // No waiting_for set yet → shows 'Not set'.
-      expect(find.text('Not set'), findsOneWidget);
+      expect(find.text('Next Actions'), findsOneWidget);
+    });
+
+    testWidgets('status pill shows Waiting For when person tags assigned', (tester) async {
+      final todo = await _insertAt(db, id: 'task8', title: 'Task with person tag');
+      final personTag = Tag(
+        id: 'ptag1',
+        name: 'Alice',
+        type: 'person',
+        color: null,
+        userId: _userId,
+      );
+      final (widget, router) = _buildScreen(
+        db,
+        'task8',
+        initialTodo: todo,
+        initialTags: [personTag],
+      );
+      await _showTaskDetail(tester, widget, router, 'task8');
+
+      expect(find.text('Waiting For Alice'), findsOneWidget);
     });
 
     testWidgets('energy level segmented button shows after tap',

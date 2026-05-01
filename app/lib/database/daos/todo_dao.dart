@@ -98,40 +98,45 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return _watchFilteredByTags(userId, tagIds, excludeIntent: 'maybe');
   }
 
-  /// Stream of waiting-for todos for [userId].
+  /// Stream of "Waiting For" todos for [userId].
   ///
-  /// Sources from the [waiting_for] text column rather than the retired
-  /// `state = 'waiting_for'` value. Returns clarified, non-done, intent='next'
-  /// todos that have a non-null [waiting_for] value. When [tagIds] is
-  /// non-empty only todos carrying **all** specified tags are returned
-  /// (AND semantics).
-  Stream<List<Todo>> watchWaitingFor(String userId,
+  /// Returns clarified, non-done, intent='next' todos that have at least one
+  /// person-typed tag. When [tagIds] is non-empty only todos carrying **all**
+  /// specified (context/filter) tags are returned (AND semantics).
+  Stream<List<Todo>> watchPersonTagged(String userId,
       {Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
-      return _watchAllForUser(userId).map(
-        (all) => all
-            .where((t) =>
-                t.waitingFor != null &&
-                t.clarified &&
-                t.doneAt == null &&
-                t.intent == 'next')
-            .toList(),
-      );
+      return customSelect(
+        'SELECT DISTINCT todos.* FROM todos '
+        'JOIN todo_tags tt ON tt.todo_id = todos.id '
+        'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
+        'WHERE todos.user_id = ? '
+        'AND todos.clarified = 1 '
+        'AND todos.done_at IS NULL '
+        'AND todos.intent = ? '
+        'ORDER BY todos.created_at',
+        variables: [
+          Variable('person'),
+          Variable(userId),
+          Variable('next'),
+        ],
+        readsFrom: {todos, todoTags, tags},
+      ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
     }
-    return _watchFilteredByWaitingForColumn(userId, tagIds);
+    return _watchPersonTaggedFilteredByTags(userId, tagIds);
   }
 
-  /// Tag-filtered variant of [watchWaitingFor] that uses the [waiting_for]
-  /// text column as the list membership criterion.
-  Stream<List<Todo>> _watchFilteredByWaitingForColumn(
+  /// Tag-filtered variant of [watchPersonTagged].
+  Stream<List<Todo>> _watchPersonTaggedFilteredByTags(
       String userId, Set<String> tagIds) {
     assert(tagIds.isNotEmpty);
     final n = tagIds.length;
     final placeholders = List.filled(n, '?').join(', ');
     return customSelect(
-      'SELECT todos.* FROM todos '
+      'SELECT DISTINCT todos.* FROM todos '
+      'JOIN todo_tags tt ON tt.todo_id = todos.id '
+      'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
       'WHERE todos.user_id = ? '
-      'AND todos.waiting_for IS NOT NULL '
       'AND todos.clarified = 1 '
       'AND todos.done_at IS NULL '
       'AND todos.intent = ? '
@@ -140,13 +145,60 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       '       AND tag_id IN ($placeholders)) = $n '
       'ORDER BY todos.created_at',
       variables: [
+        Variable('person'),
         Variable(userId),
         Variable('next'),
         Variable(userId),
         ...tagIds.map(Variable.new),
       ],
-      readsFrom: {todos, todoTags},
+      readsFrom: {todos, todoTags, tags},
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
+  }
+
+  /// Stream of todos grouped by person-tag.
+  ///
+  /// Each todo appears once per person-tag it carries.  A todo with two
+  /// person-tags appears in two entries.  Results are ordered by tag name
+  /// then todo creation date — insertion order matches the grouped view.
+  Stream<Map<Tag, List<Todo>>> watchPersonTaggedGrouped(String userId) {
+    return customSelect(
+      'SELECT '
+      '  todos.id, todos.title, todos.notes, todos.priority, '
+      '  todos.due_date, todos.created_at, todos.updated_at, '
+      '  todos.done_at, todos.clarified, todos.intent, '
+      '  todos.time_estimate, todos.energy_level, todos.capture_source, '
+      '  todos.location_id, todos.user_id, '
+      '  todos.last_clarified_at, todos.time_spent_minutes, '
+      '  tg.id AS ptag_id, tg.name AS ptag_name, '
+      '  tg.color AS ptag_color, tg.user_id AS ptag_user_id '
+      'FROM todos '
+      'JOIN todo_tags tt ON tt.todo_id = todos.id '
+      'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
+      'WHERE todos.user_id = ? '
+      '  AND todos.clarified = 1 '
+      '  AND todos.done_at IS NULL '
+      '  AND todos.intent = ? '
+      'ORDER BY tg.name, todos.created_at',
+      variables: [
+        Variable('person'),
+        Variable(userId),
+        Variable('next'),
+      ],
+      readsFrom: {todos, todoTags, tags},
+    ).watch().map((rows) {
+      final result = <Tag, List<Todo>>{};
+      for (final row in rows) {
+        final tag = Tag(
+          id: row.read<String>('ptag_id'),
+          name: row.read<String>('ptag_name'),
+          color: row.readNullable<String>('ptag_color'),
+          type: 'person',
+          userId: row.read<String>('ptag_user_id'),
+        );
+        result.putIfAbsent(tag, () => []).add(todos.map(row.data));
+      }
+      return result;
+    });
   }
 
   /// Stream of maybe-intent todos for [userId] (intent = 'maybe', done_at IS NULL).
@@ -297,17 +349,29 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   Future<void> deferTaskToMaybe(String todoId, String userId, {DateTime? now}) =>
       setIntent(todoId, userId, Intent.maybe, now: now);
 
-  /// Sets (or clears) the [waiting_for] text column for a todo.
+  /// Stamps [last_clarified_at] to now for [todoId] owned by [userId].
   ///
-  /// [text] == null or empty string clears the field; empty string is
-  /// coerced to null so `IS NOT NULL` does not produce phantom Waiting For rows.
-  Future<void> setWaitingFor(String todoId, String userId, String? text) async {
-    final effective = (text == null || text.isEmpty) ? null : text;
+  /// Called whenever a person-typed TodoTag is added to or removed from the todo.
+  /// [now] overrides the timestamp for deterministic testing.
+  Future<void> stampLastClarifiedAt(String todoId, String userId,
+      {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    await (update(todos)
+          ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+        .write(TodosCompanion(
+      lastClarifiedAt: Value(ts),
+      updatedAt: Value(ts),
+    ));
+  }
+
+  /// Restores a done or trashed todo to active next-action status.
+  Future<void> restore(String todoId, String userId) async {
     final ts = DateTime.now().toUtc().toIso8601String();
     await customUpdate(
-      'UPDATE todos SET waiting_for = ?, updated_at = ? WHERE id = ? AND user_id = ?',
+      'UPDATE todos SET done_at = NULL, intent = ?, updated_at = ? '
+      'WHERE id = ? AND user_id = ?',
       variables: [
-        Variable(effective),
+        Variable('next'),
         Variable(ts),
         Variable(todoId),
         Variable(userId),
