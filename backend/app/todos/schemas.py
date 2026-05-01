@@ -30,6 +30,7 @@ class TagType(StrEnum):
     project = "project"
     area = "area"
     label = "label"
+    person = "person"
 
 
 class TagInput(BaseModel):
@@ -93,8 +94,7 @@ class TodoCreate(BaseModel):
     time_estimate: int | None = None  # minutes
     energy_level: str | None = None  # 'low' | 'medium' | 'high'
     capture_source: str | None = None  # 'manual' | 'share_sheet' | 'voice' | 'ai_parse'
-    # Client-state columns (migration 0007)
-    waiting_for: str | None = None  # who/what the task is waiting on
+    # Client-state columns (migration 0007/0022)
     time_spent_minutes: int = Field(default=0, ge=0)
     # Legacy compatibility field — only "next_action" is accepted; ignored by the DB layer.
     state: str | None = None
@@ -135,8 +135,7 @@ class TodoUpdate(BaseModel):
     time_estimate: int | None = None
     energy_level: str | None = None
     capture_source: str | None = None
-    # Client-state columns (migration 0007)
-    waiting_for: str | None = None
+    # Client-state columns (migration 0007/0022)
     time_spent_minutes: int | None = Field(default=None, ge=0)
     # Legacy compatibility field — only "next_action" is accepted; ignored by the DB layer.
     state: str | None = None
@@ -218,8 +217,8 @@ class TodoOut(BaseModel):
     time_estimate: int | None
     energy_level: str | None
     capture_source: str | None
-    # Client-state columns (migration 0007)
-    waiting_for: str | None
+    # Client-state columns (migration 0007/0022)
+    last_clarified_at: datetime | None
     time_spent_minutes: int
     # Legacy compatibility: state column was dropped in migration 0020; always "next_action".
     state: str = "next_action"

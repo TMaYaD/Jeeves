@@ -62,6 +62,9 @@ abstract class Todo with _$Todo {
 
     /// How this todo entered the inbox: manual | share_sheet | voice | ai_parse.
     String? captureSource,
+
+    /// Timestamp of the last person-tag assignment or removal on this todo.
+    DateTime? lastClarifiedAt,
   }) = _Todo;
 
   factory Todo.fromJson(Map<String, dynamic> json) => _$TodoFromJson(json);
@@ -80,4 +83,10 @@ abstract class Todo with _$Todo {
 
   /// Context tags.
   List<Tag> get contextTags => tags.where((t) => t.isContext).toList();
+
+  /// Person tags (Waiting For delegates).
+  List<Tag> get personTags => tags.where((t) => t.isPerson).toList();
+
+  /// True when this todo has at least one person-tag (i.e. is waiting).
+  bool get isWaiting => tags.any((t) => t.isPerson);
 }

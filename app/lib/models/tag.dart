@@ -8,7 +8,8 @@ enum TagType {
   context,
   project,
   area,
-  label;
+  label,
+  person;
 
   static TagType fromString(String value) {
     return TagType.values.firstWhere(
@@ -43,6 +44,9 @@ abstract class Tag with _$Tag {
 
   /// True when this tag is a generic label.
   bool get isLabel => type == TagType.label.name;
+
+  /// True when this tag represents a person (Waiting For).
+  bool get isPerson => type == TagType.person.name;
 
   TagType get tagType => TagType.fromString(type);
 }

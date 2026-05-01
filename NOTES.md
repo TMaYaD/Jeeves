@@ -1,5 +1,13 @@
 # Notes
 
+## 2026-05-01 (issue #235)
+
+- Removing a Drift column from a table (`waitingFor`) that is still referenced in an old migration block causes a compile error. Fix: replace the Drift accessor reference with raw SQL (`ALTER TABLE todos ADD COLUMN waiting_for TEXT`) in the old migration, so the accessor can be safely deleted from the table class while the migration still runs.
+- Flutter's `package:flutter/material.dart` exports an `Intent` class that conflicts with custom Dart `Intent` enums. Fix: `import 'package:flutter/material.dart' hide Intent` and then explicitly `import '../models/todo.dart' show Intent`.
+- `Expression<bool>` Drift `&` operator extensions are not available without `package:drift/drift.dart`. Avoid the operator by chaining `..where()` calls on `SimpleSelectStatement` — each `.where()` adds an AND condition without needing the extension import.
+- `TagDao.createPersonTag` now checks for an existing person tag by `(name, userId, type='person')` before generating a new UUID, making it idempotent. Previously it always generated a new UUID, which could create duplicates since the Drift Tags table has no unique constraint on `(userId, type, name)` — only on the primary key `id`.
+- Alembic migration 0022 backfill SQL must use `TRIM(waiting_for)` in both the INSERT and JOIN, and filter `TRIM(waiting_for) <> ''`, to handle any legacy whitespace-only or padded values in the old column.
+
 ## 2026-04-29 (issue #225)
 
 - The `/focus` → `/focus-session-planning` redirect in `router.dart` was gating the Focus screen unconditionally on `focusSessionPlanningCompletionNotifier.value`, which fires `false` at every app launch. Removed both the redirect block and `refreshListenable`; `focusSessionPlanningCompletionNotifier` no longer drives any router redirect (the banner in `AppShell` still reads it directly).

@@ -4,6 +4,7 @@ These endpoints are called by the PowerSync BackendConnector to upload
 offline mutations for the `tags` and `todo_tags` sync shapes.
 """
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,15 @@ from app.todos.models import Tag, Todo, TodoTag
 from app.todos.schemas import TagCreate, TagOut, TagUpdate, TodoTagCreate
 
 router = APIRouter()
+
+
+async def _stamp_clarified_at_if_person(db: AsyncSession, tag: Tag, todo_id: str) -> None:
+    """Set last_clarified_at = now() on the todo when tag is person-typed."""
+    if tag.type == "person":
+        await db.execute(
+            sa.text("UPDATE todos SET last_clarified_at = now() WHERE id = :id"),
+            {"id": todo_id},
+        )
 
 
 # ── Tags ──────────────────────────────────────────────────────────────────────
@@ -122,6 +132,8 @@ async def create_todo_tag(
         user_id=current_user.id,
     )
     db.add(todo_tag)
+    await db.flush()
+    await _stamp_clarified_at_if_person(db, tag, body.todo_id)
     await db.commit()
     return {"todo_id": body.todo_id, "tag_id": body.tag_id}
 
@@ -140,5 +152,9 @@ async def delete_todo_tag(
     todo = await db.get(Todo, todo_tag.todo_id)
     if not todo or todo.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Forbidden")
+    tag = await db.get(Tag, todo_tag.tag_id)
     await db.delete(todo_tag)
+    await db.flush()
+    if tag is not None:
+        await _stamp_clarified_at_if_person(db, tag, todo_tag.todo_id)
     await db.commit()

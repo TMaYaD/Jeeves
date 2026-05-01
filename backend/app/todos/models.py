@@ -28,7 +28,7 @@ from app.database import Base
 # ---------------------------------------------------------------------------
 
 INTENT_VALUES = ("next", "maybe", "trash")
-TAG_TYPES = ("context", "project", "area", "label")
+TAG_TYPES = ("context", "project", "area", "label", "person")
 ENERGY_LEVELS = ("low", "medium", "high")
 
 
@@ -40,7 +40,10 @@ class Tag(Base):
     __tablename__ = "tags"
     __table_args__ = (
         Index("ix_tags_type", "type"),
-        CheckConstraint("type IN ('context','project','area','label')", name="ck_tags_type"),
+        CheckConstraint(
+            "type IN ('context','project','area','label','person')",
+            name="ck_tags_type",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -116,8 +119,10 @@ class Todo(Base):
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
-    # Client-state columns replicated via PowerSync (migration 0007).
-    waiting_for: Mapped[str | None] = mapped_column(Text)
+    # Client-state columns replicated via PowerSync (migration 0007/0022).
+    last_clarified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     time_spent_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     tags: Mapped[list["Tag"]] = relationship("Tag", secondary="todo_tags", back_populates="todos")

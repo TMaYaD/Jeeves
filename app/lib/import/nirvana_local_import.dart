@@ -123,9 +123,10 @@ Future<ImportResult> importNirvanaLocally({
     // --- Insert tasks in batches ---
     final tasks = items.where((i) => i.type == 'task').toList();
 
-    // In-memory cache for context tag ids — avoids redundant SELECTs when
-    // the same tag (e.g. "computer", "anywhere") appears on many tasks.
+    // In-memory caches for tag ids — avoids redundant SELECTs when
+    // the same tag appears on many tasks.
     final contextTagIds = <String, String>{};
+    final personTagIds = <String, String>{};
 
     for (var batchStart = 0;
         batchStart < tasks.length;
@@ -164,7 +165,9 @@ Future<ImportResult> importNirvanaLocally({
                 dueDate: Value(dueDate),
                 timeEstimate: Value(item.timeEstimate),
                 energyLevel: Value(item.energyLevel),
-                waitingFor: Value(effectiveWaitingFor),
+                lastClarifiedAt: effectiveWaitingFor != null
+                    ? Value(now.toUtc())
+                    : const Value(null),
                 captureSource: const Value('nirvana_import'),
                 userId: Value(userId),
                 createdAt: Value(now),
@@ -172,6 +175,20 @@ Future<ImportResult> importNirvanaLocally({
               ),
               mode: InsertMode.insertOrReplace,
             );
+        if (effectiveWaitingFor != null) {
+          final personTagId = personTagIds[effectiveWaitingFor] ??
+              await _upsertPersonTag(db, effectiveWaitingFor, userId);
+          personTagIds[effectiveWaitingFor] = personTagId;
+          await db.into(db.todoTags).insert(
+                TodoTagsCompanion(
+                  id: Value(todoTagIdFor(todoId, personTagId)),
+                  todoId: Value(todoId),
+                  tagId: Value(personTagId),
+                  userId: Value(userId),
+                ),
+                mode: InsertMode.insertOrReplace,
+              );
+        }
         if (item.intent == 'maybe') {
           await db.todoDao.deferTaskToMaybe(todoId, userId, now: now);
         }
@@ -233,6 +250,31 @@ Future<ImportResult> importNirvanaLocally({
 /// Jeeves namespace).  Makes re-importing the same export idempotent.
 String _deterministicTodoId(NirvanaItem item) =>
     uuid.v5(Namespace.url.value, 'jeeves://nirvana_import/${item.id}');
+
+/// Look up or insert a person tag by [name] for [userId].
+///
+/// Returns the tag's id.
+Future<String> _upsertPersonTag(
+    GtdDatabase db, String name, String userId) async {
+  final existing = await (db.select(db.tags)
+        ..where((t) =>
+            t.name.equals(name) &
+            t.userId.equals(userId) &
+            t.type.equals('person')))
+      .getSingleOrNull();
+  if (existing != null) return existing.id;
+
+  final tagId = uuid.v4();
+  final color = tagColorToHex(tagColorForName(name));
+  await db.tagDao.upsertTag(TagsCompanion(
+    id: Value(tagId),
+    name: Value(name),
+    type: const Value('person'),
+    color: Value(color),
+    userId: Value(userId),
+  ));
+  return tagId;
+}
 
 /// Look up or insert a context tag by [name] for [userId].
 ///

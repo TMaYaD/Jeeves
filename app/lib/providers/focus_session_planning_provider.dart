@@ -353,17 +353,23 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Processes an inbox item to the Waiting For list.
   ///
-  /// Sets clarified = true and writes [waitingForText] to the waiting_for
-  /// column so the item appears in the Waiting For view.
+  /// Sets clarified = true, creates a person-typed tag for [waitingForText]
+  /// (or reuses an existing one with the same name), links it to the todo,
+  /// and stamps last_clarified_at.
   Future<void> processInboxItemToWaitingFor(
       String id, String waitingForText) async {
-    final normalizedWaitingFor = waitingForText.trim();
+    final name = waitingForText.trim();
+    if (name.isEmpty) {
+      throw ArgumentError.value(
+          waitingForText, 'waitingForText', 'cannot be blank');
+    }
     await _db.transaction(() async {
-      await _db.inboxDao.processInboxItem(
-        id,
-        userId: _userId,
-      );
-      await _db.todoDao.setWaitingFor(id, _userId, normalizedWaitingFor);
+      await _db.inboxDao.processInboxItem(id, userId: _userId);
+      // Find or create a person-typed tag for this name.
+      final existing = await _db.tagDao.findPersonTagByName(name, _userId);
+      final tagId = existing?.id ?? await _db.tagDao.createPersonTag(name, _userId);
+      await _db.tagDao.assignTag(id, tagId, _userId);
+      await _db.todoDao.stampLastClarifiedAt(id, _userId);
     });
     state = state.copyWith(
       inboxClarifiedCount: state.inboxClarifiedCount + 1,

@@ -5,6 +5,7 @@ auth-gated mutations, and operations that require server-side logic
 (e.g. recurrence expansion, AI-assisted parsing).
 """
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,7 +73,6 @@ async def create_todo(
         time_estimate=body.time_estimate,
         energy_level=body.energy_level,
         capture_source=body.capture_source,
-        waiting_for=body.waiting_for,
         time_spent_minutes=body.time_spent_minutes,
         user_id=current_user.id,
     )
@@ -126,17 +126,26 @@ async def update_todo(
         update_data.pop("tags")
         # Replace the tag set by deleting existing junction rows and inserting
         # new ones — explicit so we can populate user_id (see create_todo).
+        old_person_tags = [t for t in todo.tags if t.type == "person"]
         new_tags = await resolve_tags(body.tags, current_user.id, db)  # type: ignore[arg-type]
+        new_person_tags = [t for t in new_tags if t.type == "person"]
         await db.execute(delete(TodoTag).where(TodoTag.todo_id == todo.id))
         for tag in new_tags:
             db.add(TodoTag(todo_id=todo.id, tag_id=tag.id, user_id=current_user.id))
+        old_person_ids = {t.id for t in old_person_tags}
+        new_person_ids = {t.id for t in new_person_tags}
+        if old_person_ids != new_person_ids:
+            await db.execute(
+                sa.text("UPDATE todos SET last_clarified_at = now() WHERE id = :id"),
+                {"id": todo.id},
+            )
 
     for field, value in update_data.items():
         setattr(todo, field, value)
 
     await db.commit()
     # Expire the in-memory tags collection; see create_todo for rationale.
-    db.expire(todo, ["tags"])
+    db.expire(todo, ["tags", "last_clarified_at"])
     loaded = await _get_todo_with_tags(todo.id, db)
     assert loaded is not None
     return loaded

@@ -29,12 +29,27 @@ final nextActionsProvider = StreamProvider<List<Todo>>((ref) {
   return db.todoDao.watchNextActions(userId, tagIds: tagIds);
 });
 
-/// Stream of waiting-for todos.
+/// Stream of waiting-for todos (todos with at least one person-typed tag).
+///
+/// Automatically filtered by the active context tag set from
+/// [tagFilterProvider] (AND semantics when multiple tags are selected).
 final waitingForProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final userId = ref.watch(currentUserIdProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchWaitingFor(userId, tagIds: tagIds);
+  return db.todoDao.watchPersonTagged(userId, tagIds: tagIds);
+});
+
+/// Stream of waiting-for todos grouped by person-tag.
+///
+/// Each entry maps a person [Tag] to the list of active todos assigned to
+/// that person. A todo with two person-tags appears under both keys.
+/// Tags are ordered alphabetically; todos within each group are ordered by
+/// creation date.
+final waitingListGroupedProvider = StreamProvider<Map<Tag, List<Todo>>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.todoDao.watchPersonTaggedGrouped(userId);
 });
 
 /// Stream of maybe-intent todos (intent = 'maybe', done_at IS NULL).
