@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_planning_settings_provider.dart';
+import '../providers/gtd_lists_provider.dart';
+import '../providers/onboarding_provider.dart';
 
 /// A dismissible banner shown at the top of shell views when the daily
 /// planning ritual is incomplete and the user hasn't dismissed it today.
@@ -64,6 +66,17 @@ class FocusSessionPlanningBanner extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(focusSessionPlanningSettingsProvider);
     if (!settings.bannerEnabled) return const SizedBox.shrink();
+
+    final hasTodos = ref.watch(hasTodosProvider);
+    if (!hasTodos.hasValue) return const SizedBox.shrink();
+    if (!hasTodos.requireValue) return const SizedBox.shrink();
+
+    final inbox = ref.watch(unfilteredInboxProvider);
+    final next = ref.watch(unfilteredNextActionsProvider);
+    if (!inbox.hasValue || !next.hasValue) return const SizedBox.shrink();
+    if (inbox.requireValue.isEmpty && next.requireValue.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return ValueListenableBuilder<bool>(
       valueListenable: focusSessionPlanningCompletionNotifier,
