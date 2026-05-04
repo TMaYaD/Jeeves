@@ -22,8 +22,6 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
 
   /// Returns the Jeeves-flavoured phrase for [elapsed].
   ///
-  /// [isPaused] appends a pause suffix.
-  ///
   /// [seed] makes template selection deterministic. The widget seeds from
   /// the active task id plus the current bucket so the phrase is stable
   /// per-task-per-bucket and doesn't flip mid-glance on rebuilds.
@@ -34,7 +32,6 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     required SprintTimerState sprintState,
     required Duration elapsed,
     required String? activeTodoId,
-    bool isPaused = false,
   }) {
     final sprintSeed =
         Object.hash(sprintState.activeTaskId, sprintState.sprintNumber);
@@ -42,7 +39,7 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     if (sprintState.phase == SprintPhase.breakOvertime) {
       return jeevesOvertimePhrase(isFocus: false, seed: sprintSeed);
     }
-    if (sprintState.isBreak && sprintState.progress <= 0.15) {
+    if (sprintState.isBreak && sprintState.isNearPhaseEnd) {
       return jeevesBreakNearEndHint(seed: sprintSeed);
     }
     if (sprintState.isBreak) {
@@ -51,7 +48,7 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     if (sprintState.phase == SprintPhase.focusOvertime) {
       return jeevesOvertimePhrase(isFocus: true, seed: sprintSeed);
     }
-    if (sprintState.isFocus && sprintState.progress <= 0.15) {
+    if (sprintState.isFocus && sprintState.isNearPhaseEnd) {
       return jeevesSprintNearEndHint(seed: sprintSeed);
     }
 
@@ -61,7 +58,6 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     final seed = Object.hash(activeTodoId, bucket, bucketSize);
     return jeevesPhrase(
       elapsed,
-      isPaused: isPaused,
       seed: seed,
       suppressRest: sprintState.isPostBreakCooldown,
     );
@@ -129,12 +125,10 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   }
 
   static String jeevesPhrase(Duration elapsed,
-      {bool isPaused = false, int? seed, bool suppressRest = false}) {
+      {int? seed, bool suppressRest = false}) {
     final m = elapsed.inMinutes;
     final duration = m < 5 ? '' : _describeDuration(m);
-    final template = isPaused
-        ? _pickPausedTemplate(m, seed: seed)
-        : _pickTemplate(m, seed: seed, suppressRest: suppressRest);
+    final template = _pickTemplate(m, seed: seed, suppressRest: suppressRest);
     var phrase = template.replaceAll('{d}', duration);
 
     // Jeeves does not begin sentences with lowercase letters.
@@ -142,32 +136,6 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
       phrase = phrase[0].toUpperCase() + phrase.substring(1);
     }
     return phrase;
-  }
-
-  /// Jeeves-voice utterance for a paused session. Replaces the active
-  /// commentary entirely — Jeeves doesn't speak parentheticals.
-  /// All templates carry a `rest`/`reprieve`/`abeyance` marker so callers
-  /// can recognise paused-mode prose without exact-string matching.
-  static String _pickPausedTemplate(int m, {int? seed}) {
-    late final List<String> pool;
-    if (m < 5) {
-      pool = const [
-        'Barely begun, sir, and already at rest.',
-        'Scarcely underway, sir; at rest already.',
-        'A reprieve before we have properly begun, sir.',
-      ];
-    } else {
-      pool = const [
-        '{d} on the matter, sir; we are at rest.',
-        '{d} thus far, sir, and now at rest.',
-        '{d}, sir. The matter rests, with your leave.',
-        '{d} elapsed, sir; held in abeyance.',
-        'A reprieve at {d}, sir.',
-        'After {d}, sir, a brief reprieve.',
-      ];
-    }
-    final rng = seed == null ? _random : Random(seed);
-    return pool[rng.nextInt(pool.length)];
   }
 
   /// Renders the duration itself in period-appropriate prose.
@@ -244,7 +212,7 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
             ]
           : const [
               '{d} on the matter, sir. One ventures to suggest a brief respite.',
-              "{d} elapsed, sir. Perhaps a moment's pause would not go amiss.",
+              '{d} elapsed, sir. Perhaps a brief interval would not go amiss.',
               '{d} already, sir. Might one suggest a brief interval?',
             ];
     } else if (m < 240) {
@@ -256,7 +224,7 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
           : const [
               '{d}, sir. I feel it my duty to gently insist on a respite.',
               '{d} at the grindstone, sir. One really must protest.',
-              '{d}, sir. One must, regrettably, insist on a pause.',
+              '{d}, sir. One must, regrettably, insist on a rest.',
             ];
     } else {
       pool = suppressRest
@@ -325,8 +293,8 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
       );
     }
 
-    // Break near-end (last 15%) — nudge towards returning.
-    if (sprintState.isBreak && sprintState.progress <= 0.15) {
+    // Break near-end — nudge towards returning.
+    if (sprintState.isBreak && sprintState.isNearPhaseEnd) {
       return _buildBanner(
         ElapsedTimerWidget.jeevesBreakNearEndHint(seed: sprintSeed),
         icon: Icons.self_improvement,
@@ -352,8 +320,8 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
       );
     }
 
-    // Sprint near-end (last 15%) — hint about the upcoming break.
-    if (sprintState.isFocus && sprintState.progress <= 0.15) {
+    // Sprint near-end — hint about the upcoming break.
+    if (sprintState.isFocus && sprintState.isNearPhaseEnd) {
       return _buildBanner(
         ElapsedTimerWidget.jeevesSprintNearEndHint(seed: sprintSeed),
         icon: Icons.timer_outlined,
@@ -367,7 +335,6 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
     final seed = Object.hash(focusState.activeTodoId, bucket, bucketSize);
     final phrase = ElapsedTimerWidget.jeevesPhrase(
       focusState.elapsed,
-      isPaused: focusState.isPaused,
       seed: seed,
       suppressRest: sprintState.isPostBreakCooldown,
     );

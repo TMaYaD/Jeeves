@@ -71,7 +71,6 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       sprintState: sprintState,
       elapsed: focusState.elapsed,
       activeTodoId: todoId,
-      isPaused: focusState.isPaused,
     );
     NotificationService.instance.showFocusNotification(
       title: 'In Focus: $title',
@@ -271,6 +270,15 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
                 timer: timer,
                 ringColor: ringColor,
                 pulseCtrl: _pulseCtrl,
+                onPhaseSkip: timer.isProcessing
+                    ? null
+                    : () {
+                        if (isBreak) {
+                          notifier.skipBreak();
+                        } else {
+                          notifier.startBreak();
+                        }
+                      },
               ),
               _NotesPage(todo: todo),
             ],
@@ -278,7 +286,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
         ),
         // Page dots
         _PageDots(current: _currentPage),
-        // Action bar: pause/resume | Done | stop
+        // Action bar: Stop | Done (2×)
         Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           decoration: BoxDecoration(
@@ -287,46 +295,6 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
           ),
           child: Row(
             children: [
-              // Pause → starts break early; play during break → starts next sprint
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: timer.isProcessing
-                      ? null
-                      : () {
-                          if (isBreak) {
-                            notifier.skipBreak();
-                          } else {
-                            notifier.pauseSprint();
-                          }
-                        },
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: Icon(
-                    isBreak
-                        ? Icons.play_arrow_rounded
-                        : Icons.pause_rounded,
-                    size: 22,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Done — mark task complete
-              Expanded(
-                child: FilledButton(
-                  onPressed: widget.onComplete,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF2667B7),
-                    minimumSize: const Size.fromHeight(48),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: const Text('Done'),
-                ),
-              ),
-              const SizedBox(width: 8),
               // Stop — keep task in plan, log partial time, return to focus list
               Expanded(
                 child: OutlinedButton(
@@ -339,6 +307,21 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
                         borderRadius: BorderRadius.circular(12)),
                   ),
                   child: const Icon(Icons.stop_rounded, size: 22),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Done — mark task complete (doubled width)
+              Expanded(
+                flex: 2,
+                child: FilledButton(
+                  onPressed: widget.onComplete,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2667B7),
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Done'),
                 ),
               ),
             ],
@@ -358,10 +341,12 @@ class _TimerPage extends StatelessWidget {
     required this.timer,
     required this.ringColor,
     required this.pulseCtrl,
+    this.onPhaseSkip,
   });
   final SprintTimerState timer;
   final Color ringColor;
   final AnimationController pulseCtrl;
+  final VoidCallback? onPhaseSkip;
 
   @override
   Widget build(BuildContext context) {
@@ -381,6 +366,7 @@ class _TimerPage extends StatelessWidget {
                 timer: timer,
                 size: ringSize,
                 color: ringColor,
+                onPhaseSkip: onPhaseSkip,
               ),
               const SizedBox(width: 20),
               _SprintDotsColumn(
@@ -656,16 +642,61 @@ class _PageDots extends StatelessWidget {
 // Sprint ring — countdown (full→empty) or overtime (empty→full, amber→red)
 // ---------------------------------------------------------------------------
 
-class _SprintRing extends StatelessWidget {
-  const _SprintRing(
-      {required this.timer, required this.size, required this.color});
+class _SprintRing extends StatefulWidget {
+  const _SprintRing({
+    required this.timer,
+    required this.size,
+    required this.color,
+    this.onPhaseSkip,
+  });
   final SprintTimerState timer;
   final double size;
   final Color color;
+  final VoidCallback? onPhaseSkip;
+
+  @override
+  State<_SprintRing> createState() => _SprintRingState();
+}
+
+class _SprintRingState extends State<_SprintRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    );
+    _syncPulse();
+  }
+
+  @override
+  void didUpdateWidget(_SprintRing old) {
+    super.didUpdateWidget(old);
+    _syncPulse();
+  }
+
+  void _syncPulse() {
+    final suggest = widget.timer.isNearPhaseEnd;
+    if (suggest && !_pulseCtrl.isAnimating) {
+      _pulseCtrl.repeat();
+    } else if (!suggest && _pulseCtrl.isAnimating) {
+      _pulseCtrl.stop();
+      _pulseCtrl.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final bool overtime = timer.isOvertime;
+    final bool overtime = widget.timer.isOvertime;
 
     final Color ringColor;
     final Color trackColor;
@@ -673,7 +704,7 @@ class _SprintRing extends StatelessWidget {
     final Duration displayTime;
 
     if (overtime) {
-      final p = timer.overtimeProgress;
+      final p = widget.timer.overtimeProgress;
       ringColor = Color.lerp(
             const Color(0xFFF59E0B),
             const Color(0xFFDC2626),
@@ -682,13 +713,14 @@ class _SprintRing extends StatelessWidget {
           const Color(0xFFDC2626);
       trackColor = const Color(0xFFFEF3C7);
       progress = p;
-      displayTime = timer.overtime;
+      displayTime = widget.timer.overtime;
     } else {
-      ringColor = color;
-      trackColor =
-          timer.isBreak ? const Color(0xFFD1FAE5) : const Color(0xFFDBEAFE);
-      progress = timer.progress;
-      displayTime = timer.remaining;
+      ringColor = widget.color;
+      trackColor = widget.timer.isBreak
+          ? const Color(0xFFD1FAE5)
+          : const Color(0xFFDBEAFE);
+      progress = widget.timer.progress;
+      displayTime = widget.timer.remaining;
     }
 
     final minutes =
@@ -696,25 +728,60 @@ class _SprintRing extends StatelessWidget {
     final seconds =
         displayTime.inSeconds.remainder(60).toString().padLeft(2, '0');
 
+    final phaseLabel =
+        widget.timer.isBreak ? 'Start sprint' : 'Start break';
+    final phaseIcon = widget.timer.isBreak
+        ? Icons.play_arrow_rounded
+        : Icons.coffee_outlined;
+
     return SizedBox(
-      width: size,
-      height: size,
+      width: widget.size,
+      height: widget.size,
       child: CustomPaint(
         painter: _RingPainter(
           progress: progress,
           ringColor: ringColor,
           trackColor: trackColor,
-          clockwise: timer.isOvertime != timer.isBreak,
+          clockwise: widget.timer.isOvertime != widget.timer.isBreak,
         ),
-        child: Center(
-          child: Text(
-            '$minutes:$seconds',
-            style: TextStyle(
-              fontSize: size * 0.195,
-              fontWeight: FontWeight.bold,
-              color: ringColor,
-              letterSpacing: -1,
-            ),
+        child: Padding(
+          // align column bounds to the inner edge of the ring stroke
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.max,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Spacer(),
+              Text(
+                '$minutes:$seconds',
+                style: TextStyle(
+                  fontSize: widget.size * 0.17,
+                  fontWeight: FontWeight.bold,
+                  color: ringColor,
+                  letterSpacing: -1,
+                ),
+              ),
+              const Spacer(),
+              AnimatedBuilder(
+                animation: _pulseCtrl,
+                builder: (context, child) {
+                  final scale =
+                      1.0 + math.sin(_pulseCtrl.value * math.pi) * 0.12;
+                  return Transform.scale(scale: scale, child: child);
+                },
+                child: IconButton(
+                  onPressed: widget.onPhaseSkip,
+                  tooltip: phaseLabel,
+                  icon: Icon(phaseIcon, color: ringColor),
+                  iconSize: 36,
+                  style: IconButton.styleFrom(
+                    backgroundColor: ringColor.withValues(alpha: 0.07),
+                    shape: const StadiumBorder(),
+                  ),
+                ),
+              ),
+              const Spacer(),
+            ],
           ),
         ),
       ),

@@ -30,9 +30,8 @@ void main() {
   // keeps template selection deterministic across runs. Lowercased so that
   // assertions don't have to care whether the duration falls at the start
   // of a sentence (where the first letter is capitalized).
-  String phrase(int m, {bool isPaused = false, int seed = 0}) =>
-      ElapsedTimerWidget.jeevesPhrase(_minutes(m), isPaused: isPaused, seed: seed)
-          .toLowerCase();
+  String phrase(int m, {int seed = 0}) =>
+      ElapsedTimerWidget.jeevesPhrase(_minutes(m), seed: seed).toLowerCase();
 
   group('ElapsedTimerWidget.jeevesPhrase unit tests', () {
     test('< 5 min → just-started phrase', () {
@@ -117,25 +116,6 @@ void main() {
       expect(phrase(45, seed: 7), phrase(45, seed: 7));
     });
 
-    // Every Jeeves-voice paused utterance carries one of these markers.
-    final pausedMarker = anyOf(
-      contains('rest'),
-      contains('reprieve'),
-      contains('abeyance'),
-    );
-
-    test('paused, < 5 min → just-started Jeeves-voice paused prose', () {
-      final p = phrase(3, isPaused: true);
-      expect(p, anyOf(contains('begun'), contains('underway')));
-      expect(p, pausedMarker);
-    });
-
-    test('paused, ≥ 5 min → Jeeves-voice paused prose with duration', () {
-      final p = phrase(45, isPaused: true);
-      expect(p, contains('three-quarters of an hour'));
-      expect(p, pausedMarker);
-    });
-
     test("phrase always begins with a capital letter (Jeeves's standards)", () {
       // Sample across all duration tiers; the first character must be uppercase
       // regardless of whether the template starts with the duration token.
@@ -178,52 +158,6 @@ void main() {
       await tester.pump();
       final text = tester.widget<Text>(find.byType(Text)).data!;
       expect(text, contains('five minutes'));
-    });
-
-    testWidgets('appends paused suffix when elapsed < 5 min and paused',
-        (tester) async {
-      final start = DateTime.now().subtract(const Duration(minutes: 2));
-      final pauseStart = DateTime.now().subtract(const Duration(seconds: 30));
-      await tester.pumpWidget(_wrap(
-        focusState: FocusModeState(
-          activeTodoId: 't1',
-          sessionStart: start,
-          isPaused: true,
-          pauseStart: pauseStart,
-        ),
-      ));
-      await tester.pump();
-      final text = tester.widget<Text>(find.byType(Text)).data!;
-      expect(text, anyOf(contains('begun'), contains('underway')));
-      expect(
-        text,
-        anyOf(
-          contains('rest'),
-          contains('reprieve'),
-          contains('abeyance'),
-        ),
-      );
-    });
-
-    testWidgets('display is frozen while paused', (tester) async {
-      final start = DateTime.now().subtract(const Duration(minutes: 47));
-      final pauseStart = DateTime.now().subtract(const Duration(seconds: 10));
-      final pausedState = FocusModeState(
-        activeTodoId: 't1',
-        sessionStart: start,
-        isPaused: true,
-        pauseStart: pauseStart,
-      );
-
-      await tester.pumpWidget(_wrap(focusState: pausedState));
-      await tester.pump();
-      final textBefore = tester.widget<Text>(find.byType(Text)).data;
-
-      // Advance time — the widget's Timer fires but elapsed is frozen.
-      await tester.pump(const Duration(minutes: 2));
-      final textAfter = tester.widget<Text>(find.byType(Text)).data;
-
-      expect(textBefore, textAfter, reason: 'Paused timer should not change');
     });
   });
 }

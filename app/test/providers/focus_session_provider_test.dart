@@ -50,27 +50,6 @@ void main() {
       final s = FocusModeState(sessionStart: start);
       expect(s.elapsed.inMinutes, 5);
     });
-
-    test('elapsed is frozen when paused', () {
-      final start = DateTime.now().subtract(const Duration(minutes: 10));
-      final pauseStart = DateTime.now().subtract(const Duration(minutes: 3));
-      final s = FocusModeState(
-        sessionStart: start,
-        isPaused: true,
-        pauseStart: pauseStart,
-      );
-      // Elapsed at pause = 10m - 3m = 7m
-      expect(s.elapsed.inMinutes, 7);
-    });
-
-    test('accumulated reduces elapsed', () {
-      final start = DateTime.now().subtract(const Duration(minutes: 10));
-      final s = FocusModeState(
-        sessionStart: start,
-        accumulated: const Duration(minutes: 3),
-      );
-      expect(s.elapsed.inMinutes, 7);
-    });
   });
 
   group('FocusModeNotifier — pure state transitions', () {
@@ -85,7 +64,6 @@ void main() {
     test('initial state is inactive', () {
       final s = container.read(focusModeProvider);
       expect(s.isActive, isFalse);
-      expect(s.isPaused, isFalse);
       expect(s.activeTodoId, isNull);
     });
 
@@ -97,66 +75,6 @@ void main() {
       expect(s.activeTodoId, 'id-1');
       expect(s.sessionStart, since);
     });
-
-    test('resumeFrom while paused folds pause gap into accumulated', () {
-      final since = DateTime.now().subtract(const Duration(minutes: 10));
-      final pauseTime = DateTime.now();
-      final resumeTime = pauseTime.add(const Duration(milliseconds: 100));
-
-      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
-      container.read(focusModeProvider.notifier).pauseFocus(now: pauseTime);
-      expect(container.read(focusModeProvider).isPaused, isTrue);
-
-      // Simulate exit → re-enter: resumeFrom called with same todoId while paused.
-      container
-          .read(focusModeProvider.notifier)
-          .resumeFrom('id-1', since, now: resumeTime);
-      final s = container.read(focusModeProvider);
-
-      expect(s.isPaused, isFalse);
-      expect(s.sessionStart, since);
-      expect(s.accumulated, const Duration(milliseconds: 100));
-    });
-
-    test('pauseFocus freezes timer', () {
-      final since = DateTime.now().subtract(const Duration(minutes: 5));
-      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
-      container.read(focusModeProvider.notifier).pauseFocus();
-      final s = container.read(focusModeProvider);
-      expect(s.isPaused, isTrue);
-      expect(s.pauseStart, isNotNull);
-    });
-
-    test('pauseFocus is idempotent when already paused', () {
-      final since = DateTime.now().subtract(const Duration(minutes: 5));
-      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
-      container.read(focusModeProvider.notifier).pauseFocus();
-      final firstPause = container.read(focusModeProvider).pauseStart;
-      container.read(focusModeProvider.notifier).pauseFocus();
-      expect(container.read(focusModeProvider).pauseStart, firstPause);
-    });
-
-    test('resumeFocus accumulates pause duration', () {
-      final since = DateTime.now().subtract(const Duration(minutes: 10));
-      final pauseTime = DateTime.now();
-      final resumeTime = pauseTime.add(const Duration(seconds: 90));
-
-      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
-      container.read(focusModeProvider.notifier).pauseFocus(now: pauseTime);
-      container.read(focusModeProvider.notifier).resumeFocus(now: resumeTime);
-      final s = container.read(focusModeProvider);
-      expect(s.isPaused, isFalse);
-      expect(s.pauseStart, isNull);
-      expect(s.accumulated, const Duration(seconds: 90));
-    });
-
-    test('resumeFocus no-ops when not paused', () {
-      final since = DateTime.now().subtract(const Duration(minutes: 5));
-      container.read(focusModeProvider.notifier).resumeFrom('id-1', since);
-      container.read(focusModeProvider.notifier).resumeFocus();
-      expect(container.read(focusModeProvider).accumulated, Duration.zero);
-    });
-
   });
 
   group('FocusModeNotifier — startFocus / endFocus (integration)', () {
@@ -232,7 +150,6 @@ void main() {
       final s = container.read(focusModeProvider);
       expect(s.isActive, isFalse);
       expect(s.sessionStart, isNull);
-      expect(s.accumulated, Duration.zero);
 
       // Time log must be closed.
       final log = await db.timeLogDao.watchActiveLog(_userId).first;

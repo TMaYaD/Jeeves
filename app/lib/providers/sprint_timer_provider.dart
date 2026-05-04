@@ -27,8 +27,8 @@ const _kPrefEndTime = 'sprint_end_time';
 const _kPrefPhase = 'sprint_phase';
 const _kPrefSprintNumber = 'sprint_sprint_number';
 const _kPrefTotalSprints = 'sprint_total_sprints';
-const _kPrefIsPaused = 'sprint_is_paused';
-const _kPrefRemainingSeconds = 'sprint_remaining_seconds';
+const _kPrefIsPaused = 'sprint_is_paused'; // legacy key, kept for prefs cleanup
+const _kPrefRemainingSeconds = 'sprint_remaining_seconds'; // legacy key, kept for prefs cleanup
 const _kPrefSprintMinutes = 'sprint_sprint_duration_minutes';
 const _kPrefBreakMinutes = 'sprint_break_duration_minutes';
 const _kPrefLastBreakEndedAt = 'sprint_last_break_ended_at';
@@ -65,7 +65,6 @@ class SprintTimerState {
   final Duration remaining;
   final Duration total;
   final Duration overtime;
-  final bool isPaused;
   final bool isProcessing;
   // Minutes used for the current (or last) sprint/break — set at startSprint.
   final int sprintDurationMinutes;
@@ -82,7 +81,6 @@ class SprintTimerState {
     this.remaining = const Duration(minutes: 20),
     this.total = const Duration(minutes: 20),
     this.overtime = Duration.zero,
-    this.isPaused = false,
     this.isProcessing = false,
     this.sprintDurationMinutes = 20,
     this.breakDurationMinutes = 3,
@@ -109,6 +107,10 @@ class SprintTimerState {
     return (overtime.inSeconds / total.inSeconds).clamp(0.0, 1.0);
   }
 
+  /// True in the last 15% of a normal phase — Jeeves copy and UI affordances
+  /// use this to nudge the user toward the phase transition.
+  bool get isNearPhaseEnd => !isOvertime && progress <= 0.15;
+
   /// True when a break ended recently enough that rest shouldn't be suggested.
   /// The cooldown window equals the break duration itself.
   bool get isPostBreakCooldown {
@@ -126,7 +128,6 @@ class SprintTimerState {
     Duration? remaining,
     Duration? total,
     Duration? overtime,
-    bool? isPaused,
     bool? isProcessing,
     int? sprintDurationMinutes,
     int? breakDurationMinutes,
@@ -141,7 +142,6 @@ class SprintTimerState {
         remaining: remaining ?? this.remaining,
         total: total ?? this.total,
         overtime: overtime ?? this.overtime,
-        isPaused: isPaused ?? this.isPaused,
         isProcessing: isProcessing ?? this.isProcessing,
         sprintDurationMinutes:
             sprintDurationMinutes ?? this.sprintDurationMinutes,
@@ -229,7 +229,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
         lastBreakEndedAt: state.lastBreakEndedAt,
       );
 
-      await _persist(isPaused: false);
+      await _persist();
       await _scheduleEndNotification(
           _endTime!, isFocus: true, taskTitle: task.title);
       _startTicker();
@@ -238,8 +238,8 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
-  /// Pauses the sprint by entering a break early (works from focus or focusOvertime).
-  Future<void> pauseSprint() async {
+  /// Ends the current sprint early and starts a break.
+  Future<void> startBreak() async {
     if (!state.isFocus || state.isProcessing) return;
     state = state.copyWith(isProcessing: true);
     try {
@@ -248,27 +248,6 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       await _cancelSprintNotifications();
       state = state.copyWith(isProcessing: false);
       await _startBreak();
-    } finally {
-      if (state.isProcessing) state = state.copyWith(isProcessing: false);
-    }
-  }
-
-  /// Resumes a paused timer (legacy path, not used by the redesigned UI).
-  Future<void> resumeSprint() async {
-    if (!state.isActive || !state.isPaused || state.isProcessing) return;
-    state = state.copyWith(isProcessing: true);
-    try {
-      HapticFeedback.lightImpact();
-
-      _endTime = DateTime.now().add(state.remaining);
-      state = state.copyWith(isPaused: false, isProcessing: false);
-      await _persist(isPaused: false);
-      await _scheduleEndNotification(
-        _endTime!,
-        isFocus: state.isFocus,
-        taskTitle: state.activeTaskTitle,
-      );
-      _startTicker();
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
     }
@@ -354,8 +333,6 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
 
     final sprintNumber = prefs.getInt(_kPrefSprintNumber) ?? 1;
     final totalSprints = prefs.getInt(_kPrefTotalSprints) ?? 1;
-    final isPaused = prefs.getBool(_kPrefIsPaused) ?? false;
-    final remainingSeconds = prefs.getInt(_kPrefRemainingSeconds);
     final taskTitle = prefs.getString(_kPrefActiveTaskTitle) ?? '';
     final sm = prefs.getInt(_kPrefSprintMinutes) ?? 20;
     final bm = prefs.getInt(_kPrefBreakMinutes) ?? 3;
@@ -404,18 +381,13 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
         ? Duration(minutes: sm)
         : Duration(minutes: bm);
 
-    Duration remaining;
-    if (isPaused && remainingSeconds != null) {
-      remaining = Duration(seconds: remainingSeconds);
-    } else {
-      _endTime = DateTime.tryParse(endTimeStr);
-      if (_endTime == null) return;
-      remaining = _endTime!.difference(DateTime.now());
-      if (remaining.isNegative) {
-        _onTimerExpiredBackground(phase, sm: sm, bm: bm,
-            lastBreakEndedAt: lastBreakEndedAt);
-        return;
-      }
+    _endTime = DateTime.tryParse(endTimeStr);
+    if (_endTime == null) return;
+    final remaining = _endTime!.difference(DateTime.now());
+    if (remaining.isNegative) {
+      _onTimerExpiredBackground(phase, sm: sm, bm: bm,
+          lastBreakEndedAt: lastBreakEndedAt);
+      return;
     }
 
     state = SprintTimerState(
@@ -426,13 +398,12 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       totalSprints: totalSprints,
       remaining: remaining,
       total: total,
-      isPaused: isPaused,
       sprintDurationMinutes: sm,
       breakDurationMinutes: bm,
       lastBreakEndedAt: lastBreakEndedAt,
     );
 
-    if (!isPaused) _startTicker();
+    _startTicker();
   }
 
   void _onTimerExpiredBackground(SprintPhase expiredPhase,
@@ -495,14 +466,12 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       remaining: breakRemaining,
       total: breakDur,
       overtime: Duration.zero,
-      isPaused: false,
       sprintDurationMinutes: sprintMin,
       breakDurationMinutes: breakMin,
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kPrefEndTime, _endTime!.toIso8601String());
     await prefs.setString(_kPrefPhase, _kPhaseBreak);
-    await prefs.setBool(_kPrefIsPaused, false);
     await _scheduleEndNotification(_endTime!, isFocus: false);
     _startTicker();
   }
@@ -527,7 +496,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       breakDurationMinutes: bm,
       lastBreakEndedAt: state.lastBreakEndedAt,
     );
-    await _persist(isPaused: false);
+    await _persist();
     await _scheduleEndNotification(
       _endTime!,
       isFocus: true,
@@ -608,7 +577,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
-  Future<void> _persist({required bool isPaused}) async {
+  Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kPrefActiveTaskId, state.activeTaskId ?? '');
     await prefs.setString(_kPrefActiveTaskTitle, state.activeTaskTitle ?? '');
@@ -623,7 +592,6 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     await prefs.setString(_kPrefPhase, phaseStr);
     await prefs.setInt(_kPrefSprintNumber, state.sprintNumber);
     await prefs.setInt(_kPrefTotalSprints, state.totalSprints);
-    await prefs.setBool(_kPrefIsPaused, isPaused);
     await prefs.setInt(_kPrefSprintMinutes, state.sprintDurationMinutes);
     await prefs.setInt(_kPrefBreakMinutes, state.breakDurationMinutes);
   }
