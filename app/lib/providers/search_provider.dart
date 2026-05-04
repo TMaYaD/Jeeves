@@ -47,6 +47,24 @@ final searchResultsProvider =
 });
 
 // ---------------------------------------------------------------------------
+// Hidden done-match count
+// ---------------------------------------------------------------------------
+
+/// Counts completed tasks that would match the current query if Include Done
+/// were enabled. Returns 0 when [includeDone] is already true or when the
+/// entire query is empty — in both cases the hint is not needed.
+final hiddenDoneMatchCountProvider =
+    StreamProvider.autoDispose<int>((ref) {
+  final query = ref.watch(searchQueryProvider);
+  if (query.includeDone || query.isEmpty) return Stream.value(0);
+
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+
+  return db.searchDao.countDoneOnlyMatches(userId, query);
+});
+
+// ---------------------------------------------------------------------------
 // Recent searches
 // ---------------------------------------------------------------------------
 

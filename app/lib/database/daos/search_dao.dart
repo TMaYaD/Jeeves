@@ -87,16 +87,63 @@ class SearchDao {
     return q.watch().map((rows) => _processRows(rows, query));
   }
 
+  /// Returns a reactive count of completed tasks that match [query] (ignoring
+  /// [query.includeDone]). Used to populate the "N matches in completed tasks"
+  /// hint when the primary results stream is empty.
+  Stream<int> countDoneOnlyMatches(String userId, SearchQuery query) {
+    if (query.text.isEmpty || query.includeDone) return Stream.value(0);
+
+    final doneQuery = query.copyWith(includeDone: true);
+
+    final q = _db.select(_db.todos).join([
+      leftOuterJoin(
+        _db.todoTags,
+        _db.todoTags.todoId.equalsExp(_db.todos.id),
+      ),
+      leftOuterJoin(
+        _db.tags,
+        _db.tags.id.equalsExp(_db.todoTags.tagId),
+      ),
+    ]);
+
+    Expression<bool> where = _db.todos.userId.equals(userId);
+    where = where & _db.todos.doneAt.isNotNull();
+
+    if (query.energyLevels.isNotEmpty) {
+      where = where & _db.todos.energyLevel.isIn(query.energyLevels.toList());
+    }
+
+    if (query.dueDateAfter != null) {
+      where =
+          where & _db.todos.dueDate.isBiggerOrEqualValue(query.dueDateAfter!);
+    }
+    if (query.dueDateBefore != null) {
+      where = where &
+          _db.todos.dueDate.isSmallerOrEqualValue(query.dueDateBefore!);
+    }
+
+    if (query.timeEstimateMaxMinutes != null) {
+      where = where &
+          (_db.todos.timeEstimate.isNull() |
+              _db.todos.timeEstimate
+                  .isSmallerOrEqualValue(query.timeEstimateMaxMinutes!));
+    }
+
+    q.where(where);
+
+    return q.watch().map((rows) => _groupAndFilter(rows, doneQuery).length);
+  }
+
   // ---------------------------------------------------------------------------
   // Row processing
   // ---------------------------------------------------------------------------
 
-  List<SearchResult> _processRows(
+  /// Groups [rows] by todo id and applies the Dart-side text + tag-scope
+  /// filter. Returns [_TodoWithTags] entries that pass all filters.
+  List<_TodoWithTags> _groupAndFilter(
     List<TypedResult> rows,
     SearchQuery query,
   ) {
-    // Group rows by todo id, collecting all tags for each todo.
-    // The ordered list preserves the SQL ordering.
     final Map<String, _TodoWithTags> grouped = {};
     final List<String> orderedIds = [];
 
@@ -114,7 +161,7 @@ class SearchDao {
     }
 
     final term = query.text.toLowerCase().trim();
-    final results = <SearchResult>[];
+    final result = <_TodoWithTags>[];
 
     for (final id in orderedIds) {
       final entry = grouped[id]!;
@@ -130,17 +177,35 @@ class SearchDao {
 
       // Text filter applied in Dart so the SQL query stays simple and
       // compatible with PowerSync views.
+      if (term.isNotEmpty) {
+        final titleHit = todo.title.toLowerCase().contains(term);
+        final notesHit = todo.notes?.toLowerCase().contains(term) ?? false;
+        final tagHit = tags.any((t) => t.name.toLowerCase().contains(term));
+        if (!titleHit && !notesHit && !tagHit) continue;
+      }
+
+      result.add(entry);
+    }
+
+    return result;
+  }
+
+  List<SearchResult> _processRows(
+    List<TypedResult> rows,
+    SearchQuery query,
+  ) {
+    final entries = _groupAndFilter(rows, query);
+    final term = query.text.toLowerCase().trim();
+
+    return entries.map((entry) {
+      final todo = entry.todo;
+      final tags = entry.tags;
+
       Set<SearchMatchField> matchedFields;
       String? snippet;
 
       if (term.isNotEmpty) {
-        final titleHit = todo.title.toLowerCase().contains(term);
         final notesHit = todo.notes?.toLowerCase().contains(term) ?? false;
-        final tagHit =
-            tags.any((t) => t.name.toLowerCase().contains(term));
-
-        if (!titleHit && !notesHit && !tagHit) continue;
-
         matchedFields = _computeMatchedFields(todo, tags, term);
         snippet = notesHit ? _extractSnippet(todo.notes, term) : null;
       } else {
@@ -148,15 +213,13 @@ class SearchDao {
         snippet = null;
       }
 
-      results.add(SearchResult(
+      return SearchResult(
         todo: todo,
         tags: tags,
         matchedFields: matchedFields,
         matchSnippet: snippet,
-      ));
-    }
-
-    return results;
+      );
+    }).toList();
   }
 
   Set<SearchMatchField> _computeMatchedFields(
