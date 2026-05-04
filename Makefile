@@ -96,14 +96,14 @@ emulator-ios: ## Boot the iOS Simulator
 # -----------------------------------------------------------------------------
 
 android: setup emulator-android ## Run app on Android emulator
-	cd $(APP_DIR) && flutter run -d emulator
+	cd $(APP_DIR) && flutter run -d emulator --flavor alpha
 
 # Solana Seeker device (physical or emulator).
 # Override with:  make seeker SEEKER_DEVICE=<device-id>
 SEEKER_DEVICE ?= emulator
 
 seeker: setup emulator-android ## Run app on Solana Seeker with SWS auth mode
-	cd $(APP_DIR) && flutter run -d $(SEEKER_DEVICE) --dart-define=JEEVES_AUTH_MODE=sws
+	cd $(APP_DIR) && flutter run -d $(SEEKER_DEVICE) --flavor alpha --dart-define=JEEVES_AUTH_MODE=sws
 
 iphone ios: setup emulator-ios ## Run app on iOS Simulator
 	cd $(APP_DIR) && flutter run -d "$(IOS_DEVICE)"
