@@ -642,7 +642,7 @@ class _PageDots extends StatelessWidget {
 // Sprint ring — countdown (full→empty) or overtime (empty→full, amber→red)
 // ---------------------------------------------------------------------------
 
-class _SprintRing extends StatelessWidget {
+class _SprintRing extends StatefulWidget {
   const _SprintRing({
     required this.timer,
     required this.size,
@@ -655,8 +655,48 @@ class _SprintRing extends StatelessWidget {
   final VoidCallback? onPhaseSkip;
 
   @override
+  State<_SprintRing> createState() => _SprintRingState();
+}
+
+class _SprintRingState extends State<_SprintRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    );
+    _syncPulse();
+  }
+
+  @override
+  void didUpdateWidget(_SprintRing old) {
+    super.didUpdateWidget(old);
+    _syncPulse();
+  }
+
+  void _syncPulse() {
+    final suggest = widget.timer.isNearPhaseEnd;
+    if (suggest && !_pulseCtrl.isAnimating) {
+      _pulseCtrl.repeat();
+    } else if (!suggest && _pulseCtrl.isAnimating) {
+      _pulseCtrl.stop();
+      _pulseCtrl.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final bool overtime = timer.isOvertime;
+    final bool overtime = widget.timer.isOvertime;
 
     final Color ringColor;
     final Color trackColor;
@@ -664,7 +704,7 @@ class _SprintRing extends StatelessWidget {
     final Duration displayTime;
 
     if (overtime) {
-      final p = timer.overtimeProgress;
+      final p = widget.timer.overtimeProgress;
       ringColor = Color.lerp(
             const Color(0xFFF59E0B),
             const Color(0xFFDC2626),
@@ -673,13 +713,14 @@ class _SprintRing extends StatelessWidget {
           const Color(0xFFDC2626);
       trackColor = const Color(0xFFFEF3C7);
       progress = p;
-      displayTime = timer.overtime;
+      displayTime = widget.timer.overtime;
     } else {
-      ringColor = color;
-      trackColor =
-          timer.isBreak ? const Color(0xFFD1FAE5) : const Color(0xFFDBEAFE);
-      progress = timer.progress;
-      displayTime = timer.remaining;
+      ringColor = widget.color;
+      trackColor = widget.timer.isBreak
+          ? const Color(0xFFD1FAE5)
+          : const Color(0xFFDBEAFE);
+      progress = widget.timer.progress;
+      displayTime = widget.timer.remaining;
     }
 
     final minutes =
@@ -687,64 +728,59 @@ class _SprintRing extends StatelessWidget {
     final seconds =
         displayTime.inSeconds.remainder(60).toString().padLeft(2, '0');
 
-    final phaseLabel = timer.isBreak ? 'Start sprint' : 'Start break';
-    final phaseIcon =
-        timer.isBreak ? Icons.play_arrow_rounded : Icons.coffee_outlined;
+    final phaseLabel =
+        widget.timer.isBreak ? 'Start sprint' : 'Start break';
+    final phaseIcon = widget.timer.isBreak
+        ? Icons.play_arrow_rounded
+        : Icons.coffee_outlined;
 
     return SizedBox(
-      width: size,
-      height: size,
+      width: widget.size,
+      height: widget.size,
       child: CustomPaint(
         painter: _RingPainter(
           progress: progress,
           ringColor: ringColor,
           trackColor: trackColor,
-          clockwise: timer.isOvertime != timer.isBreak,
+          clockwise: widget.timer.isOvertime != widget.timer.isBreak,
         ),
-        child: Center(
+        child: Padding(
+          // align column bounds to the inner edge of the ring stroke
+          padding: const EdgeInsets.symmetric(vertical: 24),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: MainAxisSize.max,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              const Spacer(),
               Text(
                 '$minutes:$seconds',
                 style: TextStyle(
-                  fontSize: size * 0.17,
+                  fontSize: widget.size * 0.17,
                   fontWeight: FontWeight.bold,
                   color: ringColor,
                   letterSpacing: -1,
                 ),
               ),
-              const SizedBox(height: 6),
-              Tooltip(
-                message: phaseLabel,
-                child: Semantics(
-                  label: phaseLabel,
-                  button: true,
-                  child: InkWell(
-                    onTap: onPhaseSkip,
-                    borderRadius: BorderRadius.circular(24),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(phaseIcon, size: 20, color: ringColor),
-                          const SizedBox(height: 2),
-                          Text(
-                            phaseLabel,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: ringColor,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+              const Spacer(),
+              AnimatedBuilder(
+                animation: _pulseCtrl,
+                builder: (context, child) {
+                  final scale =
+                      1.0 + math.sin(_pulseCtrl.value * math.pi) * 0.12;
+                  return Transform.scale(scale: scale, child: child);
+                },
+                child: IconButton(
+                  onPressed: widget.onPhaseSkip,
+                  tooltip: phaseLabel,
+                  icon: Icon(phaseIcon, color: ringColor),
+                  iconSize: 36,
+                  style: IconButton.styleFrom(
+                    backgroundColor: ringColor.withValues(alpha: 0.07),
+                    shape: const StadiumBorder(),
                   ),
                 ),
               ),
+              const Spacer(),
             ],
           ),
         ),

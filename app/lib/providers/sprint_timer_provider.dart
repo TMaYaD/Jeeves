@@ -107,6 +107,10 @@ class SprintTimerState {
     return (overtime.inSeconds / total.inSeconds).clamp(0.0, 1.0);
   }
 
+  /// True in the last 15% of a normal phase — Jeeves copy and UI affordances
+  /// use this to nudge the user toward the phase transition.
+  bool get isNearPhaseEnd => !isOvertime && progress <= 0.15;
+
   /// True when a break ended recently enough that rest shouldn't be suggested.
   /// The cooldown window equals the break duration itself.
   bool get isPostBreakCooldown {

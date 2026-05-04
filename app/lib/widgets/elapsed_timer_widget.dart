@@ -39,7 +39,7 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     if (sprintState.phase == SprintPhase.breakOvertime) {
       return jeevesOvertimePhrase(isFocus: false, seed: sprintSeed);
     }
-    if (sprintState.isBreak && sprintState.progress <= 0.15) {
+    if (sprintState.isBreak && sprintState.isNearPhaseEnd) {
       return jeevesBreakNearEndHint(seed: sprintSeed);
     }
     if (sprintState.isBreak) {
@@ -48,7 +48,7 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     if (sprintState.phase == SprintPhase.focusOvertime) {
       return jeevesOvertimePhrase(isFocus: true, seed: sprintSeed);
     }
-    if (sprintState.isFocus && sprintState.progress <= 0.15) {
+    if (sprintState.isFocus && sprintState.isNearPhaseEnd) {
       return jeevesSprintNearEndHint(seed: sprintSeed);
     }
 
@@ -293,8 +293,8 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
       );
     }
 
-    // Break near-end (last 15%) — nudge towards returning.
-    if (sprintState.isBreak && sprintState.progress <= 0.15) {
+    // Break near-end — nudge towards returning.
+    if (sprintState.isBreak && sprintState.isNearPhaseEnd) {
       return _buildBanner(
         ElapsedTimerWidget.jeevesBreakNearEndHint(seed: sprintSeed),
         icon: Icons.self_improvement,
@@ -320,8 +320,8 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
       );
     }
 
-    // Sprint near-end (last 15%) — hint about the upcoming break.
-    if (sprintState.isFocus && sprintState.progress <= 0.15) {
+    // Sprint near-end — hint about the upcoming break.
+    if (sprintState.isFocus && sprintState.isNearPhaseEnd) {
       return _buildBanner(
         ElapsedTimerWidget.jeevesSprintNearEndHint(seed: sprintSeed),
         icon: Icons.timer_outlined,
