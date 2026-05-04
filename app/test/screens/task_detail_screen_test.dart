@@ -180,6 +180,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Next Actions'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(ListTile, 'Next Actions'));
+      await tester.pumpAndSettle();
+      final updated = await db.todoDao.getTodo('maybe1', _userId);
+      expect(updated!.intent, 'next');
     });
 
     testWidgets('status sheet does not show Next Actions tile for a Next todo', (tester) async {
