@@ -162,7 +162,6 @@ void main() {
       await tester.pump(); // process stream emissions
 
       expect(find.textContaining('3 matches in completed tasks'), findsOneWidget);
-      expect(find.textContaining('tap to include them'), findsOneWidget);
     });
 
     testWidgets('hint uses singular form when count is 1', (tester) async {
@@ -176,7 +175,6 @@ void main() {
       await tester.pump(); // process stream emissions
 
       expect(find.textContaining('1 match in completed tasks'), findsOneWidget);
-      expect(find.textContaining('tap to include it'), findsOneWidget);
     });
 
     testWidgets('hint uses plural form when count is greater than 1',
@@ -191,7 +189,6 @@ void main() {
       await tester.pump(); // process stream emissions
 
       expect(find.textContaining('5 matches in completed tasks'), findsOneWidget);
-      expect(find.textContaining('tap to include them'), findsOneWidget);
     });
 
     testWidgets('tapping hint sets includeDone to true', (tester) async {
@@ -225,7 +222,7 @@ void main() {
 
       expect(container.read(searchQueryProvider).includeDone, isFalse);
 
-      await tester.tap(find.textContaining('tap to include them'));
+      await tester.tap(find.textContaining('matches in completed tasks'));
       await tester.pump();
 
       expect(container.read(searchQueryProvider).includeDone, isTrue);

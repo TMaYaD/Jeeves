@@ -230,8 +230,7 @@ class _Results extends ConsumerWidget {
                           ref.read(searchQueryProvider).copyWith(includeDone: true),
                         ),
                     child: Text(
-                      '$hiddenCount ${hiddenCount == 1 ? 'match' : 'matches'} in completed tasks'
-                      ' — tap to include ${hiddenCount == 1 ? 'it' : 'them'}.',
+                      '$hiddenCount ${hiddenCount == 1 ? 'match' : 'matches'} in completed tasks.',
                       style: const TextStyle(
                         color: Color(0xFF3B82F6),
                         fontSize: 13,
