@@ -145,6 +145,17 @@ class _StatusMenuSheet extends ConsumerWidget {
                   await notifier.clearAllPersonTags();
                 },
               ),
+            // Next Actions — only shown when currently in Someday/Maybe
+            if (isMaybe)
+              ListTile(
+                leading: const Icon(Icons.check_circle_outline,
+                    color: Color(0xFF10B981)),
+                title: const Text('Next Actions'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await notifier.setIntent(Intent.next);
+                },
+              ),
             // Waiting For >
             ListTile(
               leading: const Icon(Icons.hourglass_empty_outlined,
