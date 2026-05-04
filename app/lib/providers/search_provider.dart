@@ -52,7 +52,7 @@ final searchResultsProvider =
 
 /// Counts completed tasks that would match the current query if Include Done
 /// were enabled. Returns 0 when [includeDone] is already true or when the
-/// query is empty — in both cases the hint is not needed.
+/// entire query is empty — in both cases the hint is not needed.
 final hiddenDoneMatchCountProvider =
     StreamProvider.autoDispose<int>((ref) {
   final query = ref.watch(searchQueryProvider);
