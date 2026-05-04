@@ -79,6 +79,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   String? _energyLevel;
   int? _timeEstimate;
   DateTime? _dueDate;
+  bool _processing = false;
 
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
@@ -99,6 +100,18 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     _titleCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
+  }
+
+  /// Runs [action] with a re-entry guard so rapid taps cannot fire concurrent
+  /// DB writes on the same item.
+  Future<void> _runAction(Future<void> Function() action) async {
+    if (_processing) return;
+    setState(() => _processing = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) setState(() => _processing = false);
+    }
   }
 
   /// Validates and saves editable fields on the current inbox item.
@@ -124,6 +137,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   }
 
   Future<void> _process(BuildContext context) async {
+    if (!mounted) return;
     Object? error;
     try {
       final saved = await _saveFields(context);
@@ -142,6 +156,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   }
 
   Future<void> _processToWaitingFor(BuildContext context) async {
+    if (!mounted) return;
     final saved = await _saveFields(context);
     if (!saved || !context.mounted) return;
 
@@ -182,6 +197,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   }
 
   Future<void> _processToDone(BuildContext context) async {
+    if (!mounted) return;
     Object? error;
     try {
       final saved = await _saveFields(context);
@@ -197,6 +213,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   }
 
   Future<void> _processToMaybe(BuildContext context) async {
+    if (!mounted) return;
     Object? error;
     try {
       final saved = await _saveFields(context);
@@ -367,44 +384,59 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         ),
         const SizedBox(height: 28),
 
-        // Destination buttons
-        _FieldLabel('PROCESS TO'),
-        const SizedBox(height: 12),
-        _DestinationButton(
-          label: 'Next Action',
-          icon: Icons.check_circle_outline,
-          color: const Color(0xFF16A34A),
-          onTap: () => _process(context),
-        ),
-        const SizedBox(height: 8),
-        _DestinationButton(
-          label: 'Waiting For',
-          icon: Icons.hourglass_empty,
-          color: const Color(0xFFF59E0B),
-          onTap: () => _processToWaitingFor(context),
-        ),
-        const SizedBox(height: 8),
-        _DestinationButton(
-          label: 'Maybe',
-          icon: Icons.star_border,
-          color: const Color(0xFF6B7280),
-          onTap: () => _processToMaybe(context),
-        ),
-        const SizedBox(height: 8),
-        _DestinationButton(
-          label: 'Done (discard)',
-          icon: Icons.delete_outline,
-          color: const Color(0xFFDC2626),
-          onTap: () => _processToDone(context),
-        ),
-        const SizedBox(height: 20),
-        _DestinationButton(
-          label: 'Skip for today',
-          icon: Icons.next_plan_outlined,
-          color: const Color(0xFF6B7280),
-          onTap: () {
-            ref.read(focusSessionPlanningProvider.notifier).skipInboxItem(widget.todo.id);
-          },
+        // Destination buttons — dimmed while a write is in flight to signal
+        // the commit is pending and to block concurrent taps.
+        AnimatedOpacity(
+          opacity: _processing ? 0.4 : 1.0,
+          duration: const Duration(milliseconds: 150),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _FieldLabel('PROCESS TO'),
+              const SizedBox(height: 12),
+              _DestinationButton(
+                label: 'Next Action',
+                icon: Icons.check_circle_outline,
+                color: const Color(0xFF16A34A),
+                enabled: !_processing,
+                onTap: () => _runAction(() => _process(context)),
+              ),
+              const SizedBox(height: 8),
+              _DestinationButton(
+                label: 'Waiting For',
+                icon: Icons.hourglass_empty,
+                color: const Color(0xFFF59E0B),
+                enabled: !_processing,
+                onTap: () => _runAction(() => _processToWaitingFor(context)),
+              ),
+              const SizedBox(height: 8),
+              _DestinationButton(
+                label: 'Maybe',
+                icon: Icons.star_border,
+                color: const Color(0xFF6B7280),
+                enabled: !_processing,
+                onTap: () => _runAction(() => _processToMaybe(context)),
+              ),
+              const SizedBox(height: 8),
+              _DestinationButton(
+                label: 'Done (discard)',
+                icon: Icons.delete_outline,
+                color: const Color(0xFFDC2626),
+                enabled: !_processing,
+                onTap: () => _runAction(() => _processToDone(context)),
+              ),
+              const SizedBox(height: 20),
+              _DestinationButton(
+                label: 'Skip for today',
+                icon: Icons.next_plan_outlined,
+                color: const Color(0xFF6B7280),
+                enabled: !_processing,
+                onTap: () {
+                  ref.read(focusSessionPlanningProvider.notifier).skipInboxItem(widget.todo.id);
+                },
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -562,17 +594,19 @@ class _DestinationButton extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.onTap,
+    this.enabled = true,
   });
 
   final String label;
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     return OutlinedButton.icon(
-      onPressed: onTap,
+      onPressed: enabled ? onTap : null,
       icon: Icon(icon, size: 18, color: color),
       label: Text(label),
       style: OutlinedButton.styleFrom(

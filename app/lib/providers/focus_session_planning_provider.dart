@@ -341,29 +341,38 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       );
 
   /// Processes an inbox item by setting clarified = true.
+  ///
+  /// Increments [inboxClarifiedCount] only when the DAO actually updated a row
+  /// (affected > 0), preventing double-counting on rapid duplicate calls.
   Future<void> processInboxItem(String id) async {
-    await _db.inboxDao.processInboxItem(
+    final affected = await _db.inboxDao.processInboxItem(
       id,
       userId: _userId,
     );
-    state = state.copyWith(
-      inboxClarifiedCount: state.inboxClarifiedCount + 1,
-    );
+    if (affected > 0) {
+      state = state.copyWith(
+        inboxClarifiedCount: state.inboxClarifiedCount + 1,
+      );
+    }
   }
 
   /// Processes an inbox item to the maybe list.
   ///
   /// Sets clarified = true and intent = 'maybe' so the item appears in the
   /// Maybe view rather than Next Actions.
+  ///
+  /// Increments [inboxClarifiedCount] only when the DAO actually updated a row.
   Future<void> processInboxItemToMaybe(String id) async {
-    await _db.inboxDao.processInboxItem(
+    final affected = await _db.inboxDao.processInboxItem(
       id,
       userId: _userId,
       intent: 'maybe',
     );
-    state = state.copyWith(
-      inboxClarifiedCount: state.inboxClarifiedCount + 1,
-    );
+    if (affected > 0) {
+      state = state.copyWith(
+        inboxClarifiedCount: state.inboxClarifiedCount + 1,
+      );
+    }
   }
 
   /// Skips an inbox item for today without clarifying it.
