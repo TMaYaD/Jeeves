@@ -7,6 +7,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
+import 'package:jeeves/providers/onboarding_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_screen.dart';
 import 'package:jeeves/screens/inbox/widgets/offline_chip.dart';
 import '../test_helpers.dart';
@@ -54,6 +55,8 @@ Widget _buildApp({
       inboxItemsProvider.overrideWith(
         (ref) => inboxStream ?? Stream.value([]),
       ),
+      // Stub out hasTodosProvider so OnboardingCard never hits the real DB.
+      hasTodosProvider.overrideWith((ref) => Stream.value(true)),
       if (db != null) databaseProvider.overrideWithValue(db),
     ],
     child: const MaterialApp(home: InboxScreen()),

@@ -41,6 +41,17 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
+  /// Returns a stream that emits true as soon as [userId] has any todo.
+  ///
+  /// Watches all todos (clarified or not) so that imports also collapse the
+  /// first-launch onboarding card even though imported items are clarified.
+  Stream<bool> watchHasTodos(String userId) =>
+      (select(todos)
+            ..where((t) => t.userId.equals(userId))
+            ..limit(1))
+          .watch()
+          .map((rows) => rows.isNotEmpty);
+
   /// Inserts a new inbox item (sets clarified = false).
   Future<void> insertTodo(TodosCompanion companion) {
     return into(todos).insert(

@@ -160,3 +160,6 @@
 - `app/lib/database/gtd_database.g.dart` is committed and must be manually updated when the Drift schema changes; `build_runner` cannot be run because the dev machine doesn't have the full Flutter toolchain.
 - `Future.microtask(_preloadRolloverIds)` in `FocusSessionPlanningNotifier.build()` is the correct pattern for one-shot async side-effects in a Riverpod `Notifier` — `build()` must return synchronously, and the microtask fires exactly once per notifier lifetime.
 - Session ID is passed to `FocusSessionReviewScreen` via `GoRouterState.extra`; the review route lives outside `ShellRoute` so it gets a full-screen layout without the bottom nav bar.
+
+## 2026-05-04
+- OnboardingCard reads hasTodosProvider (a StreamProvider) which depends on databaseProvider. Any test that renders InboxScreen must override hasTodosProvider to avoid pending-timer failures in fakeAsync — see inbox_screen_test.dart for the pattern.

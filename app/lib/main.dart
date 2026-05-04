@@ -8,12 +8,16 @@ import 'providers/auth_provider.dart';
 import 'providers/evening_shutdown_provider.dart';
 import 'providers/focus_session_planning_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
+import 'providers/onboarding_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
 import 'services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Seed onboarding dismissal state before the first frame.
+  await initOnboardingCompletion();
 
   // Seed suppression flags before any notification scheduling so that a
   // previously skipped/snoozed reminder is not re-enabled on restart.
