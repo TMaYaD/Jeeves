@@ -29,6 +29,7 @@ Future<void> initOnboardingCompletion() async {
 /// Updates [onboardingSeenNotifier] synchronously (instant UI collapse) then
 /// persists to [SharedPreferences].
 Future<void> markOnboardingSeen() async {
+  if (onboardingSeenNotifier.value) return;
   onboardingSeenNotifier.value = true;
   final prefs = await SharedPreferences.getInstance();
   await prefs.setBool(_kOnboardingSeenKey, true);

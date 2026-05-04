@@ -26,8 +26,9 @@ class OnboardingCard extends ConsumerWidget {
       builder: (context, seen, _) {
         if (seen) return const SizedBox.shrink();
 
-        final hasTodos = ref.watch(hasTodosProvider).asData?.value ?? false;
-        if (hasTodos) return const SizedBox.shrink();
+        final hasTodosAsync = ref.watch(hasTodosProvider);
+        final hasTodos = hasTodosAsync.asData?.value;
+        if (hasTodos == null || hasTodos) return const SizedBox.shrink();
 
         return _OnboardingCardContent(
           key: const Key('onboarding_card'),
