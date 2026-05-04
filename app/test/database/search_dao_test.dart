@@ -338,4 +338,110 @@ void main() {
       await it.cancel();
     });
   });
+
+  group('SearchDao — countDoneOnlyMatches', () {
+    late GtdDatabase db;
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('returns 0 for empty text', () async {
+      await _insertTodo(db, id: 'a', title: 'Done task');
+      await db.todoDao.markDone('a', _user);
+
+      final count = await db.searchDao
+          .countDoneOnlyMatches(_user, const SearchQuery())
+          .first;
+
+      expect(count, 0);
+    });
+
+    test('returns 0 when includeDone is already true', () async {
+      await _insertTodo(db, id: 'a', title: 'Done task');
+      await db.todoDao.markDone('a', _user);
+
+      final count = await db.searchDao
+          .countDoneOnlyMatches(
+            _user,
+            const SearchQuery(text: 'task', includeDone: true),
+          )
+          .first;
+
+      expect(count, 0);
+    });
+
+    test('counts done tasks matching title', () async {
+      await _insertTodo(db, id: 'a', title: 'Done task');
+      await db.todoDao.markDone('a', _user);
+      await _insertTodo(db, id: 'b', title: 'Active task');
+
+      final count = await db.searchDao
+          .countDoneOnlyMatches(_user, const SearchQuery(text: 'task'))
+          .first;
+
+      expect(count, 1);
+    });
+
+    test('counts done tasks matching notes', () async {
+      await _insertTodo(
+        db,
+        id: 'a',
+        title: 'Done task',
+        notes: 'important plumber call',
+      );
+      await db.todoDao.markDone('a', _user);
+
+      final count = await db.searchDao
+          .countDoneOnlyMatches(_user, const SearchQuery(text: 'plumber'))
+          .first;
+
+      expect(count, 1);
+    });
+
+    test('does not count active tasks', () async {
+      await _insertTodo(db, id: 'a', title: 'Active task');
+
+      final count = await db.searchDao
+          .countDoneOnlyMatches(_user, const SearchQuery(text: 'task'))
+          .first;
+
+      expect(count, 0);
+    });
+
+    test('respects tag-scope filter', () async {
+      await _insertTodo(db, id: 'a', title: 'Done task');
+      await db.todoDao.markDone('a', _user);
+      await _insertTodo(db, id: 'b', title: 'Done tagged task');
+      await db.todoDao.markDone('b', _user);
+      final tagId = await _insertTag(db, name: 'work', type: 'context');
+      await db.tagDao.assignTag('b', tagId, _user);
+
+      final count = await db.searchDao
+          .countDoneOnlyMatches(
+            _user,
+            SearchQuery(text: 'task', tagIds: {tagId}),
+          )
+          .first;
+
+      expect(count, 1);
+    });
+
+    test('reacts to database changes', () async {
+      await _insertTodo(db, id: 'a', title: 'Future done task');
+
+      final stream = db.searchDao
+          .countDoneOnlyMatches(_user, const SearchQuery(text: 'task'));
+
+      final it = StreamIterator(stream);
+
+      expect(await it.moveNext(), isTrue);
+      expect(it.current, 0);
+
+      await db.todoDao.markDone('a', _user);
+
+      expect(await it.moveNext(), isTrue);
+      expect(it.current, 1);
+
+      await it.cancel();
+    });
+  });
 }

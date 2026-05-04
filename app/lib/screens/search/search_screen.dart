@@ -189,7 +189,7 @@ class _SearchBar extends StatelessWidget {
 // Results
 // ---------------------------------------------------------------------------
 
-class _Results extends StatelessWidget {
+class _Results extends ConsumerWidget {
   const _Results({
     required this.resultsAsync,
     required this.queryText,
@@ -199,13 +199,19 @@ class _Results extends StatelessWidget {
   final String queryText;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final hiddenCountAsync = ref.watch(hiddenDoneMatchCountProvider);
+
     return resultsAsync.when(
       loading: () => const LinearProgressIndicator(),
       error: (err, _) =>
           Center(child: Text('Error: $err', style: const TextStyle(color: Color(0xFFDC2626)))),
       data: (results) {
         if (results.isEmpty) {
+          final hiddenCount = hiddenCountAsync.maybeWhen(
+            data: (v) => v,
+            orElse: () => 0,
+          );
           return Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -217,6 +223,18 @@ class _Results extends StatelessWidget {
                   style: const TextStyle(color: Color(0xFF6B7280)),
                   textAlign: TextAlign.center,
                 ),
+                if (hiddenCount > 0) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '$hiddenCount ${hiddenCount == 1 ? 'match' : 'matches'} in completed tasks'
+                    ' — toggle Include Done to see ${hiddenCount == 1 ? 'it' : 'them'}.',
+                    style: const TextStyle(
+                      color: Color(0xFF3B82F6),
+                      fontSize: 13,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ],
             ),
           );
