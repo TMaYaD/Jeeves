@@ -22,17 +22,19 @@ Future<Todo> _insertAt(
   GtdDatabase db, {
   required String id,
   String title = 'Test task',
+  String intent = 'next',
 }) async {
   final now = DateTime.now();
   await db.customInsert(
-    'INSERT INTO todos (id, title, user_id, created_at, time_spent_minutes) '
-    'VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO todos (id, title, user_id, created_at, time_spent_minutes, intent) '
+    'VALUES (?, ?, ?, ?, ?, ?)',
     variables: [
       Variable.withString(id),
       Variable.withString(title),
       Variable.withString(_userId),
       Variable.withDateTime(now),
       Variable.withInt(0),
+      Variable.withString(intent),
     ],
   );
   return (await db.todoDao.getTodo(id, _userId))!;
@@ -167,6 +169,33 @@ void main() {
       expect(find.text('Low'), findsOneWidget);
       expect(find.text('Medium'), findsOneWidget);
       expect(find.text('High'), findsOneWidget);
+    });
+
+    testWidgets('status sheet shows Next Actions tile for Maybe todo', (tester) async {
+      final todo = await _insertAt(db, id: 'maybe1', title: 'Maybe task', intent: 'maybe');
+      final (widget, router) = _buildScreen(db, 'maybe1', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'maybe1');
+
+      await tester.tap(find.byKey(const Key('status_pill')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Next Actions'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(ListTile, 'Next Actions'));
+      await tester.pumpAndSettle();
+      final updated = await db.todoDao.getTodo('maybe1', _userId);
+      expect(updated!.intent, 'next');
+    });
+
+    testWidgets('status sheet does not show Next Actions tile for a Next todo', (tester) async {
+      final todo = await _insertAt(db, id: 'next1', title: 'Next task', intent: 'next');
+      final (widget, router) = _buildScreen(db, 'next1', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'next1');
+
+      await tester.tap(find.byKey(const Key('status_pill')));
+      await tester.pumpAndSettle();
+
+      expect(find.descendant(of: find.byType(ListTile), matching: find.text('Next Actions')), findsNothing);
     });
 
   });
