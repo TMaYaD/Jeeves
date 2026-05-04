@@ -41,7 +41,6 @@ class OnboardingCard extends ConsumerWidget {
             markOnboardingSeen();
             context.push('/login');
           },
-          onDismiss: () => markOnboardingSeen(),
         );
       },
     );
@@ -54,94 +53,70 @@ class _OnboardingCardContent extends StatelessWidget {
     required this.onStartFresh,
     required this.onImportFromNirvana,
     required this.onSignIn,
-    required this.onDismiss,
   });
 
   final VoidCallback onStartFresh;
   final VoidCallback onImportFromNirvana;
   final VoidCallback onSignIn;
-  final VoidCallback onDismiss;
 
-  static const _bg = Color(0xFFEFF6FF); // blue-50
   static const _ink = Color(0xFF1A1A2E);
-  static const _inkMuted = Color(0xFF6B7280); // gray-500
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-      child: Container(
-        decoration: BoxDecoration(
-          color: _bg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFBFDBFE)), // blue-200
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header: logo + dismiss button
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 8, 0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  const JeevesLogo(size: 32, variant: JeevesLogoVariant.signature),
-                  const SizedBox(width: 4),
-                  const Expanded(
-                    child: Text(
-                      'Your GTD inbox, sir. Shall we stock it?',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: _ink,
-                        height: 1.3,
-                      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header: logo + dismiss button
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const JeevesLogo(size: 32, variant: JeevesLogoVariant.signature),
+                const SizedBox(width: 4),
+                const Expanded(
+                  child: Text(
+                    'Your GTD inbox, sir. Shall we stock it?',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: _ink,
+                      height: 1.3,
                     ),
                   ),
-                  Semantics(
-                    button: true,
-                    label: 'Dismiss onboarding',
-                    child: GestureDetector(
-                      key: const Key('onboarding_dismiss'),
-                      behavior: HitTestBehavior.opaque,
-                      onTap: onDismiss,
-                      child: const Padding(
-                        padding: EdgeInsets.all(8),
-                        child: Icon(Icons.close, size: 18, color: _inkMuted),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
-              child: Divider(height: 1, color: Color(0xFFBFDBFE)),
-            ),
-            // Action rows
-            _ActionRow(
-              key: const Key('onboarding_start_fresh'),
-              icon: Icons.inbox_outlined,
-              label: 'Start fresh',
-              isPrimary: true,
-              onTap: onStartFresh,
-            ),
-            _ActionRow(
-              key: const Key('onboarding_import'),
-              icon: Icons.upload_file_outlined,
-              label: 'Import from Nirvana export',
-              onTap: onImportFromNirvana,
-            ),
-            _ActionRow(
-              key: const Key('onboarding_sign_in'),
-              icon: Icons.cloud_outlined,
-              label: 'Sign in to sync',
-              onTap: onSignIn,
-            ),
-            const SizedBox(height: 4),
-          ],
-        ),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
+            child: Divider(height: 1, color: Color(0xFFBFDBFE)),
+          ),
+          // Action rows
+          _ActionRow(
+            key: const Key('onboarding_start_fresh'),
+            icon: Icons.inbox_outlined,
+            label: 'Start fresh',
+            isPrimary: true,
+            onTap: onStartFresh,
+          ),
+          _ActionRow(
+            key: const Key('onboarding_import'),
+            icon: Icons.upload_file_outlined,
+            label: 'Import from Nirvana export',
+            onTap: onImportFromNirvana,
+          ),
+          _ActionRow(
+            key: const Key('onboarding_sign_in'),
+            icon: Icons.cloud_outlined,
+            label: 'Sign in to sync',
+            onTap: onSignIn,
+          ),
+          const SizedBox(height: 4),
+        ],
       ),
     );
   }

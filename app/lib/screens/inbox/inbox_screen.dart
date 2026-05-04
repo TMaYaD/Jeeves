@@ -5,7 +5,6 @@ import '../../providers/connectivity_provider.dart';
 import '../../providers/inbox_provider.dart';
 import '../../providers/powersync_provider.dart';
 import '../../widgets/active_filter_bar.dart';
-import '../../widgets/onboarding_card.dart';
 import 'widgets/inbox_list.dart';
 import 'widgets/offline_chip.dart';
 import 'widgets/quick_add_bar.dart';
@@ -106,8 +105,6 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
                 onAdd: _addTodo,
               ),
             ),
-            // First-launch onboarding card (self-hiding once seen or once any todo exists)
-            const OnboardingCard(),
             // Inbox list
             Expanded(
               child: InboxList(

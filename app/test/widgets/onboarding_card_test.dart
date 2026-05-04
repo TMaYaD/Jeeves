@@ -106,18 +106,6 @@ void main() {
     expect(find.text('login screen'), findsOneWidget);
   });
 
-  testWidgets('tapping dismiss calls markOnboardingSeen and hides card',
-      (tester) async {
-    await tester.pumpWidget(_buildCard(Stream.value(false)));
-    await tester.pump();
-
-    await tester.tap(find.byKey(const Key('onboarding_dismiss')));
-    await tester.pump();
-
-    expect(onboardingSeenNotifier.value, isTrue);
-    expect(find.byKey(const Key('onboarding_card')), findsNothing);
-  });
-
   testWidgets('card disappears when hasTodosProvider emits true', (tester) async {
     final controller = StreamController<bool>();
     controller.add(false);

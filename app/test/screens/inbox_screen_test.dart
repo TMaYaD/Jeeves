@@ -71,6 +71,9 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('InboxScreen', () {
+    setUp(() => onboardingSeenNotifier.value = true);
+    tearDown(() => onboardingSeenNotifier.value = false);
+
     testWidgets('empty state shows "No items yet" message', (tester) async {
       await tester.pumpWidget(_buildApp());
       await tester.pump();

@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../providers/inbox_provider.dart';
+import '../../../providers/onboarding_provider.dart';
+import '../../../widgets/onboarding_card.dart';
 import 'todo_list_item.dart';
 
 class _TightBouncingScrollPhysics extends BouncingScrollPhysics {
@@ -58,14 +60,25 @@ class InboxList extends ConsumerWidget {
           itemCount: items.isEmpty ? 1 : items.length,
           itemBuilder: (_, index) {
             if (items.isEmpty) {
-              return const Padding(
-                padding: EdgeInsets.only(top: 120),
-                child: Center(
-                  child: Text(
-                    'No items yet — add something above',
-                    style: TextStyle(color: Color(0xFF9CA3AF)),
-                  ),
-                ),
+              return ValueListenableBuilder<bool>(
+                valueListenable: onboardingSeenNotifier,
+                builder: (context, seen, _) {
+                  if (!seen) {
+                    return const Padding(
+                      padding: EdgeInsets.only(top: 120),
+                      child: OnboardingCard(),
+                    );
+                  }
+                  return const Padding(
+                    padding: EdgeInsets.only(top: 120),
+                    child: Center(
+                      child: Text(
+                        'No items yet — add something above',
+                        style: TextStyle(color: Color(0xFF9CA3AF)),
+                      ),
+                    ),
+                  );
+                },
               );
             }
             return TodoListItem(
