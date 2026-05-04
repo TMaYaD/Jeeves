@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -156,6 +157,78 @@ void main() {
 
       // Today does not match '2000-01-01'.
       expect(focusSessionPlanningBannerDismissedNotifier.value, isFalse);
+    });
+  });
+
+  group('FocusSessionPlanningNotifier — inbox double-process guard', () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+
+    setUp(() {
+      db = GtdDatabase(NativeDatabase.memory());
+      container = _container(db);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+      focusSessionPlanningCompletionNotifier.value = false;
+    });
+
+    test('processInboxItem twice concurrently increments count only once',
+        () async {
+      final now = DateTime.now();
+      await db.inboxDao.insertTodo(TodosCompanion(
+        id: const Value('item-1'),
+        title: const Value('Test item'),
+        userId: const Value('local'),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+
+      // Fire both without awaiting the first so they race.
+      final first = notifier.processInboxItem('item-1');
+      final second = notifier.processInboxItem('item-1');
+      await Future.wait([first, second]);
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxClarifiedCount, 1,
+          reason: 'Double-process must not increment count twice');
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(row.clarified, isTrue);
+    });
+
+    test('processInboxItemToMaybe twice concurrently increments count only once',
+        () async {
+      final now = DateTime.now();
+      await db.inboxDao.insertTodo(TodosCompanion(
+        id: const Value('item-2'),
+        title: const Value('Maybe item'),
+        userId: const Value('local'),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+
+      final first = notifier.processInboxItemToMaybe('item-2');
+      final second = notifier.processInboxItemToMaybe('item-2');
+      await Future.wait([first, second]);
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxClarifiedCount, 1,
+          reason: 'Double-process to maybe must not increment count twice');
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-2')))
+          .getSingle();
+      expect(row.clarified, isTrue);
+      expect(row.intent, 'maybe');
     });
   });
 

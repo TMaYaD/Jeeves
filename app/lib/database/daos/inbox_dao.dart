@@ -77,14 +77,17 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   /// Sets clarified = true on the given inbox item, optionally updating
   /// [intent] and [dueDate].
   ///
+  /// Returns the number of affected rows (0 if already clarified or not found,
+  /// 1 on success). Callers can use this to guard against double-processing.
+  ///
   /// Scoped to [userId] to prevent cross-user mutations.
-  Future<void> processInboxItem(
+  Future<int> processInboxItem(
     String id, {
     required String userId,
     String? intent,
     DateTime? dueDate,
-  }) async {
-    await (update(todos)
+  }) {
+    return (update(todos)
           ..where(
             (t) =>
                 t.id.equals(id) &
