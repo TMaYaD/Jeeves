@@ -223,6 +223,12 @@ void main() {
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxClarifiedCount, 1,
           reason: 'Double-process to maybe must not increment count twice');
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-2')))
+          .getSingle();
+      expect(row.clarified, isTrue);
+      expect(row.intent, 'maybe');
     });
   });
 

@@ -431,9 +431,9 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.next_plan_outlined,
                 color: const Color(0xFF6B7280),
                 enabled: !_processing,
-                onTap: () {
+                onTap: () => _runAction(() async {
                   ref.read(focusSessionPlanningProvider.notifier).skipInboxItem(widget.todo.id);
-                },
+                }),
               ),
             ],
           ),
