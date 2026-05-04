@@ -212,7 +212,7 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
             ]
           : const [
               '{d} on the matter, sir. One ventures to suggest a brief respite.',
-              "{d} elapsed, sir. Perhaps a moment's pause would not go amiss.",
+              '{d} elapsed, sir. Perhaps a brief interval would not go amiss.',
               '{d} already, sir. Might one suggest a brief interval?',
             ];
     } else if (m < 240) {
@@ -224,7 +224,7 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
           : const [
               '{d}, sir. I feel it my duty to gently insist on a respite.',
               '{d} at the grindstone, sir. One really must protest.',
-              '{d}, sir. One must, regrettably, insist on a pause.',
+              '{d}, sir. One must, regrettably, insist on a rest.',
             ];
     } else {
       pool = suppressRest
