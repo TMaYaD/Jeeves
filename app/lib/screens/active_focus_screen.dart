@@ -270,6 +270,15 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
                 timer: timer,
                 ringColor: ringColor,
                 pulseCtrl: _pulseCtrl,
+                onPhaseSkip: timer.isProcessing
+                    ? null
+                    : () {
+                        if (isBreak) {
+                          notifier.skipBreak();
+                        } else {
+                          notifier.startBreak();
+                        }
+                      },
               ),
               _NotesPage(todo: todo),
             ],
@@ -277,7 +286,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
         ),
         // Page dots
         _PageDots(current: _currentPage),
-        // Action bar: Start break/sprint | Done | Stop
+        // Action bar: Stop | Done (2×)
         Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           decoration: BoxDecoration(
@@ -286,47 +295,6 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
           ),
           child: Row(
             children: [
-              // Start break (during sprint) or Start sprint (during break)
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: timer.isProcessing
-                      ? null
-                      : () {
-                          if (isBreak) {
-                            notifier.skipBreak();
-                          } else {
-                            notifier.startBreak();
-                          }
-                        },
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  icon: Icon(
-                    isBreak
-                        ? Icons.play_arrow_rounded
-                        : Icons.free_breakfast,
-                    size: 22,
-                  ),
-                  label: Text(isBreak ? 'Start sprint' : 'Start break'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Done — mark task complete
-              Expanded(
-                child: FilledButton(
-                  onPressed: widget.onComplete,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF2667B7),
-                    minimumSize: const Size.fromHeight(48),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: const Text('Done'),
-                ),
-              ),
-              const SizedBox(width: 8),
               // Stop — keep task in plan, log partial time, return to focus list
               Expanded(
                 child: OutlinedButton(
@@ -339,6 +307,21 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
                         borderRadius: BorderRadius.circular(12)),
                   ),
                   child: const Icon(Icons.stop_rounded, size: 22),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Done — mark task complete (doubled width)
+              Expanded(
+                flex: 2,
+                child: FilledButton(
+                  onPressed: widget.onComplete,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2667B7),
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Done'),
                 ),
               ),
             ],
@@ -358,10 +341,12 @@ class _TimerPage extends StatelessWidget {
     required this.timer,
     required this.ringColor,
     required this.pulseCtrl,
+    this.onPhaseSkip,
   });
   final SprintTimerState timer;
   final Color ringColor;
   final AnimationController pulseCtrl;
+  final VoidCallback? onPhaseSkip;
 
   @override
   Widget build(BuildContext context) {
@@ -381,6 +366,7 @@ class _TimerPage extends StatelessWidget {
                 timer: timer,
                 size: ringSize,
                 color: ringColor,
+                onPhaseSkip: onPhaseSkip,
               ),
               const SizedBox(width: 20),
               _SprintDotsColumn(
@@ -657,11 +643,16 @@ class _PageDots extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _SprintRing extends StatelessWidget {
-  const _SprintRing(
-      {required this.timer, required this.size, required this.color});
+  const _SprintRing({
+    required this.timer,
+    required this.size,
+    required this.color,
+    this.onPhaseSkip,
+  });
   final SprintTimerState timer;
   final double size;
   final Color color;
+  final VoidCallback? onPhaseSkip;
 
   @override
   Widget build(BuildContext context) {
@@ -696,6 +687,10 @@ class _SprintRing extends StatelessWidget {
     final seconds =
         displayTime.inSeconds.remainder(60).toString().padLeft(2, '0');
 
+    final phaseLabel = timer.isBreak ? 'Start sprint' : 'Start break';
+    final phaseIcon =
+        timer.isBreak ? Icons.play_arrow_rounded : Icons.coffee_outlined;
+
     return SizedBox(
       width: size,
       height: size,
@@ -707,14 +702,50 @@ class _SprintRing extends StatelessWidget {
           clockwise: timer.isOvertime != timer.isBreak,
         ),
         child: Center(
-          child: Text(
-            '$minutes:$seconds',
-            style: TextStyle(
-              fontSize: size * 0.195,
-              fontWeight: FontWeight.bold,
-              color: ringColor,
-              letterSpacing: -1,
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$minutes:$seconds',
+                style: TextStyle(
+                  fontSize: size * 0.17,
+                  fontWeight: FontWeight.bold,
+                  color: ringColor,
+                  letterSpacing: -1,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Tooltip(
+                message: phaseLabel,
+                child: Semantics(
+                  label: phaseLabel,
+                  button: true,
+                  child: InkWell(
+                    onTap: onPhaseSkip,
+                    borderRadius: BorderRadius.circular(24),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(phaseIcon, size: 20, color: ringColor),
+                          const SizedBox(height: 2),
+                          Text(
+                            phaseLabel,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: ringColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
