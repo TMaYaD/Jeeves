@@ -22,8 +22,6 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
 
   /// Returns the Jeeves-flavoured phrase for [elapsed].
   ///
-  /// [isPaused] appends a pause suffix.
-  ///
   /// [seed] makes template selection deterministic. The widget seeds from
   /// the active task id plus the current bucket so the phrase is stable
   /// per-task-per-bucket and doesn't flip mid-glance on rebuilds.
@@ -34,7 +32,6 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     required SprintTimerState sprintState,
     required Duration elapsed,
     required String? activeTodoId,
-    bool isPaused = false,
   }) {
     final sprintSeed =
         Object.hash(sprintState.activeTaskId, sprintState.sprintNumber);
@@ -61,7 +58,6 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
     final seed = Object.hash(activeTodoId, bucket, bucketSize);
     return jeevesPhrase(
       elapsed,
-      isPaused: isPaused,
       seed: seed,
       suppressRest: sprintState.isPostBreakCooldown,
     );
@@ -129,12 +125,10 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
   }
 
   static String jeevesPhrase(Duration elapsed,
-      {bool isPaused = false, int? seed, bool suppressRest = false}) {
+      {int? seed, bool suppressRest = false}) {
     final m = elapsed.inMinutes;
     final duration = m < 5 ? '' : _describeDuration(m);
-    final template = isPaused
-        ? _pickPausedTemplate(m, seed: seed)
-        : _pickTemplate(m, seed: seed, suppressRest: suppressRest);
+    final template = _pickTemplate(m, seed: seed, suppressRest: suppressRest);
     var phrase = template.replaceAll('{d}', duration);
 
     // Jeeves does not begin sentences with lowercase letters.
@@ -142,32 +136,6 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
       phrase = phrase[0].toUpperCase() + phrase.substring(1);
     }
     return phrase;
-  }
-
-  /// Jeeves-voice utterance for a paused session. Replaces the active
-  /// commentary entirely — Jeeves doesn't speak parentheticals.
-  /// All templates carry a `rest`/`reprieve`/`abeyance` marker so callers
-  /// can recognise paused-mode prose without exact-string matching.
-  static String _pickPausedTemplate(int m, {int? seed}) {
-    late final List<String> pool;
-    if (m < 5) {
-      pool = const [
-        'Barely begun, sir, and already at rest.',
-        'Scarcely underway, sir; at rest already.',
-        'A reprieve before we have properly begun, sir.',
-      ];
-    } else {
-      pool = const [
-        '{d} on the matter, sir; we are at rest.',
-        '{d} thus far, sir, and now at rest.',
-        '{d}, sir. The matter rests, with your leave.',
-        '{d} elapsed, sir; held in abeyance.',
-        'A reprieve at {d}, sir.',
-        'After {d}, sir, a brief reprieve.',
-      ];
-    }
-    final rng = seed == null ? _random : Random(seed);
-    return pool[rng.nextInt(pool.length)];
   }
 
   /// Renders the duration itself in period-appropriate prose.
@@ -367,7 +335,6 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
     final seed = Object.hash(focusState.activeTodoId, bucket, bucketSize);
     final phrase = ElapsedTimerWidget.jeevesPhrase(
       focusState.elapsed,
-      isPaused: focusState.isPaused,
       seed: seed,
       suppressRest: sprintState.isPostBreakCooldown,
     );

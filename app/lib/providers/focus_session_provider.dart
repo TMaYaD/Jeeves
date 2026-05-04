@@ -7,51 +7,29 @@ class FocusModeState {
   const FocusModeState({
     this.activeTodoId,
     this.sessionStart,
-    this.accumulated = Duration.zero,
-    this.isPaused = false,
-    this.pauseStart,
   });
 
   final String? activeTodoId;
 
-  /// Wall-clock time when the current (unpaused) focus segment started.
+  /// Wall-clock time when the focus segment started.
   final DateTime? sessionStart;
-
-  /// Total duration subtracted from wall time (accumulated pause gaps).
-  final Duration accumulated;
-
-  final bool isPaused;
-
-  /// Wall-clock time when the most recent pause began (null when not paused).
-  final DateTime? pauseStart;
 
   bool get isActive => activeTodoId != null;
 
-  /// Net elapsed time, frozen while paused.
+  /// Net elapsed time since the session started.
   Duration get elapsed {
     if (sessionStart == null) return Duration.zero;
-    if (isPaused && pauseStart != null) {
-      return pauseStart!.difference(sessionStart!) - accumulated;
-    }
     final raw = DateTime.now().difference(sessionStart!);
-    final net = raw - accumulated;
-    return net.isNegative ? Duration.zero : net;
+    return raw.isNegative ? Duration.zero : raw;
   }
 
   FocusModeState copyWith({
     String? activeTodoId,
     DateTime? sessionStart,
-    Duration? accumulated,
-    bool? isPaused,
-    DateTime? pauseStart,
-    bool clearPauseStart = false,
   }) =>
       FocusModeState(
         activeTodoId: activeTodoId ?? this.activeTodoId,
         sessionStart: sessionStart ?? this.sessionStart,
-        accumulated: accumulated ?? this.accumulated,
-        isPaused: isPaused ?? this.isPaused,
-        pauseStart: clearPauseStart ? null : (pauseStart ?? this.pauseStart),
       );
 }
 
@@ -98,45 +76,10 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   ///
   /// [startedAt] should be the time-log's [started_at] so the timer reflects
   /// how long the user has been focused on this specific task.
-  ///
-  /// If the session is currently paused (e.g. user exited via _onExit), the
-  /// pause gap is folded into [accumulated] so elapsed stays frozen correctly.
-  /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   void resumeFrom(String todoId, DateTime startedAt, {DateTime? now}) {
-    if (state.activeTodoId == todoId &&
-        state.isPaused &&
-        state.pauseStart != null) {
-      final pauseDuration = (now ?? DateTime.now()).difference(state.pauseStart!);
-      state = FocusModeState(
-        activeTodoId: todoId,
-        sessionStart: state.sessionStart ?? startedAt,
-        accumulated: state.accumulated + pauseDuration,
-        isPaused: false,
-      );
-      return;
-    }
-
     state = FocusModeState(
       activeTodoId: todoId,
       sessionStart: startedAt,
-    );
-  }
-
-  /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
-  void pauseFocus({DateTime? now}) {
-    if (state.isPaused || state.sessionStart == null) return;
-    state = state.copyWith(isPaused: true, pauseStart: now ?? DateTime.now());
-  }
-
-  /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
-  void resumeFocus({DateTime? now}) {
-    if (!state.isPaused || state.pauseStart == null) return;
-    final pauseDuration = (now ?? DateTime.now()).difference(state.pauseStart!);
-    state = FocusModeState(
-      activeTodoId: state.activeTodoId,
-      sessionStart: state.sessionStart,
-      accumulated: state.accumulated + pauseDuration,
-      isPaused: false,
     );
   }
 

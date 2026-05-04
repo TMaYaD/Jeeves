@@ -71,7 +71,6 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       sprintState: sprintState,
       elapsed: focusState.elapsed,
       activeTodoId: todoId,
-      isPaused: focusState.isPaused,
     );
     NotificationService.instance.showFocusNotification(
       title: 'In Focus: $title',
@@ -278,7 +277,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
         ),
         // Page dots
         _PageDots(current: _currentPage),
-        // Action bar: pause/resume | Done | stop
+        // Action bar: Start break/sprint | Done | Stop
         Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           decoration: BoxDecoration(
@@ -287,16 +286,16 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
           ),
           child: Row(
             children: [
-              // Pause → starts break early; play during break → starts next sprint
+              // Start break (during sprint) or Start sprint (during break)
               Expanded(
-                child: OutlinedButton(
+                child: OutlinedButton.icon(
                   onPressed: timer.isProcessing
                       ? null
                       : () {
                           if (isBreak) {
                             notifier.skipBreak();
                           } else {
-                            notifier.pauseSprint();
+                            notifier.startBreak();
                           }
                         },
                   style: OutlinedButton.styleFrom(
@@ -304,12 +303,13 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: Icon(
+                  icon: Icon(
                     isBreak
                         ? Icons.play_arrow_rounded
-                        : Icons.pause_rounded,
+                        : Icons.free_breakfast,
                     size: 22,
                   ),
+                  label: Text(isBreak ? 'Start sprint' : 'Start break'),
                 ),
               ),
               const SizedBox(width: 8),

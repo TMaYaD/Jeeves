@@ -285,15 +285,11 @@ class _Controls extends ConsumerWidget {
 
     return Row(
       children: [
-        // Pause / Resume
+        // Start break
         Tooltip(
-          message: timer.isPaused ? 'Resume sprint' : 'Pause sprint',
+          message: 'Start break',
           child: OutlinedButton(
-            onPressed: disabled
-                ? null
-                : (timer.isPaused
-                    ? notifier.resumeSprint
-                    : notifier.pauseSprint),
+            onPressed: disabled ? null : notifier.startBreak,
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFF2563EB),
               side: const BorderSide(color: Color(0xFFBFDBFE)),
@@ -302,12 +298,7 @@ class _Controls extends ConsumerWidget {
               minimumSize: const Size(48, 44),
               padding: const EdgeInsets.symmetric(horizontal: 14),
             ),
-            child: Icon(
-              timer.isPaused
-                  ? Icons.play_arrow_rounded
-                  : Icons.pause_rounded,
-              size: 22,
-            ),
+            child: const Icon(Icons.free_breakfast, size: 22),
           ),
         ),
         const SizedBox(width: 10),
