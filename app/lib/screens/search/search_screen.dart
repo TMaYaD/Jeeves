@@ -225,14 +225,21 @@ class _Results extends ConsumerWidget {
                 ),
                 if (hiddenCount > 0) ...[
                   const SizedBox(height: 8),
-                  Text(
-                    '$hiddenCount ${hiddenCount == 1 ? 'match' : 'matches'} in completed tasks'
-                    ' — toggle Include Done to see ${hiddenCount == 1 ? 'it' : 'them'}.',
-                    style: const TextStyle(
-                      color: Color(0xFF3B82F6),
-                      fontSize: 13,
+                  GestureDetector(
+                    onTap: () => ref.read(searchQueryProvider.notifier).update(
+                          ref.read(searchQueryProvider).copyWith(includeDone: true),
+                        ),
+                    child: Text(
+                      '$hiddenCount ${hiddenCount == 1 ? 'match' : 'matches'} in completed tasks'
+                      ' — tap to include ${hiddenCount == 1 ? 'it' : 'them'}.',
+                      style: const TextStyle(
+                        color: Color(0xFF3B82F6),
+                        fontSize: 13,
+                        decoration: TextDecoration.underline,
+                        decorationColor: Color(0xFF3B82F6),
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                    textAlign: TextAlign.center,
                   ),
                 ],
               ],
