@@ -66,3 +66,25 @@ final doneProvider = StreamProvider<List<Todo>>((ref) {
   final userId = ref.watch(currentUserIdProvider);
   return db.todoDao.watchDone(userId);
 });
+
+/// Stream of inbox todos (clarified = false), newest first — no context tag filter.
+///
+/// Unlike [inboxProvider], this ignores [tagFilterProvider] so it covers the
+/// user's entire inbox. Used by [FocusSessionPlanningBanner] to decide whether
+/// there is anything to plan.
+final unfilteredInboxProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.inboxDao.watchInbox(userId);
+});
+
+/// Stream of next-action todos — no context tag filter.
+///
+/// Unlike [nextActionsProvider], this ignores [tagFilterProvider] so it covers
+/// the user's full next-action list. Used by [FocusSessionPlanningBanner] to
+/// decide whether there is anything to plan.
+final unfilteredNextActionsProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  return db.todoDao.watchNextActions(userId);
+});
