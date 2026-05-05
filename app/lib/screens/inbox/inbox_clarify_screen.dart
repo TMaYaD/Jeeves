@@ -153,10 +153,18 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       requireSelection: true,
       onAfterConfirm: () async {
         if (!mounted) return;
-        final db = ref.read(databaseProvider);
-        final userId = ref.read(currentUserIdProvider);
-        await db.inboxDao.processInboxItem(widget.todoId, userId: userId);
-        if (mounted) context.pop();
+        try {
+          final db = ref.read(databaseProvider);
+          final userId = ref.read(currentUserIdProvider);
+          await db.inboxDao.processInboxItem(widget.todoId, userId: userId);
+          if (mounted) context.pop();
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Operation failed. Please try again.')),
+            );
+          }
+        }
       },
     );
   }
