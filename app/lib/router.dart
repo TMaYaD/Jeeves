@@ -17,6 +17,7 @@ import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/active_focus_screen.dart';
 import 'screens/focus_screen.dart';
 import 'screens/import_screen.dart';
+import 'screens/inbox/inbox_clarify_screen.dart';
 import 'screens/search/search_screen.dart';
 import 'screens/shutdown/shutdown_ritual_screen.dart';
 
@@ -102,6 +103,12 @@ final appRouter = GoRouter(
           builder: (context, state) => const FocusScreen(),
         ),
       ],
+    ),
+    GoRoute(
+      path: '/inbox/:id/clarify',
+      builder: (context, state) => InboxClarifyScreen(
+        todoId: state.pathParameters['id']!,
+      ),
     ),
     GoRoute(
       path: '/task/:id',

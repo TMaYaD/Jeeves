@@ -83,7 +83,7 @@ class InboxList extends ConsumerWidget {
             }
             return TodoListItem(
               todo: items[index],
-              onTap: () => context.push('/task/${items[index].id}'),
+              onTap: () => context.push('/inbox/${items[index].id}/clarify'),
             );
           },
         ),

@@ -16,6 +16,7 @@ import '../../../providers/auth_provider.dart';
 import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/inbox_provider.dart';
+import '../../../widgets/clarify_shared_widgets.dart';
 import '../../../widgets/person_tag_picker.dart';
 
 class InboxClarificationStep extends ConsumerWidget {
@@ -315,23 +316,23 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         const SizedBox(height: 20),
 
         // Energy level
-        _FieldLabel('ENERGY LEVEL'),
+        ClarifyFieldLabel('ENERGY LEVEL'),
         const SizedBox(height: 8),
-        _EnergyPicker(
+        ClarifyEnergyPicker(
           selected: _energyLevel,
           onSelect: (level) => setState(() => _energyLevel = level),
         ),
         const SizedBox(height: 20),
 
         // Time estimate
-        _FieldLabel('TIME ESTIMATE'),
+        ClarifyFieldLabel('TIME ESTIMATE'),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: _estimateOptions.map((m) {
             final selected = _timeEstimate == m;
-            return _EstimateChip(
+            return ClarifyEstimateChip(
               label: m < 60
                   ? '${m}m'
                   : m % 60 == 0
@@ -346,7 +347,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         const SizedBox(height: 20),
 
         // Due date
-        _FieldLabel('DUE DATE'),
+        ClarifyFieldLabel('DUE DATE'),
         const SizedBox(height: 8),
         Row(
           children: [
@@ -392,9 +393,9 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _FieldLabel('PROCESS TO'),
+              ClarifyFieldLabel('PROCESS TO'),
               const SizedBox(height: 12),
-              _DestinationButton(
+              ClarifyDestinationButton(
                 label: 'Next Action',
                 icon: Icons.check_circle_outline,
                 color: const Color(0xFF16A34A),
@@ -402,7 +403,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 onTap: () => _runAction(() => _process(context)),
               ),
               const SizedBox(height: 8),
-              _DestinationButton(
+              ClarifyDestinationButton(
                 label: 'Waiting For',
                 icon: Icons.hourglass_empty,
                 color: const Color(0xFFF59E0B),
@@ -410,7 +411,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 onTap: () => _runAction(() => _processToWaitingFor(context)),
               ),
               const SizedBox(height: 8),
-              _DestinationButton(
+              ClarifyDestinationButton(
                 label: 'Maybe',
                 icon: Icons.star_border,
                 color: const Color(0xFF6B7280),
@@ -418,7 +419,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 onTap: () => _runAction(() => _processToMaybe(context)),
               ),
               const SizedBox(height: 8),
-              _DestinationButton(
+              ClarifyDestinationButton(
                 label: 'Done (discard)',
                 icon: Icons.delete_outline,
                 color: const Color(0xFFDC2626),
@@ -426,7 +427,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 onTap: () => _runAction(() => _processToDone(context)),
               ),
               const SizedBox(height: 20),
-              _DestinationButton(
+              ClarifyDestinationButton(
                 label: 'Skip for today',
                 icon: Icons.next_plan_outlined,
                 color: const Color(0xFF6B7280),
@@ -477,146 +478,3 @@ class _InboxCleared extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Small widgets
-// ---------------------------------------------------------------------------
-
-class _FieldLabel extends StatelessWidget {
-  const _FieldLabel(this.label);
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      label,
-      style: const TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.bold,
-        letterSpacing: 1.2,
-        color: Color(0xFF9CA3AF),
-      ),
-    );
-  }
-}
-
-class _EnergyPicker extends StatelessWidget {
-  const _EnergyPicker({required this.selected, required this.onSelect});
-
-  final String? selected;
-  final void Function(String?) onSelect;
-
-  static const _levels = [
-    ('low', 'Low', Color(0xFF16A34A)),
-    ('medium', 'Medium', Color(0xFFF59E0B)),
-    ('high', 'High', Color(0xFFDC2626)),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: _levels.map(((String, String, Color) level) {
-        final (value, label, color) = level;
-        final isSelected = selected == value;
-        return Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: GestureDetector(
-            onTap: () => onSelect(isSelected ? null : value),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: isSelected ? color.withValues(alpha: 0.1) : Colors.transparent,
-                border: Border.all(
-                  color: isSelected ? color : const Color(0xFFD1D5DB),
-                  width: isSelected ? 2 : 1,
-                ),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                  color: isSelected ? color : const Color(0xFF6B7280),
-                ),
-              ),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-}
-
-class _EstimateChip extends StatelessWidget {
-  const _EstimateChip(
-      {required this.label, required this.selected, required this.onTap});
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFF2563EB)
-              : Colors.transparent,
-          border: Border.all(
-            color: selected
-                ? const Color(0xFF2563EB)
-                : const Color(0xFFD1D5DB),
-          ),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: selected ? Colors.white : const Color(0xFF6B7280),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DestinationButton extends StatelessWidget {
-  const _DestinationButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-    this.enabled = true,
-  });
-
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: enabled ? onTap : null,
-      icon: Icon(icon, size: 18, color: color),
-      label: Text(label),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: color,
-        side: BorderSide(color: color.withValues(alpha: 0.4)),
-        alignment: Alignment.centerLeft,
-        minimumSize: const Size.fromHeight(44),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
-  }
-}
