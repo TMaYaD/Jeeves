@@ -10,16 +10,16 @@ Both columns are nullable with no default and no backfill. Existing rows start N
 Tasks with next_action_text = NULL will surface as Actionless on the first planning
 session after the migration — this is intentional, prompting a one-time clarification pass.
 
-Revision ID: 0023
-Revises: 0022
+Revision ID: 0024
+Revises: 0023
 """
 
 import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0023"
-down_revision = "0022"
+revision = "0024"
+down_revision = "0023"
 branch_labels = None
 depends_on = None
 
