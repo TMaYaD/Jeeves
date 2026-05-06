@@ -27,7 +27,7 @@ void main() {
         userId: const Value(_userId),
       ));
 
-      final tags = await db.tagDao.watchByType(_userId, 'context').first;
+      final tags = await db.tagDao.watchByType('context').first;
       expect(tags.length, 1);
       expect(tags.first.name, 'work');
     });
@@ -46,7 +46,7 @@ void main() {
         userId: const Value(_userId),
       ));
 
-      final tags = await db.tagDao.watchByType(_userId, 'context').first;
+      final tags = await db.tagDao.watchByType('context').first;
       expect(tags.length, 1);
       expect(tags.first.name, 'home-v2');
     });
@@ -68,7 +68,7 @@ void main() {
         userId: const Value(_userId),
       ));
 
-      final tags = await db.tagDao.watchByType(_userId, 'context').first;
+      final tags = await db.tagDao.watchByType('context').first;
       expect(tags.length, 1);
       expect(tags.first.name, 'errand-v2');
       expect(tags.first.color, '#ff0000');
@@ -237,7 +237,7 @@ void main() {
         ));
       }
 
-      final tags = await db.tagDao.watchByType(_userId, 'label').first;
+      final tags = await db.tagDao.watchByType('label').first;
       expect(tags.map((t) => t.name).toList(), ['alpha', 'middle', 'zebra']);
     });
   });

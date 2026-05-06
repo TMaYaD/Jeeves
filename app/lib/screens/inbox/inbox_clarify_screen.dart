@@ -12,7 +12,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/database_provider.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/person_tag_picker.dart';
@@ -48,9 +47,8 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
 
   Future<void> _loadTodo() async {
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
     try {
-      final todo = await db.todoDao.getTodo(widget.todoId, userId);
+      final todo = await db.todoDao.getTodo(widget.todoId);
       if (!mounted) return;
       if (todo == null) {
         context.pop();
@@ -113,12 +111,10 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     }
     final notes = _notesCtrl.text.trim();
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
     final todo = _todo;
     if (todo == null) return false;
     await db.todoDao.updateFields(
       widget.todoId,
-      userId,
       title: title,
       notes: notes.isNotEmpty ? notes : null,
       energyLevel: _energyLevel,
@@ -135,8 +131,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     final saved = await _saveFields();
     if (!saved || !mounted) return;
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    await db.inboxDao.processInboxItem(widget.todoId, userId: userId);
+    await db.inboxDao.processInboxItem(widget.todoId);
     if (mounted) context.pop();
   }
 
@@ -144,9 +139,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     final saved = await _saveFields();
     if (!saved || !mounted) return;
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    await db.inboxDao
-        .processInboxItem(widget.todoId, userId: userId, intent: 'maybe');
+    await db.inboxDao.processInboxItem(widget.todoId, intent: 'maybe');
     if (mounted) context.pop();
   }
 
@@ -154,8 +147,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     final saved = await _saveFields();
     if (!saved || !mounted) return;
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    await db.todoDao.markDone(widget.todoId, userId);
+    await db.todoDao.markDone(widget.todoId);
     if (mounted) context.pop();
   }
 
@@ -171,8 +163,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
         if (!mounted) return;
         try {
           final db = ref.read(databaseProvider);
-          final userId = ref.read(currentUserIdProvider);
-          await db.inboxDao.processInboxItem(widget.todoId, userId: userId);
+          await db.inboxDao.processInboxItem(widget.todoId);
           if (mounted) context.pop();
         } catch (e) {
           if (mounted) {

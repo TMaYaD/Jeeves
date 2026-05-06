@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
@@ -463,8 +462,7 @@ class _StartButton extends ConsumerWidget {
           // session still has current_task_id set. Re-attach to the open time
           // log rather than opening a new one.
           final db = ref.read(databaseProvider);
-          final userId = ref.read(currentUserIdProvider);
-          final log = await db.timeLogDao.watchActiveLog(userId).first;
+          final log = await db.timeLogDao.watchActiveLog().first;
           if (log != null && log.taskId == todoId) {
             ref
                 .read(focusModeProvider.notifier)

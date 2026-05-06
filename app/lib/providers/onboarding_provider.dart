@@ -8,7 +8,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'auth_provider.dart';
 import 'database_provider.dart';
 
 const _kOnboardingSeenKey = 'onboarding_seen';
@@ -41,6 +40,5 @@ Future<void> markOnboardingSeen() async {
 /// (which produce clarified todos) also hide the onboarding card.
 final hasTodosProvider = StreamProvider<bool>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.inboxDao.watchHasTodos(userId);
+  return db.inboxDao.watchHasTodos();
 });

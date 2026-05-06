@@ -124,16 +124,14 @@ Future<void> persistFocusSessionPlanningSnoozedUntil(DateTime until) async {
 /// Stream of the user's currently open [FocusSession], or null.
 final activeSessionProvider = StreamProvider<FocusSession?>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.focusSessionDao.watchActiveSession(userId);
+  return db.focusSessionDao.watchActiveSession();
 });
 
 /// Stream of [Todo] rows that are part of the user's active session, ordered
 /// by their session position.
 final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.focusSessionDao.watchSessionTasksForUser(userId);
+  return db.focusSessionDao.watchActiveSessionTasks();
 });
 
 // ---------------------------------------------------------------------------
@@ -144,14 +142,13 @@ final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
 final nextActionsForFocusSessionPlanningProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final planningState = ref.watch(focusSessionPlanningProvider);
   final reviewed = {
     ...planningState.reviewedTaskIds,
     ...planningState.pendingSelectedTaskIds,
   };
   return db.todoDao
-      .watchNextActions(userId)
+      .watchNextActions()
       .map((all) => all.where((t) => !reviewed.contains(t.id)).toList());
 });
 
@@ -159,11 +156,10 @@ final nextActionsForFocusSessionPlanningProvider =
 final focusSessionPlanningSelectedTasksProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final ids = ref.watch(
     focusSessionPlanningProvider.select((s) => s.pendingSelectedTaskIds),
   );
-  return db.todoDao.watchTodosById(userId, ids).map((tasks) {
+  return db.todoDao.watchTodosById(ids).map((tasks) {
     final indexById = {for (var i = 0; i < ids.length; i++) ids[i]: i};
     final ordered = [...tasks];
     ordered.sort((a, b) =>
@@ -176,11 +172,10 @@ final focusSessionPlanningSelectedTasksProvider =
 final focusSessionPlanningTasksMissingEstimatesProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final ids = ref.watch(
     focusSessionPlanningProvider.select((s) => s.pendingSelectedTaskIds),
   );
-  return db.todoDao.watchTodosById(userId, ids).map(
+  return db.todoDao.watchTodosById(ids).map(
         (tasks) => tasks.where((t) => t.timeEstimate == null).toList(),
       );
 });
@@ -189,12 +184,11 @@ final focusSessionPlanningTasksMissingEstimatesProvider =
 final skippedNextActionsForFocusSessionPlanningProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final planningState = ref.watch(focusSessionPlanningProvider);
   final skippedIds = planningState.reviewedTaskIds
       .where((id) => !planningState.pendingSelectedTaskIds.contains(id))
       .toList();
-  return db.todoDao.watchTodosById(userId, skippedIds);
+  return db.todoDao.watchTodosById(skippedIds);
 });
 
 // ---------------------------------------------------------------------------
@@ -281,7 +275,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// recently closed session so they appear pre-selected in the plan summary.
   Future<void> _preloadRolloverIds() async {
     final ids = await _db.focusSessionDao
-        .getLastClosedSessionRolloverTaskIds(_userId);
+        .getLastClosedSessionRolloverTaskIds();
     if (ids.isEmpty) return;
     final current = Set.of(state.pendingSelectedTaskIds);
     final newIds = ids.where((id) => !current.contains(id)).toList();
@@ -331,7 +325,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     bool clearDueDate = false,
   }) =>
       _db.todoDao.updateFields(
-        id, _userId,
+        id,
         title: title,
         notes: notes,
         energyLevel: energyLevel,
@@ -345,10 +339,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Increments [inboxClarifiedCount] only when the DAO actually updated a row
   /// (affected > 0), preventing double-counting on rapid duplicate calls.
   Future<void> processInboxItem(String id) async {
-    final affected = await _db.inboxDao.processInboxItem(
-      id,
-      userId: _userId,
-    );
+    final affected = await _db.inboxDao.processInboxItem(id);
     if (affected > 0) {
       state = state.copyWith(
         inboxClarifiedCount: state.inboxClarifiedCount + 1,
@@ -365,7 +356,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> processInboxItemToMaybe(String id) async {
     final affected = await _db.inboxDao.processInboxItem(
       id,
-      userId: _userId,
       intent: 'maybe',
     );
     if (affected > 0) {
@@ -414,7 +404,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
   }
 
-  Future<void> deferTask(String id) => _db.todoDao.deferTaskToMaybe(id, _userId);
+  Future<void> deferTask(String id) => _db.todoDao.deferTaskToMaybe(id);
 
   // ---- Task mutations (Step 3 — Scheduled review) ----------------------------
 
@@ -422,12 +412,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   void confirmScheduledTask(String id) => selectTask(id);
 
   Future<void> rescheduleTask(String id, DateTime newDate) =>
-      _db.todoDao.rescheduleTask(id, _userId, newDate);
+      _db.todoDao.rescheduleTask(id, newDate);
 
   // ---- Task mutations (Step 4 — Time Estimates) ------------------------------
 
   Future<void> setTimeEstimate(String id, int minutes) =>
-      _db.todoDao.updateFields(id, _userId, timeEstimate: minutes);
+      _db.todoDao.updateFields(id, timeEstimate: minutes);
 
   // ---- Energy-based auto-skip ------------------------------------------------
 
@@ -448,7 +438,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     const energyOrder = {'low': 1, 'medium': 2, 'high': 3};
     final dayLevel = energyOrder[dayEnergy] ?? 0;
 
-    final allNextActions = await _db.todoDao.watchNextActions(_userId).first;
+    final allNextActions = await _db.todoDao.watchNextActions().first;
     final alreadyReviewed = {
       ...state.reviewedTaskIds,
       ...state.pendingSelectedTaskIds,

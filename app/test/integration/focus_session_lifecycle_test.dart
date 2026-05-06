@@ -58,7 +58,7 @@ void main() {
       final t1 = DateTime(2026, 4, 28, 9, 5);
       await db.focusSessionDao.setCurrentTask(
           sessionId: sessionId, taskId: 'tA', now: t1);
-      await db.todoDao.markDone('tA', _userId, now: t1);
+      await db.todoDao.markDone('tA', now: t1);
 
       // --- Switch to task B ---
       final t2 = DateTime(2026, 4, 28, 9, 30);
@@ -119,7 +119,7 @@ void main() {
 
       // --- Rollover task IDs: only B ---
       final rolloverIds = await db.focusSessionDao
-          .getLastClosedSessionRolloverTaskIds(_userId);
+          .getLastClosedSessionRolloverTaskIds();
       expect(rolloverIds, unorderedEquals(['tB']));
     });
   });

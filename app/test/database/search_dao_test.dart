@@ -12,7 +12,6 @@ import '../test_helpers.dart';
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 const _user = 'test-user';
-const _otherUser = 'other-user';
 
 Future<void> _insertTodo(
   GtdDatabase db, {
@@ -22,7 +21,6 @@ Future<void> _insertTodo(
   String? energyLevel,
   int? timeEstimate,
   DateTime? dueDate,
-  String userId = _user,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
@@ -33,7 +31,7 @@ Future<void> _insertTodo(
     timeEstimate: Value(timeEstimate),
     dueDate: Value(dueDate),
     clarified: const Value(true),
-    userId: Value(userId),
+    userId: const Value(_user),
     createdAt: Value(now),
     updatedAt: Value(now),
   ));
@@ -43,16 +41,15 @@ Future<String> _insertTag(
   GtdDatabase db, {
   required String name,
   required String type,
-  String userId = _user,
 }) async {
   final tag = TagsCompanion.insert(
     name: name,
     type: Value(type),
-    userId: userId,
+    userId: _user,
   );
   await db.tagDao.upsertTag(tag);
   // Retrieve the inserted tag's id
-  final tags = await db.tagDao.watchByType(userId, type).first;
+  final tags = await db.tagDao.watchByType(type).first;
   return tags.firstWhere((t) => t.name == name).id;
 }
 
@@ -69,7 +66,7 @@ void main() {
       await _insertTodo(db, id: 'b', title: 'Call dentist');
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'Buy groceries'))
+          .search(const SearchQuery(text: 'Buy groceries'))
           .first;
 
       expect(results.length, 1);
@@ -82,7 +79,7 @@ void main() {
       await _insertTodo(db, id: 'b', title: 'Call dentist');
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'groc'))
+          .search(const SearchQuery(text: 'groc'))
           .first;
 
       expect(results.length, 1);
@@ -93,7 +90,7 @@ void main() {
       await _insertTodo(db, id: 'a', title: 'buy groceries');
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'BUY'))
+          .search(const SearchQuery(text: 'BUY'))
           .first;
 
       expect(results.length, 1);
@@ -109,7 +106,7 @@ void main() {
       await _insertTodo(db, id: 'b', title: 'Task B', notes: 'Nothing here');
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'plumber'))
+          .search(const SearchQuery(text: 'plumber'))
           .first;
 
       expect(results.length, 1);
@@ -125,7 +122,7 @@ void main() {
       await db.tagDao.assignTag('a', tagId, _user);
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'office'))
+          .search(const SearchQuery(text: 'office'))
           .first;
 
       expect(results.length, 1);
@@ -139,7 +136,7 @@ void main() {
       await db.tagDao.assignTag('a', tagId, _user);
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'WebProject'))
+          .search(const SearchQuery(text: 'WebProject'))
           .first;
 
       expect(results.length, 1);
@@ -152,7 +149,7 @@ void main() {
       await db.tagDao.assignTag('a', tagId, _user);
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'Health'))
+          .search(const SearchQuery(text: 'Health'))
           .first;
 
       expect(results.length, 1);
@@ -163,7 +160,7 @@ void main() {
       await _insertTodo(db, id: 'a', title: 'Buy groceries');
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'zzznomatch'))
+          .search(const SearchQuery(text: 'zzznomatch'))
           .first;
 
       expect(results, isEmpty);
@@ -173,7 +170,7 @@ void main() {
       await _insertTodo(db, id: 'a', title: 'Standalone task');
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'Standalone'))
+          .search(const SearchQuery(text: 'Standalone'))
           .first;
 
       expect(results.length, 1);
@@ -188,7 +185,7 @@ void main() {
       await db.tagDao.assignTag('a', proj, _user);
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'phone'))
+          .search(const SearchQuery(text: 'phone'))
           .first;
 
       expect(results.length, 1);
@@ -204,11 +201,11 @@ void main() {
 
     test('done tasks excluded by default', () async {
       await _insertTodo(db, id: 'a', title: 'Done thing');
-      await db.todoDao.markDone('a', _user);
+      await db.todoDao.markDone('a');
       await _insertTodo(db, id: 'b', title: 'Active thing');
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'thing'))
+          .search(const SearchQuery(text: 'thing'))
           .first;
 
       expect(results.length, 1);
@@ -217,10 +214,10 @@ void main() {
 
     test('includeDone shows done tasks', () async {
       await _insertTodo(db, id: 'a', title: 'Done thing');
-      await db.todoDao.markDone('a', _user);
+      await db.todoDao.markDone('a');
 
       final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'thing', includeDone: true))
+          .search(const SearchQuery(text: 'thing', includeDone: true))
           .first;
 
       expect(results.length, 1);
@@ -238,10 +235,7 @@ void main() {
       await _insertTodo(db, id: 'c', title: 'Task');
 
       final results = await db.searchDao
-          .search(
-            _user,
-            const SearchQuery(text: 'Task', energyLevels: {'low'}),
-          )
+          .search(const SearchQuery(text: 'Task', energyLevels: {'low'}))
           .first;
 
       expect(results.length, 1);
@@ -254,15 +248,12 @@ void main() {
       await _insertTodo(db, id: 'c', title: 'No estimate');
 
       // Use an empty text query so the time-estimate filter is the only constraint.
-      final results2 = await db.searchDao
-          .search(
-            _user,
-            const SearchQuery(timeEstimateMaxMinutes: 30),
-          )
+      final results = await db.searchDao
+          .search(const SearchQuery(timeEstimateMaxMinutes: 30))
           .first;
 
-      expect(results2.map((r) => r.todo.id), containsAll(['a', 'c']));
-      expect(results2.map((r) => r.todo.id), isNot(contains('b')));
+      expect(results.map((r) => r.todo.id), containsAll(['a', 'c']));
+      expect(results.map((r) => r.todo.id), isNot(contains('b')));
     });
 
     test('tag-scope filter (tagIds)', () async {
@@ -272,25 +263,7 @@ void main() {
       await db.tagDao.assignTag('a', tagId, _user);
 
       final results = await db.searchDao
-          .search(_user, SearchQuery(tagIds: {tagId}))
-          .first;
-
-      expect(results.length, 1);
-      expect(results.first.todo.id, 'a');
-    });
-  });
-
-  group('SearchDao — user isolation', () {
-    late GtdDatabase db;
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('results are scoped to userId', () async {
-      await _insertTodo(db, id: 'a', title: 'My task', userId: _user);
-      await _insertTodo(db, id: 'b', title: 'Their task', userId: _otherUser);
-
-      final results = await db.searchDao
-          .search(_user, const SearchQuery(text: 'task'))
+          .search(SearchQuery(tagIds: {tagId}))
           .first;
 
       expect(results.length, 1);
@@ -307,7 +280,7 @@ void main() {
       await _insertTodo(db, id: 'a', title: 'Something');
 
       final results =
-          await db.searchDao.search(_user, const SearchQuery()).first;
+          await db.searchDao.search(const SearchQuery()).first;
 
       expect(results, isEmpty);
     });
@@ -320,7 +293,7 @@ void main() {
 
     test('stream re-emits when a matching todo is inserted', () async {
       final stream = db.searchDao
-          .search(_user, const SearchQuery(text: 'hello'))
+          .search(const SearchQuery(text: 'hello'))
           .map((r) => r.length);
 
       final it = StreamIterator(stream);
@@ -346,10 +319,10 @@ void main() {
 
     test('returns 0 for empty text', () async {
       await _insertTodo(db, id: 'a', title: 'Done task');
-      await db.todoDao.markDone('a', _user);
+      await db.todoDao.markDone('a');
 
       final count = await db.searchDao
-          .countDoneOnlyMatches(_user, const SearchQuery())
+          .countDoneOnlyMatches(const SearchQuery())
           .first;
 
       expect(count, 0);
@@ -357,11 +330,10 @@ void main() {
 
     test('returns 0 when includeDone is already true', () async {
       await _insertTodo(db, id: 'a', title: 'Done task');
-      await db.todoDao.markDone('a', _user);
+      await db.todoDao.markDone('a');
 
       final count = await db.searchDao
           .countDoneOnlyMatches(
-            _user,
             const SearchQuery(text: 'task', includeDone: true),
           )
           .first;
@@ -371,11 +343,11 @@ void main() {
 
     test('counts done tasks matching title', () async {
       await _insertTodo(db, id: 'a', title: 'Done task');
-      await db.todoDao.markDone('a', _user);
+      await db.todoDao.markDone('a');
       await _insertTodo(db, id: 'b', title: 'Active task');
 
       final count = await db.searchDao
-          .countDoneOnlyMatches(_user, const SearchQuery(text: 'task'))
+          .countDoneOnlyMatches(const SearchQuery(text: 'task'))
           .first;
 
       expect(count, 1);
@@ -388,10 +360,10 @@ void main() {
         title: 'Done task',
         notes: 'important plumber call',
       );
-      await db.todoDao.markDone('a', _user);
+      await db.todoDao.markDone('a');
 
       final count = await db.searchDao
-          .countDoneOnlyMatches(_user, const SearchQuery(text: 'plumber'))
+          .countDoneOnlyMatches(const SearchQuery(text: 'plumber'))
           .first;
 
       expect(count, 1);
@@ -401,7 +373,7 @@ void main() {
       await _insertTodo(db, id: 'a', title: 'Active task');
 
       final count = await db.searchDao
-          .countDoneOnlyMatches(_user, const SearchQuery(text: 'task'))
+          .countDoneOnlyMatches(const SearchQuery(text: 'task'))
           .first;
 
       expect(count, 0);
@@ -409,17 +381,14 @@ void main() {
 
     test('respects tag-scope filter', () async {
       await _insertTodo(db, id: 'a', title: 'Done task');
-      await db.todoDao.markDone('a', _user);
+      await db.todoDao.markDone('a');
       await _insertTodo(db, id: 'b', title: 'Done tagged task');
-      await db.todoDao.markDone('b', _user);
+      await db.todoDao.markDone('b');
       final tagId = await _insertTag(db, name: 'work', type: 'context');
       await db.tagDao.assignTag('b', tagId, _user);
 
       final count = await db.searchDao
-          .countDoneOnlyMatches(
-            _user,
-            SearchQuery(text: 'task', tagIds: {tagId}),
-          )
+          .countDoneOnlyMatches(SearchQuery(text: 'task', tagIds: {tagId}))
           .first;
 
       expect(count, 1);
@@ -429,14 +398,14 @@ void main() {
       await _insertTodo(db, id: 'a', title: 'Future done task');
 
       final stream = db.searchDao
-          .countDoneOnlyMatches(_user, const SearchQuery(text: 'task'));
+          .countDoneOnlyMatches(const SearchQuery(text: 'task'));
 
       final it = StreamIterator(stream);
 
       expect(await it.moveNext(), isTrue);
       expect(it.current, 0);
 
-      await db.todoDao.markDone('a', _user);
+      await db.todoDao.markDone('a');
 
       expect(await it.moveNext(), isTrue);
       expect(it.current, 1);

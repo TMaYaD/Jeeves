@@ -30,7 +30,7 @@ void main() {
     test('addTodo stores item with clarified = false', () async {
       await container.read(inboxNotifierProvider).addTodo('Buy milk');
 
-      final items = await db.inboxDao.watchInbox('local').first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.length, 1);
       expect(items.first.title, 'Buy milk');
       expect(items.first.clarified, isFalse);
@@ -42,13 +42,13 @@ void main() {
       await notifier.addTodo('Task one');
       await notifier.addTodo('Task two');
 
-      final items = await db.inboxDao.watchInbox('local').first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.length, 2);
       expect(items.every((t) => !t.clarified), isTrue);
     });
 
     test('fresh database has no inbox items', () async {
-      final items = await db.inboxDao.watchInbox('local').first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items, isEmpty);
     });
   });

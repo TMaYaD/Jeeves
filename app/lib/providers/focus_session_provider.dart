@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'auth_provider.dart';
 import 'database_provider.dart';
 
 class FocusModeState {
@@ -50,10 +49,9 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     }
 
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
     final now = DateTime.now();
 
-    final session = await db.focusSessionDao.getActiveSession(userId);
+    final session = await db.focusSessionDao.getActiveSession();
     if (session == null) {
       throw StateError(
         'No active focus session — complete the daily planning ritual first.',
@@ -89,8 +87,7 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   /// the task done) before calling this.
   Future<void> endFocus() async {
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    final session = await db.focusSessionDao.getActiveSession(userId);
+    final session = await db.focusSessionDao.getActiveSession();
     if (session != null) {
       await db.focusSessionDao.setCurrentTask(
         sessionId: session.id,

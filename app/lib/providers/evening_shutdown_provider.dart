@@ -23,7 +23,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
 import '../services/notification_service.dart';
-import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
 
@@ -136,8 +135,7 @@ class ShutdownSessionDateNotifier extends Notifier<String> {
 /// (i.e. [Todo.doneAt] is not null).
 final completedTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.focusSessionDao.watchSessionTasksForUser(userId).map(
+  return db.focusSessionDao.watchActiveSessionTasks().map(
         (tasks) => tasks.where((t) => t.doneAt != null).toList(),
       );
 });
@@ -152,11 +150,10 @@ final completedTodayProvider = StreamProvider<List<Todo>>((ref) {
 /// requiring intermediate DB writes.
 final unfinishedSelectedTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final dispositions = ref.watch(
     eveningShutdownProvider.select((s) => s.dispositions),
   );
-  return db.focusSessionDao.watchSessionTasksForUser(userId).map(
+  return db.focusSessionDao.watchActiveSessionTasks().map(
         (tasks) => tasks
             .where((t) =>
                 t.doneAt == null && !dispositions.containsKey(t.id))
@@ -208,7 +205,6 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   EveningShutdownState build() => const EveningShutdownState();
 
   GtdDatabase get _db => ref.read(databaseProvider);
-  String get _userId => ref.read(currentUserIdProvider);
 
   // ---- Step navigation -------------------------------------------------------
 
@@ -275,7 +271,7 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   /// Done tasks are filtered out because [FocusSessionDao.reviewAndCloseSession]
   /// expects callers to do so.
   Future<void> closeDay({DateTime? now}) async {
-    final session = await _db.focusSessionDao.getActiveSession(_userId);
+    final session = await _db.focusSessionDao.getActiveSession();
     if (session != null) {
       await _db.focusSessionDao.reviewAndCloseSession(
         sessionId: session.id,

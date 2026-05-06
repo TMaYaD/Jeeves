@@ -10,32 +10,28 @@ import 'database_provider.dart';
 
 export '../database/daos/tag_dao.dart' show TagWithCount;
 
-/// Stream of all project tags for the current user.
+/// Stream of all project tags.
 final projectTagsProvider = StreamProvider<List<Tag>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.tagDao.watchByType(userId, 'project');
+  return db.tagDao.watchByType('project');
 });
 
-/// Stream of all context tags for the current user.
+/// Stream of all context tags.
 final contextTagsProvider = StreamProvider<List<Tag>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.tagDao.watchByType(userId, 'context');
+  return db.tagDao.watchByType('context');
 });
 
-/// Stream of all person tags for the current user.
+/// Stream of all person tags.
 final personTagsProvider = StreamProvider<List<Tag>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.tagDao.watchPersonTags(userId);
+  return db.tagDao.watchPersonTags();
 });
 
 /// Stream of context tags paired with their active-task counts.
 final contextTagsWithCountProvider = StreamProvider<List<TagWithCount>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.tagDao.watchTagsWithActiveCount(userId, 'context');
+  return db.tagDao.watchTagsWithActiveCount('context');
 });
 
 /// Exposes tag mutation operations.

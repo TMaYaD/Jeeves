@@ -28,7 +28,7 @@ void main() {
         updatedAt: Value(now),
       ));
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.length, 1);
       expect(items.first.timeSpentMinutes, 0);
     });
@@ -54,7 +54,7 @@ void main() {
         ],
       );
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.length, 1);
       expect(items.first.title, 'Legacy task');
       expect(items.first.timeSpentMinutes, 0);
@@ -211,7 +211,7 @@ void main() {
       );
 
       // Legacy data must survive and new columns must carry correct defaults.
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.length, 1);
       expect(items.first.title, 'Legacy v1 task');
       expect(items.first.timeSpentMinutes, 0);

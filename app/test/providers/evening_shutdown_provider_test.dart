@@ -150,7 +150,7 @@ void main() {
       final notifier = container.read(eveningShutdownProvider.notifier);
       await notifier.closeDay();
 
-      final session = await db.focusSessionDao.getActiveSession(_uid);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session, isNull,
           reason: 'closeDay should close the open session');
 
@@ -235,7 +235,7 @@ void main() {
       await notifier.closeDay();
 
       final rolloverIds =
-          await db.focusSessionDao.getLastClosedSessionRolloverTaskIds(_uid);
+          await db.focusSessionDao.getLastClosedSessionRolloverTaskIds();
       expect(rolloverIds, contains('t1'));
       expect(rolloverIds, isNot(contains('t2')));
     });
@@ -281,7 +281,7 @@ void main() {
 
       // Sanity: DAO stream emits as expected.
       final raw = await db.focusSessionDao
-          .watchSessionTasksForUser(_uid)
+          .watchActiveSessionTasks()
           .first
           .timeout(const Duration(seconds: 5));
       expect(raw.map((t) => t.id), containsAll(['t_done', 't_open']));

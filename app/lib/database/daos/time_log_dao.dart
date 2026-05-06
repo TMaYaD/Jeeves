@@ -15,8 +15,8 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
 
   /// Opens a new focus log for [taskId] / [userId].
   ///
-  /// If another log is already open for [userId] it is defensively closed first
-  /// to handle offline edge-cases with stale open rows.
+  /// Any currently-open log is defensively closed first to enforce the global
+  /// single-open-log invariant (handles offline edge-cases with stale rows).
   ///
   /// [focusSessionId] links this log to the active [FocusSession] row; callers
   /// that manage sessions directly (e.g. [FocusSessionDao.setCurrentTask]) pass
@@ -31,9 +31,8 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
     await transaction(() async {
-      // Close any pre-existing open log for this user.
-      await (update(timeLogs)
-            ..where((t) => t.userId.equals(userId) & t.endedAt.isNull()))
+      // Close any pre-existing open log.
+      await (update(timeLogs)..where((t) => t.endedAt.isNull()))
           .write(TimeLogsCompanion(endedAt: Value(ts.toIso8601String())));
       // Insert the new open log.
       await into(timeLogs).insert(TimeLogsCompanion(
@@ -57,10 +56,9 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         .write(TimeLogsCompanion(endedAt: Value(ts.toIso8601String())));
   }
 
-  /// Stream that emits the currently-open log for [userId], or null.
-  Stream<TimeLog?> watchActiveLog(String userId) {
-    return (select(timeLogs)
-          ..where((t) => t.userId.equals(userId) & t.endedAt.isNull()))
+  /// Stream that emits the currently-open log, or null.
+  Stream<TimeLog?> watchActiveLog() {
+    return (select(timeLogs)..where((t) => t.endedAt.isNull()))
         .watchSingleOrNull();
   }
 

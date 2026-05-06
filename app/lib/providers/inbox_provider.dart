@@ -14,9 +14,8 @@ export 'user_constants.dart' show kLocalUserId;
 /// [tagFilterProvider] (AND semantics when multiple tags are selected).
 final inboxItemsProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.inboxDao.watchInbox(userId, tagIds: tagIds);
+  return db.inboxDao.watchInbox(tagIds: tagIds);
 });
 
 /// Notifier exposing inbox mutation operations.

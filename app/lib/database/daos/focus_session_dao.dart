@@ -29,14 +29,16 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     final newId = uuid.v4();
 
     await transaction(() async {
-      // Close any open session (and its open time log) for this user.
+      // Close any open session (and its open time log).
       final existing = await (select(focusSessions)
-            ..where((s) => s.userId.equals(userId) & s.endedAt.isNull()))
+            ..where((s) => s.endedAt.isNull()))
           .getSingleOrNull();
       if (existing != null) {
         // Close open time log before closing session.
         await (update(timeLogs)
-              ..where((t) => t.userId.equals(userId) & t.endedAt.isNull()))
+              ..where((t) =>
+                  t.endedAt.isNull() &
+                  t.focusSessionId.equals(existing.id)))
             .write(TimeLogsCompanion(endedAt: Value(ts)));
         await (update(focusSessions)
               ..where((s) => s.id.equals(existing.id)))
@@ -67,7 +69,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }
 
   /// Closes [sessionId], setting its [ended_at] and clearing
-  /// [current_task_id]. Also closes any open time log for the session owner.
+  /// [current_task_id]. Also closes any open time log for the session.
   ///
   /// [now] is injectable for deterministic testing.
   Future<void> closeSession({required String sessionId, DateTime? now}) async {
@@ -82,7 +84,6 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // Close only the open time log that belongs to this session.
       await (update(timeLogs)
             ..where((t) =>
-                t.userId.equals(session.userId) &
                 t.endedAt.isNull() &
                 t.focusSessionId.equals(sessionId)))
           .write(TimeLogsCompanion(endedAt: Value(ts)));
@@ -95,9 +96,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     });
   }
 
-  /// Atomically closes any open time log for the session owner, optionally
-  /// opens a new one for [taskId], and updates [current_task_id] on the
-  /// session row.
+  /// Atomically closes any open time log for the session, optionally opens a
+  /// new one for [taskId], and updates [current_task_id] on the session row.
   ///
   /// Pass [taskId] = null to clear the focused task without starting a new log.
   ///
@@ -126,10 +126,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         }
       }
 
-      // Close any open time log for this user.
-      await (update(timeLogs)
-            ..where(
-                (t) => t.userId.equals(session.userId) & t.endedAt.isNull()))
+      // Close any open time log. The single-open-log invariant is global,
+      // so we close defensively rather than scoping to this session — a stray
+      // open log from elsewhere would otherwise coexist with the new one.
+      await (update(timeLogs)..where((t) => t.endedAt.isNull()))
           .write(TimeLogsCompanion(endedAt: Value(ts)));
 
       // Open a new time log if a task is being focused.
@@ -150,16 +150,14 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     });
   }
 
-  /// Stream that emits the currently open session for [userId], or null.
-  Stream<FocusSession?> watchActiveSession(String userId) =>
-      (select(focusSessions)
-            ..where((s) => s.userId.equals(userId) & s.endedAt.isNull()))
+  /// Stream that emits the currently open session, or null.
+  Stream<FocusSession?> watchActiveSession() =>
+      (select(focusSessions)..where((s) => s.endedAt.isNull()))
           .watchSingleOrNull();
 
-  /// One-shot query for the currently open session for [userId].
-  Future<FocusSession?> getActiveSession(String userId) =>
-      (select(focusSessions)
-            ..where((s) => s.userId.equals(userId) & s.endedAt.isNull()))
+  /// One-shot query for the currently open session.
+  Future<FocusSession?> getActiveSession() =>
+      (select(focusSessions)..where((s) => s.endedAt.isNull()))
           .getSingleOrNull();
 
   /// Stream of [Todo] rows that are members of [sessionId], ordered by position.
@@ -241,13 +239,11 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       for (final entry in dispositions.entries) {
         if (entry.value == 'maybe') {
           await customUpdate(
-            'UPDATE todos SET intent = ?, updated_at = ? '
-            'WHERE id = ? AND user_id = ?',
+            'UPDATE todos SET intent = ?, updated_at = ? WHERE id = ?',
             variables: [
               Variable('maybe'),
               Variable(ts),
               Variable(entry.key),
-              Variable(session.userId),
             ],
             updates: {todos},
             updateKind: UpdateKind.update,
@@ -258,7 +254,6 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // Close any open time log for this session.
       await (update(timeLogs)
             ..where((t) =>
-                t.userId.equals(session.userId) &
                 t.endedAt.isNull() &
                 t.focusSessionId.equals(sessionId)))
           .write(TimeLogsCompanion(endedAt: Value(ts)));
@@ -273,44 +268,41 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }
 
   /// Returns the task IDs with [disposition] = 'rollover' from the most
-  /// recently closed session for [userId].
+  /// recently closed session.
   ///
   /// Returns an empty list when no closed session exists or none has rollover
   /// tasks.
-  Future<List<String>> getLastClosedSessionRolloverTaskIds(
-      String userId) async {
+  Future<List<String>> getLastClosedSessionRolloverTaskIds() async {
     final rows = await customSelect(
       'SELECT fst.task_id FROM focus_session_tasks fst '
       'JOIN focus_sessions fs ON fs.id = fst.focus_session_id '
-      'WHERE fs.user_id = ? '
-      'AND fs.ended_at IS NOT NULL '
+      'WHERE fs.ended_at IS NOT NULL '
       'AND fst.disposition = ? '
       'AND fs.ended_at = ('
       '  SELECT MAX(ended_at) FROM focus_sessions '
-      '  WHERE user_id = ? AND ended_at IS NOT NULL'
+      '  WHERE ended_at IS NOT NULL'
       ')',
       variables: [
-        Variable(userId),
         Variable('rollover'),
-        Variable(userId),
       ],
       readsFrom: {focusSessions, focusSessionTasks},
     ).get();
     return rows.map((r) => r.read<String>('task_id')).toList();
   }
 
-  /// Stream of [Todo] rows in the user's currently open session.
+  /// Stream of [Todo] rows in the currently open session.
   ///
   /// Joins through [focus_sessions] so no session-ID plumbing is needed at
   /// call sites. Returns an empty list when no session is open.
-  Stream<List<Todo>> watchSessionTasksForUser(String userId) {
+  Stream<List<Todo>> watchActiveSessionTasks() {
     return customSelect(
       'SELECT t.* FROM todos t '
       'JOIN focus_session_tasks fst ON fst.task_id = t.id '
-      'JOIN focus_sessions fs ON fs.id = fst.focus_session_id '
-      'WHERE fs.user_id = ? AND fs.ended_at IS NULL '
+      'WHERE fst.focus_session_id = ('
+      '  SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
+      ') '
       'ORDER BY fst.position',
-      variables: [Variable<String>(userId)],
+      variables: [],
       readsFrom: {focusSessionTasks, focusSessions, todos},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
