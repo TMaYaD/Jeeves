@@ -138,6 +138,30 @@ Focus Mode is the task execution layer activated after daily planning. Its archi
 
 The router has a `redirect` callback only for SWS mode (redirect `/register` to `/login`). `/focus` is unconditionally accessible from the drawer; daily planning is entered explicitly via the "Plan the Day" button on the Focus screen or the amber `FocusSessionPlanningBanner` in `AppShell`.
 
+### Top-level routes outside the ShellRoute
+
+| Route | Screen | Purpose |
+|---|---|---|
+| `/inbox/:id/clarify` | `InboxClarifyScreen` | Standalone clarification for a single inbox item; tapped from an inbox row |
+| `/task/:id` | `TaskDetailScreen` | Full task detail view; reachable from Next Actions, search results, etc. |
+| `/focus/active` | `ActiveFocusScreen` | Active focus timer |
+| `/focus-session-planning` | `FocusSessionPlanningScreen` | Daily planning ritual |
+| `/shutdown` | `ShutdownRitualScreen` | End-of-day shutdown ritual |
+| `/settings` | `SettingsScreen` | App settings |
+| `/search` | `SearchScreen` | Universal search |
+| `/import` | `ImportScreen` | Data import |
+
+### Inbox row tap flow
+
+Tapping an inbox row navigates to `/inbox/:id/clarify` (`InboxClarifyScreen`), a focused, full-screen clarification flow that:
+
+1. Loads the todo from the local DB via `TodoDao.getTodo`.
+2. Shows the same editing UI as the planning wizard's `_ClarifyCard`: title, notes, energy level, time estimate, due date, and GTD routing buttons.
+3. On any routing action (Next Action / Waiting For / Maybe / Done), calls the appropriate DAO method and then pops.
+4. "Skip" pops without touching the DB — the item remains in the inbox.
+
+The shared UI primitives (`ClarifyFieldLabel`, `ClarifyEnergyPicker`, `ClarifyEstimateChip`, `ClarifyDestinationButton`) live in `app/lib/widgets/clarify_shared_widgets.dart` and are used by both `InboxClarifyScreen` and the planning wizard's `InboxClarificationStep`.
+
 ### FocusModeNotifier (`providers/focus_session_provider.dart`)
 
 A `NotifierProvider<FocusModeNotifier, FocusModeState>` that holds ephemeral focus session state:
