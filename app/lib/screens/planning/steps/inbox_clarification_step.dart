@@ -12,7 +12,6 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../providers/auth_provider.dart';
 import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/inbox_provider.dart';
@@ -204,8 +203,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       final saved = await _saveFields(context);
       if (!saved || !context.mounted) return;
       final db = ref.read(databaseProvider);
-      final userId = ref.read(currentUserIdProvider);
-      await db.todoDao.markDone(widget.todo.id, userId);
+      await db.todoDao.markDone(widget.todo.id);
     } catch (e) {
       error = e;
     }

@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/search_query.dart';
 import '../models/search_result.dart';
-import 'auth_provider.dart';
 import 'database_provider.dart';
 
 // ---------------------------------------------------------------------------
@@ -41,9 +40,8 @@ final searchResultsProvider =
   if (query.isEmpty) return Stream.value([]);
 
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
 
-  return db.searchDao.search(userId, query);
+  return db.searchDao.search(query);
 });
 
 // ---------------------------------------------------------------------------
@@ -59,9 +57,8 @@ final hiddenDoneMatchCountProvider =
   if (query.includeDone || query.isEmpty) return Stream.value(0);
 
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
 
-  return db.searchDao.countDoneOnlyMatches(userId, query);
+  return db.searchDao.countDoneOnlyMatches(query);
 });
 
 // ---------------------------------------------------------------------------

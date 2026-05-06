@@ -104,13 +104,13 @@ void main() {
       expect(s.sessionStart, isNotNull);
 
       // A time log must have been opened by setCurrentTask.
-      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      final log = await db.timeLogDao.watchActiveLog().first;
       expect(log, isNotNull);
       expect(log!.taskId, todo.id);
       expect(DateTime.parse(log.startedAt), s.sessionStart!.toUtc());
 
       // Session's current_task_id must point to the focused task.
-      final session = await db.focusSessionDao.getActiveSession(_userId);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session?.currentTaskId, todo.id);
 
       // The time log must be linked to the session.
@@ -152,11 +152,11 @@ void main() {
       expect(s.sessionStart, isNull);
 
       // Time log must be closed.
-      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      final log = await db.timeLogDao.watchActiveLog().first;
       expect(log, isNull);
 
       // Session's current_task_id must be cleared.
-      final session = await db.focusSessionDao.getActiveSession(_userId);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session?.currentTaskId, isNull);
     });
   });

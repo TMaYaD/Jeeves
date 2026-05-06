@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
-import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'tag_filter_provider.dart';
 
@@ -13,9 +12,8 @@ export '../database/gtd_database.dart' show Todo;
 /// [tagFilterProvider] (AND semantics when multiple tags are selected).
 final inboxProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.inboxDao.watchInbox(userId, tagIds: tagIds);
+  return db.inboxDao.watchInbox(tagIds: tagIds);
 });
 
 /// Stream of next-action todos.
@@ -24,9 +22,8 @@ final inboxProvider = StreamProvider<List<Todo>>((ref) {
 /// [tagFilterProvider] (AND semantics when multiple tags are selected).
 final nextActionsProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchNextActions(userId, tagIds: tagIds);
+  return db.todoDao.watchNextActions(tagIds: tagIds);
 });
 
 /// Stream of waiting-for todos (todos with at least one person-typed tag).
@@ -35,9 +32,8 @@ final nextActionsProvider = StreamProvider<List<Todo>>((ref) {
 /// [tagFilterProvider] (AND semantics when multiple tags are selected).
 final waitingForProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchPersonTagged(userId, tagIds: tagIds);
+  return db.todoDao.watchPersonTagged(tagIds: tagIds);
 });
 
 /// Stream of waiting-for todos grouped by person-tag.
@@ -48,23 +44,20 @@ final waitingForProvider = StreamProvider<List<Todo>>((ref) {
 /// creation date.
 final waitingListGroupedProvider = StreamProvider<Map<Tag, List<Todo>>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchPersonTaggedGrouped(userId);
+  return db.todoDao.watchPersonTaggedGrouped();
 });
 
 /// Stream of maybe-intent todos (intent = 'maybe', done_at IS NULL).
 final maybeProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchMaybe(userId, tagIds: tagIds);
+  return db.todoDao.watchMaybe(tagIds: tagIds);
 });
 
 /// Stream of completed todos ordered by done_at descending.
 final doneProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchDone(userId);
+  return db.todoDao.watchDone();
 });
 
 /// Stream of inbox todos (clarified = false), newest first — no context tag filter.
@@ -74,8 +67,7 @@ final doneProvider = StreamProvider<List<Todo>>((ref) {
 /// there is anything to plan.
 final unfilteredInboxProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.inboxDao.watchInbox(userId);
+  return db.inboxDao.watchInbox();
 });
 
 /// Stream of next-action todos — no context tag filter.
@@ -85,6 +77,5 @@ final unfilteredInboxProvider = StreamProvider<List<Todo>>((ref) {
 /// decide whether there is anything to plan.
 final unfilteredNextActionsProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchNextActions(userId);
+  return db.todoDao.watchNextActions();
 });

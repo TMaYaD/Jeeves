@@ -98,7 +98,7 @@ void main() {
     // -------------------------------------------------------------------------
 
     test('watchActiveLog returns null when no open log', () async {
-      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      final log = await db.timeLogDao.watchActiveLog().first;
       expect(log, isNull);
     });
 
@@ -107,7 +107,7 @@ void main() {
       await db.timeLogDao
           .openLog(taskId: 'task1', userId: _userId, now: DateTime.now());
 
-      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      final log = await db.timeLogDao.watchActiveLog().first;
       expect(log, isNotNull);
       expect(log!.taskId, 'task1');
     });
@@ -118,7 +118,7 @@ void main() {
           .openLog(taskId: 'task1', userId: _userId, now: DateTime.now());
       await db.timeLogDao.closeLog(taskId: 'task1', now: DateTime.now());
 
-      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      final log = await db.timeLogDao.watchActiveLog().first;
       expect(log, isNull);
     });
 

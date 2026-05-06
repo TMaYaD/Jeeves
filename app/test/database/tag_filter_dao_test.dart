@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -65,7 +65,7 @@ void main() {
     test('returns zero count for tag with no todos', () async {
       await _insertTag(db, id: 'ctx1', name: 'work');
       final results =
-          await db.tagDao.watchTagsWithActiveCount(_userId, 'context').first;
+          await db.tagDao.watchTagsWithActiveCount('context').first;
       expect(results, hasLength(1));
       expect(results.first.tag.name, 'work');
       expect(results.first.count, 0);
@@ -77,7 +77,7 @@ void main() {
           id: 't1', title: 'Task A');
       final t2 = await _insertTodo(db,
           id: 't2', title: 'Task B');
-      await db.todoDao.markDone(t2, _userId);
+      await db.todoDao.markDone(t2);
       final t3 = await _insertTodo(db,
           id: 't3', title: 'Task C', clarified: false);
       await _assignTag(db, t1, 'ctx1');
@@ -85,7 +85,7 @@ void main() {
       await _assignTag(db, t3, 'ctx1');
 
       final results =
-          await db.tagDao.watchTagsWithActiveCount(_userId, 'context').first;
+          await db.tagDao.watchTagsWithActiveCount('context').first;
       expect(results.first.count, 1); // only t1 (clarified, not done) is counted
     });
 
@@ -98,12 +98,12 @@ void main() {
       // Single subscription — two separate `.first` calls would create
       // fresh streams and hide any reactivity bug.
       final counts = db.tagDao
-          .watchTagsWithActiveCount(_userId, 'context')
+          .watchTagsWithActiveCount('context')
           .map((rows) => rows.first.count);
       final expectation = expectLater(counts, emitsInOrder([1, 0]));
 
       // Mark done — should push a new emission on the same stream.
-      await db.todoDao.markDone(t1, _userId);
+      await db.todoDao.markDone(t1);
 
       await expectation;
     });
@@ -113,7 +113,7 @@ void main() {
         await _insertTag(db, id: name, name: name);
       }
       final results =
-          await db.tagDao.watchTagsWithActiveCount(_userId, 'context').first;
+          await db.tagDao.watchTagsWithActiveCount('context').first;
       expect(results.map((r) => r.tag.name).toList(),
           ['alpha', 'middle', 'zebra']);
     });
@@ -132,7 +132,7 @@ void main() {
       ));
       await db.tagDao.rename('ctx1', 'office');
       final tags =
-          await db.tagDao.watchByType(_userId, 'context').first;
+          await db.tagDao.watchByType('context').first;
       expect(tags.first.name, 'office');
       expect(tags.first.color, '#ff0000');
     });
@@ -147,7 +147,7 @@ void main() {
       await _insertTag(db, id: 'ctx1', name: 'work');
       await db.tagDao.updateColor('ctx1', '#3b82f6');
       final tags =
-          await db.tagDao.watchByType(_userId, 'context').first;
+          await db.tagDao.watchByType('context').first;
       expect(tags.first.color, '#3b82f6');
     });
 
@@ -161,8 +161,8 @@ void main() {
       ));
       await db.tagDao.updateColor('ctx1', null);
       final tags =
-          await db.tagDao.watchByType(_userId, 'context').first;
-      expect(tags.first.color, equals(null));
+          await db.tagDao.watchByType('context').first;
+      expect(tags.first.color, isNull);
     });
   });
 
@@ -193,7 +193,7 @@ void main() {
       await db.tagDao.merge('src', 'tgt');
 
       final remaining =
-          await db.tagDao.watchByType(_userId, 'context').first;
+          await db.tagDao.watchByType('context').first;
       final remainingIds = remaining.map((t) => t.id).toList();
       expect(remainingIds, isNot(contains('src')));
     });
@@ -206,7 +206,7 @@ void main() {
 
       expect(() => db.tagDao.merge('src', 'src'), throwsArgumentError);
 
-      final tags = await db.tagDao.watchByType(_userId, 'context').first;
+      final tags = await db.tagDao.watchByType('context').first;
       expect(tags.map((t) => t.id), contains('src'));
       final rows = await (db.select(db.todoTags)
             ..where((tt) => tt.todoId.equals(t1)))
@@ -243,7 +243,7 @@ void main() {
       await _insertTodo(db, id: 't1', title: 'A');
       await _insertTodo(db, id: 't2', title: 'B');
       final results =
-          await db.todoDao.watchNextActions(_userId).first;
+          await db.todoDao.watchNextActions().first;
       expect(results, hasLength(2));
     });
 
@@ -258,7 +258,7 @@ void main() {
       await _assignTag(db, t2, 'ctx2');
 
       final results = await db.todoDao
-          .watchNextActions(_userId, tagIds: {'ctx1'}).first;
+          .watchNextActions(tagIds: {'ctx1'}).first;
       expect(results, hasLength(1));
       expect(results.first.id, t1);
     });
@@ -276,7 +276,7 @@ void main() {
       await _assignTag(db, t2, 'ctx1');
 
       final results = await db.todoDao
-          .watchNextActions(_userId, tagIds: {'ctx1', 'ctx2'}).first;
+          .watchNextActions(tagIds: {'ctx1', 'ctx2'}).first;
       expect(results, hasLength(1));
       expect(results.first.id, t1);
     });
@@ -294,7 +294,7 @@ void main() {
       await _assignTag(db, 't1', 'ctx1');
 
       final results = await db.todoDao
-          .watchPersonTagged(_userId, tagIds: {'ctx1'}).first;
+          .watchPersonTagged(tagIds: {'ctx1'}).first;
       expect(results, hasLength(1));
       expect(results.first.id, 't1');
     });
@@ -326,7 +326,7 @@ void main() {
       await db.tagDao.assignTag('i1', 'ctx1', _userId);
 
       final results = await db.inboxDao
-          .watchInbox(_userId, tagIds: {'ctx1'}).first;
+          .watchInbox(tagIds: {'ctx1'}).first;
       expect(results, hasLength(1));
       expect(results.first.id, 'i1');
     });
@@ -349,7 +349,7 @@ void main() {
       ));
 
       final results =
-          await db.inboxDao.watchInbox(_userId).first;
+          await db.inboxDao.watchInbox().first;
       expect(results, hasLength(2));
     });
   });

@@ -11,8 +11,7 @@ import 'database_provider.dart';
 final taskDetailTodoProvider =
     StreamProvider.autoDispose.family<Todo?, String>((ref, todoId) {
   final db = ref.watch(databaseProvider);
-  final userId = ref.watch(currentUserIdProvider);
-  return db.todoDao.watchTodo(todoId, userId);
+  return db.todoDao.watchTodo(todoId);
 });
 
 /// Watches the Drift Tag rows associated with [todoId], scoped to the current user.
@@ -62,19 +61,16 @@ class TaskDetailNotifier {
 
   Future<void> updateTitle(String title) => _db.todoDao.updateFields(
         _todoId,
-        _userId,
         title: title.trim(),
       );
 
   Future<void> updateNotes(String notes) => _db.todoDao.updateFields(
         _todoId,
-        _userId,
         notes: notes,
       );
 
   Future<void> setEnergyLevel(String level) => _db.todoDao.updateFields(
         _todoId,
-        _userId,
         energyLevel: level,
       );
 
@@ -100,19 +96,16 @@ class TaskDetailNotifier {
 
   Future<void> setTimeEstimate(int minutes) => _db.todoDao.updateFields(
         _todoId,
-        _userId,
         timeEstimate: minutes,
       );
 
   Future<void> setDueDate(DateTime date) => _db.todoDao.updateFields(
         _todoId,
-        _userId,
         dueDate: date,
       );
 
   Future<void> clearDueDate() => _db.todoDao.updateFields(
         _todoId,
-        _userId,
         clearDueDate: true,
       );
 
@@ -120,7 +113,7 @@ class TaskDetailNotifier {
       _db.tagDao.enforceSingleProject(_todoId, _userId, tagId);
 
   Future<void> clearProject() async {
-    final todo = await _db.todoDao.getTodo(_todoId, _userId);
+    final todo = await _db.todoDao.getTodo(_todoId);
     if (todo == null) return;
     final projectTagIds = await (_db.select(_db.tags)
           ..where((t) => t.type.equals('project')))
@@ -136,13 +129,13 @@ class TaskDetailNotifier {
   }
 
   Future<void> assignContextTag(String tagId) async {
-    final todo = await _db.todoDao.getTodo(_todoId, _userId);
+    final todo = await _db.todoDao.getTodo(_todoId);
     if (todo == null) return;
     await _db.tagDao.assignTag(_todoId, tagId, _userId);
   }
 
   Future<void> removeContextTag(String tagId) async {
-    final todo = await _db.todoDao.getTodo(_todoId, _userId);
+    final todo = await _db.todoDao.getTodo(_todoId);
     if (todo == null) return;
     await (_db.delete(_db.todoTags)
           ..where(
@@ -154,7 +147,7 @@ class TaskDetailNotifier {
   /// Assigns a person-typed tag to this todo and stamps last_clarified_at.
   Future<void> assignPersonTag(String tagId) async {
     await _db.tagDao.assignTag(_todoId, tagId, _userId);
-    await _db.todoDao.stampLastClarifiedAt(_todoId, _userId);
+    await _db.todoDao.stampLastClarifiedAt(_todoId);
   }
 
   /// Removes a person-typed tag from this todo and stamps last_clarified_at.
@@ -164,7 +157,7 @@ class TaskDetailNotifier {
             (jt) => jt.todoId.equals(_todoId) & jt.tagId.equals(tagId),
           ))
         .go();
-    await _db.todoDao.stampLastClarifiedAt(_todoId, _userId);
+    await _db.todoDao.stampLastClarifiedAt(_todoId);
   }
 
   /// Removes all person-typed tags from this todo and stamps last_clarified_at.
@@ -180,15 +173,15 @@ class TaskDetailNotifier {
                 jt.todoId.equals(_todoId) & jt.tagId.isIn(personTagIds),
           ))
         .go();
-    await _db.todoDao.stampLastClarifiedAt(_todoId, _userId);
+    await _db.todoDao.stampLastClarifiedAt(_todoId);
   }
 
-  Future<void> markDone() => _db.todoDao.markDone(_todoId, _userId);
+  Future<void> markDone() => _db.todoDao.markDone(_todoId);
 
   Future<void> setIntent(Intent intent) =>
-      _db.todoDao.setIntent(_todoId, _userId, intent);
+      _db.todoDao.setIntent(_todoId, intent);
 
-  Future<void> restore() => _db.todoDao.restore(_todoId, _userId);
+  Future<void> restore() => _db.todoDao.restore(_todoId);
 
   /// Watch all tag associations for this todo (returns Drift [Tag] rows),
   /// scoped to the current user.

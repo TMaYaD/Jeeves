@@ -36,26 +36,25 @@ class TagWithCount {
 class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   TagDao(super.db);
 
-  /// Stream of all tags of [type] belonging to [userId].
-  Stream<List<Tag>> watchByType(String userId, String type) {
+  /// Stream of all tags of [type], ordered by name.
+  Stream<List<Tag>> watchByType(String type) {
     return (select(tags)
-          ..where((t) => t.userId.equals(userId) & t.type.equals(type))
+          ..where((t) => t.type.equals(type))
           ..orderBy([(t) => OrderingTerm.asc(t.name)]))
         .watch();
   }
 
-  /// Stream of all person-typed tags for [userId], ordered by name.
-  Stream<List<Tag>> watchPersonTags(String userId) =>
-      watchByType(userId, 'person');
+  /// Stream of all person-typed tags, ordered by name.
+  Stream<List<Tag>> watchPersonTags() => watchByType('person');
 
   /// Create a new person-typed tag with the given [name] for [userId].
   ///
   /// Returns the tag id.  Assigns a derived color automatically.
-  /// If a person-typed tag with the same name already exists for [userId],
-  /// returns its id without creating a duplicate.
+  /// If a person-typed tag with the same name already exists, returns its id
+  /// without creating a duplicate.
   Future<String> createPersonTag(String name, String userId) async {
     final trimmedName = name.trim();
-    final existing = await findPersonTagByName(trimmedName, userId);
+    final existing = await findPersonTagByName(trimmedName);
     if (existing != null) return existing.id;
     final id = uuid.v4();
     final colorHex = tagColorToHex(tagColorForName(trimmedName));
@@ -69,34 +68,29 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     return id;
   }
 
-  /// Look up an existing person-typed tag by [name] for [userId].
-  Future<Tag?> findPersonTagByName(String name, String userId) {
+  /// Look up an existing person-typed tag by [name].
+  Future<Tag?> findPersonTagByName(String name) {
     return (select(tags)
-          ..where((t) =>
-              t.name.equals(name) &
-              t.userId.equals(userId) &
-              t.type.equals('person')))
+          ..where((t) => t.name.equals(name) & t.type.equals('person')))
         .getSingleOrNull();
   }
 
-  /// Stream of tags of [type] for [userId] paired with their active-task count.
+  /// Stream of tags of [type] paired with their active-task count.
   ///
   /// "Active" means clarified=1 (not in inbox) and done_at IS NULL.  Tags
   /// with zero active tasks return count = 0 and are still included so the
   /// cloud can show them as demoted/faded rather than vanishing mid-session.
-  Stream<List<TagWithCount>> watchTagsWithActiveCount(
-      String userId, String type) {
+  Stream<List<TagWithCount>> watchTagsWithActiveCount(String type) {
     return customSelect(
       'SELECT tags.id, tags.name, tags.color, tags.type, tags.user_id, '
       'COUNT(t.id) AS active_count '
       'FROM tags '
       'LEFT JOIN todo_tags tt ON tt.tag_id = tags.id '
       'LEFT JOIN todos t ON t.id = tt.todo_id AND t.done_at IS NULL AND t.clarified = 1 '
-      'WHERE tags.user_id = ? AND tags.type = ? '
+      'WHERE tags.type = ? '
       'GROUP BY tags.id '
       'ORDER BY tags.name',
       variables: [
-        Variable(userId),
         Variable(type),
       ],
       readsFrom: {tags, todoTags, todos},
@@ -236,12 +230,11 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].
   ///
   /// Enforces the single-project-per-todo invariant on the client side.
-  /// Silently returns without changes if [todoId] does not belong to [userId].
+  /// Silently returns without changes if [todoId] does not exist.
   Future<void> enforceSingleProject(
       String todoId, String userId, String newProjectTagId) async {
-    // Verify the todo belongs to this user before mutating
-    final todo = await (select(todos)
-          ..where((t) => t.id.equals(todoId) & t.userId.equals(userId)))
+    // Verify the todo exists before mutating
+    final todo = await (select(todos)..where((t) => t.id.equals(todoId)))
         .getSingleOrNull();
     if (todo == null) return;
 

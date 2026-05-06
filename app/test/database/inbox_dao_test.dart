@@ -37,7 +37,7 @@ void main() {
     test('insertTodo sets clarified = false', () async {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Buy milk'));
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.length, 1);
       expect(items.first.clarified, isFalse);
     });
@@ -45,7 +45,7 @@ void main() {
     test('insertTodo stores row visible in watchInbox', () async {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Buy milk'));
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.length, 1);
       expect(items.first.title, 'Buy milk');
     });
@@ -62,24 +62,24 @@ void main() {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Inbox item'));
       await db.inboxDao.insertTodo(_companion(id: 'b', title: 'Processed item'));
       // Process 'b' — sets clarified = true
-      await db.inboxDao.processInboxItem('b', userId: _userId);
+      await db.inboxDao.processInboxItem('b');
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.length, 1);
       expect(items.first.id, 'a');
     });
 
     test('watchInbox excludes rows where clarified = true', () async {
       await db.inboxDao.insertTodo(_companion(id: 'a', title: 'Item'));
-      await db.inboxDao.processInboxItem('a', userId: _userId);
+      await db.inboxDao.processInboxItem('a');
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items, isEmpty);
     });
 
     test('processInboxItem sets clarified = true', () async {
       await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
-      await db.inboxDao.processInboxItem('x', userId: _userId);
+      await db.inboxDao.processInboxItem('x');
 
       final row =
           await (db.select(db.todos)..where((t) => t.id.equals('x')))
@@ -89,16 +89,16 @@ void main() {
 
     test('processInboxItem removes row from inbox watch', () async {
       await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
-      await db.inboxDao.processInboxItem('x', userId: _userId);
+      await db.inboxDao.processInboxItem('x');
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items, isEmpty);
     });
 
     test('processInboxItem then assign person tag: clarified + person tag linked',
         () async {
       await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Process me'));
-      await db.inboxDao.processInboxItem('x', userId: _userId);
+      await db.inboxDao.processInboxItem('x');
       await db.tagDao.upsertTag(const TagsCompanion(
         id: Value('alice-tag'),
         name: Value('Alice'),
@@ -120,9 +120,9 @@ void main() {
 
     test('deleteTodo removes row from inbox watch', () async {
       await db.inboxDao.insertTodo(_companion(id: 'del', title: 'Delete me'));
-      await db.inboxDao.deleteTodo('del', userId: _userId);
+      await db.inboxDao.deleteTodo('del');
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items, isEmpty);
     });
 
@@ -145,7 +145,7 @@ void main() {
         updatedAt: Value(later),
       ));
 
-      final items = await db.inboxDao.watchInbox(_userId).first;
+      final items = await db.inboxDao.watchInbox().first;
       expect(items.first.id, 'new');
       expect(items.last.id, 'old');
     });

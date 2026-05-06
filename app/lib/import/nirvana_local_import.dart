@@ -94,8 +94,7 @@ Future<ImportResult> importNirvanaLocally({
   await db.transaction(() async {
     // --- Upsert project tags ---
     final existingTagRows = await (db.select(db.tags)
-          ..where(
-              (t) => t.userId.equals(userId) & t.type.equals('project')))
+          ..where((t) => t.type.equals('project')))
         .get();
     final existingProjectNames = {for (final t in existingTagRows) t.name};
 
@@ -213,7 +212,7 @@ Future<ImportResult> importNirvanaLocally({
           }
         }
         if (item.intent == 'maybe') {
-          await db.todoDao.deferTaskToMaybe(todoId, userId, now: now);
+          await db.todoDao.deferTaskToMaybe(todoId, now: now);
         }
 
         // Resolve project tag for this task.

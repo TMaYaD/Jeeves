@@ -83,8 +83,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     NotificationService.instance.cancelFocusNotification();
     ref.read(sprintTimerProvider.notifier).stopSprint().ignore();
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
-    await db.todoDao.markDone(todoId, userId);
+    await db.todoDao.markDone(todoId);
     await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
 

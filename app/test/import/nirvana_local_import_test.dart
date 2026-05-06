@@ -52,13 +52,13 @@ void main() {
       );
 
       final projectTags =
-          await db.tagDao.watchByType(_userId, 'project').first;
+          await db.tagDao.watchByType('project').first;
       expect(projectTags.length, 1);
       expect(projectTags.first.name, 'Brush up on GTD®');
 
       final tagId = projectTags.first.id;
       final tasksByProject =
-          await db.todoDao.watchByProject(_userId, tagId).first;
+          await db.todoDao.watchByProject(tagId).first;
       expect(tasksByProject.length, 2);
     });
 
@@ -72,7 +72,7 @@ void main() {
       );
 
       final contextTags =
-          await db.tagDao.watchByType(_userId, 'context').first;
+          await db.tagDao.watchByType('context').first;
       final names = contextTags.map((t) => t.name).toSet();
       expect(names, containsAll(['computer', 'Personal', 'anywhere']));
     });
@@ -86,7 +86,7 @@ void main() {
         db: db,
       );
 
-      final done = await db.todoDao.watchDone(_userId).first;
+      final done = await db.todoDao.watchDone().first;
       expect(done.length, 2);
     });
 
@@ -246,12 +246,12 @@ void main() {
       );
 
       final projectTags =
-          await db.tagDao.watchByType(_userId, 'project').first;
+          await db.tagDao.watchByType('project').first;
       expect(projectTags.length, 1);
 
       final tagId = projectTags.first.id;
       final tasksByProject =
-          await db.todoDao.watchByProject(_userId, tagId).first;
+          await db.todoDao.watchByProject(tagId).first;
       expect(tasksByProject.length, 2);
       final names = tasksByProject.map((t) => t.title).toSet();
       expect(names, containsAll(['Read the Book', 'Read our Quick Guide']));
@@ -278,7 +278,7 @@ void main() {
       expect(first.projectTagsCreated, 1);
       expect(second.projectTagsCreated, 0);
 
-      final tags = await db.tagDao.watchByType(_userId, 'project').first;
+      final tags = await db.tagDao.watchByType('project').first;
       expect(tags.length, 1);
     });
 

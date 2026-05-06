@@ -16,13 +16,13 @@ class SearchDao {
 
   final GtdDatabase _db;
 
-  /// Returns a reactive stream of search results for [userId] matching [query].
+  /// Returns a reactive stream of search results matching [query].
   ///
   /// The stream re-emits whenever the todos, todo_tags, or tags tables change,
   /// so results stay up-to-date with offline writes and sync'd data.
   ///
   /// When [query.isEmpty] is true, an empty list is returned immediately.
-  Stream<List<SearchResult>> search(String userId, SearchQuery query) {
+  Stream<List<SearchResult>> search(SearchQuery query) {
     if (query.isEmpty) return Stream.value([]);
 
     // Build a LEFT OUTER JOIN across all three tables so we get:
@@ -41,7 +41,7 @@ class SearchDao {
 
     // ---- Structured filters applied at the SQL level ----
 
-    Expression<bool> where = _db.todos.userId.equals(userId);
+    Expression<bool> where = const Constant(true);
 
     if (!query.includeDone) {
       where = where & _db.todos.doneAt.isNull();
@@ -90,7 +90,7 @@ class SearchDao {
   /// Returns a reactive count of completed tasks that match [query] (ignoring
   /// [query.includeDone]). Used to populate the "N matches in completed tasks"
   /// hint when the primary results stream is empty.
-  Stream<int> countDoneOnlyMatches(String userId, SearchQuery query) {
+  Stream<int> countDoneOnlyMatches(SearchQuery query) {
     if (query.text.isEmpty || query.includeDone) return Stream.value(0);
 
     final doneQuery = query.copyWith(includeDone: true);
@@ -106,8 +106,7 @@ class SearchDao {
       ),
     ]);
 
-    Expression<bool> where = _db.todos.userId.equals(userId);
-    where = where & _db.todos.doneAt.isNotNull();
+    Expression<bool> where = _db.todos.doneAt.isNotNull();
 
     if (query.energyLevels.isNotEmpty) {
       where = where & _db.todos.energyLevel.isIn(query.energyLevels.toList());

@@ -37,7 +37,7 @@ Future<Todo> _insertAt(
       Variable.withString(intent),
     ],
   );
-  return (await db.todoDao.getTodo(id, _userId))!;
+  return (await db.todoDao.getTodo(id))!;
 }
 
 (Widget, GoRouter) _buildScreen(
@@ -183,7 +183,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(ListTile, 'Next Actions'));
       await tester.pumpAndSettle();
-      final updated = await db.todoDao.getTodo('maybe1', _userId);
+      final updated = await db.todoDao.getTodo('maybe1');
       expect(updated!.intent, 'next');
     });
 

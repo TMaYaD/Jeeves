@@ -43,7 +43,7 @@ void main() {
       final sessionId =
           await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
 
-      final session = await db.focusSessionDao.getActiveSession(_userId);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session, isNotNull);
       expect(session!.id, sessionId);
       expect(session.userId, _userId);
@@ -105,7 +105,7 @@ void main() {
       expect(first.endedAt, isNotNull);
       expect(second.endedAt, isNull);
 
-      final active = await db.focusSessionDao.getActiveSession(_userId);
+      final active = await db.focusSessionDao.getActiveSession();
       expect(active?.id, secondId);
     });
   });
@@ -130,7 +130,7 @@ void main() {
           .getSingle();
       expect(session.endedAt, isNotNull);
 
-      final active = await db.focusSessionDao.getActiveSession(_userId);
+      final active = await db.focusSessionDao.getActiveSession();
       expect(active, isNull);
     });
 
@@ -144,12 +144,12 @@ void main() {
           sessionId: sessionId, taskId: 'task1');
 
       final logBefore =
-          await db.timeLogDao.watchActiveLog(_userId).first;
+          await db.timeLogDao.watchActiveLog().first;
       expect(logBefore, isNotNull);
 
       await db.focusSessionDao.closeSession(sessionId: sessionId);
 
-      final logAfter = await db.timeLogDao.watchActiveLog(_userId).first;
+      final logAfter = await db.timeLogDao.watchActiveLog().first;
       expect(logAfter, isNull);
     });
 
@@ -185,7 +185,7 @@ void main() {
         now: startTime,
       );
 
-      final log = await db.timeLogDao.watchActiveLog(_userId).first;
+      final log = await db.timeLogDao.watchActiveLog().first;
       expect(log, isNotNull);
       expect(log!.taskId, 'task1');
       expect(DateTime.parse(log.startedAt), startTime.toUtc());
@@ -215,7 +215,7 @@ void main() {
       final logForTask1 = allLogs.firstWhere((l) => l.taskId == 'task1');
       expect(logForTask1.endedAt, isNotNull);
 
-      final activeLog = await db.timeLogDao.watchActiveLog(_userId).first;
+      final activeLog = await db.timeLogDao.watchActiveLog().first;
       expect(activeLog?.taskId, 'task2');
     });
 
@@ -228,7 +228,7 @@ void main() {
       await db.focusSessionDao.setCurrentTask(
           sessionId: sessionId, taskId: 'task1');
 
-      final session = await db.focusSessionDao.getActiveSession(_userId);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session?.currentTaskId, 'task1');
     });
 
@@ -244,10 +244,10 @@ void main() {
       await db.focusSessionDao.setCurrentTask(
           sessionId: sessionId, taskId: null);
 
-      final session = await db.focusSessionDao.getActiveSession(_userId);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session?.currentTaskId, isNull);
 
-      final activeLog = await db.timeLogDao.watchActiveLog(_userId).first;
+      final activeLog = await db.timeLogDao.watchActiveLog().first;
       expect(activeLog, isNull);
     });
   });
@@ -263,14 +263,14 @@ void main() {
     tearDown(() async => db.close());
 
     test('returns null when no session is open', () async {
-      final session = await db.focusSessionDao.getActiveSession(_userId);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session, isNull);
     });
 
     test('returns the open session by id', () async {
       final sessionId =
           await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
-      final session = await db.focusSessionDao.getActiveSession(_userId);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session?.id, sessionId);
     });
 
@@ -278,18 +278,18 @@ void main() {
       final sessionId =
           await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
       await db.focusSessionDao.closeSession(sessionId: sessionId);
-      final session = await db.focusSessionDao.getActiveSession(_userId);
+      final session = await db.focusSessionDao.getActiveSession();
       expect(session, isNull);
     });
 
     test('watchActiveSession emits the new session after openSession', () async {
       final initial =
-          await db.focusSessionDao.watchActiveSession(_userId).first;
+          await db.focusSessionDao.watchActiveSession().first;
       expect(initial, isNull);
 
       // Subscribe BEFORE mutating to capture the reactive emission.
       final nextEmission =
-          db.focusSessionDao.watchActiveSession(_userId).skip(1).first;
+          db.focusSessionDao.watchActiveSession().skip(1).first;
       final sessionId =
           await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
       final emitted = await nextEmission;
@@ -298,10 +298,10 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // watchSessionTasksForUser
+  // watchActiveSessionTasks
   // ---------------------------------------------------------------------------
 
-  group('FocusSessionDao — watchSessionTasksForUser', () {
+  group('FocusSessionDao — watchActiveSessionTasks', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
@@ -309,7 +309,7 @@ void main() {
 
     test('returns empty list when no session is open', () async {
       final tasks =
-          await db.focusSessionDao.watchSessionTasksForUser(_userId).first;
+          await db.focusSessionDao.watchActiveSessionTasks().first;
       expect(tasks, isEmpty);
     });
 
@@ -322,7 +322,7 @@ void main() {
       );
 
       final tasks =
-          await db.focusSessionDao.watchSessionTasksForUser(_userId).first;
+          await db.focusSessionDao.watchActiveSessionTasks().first;
       expect(tasks.map((t) => t.id), orderedEquals(['a', 'b']));
     });
 
@@ -335,7 +335,7 @@ void main() {
       await db.focusSessionDao.closeSession(sessionId: sessionId);
 
       final tasks =
-          await db.focusSessionDao.watchSessionTasksForUser(_userId).first;
+          await db.focusSessionDao.watchActiveSessionTasks().first;
       expect(tasks, isEmpty);
     });
   });
@@ -499,7 +499,7 @@ void main() {
       await db.focusSessionDao.setCurrentTask(
           sessionId: sessionId, taskId: 'tE');
 
-      final logBefore = await db.timeLogDao.watchActiveLog(_userId).first;
+      final logBefore = await db.timeLogDao.watchActiveLog().first;
       expect(logBefore, isNotNull);
 
       await db.focusSessionDao.reviewAndCloseSession(
@@ -507,7 +507,7 @@ void main() {
         dispositions: {'tE': 'leave'},
       );
 
-      final logAfter = await db.timeLogDao.watchActiveLog(_userId).first;
+      final logAfter = await db.timeLogDao.watchActiveLog().first;
       expect(logAfter, isNull);
     });
 
@@ -520,7 +520,7 @@ void main() {
         dispositions: {},
       );
 
-      final active = await db.focusSessionDao.getActiveSession(_userId);
+      final active = await db.focusSessionDao.getActiveSession();
       expect(active, isNull);
     });
   });
@@ -537,7 +537,7 @@ void main() {
 
     test('returns empty list when no closed sessions exist', () async {
       final ids = await db.focusSessionDao
-          .getLastClosedSessionRolloverTaskIds(_userId);
+          .getLastClosedSessionRolloverTaskIds();
       expect(ids, isEmpty);
     });
 
@@ -576,7 +576,7 @@ void main() {
       );
 
       final ids = await db.focusSessionDao
-          .getLastClosedSessionRolloverTaskIds(_userId);
+          .getLastClosedSessionRolloverTaskIds();
       expect(ids, unorderedEquals(['tB']));
     });
 
@@ -609,7 +609,7 @@ void main() {
       );
 
       final ids = await db.focusSessionDao
-          .getLastClosedSessionRolloverTaskIds(_userId);
+          .getLastClosedSessionRolloverTaskIds();
       // 'old' is from an older session and must not appear.
       expect(ids, isEmpty);
     });
