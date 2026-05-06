@@ -8,8 +8,10 @@
 /// - Task selection during the ritual is accumulated in-memory
 ///   ([pendingSelectedTaskIds] / [reviewedTaskIds]); [startDay] commits them
 ///   atomically by calling [FocusSessionDao.openSession].
-/// - Inbox clarification uses a fixed snapshot (loaded once at step start)
-///   navigated by [inboxIndex]. All routing is tracked in [inboxRoutings].
+/// - Inbox clarification and task review both use a [SnapshotNav]: a fixed
+///   list loaded once at step start, navigated by an integer index. Routing
+///   and action records are tracked separately in [inboxRoutings] /
+///   [reviewActions], keyed by snapshot index.
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
@@ -20,6 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show Intent;
 import '../services/notification_service.dart';
+import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'synced_preferences_provider.dart';
@@ -278,13 +281,11 @@ class FocusSessionPlanningState {
     this.availableMinutes = 480, // 8 hours default
     this.availableTimeSet = false,
     this.energyLevel,
-    this.inboxSnapshot,
-    this.inboxIndex = 0,
+    this.inboxNav = const SnapshotNav<Todo>(),
     this.inboxRoutings = const {},
     this.pendingSelectedTaskIds = const [],
     this.reviewedTaskIds = const [],
-    this.reviewItems = const [],
-    this.reviewIndex = 0,
+    this.reviewNav = const SnapshotNav<Todo>(),
     this.reviewActions = const {},
   });
 
@@ -297,14 +298,12 @@ class FocusSessionPlanningState {
   /// User's self-reported energy level for today: 'low' | 'medium' | 'high'.
   final String? energyLevel;
 
-  /// Fixed snapshot of inbox items loaded at the start of Step 0, ordered
-  /// oldest-first (FIFO). null = not yet loaded; [] = loaded and empty.
-  final List<Todo>? inboxSnapshot;
+  /// Fixed snapshot of inbox items loaded at the start of Step 0 plus the
+  /// current navigation cursor. items == null until loaded; ordered
+  /// oldest-first (FIFO).
+  final SnapshotNav<Todo> inboxNav;
 
-  /// Index into [inboxSnapshot] pointing at the current item being clarified.
-  final int inboxIndex;
-
-  /// Maps [inboxSnapshot] index → routing record (kind + captured prior state).
+  /// Maps [inboxNav.items] index → routing record (kind + captured prior state).
   /// An absent key means the item at that index has not yet been processed.
   final Map<int, InboxRoutingRecord> inboxRoutings;
 
@@ -316,13 +315,11 @@ class FocusSessionPlanningState {
   /// Task IDs the user has reviewed but skipped (not selected).
   final List<String> reviewedTaskIds;
 
-  /// Snapshot of tasks needing re-clarification, loaded once when Step 1 is
-  /// entered. Navigation is index-driven; the DB is never queried for "next".
-  final List<Todo> reviewItems;
-
-  /// Index of the task currently shown in the review step.
-  /// [reviewIndex] >= [reviewItems.length] means all items have been acted on.
-  final int reviewIndex;
+  /// Snapshot of tasks needing re-clarification plus the navigation cursor.
+  /// Loaded once when Step 1 is entered; the DB is never queried for "next".
+  /// items == null until step 1 is entered; an empty list short-circuits the
+  /// step entirely.
+  final SnapshotNav<Todo> reviewNav;
 
   /// Recorded action for each review index — used to show selection affordances
   /// when the user navigates back within the review step.
@@ -334,14 +331,11 @@ class FocusSessionPlanningState {
     bool? availableTimeSet,
     String? energyLevel,
     bool clearEnergyLevel = false,
-    List<Todo>? inboxSnapshot,
-    bool clearInboxSnapshot = false,
-    int? inboxIndex,
+    SnapshotNav<Todo>? inboxNav,
     Map<int, InboxRoutingRecord>? inboxRoutings,
     List<String>? pendingSelectedTaskIds,
     List<String>? reviewedTaskIds,
-    List<Todo>? reviewItems,
-    int? reviewIndex,
+    SnapshotNav<Todo>? reviewNav,
     Map<int, ReviewActionRecord>? reviewActions,
   }) =>
       FocusSessionPlanningState(
@@ -349,14 +343,12 @@ class FocusSessionPlanningState {
         availableMinutes: availableMinutes ?? this.availableMinutes,
         availableTimeSet: availableTimeSet ?? this.availableTimeSet,
         energyLevel: clearEnergyLevel ? null : (energyLevel ?? this.energyLevel),
-        inboxSnapshot: clearInboxSnapshot ? null : (inboxSnapshot ?? this.inboxSnapshot),
-        inboxIndex: inboxIndex ?? this.inboxIndex,
+        inboxNav: inboxNav ?? this.inboxNav,
         inboxRoutings: inboxRoutings ?? this.inboxRoutings,
         pendingSelectedTaskIds:
             pendingSelectedTaskIds ?? this.pendingSelectedTaskIds,
         reviewedTaskIds: reviewedTaskIds ?? this.reviewedTaskIds,
-        reviewItems: reviewItems ?? this.reviewItems,
-        reviewIndex: reviewIndex ?? this.reviewIndex,
+        reviewNav: reviewNav ?? this.reviewNav,
         reviewActions: reviewActions ?? this.reviewActions,
       );
 }
@@ -424,7 +416,10 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       if (items.isEmpty) {
         next = 2;
       } else {
-        state = state.copyWith(reviewItems: items, reviewIndex: 0, reviewActions: {});
+        state = state.copyWith(
+          reviewNav: SnapshotNav<Todo>(items: items),
+          reviewActions: {},
+        );
       }
     }
     state = state.copyWith(currentStep: next.clamp(0, _maxStepIndex));
@@ -432,16 +427,16 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Steps back within the review step to the previous item.
   void reviewBack() {
-    if (state.reviewIndex > 0) {
-      state = state.copyWith(reviewIndex: state.reviewIndex - 1);
+    if (state.reviewNav.index > 0) {
+      state = state.copyWith(reviewNav: state.reviewNav.previous());
     }
   }
 
   /// Skips the current review item without writing anything to the DB.
   /// Called by the Next button while the review step still has pending items.
   void skipReviewItem() {
-    if (state.reviewIndex < state.reviewItems.length) {
-      state = state.copyWith(reviewIndex: state.reviewIndex + 1);
+    if (!state.reviewNav.isComplete) {
+      state = state.copyWith(reviewNav: state.reviewNav.next());
     }
   }
 
@@ -464,33 +459,35 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// The tag filter is captured at load time; later filter changes do not
   /// affect the snapshot.
   Future<void> loadInboxSnapshot() async {
-    if (state.inboxSnapshot != null || _loadingInboxSnapshot) return;
+    if (state.inboxNav.isLoaded || _loadingInboxSnapshot) return;
     _loadingInboxSnapshot = true;
     try {
       final tagIds = ref.read(tagFilterProvider);
       final items = await _db.inboxDao.watchInbox(tagIds: tagIds).first;
-      state = state.copyWith(inboxSnapshot: items.reversed.toList());
+      state = state.copyWith(
+        inboxNav: state.inboxNav.withItems(items.reversed.toList()),
+      );
     } finally {
       _loadingInboxSnapshot = false;
     }
   }
 
-  /// Advances [inboxIndex] by one (no bounds check — callers must not call
+  /// Advances the inbox cursor by one (no bounds check — callers must not call
   /// when already past the end).
   void nextInboxItem() =>
-      state = state.copyWith(inboxIndex: state.inboxIndex + 1);
+      state = state.copyWith(inboxNav: state.inboxNav.next());
 
-  /// Pure navigation: decrements [inboxIndex] by one (clamped to 0). The DB is
+  /// Pure navigation: decrements the inbox cursor (clamped to 0). The DB is
   /// not touched on Back — any prior routing remains applied so the
   /// "previously selected" affordance can render on revisit. Re-tapping a
   /// destination is what reverts the prior routing (handled inside each
   /// destination handler).
   void previousInboxItem() {
-    if (state.inboxIndex <= 0) return;
-    state = state.copyWith(inboxIndex: state.inboxIndex - 1);
+    if (state.inboxNav.index <= 0) return;
+    state = state.copyWith(inboxNav: state.inboxNav.previous());
   }
 
-  /// Advances the index without writing to the DB or recording a routing.
+  /// Advances the cursor without writing to the DB or recording a routing.
   void skipInboxItem() => nextInboxItem();
 
   /// Reverts the DB state for the item at [idx] back to the captured
@@ -506,7 +503,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// inbox state with the wrong assignees, and [inboxRoutings] is only
   /// cleared after the transaction commits.
   Future<void> _revertProcessedInboxItem(int idx) async {
-    final todo = state.inboxSnapshot![idx];
+    final todo = state.inboxNav.items![idx];
     final record = state.inboxRoutings[idx];
     if (record == null) return;
     final affected = await _db.transaction(() async {
@@ -546,7 +543,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     String? doneAt,
     Set<String> personTagIds,
   })> _capturePriorInboxState(int idx) async {
-    final id = state.inboxSnapshot![idx].id;
+    final id = state.inboxNav.items![idx].id;
     final todo = await _db.todoDao.getTodo(id);
     final personTagIds = await _db.todoDao.getPersonTagIdsForTodo(id);
     return (
@@ -586,7 +583,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// the DB UPDATE does not affect any row (item not found) the state is not
   /// changed.
   Future<void> processInboxItem(String id, {required String title}) async {
-    final idx = state.inboxIndex;
+    final idx = state.inboxNav.index;
     if (state.inboxRoutings.containsKey(idx)) {
       await _revertProcessedInboxItem(idx);
     }
@@ -618,7 +615,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// as the task's next-action text.
   Future<void> processInboxItemToWaitingFor(String id,
       {required String title}) async {
-    final idx = state.inboxIndex;
+    final idx = state.inboxNav.index;
     if (state.inboxRoutings.containsKey(idx)) {
       await _revertProcessedInboxItem(idx);
     }
@@ -648,7 +645,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Routes the current inbox item to Someday/Maybe (clarified = true,
   /// intent = 'maybe').
   Future<void> processInboxItemToMaybe(String id) async {
-    final idx = state.inboxIndex;
+    final idx = state.inboxNav.index;
     if (state.inboxRoutings.containsKey(idx)) {
       await _revertProcessedInboxItem(idx);
     }
@@ -675,7 +672,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// does not affect any row (item deleted out from under us, etc.) the state
   /// is not changed.
   Future<void> processInboxItemToDone(String id) async {
-    final idx = state.inboxIndex;
+    final idx = state.inboxNav.index;
     if (state.inboxRoutings.containsKey(idx)) {
       await _revertProcessedInboxItem(idx);
     }
@@ -833,7 +830,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       // Blank text normalises to NULL and the index does not advance, but any
       // stale action record must be cleared so the dialog doesn't pre-fill with
       // the old text when the user navigates back to this item.
-      final idx = state.reviewIndex;
+      final idx = state.reviewNav.index;
       if (state.reviewActions.containsKey(idx)) {
         state = state.copyWith(
           reviewActions: Map.of(state.reviewActions)..remove(idx),
@@ -864,9 +861,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   }
 
   void _recordAndAdvance(ReviewActionRecord record) {
-    final index = state.reviewIndex;
+    final index = state.reviewNav.index;
     state = state.copyWith(
-      reviewIndex: index + 1,
+      reviewNav: state.reviewNav.next(),
       reviewActions: {...state.reviewActions, index: record},
     );
   }
@@ -881,11 +878,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// - Previous was [sendToSomeday] or [trash] and new is a stamp/active action:
   ///   reset intent to 'next'. Intent is irrelevant for [markDone] tasks.
   Future<void> _revertIfNeeded(ReviewActionKind newKind) async {
-    final idx = state.reviewIndex;
+    final idx = state.reviewNav.index;
     final previous = state.reviewActions[idx]?.kind;
-    if (previous == null || idx >= state.reviewItems.length) return;
+    if (previous == null || idx >= state.reviewNav.length) return;
 
-    final id = state.reviewItems[idx].id;
+    final id = state.reviewNav.items![idx].id;
 
     if (previous == ReviewActionKind.markDone) {
       await _db.todoDao.clearDoneAt(id);

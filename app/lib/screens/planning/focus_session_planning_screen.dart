@@ -51,8 +51,8 @@ class _FocusSessionPlanningScreenState
   void _handleNext(int step) {
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
     if (step == 1) {
-      final s = ref.read(focusSessionPlanningProvider);
-      if (s.reviewIndex < s.reviewItems.length) {
+      final nav = ref.read(focusSessionPlanningProvider).reviewNav;
+      if (nav.isLoaded && !nav.isComplete) {
         // Still items to review — skip the current one.
         notifier.skipReviewItem();
       } else {
@@ -91,9 +91,9 @@ class _FocusSessionPlanningScreenState
       }
       // Auto-advance when the snapshot loads to empty (inbox was already clear).
       if (next.currentStep == 0 &&
-          next.inboxSnapshot != null &&
-          next.inboxSnapshot!.isEmpty &&
-          (prev == null || prev.inboxSnapshot == null)) {
+          next.inboxNav.isLoaded &&
+          next.inboxNav.isEmpty &&
+          (prev == null || !prev.inboxNav.isLoaded)) {
         ref.read(focusSessionPlanningProvider.notifier).advanceStep();
       }
     });
@@ -128,7 +128,7 @@ class _FocusSessionPlanningScreenState
                     ? null
                     : step == 1
                         ? () {
-                            if (ref.read(focusSessionPlanningProvider).reviewIndex > 0) {
+                            if (ref.read(focusSessionPlanningProvider).reviewNav.index > 0) {
                               notifier.reviewBack();
                             } else {
                               notifier.goToStep(0);
@@ -148,7 +148,7 @@ class _FocusSessionPlanningScreenState
     final s = ref.watch(focusSessionPlanningProvider);
     return switch (step) {
       // Step 0: inbox snapshot loaded and all items processed or skipped.
-      0 => s.inboxSnapshot != null && s.inboxIndex >= s.inboxSnapshot!.length,
+      0 => s.inboxNav.isComplete,
       // Step 1: task review — always enabled; tapping Next skips the current item.
       1 => true,
       // Step 2: energy check in
@@ -218,27 +218,26 @@ class _PlanningHeader extends ConsumerWidget {
 
   Widget _buildSubtitle(int step, WidgetRef ref) {
     if (step == 0) {
-      final state = ref.watch(focusSessionPlanningProvider);
-      if (state.inboxSnapshot == null) {
+      final nav = ref.watch(focusSessionPlanningProvider).inboxNav;
+      if (!nav.isLoaded) {
         return Text(
           'Step 1 of 5 · Loading inbox…',
           style: TextStyle(fontSize: 12, color: Colors.grey[400]),
         );
       }
-      final initial = state.inboxSnapshot!.length;
-      final processed = state.inboxIndex;
-      final skipped = state.inboxIndex - state.inboxRoutings.length;
+      final routings =
+          ref.watch(focusSessionPlanningProvider.select((s) => s.inboxRoutings));
+      final processed = nav.index;
+      final skipped = nav.index - routings.length;
       return Text(
-        'Step 1 of 5 · $processed / $initial processed (skipped $skipped)',
+        'Step 1 of 5 · $processed / ${nav.length} processed (skipped $skipped)',
         style: TextStyle(fontSize: 12, color: Colors.grey[400]),
       );
     }
     if (step == 1) {
-      final state = ref.watch(focusSessionPlanningProvider);
-      final reviewed = state.reviewIndex;
-      final total = state.reviewItems.length;
+      final nav = ref.watch(focusSessionPlanningProvider).reviewNav;
       return Text(
-        'Step 2 of 5 · $reviewed / $total reviewed',
+        'Step 2 of 5 · ${nav.index} / ${nav.length} reviewed',
         style: TextStyle(fontSize: 12, color: Colors.grey[400]),
       );
     }
@@ -274,13 +273,12 @@ class _SegmentedProgressBar extends StatelessWidget {
   double _currentStepFraction(int step, FocusSessionPlanningState state) {
     switch (step) {
       case 0:
-        final snapshot = state.inboxSnapshot;
-        if (snapshot == null || snapshot.isEmpty) return 0.0;
-        return (state.inboxIndex / snapshot.length).clamp(0.0, 1.0);
+        final nav = state.inboxNav;
+        if (!nav.isLoaded || nav.isEmpty) return 0.0;
+        return (nav.index / nav.length).clamp(0.0, 1.0);
       case 1:
-        final total = state.reviewItems.length;
-        final reviewed = state.reviewIndex;
-        return total > 0 ? (reviewed / total).clamp(0.0, 1.0) : 1.0;
+        final nav = state.reviewNav;
+        return nav.length > 0 ? (nav.index / nav.length).clamp(0.0, 1.0) : 1.0;
       case 2:
         return state.energyLevel != null ? 1.0 : 0.0;
       case 3:

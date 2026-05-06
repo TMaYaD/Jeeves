@@ -9,7 +9,8 @@
 /// 4. Back navigates to the previous item; re-choosing a destination first
 ///    reverts the prior routing then applies the new one.
 ///
-/// The Next button in the parent is enabled only when inboxIndex >= snapshot.length.
+/// The Next button in the parent is enabled only when the inbox snapshot is
+/// fully consumed (inboxNav.isComplete).
 library;
 
 import 'package:flutter/material.dart';
@@ -24,31 +25,29 @@ class InboxClarificationStep extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final snapshot =
-        ref.watch(focusSessionPlanningProvider.select((s) => s.inboxSnapshot));
-    final index =
-        ref.watch(focusSessionPlanningProvider.select((s) => s.inboxIndex));
+    final nav =
+        ref.watch(focusSessionPlanningProvider.select((s) => s.inboxNav));
     final inboxRoutings = ref.watch(
         focusSessionPlanningProvider.select((s) => s.inboxRoutings));
 
-    if (snapshot == null) {
+    if (!nav.isLoaded) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         ref.read(focusSessionPlanningProvider.notifier).loadInboxSnapshot();
       });
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (snapshot.isEmpty || index >= snapshot.length) {
+    if (nav.isEmpty || nav.isComplete) {
       return const _InboxCleared();
     }
 
-    final current = snapshot[index];
+    final current = nav.current!;
     return _ClarifyCard(
       key: ValueKey(current.id),
       todo: current,
-      index: index,
-      total: snapshot.length,
-      lastRouting: inboxRoutings[index]?.kind,
+      index: nav.index,
+      total: nav.length,
+      lastRouting: inboxRoutings[nav.index]?.kind,
     );
   }
 }

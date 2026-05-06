@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
 import '../services/notification_service.dart';
+import '../utils/snapshot_nav.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
 import 'synced_preferences_provider.dart';
@@ -190,8 +191,7 @@ class EveningShutdownState {
   const EveningShutdownState({
     this.currentStep = 0,
     this.dispositions = const {},
-    this.unfinishedSnapshot,
-    this.unfinishedIndex = 0,
+    this.unfinishedNav = const SnapshotNav<Todo>(),
   });
 
   final int currentStep;
@@ -201,30 +201,19 @@ class EveningShutdownState {
   /// [FocusSessionDao.reviewAndCloseSession].
   final Map<String, String> dispositions;
 
-  /// Fixed snapshot of unfinished session tasks loaded at the start of the
-  /// unfinished-tasks step. null = not yet loaded; [] = loaded and empty.
-  final List<Todo>? unfinishedSnapshot;
-
-  /// Index into [unfinishedSnapshot] pointing at the task currently being
-  /// resolved.
-  final int unfinishedIndex;
+  /// Fixed snapshot of unfinished session tasks plus the navigation cursor.
+  /// items == null until loaded.
+  final SnapshotNav<Todo> unfinishedNav;
 
   EveningShutdownState copyWith({
     int? currentStep,
     Map<String, String>? dispositions,
-    List<Todo>? unfinishedSnapshot,
-    bool clearUnfinishedSnapshot = false,
-    int? unfinishedIndex,
+    SnapshotNav<Todo>? unfinishedNav,
   }) =>
       EveningShutdownState(
         currentStep: currentStep ?? this.currentStep,
         dispositions: dispositions ?? this.dispositions,
-        unfinishedSnapshot: clearUnfinishedSnapshot
-            ? null
-            : (unfinishedSnapshot ?? this.unfinishedSnapshot),
-        unfinishedIndex: clearUnfinishedSnapshot
-            ? 0
-            : (unfinishedIndex ?? this.unfinishedIndex),
+        unfinishedNav: unfinishedNav ?? this.unfinishedNav,
       );
 }
 
@@ -278,39 +267,40 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   /// Loads the unfinished-tasks snapshot once. Idempotent: subsequent calls
   /// are no-ops. Only includes tasks with doneAt == null.
   Future<void> loadUnfinishedSnapshot() async {
-    if (state.unfinishedSnapshot != null || _loadingUnfinishedSnapshot) return;
+    if (state.unfinishedNav.isLoaded || _loadingUnfinishedSnapshot) return;
     _loadingUnfinishedSnapshot = true;
     try {
       final allTasks =
           await _db.focusSessionDao.watchActiveSessionTasks().first;
       final unfinished = allTasks.where((t) => t.doneAt == null).toList();
-      state = state.copyWith(unfinishedSnapshot: unfinished);
+      state = state.copyWith(
+        unfinishedNav: state.unfinishedNav.withItems(unfinished),
+      );
     } finally {
       _loadingUnfinishedSnapshot = false;
     }
   }
 
-  /// Advances [unfinishedIndex] by one. When all items have been resolved
-  /// (new index would reach or exceed snapshot length), calls [advanceStep]
-  /// instead so the ritual proceeds automatically.
+  /// Advances the cursor by one. When all items have been resolved (new index
+  /// reaches or exceeds snapshot length), calls [advanceStep] instead so the
+  /// ritual proceeds automatically.
   void nextUnfinishedTask() {
-    final snapshot = state.unfinishedSnapshot;
-    if (snapshot == null) return;
-    final newIndex = state.unfinishedIndex + 1;
-    if (newIndex >= snapshot.length) {
+    if (!state.unfinishedNav.isLoaded) return;
+    final advanced = state.unfinishedNav.next();
+    if (advanced.index >= state.unfinishedNav.length) {
       advanceStep();
     } else {
-      state = state.copyWith(unfinishedIndex: newIndex);
+      state = state.copyWith(unfinishedNav: advanced);
     }
   }
 
-  /// Pure navigation: decrements [unfinishedIndex] by one (clamped to 0).
-  /// The in-memory disposition is preserved so the previously-tapped action
-  /// can render its visual affordance on revisit. Re-tapping a disposition
-  /// replaces the prior one; that is what removes the previous selection.
+  /// Pure navigation: decrements the cursor (clamped to 0). The in-memory
+  /// disposition is preserved so the previously-tapped action can render its
+  /// visual affordance on revisit. Re-tapping a disposition replaces the
+  /// prior one; that is what removes the previous selection.
   void previousUnfinishedTask() {
-    if (state.unfinishedIndex == 0 || state.unfinishedSnapshot == null) return;
-    state = state.copyWith(unfinishedIndex: state.unfinishedIndex - 1);
+    if (state.unfinishedNav.index == 0 || !state.unfinishedNav.isLoaded) return;
+    state = state.copyWith(unfinishedNav: state.unfinishedNav.previous());
   }
 
   // ---- Task disposition (in-memory) ------------------------------------------

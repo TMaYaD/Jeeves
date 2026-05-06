@@ -355,10 +355,10 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final state = container.read(eveningShutdownProvider);
-      expect(state.unfinishedSnapshot, isNotNull);
-      expect(state.unfinishedSnapshot!.map((t) => t.id),
+      expect(state.unfinishedNav.items, isNotNull);
+      expect(state.unfinishedNav.items!.map((t) => t.id),
           containsAll(['open1', 'open2']));
-      expect(state.unfinishedSnapshot!.map((t) => t.id),
+      expect(state.unfinishedNav.items!.map((t) => t.id),
           isNot(contains('done1')));
     });
 
@@ -369,7 +369,7 @@ void main() {
       final notifier = container.read(eveningShutdownProvider.notifier);
       await notifier.loadUnfinishedSnapshot();
       final firstSnapshot =
-          container.read(eveningShutdownProvider).unfinishedSnapshot;
+          container.read(eveningShutdownProvider).unfinishedNav.items;
 
       // Mark the in-session task done in the DB directly — snapshot must not change.
       final doneAt = DateTime.now().toUtc().toIso8601String();
@@ -378,7 +378,7 @@ void main() {
       await notifier.loadUnfinishedSnapshot(); // should be a no-op
 
       final secondSnapshot =
-          container.read(eveningShutdownProvider).unfinishedSnapshot;
+          container.read(eveningShutdownProvider).unfinishedNav.items;
       expect(identical(firstSnapshot, secondSnapshot), isTrue,
           reason: 'second call must not replace the snapshot object');
     });
@@ -392,14 +392,14 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final snapshot =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
       final firstId = snapshot[0].id;
 
       notifier.rolloverTask(firstId);
 
       final state = container.read(eveningShutdownProvider);
       expect(state.dispositions[firstId], equals('rollover'));
-      expect(state.unfinishedIndex, equals(1));
+      expect(state.unfinishedNav.index, equals(1));
     });
 
     test('returnToNextActions records disposition and advances index', () async {
@@ -411,14 +411,14 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final snapshot =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
       final firstId = snapshot[0].id;
 
       notifier.returnToNextActions(firstId);
 
       final state = container.read(eveningShutdownProvider);
       expect(state.dispositions[firstId], equals('leave'));
-      expect(state.unfinishedIndex, equals(1));
+      expect(state.unfinishedNav.index, equals(1));
     });
 
     test('deferTask records disposition and advances index', () async {
@@ -430,14 +430,14 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final snapshot =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
       final firstId = snapshot[0].id;
 
       notifier.deferTask(firstId);
 
       final state = container.read(eveningShutdownProvider);
       expect(state.dispositions[firstId], equals('maybe'));
-      expect(state.unfinishedIndex, equals(1));
+      expect(state.unfinishedNav.index, equals(1));
     });
 
     test('resolving the last unfinished item auto-advances the step',
@@ -466,16 +466,16 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final snapshot =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
       final firstId = snapshot[0].id;
 
       notifier.rolloverTask(firstId); // index → 1, disposition set
-      expect(container.read(eveningShutdownProvider).unfinishedIndex, equals(1));
+      expect(container.read(eveningShutdownProvider).unfinishedNav.index, equals(1));
 
       notifier.previousUnfinishedTask(); // index → 0, disposition preserved
 
       final state = container.read(eveningShutdownProvider);
-      expect(state.unfinishedIndex, equals(0));
+      expect(state.unfinishedNav.index, equals(0));
       expect(state.dispositions[firstId], equals('rollover'),
           reason:
               'Back must not clear dispositions; the previously-selected '
@@ -490,7 +490,7 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final id =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!.first.id;
+          container.read(eveningShutdownProvider).unfinishedNav.items!.first.id;
 
       notifier.rolloverTask(id);
       expect(container.read(eveningShutdownProvider).dispositions[id],
@@ -513,11 +513,11 @@ void main() {
       final notifier = container.read(eveningShutdownProvider.notifier);
       await notifier.loadUnfinishedSnapshot();
 
-      expect(container.read(eveningShutdownProvider).unfinishedIndex, equals(0));
+      expect(container.read(eveningShutdownProvider).unfinishedNav.index, equals(0));
 
       notifier.previousUnfinishedTask(); // already at 0
 
-      expect(container.read(eveningShutdownProvider).unfinishedIndex, equals(0));
+      expect(container.read(eveningShutdownProvider).unfinishedNav.index, equals(0));
     });
 
     test('step is complete when all snapshot items have been resolved',
@@ -530,7 +530,7 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final snapshot =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
       notifier.rolloverTask(snapshot[0].id); // index → 1
       notifier.deferTask(snapshot[1].id);    // index would be 2 >= 2 → advanceStep
 
@@ -549,7 +549,7 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final snapshot =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
       notifier.rolloverTask(snapshot[0].id);
       notifier.deferTask(snapshot[1].id); // auto-advances step
 
@@ -574,7 +574,7 @@ void main() {
       await notifier.loadUnfinishedSnapshot();
 
       final snapshotBefore =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
       expect(snapshotBefore.length, equals(2));
 
       // Mark t1 done in DB directly (simulates background update).
@@ -583,7 +583,7 @@ void main() {
           .write(TodosCompanion(doneAt: Value(doneAt)));
 
       final snapshotAfter =
-          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
       expect(snapshotAfter.length, equals(2),
           reason: 'snapshot must not drift after DB changes');
       expect(snapshotAfter.map((t) => t.id), containsAll(['t1', 't2']));

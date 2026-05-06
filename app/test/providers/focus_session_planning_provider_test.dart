@@ -126,8 +126,8 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.currentStep, 0);
-      expect(state.inboxSnapshot, isNull);
-      expect(state.inboxIndex, 0);
+      expect(state.inboxNav.items, isNull);
+      expect(state.inboxNav.index, 0);
       expect(state.inboxRoutings, isEmpty);
     });
   });
@@ -204,7 +204,7 @@ void main() {
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxRoutings[0]?.kind, equals('next_action'),
           reason: 'Routing recorded exactly once for index 0');
-      expect(state.inboxIndex, equals(1),
+      expect(state.inboxNav.index, equals(1),
           reason: 'Index advanced exactly once');
 
       final row = await (db.select(db.todos)
@@ -227,7 +227,7 @@ void main() {
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxRoutings[0]?.kind, equals('maybe'),
           reason: 'Routing recorded exactly once for index 0');
-      expect(state.inboxIndex, equals(1));
+      expect(state.inboxNav.index, equals(1));
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-2')))
@@ -325,8 +325,8 @@ void main() {
       await notifier.loadInboxSnapshot();
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxSnapshot, isNotNull);
-      expect(state.inboxSnapshot!.map((t) => t.id).toList(),
+      expect(state.inboxNav.items, isNotNull);
+      expect(state.inboxNav.items!.map((t) => t.id).toList(),
           equals(['old', 'new']),
           reason: 'oldest item first (FIFO order)');
     });
@@ -342,7 +342,7 @@ void main() {
       await notifier.loadInboxSnapshot();
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxSnapshot!.length, equals(1),
+      expect(state.inboxNav.items!.length, equals(1),
           reason: 'second load is a no-op; snapshot stays frozen');
     });
 
@@ -353,9 +353,9 @@ void main() {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
       await notifier.loadInboxSnapshot();
 
-      expect(container.read(focusSessionPlanningProvider).inboxIndex, 0);
+      expect(container.read(focusSessionPlanningProvider).inboxNav.index, 0);
       notifier.nextInboxItem();
-      expect(container.read(focusSessionPlanningProvider).inboxIndex, 1);
+      expect(container.read(focusSessionPlanningProvider).inboxNav.index, 1);
     });
 
     test('previousInboxItem decrements index, clamped at 0', () async {
@@ -367,11 +367,11 @@ void main() {
       notifier.nextInboxItem(); // index = 1
 
       notifier.previousInboxItem(); // index = 0
-      expect(container.read(focusSessionPlanningProvider).inboxIndex, 0);
+      expect(container.read(focusSessionPlanningProvider).inboxNav.index, 0);
 
       // Already at 0 — must stay at 0.
       notifier.previousInboxItem();
-      expect(container.read(focusSessionPlanningProvider).inboxIndex, 0);
+      expect(container.read(focusSessionPlanningProvider).inboxNav.index, 0);
     });
 
     test('skipInboxItem advances index without DB write and without adding to inboxRoutings',
@@ -384,7 +384,7 @@ void main() {
       notifier.skipInboxItem();
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxIndex, 1);
+      expect(state.inboxNav.index, 1);
       expect(state.inboxRoutings, isEmpty);
 
       final row = await (db.select(db.todos)
@@ -403,7 +403,7 @@ void main() {
       await notifier.processInboxItem('item-1', title: 'Test item');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxIndex, 1);
+      expect(state.inboxNav.index, 1);
       expect(state.inboxRoutings[0]?.kind, equals('next_action'));
 
       final row = await (db.select(db.todos)
@@ -421,7 +421,7 @@ void main() {
       await notifier.processInboxItemToMaybe('item-1');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxIndex, 1);
+      expect(state.inboxNav.index, 1);
       expect(state.inboxRoutings[0]?.kind, equals('maybe'));
 
       final row = await (db.select(db.todos)
@@ -440,7 +440,7 @@ void main() {
       await notifier.processInboxItemToDone('item-1');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxIndex, 1);
+      expect(state.inboxNav.index, 1);
       expect(state.inboxRoutings[0]?.kind, equals('done'));
 
       final row = await (db.select(db.todos)
@@ -589,11 +589,11 @@ void main() {
       await notifier.loadInboxSnapshot();
 
       var state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxIndex / state.inboxSnapshot!.length, equals(0.0));
+      expect(state.inboxNav.index / state.inboxNav.items!.length, equals(0.0));
 
       notifier.nextInboxItem();
       state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxIndex / state.inboxSnapshot!.length, equals(0.5));
+      expect(state.inboxNav.index / state.inboxNav.items!.length, equals(0.5));
     });
 
     test('isInboxComplete is true when inboxIndex >= inboxSnapshot.length',
@@ -604,11 +604,11 @@ void main() {
       await notifier.loadInboxSnapshot();
 
       var state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxIndex >= state.inboxSnapshot!.length, isFalse);
+      expect(state.inboxNav.index >= state.inboxNav.items!.length, isFalse);
 
       await notifier.processInboxItem('item-1', title: 'Test item');
       state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxIndex >= state.inboxSnapshot!.length, isTrue);
+      expect(state.inboxNav.index >= state.inboxNav.items!.length, isTrue);
     });
 
     test('snapshot does not drift when DB changes mid-session', () async {
@@ -621,7 +621,7 @@ void main() {
       await _insertInboxItem(db, id: 'item-2');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxSnapshot!.length, equals(1),
+      expect(state.inboxNav.items!.length, equals(1),
           reason: 'snapshot frozen at load time');
     });
 
@@ -754,8 +754,8 @@ void main() {
       final state = container.read(focusSessionPlanningProvider);
       expect(state.currentStep, 1,
           reason: 'step 1 (review) should not be skipped when items exist');
-      expect(state.reviewItems, hasLength(1));
-      expect(state.reviewIndex, 0);
+      expect(state.reviewNav.items, hasLength(1));
+      expect(state.reviewNav.index, 0);
     });
 
     test('advanceStep from step 1 lands on step 2', () async {
@@ -843,7 +843,7 @@ void main() {
       expect(
           await db.todoDao.watchNeedsReview().first, isEmpty);
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('updateReviewItemNextAction: sets nextActionText; stamps lastClarifiedAt; reviewIndex advances',
@@ -863,7 +863,7 @@ void main() {
       expect(todo?.nextActionText, 'Draft the proposal');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('markReviewItemDone: task doneAt set; not in result; reviewIndex advances',
@@ -880,7 +880,7 @@ void main() {
       expect(todo?.doneAt, isNotNull);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('deferReviewItemToSomeday: stale task intent=maybe; leaves result; reviewIndex advances',
@@ -897,7 +897,7 @@ void main() {
       expect(todo?.intent, 'maybe');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('trashReviewItem: task intent=trash; not in result; reviewIndex advances',
@@ -914,7 +914,7 @@ void main() {
       expect(todo?.intent, 'trash');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('deferReviewItemToSomeday on actionless task: leaves result; reviewIndex advances',
@@ -930,7 +930,7 @@ void main() {
           await db.todoDao.watchNeedsReview().first, isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('markReviewItemWaitingFor on stale task: task leaves result; reviewIndex advances',
@@ -945,7 +945,7 @@ void main() {
       expect(await db.todoDao.watchNeedsReview().first, isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('markReviewItemWaitingFor on actionless task: sets next_action_text; task leaves result; reviewIndex advances',
@@ -963,7 +963,7 @@ void main() {
       expect(todo?.nextActionText, 'Waiting for…');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('updateReviewItemNextAction with blank text: stays in result; reviewIndex does not advance; action record cleared',
@@ -974,11 +974,11 @@ void main() {
 
       // Load review items so _revertIfNeeded can look up the task by index.
       await notifier.advanceStep();
-      expect(container.read(focusSessionPlanningProvider).reviewItems, hasLength(1));
+      expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
       // First commit a real action so there's a stale record to clear.
       await notifier.updateReviewItemNextAction(id, 'Draft the proposal');
-      expect(container.read(focusSessionPlanningProvider).reviewIndex, 1);
+      expect(container.read(focusSessionPlanningProvider).reviewNav.index, 1);
       notifier.reviewBack();
 
       // Submit blank — should clear the stale record without advancing.
@@ -987,7 +987,7 @@ void main() {
       expect(await db.todoDao.watchNeedsReview().first, isNotEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 0);
+      expect(state.reviewNav.index, 0);
       expect(state.reviewActions[0], isNull,
           reason: 'stale action record must be cleared so dialog does not pre-fill with old text');
     });
@@ -1001,7 +1001,7 @@ void main() {
 
       // Load review items the same way the UI does.
       await notifier.advanceStep(); // step 0 → step 1, loads reviewItems
-      expect(container.read(focusSessionPlanningProvider).reviewItems, hasLength(1));
+      expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
       await notifier.markReviewItemDone(id);
 
@@ -1023,7 +1023,7 @@ void main() {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       await notifier.advanceStep();
-      expect(container.read(focusSessionPlanningProvider).reviewItems, hasLength(1));
+      expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
       await notifier.trashReviewItem(id);
 

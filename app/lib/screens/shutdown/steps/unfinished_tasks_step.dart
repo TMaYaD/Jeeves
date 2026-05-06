@@ -38,17 +38,15 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
 
   @override
   Widget build(BuildContext context) {
-    final snapshot = ref.watch(
-        eveningShutdownProvider.select((s) => s.unfinishedSnapshot));
-    final index = ref.watch(
-        eveningShutdownProvider.select((s) => s.unfinishedIndex));
+    final nav = ref.watch(
+        eveningShutdownProvider.select((s) => s.unfinishedNav));
     final notifier = ref.read(eveningShutdownProvider.notifier);
 
-    if (snapshot == null) {
+    if (!nav.isLoaded) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (snapshot.isEmpty || index >= snapshot.length) {
+    if (nav.isEmpty || nav.isComplete) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -68,7 +66,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
       );
     }
 
-    final current = snapshot[index];
+    final current = nav.current!;
     final dispositions =
         ref.watch(eveningShutdownProvider.select((s) => s.dispositions));
 
@@ -79,7 +77,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Within-step Back button (shown when not at the first task).
-          if (index > 0) ...[
+          if (nav.index > 0) ...[
             TextButton.icon(
               onPressed: () => notifier.previousUnfinishedTask(),
               icon: const Icon(Icons.arrow_back, size: 16),
@@ -95,7 +93,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
           ],
           // Progress label
           Text(
-            'Task ${index + 1} of ${snapshot.length}',
+            'Task ${nav.index + 1} of ${nav.length}',
             style: TextStyle(fontSize: 13, color: Colors.grey[500]),
           ),
           const SizedBox(height: 8),
