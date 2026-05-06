@@ -289,6 +289,33 @@ void main() {
       expect(row?.title, 'Updated');
       expect(row?.notes, 'Some notes');
     });
+
+    test('title change stamps lastClarifiedAt', () async {
+      await _insertTodo(db, id: 'u2', title: 'Original');
+      await db.todoDao.updateFields('u2', title: 'Renamed');
+
+      final row = await db.todoDao.getTodo('u2');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
+
+    test('notes-only change does not stamp lastClarifiedAt', () async {
+      await _insertTodo(db, id: 'u3', title: 'Task');
+      await db.todoDao.updateFields('u3', notes: 'New notes');
+
+      final row = await db.todoDao.getTodo('u3');
+      expect(row?.lastClarifiedAt, isNull);
+    });
+
+    test('clearDueDate stamps lastClarifiedAt', () async {
+      await _insertTodo(db, id: 'u4', title: 'Task');
+      // Set then immediately clear due date; both calls should stamp lastClarifiedAt.
+      final due = DateTime.now().add(const Duration(days: 1));
+      await db.todoDao.updateFields('u4', dueDate: due);
+      await db.todoDao.updateFields('u4', clearDueDate: true);
+
+      final row = await db.todoDao.getTodo('u4');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
   });
 
   group('TodoDao — stampLastClarifiedAt', () {

@@ -144,7 +144,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       if (!saved || !context.mounted) return;
       await ref
           .read(focusSessionPlanningProvider.notifier)
-          .processInboxItem(widget.todo.id);
+          .processInboxItem(widget.todo.id, title: _titleCtrl.text.trim());
     } catch (e) {
       error = e;
     }
@@ -159,6 +159,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     if (!mounted) return;
     final saved = await _saveFields(context);
     if (!saved || !context.mounted) return;
+    final title = _titleCtrl.text.trim();
 
     await showPersonTagPicker(
       context,
@@ -171,7 +172,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         try {
           await ref
               .read(focusSessionPlanningProvider.notifier)
-              .processInboxItem(widget.todo.id);
+              .processInboxItem(widget.todo.id, title: title);
         } catch (e) {
           error = e;
         }

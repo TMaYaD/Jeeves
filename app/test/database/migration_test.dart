@@ -247,6 +247,59 @@ void main() {
       expect(rows.first.read<String>('title'), 'Waiting task');
     });
 
+    test('v19→v20 migration: next_action_text and last_next_action_completion_at added', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a v19 database by recreating todos without the v20 columns.
+      await db.customStatement('DROP TABLE IF EXISTS todos');
+      await db.customStatement('''
+        CREATE TABLE "todos" (
+          "id" TEXT NOT NULL,
+          "title" TEXT NOT NULL,
+          "clarified" INTEGER NOT NULL DEFAULT 1,
+          "user_id" TEXT NOT NULL,
+          "created_at" TEXT NOT NULL,
+          PRIMARY KEY ("id")
+        )
+      ''');
+
+      // Seed a row at the v19 state.
+      final now = DateTime.now();
+      await db.customInsert(
+        'INSERT INTO todos (id, title, clarified, user_id, created_at) '
+        'VALUES (?, ?, ?, ?, ?)',
+        variables: [
+          Variable.withString('v20t1'),
+          Variable.withString('Legacy task'),
+          Variable.withInt(1),
+          Variable.withString(_userId),
+          Variable.withDateTime(now),
+        ],
+      );
+
+      // Drive the v20 migration.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 19, 20);
+
+      // Both new columns must exist.
+      final cols = await db.customSelect('PRAGMA table_info(todos)').get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames, contains('next_action_text'));
+      expect(colNames, contains('last_next_action_completion_at'));
+
+      // Row must have survived with both columns NULL.
+      final rows = await db.customSelect(
+        'SELECT title, next_action_text, last_next_action_completion_at '
+        'FROM todos WHERE id = ?',
+        variables: [Variable.withString('v20t1')],
+      ).get();
+      expect(rows.length, 1);
+      expect(rows.first.read<String>('title'), 'Legacy task');
+      expect(rows.first.read<String?>('next_action_text'), isNull);
+      expect(rows.first.read<String?>('last_next_action_completion_at'), isNull);
+    });
+
     test('v18→v19 migration: waiting_for dropped, last_clarified_at added', () async {
       final db = _openInMemory();
       addTearDown(db.close);
@@ -471,6 +524,19 @@ void main() {
           [value],
         );
       }
+    });
+
+    test('v20→v21 migration: next_action_text and last_next_action_completion_at added to todos',
+        () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 20, 21);
+
+      final cols = await db.customSelect('PRAGMA table_info(todos)').get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames, containsAll(['next_action_text', 'last_next_action_completion_at']));
     });
 
     test('v19→v20 migration: user_preferences table created with UNIQUE(user_id, key)',

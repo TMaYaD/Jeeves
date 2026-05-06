@@ -229,6 +229,18 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     );
   }
 
+  /// Returns the set of person-typed tag IDs currently assigned to [todoId].
+  Future<Set<String>> getPersonTagIdsForTodo(String todoId) async {
+    final rows = await customSelect(
+      'SELECT tt.tag_id FROM todo_tags tt '
+      'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
+      'WHERE tt.todo_id = ?',
+      variables: [Variable('person'), Variable(todoId)],
+      readsFrom: {todoTags, tags},
+    ).get();
+    return {for (final r in rows) r.read<String>('tag_id')};
+  }
+
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].
   ///
   /// Enforces the single-project-per-todo invariant on the client side.

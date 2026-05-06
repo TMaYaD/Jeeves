@@ -60,6 +60,14 @@ class Todos extends Table with Synced {
   IntColumn get timeSpentMinutes =>
       integer().withDefault(const Constant(0)).clientDefault(() => 0)();
 
+  /// The current next-action text for this task. NULL = no next action defined (Actionless).
+  /// Set when a task is processed through inbox-clarify or the review step.
+  TextColumn get nextActionText => text().withLength(max: 500).nullable()();
+
+  /// When a focus session last closed with this task non-done.
+  /// Stamped by reviewAndCloseSession. Used to detect staleness vs lastClarifiedAt.
+  DateTimeColumn get lastNextActionCompletionAt => dateTime().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

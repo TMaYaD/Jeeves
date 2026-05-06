@@ -44,7 +44,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 20;
+  int get schemaVersion => 21;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -368,6 +368,11 @@ class GtdDatabase extends _$GtdDatabase {
             if (rows.isEmpty) {
               await m.createTable(userPreferences);
             }
+          }
+          if (from < 21) {
+            // Add next_action_text and last_next_action_completion_at (issue #237).
+            await _addColumnIfTable(m, todos, todos.nextActionText);
+            await _addColumnIfTable(m, todos, todos.lastNextActionCompletionAt);
           }
         },
       );
