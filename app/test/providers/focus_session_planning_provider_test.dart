@@ -551,19 +551,30 @@ void main() {
       expect(state.reviewIndex, 1);
     });
 
-    test('updateReviewItemNextAction with blank text: stays in result; reviewIndex does not advance',
+    test('updateReviewItemNextAction with blank text: stays in result; reviewIndex does not advance; action record cleared',
         () async {
       // Blank text normalises to NULL → task stays Actionless → not counted as done.
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
+      // Load review items so _revertIfNeeded can look up the task by index.
+      await notifier.advanceStep();
+      expect(container.read(focusSessionPlanningProvider).reviewItems, hasLength(1));
+
+      // First commit a real action so there's a stale record to clear.
+      await notifier.updateReviewItemNextAction(id, 'Draft the proposal');
+      expect(container.read(focusSessionPlanningProvider).reviewIndex, 1);
+      notifier.reviewBack();
+
+      // Submit blank — should clear the stale record without advancing.
       await notifier.updateReviewItemNextAction(id, '   ');
 
-      expect(
-          await db.todoDao.watchNeedsReview().first, isNotEmpty);
+      expect(await db.todoDao.watchNeedsReview().first, isNotEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewIndex, 0);
+      expect(state.reviewActions[0], isNull,
+          reason: 'stale action record must be cleared so dialog does not pre-fill with old text');
     });
 
     // ---- Re-selection (back + different action) --------------------------------

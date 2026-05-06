@@ -614,6 +614,16 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         kind: ReviewActionKind.updateNextAction,
         nextActionText: text.trim(),
       ));
+    } else {
+      // Blank text normalises to NULL and the index does not advance, but any
+      // stale action record must be cleared so the dialog doesn't pre-fill with
+      // the old text when the user navigates back to this item.
+      final idx = state.reviewIndex;
+      if (state.reviewActions.containsKey(idx)) {
+        state = state.copyWith(
+          reviewActions: Map.of(state.reviewActions)..remove(idx),
+        );
+      }
     }
   }
 
@@ -658,7 +668,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> _revertIfNeeded(ReviewActionKind newKind) async {
     final idx = state.reviewIndex;
     final previous = state.reviewActions[idx]?.kind;
-    if (previous == null) return;
+    if (previous == null || idx >= state.reviewItems.length) return;
 
     final id = state.reviewItems[idx].id;
 
