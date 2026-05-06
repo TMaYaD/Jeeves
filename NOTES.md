@@ -1,5 +1,11 @@
 # Notes
 
+## 2026-05-01 (issue #237)
+
+- Drift's `DelegatedDatabase.close()` resets the internal `_ensureOpenCalled` flag to `false`. If an async DB query (via `customSelect().get()`) is in-flight when `close()` runs, the query's `runSelect._debugCheckIsOpen()` assert fires. Fix: wrap `_loadInitialReviewCount` in `try { ... } on StateError catch (_) {}` to silently swallow teardown races. This pattern is safe in production because the DB is never closed while the app is running.
+- When queuing a `Future.microtask` from a Riverpod `Notifier.build()` that eventually writes back to `state`, always guard with `if (!ref.mounted) return;` both before the async DB call and after. `ref.mounted` is safe to call after the element is disposed (returns false). The plain `mounted` getter does not exist on `Notifier` — use `ref.mounted` instead.
+- When writing Riverpod provider tests that exercise a `Future.microtask` queued in `build()`, read the provider BEFORE any `await` that is meant to let the microtask settle (e.g. `await Future.delayed(Duration.zero)`). If `container.read()` happens after the await, the microtask hasn't been queued yet and the await accomplishes nothing.
+
 ## 2026-05-01 (issue #235)
 
 - Removing a Drift column from a table (`waitingFor`) that is still referenced in an old migration block causes a compile error. Fix: replace the Drift accessor reference with raw SQL (`ALTER TABLE todos ADD COLUMN waiting_for TEXT`) in the old migration, so the accessor can be safely deleted from the table class while the migration still runs.

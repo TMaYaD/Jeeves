@@ -1,8 +1,8 @@
 /// Focus session planning ritual — outer container screen (Issue #82).
 ///
 /// Renders a full-screen, drawer-free scaffold with:
-/// - A 4-segment progress bar (Inbox → Energy → Time → Plan Summary).
-///   The 5th screen (Today's Schedule) is the completion view: all 4 filled.
+/// - A 5-segment progress bar (Inbox → Review → Energy → Time → Plan Summary).
+///   The 6th screen (Today's Schedule) is the completion view: all 5 filled.
 /// - A non-swipeable [PageView] that displays each step.
 /// - Back / Next navigation buttons at the bottom (hidden on the last step).
 library;
@@ -17,6 +17,7 @@ import 'steps/day_checkin_time_step.dart';
 import 'steps/inbox_clarification_step.dart';
 import 'steps/plan_summary_step.dart';
 import 'steps/scheduled_review_step.dart';
+import 'steps/task_review_step.dart';
 
 class FocusSessionPlanningScreen extends ConsumerStatefulWidget {
   const FocusSessionPlanningScreen({super.key});
@@ -32,6 +33,7 @@ class _FocusSessionPlanningScreenState
 
   static const _stepTitles = [
     'Clarify Inbox',
+    'Review Tasks',
     'Energy Check-in',
     'Time Check-in',
     'Review Next Actions',
@@ -67,6 +69,14 @@ class _FocusSessionPlanningScreenState
   void _handleNext(int step) {
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
     if (step == 1) {
+      final s = ref.read(focusSessionPlanningProvider);
+      if (s.reviewIndex < s.reviewItems.length) {
+        // Still items to review — skip the current one.
+        notifier.skipReviewItem();
+      } else {
+        notifier.advanceStep();
+      }
+    } else if (step == 2) {
       // Energy → Time: auto-skip tasks that exceed today's energy.
       notifier.autoSkipByEnergy().then((_) => notifier.advanceStep());
     } else {
@@ -119,6 +129,7 @@ class _FocusSessionPlanningScreenState
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
                   InboxClarificationStep(),
+                  TaskReviewStep(),
                   DayCheckinEnergyStep(),
                   DayCheckinTimeStep(),
                   PlanSummaryStep(),
@@ -126,10 +137,20 @@ class _FocusSessionPlanningScreenState
                 ],
               ),
             ),
-            if (step < 4)
+            if (step < 5)
               _PlanningFooter(
                 step: step,
-                onBack: step > 0 ? () => notifier.goToStep(step - 1) : null,
+                onBack: step == 0
+                    ? null
+                    : step == 1
+                        ? () {
+                            if (ref.read(focusSessionPlanningProvider).reviewIndex > 0) {
+                              notifier.reviewBack();
+                            } else {
+                              notifier.goToStep(0);
+                            }
+                          }
+                        : () => notifier.goToStep(step - 1),
                 onNext: _canAdvance(step, ref) ? () => _handleNext(step) : null,
               ),
           ],
@@ -143,14 +164,16 @@ class _FocusSessionPlanningScreenState
     return switch (step) {
       // Step 0: inbox empty (all items clarified or none remaining)
       0 => ref.watch(inboxItemsProvider).asData?.value.isEmpty ?? false,
-      // Step 1: energy check in
+      // Step 1: task review — always enabled; tapping Next skips the current item.
       1 => true,
-      // Step 2: time check in
+      // Step 2: energy check in
       2 => true,
-      // Step 3: Plan Summary and Next Actions view is fully controllable
+      // Step 3: time check in
       3 => true,
-      // Step 4: ScheduledReviewStep is last page
-      4 => false,
+      // Step 4: Plan Summary and Next Actions view is fully controllable
+      4 => true,
+      // Step 5: ScheduledReviewStep is last page
+      5 => false,
       _ => false,
     };
   }
@@ -199,7 +222,7 @@ class _PlanningHeader extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _SegmentedProgressBar(currentStep: step, totalSteps: 4, ref: ref),
+          _SegmentedProgressBar(currentStep: step, totalSteps: 5, ref: ref),
           const SizedBox(height: 4),
           _buildSubtitle(step, ref),
           const SizedBox(height: 8),
@@ -215,19 +238,28 @@ class _PlanningHeader extends ConsumerWidget {
       final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
       final skipped = state.inboxSkippedCount;
       return Text(
-        'Step 1 of 4 · $processed / $initial processed (skipped $skipped)',
+        'Step 1 of 5 · $processed / $initial processed (skipped $skipped)',
         style: TextStyle(fontSize: 12, color: Colors.grey[400]),
       );
     }
-    // Step 4 = Today's Schedule (completion screen — all 4 segments filled).
-    if (step >= 4) {
+    if (step == 1) {
+      final state = ref.watch(focusSessionPlanningProvider);
+      final reviewed = state.reviewIndex;
+      final total = state.reviewItems.length;
+      return Text(
+        'Step 2 of 5 · $reviewed / $total reviewed',
+        style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+      );
+    }
+    // Step 5 = Today's Schedule (completion screen — all 5 segments filled).
+    if (step >= 5) {
       return Text(
         'Planning complete',
         style: TextStyle(fontSize: 12, color: Colors.grey[400]),
       );
     }
     return Text(
-      'Step ${step + 1} of 4',
+      'Step ${step + 1} of 5',
       style: TextStyle(fontSize: 12, color: Colors.grey[400]),
     );
   }
@@ -244,8 +276,9 @@ class _SegmentedProgressBar extends StatelessWidget {
   /// Returns the fill fraction (0.0–1.0) for the current segment of [step].
   ///
   /// - Step 0 (inbox): ratio of items processed so far.
-  /// - Step 1 (energy): 1.0 when an energy level has been chosen, else 0.0.
-  /// - Step 2 (time): 1.0 when the user has explicitly set available time.
+  /// - Step 1 (task review): ratio of review items acted on so far.
+  /// - Step 2 (energy): 1.0 when an energy level has been chosen, else 0.0.
+  /// - Step 3 (time): 1.0 when the user has explicitly set available time.
   /// - All other steps: 0.0 (segment stays empty until the step is completed).
   double _currentStepFraction(int step, FocusSessionPlanningState state) {
     switch (step) {
@@ -254,8 +287,12 @@ class _SegmentedProgressBar extends StatelessWidget {
         final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
         return initial > 0 ? (processed / initial).clamp(0.0, 1.0) : 1.0;
       case 1:
-        return state.energyLevel != null ? 1.0 : 0.0;
+        final total = state.reviewItems.length;
+        final reviewed = state.reviewIndex;
+        return total > 0 ? (reviewed / total).clamp(0.0, 1.0) : 1.0;
       case 2:
+        return state.energyLevel != null ? 1.0 : 0.0;
+      case 3:
         return state.availableTimeSet ? 1.0 : 0.0;
       default:
         return 0.0;

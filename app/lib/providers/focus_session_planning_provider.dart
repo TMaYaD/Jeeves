@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
+import '../models/todo.dart' show Intent;
 import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
@@ -207,6 +208,35 @@ final skippedNextActionsForFocusSessionPlanningProvider =
 });
 
 // ---------------------------------------------------------------------------
+// Review action tracking — used to show affordances when going back
+// ---------------------------------------------------------------------------
+
+enum ReviewActionKind {
+  stillRelevant,
+  updateNextAction,
+  waitingFor,
+  markDone,
+  sendToSomeday,
+  trash,
+}
+
+class ReviewActionRecord {
+  const ReviewActionRecord({
+    required this.kind,
+    this.nextActionText,
+    this.personTagIds = const {},
+  });
+
+  final ReviewActionKind kind;
+
+  /// Recorded text when [kind] is [ReviewActionKind.updateNextAction].
+  final String? nextActionText;
+
+  /// Person tag IDs assigned when [kind] is [ReviewActionKind.waitingFor].
+  final Set<String> personTagIds;
+}
+
+// ---------------------------------------------------------------------------
 // FocusSessionPlanningNotifier — step navigation + mutations
 // ---------------------------------------------------------------------------
 
@@ -222,6 +252,9 @@ class FocusSessionPlanningState {
     this.inboxSkippedCount = 0,
     this.pendingSelectedTaskIds = const [],
     this.reviewedTaskIds = const [],
+    this.reviewItems = const [],
+    this.reviewIndex = 0,
+    this.reviewActions = const {},
   });
 
   final int currentStep;
@@ -245,6 +278,18 @@ class FocusSessionPlanningState {
   /// Task IDs the user has reviewed but skipped (not selected).
   final List<String> reviewedTaskIds;
 
+  /// Snapshot of tasks needing re-clarification, loaded once when Step 1 is
+  /// entered. Navigation is index-driven; the DB is never queried for "next".
+  final List<Todo> reviewItems;
+
+  /// Index of the task currently shown in the review step.
+  /// [reviewIndex] >= [reviewItems.length] means all items have been acted on.
+  final int reviewIndex;
+
+  /// Recorded action for each review index — used to show selection affordances
+  /// when the user navigates back within the review step.
+  final Map<int, ReviewActionRecord> reviewActions;
+
   FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
@@ -256,6 +301,9 @@ class FocusSessionPlanningState {
     int? inboxSkippedCount,
     List<String>? pendingSelectedTaskIds,
     List<String>? reviewedTaskIds,
+    List<Todo>? reviewItems,
+    int? reviewIndex,
+    Map<int, ReviewActionRecord>? reviewActions,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -268,6 +316,9 @@ class FocusSessionPlanningState {
         pendingSelectedTaskIds:
             pendingSelectedTaskIds ?? this.pendingSelectedTaskIds,
         reviewedTaskIds: reviewedTaskIds ?? this.reviewedTaskIds,
+        reviewItems: reviewItems ?? this.reviewItems,
+        reviewIndex: reviewIndex ?? this.reviewIndex,
+        reviewActions: reviewActions ?? this.reviewActions,
       );
 }
 
@@ -323,9 +374,34 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Step navigation -------------------------------------------------------
 
-  void advanceStep() {
-    state = state.copyWith(
-        currentStep: (state.currentStep + 1).clamp(0, _maxStepIndex));
+  Future<void> advanceStep() async {
+    int next = state.currentStep + 1;
+    if (next == 1) {
+      // Load the review snapshot. Skip step 1 entirely if nothing needs review.
+      final items = await _db.todoDao.getNeedsReview();
+      if (!ref.mounted) return;
+      if (items.isEmpty) {
+        next = 2;
+      } else {
+        state = state.copyWith(reviewItems: items, reviewIndex: 0, reviewActions: {});
+      }
+    }
+    state = state.copyWith(currentStep: next.clamp(0, _maxStepIndex));
+  }
+
+  /// Steps back within the review step to the previous item.
+  void reviewBack() {
+    if (state.reviewIndex > 0) {
+      state = state.copyWith(reviewIndex: state.reviewIndex - 1);
+    }
+  }
+
+  /// Skips the current review item without writing anything to the DB.
+  /// Called by the Next button while the review step still has pending items.
+  void skipReviewItem() {
+    if (state.reviewIndex < state.reviewItems.length) {
+      state = state.copyWith(reviewIndex: state.reviewIndex + 1);
+    }
   }
 
   void goToStep(int step) {
@@ -366,12 +442,20 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         clearDueDate: clearDueDate,
       );
 
-  /// Processes an inbox item by setting clarified = true.
+  /// Processes an inbox item by setting clarified = true and recording [title]
+  /// as the task's next-action text.
+  ///
+  /// Setting [next_action_text] prevents the task from immediately surfacing as
+  /// Actionless in the re-clarification surface after inbox-clarify.
   ///
   /// Increments [inboxClarifiedCount] only when the DAO actually updated a row
   /// (affected > 0), preventing double-counting on rapid duplicate calls.
-  Future<void> processInboxItem(String id) async {
-    final affected = await _db.inboxDao.processInboxItem(id);
+  Future<void> processInboxItem(String id, {required String title}) async {
+    final affected = await _db.transaction(() async {
+      final n = await _db.inboxDao.processInboxItem(id);
+      if (n > 0) await _db.todoDao.setNextActionText(id, title);
+      return n;
+    });
     if (affected > 0) {
       state = state.copyWith(
         inboxClarifiedCount: state.inboxClarifiedCount + 1,
@@ -488,6 +572,115 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       state = state.copyWith(
         reviewedTaskIds: [...state.reviewedTaskIds, ...toSkip],
       );
+    }
+  }
+
+  // ---- Task Review (Step 1) --------------------------------------------------
+
+  /// "Still relevant" — stamps last_clarified_at; only available for Stale tasks.
+  Future<void> confirmReviewItemRelevant(String id) async {
+    await _revertIfNeeded(ReviewActionKind.stillRelevant);
+    await _db.todoDao.stampLastClarifiedAt(id);
+    _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.stillRelevant));
+  }
+
+  /// "Waiting for…" — called after [PersonTagPickerSheet] assigns a person tag.
+  ///
+  /// For Stale tasks, stamps last_clarified_at explicitly to clear the stale
+  /// predicate (does not rely on [assignPersonTag] as an implicit side-effect).
+  /// For Actionless tasks, sets a default next_action_text so the task leaves
+  /// the Actionless predicate.
+  Future<void> markReviewItemWaitingFor(String id, {bool isActionless = false}) async {
+    await _revertIfNeeded(ReviewActionKind.waitingFor);
+    if (isActionless) {
+      await _db.todoDao.setNextActionText(id, 'Waiting for…');
+    } else {
+      await _db.todoDao.stampLastClarifiedAt(id);
+    }
+    final tagIds = await _db.tagDao.getPersonTagIdsForTodo(id);
+    _recordAndAdvance(ReviewActionRecord(
+      kind: ReviewActionKind.waitingFor,
+      personTagIds: tagIds,
+    ));
+  }
+
+  /// "Update next action" — sets next_action_text and stamps last_clarified_at.
+  /// Blank text is ignored: the task stays Actionless and the index does not advance.
+  Future<void> updateReviewItemNextAction(String id, String text) async {
+    await _revertIfNeeded(ReviewActionKind.updateNextAction);
+    await _db.todoDao.setNextActionText(id, text);
+    if (text.trim().isNotEmpty) {
+      _recordAndAdvance(ReviewActionRecord(
+        kind: ReviewActionKind.updateNextAction,
+        nextActionText: text.trim(),
+      ));
+    } else {
+      // Blank text normalises to NULL and the index does not advance, but any
+      // stale action record must be cleared so the dialog doesn't pre-fill with
+      // the old text when the user navigates back to this item.
+      final idx = state.reviewIndex;
+      if (state.reviewActions.containsKey(idx)) {
+        state = state.copyWith(
+          reviewActions: Map.of(state.reviewActions)..remove(idx),
+        );
+      }
+    }
+  }
+
+  /// "Mark done" — marks done_at and stamps last_clarified_at internally via DAO.
+  Future<void> markReviewItemDone(String id) async {
+    await _revertIfNeeded(ReviewActionKind.markDone);
+    await _db.todoDao.markDone(id);
+    _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.markDone));
+  }
+
+  /// "Send to Someday" — changes intent to maybe and stamps last_clarified_at.
+  Future<void> deferReviewItemToSomeday(String id) async {
+    await _revertIfNeeded(ReviewActionKind.sendToSomeday);
+    await _db.todoDao.deferTaskToMaybe(id);
+    _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.sendToSomeday));
+  }
+
+  /// "Trash" — sets intent to trash.
+  Future<void> trashReviewItem(String id) async {
+    await _revertIfNeeded(ReviewActionKind.trash);
+    await _db.todoDao.setIntent(id, Intent.trash);
+    _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.trash));
+  }
+
+  void _recordAndAdvance(ReviewActionRecord record) {
+    final index = state.reviewIndex;
+    state = state.copyWith(
+      reviewIndex: index + 1,
+      reviewActions: {...state.reviewActions, index: record},
+    );
+  }
+
+  /// Cleans up only the DB fields that are invalid given the incoming [newKind],
+  /// based on what was previously committed at the current review index.
+  ///
+  /// Rules (others are left untouched — next_action_text and last_clarified_at
+  /// accumulate legitimately across re-selections):
+  /// - Previous was [markDone]: clear done_at — completed_at is not valid
+  ///   alongside any other resolution.
+  /// - Previous was [sendToSomeday] or [trash] and new is a stamp/active action:
+  ///   reset intent to 'next'. Intent is irrelevant for [markDone] tasks.
+  Future<void> _revertIfNeeded(ReviewActionKind newKind) async {
+    final idx = state.reviewIndex;
+    final previous = state.reviewActions[idx]?.kind;
+    if (previous == null || idx >= state.reviewItems.length) return;
+
+    final id = state.reviewItems[idx].id;
+
+    if (previous == ReviewActionKind.markDone) {
+      await _db.todoDao.clearDoneAt(id);
+    }
+
+    if ((previous == ReviewActionKind.sendToSomeday || previous == ReviewActionKind.trash) &&
+        (newKind == ReviewActionKind.stillRelevant ||
+            newKind == ReviewActionKind.waitingFor ||
+            newKind == ReviewActionKind.updateNextAction)) {
+      await _db.todoDao.setIntent(id, Intent.next);
     }
   }
 

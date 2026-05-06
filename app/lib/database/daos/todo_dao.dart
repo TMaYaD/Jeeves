@@ -2,6 +2,7 @@
 library;
 
 import 'package:drift/drift.dart';
+import 'package:meta/meta.dart';
 
 import '../../models/todo.dart' show Intent;
 import '../gtd_database.dart';
@@ -153,6 +154,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       '  todos.time_estimate, todos.energy_level, todos.capture_source, '
       '  todos.location_id, todos.user_id, '
       '  todos.last_clarified_at, todos.time_spent_minutes, '
+      '  todos.next_action_text, todos.last_next_action_completion_at, '
       '  tg.id AS ptag_id, tg.name AS ptag_name, '
       '  tg.color AS ptag_color, tg.user_id AS ptag_user_id '
       'FROM todos '
@@ -246,14 +248,15 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // ---------------------------------------------------------------------------
 
   /// Marks [todoId] as done by setting [done_at] to the current UTC timestamp.
+  /// Also stamps [last_clarified_at] since marking done is a clarifying act.
   ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<void> markDone(String todoId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
     await customUpdate(
-      'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1 '
+      'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
       'WHERE id = ?',
-      variables: [Variable(ts), Variable(ts), Variable(todoId)],
+      variables: [Variable(ts), Variable(ts), Variable(ts), Variable(todoId)],
       updates: {todos},
       updateKind: UpdateKind.update,
     );
@@ -309,15 +312,17 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // ---------------------------------------------------------------------------
 
   /// Sets the [intent] column for a todo without touching its GTD state.
+  /// Also stamps [last_clarified_at] since a state transition is a clarifying act.
   ///
   /// [intent] must be one of: next | maybe | trash.
   /// [now] overrides the timestamp used for [updatedAt]; defaults to [DateTime.now()].
   Future<void> setIntent(String todoId, Intent intent, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
     await customUpdate(
-      'UPDATE todos SET intent = ?, updated_at = ? WHERE id = ?',
+      'UPDATE todos SET intent = ?, updated_at = ?, last_clarified_at = ? WHERE id = ?',
       variables: [
         Variable(intent.value),
+        Variable(ts),
         Variable(ts),
         Variable(todoId),
       ],
@@ -345,6 +350,81 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ));
   }
 
+  /// Sets [next_action_text] and stamps [last_clarified_at] atomically.
+  ///
+  /// Used by inbox-clarify (to record the task title as the default action) and
+  /// by the review step's "Update next action" action.
+  Future<void> setNextActionText(
+      String todoId, String text, {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final normalized = text.trim();
+    await (update(todos)..where((t) => t.id.equals(todoId)))
+        .write(TodosCompanion(
+      nextActionText: Value(normalized.isEmpty ? null : normalized),
+      lastClarifiedAt: Value(ts),
+      updatedAt: Value(ts),
+    ));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Re-clarification surface (issue #237)
+  // ---------------------------------------------------------------------------
+
+  static const _needsReviewWhere = '''
+clarified = 1
+AND done_at IS NULL
+AND intent = 'next'
+AND (
+  (last_next_action_completion_at IS NOT NULL
+   AND (last_clarified_at IS NULL
+        OR last_clarified_at < last_next_action_completion_at))
+  OR next_action_text IS NULL
+  OR TRIM(next_action_text) = ''
+)''';
+
+  /// Stream of tasks needing re-clarification: Stale or Actionless per spec.
+  ///
+  /// Stale: worked on in a session more recently than last clarified.
+  /// Actionless: no next action defined (regardless of session history).
+  Stream<List<Todo>> watchNeedsReview() {
+    return customSelect(
+      'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
+      variables: [],
+      readsFrom: {todos},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
+  /// One-shot snapshot of tasks needing re-clarification.
+  Future<List<Todo>> getNeedsReview() {
+    return customSelect(
+      'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
+      variables: [],
+      readsFrom: {todos},
+    ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
+  /// One-shot count of tasks needing re-clarification.
+  @visibleForTesting
+  Future<int> getNeedsReviewCount() async {
+    final rows = await customSelect(
+      'SELECT COUNT(*) AS cnt FROM todos WHERE $_needsReviewWhere',
+      variables: [],
+      readsFrom: {todos},
+    ).get();
+    return rows.first.read<int>('cnt');
+  }
+
+  /// Clears [done_at], returning the task to an undone state without touching
+  /// any other fields. Called when a "mark done" review action is replaced by a
+  /// different resolution.
+  Future<void> clearDoneAt(String id) async {
+    final ts = DateTime.now().toUtc();
+    await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
+      doneAt: const Value(null),
+      updatedAt: Value(ts),
+    ));
+  }
+
   /// Restores a done or trashed todo to active next-action status.
   Future<void> restore(String todoId) async {
     final ts = DateTime.now().toUtc().toIso8601String();
@@ -361,7 +441,21 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     );
   }
 
+  /// One-shot check: is [todoId] currently in the re-clarification queue?
+  @visibleForTesting
+  Future<bool> isNeedsReview(String todoId) async {
+    final rows = await customSelect(
+      'SELECT 1 FROM todos WHERE id = ? AND $_needsReviewWhere',
+      variables: [Variable(todoId)],
+      readsFrom: {todos},
+    ).get();
+    return rows.isNotEmpty;
+  }
+
   /// Update mutable todo fields (title, notes, energy level, time estimate, due date).
+  ///
+  /// Title and due-date edits are clarifying acts: they stamp [lastClarifiedAt]
+  /// so a stale task does not remain falsely surfaced after such changes.
   Future<void> updateFields(
     String todoId, {
     String? title,
@@ -371,8 +465,11 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     DateTime? dueDate,
     bool clearDueDate = false,
   }) async {
+    final ts = DateTime.now().toUtc();
+    final shouldStampClarified = title != null || dueDate != null || clearDueDate;
     final companion = TodosCompanion(
-      updatedAt: Value(DateTime.now()),
+      updatedAt: Value(ts),
+      lastClarifiedAt: shouldStampClarified ? Value(ts) : const Value.absent(),
       title: title != null ? Value(title) : const Value.absent(),
       notes: notes != null ? Value(notes) : const Value.absent(),
       energyLevel: energyLevel != null ? Value(energyLevel) : const Value.absent(),

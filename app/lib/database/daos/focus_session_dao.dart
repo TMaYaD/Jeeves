@@ -251,6 +251,23 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         }
       }
 
+      // Stamp last_next_action_completion_at on non-done tasks in this session.
+      // This marks them as "worked on in a session" for the re-clarification predicate.
+      await customUpdate(
+        'UPDATE todos SET last_next_action_completion_at = ? '
+        'WHERE id IN ('
+        '  SELECT task_id FROM focus_session_tasks '
+        '  WHERE focus_session_id = ?'
+        ') AND done_at IS NULL AND user_id = ?',
+        variables: [
+          Variable(ts),
+          Variable(sessionId),
+          Variable(session.userId),
+        ],
+        updates: {todos},
+        updateKind: UpdateKind.update,
+      );
+
       // Close any open time log for this session.
       await (update(timeLogs)
             ..where((t) =>
