@@ -227,8 +227,11 @@ class _PlanningHeader extends ConsumerWidget {
       }
       final routings =
           ref.watch(focusSessionPlanningProvider.select((s) => s.inboxRoutings));
-      final processed = nav.index;
-      final skipped = nav.index - routings.length;
+      // Count routings strictly below the cursor: this excludes both items
+      // the user skipped (no routing recorded) and the item currently shown
+      // when they've navigated Back to revisit it.
+      final processed = routings.keys.where((k) => k < nav.index).length;
+      final skipped = nav.index - processed;
       return Text(
         'Step 1 of 5 · $processed / ${nav.length} processed (skipped $skipped)',
         style: TextStyle(fontSize: 12, color: Colors.grey[400]),
