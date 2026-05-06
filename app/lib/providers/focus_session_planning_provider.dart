@@ -285,6 +285,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         final today = planningToday();
         final dismissed = next.value.get<String>(_kBannerDismissedDateKey);
         focusSessionPlanningBannerDismissedNotifier.value = dismissed == today;
+
+        _notificationSkippedToday =
+            next.value.get<String>(_kNotificationSkippedDateKey) == today;
+
+        final snoozedUntil = DateTime.tryParse(
+          next.value.get<String>(_kNotificationSnoozedUntilKey) ?? '',
+        );
+        _notificationSnoozedActive =
+            snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
       }
     });
     Future.microtask(_preloadRolloverIds);

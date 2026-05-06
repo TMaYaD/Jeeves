@@ -40,7 +40,7 @@ void main() {
       final originalId = before.first.read<String>('id');
       final originalUpdatedAt = before.first.read<String>('updated_at');
 
-      await Future<void>.delayed(const Duration(milliseconds: 1));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
       await db.userPreferencesDao.set(_userId, 'k', '"v2"');
       final after = await db.customSelect(
         'SELECT id, value, updated_at FROM user_preferences WHERE user_id = ? AND "key" = ?',

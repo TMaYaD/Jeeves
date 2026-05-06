@@ -356,7 +356,7 @@ All preference values are stored as JSON-encoded TEXT. A NULL value is a tombsto
 
 ## Focus Session Planning State
 
-The focus session planning feature uses a mix of global `ValueNotifier` objects (for cross-widget reactivity without a Riverpod container) and `SharedPreferences` for cold-start persistence (before Riverpod loads).
+The focus session planning feature uses a mix of global `ValueNotifier` objects (for cross-widget reactivity without a Riverpod container), the `user_preferences` Drift table via `syncedPreferencesProvider` (the cross-device source of truth for settings and ceremony state), and `SharedPreferences` (for cold-start reads before Riverpod loads).
 
 ### Key objects
 

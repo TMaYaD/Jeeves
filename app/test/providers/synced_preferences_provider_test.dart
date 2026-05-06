@@ -142,12 +142,11 @@ void main() {
       expect(prefs.getString('planning_banner_dismissed_date'), '2026-05-06');
     });
 
-    test('short-circuits when DB already has rows', () async {
+    test('short-circuits when migration sentinel is set', () async {
       final db = GtdDatabase(NativeDatabase.memory());
-      // Pre-populate DB so migration guard triggers.
-      await db.userPreferencesDao.set(_userId, 'existing', '"x"');
 
       SharedPreferences.setMockInitialValues({
+        '_legacy_synced_preferences_migrated_v1': true,
         'focus_settings_sprint_duration_minutes': 99,
       });
 
@@ -157,10 +156,9 @@ void main() {
 
       await c.read(syncedPreferencesProvider.future);
 
-      // The pre-existing row is there; the SharedPreferences value was NOT imported.
+      // Migration was skipped; SharedPreferences value was NOT imported.
       final all = await db.userPreferencesDao.getAll(_userId);
       expect(all.containsKey('focus_settings_sprint_duration_minutes'), isFalse);
-      expect(all['existing'], '"x"');
 
       // SharedPreferences key was not touched.
       final prefs = await SharedPreferences.getInstance();

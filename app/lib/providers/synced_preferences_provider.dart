@@ -175,10 +175,10 @@ class SyncedPreferencesNotifier
     UserPreferencesDao dao,
     String userId,
   ) async {
-    // Short-circuit if DB already has rows — migration already ran.
-    if ((await dao.getAll(userId)).isNotEmpty) return;
-
     final prefs = await SharedPreferences.getInstance();
+    const migratedKey = '_legacy_synced_preferences_migrated_v1';
+    if (prefs.getBool(migratedKey) == true) return;
+
     final entries = <String, String?>{};
 
     // Settings keys: int / bool / String
@@ -195,15 +195,17 @@ class SyncedPreferencesNotifier
       entries[key] = _encodeRaw(raw);
     }
 
-    if (entries.isEmpty) return;
-
-    await dao.setAll(userId, entries);
+    if (entries.isNotEmpty) {
+      await dao.setAll(userId, entries);
+    }
 
     // Clear only settings keys from SharedPreferences (ceremony keys remain
     // so the startup init functions can still read them on cold start).
     for (final key in _settingsKeys) {
       if (entries.containsKey(key)) await prefs.remove(key);
     }
+
+    await prefs.setBool(migratedKey, true);
   }
 
   // ---------------------------------------------------------------------------
