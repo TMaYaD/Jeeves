@@ -441,6 +441,18 @@ AND (
     );
   }
 
+  /// Returns the IDs of person-typed tags assigned to [todoId].
+  Future<Set<String>> getPersonTagIdsForTodo(String todoId) async {
+    final rows = await customSelect(
+      'SELECT tt.tag_id FROM todo_tags tt '
+      'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
+      'WHERE tt.todo_id = ?',
+      variables: [Variable('person'), Variable(todoId)],
+      readsFrom: {todoTags, tags},
+    ).get();
+    return rows.map((r) => r.read<String>('tag_id')).toSet();
+  }
+
   /// One-shot check: is [todoId] currently in the re-clarification queue?
   @visibleForTesting
   Future<bool> isNeedsReview(String todoId) async {

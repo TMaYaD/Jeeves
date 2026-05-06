@@ -323,4 +323,270 @@ void main() {
       expect(after.map((t) => t.id), equals(['t2']));
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Unfinished snapshot navigation
+  // ---------------------------------------------------------------------------
+
+  group('Unfinished snapshot navigation', () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+
+    setUp(() {
+      db = GtdDatabase(NativeDatabase.memory());
+      container = _container(db);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    test('loadUnfinishedSnapshot populates state with only unfinished tasks',
+        () async {
+      await _insertTodo(db,
+          id: 'done1',
+          doneAt: DateTime.now().toUtc().toIso8601String());
+      await _insertTodo(db, id: 'open1');
+      await _insertTodo(db, id: 'open2');
+      await _openSessionWith(db, ['done1', 'open1', 'open2']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final state = container.read(eveningShutdownProvider);
+      expect(state.unfinishedSnapshot, isNotNull);
+      expect(state.unfinishedSnapshot!.map((t) => t.id),
+          containsAll(['open1', 'open2']));
+      expect(state.unfinishedSnapshot!.map((t) => t.id),
+          isNot(contains('done1')));
+    });
+
+    test('loadUnfinishedSnapshot is idempotent', () async {
+      await _insertTodo(db, id: 't1');
+      await _openSessionWith(db, ['t1']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+      final firstSnapshot =
+          container.read(eveningShutdownProvider).unfinishedSnapshot;
+
+      // Mark the in-session task done in the DB directly — snapshot must not change.
+      final doneAt = DateTime.now().toUtc().toIso8601String();
+      await (db.update(db.todos)..where((t) => t.id.equals('t1')))
+          .write(TodosCompanion(doneAt: Value(doneAt)));
+      await notifier.loadUnfinishedSnapshot(); // should be a no-op
+
+      final secondSnapshot =
+          container.read(eveningShutdownProvider).unfinishedSnapshot;
+      expect(identical(firstSnapshot, secondSnapshot), isTrue,
+          reason: 'second call must not replace the snapshot object');
+    });
+
+    test('rolloverTask records disposition and advances index', () async {
+      await _insertTodo(db, id: 't1');
+      await _insertTodo(db, id: 't2');
+      await _openSessionWith(db, ['t1', 't2']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final snapshot =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+      final firstId = snapshot[0].id;
+
+      notifier.rolloverTask(firstId);
+
+      final state = container.read(eveningShutdownProvider);
+      expect(state.dispositions[firstId], equals('rollover'));
+      expect(state.unfinishedIndex, equals(1));
+    });
+
+    test('returnToNextActions records disposition and advances index', () async {
+      await _insertTodo(db, id: 't1');
+      await _insertTodo(db, id: 't2');
+      await _openSessionWith(db, ['t1', 't2']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final snapshot =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+      final firstId = snapshot[0].id;
+
+      notifier.returnToNextActions(firstId);
+
+      final state = container.read(eveningShutdownProvider);
+      expect(state.dispositions[firstId], equals('leave'));
+      expect(state.unfinishedIndex, equals(1));
+    });
+
+    test('deferTask records disposition and advances index', () async {
+      await _insertTodo(db, id: 't1');
+      await _insertTodo(db, id: 't2');
+      await _openSessionWith(db, ['t1', 't2']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final snapshot =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+      final firstId = snapshot[0].id;
+
+      notifier.deferTask(firstId);
+
+      final state = container.read(eveningShutdownProvider);
+      expect(state.dispositions[firstId], equals('maybe'));
+      expect(state.unfinishedIndex, equals(1));
+    });
+
+    test('resolving the last unfinished item auto-advances the step',
+        () async {
+      await _insertTodo(db, id: 't1');
+      await _openSessionWith(db, ['t1']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      expect(container.read(eveningShutdownProvider).currentStep, equals(0));
+
+      notifier.rolloverTask('t1'); // index would become 1 >= length 1 → advanceStep
+
+      expect(container.read(eveningShutdownProvider).currentStep, equals(1));
+    });
+
+    test(
+        'previousUnfinishedTask is pure navigation: disposition is preserved',
+        () async {
+      await _insertTodo(db, id: 't1');
+      await _insertTodo(db, id: 't2');
+      await _openSessionWith(db, ['t1', 't2']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final snapshot =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+      final firstId = snapshot[0].id;
+
+      notifier.rolloverTask(firstId); // index → 1, disposition set
+      expect(container.read(eveningShutdownProvider).unfinishedIndex, equals(1));
+
+      notifier.previousUnfinishedTask(); // index → 0, disposition preserved
+
+      final state = container.read(eveningShutdownProvider);
+      expect(state.unfinishedIndex, equals(0));
+      expect(state.dispositions[firstId], equals('rollover'),
+          reason:
+              'Back must not clear dispositions; the previously-selected '
+              'affordance reads them on revisit.');
+    });
+
+    test('re-tapping a different disposition replaces the prior one', () async {
+      await _insertTodo(db, id: 't1');
+      await _openSessionWith(db, ['t1']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final id =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!.first.id;
+
+      notifier.rolloverTask(id);
+      expect(container.read(eveningShutdownProvider).dispositions[id],
+          equals('rollover'));
+
+      // Snapshot only had one item, so rolloverTask called advanceStep.
+      // Drive back to the resolution UI for re-tap by going back to step 1.
+      notifier.goToStep(1);
+      notifier.previousUnfinishedTask(); // pure nav — no-op at index 0
+      notifier.deferTask(id);
+
+      expect(container.read(eveningShutdownProvider).dispositions[id],
+          equals('maybe'));
+    });
+
+    test('previousUnfinishedTask is clamped at 0', () async {
+      await _insertTodo(db, id: 't1');
+      await _openSessionWith(db, ['t1']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      expect(container.read(eveningShutdownProvider).unfinishedIndex, equals(0));
+
+      notifier.previousUnfinishedTask(); // already at 0
+
+      expect(container.read(eveningShutdownProvider).unfinishedIndex, equals(0));
+    });
+
+    test('step is complete when all snapshot items have been resolved',
+        () async {
+      await _insertTodo(db, id: 't1');
+      await _insertTodo(db, id: 't2');
+      await _openSessionWith(db, ['t1', 't2']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final snapshot =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+      notifier.rolloverTask(snapshot[0].id); // index → 1
+      notifier.deferTask(snapshot[1].id);    // index would be 2 >= 2 → advanceStep
+
+      final state = container.read(eveningShutdownProvider);
+      expect(state.currentStep, equals(1),
+          reason: 'step advances after all items resolved');
+    });
+
+    test('closeDay commits all accumulated dispositions after snapshot use',
+        () async {
+      await _insertTodo(db, id: 't1');
+      await _insertTodo(db, id: 't2');
+      await _openSessionWith(db, ['t1', 't2']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final snapshot =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+      notifier.rolloverTask(snapshot[0].id);
+      notifier.deferTask(snapshot[1].id); // auto-advances step
+
+      await notifier.closeDay();
+
+      final rolloverIds =
+          await db.focusSessionDao.getLastClosedSessionRolloverTaskIds();
+      expect(rolloverIds, contains(snapshot[0].id));
+
+      final deferred = await (db.select(db.todos)
+            ..where((t) => t.id.equals(snapshot[1].id)))
+          .getSingle();
+      expect(deferred.intent, equals('maybe'));
+    });
+
+    test('snapshot does not drift when DB changes mid-session', () async {
+      await _insertTodo(db, id: 't1');
+      await _insertTodo(db, id: 't2');
+      await _openSessionWith(db, ['t1', 't2']);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+
+      final snapshotBefore =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+      expect(snapshotBefore.length, equals(2));
+
+      // Mark t1 done in DB directly (simulates background update).
+      final doneAt = DateTime.now().toUtc().toIso8601String();
+      await (db.update(db.todos)..where((t) => t.id.equals('t1')))
+          .write(TodosCompanion(doneAt: Value(doneAt)));
+
+      final snapshotAfter =
+          container.read(eveningShutdownProvider).unfinishedSnapshot!;
+      expect(snapshotAfter.length, equals(2),
+          reason: 'snapshot must not drift after DB changes');
+      expect(snapshotAfter.map((t) => t.id), containsAll(['t1', 't2']));
+    });
+  });
 }

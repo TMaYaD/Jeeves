@@ -8,6 +8,8 @@
 /// - Task selection during the ritual is accumulated in-memory
 ///   ([pendingSelectedTaskIds] / [reviewedTaskIds]); [startDay] commits them
 ///   atomically by calling [FocusSessionDao.openSession].
+/// - Inbox clarification uses a fixed snapshot (loaded once at step start)
+///   navigated by [inboxIndex]. All routing is tracked in [inboxRoutings].
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
@@ -21,6 +23,7 @@ import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'synced_preferences_provider.dart';
+import 'tag_filter_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession;
 
@@ -208,6 +211,34 @@ final skippedNextActionsForFocusSessionPlanningProvider =
 });
 
 // ---------------------------------------------------------------------------
+// Inbox routing record — what was done to an item and how to undo it
+// ---------------------------------------------------------------------------
+
+/// Records a routing applied to an inbox item during planning, plus the
+/// pre-routing state needed to undo it on re-route. The record's [kind] drives
+/// the "previously selected" affordance on revisit; the prior fields let the
+/// revert path restore the exact pre-routing state instead of resetting to
+/// inbox defaults (which would drop pre-existing intent / person tags from
+/// import or sync).
+class InboxRoutingRecord {
+  const InboxRoutingRecord({
+    required this.kind,
+    required this.priorClarified,
+    required this.priorIntent,
+    required this.priorDoneAt,
+    required this.priorPersonTagIds,
+  });
+
+  /// Routing kind: 'next_action' | 'waiting_for' | 'maybe' | 'done'.
+  final String kind;
+
+  final bool priorClarified;
+  final String priorIntent;
+  final String? priorDoneAt;
+  final Set<String> priorPersonTagIds;
+}
+
+// ---------------------------------------------------------------------------
 // Review action tracking — used to show affordances when going back
 // ---------------------------------------------------------------------------
 
@@ -247,9 +278,9 @@ class FocusSessionPlanningState {
     this.availableMinutes = 480, // 8 hours default
     this.availableTimeSet = false,
     this.energyLevel,
-    this.initialInboxCount,
-    this.inboxClarifiedCount = 0,
-    this.inboxSkippedCount = 0,
+    this.inboxSnapshot,
+    this.inboxIndex = 0,
+    this.inboxRoutings = const {},
     this.pendingSelectedTaskIds = const [],
     this.reviewedTaskIds = const [],
     this.reviewItems = const [],
@@ -266,9 +297,16 @@ class FocusSessionPlanningState {
   /// User's self-reported energy level for today: 'low' | 'medium' | 'high'.
   final String? energyLevel;
 
-  final int? initialInboxCount;
-  final int inboxClarifiedCount;
-  final int inboxSkippedCount;
+  /// Fixed snapshot of inbox items loaded at the start of Step 0, ordered
+  /// oldest-first (FIFO). null = not yet loaded; [] = loaded and empty.
+  final List<Todo>? inboxSnapshot;
+
+  /// Index into [inboxSnapshot] pointing at the current item being clarified.
+  final int inboxIndex;
+
+  /// Maps [inboxSnapshot] index → routing record (kind + captured prior state).
+  /// An absent key means the item at that index has not yet been processed.
+  final Map<int, InboxRoutingRecord> inboxRoutings;
 
   /// Task IDs the user has selected for today's plan (in selection order).
   /// Committed to the DB atomically when [FocusSessionPlanningNotifier.startDay]
@@ -296,9 +334,10 @@ class FocusSessionPlanningState {
     bool? availableTimeSet,
     String? energyLevel,
     bool clearEnergyLevel = false,
-    int? initialInboxCount,
-    int? inboxClarifiedCount,
-    int? inboxSkippedCount,
+    List<Todo>? inboxSnapshot,
+    bool clearInboxSnapshot = false,
+    int? inboxIndex,
+    Map<int, InboxRoutingRecord>? inboxRoutings,
     List<String>? pendingSelectedTaskIds,
     List<String>? reviewedTaskIds,
     List<Todo>? reviewItems,
@@ -310,9 +349,9 @@ class FocusSessionPlanningState {
         availableMinutes: availableMinutes ?? this.availableMinutes,
         availableTimeSet: availableTimeSet ?? this.availableTimeSet,
         energyLevel: clearEnergyLevel ? null : (energyLevel ?? this.energyLevel),
-        initialInboxCount: initialInboxCount ?? this.initialInboxCount,
-        inboxClarifiedCount: inboxClarifiedCount ?? this.inboxClarifiedCount,
-        inboxSkippedCount: inboxSkippedCount ?? this.inboxSkippedCount,
+        inboxSnapshot: clearInboxSnapshot ? null : (inboxSnapshot ?? this.inboxSnapshot),
+        inboxIndex: inboxIndex ?? this.inboxIndex,
+        inboxRoutings: inboxRoutings ?? this.inboxRoutings,
         pendingSelectedTaskIds:
             pendingSelectedTaskIds ?? this.pendingSelectedTaskIds,
         reviewedTaskIds: reviewedTaskIds ?? this.reviewedTaskIds,
@@ -328,6 +367,8 @@ final focusSessionPlanningProvider =
 );
 
 class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
+  bool _loadingInboxSnapshot = false;
+
   @override
   FocusSessionPlanningState build() {
     // Update banner-dismissed ValueNotifier when Drift receives cross-device sync.
@@ -416,11 +457,95 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = state.copyWith(energyLevel: level);
   }
 
-  void setInitialInboxCount(int count) {
-    state = state.copyWith(initialInboxCount: count);
+  // ---- Inbox clarification (Step 0) — snapshot navigation -------------------
+
+  /// Loads the inbox snapshot once. Idempotent: subsequent calls are no-ops.
+  ///
+  /// The tag filter is captured at load time; later filter changes do not
+  /// affect the snapshot.
+  Future<void> loadInboxSnapshot() async {
+    if (state.inboxSnapshot != null || _loadingInboxSnapshot) return;
+    _loadingInboxSnapshot = true;
+    try {
+      final tagIds = ref.read(tagFilterProvider);
+      final items = await _db.inboxDao.watchInbox(tagIds: tagIds).first;
+      state = state.copyWith(inboxSnapshot: items.reversed.toList());
+    } finally {
+      _loadingInboxSnapshot = false;
+    }
   }
 
-  // ---- Inbox clarification (Step 0) -----------------------------------------
+  /// Advances [inboxIndex] by one (no bounds check — callers must not call
+  /// when already past the end).
+  void nextInboxItem() =>
+      state = state.copyWith(inboxIndex: state.inboxIndex + 1);
+
+  /// Pure navigation: decrements [inboxIndex] by one (clamped to 0). The DB is
+  /// not touched on Back — any prior routing remains applied so the
+  /// "previously selected" affordance can render on revisit. Re-tapping a
+  /// destination is what reverts the prior routing (handled inside each
+  /// destination handler).
+  void previousInboxItem() {
+    if (state.inboxIndex <= 0) return;
+    state = state.copyWith(inboxIndex: state.inboxIndex - 1);
+  }
+
+  /// Advances the index without writing to the DB or recording a routing.
+  void skipInboxItem() => nextInboxItem();
+
+  /// Reverts the DB state for the item at [idx] back to the captured
+  /// pre-routing state and removes [idx] from [inboxRoutings].
+  ///
+  /// Restores intent / clarified / done_at via [InboxDao.unprocessInboxItem]
+  /// and the person-tag set via [InboxDao.setPersonTagsForTodo]; both targets
+  /// come from the [InboxRoutingRecord] captured at routing time. Pre-existing
+  /// person-tag associations (from import / sync) are preserved.
+  Future<void> _revertProcessedInboxItem(int idx) async {
+    final todo = state.inboxSnapshot![idx];
+    final record = state.inboxRoutings[idx];
+    if (record == null) return;
+    final affected = await _db.inboxDao.unprocessInboxItem(
+      todo.id,
+      priorClarified: record.priorClarified,
+      priorIntent: record.priorIntent,
+      priorDoneAt: record.priorDoneAt,
+    );
+    if (affected > 0) {
+      await _db.inboxDao.setPersonTagsForTodo(
+        todo.id,
+        record.priorPersonTagIds,
+        _userId,
+      );
+      state = state.copyWith(
+        inboxRoutings: Map.from(state.inboxRoutings)..remove(idx),
+      );
+    }
+  }
+
+  /// Captures the current pre-routing state of the item at [idx] by reading
+  /// all four fields (clarified / intent / done_at / person tags) from the
+  /// live DB at apply time, not from the snapshot.
+  ///
+  /// Reading live keeps capture consistent across fields and lets revert
+  /// preserve any external mutation (sync, import, ad-hoc edit) that landed
+  /// between snapshot load and routing apply. The cost is one extra
+  /// row-by-id query per routing call.
+  Future<({
+    bool clarified,
+    String intent,
+    String? doneAt,
+    Set<String> personTagIds,
+  })> _capturePriorInboxState(int idx) async {
+    final id = state.inboxSnapshot![idx].id;
+    final todo = await _db.todoDao.getTodo(id);
+    final personTagIds = await _db.todoDao.getPersonTagIdsForTodo(id);
+    return (
+      clarified: todo?.clarified ?? false,
+      intent: todo?.intent ?? 'next',
+      doneAt: todo?.doneAt,
+      personTagIds: personTagIds,
+    );
+  }
 
   /// Updates mutable fields on an inbox item before it is processed.
   Future<void> updateInboxItemFields(
@@ -442,15 +567,20 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         clearDueDate: clearDueDate,
       );
 
-  /// Processes an inbox item by setting clarified = true and recording [title]
-  /// as the task's next-action text.
+  /// Routes the current inbox item to Next Actions (clarified = true) and
+  /// records [title] as the task's next-action text.
   ///
-  /// Setting [next_action_text] prevents the task from immediately surfacing as
-  /// Actionless in the re-clarification surface after inbox-clarify.
-  ///
-  /// Increments [inboxClarifiedCount] only when the DAO actually updated a row
-  /// (affected > 0), preventing double-counting on rapid duplicate calls.
+  /// If the item was previously routed, that routing is reverted first.
+  /// Setting [next_action_text] prevents the task from immediately surfacing
+  /// as Actionless in the re-clarification surface after inbox-clarify. If
+  /// the DB UPDATE does not affect any row (item not found) the state is not
+  /// changed.
   Future<void> processInboxItem(String id, {required String title}) async {
+    final idx = state.inboxIndex;
+    if (state.inboxRoutings.containsKey(idx)) {
+      await _revertProcessedInboxItem(idx);
+    }
+    final prior = await _capturePriorInboxState(idx);
     final affected = await _db.transaction(() async {
       final n = await _db.inboxDao.processInboxItem(id);
       if (n > 0) await _db.todoDao.setNextActionText(id, title);
@@ -458,35 +588,106 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     });
     if (affected > 0) {
       state = state.copyWith(
-        inboxClarifiedCount: state.inboxClarifiedCount + 1,
+        inboxRoutings: {
+          ...state.inboxRoutings,
+          idx: InboxRoutingRecord(
+            kind: 'next_action',
+            priorClarified: prior.clarified,
+            priorIntent: prior.intent,
+            priorDoneAt: prior.doneAt,
+            priorPersonTagIds: prior.personTagIds,
+          ),
+        },
       );
+      nextInboxItem();
     }
   }
 
-  /// Processes an inbox item to the maybe list.
-  ///
-  /// Sets clarified = true and intent = 'maybe' so the item appears in the
-  /// Maybe view rather than Next Actions.
-  ///
-  /// Increments [inboxClarifiedCount] only when the DAO actually updated a row.
-  Future<void> processInboxItemToMaybe(String id) async {
-    final affected = await _db.inboxDao.processInboxItem(
-      id,
-      intent: 'maybe',
-    );
+  /// Routes the current inbox item to Waiting For (clarified = true, person
+  /// tags assigned by the caller before this is invoked) and records [title]
+  /// as the task's next-action text.
+  Future<void> processInboxItemToWaitingFor(String id,
+      {required String title}) async {
+    final idx = state.inboxIndex;
+    if (state.inboxRoutings.containsKey(idx)) {
+      await _revertProcessedInboxItem(idx);
+    }
+    final prior = await _capturePriorInboxState(idx);
+    final affected = await _db.transaction(() async {
+      final n = await _db.inboxDao.processInboxItem(id);
+      if (n > 0) await _db.todoDao.setNextActionText(id, title);
+      return n;
+    });
     if (affected > 0) {
       state = state.copyWith(
-        inboxClarifiedCount: state.inboxClarifiedCount + 1,
+        inboxRoutings: {
+          ...state.inboxRoutings,
+          idx: InboxRoutingRecord(
+            kind: 'waiting_for',
+            priorClarified: prior.clarified,
+            priorIntent: prior.intent,
+            priorDoneAt: prior.doneAt,
+            priorPersonTagIds: prior.personTagIds,
+          ),
+        },
       );
+      nextInboxItem();
     }
   }
 
-  /// Skips an inbox item for today without clarifying it.
-  Future<void> skipInboxItem(String id) async {
-    state = state.copyWith(
-      inboxSkippedCount: state.inboxSkippedCount + 1,
-    );
+  /// Routes the current inbox item to Someday/Maybe (clarified = true,
+  /// intent = 'maybe').
+  Future<void> processInboxItemToMaybe(String id) async {
+    final idx = state.inboxIndex;
+    if (state.inboxRoutings.containsKey(idx)) {
+      await _revertProcessedInboxItem(idx);
+    }
+    final prior = await _capturePriorInboxState(idx);
+    final affected = await _db.inboxDao.processInboxItem(id, intent: 'maybe');
+    if (affected > 0) {
+      state = state.copyWith(
+        inboxRoutings: {
+          ...state.inboxRoutings,
+          idx: InboxRoutingRecord(
+            kind: 'maybe',
+            priorClarified: prior.clarified,
+            priorIntent: prior.intent,
+            priorDoneAt: prior.doneAt,
+            priorPersonTagIds: prior.personTagIds,
+          ),
+        },
+      );
+      nextInboxItem();
+    }
   }
+
+  /// Routes the current inbox item to Done (done_at = now).
+  Future<void> processInboxItemToDone(String id) async {
+    final idx = state.inboxIndex;
+    if (state.inboxRoutings.containsKey(idx)) {
+      await _revertProcessedInboxItem(idx);
+    }
+    final prior = await _capturePriorInboxState(idx);
+    await _db.todoDao.markDone(id);
+    state = state.copyWith(
+      inboxRoutings: {
+        ...state.inboxRoutings,
+        idx: InboxRoutingRecord(
+          kind: 'done',
+          priorClarified: prior.clarified,
+          priorIntent: prior.intent,
+          priorDoneAt: prior.doneAt,
+          priorPersonTagIds: prior.personTagIds,
+        ),
+      },
+    );
+    nextInboxItem();
+  }
+
+  /// Returns the IDs of person-typed tags currently assigned to [todoId].
+  /// Used to pre-seed the Waiting For person picker on revisit.
+  Future<Set<String>> getPersonTagIds(String todoId) =>
+      _db.todoDao.getPersonTagIdsForTodo(todoId);
 
   // ---- Task mutations (Step 2 — Next Actions review) -------------------------
 
@@ -732,7 +933,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Clears completion state and returns the user to the planning ritual.
   ///
   /// Task selections are **cleared** so the user can re-plan from scratch.
-  /// Energy level and available time are preserved.
+  /// Energy level and available time are preserved. Inbox snapshot resets so
+  /// it is re-loaded fresh on the next visit to Step 0.
   Future<void> reEnterPlanning() async {
     final preservedEnergy = state.energyLevel;
     final preservedMinutes = state.availableMinutes;

@@ -1,20 +1,21 @@
 /// Step 0 of the daily planning ritual: Clarify Inbox.
 ///
-/// Works through each inbox item one at a time:
+/// Works through each inbox item one at a time using a fixed snapshot loaded
+/// at step start (oldest-first order). Navigation is index-based:
 /// 1. Prompts the user to clarify the expected outcome (editable title/notes).
 /// 2. Lets the user set energy level, time estimate, and due date.
 /// 3. Routes the item to the correct GTD list (Next Action, Waiting For,
-///    Someday/Maybe, Scheduled, or Done).
+///    Someday/Maybe, Done, or Skip).
+/// 4. Back navigates to the previous item; re-choosing a destination first
+///    reverts the prior routing then applies the new one.
 ///
-/// The Next button in the parent is enabled only when the inbox is empty.
+/// The Next button in the parent is enabled only when inboxIndex >= snapshot.length.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
-import '../../../providers/inbox_provider.dart';
 import '../../../widgets/clarify_shared_widgets.dart';
 import '../../../widgets/person_tag_picker.dart';
 
@@ -23,34 +24,31 @@ class InboxClarificationStep extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncItems = ref.watch(inboxItemsProvider);
+    final snapshot =
+        ref.watch(focusSessionPlanningProvider.select((s) => s.inboxSnapshot));
+    final index =
+        ref.watch(focusSessionPlanningProvider.select((s) => s.inboxIndex));
+    final inboxRoutings = ref.watch(
+        focusSessionPlanningProvider.select((s) => s.inboxRoutings));
 
-    return asyncItems.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (err, _) => Center(child: Text('Error: $err')),
-      data: (items) {
-        final pendingItems = items;
+    if (snapshot == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(focusSessionPlanningProvider.notifier).loadInboxSnapshot();
+      });
+      return const Center(child: CircularProgressIndicator());
+    }
 
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final state = ref.read(focusSessionPlanningProvider);
-          if (state.initialInboxCount == null) {
-            ref.read(focusSessionPlanningProvider.notifier).setInitialInboxCount(pendingItems.length);
-          }
-        });
+    if (snapshot.isEmpty || index >= snapshot.length) {
+      return const _InboxCleared();
+    }
 
-        if (pendingItems.isEmpty) {
-          return const _InboxCleared();
-        }
-        // Show remaining count + the first (oldest-last) item to clarify.
-        // inboxItemsProvider orders by createdAt DESC so items.last is oldest.
-        // Process in FIFO order: work from the end of the list forward.
-        final current = pendingItems.last;
-        return _ClarifyCard(
-          key: ValueKey(current.id),
-          todo: current,
-          remaining: pendingItems.length,
-        );
-      },
+    final current = snapshot[index];
+    return _ClarifyCard(
+      key: ValueKey(current.id),
+      todo: current,
+      index: index,
+      total: snapshot.length,
+      lastRouting: inboxRoutings[index]?.kind,
     );
   }
 }
@@ -63,11 +61,18 @@ class _ClarifyCard extends ConsumerStatefulWidget {
   const _ClarifyCard({
     super.key,
     required this.todo,
-    required this.remaining,
+    required this.index,
+    required this.total,
+    this.lastRouting,
   });
 
   final Todo todo;
-  final int remaining;
+  final int index;
+  final int total;
+
+  /// The last routing applied to this item ('next_action' | 'waiting_for' |
+  /// 'maybe' | 'done'), or null if this item has not yet been processed.
+  final String? lastRouting;
 
   @override
   ConsumerState<_ClarifyCard> createState() => _ClarifyCardState();
@@ -161,10 +166,17 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     if (!saved || !context.mounted) return;
     final title = _titleCtrl.text.trim();
 
+    // Fetch currently assigned person tags so a revisit pre-selects them.
+    final currentTagIds = await ref
+        .read(focusSessionPlanningProvider.notifier)
+        .getPersonTagIds(widget.todo.id);
+
+    if (!context.mounted) return;
+
     await showPersonTagPicker(
       context,
       todoId: widget.todo.id,
-      assignedPersonTagIds: const {},
+      assignedPersonTagIds: currentTagIds,
       requireSelection: true,
       onAfterConfirm: () async {
         if (!context.mounted) return;
@@ -172,7 +184,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         try {
           await ref
               .read(focusSessionPlanningProvider.notifier)
-              .processInboxItem(widget.todo.id, title: title);
+              .processInboxItemToWaitingFor(widget.todo.id, title: title);
         } catch (e) {
           error = e;
         }
@@ -203,8 +215,9 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     try {
       final saved = await _saveFields(context);
       if (!saved || !context.mounted) return;
-      final db = ref.read(databaseProvider);
-      await db.todoDao.markDone(widget.todo.id);
+      await ref
+          .read(focusSessionPlanningProvider.notifier)
+          .processInboxItemToDone(widget.todo.id);
     } catch (e) {
       error = e;
     }
@@ -248,9 +261,26 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
       physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
+        // Within-step Back button (shown when not at the first item).
+        if (widget.index > 0) ...[
+          TextButton.icon(
+            onPressed: () =>
+                ref.read(focusSessionPlanningProvider.notifier).previousInboxItem(),
+            icon: const Icon(Icons.arrow_back, size: 16),
+            label: const Text('Previous item'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.grey[600],
+              padding: EdgeInsets.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              alignment: Alignment.centerLeft,
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
+
         // Progress indicator
         Text(
-          '${widget.remaining} item${widget.remaining == 1 ? '' : 's'} remaining',
+          'Item ${widget.index + 1} of ${widget.total}',
           style: TextStyle(fontSize: 13, color: Colors.grey[500]),
         ),
         const SizedBox(height: 12),
@@ -399,6 +429,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.check_circle_outline,
                 color: const Color(0xFF16A34A),
                 enabled: !_processing,
+                isPreviouslySelected: widget.lastRouting == 'next_action',
                 onTap: () => _runAction(() => _process(context)),
               ),
               const SizedBox(height: 8),
@@ -407,6 +438,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.hourglass_empty,
                 color: const Color(0xFFF59E0B),
                 enabled: !_processing,
+                isPreviouslySelected: widget.lastRouting == 'waiting_for',
                 onTap: () => _runAction(() => _processToWaitingFor(context)),
               ),
               const SizedBox(height: 8),
@@ -415,6 +447,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.star_border,
                 color: const Color(0xFF6B7280),
                 enabled: !_processing,
+                isPreviouslySelected: widget.lastRouting == 'maybe',
                 onTap: () => _runAction(() => _processToMaybe(context)),
               ),
               const SizedBox(height: 8),
@@ -423,6 +456,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.delete_outline,
                 color: const Color(0xFFDC2626),
                 enabled: !_processing,
+                isPreviouslySelected: widget.lastRouting == 'done',
                 onTap: () => _runAction(() => _processToDone(context)),
               ),
               const SizedBox(height: 20),
@@ -432,7 +466,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 color: const Color(0xFF6B7280),
                 enabled: !_processing,
                 onTap: () => _runAction(() async {
-                  ref.read(focusSessionPlanningProvider.notifier).skipInboxItem(widget.todo.id);
+                  ref.read(focusSessionPlanningProvider.notifier).skipInboxItem();
                 }),
               ),
             ],
@@ -476,4 +510,3 @@ class _InboxCleared extends StatelessWidget {
     );
   }
 }
-

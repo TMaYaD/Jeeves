@@ -11,7 +11,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/focus_session_planning_provider.dart';
-import '../../providers/inbox_provider.dart';
 import 'steps/day_checkin_energy_step.dart';
 import 'steps/day_checkin_time_step.dart';
 import 'steps/inbox_clarification_step.dart';
@@ -46,23 +45,6 @@ class _FocusSessionPlanningScreenState
     _pageController = PageController(
       initialPage: ref.read(focusSessionPlanningProvider).currentStep,
     );
-    // Auto-advance from inbox step if inbox is already empty on first load.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _maybeAutoAdvanceInbox(ref.read(inboxItemsProvider));
-    });
-  }
-
-  /// Auto-advances from step 0 to step 1 when the inbox has no pending items.
-  ///
-  /// Called both on first load (via [addPostFrameCallback] in [initState]) and
-  /// whenever [inboxItemsProvider] emits a new value (via [ref.listen]).
-  void _maybeAutoAdvanceInbox(AsyncValue<List<Todo>> inboxAsync) {
-    if (ref.read(focusSessionPlanningProvider).currentStep != 0) return;
-    final items = inboxAsync.asData?.value;
-    if (items == null) return; // still loading
-    if (items.isEmpty) {
-      ref.read(focusSessionPlanningProvider.notifier).advanceStep();
-    }
   }
 
   /// Handles the Next button tap, inserting any step-specific side-effects.
@@ -96,7 +78,8 @@ class _FocusSessionPlanningScreenState
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
     final step = planningState.currentStep;
 
-    // Animate the PageView only when currentStep actually changes.
+    // Animate the PageView when currentStep changes; also auto-advance from
+    // Step 0 when the inbox snapshot loads and is empty.
     ref.listen<FocusSessionPlanningState>(focusSessionPlanningProvider,
         (prev, next) {
       if (prev?.currentStep != next.currentStep && _pageController.hasClients) {
@@ -106,13 +89,14 @@ class _FocusSessionPlanningScreenState
           curve: Curves.easeInOut,
         );
       }
+      // Auto-advance when the snapshot loads to empty (inbox was already clear).
+      if (next.currentStep == 0 &&
+          next.inboxSnapshot != null &&
+          next.inboxSnapshot!.isEmpty &&
+          (prev == null || prev.inboxSnapshot == null)) {
+        ref.read(focusSessionPlanningProvider.notifier).advanceStep();
+      }
     });
-
-    // Auto-advance from inbox step when inbox becomes empty mid-session.
-    ref.listen<AsyncValue<List<Todo>>>(
-      inboxItemsProvider,
-      (_, next) => _maybeAutoAdvanceInbox(next),
-    );
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -161,9 +145,10 @@ class _FocusSessionPlanningScreenState
 
   /// Returns true when the user is allowed to proceed from [step].
   bool _canAdvance(int step, WidgetRef ref) {
+    final s = ref.watch(focusSessionPlanningProvider);
     return switch (step) {
-      // Step 0: inbox empty (all items clarified or none remaining)
-      0 => ref.watch(inboxItemsProvider).asData?.value.isEmpty ?? false,
+      // Step 0: inbox snapshot loaded and all items processed or skipped.
+      0 => s.inboxSnapshot != null && s.inboxIndex >= s.inboxSnapshot!.length,
       // Step 1: task review — always enabled; tapping Next skips the current item.
       1 => true,
       // Step 2: energy check in
@@ -234,9 +219,15 @@ class _PlanningHeader extends ConsumerWidget {
   Widget _buildSubtitle(int step, WidgetRef ref) {
     if (step == 0) {
       final state = ref.watch(focusSessionPlanningProvider);
-      final initial = state.initialInboxCount ?? 0;
-      final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
-      final skipped = state.inboxSkippedCount;
+      if (state.inboxSnapshot == null) {
+        return Text(
+          'Step 1 of 5 · Loading inbox…',
+          style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+        );
+      }
+      final initial = state.inboxSnapshot!.length;
+      final processed = state.inboxIndex;
+      final skipped = state.inboxIndex - state.inboxRoutings.length;
       return Text(
         'Step 1 of 5 · $processed / $initial processed (skipped $skipped)',
         style: TextStyle(fontSize: 12, color: Colors.grey[400]),
@@ -283,9 +274,9 @@ class _SegmentedProgressBar extends StatelessWidget {
   double _currentStepFraction(int step, FocusSessionPlanningState state) {
     switch (step) {
       case 0:
-        final initial = state.initialInboxCount ?? 1;
-        final processed = state.inboxClarifiedCount + state.inboxSkippedCount;
-        return initial > 0 ? (processed / initial).clamp(0.0, 1.0) : 1.0;
+        final snapshot = state.inboxSnapshot;
+        if (snapshot == null || snapshot.isEmpty) return 0.0;
+        return (state.inboxIndex / snapshot.length).clamp(0.0, 1.0);
       case 1:
         final total = state.reviewItems.length;
         final reviewed = state.reviewIndex;

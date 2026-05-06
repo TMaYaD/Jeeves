@@ -160,8 +160,8 @@ final completedTodayProvider = StreamProvider<List<Todo>>((ref) {
 ///
 /// The disposition map is the in-memory state on [eveningShutdownProvider]; it
 /// only persists to the DB when [EveningShutdownNotifier.closeDay] is called.
-/// Filtering here gives the donor's "one-at-a-time resolve" UX without
-/// requiring intermediate DB writes.
+/// Filtering here gives the live "remaining tasks" count used by the banner
+/// and other consumers outside the ritual step itself.
 final unfinishedSelectedTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final dispositions = ref.watch(
@@ -190,6 +190,8 @@ class EveningShutdownState {
   const EveningShutdownState({
     this.currentStep = 0,
     this.dispositions = const {},
+    this.unfinishedSnapshot,
+    this.unfinishedIndex = 0,
   });
 
   final int currentStep;
@@ -199,13 +201,30 @@ class EveningShutdownState {
   /// [FocusSessionDao.reviewAndCloseSession].
   final Map<String, String> dispositions;
 
+  /// Fixed snapshot of unfinished session tasks loaded at the start of the
+  /// unfinished-tasks step. null = not yet loaded; [] = loaded and empty.
+  final List<Todo>? unfinishedSnapshot;
+
+  /// Index into [unfinishedSnapshot] pointing at the task currently being
+  /// resolved.
+  final int unfinishedIndex;
+
   EveningShutdownState copyWith({
     int? currentStep,
     Map<String, String>? dispositions,
+    List<Todo>? unfinishedSnapshot,
+    bool clearUnfinishedSnapshot = false,
+    int? unfinishedIndex,
   }) =>
       EveningShutdownState(
         currentStep: currentStep ?? this.currentStep,
         dispositions: dispositions ?? this.dispositions,
+        unfinishedSnapshot: clearUnfinishedSnapshot
+            ? null
+            : (unfinishedSnapshot ?? this.unfinishedSnapshot),
+        unfinishedIndex: clearUnfinishedSnapshot
+            ? 0
+            : (unfinishedIndex ?? this.unfinishedIndex),
       );
 }
 
@@ -215,6 +234,8 @@ final eveningShutdownProvider =
 );
 
 class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
+  bool _loadingUnfinishedSnapshot = false;
+
   @override
   EveningShutdownState build() {
     // Update shutdown ValueNotifiers and suppression flags when Drift receives cross-device sync.
@@ -252,20 +273,65 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     state = state.copyWith(currentStep: step.clamp(0, _kShutdownMaxStep));
   }
 
+  // ---- Unfinished snapshot navigation ----------------------------------------
+
+  /// Loads the unfinished-tasks snapshot once. Idempotent: subsequent calls
+  /// are no-ops. Only includes tasks with doneAt == null.
+  Future<void> loadUnfinishedSnapshot() async {
+    if (state.unfinishedSnapshot != null || _loadingUnfinishedSnapshot) return;
+    _loadingUnfinishedSnapshot = true;
+    try {
+      final allTasks =
+          await _db.focusSessionDao.watchActiveSessionTasks().first;
+      final unfinished = allTasks.where((t) => t.doneAt == null).toList();
+      state = state.copyWith(unfinishedSnapshot: unfinished);
+    } finally {
+      _loadingUnfinishedSnapshot = false;
+    }
+  }
+
+  /// Advances [unfinishedIndex] by one. When all items have been resolved
+  /// (new index would reach or exceed snapshot length), calls [advanceStep]
+  /// instead so the ritual proceeds automatically.
+  void nextUnfinishedTask() {
+    final snapshot = state.unfinishedSnapshot;
+    if (snapshot == null) return;
+    final newIndex = state.unfinishedIndex + 1;
+    if (newIndex >= snapshot.length) {
+      advanceStep();
+    } else {
+      state = state.copyWith(unfinishedIndex: newIndex);
+    }
+  }
+
+  /// Pure navigation: decrements [unfinishedIndex] by one (clamped to 0).
+  /// The in-memory disposition is preserved so the previously-tapped action
+  /// can render its visual affordance on revisit. Re-tapping a disposition
+  /// replaces the prior one; that is what removes the previous selection.
+  void previousUnfinishedTask() {
+    if (state.unfinishedIndex == 0 || state.unfinishedSnapshot == null) return;
+    state = state.copyWith(unfinishedIndex: state.unfinishedIndex - 1);
+  }
+
   // ---- Task disposition (in-memory) ------------------------------------------
 
-  /// Marks [id] for rollover into tomorrow's session. Held in memory until
-  /// [closeDay] commits.
-  void rolloverTask(String id) => _setDisposition(id, _kDispRollover);
+  /// Marks [id] for rollover into tomorrow's session and advances the index.
+  void rolloverTask(String id) {
+    _setDisposition(id, _kDispRollover);
+    nextUnfinishedTask();
+  }
 
-  /// Marks [id] to remain in next-actions (the task is already
-  /// `intent='next'`, `clarified=true`, `done_at IS NULL`, so it surfaces
-  /// naturally in tomorrow's planning).
-  void returnToNextActions(String id) => _setDisposition(id, _kDispLeave);
+  /// Marks [id] to remain in next-actions and advances the index.
+  void returnToNextActions(String id) {
+    _setDisposition(id, _kDispLeave);
+    nextUnfinishedTask();
+  }
 
-  /// Marks [id] to defer to Someday/Maybe. The intent flip happens atomically
-  /// during [closeDay] via [FocusSessionDao.reviewAndCloseSession].
-  void deferTask(String id) => _setDisposition(id, _kDispMaybe);
+  /// Marks [id] to defer to Someday/Maybe and advances the index.
+  void deferTask(String id) {
+    _setDisposition(id, _kDispMaybe);
+    nextUnfinishedTask();
+  }
 
   void _setDisposition(String id, String disposition) {
     state = state.copyWith(
