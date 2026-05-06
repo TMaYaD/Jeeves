@@ -103,7 +103,14 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// the title is empty.
   Future<bool> _saveFields() async {
     final title = _titleCtrl.text.trim();
-    if (title.isEmpty) return false;
+    if (title.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enter a title')),
+        );
+      }
+      return false;
+    }
     final notes = _notesCtrl.text.trim();
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
@@ -117,7 +124,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       energyLevel: _energyLevel,
       timeEstimate: _timeEstimate,
       dueDate: _dueDate != null
-          ? DateTime.utc(_dueDate!.year, _dueDate!.month, _dueDate!.day)
+          ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
           : null,
       clearDueDate: _dueDate == null && todo.dueDate != null,
     );
