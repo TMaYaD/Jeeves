@@ -23,6 +23,7 @@ import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
 import 'daos/time_log_dao.dart';
 import 'daos/todo_dao.dart';
+import 'daos/user_preferences_dao.dart';
 import 'tables.dart';
 
 export 'tables.dart';
@@ -30,7 +31,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, UserPreferences],
   daos: [InboxDao, TagDao, TodoDao, TimeLogDao, FocusSessionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -39,8 +40,11 @@ class GtdDatabase extends _$GtdDatabase {
   /// Plain-class DAO for universal search (no code generation required).
   late final SearchDao searchDao = SearchDao(this);
 
+  /// DAO for synced key-value user preferences.
+  late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
+
   @override
-  int get schemaVersion => 19;
+  int get schemaVersion => 20;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -353,6 +357,17 @@ class GtdDatabase extends _$GtdDatabase {
             // Add last_clarified_at; drop waiting_for (migration 0022).
             await _addColumnIfTable(m, todos, todos.lastClarifiedAt);
             await _dropColumnIfTable('todos', 'waiting_for');
+          }
+          if (from < 20) {
+            // Create user_preferences table on NativeDatabase (test/local) path only.
+            // On production PowerSync has already created a view named 'user_preferences',
+            // so we skip creation when the name is already registered in sqlite_master.
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'user_preferences'",
+            ).get();
+            if (rows.isEmpty) {
+              await m.createTable(userPreferences);
+            }
           }
         },
       );

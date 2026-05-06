@@ -19,6 +19,7 @@ import '../database/gtd_database.dart';
 import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
+import 'synced_preferences_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession;
 
@@ -104,17 +105,31 @@ Future<void> loadFocusSessionPlanningNotificationSuppression() async {
 }
 
 /// Persists and activates the "skip today" suppression.
-Future<void> persistFocusSessionPlanningSkipToday() async {
+///
+/// Dual-writes to SharedPreferences (for cold-start startup reads) and to the
+/// synced preferences store (for cross-device visibility).
+Future<void> persistFocusSessionPlanningSkipToday({Ref? ref}) async {
+  final today = planningToday();
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kNotificationSkippedDateKey, planningToday());
+  await prefs.setString(_kNotificationSkippedDateKey, today);
   _notificationSkippedToday = true;
+  if (ref != null) {
+    await syncedPrefs(ref).set(_kNotificationSkippedDateKey, today);
+  }
 }
 
 /// Persists and activates a snooze until [until].
-Future<void> persistFocusSessionPlanningSnoozedUntil(DateTime until) async {
+///
+/// Dual-writes to SharedPreferences (for cold-start startup reads) and to the
+/// synced preferences store (for cross-device visibility).
+Future<void> persistFocusSessionPlanningSnoozedUntil(DateTime until, {Ref? ref}) async {
+  final value = until.toIso8601String();
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kNotificationSnoozedUntilKey, until.toIso8601String());
+  await prefs.setString(_kNotificationSnoozedUntilKey, value);
   _notificationSnoozedActive = DateTime.now().isBefore(until);
+  if (ref != null) {
+    await syncedPrefs(ref).set(_kNotificationSnoozedUntilKey, value);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +279,23 @@ final focusSessionPlanningProvider =
 class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   @override
   FocusSessionPlanningState build() {
+    // Update banner-dismissed ValueNotifier when Drift receives cross-device sync.
+    ref.listen(syncedPreferencesProvider, (_, next) {
+      if (next is AsyncData<SyncedPreferences>) {
+        final today = planningToday();
+        final dismissed = next.value.get<String>(_kBannerDismissedDateKey);
+        focusSessionPlanningBannerDismissedNotifier.value = dismissed == today;
+
+        _notificationSkippedToday =
+            next.value.get<String>(_kNotificationSkippedDateKey) == today;
+
+        final snoozedUntil = DateTime.tryParse(
+          next.value.get<String>(_kNotificationSnoozedUntilKey) ?? '',
+        );
+        _notificationSnoozedActive =
+            snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
+      }
+    });
     Future.microtask(_preloadRolloverIds);
     return const FocusSessionPlanningState();
   }
@@ -467,6 +499,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kBannerDismissedDateKey, today);
     focusSessionPlanningBannerDismissedNotifier.value = true;
+    await syncedPrefs(ref).set(_kBannerDismissedDateKey, today);
   }
 
   // ---- Notification skip / snooze --------------------------------------------
@@ -474,7 +507,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Suppresses all planning nudges until the next calendar day and cancels
   /// any scheduled notification for today.
   Future<void> skipPlanningToday() async {
-    await persistFocusSessionPlanningSkipToday();
+    await persistFocusSessionPlanningSkipToday(ref: ref);
     await NotificationService.instance.cancelFocusSessionPlanningReminder();
   }
 
@@ -482,7 +515,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// one-off fire.
   Future<void> snoozePlanningNotification(int minutes) async {
     final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistFocusSessionPlanningSnoozedUntil(until);
+    await persistFocusSessionPlanningSnoozedUntil(until, ref: ref);
     await NotificationService.instance.snoozeFocusSessionPlanningReminder(minutes);
   }
 

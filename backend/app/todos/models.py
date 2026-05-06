@@ -18,6 +18,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -224,3 +225,25 @@ class RecurrenceRule(Base):
     count: Mapped[int | None] = mapped_column(Integer)
 
     todo: Mapped[Todo] = relationship("Todo", back_populates="recurrence_rule")
+
+
+class UserPreference(Base):
+    """Cross-device synced key-value preference store (one row per key per user).
+
+    `id` is a client-generated UUID. `UNIQUE(user_id, key)` enforces one value
+    per key per user. `value` is nullable TEXT storing JSON-serialised scalars;
+    NULL is a tombstone. `updated_at` drives LWW arbitration at sign-in.
+    """
+
+    __tablename__ = "user_preferences"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_user_preferences_user_key"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(100), nullable=False)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )

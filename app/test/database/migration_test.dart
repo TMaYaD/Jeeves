@@ -472,5 +472,142 @@ void main() {
         );
       }
     });
+
+    test('v19→v20 migration: user_preferences table created with UNIQUE(user_id, key)',
+        () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a v19 database by dropping the table that onCreate creates.
+      await db.customStatement('DROP TABLE IF EXISTS user_preferences');
+
+      final tablesBefore = await db.customSelect(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_preferences'",
+      ).get();
+      expect(tablesBefore.length, 0);
+
+      // Drive the real v20 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 19, 20);
+
+      final tables = await db.customSelect(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_preferences'",
+      ).get();
+      expect(tables.length, 1);
+
+      final cols = await db.customSelect('PRAGMA table_info(user_preferences)').get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames, containsAll(['id', 'user_id', 'key', 'value', 'updated_at']));
+
+      // Upsert via the DAO should not throw (UNIQUE constraint handled by ON CONFLICT).
+      await db.userPreferencesDao.set(_userId, 'k', '"v1"');
+      await db.userPreferencesDao.set(_userId, 'k', '"v2"');
+      expect(await db.userPreferencesDao.get(_userId, 'k'), '"v2"');
+    });
+  });
+
+  group('MigrationService — user_preferences LWW reassignment', () {
+    // Mirrors the 3-step UPDATE logic in LocalDataMigrationService.migrate()
+    // (migration_service.dart). Any changes to that method must be reflected here.
+    Future<void> runMigration(GtdDatabase db, String fromUserId, String toUserId) async {
+      // Step 1: reassign non-conflicting rows.
+      await db.customStatement(
+        '''
+        UPDATE user_preferences
+        SET user_id = ?
+        WHERE user_id = ?
+          AND "key" NOT IN (
+            SELECT "key" FROM user_preferences WHERE user_id = ?
+          )
+        ''',
+        [toUserId, fromUserId, toUserId],
+      );
+      // Step 2: LWW — update toUserId row when fromUserId row is newer.
+      await db.customStatement(
+        '''
+        UPDATE user_preferences
+        SET value = (
+          SELECT src.value FROM user_preferences src
+          WHERE src.user_id = ? AND src."key" = user_preferences."key"
+        ),
+        updated_at = (
+          SELECT src.updated_at FROM user_preferences src
+          WHERE src.user_id = ? AND src."key" = user_preferences."key"
+        )
+        WHERE user_id = ?
+          AND EXISTS (
+            SELECT 1 FROM user_preferences src
+            WHERE src.user_id = ?
+              AND src."key" = user_preferences."key"
+              AND src.updated_at > user_preferences.updated_at
+          )
+        ''',
+        [fromUserId, fromUserId, toUserId, fromUserId],
+      );
+      // Step 3: remove all remaining fromUserId rows.
+      await db.customStatement(
+        'DELETE FROM user_preferences WHERE user_id = ?',
+        [fromUserId],
+      );
+    }
+
+    test('migrate local→userId reassigns all user_preference rows', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      await db.userPreferencesDao.set('local', 'sprint', '"20"');
+      await db.userPreferencesDao.set('local', 'break', '"3"');
+
+      await runMigration(db, 'local', _userId);
+
+      final result = await db.userPreferencesDao.getAll(_userId);
+      expect(result.keys, containsAll(['sprint', 'break']));
+      expect(result['sprint'], '"20"');
+
+      final localRows = await db.userPreferencesDao.getAll('local');
+      expect(localRows.isEmpty, isTrue);
+    });
+
+    test('LWW: local row newer → server row updated', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      await db.customStatement(
+        '''INSERT INTO user_preferences (id, user_id, "key", value, updated_at)
+           VALUES ('sid', ?, 'k', '"server"', '2026-01-01T00:00:00.000Z')''',
+        [_userId],
+      );
+      await db.customStatement(
+        '''INSERT INTO user_preferences (id, user_id, "key", value, updated_at)
+           VALUES ('lid', 'local', 'k', '"local"', '2026-06-01T00:00:00.000Z')''',
+      );
+
+      await runMigration(db, 'local', _userId);
+
+      // Local was newer → server row value updated to "local".
+      expect(await db.userPreferencesDao.get(_userId, 'k'), '"local"');
+      expect(await db.userPreferencesDao.get('local', 'k'), isNull);
+    });
+
+    test('LWW: server row newer → server row unchanged', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      await db.customStatement(
+        '''INSERT INTO user_preferences (id, user_id, "key", value, updated_at)
+           VALUES ('sid', ?, 'k', '"server"', '2026-06-01T00:00:00.000Z')''',
+        [_userId],
+      );
+      await db.customStatement(
+        '''INSERT INTO user_preferences (id, user_id, "key", value, updated_at)
+           VALUES ('lid', 'local', 'k', '"local"', '2026-01-01T00:00:00.000Z')''',
+      );
+
+      await runMigration(db, 'local', _userId);
+
+      // Server was newer → value unchanged; local row deleted.
+      expect(await db.userPreferencesDao.get(_userId, 'k'), '"server"');
+      expect(await db.userPreferencesDao.get('local', 'k'), isNull);
+    });
   });
 }

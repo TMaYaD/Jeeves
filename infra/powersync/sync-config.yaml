@@ -78,6 +78,12 @@ sync_config:
             JOIN focus_sessions fs ON fs.id = fst.focus_session_id
             WHERE fs.user_id = bucket.user_id
 
+      by_user_preferences:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM user_preferences WHERE user_id = bucket.user_id
+
 # --- Client auth --------------------------------------------------------------
 # Validate JWTs signed by the backend using the shared secret.
 # PowerSync requires symmetric keys to be declared in JWKS format.  `kid`

@@ -25,6 +25,7 @@ import '../database/gtd_database.dart';
 import '../services/notification_service.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
+import 'synced_preferences_provider.dart';
 
 // Re-export Todo so UI consumers (e.g. unfinished_tasks_step.dart) can use
 // the type without taking a direct dependency on the database layer.
@@ -74,6 +75,12 @@ Future<void> initShutdownCompletion() async {
 bool _shutdownNotificationSkippedToday = false;
 bool _shutdownNotificationSnoozedActive = false;
 
+bool _parseSnoozedActive(String? snoozedUntilStr) {
+  if (snoozedUntilStr == null) return false;
+  final snoozedUntil = DateTime.tryParse(snoozedUntilStr);
+  return snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
+}
+
 /// Returns true if the user has skipped/snoozed shutdown notifications today.
 bool isShutdownNotificationSuppressedToday() =>
     _shutdownNotificationSkippedToday || _shutdownNotificationSnoozedActive;
@@ -85,30 +92,37 @@ Future<void> loadShutdownNotificationSuppression() async {
   _shutdownNotificationSkippedToday =
       prefs.getString(_kShutdownNotificationSkippedDateKey) == today;
 
-  final snoozedUntilStr =
-      prefs.getString(_kShutdownNotificationSnoozedUntilKey);
-  if (snoozedUntilStr != null) {
-    final snoozedUntil = DateTime.tryParse(snoozedUntilStr);
-    _shutdownNotificationSnoozedActive =
-        snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
-  } else {
-    _shutdownNotificationSnoozedActive = false;
-  }
+  _shutdownNotificationSnoozedActive = _parseSnoozedActive(
+    prefs.getString(_kShutdownNotificationSnoozedUntilKey),
+  );
 }
 
 /// Persists and activates the "skip shutdown today" suppression.
-Future<void> persistShutdownSkipToday() async {
+///
+/// Dual-writes to SharedPreferences (startup reads) and synced preferences
+/// (cross-device visibility). Pass [ref] to enable the Drift write.
+Future<void> persistShutdownSkipToday({Ref? ref}) async {
+  final today = planningToday();
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kShutdownNotificationSkippedDateKey, planningToday());
+  await prefs.setString(_kShutdownNotificationSkippedDateKey, today);
   _shutdownNotificationSkippedToday = true;
+  if (ref != null) {
+    await syncedPrefs(ref).set(_kShutdownNotificationSkippedDateKey, today);
+  }
 }
 
 /// Persists and activates a shutdown snooze until [until].
-Future<void> persistShutdownSnoozedUntil(DateTime until) async {
+///
+/// Dual-writes to SharedPreferences (startup reads) and synced preferences
+/// (cross-device visibility). Pass [ref] to enable the Drift write.
+Future<void> persistShutdownSnoozedUntil(DateTime until, {Ref? ref}) async {
+  final value = until.toIso8601String();
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(
-      _kShutdownNotificationSnoozedUntilKey, until.toIso8601String());
+  await prefs.setString(_kShutdownNotificationSnoozedUntilKey, value);
   _shutdownNotificationSnoozedActive = DateTime.now().isBefore(until);
+  if (ref != null) {
+    await syncedPrefs(ref).set(_kShutdownNotificationSnoozedUntilKey, value);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +216,28 @@ final eveningShutdownProvider =
 
 class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   @override
-  EveningShutdownState build() => const EveningShutdownState();
+  EveningShutdownState build() {
+    // Update shutdown ValueNotifiers and suppression flags when Drift receives cross-device sync.
+    ref.listen(syncedPreferencesProvider, (_, next) {
+      if (next is AsyncData<SyncedPreferences>) {
+        final today = planningToday();
+        final completed =
+            next.value.get<String>(_kShutdownCompletedDateKey) == today;
+        final bannerDismissed =
+            next.value.get<String>(_kShutdownBannerDismissedDateKey) == today;
+        shutdownCompletionNotifier.value = completed;
+        shutdownBannerDismissedNotifier.value = bannerDismissed;
+
+        _shutdownNotificationSkippedToday =
+            next.value.get<String>(_kShutdownNotificationSkippedDateKey) == today;
+
+        _shutdownNotificationSnoozedActive = _parseSnoozedActive(
+          next.value.get<String>(_kShutdownNotificationSnoozedUntilKey),
+        );
+      }
+    });
+    return const EveningShutdownState();
+  }
 
   GtdDatabase get _db => ref.read(databaseProvider);
 
@@ -245,18 +280,19 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kShutdownBannerDismissedDateKey, today);
     shutdownBannerDismissedNotifier.value = true;
+    await syncedPrefs(ref).set(_kShutdownBannerDismissedDateKey, today);
   }
 
   // ---- Notification skip / snooze --------------------------------------------
 
   Future<void> skipShutdownToday() async {
-    await persistShutdownSkipToday();
+    await persistShutdownSkipToday(ref: ref);
     await NotificationService.instance.cancelShutdownReminder();
   }
 
   Future<void> snoozeShutdownNotification(int minutes) async {
     final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistShutdownSnoozedUntil(until);
+    await persistShutdownSnoozedUntil(until, ref: ref);
     await NotificationService.instance.snoozeShutdownReminder(minutes);
   }
 
@@ -285,6 +321,7 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     try {
       await prefs.setString(_kShutdownCompletedDateKey, today);
       shutdownCompletionNotifier.value = true;
+      await syncedPrefs(ref).set(_kShutdownCompletedDateKey, today);
       state = const EveningShutdownState();
     } catch (e) {
       await prefs.remove(_kShutdownCompletedDateKey);

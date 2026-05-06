@@ -59,7 +59,7 @@ Located in `backend/`.
 PowerSync provides bidirectional offline-first sync between the Flutter SQLite store and PostgreSQL:
 
 - The Flutter app connects to a self-hosted `journeyapps/powersync-service` instance.
-- Six sync shapes are replicated per user: `todos`, `tags`, `todo_tags`, `time_logs`, `focus_sessions`, `focus_session_tasks` (all filtered by `user_id`). `focus_session_tasks` has no `user_id` column; its bucket joins through `focus_sessions` (JOIN-scoped), unlike `todo_tags` which carries a denormalized `user_id`.
+- Seven sync shapes are replicated per user: `todos`, `tags`, `todo_tags`, `time_logs`, `focus_sessions`, `focus_session_tasks`, and `user_preferences` (all filtered by `user_id`). `focus_session_tasks` has no `user_id` column; its bucket joins through `focus_sessions` (JOIN-scoped), unlike `todo_tags` which carries a denormalized `user_id`.
 - The backend issues short-lived JWTs from `GET /powersync/credentials`; PowerSync validates them using the shared `SECRET_KEY`.
 - Local writes made through the PowerSync client are queued and uploaded to the backend REST API via `JevesBackendConnector.uploadData()`.
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.
@@ -314,9 +314,49 @@ The search screen lives at `/search` outside the `ShellRoute` (full-screen, no d
 - The **Search** entry in the drawer navigation (visible on every GTD list screen).
 - **Ctrl+K** or **/** keyboard shortcuts registered in `AppShell` via Flutter's `Shortcuts` + `Actions` API.
 
+## Synced Preferences
+
+`syncedPreferencesProvider` (`lib/providers/synced_preferences_provider.dart`) is the single source of truth for all user-configurable settings that should survive across devices. It is an `AsyncNotifierProvider<SyncedPreferencesNotifier, SyncedPreferences>` backed by the `user_preferences` Drift table, which PowerSync replicates from PostgreSQL.
+
+### Storage model
+
+All preference values are stored as JSON-encoded TEXT. A NULL value is a tombstone (treated as absent by `get`/`watch`). The `SyncedPreferences` value class provides a typed `get<T>(key)` accessor.
+
+### One-time migration
+
+`_migrateSharedPreferencesIfNeeded` runs on first load when the `user_preferences` table is empty. It reads two groups of keys from `SharedPreferences` and upserts them into the Drift `user_preferences` table. Settings keys are then removed from `SharedPreferences` (Drift is now the authority); ceremony keys are retained in `SharedPreferences` so cold-start init functions can read them before Riverpod loads.
+
+**Settings keys** (cleared from SharedPreferences after migration):
+
+| Key | Type |
+|---|---|
+| `focus_settings_sprint_duration_minutes` | `int` |
+| `focus_settings_break_duration_minutes` | `int` |
+| `focus_session_planning_settings_time_hour` | `int` |
+| `focus_session_planning_settings_time_minute` | `int` |
+| `focus_session_planning_settings_notification_enabled` | `bool` |
+| `focus_session_planning_settings_banner_enabled` | `bool` |
+| `focus_session_planning_settings_default_snooze_duration` | `int` |
+
+**Ceremony keys** (copied to Drift but retained in SharedPreferences):
+
+| Key | Type |
+|---|---|
+| `planning_banner_dismissed_date` | `String` (ISO date) |
+| `planning_notification_skipped_date` | `String` (ISO date) |
+| `planning_notification_snoozed_until` | `String` (ISO datetime) |
+| `shutdown_ritual_completed_date` | `String` (ISO date) |
+| `shutdown_banner_dismissed_date` | `String` (ISO date) |
+| `shutdown_notification_skipped_date` | `String` (ISO date) |
+| `shutdown_notification_snoozed_until` | `String` (ISO datetime) |
+
+### Cross-device reactivity
+
+`SyncedPreferencesNotifier.build()` subscribes to `dao.watchAll(userId)`. When PowerSync writes a remote change to the local `user_preferences` table, the stream fires and the in-memory state updates automatically. Providers that derive state from preferences (e.g. `focusSettingsProvider`, `focusSessionPlanningSettingsProvider`) watch `syncedPreferencesProvider` via `ref.listen` and re-derive their state on each change.
+
 ## Focus Session Planning State
 
-The focus session planning feature uses a mix of global `ValueNotifier` objects (for cross-widget reactivity without a Riverpod container) and `SharedPreferences` for persistence across restarts.
+The focus session planning feature uses a mix of global `ValueNotifier` objects (for cross-widget reactivity without a Riverpod container), the `user_preferences` Drift table via `syncedPreferencesProvider` (the cross-device source of truth for settings and ceremony state), and `SharedPreferences` (for cold-start reads before Riverpod loads).
 
 ### Key objects
 
@@ -337,18 +377,17 @@ The ritual can no longer be auto-launched. Users are nudged through two opt-in m
 
 2. **Local notification** — scheduled daily at the user's configured planning time via `NotificationService.scheduleFocusSessionPlanningReminder()`. Uses `flutter_local_notifications` `zonedSchedule` with `matchDateTimeComponents: time` so the OS re-fires it every day without app interaction. Notification actions: Open (→ `/focus-session-planning`), Snooze (one-off reschedule), Skip today (cancel until tomorrow). Handled in `_handleNotificationResponse` in `main.dart`. `matchDateTimeComponents: time` means the OS reschedules the notification daily automatically — snooze schedules a one-off fire without removing the recurring daily reminder.
 
-### SharedPreferences keys
+### Persistence
+
+Ceremony state (banner dismissed, notification skip/snooze) is persisted to both `SharedPreferences` (for cold-start reads before Riverpod loads) and the `user_preferences` Drift table (for cross-device sync). Settings (planning time, toggles, snooze duration) are persisted exclusively to `user_preferences` via `syncedPreferencesProvider`. On cold start, `initFocusSessionPlanningNotificationSchedule()` reads planning settings from `SharedPreferences`; if not present, values default to 8:00 AM / enabled until `syncedPreferencesProvider` loads and reschedules with the values from Drift.
+
+### SharedPreferences keys (cold-start only)
 
 | Key | Value | Description |
 |---|---|---|
 | `planning_banner_dismissed_date` | `yyyy-MM-dd` | Date banner was last dismissed |
 | `planning_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" |
 | `planning_notification_snoozed_until` | ISO-8601 datetime | When the snoozed notification will fire |
-| `focus_session_planning_settings_time_hour` | `int` | Planning time hour |
-| `focus_session_planning_settings_time_minute` | `int` | Planning time minute |
-| `focus_session_planning_settings_notification_enabled` | `bool` | Notification toggle |
-| `focus_session_planning_settings_banner_enabled` | `bool` | Banner toggle |
-| `focus_session_planning_settings_default_snooze_duration` | `int` (minutes) | Default snooze duration |
 
 ## Sprint Timer (Pomodoro Engine)
 
@@ -358,7 +397,7 @@ Focus Mode includes an optional Pomodoro sprint timer bound to the active task. 
 
 `lib/models/focus_settings.dart` — `FocusSettings` value type with `sprintDurationMinutes` (default 20) and `breakDurationMinutes` (default 3).
 
-`lib/providers/focus_settings_provider.dart` — `FocusSettingsNotifier` persists values to SharedPreferences under `focus_settings_sprint_duration_minutes` and `focus_settings_break_duration_minutes`. Exposed in Settings → **FOCUS MODE**.
+`lib/providers/focus_settings_provider.dart` — `FocusSettingsNotifier` persists values to the `user_preferences` Drift table via `syncedPreferencesProvider` under `focus_settings_sprint_duration_minutes` and `focus_settings_break_duration_minutes`. It re-derives state from `syncedPreferencesProvider` whenever preferences change (including cross-device sync). Exposed in Settings → **FOCUS MODE**.
 
 ### State machine
 
