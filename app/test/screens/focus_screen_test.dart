@@ -9,7 +9,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:jeeves/models/focus_settings.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -30,6 +32,11 @@ class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   Future<void> reEnterPlanning() async {
     state = const FocusSessionPlanningState();
   }
+}
+
+class _MockFocusSettingsNotifier extends FocusSettingsNotifier {
+  @override
+  FocusSettings build() => const FocusSettings();
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +71,8 @@ Widget _buildScreen({
       ),
       focusSessionPlanningProvider
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
+      focusSettingsProvider
+          .overrideWith(() => _MockFocusSettingsNotifier()),
     ],
     child: MaterialApp.router(routerConfig: router),
   );

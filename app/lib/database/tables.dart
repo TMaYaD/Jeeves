@@ -157,6 +157,31 @@ class Tags extends Table with Synced {
 }
 
 // ---------------------------------------------------------------------------
+// user_preferences
+// ---------------------------------------------------------------------------
+
+/// Cross-device synced key-value preference store.
+///
+/// One row per (user_id, key) pair. `value` is JSON-encoded; NULL is a
+/// tombstone. `updated_at` drives LWW arbitration when local and server rows
+/// conflict at sign-in (see MigrationService).
+class UserPreferences extends Table with Synced {
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+  TextColumn get key => text()();
+  TextColumn get value => text().nullable()();
+  TextColumn get updatedAt => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+
+  @override
+  List<Set<Column<Object>>> get uniqueKeys => [
+        {userId, key}
+      ];
+}
+
+// ---------------------------------------------------------------------------
 // todo_tags  (junction)
 // ---------------------------------------------------------------------------
 
