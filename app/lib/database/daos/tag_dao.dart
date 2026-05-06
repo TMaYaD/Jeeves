@@ -49,9 +49,11 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Create a new person-typed tag with the given [name] for [userId].
   ///
-  /// Returns the tag id.  Assigns a derived color automatically.
+  /// Returns the tag id. Assigns a derived color automatically.
   /// If a person-typed tag with the same name already exists, returns its id
-  /// without creating a duplicate.
+  /// without creating a duplicate; in that case [userId] is ignored and the
+  /// existing row's user_id is preserved (under the single-user-per-local-DB
+  /// invariant they will normally match).
   Future<String> createPersonTag(String name, String userId) async {
     final trimmedName = name.trim();
     final existing = await findPersonTagByName(trimmedName);

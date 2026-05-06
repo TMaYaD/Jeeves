@@ -126,11 +126,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         }
       }
 
-      // Close any open time log for this session.
-      await (update(timeLogs)
-            ..where((t) =>
-                t.endedAt.isNull() &
-                t.focusSessionId.equals(sessionId)))
+      // Close any open time log. The single-open-log invariant is global,
+      // so we close defensively rather than scoping to this session — a stray
+      // open log from elsewhere would otherwise coexist with the new one.
+      await (update(timeLogs)..where((t) => t.endedAt.isNull()))
           .write(TimeLogsCompanion(endedAt: Value(ts)));
 
       // Open a new time log if a task is being focused.

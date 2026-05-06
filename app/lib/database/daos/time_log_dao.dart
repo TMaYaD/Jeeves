@@ -15,8 +15,8 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
 
   /// Opens a new focus log for [taskId] / [userId].
   ///
-  /// If another log is already open for [userId] it is defensively closed first
-  /// to handle offline edge-cases with stale open rows.
+  /// Any currently-open log is defensively closed first to enforce the global
+  /// single-open-log invariant (handles offline edge-cases with stale rows).
   ///
   /// [focusSessionId] links this log to the active [FocusSession] row; callers
   /// that manage sessions directly (e.g. [FocusSessionDao.setCurrentTask]) pass
