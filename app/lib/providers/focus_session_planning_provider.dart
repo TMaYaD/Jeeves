@@ -396,6 +396,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     }
   }
 
+  /// Skips the current review item without writing anything to the DB.
+  /// Called by the Next button while the review step still has pending items.
+  void skipReviewItem() {
+    if (state.reviewIndex < state.reviewItems.length) {
+      state = state.copyWith(reviewIndex: state.reviewIndex + 1);
+    }
+  }
+
   void goToStep(int step) {
     state = state.copyWith(currentStep: step.clamp(0, _maxStepIndex));
   }

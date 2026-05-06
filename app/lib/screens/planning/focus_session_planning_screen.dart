@@ -68,7 +68,15 @@ class _FocusSessionPlanningScreenState
   /// Handles the Next button tap, inserting any step-specific side-effects.
   void _handleNext(int step) {
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
-    if (step == 2) {
+    if (step == 1) {
+      final s = ref.read(focusSessionPlanningProvider);
+      if (s.reviewIndex < s.reviewItems.length) {
+        // Still items to review — skip the current one.
+        notifier.skipReviewItem();
+      } else {
+        notifier.advanceStep();
+      }
+    } else if (step == 2) {
       // Energy → Time: auto-skip tasks that exceed today's energy.
       notifier.autoSkipByEnergy().then((_) => notifier.advanceStep());
     } else {
@@ -156,9 +164,8 @@ class _FocusSessionPlanningScreenState
     return switch (step) {
       // Step 0: inbox empty (all items clarified or none remaining)
       0 => ref.watch(inboxItemsProvider).asData?.value.isEmpty ?? false,
-      // Step 1: task review — enabled when all items reviewed or none to review
-      1 => ref.watch(focusSessionPlanningProvider.select(
-            (s) => s.reviewItems.isEmpty || s.reviewIndex >= s.reviewItems.length)),
+      // Step 1: task review — always enabled; tapping Next skips the current item.
+      1 => true,
       // Step 2: energy check in
       2 => true,
       // Step 3: time check in
