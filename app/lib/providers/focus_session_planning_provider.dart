@@ -500,22 +500,32 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// and the person-tag set via [InboxDao.setPersonTagsForTodo]; both targets
   /// come from the [InboxRoutingRecord] captured at routing time. Pre-existing
   /// person-tag associations (from import / sync) are preserved.
+  ///
+  /// Both writes run in a single DB transaction so the revert is all-or-
+  /// nothing: a failure in the tag restore does not leave the row back in
+  /// inbox state with the wrong assignees, and [inboxRoutings] is only
+  /// cleared after the transaction commits.
   Future<void> _revertProcessedInboxItem(int idx) async {
     final todo = state.inboxSnapshot![idx];
     final record = state.inboxRoutings[idx];
     if (record == null) return;
-    final affected = await _db.inboxDao.unprocessInboxItem(
-      todo.id,
-      priorClarified: record.priorClarified,
-      priorIntent: record.priorIntent,
-      priorDoneAt: record.priorDoneAt,
-    );
-    if (affected > 0) {
-      await _db.inboxDao.setPersonTagsForTodo(
+    final affected = await _db.transaction(() async {
+      final n = await _db.inboxDao.unprocessInboxItem(
         todo.id,
-        record.priorPersonTagIds,
-        _userId,
+        priorClarified: record.priorClarified,
+        priorIntent: record.priorIntent,
+        priorDoneAt: record.priorDoneAt,
       );
+      if (n > 0) {
+        await _db.inboxDao.setPersonTagsForTodo(
+          todo.id,
+          record.priorPersonTagIds,
+          _userId,
+        );
+      }
+      return n;
+    });
+    if (affected > 0) {
       state = state.copyWith(
         inboxRoutings: Map.from(state.inboxRoutings)..remove(idx),
       );
@@ -661,27 +671,31 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     }
   }
 
-  /// Routes the current inbox item to Done (done_at = now).
+  /// Routes the current inbox item to Done (done_at = now). If the DB UPDATE
+  /// does not affect any row (item deleted out from under us, etc.) the state
+  /// is not changed.
   Future<void> processInboxItemToDone(String id) async {
     final idx = state.inboxIndex;
     if (state.inboxRoutings.containsKey(idx)) {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
-    await _db.todoDao.markDone(id);
-    state = state.copyWith(
-      inboxRoutings: {
-        ...state.inboxRoutings,
-        idx: InboxRoutingRecord(
-          kind: 'done',
-          priorClarified: prior.clarified,
-          priorIntent: prior.intent,
-          priorDoneAt: prior.doneAt,
-          priorPersonTagIds: prior.personTagIds,
-        ),
-      },
-    );
-    nextInboxItem();
+    final affected = await _db.todoDao.markDone(id);
+    if (affected > 0) {
+      state = state.copyWith(
+        inboxRoutings: {
+          ...state.inboxRoutings,
+          idx: InboxRoutingRecord(
+            kind: 'done',
+            priorClarified: prior.clarified,
+            priorIntent: prior.intent,
+            priorDoneAt: prior.doneAt,
+            priorPersonTagIds: prior.personTagIds,
+          ),
+        },
+      );
+      nextInboxItem();
+    }
   }
 
   /// Returns the IDs of person-typed tags currently assigned to [todoId].

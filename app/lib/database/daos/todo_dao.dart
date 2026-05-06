@@ -251,9 +251,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Also stamps [last_clarified_at] since marking done is a clarifying act.
   ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
-  Future<void> markDone(String todoId, {DateTime? now}) async {
+  ///
+  /// Returns the number of affected rows (0 if [todoId] not found, 1 on
+  /// success). Inbox callers gate state advancement on a non-zero result.
+  Future<int> markDone(String todoId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
-    await customUpdate(
+    return customUpdate(
       'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
       'WHERE id = ?',
       variables: [Variable(ts), Variable(ts), Variable(ts), Variable(todoId)],
