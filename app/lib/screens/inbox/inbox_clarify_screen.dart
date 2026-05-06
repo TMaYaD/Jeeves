@@ -49,22 +49,31 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   Future<void> _loadTodo() async {
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
-    final todo = await db.todoDao.getTodo(widget.todoId, userId);
-    if (!mounted) return;
-    if (todo == null) {
-      context.pop();
-      return;
+    try {
+      final todo = await db.todoDao.getTodo(widget.todoId, userId);
+      if (!mounted) return;
+      if (todo == null) {
+        context.pop();
+        return;
+      }
+      setState(() {
+        _todo = todo;
+        _titleCtrl.text = todo.title;
+        _notesCtrl.text = todo.notes ?? '';
+        _energyLevel = todo.energyLevel;
+        _timeEstimate = todo.timeEstimate;
+        // Storage is UTC; show calendar day in local timezone.
+        _dueDate = todo.dueDate?.toLocal();
+        _loading = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to load item. Please try again.')),
+        );
+        context.pop();
+      }
     }
-    setState(() {
-      _todo = todo;
-      _titleCtrl.text = todo.title;
-      _notesCtrl.text = todo.notes ?? '';
-      _energyLevel = todo.energyLevel;
-      _timeEstimate = todo.timeEstimate;
-      // Storage is UTC; show calendar day in local timezone.
-      _dueDate = todo.dueDate?.toLocal();
-      _loading = false;
-    });
   }
 
   @override
