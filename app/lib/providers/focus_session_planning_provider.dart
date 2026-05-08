@@ -502,31 +502,32 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// nothing: a failure in the tag restore does not leave the row back in
   /// inbox state with the wrong assignees, and [inboxRoutings] is only
   /// cleared after the transaction commits.
+  ///
+  /// Note: we cannot gate on Drift's "affected rows" return value here
+  /// because PowerSync exposes [todos] as a SQLite VIEW backed by an
+  /// INSTEAD OF trigger, and `sqlite3_changes()` does not count rows
+  /// touched by triggers — Drift always reports 0. We trust that the
+  /// snapshot already vouches for the row's existence at routing time.
   Future<void> _revertProcessedInboxItem(int idx) async {
     final todo = state.inboxNav.items![idx];
     final record = state.inboxRoutings[idx];
     if (record == null) return;
-    final affected = await _db.transaction(() async {
-      final n = await _db.inboxDao.unprocessInboxItem(
+    await _db.transaction(() async {
+      await _db.inboxDao.unprocessInboxItem(
         todo.id,
         priorClarified: record.priorClarified,
         priorIntent: record.priorIntent,
         priorDoneAt: record.priorDoneAt,
       );
-      if (n > 0) {
-        await _db.inboxDao.setPersonTagsForTodo(
-          todo.id,
-          record.priorPersonTagIds,
-          _userId,
-        );
-      }
-      return n;
-    });
-    if (affected > 0) {
-      state = state.copyWith(
-        inboxRoutings: Map.from(state.inboxRoutings)..remove(idx),
+      await _db.inboxDao.setPersonTagsForTodo(
+        todo.id,
+        record.priorPersonTagIds,
+        _userId,
       );
-    }
+    });
+    state = state.copyWith(
+      inboxRoutings: Map.from(state.inboxRoutings)..remove(idx),
+    );
   }
 
   /// Captures the current pre-routing state of the item at [idx] by reading
@@ -588,26 +589,24 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
-    final affected = await _db.transaction(() async {
-      final n = await _db.inboxDao.processInboxItem(id);
-      if (n > 0) await _db.todoDao.setNextActionText(id, title);
-      return n;
+    await _db.transaction(() async {
+      await _db.inboxDao.processInboxItem(id);
+      await _db.todoDao.setNextActionText(id, title);
     });
-    if (affected > 0) {
-      state = state.copyWith(
-        inboxRoutings: {
-          ...state.inboxRoutings,
-          idx: InboxRoutingRecord(
-            kind: 'next_action',
-            priorClarified: prior.clarified,
-            priorIntent: prior.intent,
-            priorDoneAt: prior.doneAt,
-            priorPersonTagIds: prior.personTagIds,
-          ),
-        },
-      );
-      nextInboxItem();
-    }
+    if (state.inboxNav.index != idx) return;
+    state = state.copyWith(
+      inboxRoutings: {
+        ...state.inboxRoutings,
+        idx: InboxRoutingRecord(
+          kind: 'next_action',
+          priorClarified: prior.clarified,
+          priorIntent: prior.intent,
+          priorDoneAt: prior.doneAt,
+          priorPersonTagIds: prior.personTagIds,
+        ),
+      },
+    );
+    nextInboxItem();
   }
 
   /// Routes the current inbox item to Waiting For (clarified = true, person
@@ -620,26 +619,24 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
-    final affected = await _db.transaction(() async {
-      final n = await _db.inboxDao.processInboxItem(id);
-      if (n > 0) await _db.todoDao.setNextActionText(id, title);
-      return n;
+    await _db.transaction(() async {
+      await _db.inboxDao.processInboxItem(id);
+      await _db.todoDao.setNextActionText(id, title);
     });
-    if (affected > 0) {
-      state = state.copyWith(
-        inboxRoutings: {
-          ...state.inboxRoutings,
-          idx: InboxRoutingRecord(
-            kind: 'waiting_for',
-            priorClarified: prior.clarified,
-            priorIntent: prior.intent,
-            priorDoneAt: prior.doneAt,
-            priorPersonTagIds: prior.personTagIds,
-          ),
-        },
-      );
-      nextInboxItem();
-    }
+    if (state.inboxNav.index != idx) return;
+    state = state.copyWith(
+      inboxRoutings: {
+        ...state.inboxRoutings,
+        idx: InboxRoutingRecord(
+          kind: 'waiting_for',
+          priorClarified: prior.clarified,
+          priorIntent: prior.intent,
+          priorDoneAt: prior.doneAt,
+          priorPersonTagIds: prior.personTagIds,
+        ),
+      },
+    );
+    nextInboxItem();
   }
 
   /// Routes the current inbox item to Someday/Maybe (clarified = true,
@@ -650,22 +647,21 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
-    final affected = await _db.inboxDao.processInboxItem(id, intent: 'maybe');
-    if (affected > 0) {
-      state = state.copyWith(
-        inboxRoutings: {
-          ...state.inboxRoutings,
-          idx: InboxRoutingRecord(
-            kind: 'maybe',
-            priorClarified: prior.clarified,
-            priorIntent: prior.intent,
-            priorDoneAt: prior.doneAt,
-            priorPersonTagIds: prior.personTagIds,
-          ),
-        },
-      );
-      nextInboxItem();
-    }
+    await _db.inboxDao.processInboxItem(id, intent: 'maybe');
+    if (state.inboxNav.index != idx) return;
+    state = state.copyWith(
+      inboxRoutings: {
+        ...state.inboxRoutings,
+        idx: InboxRoutingRecord(
+          kind: 'maybe',
+          priorClarified: prior.clarified,
+          priorIntent: prior.intent,
+          priorDoneAt: prior.doneAt,
+          priorPersonTagIds: prior.personTagIds,
+        ),
+      },
+    );
+    nextInboxItem();
   }
 
   /// Routes the current inbox item to Done (done_at = now). If the DB UPDATE
@@ -677,22 +673,21 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
-    final affected = await _db.todoDao.markDone(id);
-    if (affected > 0) {
-      state = state.copyWith(
-        inboxRoutings: {
-          ...state.inboxRoutings,
-          idx: InboxRoutingRecord(
-            kind: 'done',
-            priorClarified: prior.clarified,
-            priorIntent: prior.intent,
-            priorDoneAt: prior.doneAt,
-            priorPersonTagIds: prior.personTagIds,
-          ),
-        },
-      );
-      nextInboxItem();
-    }
+    await _db.todoDao.markDone(id);
+    if (state.inboxNav.index != idx) return;
+    state = state.copyWith(
+      inboxRoutings: {
+        ...state.inboxRoutings,
+        idx: InboxRoutingRecord(
+          kind: 'done',
+          priorClarified: prior.clarified,
+          priorIntent: prior.intent,
+          priorDoneAt: prior.doneAt,
+          priorPersonTagIds: prior.personTagIds,
+        ),
+      },
+    );
+    nextInboxItem();
   }
 
   /// Returns the IDs of person-typed tags currently assigned to [todoId].
