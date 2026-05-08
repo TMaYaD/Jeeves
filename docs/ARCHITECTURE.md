@@ -374,18 +374,23 @@ The focus session planning feature uses a mix of global `ValueNotifier` objects 
 Step 0 (`InboxClarificationStep`) uses a fixed snapshot rather than a live DB stream so the user navigates a stable, ordered list even as the underlying inbox data changes during the session.
 
 **State fields on `FocusSessionPlanningState`:**
-- `inboxSnapshot: List<Todo>?` — loaded once at step start (oldest-first, respecting the active tag filter); `null` until loaded, `[]` if the inbox is empty.
-- `inboxIndex: int` — points at the item currently being clarified; advances on each routing action.
-- `inboxRoutings: Map<int, String>` — maps snapshot index → routing string (`'next_action'` | `'waiting_for'` | `'maybe'` | `'done'`) for items already processed, used to indicate prior choices and revert before re-routing.
+- `inboxNav: SnapshotNav<String>` — fixed snapshot of inbox item IDs loaded at step start (oldest-first, respecting the active tag filter), plus the current cursor.
+- `inboxRoutings: Map<int, InboxRoutingRecord>` — maps snapshot index → record holding the chosen `RoutingKind`. Drives the "previously selected" affordance on revisit and supplies the `from` argument when the user re-routes the item.
 
 **`FocusSessionPlanningNotifier` methods:**
 - `loadInboxSnapshot()` — idempotent; reads the tag filter at load time, freezes the list oldest-first. Subsequent calls are no-ops.
-- `nextInboxItem()` / `previousInboxItem()` — advance or retreat the index (clamped at 0).
+- `nextInboxItem()` / `previousInboxItem()` — advance or retreat the cursor. `previousInboxItem()` clamps at 0 (method-level); `nextInboxItem()` has no upper-bound clamp itself — the planning screen's Next button gates further progression at `inboxIndex >= inboxSnapshot!.length` (UI-level gating).
 - `skipInboxItem(id)` — records no routing; just calls `nextInboxItem()`.
-- `processInboxItem(id)` / `processInboxItemToWaitingFor(id)` / `processInboxItemToMaybe(id)` / `processInboxItemToDone(id)` — each calls `_revertProcessedInboxItem` if the item was previously routed (undoes the prior DB write), applies the new routing, records the destination in `inboxRoutings`, then calls `nextInboxItem()`.
+- `processInboxItem(id)` / `processInboxItemToWaitingFor(id)` / `processInboxItemToMaybe(id)` / `processInboxItemToDone(id)` / `processInboxItemToTrash(id)` — each delegates to `TodoDao.applyRouting(from: prior, to: kind, …)` so a single forward write expresses the desired final state regardless of any prior routing on the same index. The returned record's `kind` is stored in `inboxRoutings`, then the cursor advances.
 - `getPersonTagIds(todoId)` — returns person-tag IDs for pre-seeding the person picker on a Waiting For revisit.
 
 The **Next** button in `FocusSessionPlanningScreen` is gated on `inboxIndex >= inboxSnapshot!.length` so the user cannot advance until every item is processed or skipped. The screen also auto-advances when a freshly loaded snapshot is empty (inbox was already clear).
+
+### Routing transitions — single source of truth
+
+`TodoDao.applyRouting(todoId, to:, from:, nextActionText:, personTagIds:, userId:, now:)` is the only path that mutates the `clarified` / `intent` / `done_at` / `next_action_text` columns for a clarification (inbox-clarify or re-clarification review). Both `FocusSessionPlanningNotifier.processInboxItem*` (Step 0) and the review-step actions (`confirmReviewItemRelevant` / `markReviewItemWaitingFor` / `updateReviewItemNextAction` / `markReviewItemDone` / `deferReviewItemToSomeday` / `trashReviewItem`, Step 1) call into it.
+
+`RoutingKind` (`app/lib/models/todo.dart`) names the destinations: `nextAction`, `waitingFor`, `maybe`, `done`, `trash`. Each value defines the desired final column state (the forward matrix); `applyRouting` writes that state in a single transaction and stamps `last_clarified_at`. Because the matrix is exhaustive, callers do not need a separate revert step before re-applying — passing the prior `RoutingKind` as `from` is sufficient. The only `from`-dependent rule is that transitioning *away* from `RoutingKind.waitingFor` clears person-tag associations (a Waiting For-specific side effect); other transitions leave person tags untouched. Callers that supply `personTagIds` (waitingFor → waitingFor with a new delegate set) overwrite the assignments explicitly.
 
 ### Planning nudges
 

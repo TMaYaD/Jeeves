@@ -4,7 +4,6 @@ library;
 import 'package:drift/drift.dart';
 
 import '../gtd_database.dart';
-import 'tag_dao.dart' show todoTagIdFor;
 
 part 'inbox_dao.g.dart';
 
@@ -64,76 +63,6 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
             (t) => t.id.equals(id) & t.clarified.equals(false),
           ))
         .go();
-  }
-
-  /// Reverts a processed inbox item to the explicit prior state captured by
-  /// the planning ritual when the routing was applied. Used by the Back / re-
-  /// route flow to undo a prior routing before re-applying.
-  ///
-  /// Returns the number of affected rows (1 on success, 0 if [id] not found).
-  Future<int> unprocessInboxItem(
-    String id, {
-    required bool priorClarified,
-    required String priorIntent,
-    required String? priorDoneAt,
-  }) {
-    return (update(todos)..where((t) => t.id.equals(id))).write(
-      TodosCompanion(
-        clarified: Value(priorClarified),
-        intent: Value(priorIntent),
-        doneAt: Value(priorDoneAt),
-        updatedAt: Value(DateTime.now()),
-      ),
-    );
-  }
-
-  /// Sets the person-typed tag associations for [todoId] to exactly
-  /// [targetPersonTagIds]: removes person tags currently assigned but not in
-  /// the target set, and adds tags in the target set that are not currently
-  /// assigned. Non-person tag associations on the todo are left untouched.
-  ///
-  /// Used by the planning ritual's revert path to restore the captured
-  /// pre-routing person-tag set, instead of clearing all (which would lose
-  /// pre-existing associations from import / sync).
-  Future<void> setPersonTagsForTodo(
-    String todoId,
-    Set<String> targetPersonTagIds,
-    String userId,
-  ) async {
-    final allPersonTagIds = await (select(tags)
-          ..where((t) => t.type.equals('person')))
-        .map((t) => t.id)
-        .get();
-    if (allPersonTagIds.isEmpty) return;
-
-    final currentRows = await (select(todoTags)
-          ..where(
-            (tt) => tt.todoId.equals(todoId) & tt.tagId.isIn(allPersonTagIds),
-          ))
-        .get();
-    final currentTagIds = currentRows.map((r) => r.tagId).toSet();
-
-    final toRemove = currentTagIds.difference(targetPersonTagIds);
-    final toAdd = targetPersonTagIds.difference(currentTagIds);
-
-    if (toRemove.isNotEmpty) {
-      await (delete(todoTags)
-            ..where(
-              (tt) => tt.todoId.equals(todoId) & tt.tagId.isIn(toRemove),
-            ))
-          .go();
-    }
-    for (final tagId in toAdd) {
-      await into(todoTags).insert(
-        TodoTagsCompanion(
-          id: Value(todoTagIdFor(todoId, tagId)),
-          todoId: Value(todoId),
-          tagId: Value(tagId),
-          userId: Value(userId),
-        ),
-        mode: InsertMode.insertOrReplace,
-      );
-    }
   }
 
   /// Sets clarified = true on the given inbox item, optionally updating
