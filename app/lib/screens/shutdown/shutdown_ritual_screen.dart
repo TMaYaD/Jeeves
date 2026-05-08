@@ -138,7 +138,20 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
             ),
             _ShutdownFooter(
               step: step,
-              onBack: step > 0 ? () => notifier.goToStep(step - 1) : null,
+              // Step 1 walks the unfinished snapshot cursor back like the
+              // planning Inbox / Review steps; once at the first task, the
+              // next Back lands on Step 0 (Review Your Day).
+              onBack: step == 0
+                  ? null
+                  : step == 1
+                      ? () {
+                          if (shutdownState.unfinishedNav.canGoBack) {
+                            notifier.previousUnfinishedTask();
+                          } else {
+                            notifier.goToStep(0);
+                          }
+                        }
+                      : () => notifier.goToStep(step - 1),
               onNext: _canAdvance(step, ref) ? () => notifier.advanceStep() : null,
             ),
           ],

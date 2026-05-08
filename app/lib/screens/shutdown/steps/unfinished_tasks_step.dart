@@ -40,7 +40,6 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
   Widget build(BuildContext context) {
     final nav = ref.watch(
         eveningShutdownProvider.select((s) => s.unfinishedNav));
-    final notifier = ref.read(eveningShutdownProvider.notifier);
 
     if (!nav.isLoaded) {
       return const Center(child: CircularProgressIndicator());
@@ -67,45 +66,20 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
     }
 
     final current = nav.current!;
+    final notifier = ref.read(eveningShutdownProvider.notifier);
     final dispositions =
         ref.watch(eveningShutdownProvider.select((s) => s.dispositions));
 
     return SingleChildScrollView(
       physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Within-step Back button (shown when not at the first task).
-          if (nav.index > 0) ...[
-            TextButton.icon(
-              onPressed: () => notifier.previousUnfinishedTask(),
-              icon: const Icon(Icons.arrow_back, size: 16),
-              label: const Text('Previous task'),
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.grey[600],
-                padding: EdgeInsets.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                alignment: Alignment.centerLeft,
-              ),
-            ),
-            const SizedBox(height: 4),
-          ],
-          // Progress label
-          Text(
-            'Task ${nav.index + 1} of ${nav.length}',
-            style: TextStyle(fontSize: 13, color: Colors.grey[500]),
-          ),
-          const SizedBox(height: 8),
-          _TaskResolutionCard(
-            key: ValueKey(current.id),
-            todo: current,
-            lastDisposition: dispositions[current.id],
-            onRollOver: () => notifier.rolloverTask(current.id),
-            onReturn: () => notifier.returnToNextActions(current.id),
-            onDefer: () => notifier.deferTask(current.id),
-          ),
-        ],
+      child: _TaskResolutionCard(
+        key: ValueKey(current.id),
+        todo: current,
+        lastDisposition: dispositions[current.id],
+        onRollOver: () => notifier.rolloverTask(current.id),
+        onReturn: () => notifier.returnToNextActions(current.id),
+        onDefer: () => notifier.deferTask(current.id),
       ),
     );
   }

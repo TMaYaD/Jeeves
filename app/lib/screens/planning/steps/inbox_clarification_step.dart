@@ -493,10 +493,12 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
             children: [
               ClarifyFieldLabel('PROCESS TO'),
               const SizedBox(height: 12),
+              // Colors / icons mirror the review step's action buttons so
+              // a routing kind reads the same across both flows.
               ClarifyDestinationButton(
                 label: 'Next Action',
                 icon: Icons.check_circle_outline,
-                color: const Color(0xFF16A34A),
+                color: const Color(0xFF2563EB),
                 enabled: !_processing,
                 isPreviouslySelected: widget.lastRouting == 'next_action',
                 onTap: () => _runAction(() => _process(context)),
@@ -504,8 +506,8 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
               const SizedBox(height: 8),
               ClarifyDestinationButton(
                 label: 'Waiting For',
-                icon: Icons.hourglass_empty,
-                color: const Color(0xFFF59E0B),
+                icon: Icons.person_outlined,
+                color: const Color(0xFF7C3AED),
                 enabled: !_processing,
                 isPreviouslySelected: widget.lastRouting == 'waiting_for',
                 onTap: () => _runAction(() => _processToWaitingFor(context)),
@@ -522,8 +524,8 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
               const SizedBox(height: 8),
               ClarifyDestinationButton(
                 label: 'Done',
-                icon: Icons.task_alt,
-                color: const Color(0xFF0EA5E9),
+                icon: Icons.task_alt_outlined,
+                color: const Color(0xFF16A34A),
                 enabled: !_processing,
                 isPreviouslySelected: widget.lastRouting == 'done',
                 onTap: () => _runAction(() => _processToDone(context)),
