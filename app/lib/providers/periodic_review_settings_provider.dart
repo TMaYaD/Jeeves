@@ -11,8 +11,10 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/notification_service.dart';
+import 'focus_session_planning_provider.dart' show planningToday;
 import 'synced_preferences_provider.dart';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
@@ -22,6 +24,10 @@ const _kBannerEnabledKey = 'periodic_review_banner_enabled';
 const _kNotificationEnabledKey = 'periodic_review_notification_enabled';
 const _kNotificationHourKey = 'periodic_review_notification_hour';
 const _kNotificationMinuteKey = 'periodic_review_notification_minute';
+const _kNotificationSkippedDateKey =
+    'periodic_review_notification_skipped_date';
+const _kNotificationSnoozedUntilKey =
+    'periodic_review_notification_snoozed_until';
 
 const int _kCadenceDays = 7;
 
@@ -31,6 +37,66 @@ String _todayDateString() {
   return '${now.year.toString().padLeft(4, '0')}-'
       '${now.month.toString().padLeft(2, '0')}-'
       '${now.day.toString().padLeft(2, '0')}';
+}
+
+// ---------------------------------------------------------------------------
+// Notification suppression helpers
+// ---------------------------------------------------------------------------
+
+bool _periodicReviewNotificationSkippedToday = false;
+bool _periodicReviewNotificationSnoozedActive = false;
+
+bool _parseSnoozedActive(String? snoozedUntilStr) {
+  if (snoozedUntilStr == null) return false;
+  final snoozedUntil = DateTime.tryParse(snoozedUntilStr);
+  return snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
+}
+
+/// Returns true if the user has skipped/snoozed the periodic-review
+/// notification for today.
+bool isPeriodicReviewNotificationSuppressedToday() =>
+    _periodicReviewNotificationSkippedToday ||
+    _periodicReviewNotificationSnoozedActive;
+
+/// Reads periodic-review skip/snooze state from [SharedPreferences] into
+/// module-level flags. Call once on startup before scheduling.
+Future<void> loadPeriodicReviewNotificationSuppression() async {
+  final prefs = await SharedPreferences.getInstance();
+  final today = planningToday();
+  _periodicReviewNotificationSkippedToday =
+      prefs.getString(_kNotificationSkippedDateKey) == today;
+  _periodicReviewNotificationSnoozedActive = _parseSnoozedActive(
+    prefs.getString(_kNotificationSnoozedUntilKey),
+  );
+}
+
+/// Persists and activates the "skip periodic review today" suppression.
+///
+/// Dual-writes to SharedPreferences (startup reads) and synced preferences
+/// (cross-device visibility). Pass [ref] to enable the Drift write.
+Future<void> persistPeriodicReviewSkipToday({Ref? ref}) async {
+  final today = planningToday();
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_kNotificationSkippedDateKey, today);
+  _periodicReviewNotificationSkippedToday = true;
+  if (ref != null) {
+    await syncedPrefs(ref).set(_kNotificationSkippedDateKey, today);
+  }
+}
+
+/// Persists and activates a periodic-review snooze until [until].
+///
+/// Dual-writes to SharedPreferences (startup reads) and synced preferences
+/// (cross-device visibility). Pass [ref] to enable the Drift write.
+Future<void> persistPeriodicReviewSnoozedUntil(DateTime until,
+    {Ref? ref}) async {
+  final value = until.toIso8601String();
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_kNotificationSnoozedUntilKey, value);
+  _periodicReviewNotificationSnoozedActive = DateTime.now().isBefore(until);
+  if (ref != null) {
+    await syncedPrefs(ref).set(_kNotificationSnoozedUntilKey, value);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +199,12 @@ class PeriodicReviewSettingsNotifier
   PeriodicReviewSettings build() {
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
+        final today = planningToday();
+        _periodicReviewNotificationSkippedToday =
+            next.value.get<String>(_kNotificationSkippedDateKey) == today;
+        _periodicReviewNotificationSnoozedActive = _parseSnoozedActive(
+          next.value.get<String>(_kNotificationSnoozedUntilKey),
+        );
         state = _fromPrefs(next.value);
         _rescheduleNotification();
       }
@@ -194,7 +266,8 @@ class PeriodicReviewSettingsNotifier
 
   Future<void> _rescheduleNotification() async {
     final svc = ref.read(notificationServiceProvider);
-    if (state.notificationEnabled) {
+    if (state.notificationEnabled &&
+        !isPeriodicReviewNotificationSuppressedToday()) {
       await svc.schedulePeriodicReviewReminder(time: state.notificationTime);
     } else {
       await svc.cancelPeriodicReviewReminder();

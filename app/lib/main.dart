@@ -9,6 +9,7 @@ import 'providers/evening_shutdown_provider.dart';
 import 'providers/focus_session_planning_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
 import 'providers/onboarding_provider.dart';
+import 'providers/periodic_review_settings_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
 import 'services/notification_service.dart';
@@ -27,6 +28,10 @@ Future<void> main() async {
   // Seed shutdown state from SharedPreferences before the first frame.
   await initShutdownCompletion();
   await loadShutdownNotificationSuppression();
+
+  // Seed periodic-review notification suppression so a previously skipped/
+  // snoozed reminder is not re-enabled on restart.
+  await loadPeriodicReviewNotificationSuppression();
 
   // flutter_local_notifications uses platform channels unavailable on web.
   // Skip the entire notification stack on web; push notifications are a
@@ -106,9 +111,12 @@ void _handleNotificationResponse(NotificationResponse response) async {
       appRouter.go('/periodic-review');
 
     case kPeriodicReviewActionSnooze:
+      final until = DateTime.now().add(const Duration(minutes: 60));
+      await persistPeriodicReviewSnoozedUntil(until);
       await NotificationService.instance.snoozePeriodicReviewReminder(60);
 
     case kPeriodicReviewActionSkip:
+      await persistPeriodicReviewSkipToday();
       await NotificationService.instance.skipTodayPeriodicReviewReminder();
   }
 }

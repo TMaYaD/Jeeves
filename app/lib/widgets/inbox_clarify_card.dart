@@ -207,9 +207,11 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
 
   Future<DateTime?> _pickDate(BuildContext context) {
     final now = DateTime.now();
+    final candidate = _dueDate ?? now.add(const Duration(days: 1));
+    final initial = candidate.isBefore(now) ? now : candidate;
     return showDatePicker(
       context: context,
-      initialDate: _dueDate ?? now.add(const Duration(days: 1)),
+      initialDate: initial,
       firstDate: now,
       lastDate: now.add(const Duration(days: 365)),
       helpText: 'Set due date',

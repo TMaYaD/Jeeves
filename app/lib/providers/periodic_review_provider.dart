@@ -85,6 +85,11 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
 
   static const int _kMaxStep = kStepSummary;
 
+  /// Re-entrancy guard for [advanceStep] / [goToStep]. Prevents concurrent
+  /// step transitions (rapid Next taps, or an auto-skip firing while a slow
+  /// snapshot load is still in flight) from racing on [state.currentStep].
+  bool _isTransitioning = false;
+
   @override
   PeriodicReviewState build() => const PeriodicReviewState();
 
@@ -159,15 +164,26 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   // ---------------------------------------------------------------------------
 
   Future<void> advanceStep() async {
-    final next = (state.currentStep + 1).clamp(0, _kMaxStep);
-    state = state.copyWith(currentStep: next);
-    await _onStepEnter(next);
+    if (_isTransitioning) return;
+    await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
   }
 
   Future<void> goToStep(int step) async {
-    final clamped = step.clamp(0, _kMaxStep);
-    state = state.copyWith(currentStep: clamped);
-    await _onStepEnter(clamped);
+    if (_isTransitioning) return;
+    await _transitionTo(step.clamp(0, _kMaxStep));
+  }
+
+  /// Performs the step transition while holding [_isTransitioning]. Internal
+  /// callers (auto-skip in [_onStepEnter]) use this directly so the guard set
+  /// by the outer [advanceStep] / [goToStep] does not block their reentry.
+  Future<void> _transitionTo(int step) async {
+    _isTransitioning = true;
+    try {
+      state = state.copyWith(currentStep: step);
+      await _onStepEnter(step);
+    } finally {
+      _isTransitioning = false;
+    }
   }
 
   Future<void> _onStepEnter(int step) async {
@@ -175,19 +191,19 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
       case kStepInbox:
         await loadInboxSnapshot();
         // Auto-skip: empty inbox advances past Step 0 on entry. Loader has
-        // already returned so we are outside any build phase, and the await
-        // chain prevents reentrant state mutation.
+        // already returned so we are outside any build phase, and the
+        // _isTransitioning guard prevents external concurrent entries.
         if (state.currentStep == kStepInbox &&
             state.inboxNav.isLoaded &&
             state.inboxNav.isEmpty) {
-          await advanceStep();
+          await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
         }
       case kStepWaitingFor:
         await loadWaitingForSnapshot();
         if (state.currentStep == kStepWaitingFor &&
             state.waitingForNav.isLoaded &&
             state.waitingForNav.isEmpty) {
-          await advanceStep();
+          await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
         }
       case kStepProjects:
         await loadProjectsSnapshot();

@@ -83,6 +83,35 @@ void main() {
       expect(c.read(periodicReviewIsDueProvider), isFalse);
     });
 
+    test('isDue is true when last completion is exactly 7 days ago', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      final sevenDaysAgo =
+          DateTime.now().toUtc().subtract(const Duration(days: 7));
+      await c
+          .read(syncedPreferencesProvider.notifier)
+          .set('periodic_review_last_completed_at',
+              sevenDaysAgo.toIso8601String());
+      expect(c.read(periodicReviewIsDueProvider), isTrue);
+    });
+
+    test('isDue is false when last completion is just under 7 days ago',
+        () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      final justUnder =
+          DateTime.now().toUtc().subtract(const Duration(days: 6, hours: 23));
+      await c
+          .read(syncedPreferencesProvider.notifier)
+          .set('periodic_review_last_completed_at',
+              justUnder.toIso8601String());
+      expect(c.read(periodicReviewIsDueProvider), isFalse);
+    });
+
     test('bannerEnabled defaults to true when key is unset', () async {
       final c = _container();
       addTearDown(c.dispose);
@@ -104,6 +133,18 @@ void main() {
         c.read(periodicReviewLastObjectivesProvider),
         equals(['Ship #54', 'Touch grass']),
       );
+    });
+
+    test('lastObjectives returns empty list for malformed JSON', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      await c
+          .read(syncedPreferencesProvider.notifier)
+          .set('periodic_review_objectives', 'not-valid-json');
+
+      expect(c.read(periodicReviewLastObjectivesProvider), isEmpty);
     });
   });
 

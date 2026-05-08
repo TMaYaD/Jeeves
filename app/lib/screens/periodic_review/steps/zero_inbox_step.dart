@@ -27,7 +27,15 @@ class _ZeroInboxStepState extends ConsumerState<ZeroInboxStep> {
       // Lazy-load: only triggers a fetch the first time the step is shown.
       final nav = ref.read(periodicReviewProvider).inboxNav;
       if (!nav.isLoaded) {
-        ref.read(periodicReviewProvider.notifier).loadInboxSnapshot();
+        ref
+            .read(periodicReviewProvider.notifier)
+            .loadInboxSnapshot()
+            .catchError((Object e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to load inbox: $e')),
+          );
+        });
       }
     });
   }

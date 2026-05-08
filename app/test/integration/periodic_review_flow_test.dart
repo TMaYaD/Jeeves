@@ -140,11 +140,12 @@ void main() {
       final notifier = c.read(periodicReviewProvider.notifier);
 
       await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
-      // The post-frame auto-skip is dispatched by the framework; in a
-      // non-widget test we can simulate it by checking the loaded state.
       final state = c.read(periodicReviewProvider);
       expect(state.inboxNav.isLoaded, isTrue);
       expect(state.inboxNav.isEmpty, isTrue);
+      // Auto-skip fires synchronously inside _onStepEnter once the snapshot
+      // load resolves, so currentStep must have advanced past Step 0.
+      expect(state.currentStep, isNot(PeriodicReviewNotifier.kStepInbox));
     });
   });
 }
