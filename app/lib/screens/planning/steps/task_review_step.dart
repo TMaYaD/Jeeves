@@ -35,19 +35,18 @@ class TaskReviewStep extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(focusSessionPlanningProvider);
-    final items = state.reviewItems;
-    final index = state.reviewIndex;
+    final nav = state.reviewNav;
 
-    if (index >= items.length) {
+    if (!nav.isLoaded || nav.isComplete) {
       return const _AllReviewedCard();
     }
 
-    final task = items[index];
+    final task = nav.current!;
     return _ReviewCard(
       key: ValueKey(task.id),
       task: task,
       hint: hintFor(task),
-      previousAction: state.reviewActions[index],
+      previousAction: state.reviewActions[nav.index],
     );
   }
 }

@@ -136,6 +136,7 @@ class ClarifyDestinationButton extends StatelessWidget {
     required this.color,
     required this.onTap,
     this.enabled = true,
+    this.isPreviouslySelected = false,
   });
 
   final String label;
@@ -143,6 +144,10 @@ class ClarifyDestinationButton extends StatelessWidget {
   final Color color;
   final VoidCallback onTap;
   final bool enabled;
+
+  /// When true, the button shows a stronger border and light background tint
+  /// to indicate it was the previously chosen routing for this item.
+  final bool isPreviouslySelected;
 
   @override
   Widget build(BuildContext context) {
@@ -152,7 +157,13 @@ class ClarifyDestinationButton extends StatelessWidget {
       label: Text(label),
       style: OutlinedButton.styleFrom(
         foregroundColor: color,
-        side: BorderSide(color: color.withValues(alpha: enabled ? 0.4 : 0.2)),
+        backgroundColor: isPreviouslySelected ? color.withValues(alpha: 0.08) : null,
+        side: BorderSide(
+          color: isPreviouslySelected
+              ? color
+              : color.withValues(alpha: enabled ? 0.4 : 0.2),
+          width: isPreviouslySelected ? 2.0 : 1.0,
+        ),
         alignment: Alignment.centerLeft,
         minimumSize: const Size.fromHeight(44),
         padding: const EdgeInsets.symmetric(horizontal: 16),

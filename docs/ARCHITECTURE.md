@@ -369,6 +369,24 @@ The focus session planning feature uses a mix of global `ValueNotifier` objects 
 
 `focusSessionPlanningCompletionNotifier` is set to `true` in-memory by `FocusSessionPlanningNotifier.startDay()` when the ritual ends; it is not persisted across restarts. `focusSessionPlanningBannerDismissedNotifier` is initialised from `SharedPreferences` in `initFocusSessionPlanningCompletion()`, which is called in `main()` before `runApp`.
 
+### Inbox clarification step — snapshot+index navigation
+
+Step 0 (`InboxClarificationStep`) uses a fixed snapshot rather than a live DB stream so the user navigates a stable, ordered list even as the underlying inbox data changes during the session.
+
+**State fields on `FocusSessionPlanningState`:**
+- `inboxSnapshot: List<Todo>?` — loaded once at step start (oldest-first, respecting the active tag filter); `null` until loaded, `[]` if the inbox is empty.
+- `inboxIndex: int` — points at the item currently being clarified; advances on each routing action.
+- `inboxRoutings: Map<int, String>` — maps snapshot index → routing string (`'next_action'` | `'waiting_for'` | `'maybe'` | `'done'`) for items already processed, used to indicate prior choices and revert before re-routing.
+
+**`FocusSessionPlanningNotifier` methods:**
+- `loadInboxSnapshot()` — idempotent; reads the tag filter at load time, freezes the list oldest-first. Subsequent calls are no-ops.
+- `nextInboxItem()` / `previousInboxItem()` — advance or retreat the index (clamped at 0).
+- `skipInboxItem(id)` — records no routing; just calls `nextInboxItem()`.
+- `processInboxItem(id)` / `processInboxItemToWaitingFor(id)` / `processInboxItemToMaybe(id)` / `processInboxItemToDone(id)` — each calls `_revertProcessedInboxItem` if the item was previously routed (undoes the prior DB write), applies the new routing, records the destination in `inboxRoutings`, then calls `nextInboxItem()`.
+- `getPersonTagIds(todoId)` — returns person-tag IDs for pre-seeding the person picker on a Waiting For revisit.
+
+The **Next** button in `FocusSessionPlanningScreen` is gated on `inboxIndex >= inboxSnapshot!.length` so the user cannot advance until every item is processed or skipped. The screen also auto-advances when a freshly loaded snapshot is empty (inbox was already clear).
+
 ### Planning nudges
 
 The ritual can no longer be auto-launched. Users are nudged through two opt-in mechanisms:
@@ -388,6 +406,34 @@ Ceremony state (banner dismissed, notification skip/snooze) is persisted to both
 | `planning_banner_dismissed_date` | `yyyy-MM-dd` | Date banner was last dismissed |
 | `planning_notification_skipped_date` | `yyyy-MM-dd` | Date user hit "Skip today" |
 | `planning_notification_snoozed_until` | ISO-8601 datetime | When the snoozed notification will fire |
+
+## Evening Shutdown Ritual
+
+The shutdown ritual reviews the day's focus session and lets the user assign a per-task disposition to each unfinished task before closing the session.
+
+### EveningShutdownNotifier (`providers/evening_shutdown_provider.dart`)
+
+A `NotifierProvider<EveningShutdownNotifier, EveningShutdownState>` that drives the shutdown ritual UI (steps 0–2: unfinished tasks → completed summary → confirm close).
+
+**State fields on `EveningShutdownState`:**
+- `currentStep: int` — 0-indexed step within the ritual.
+- `dispositions: Map<String, String>` — maps task ID → disposition string (`'rollover'` | `'leave'` | `'maybe'`). Held in memory until `closeDay()` commits.
+- `unfinishedSnapshot: List<Todo>?` — fixed snapshot of unfinished session tasks loaded at step start; `null` until loaded, `[]` if all tasks are done.
+- `unfinishedIndex: int` — points at the task currently being resolved.
+
+**Snapshot+index navigation** (same pattern as the inbox clarification step):
+- `loadUnfinishedSnapshot()` — idempotent; reads `watchActiveSessionTasks().first`, filters `doneAt == null`, freezes the list. Subsequent calls are no-ops.
+- `nextUnfinishedTask()` — increments `unfinishedIndex`. If the new index would reach `snapshot.length`, calls `advanceStep()` instead so the ritual proceeds automatically.
+- `previousUnfinishedTask()` — decrements index (clamped at 0) and removes the in-memory disposition for the returned-to task so the user can re-choose.
+- `rolloverTask(id)` / `returnToNextActions(id)` / `deferTask(id)` — each calls `_setDisposition` then `nextUnfinishedTask()`.
+
+**Lifecycle:**
+- `closeDay()` — atomically commits all accumulated dispositions via `FocusSessionDao.reviewAndCloseSession`, persists the completion date to `SharedPreferences`, flips `shutdownCompletionNotifier.value = true`, and resets state.
+- `dismissBannerForToday()` / `skipShutdownToday()` / `snoozeShutdownNotification(minutes)` — banner and notification suppression helpers.
+
+**Stream providers** driven by the active focus session:
+- `completedTodayProvider` — tasks in the active session with `doneAt != null`.
+- `unfinishedSelectedTodayProvider` — tasks in the active session with `doneAt == null` that have no in-memory disposition yet; used by the banner and other out-of-ritual consumers to show the remaining count.
 
 ## Sprint Timer (Pomodoro Engine)
 

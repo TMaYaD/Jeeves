@@ -7,12 +7,17 @@ import '../../../providers/evening_shutdown_provider.dart';
 
 /// Step 1 of the shutdown ritual: resolve each unfinished task one at a time.
 ///
+/// Uses a fixed snapshot loaded at step start, navigated by an integer index.
 /// For every task that was planned but not completed today, the user must
 /// choose one of three dispositions:
 /// - Roll Over to Tomorrow → preselects the task for tomorrow's plan.
 /// - Return to Next Actions → clears the daily selection; task reappears in
 ///   tomorrow's planning session.
 /// - Defer until a later day → moves the task to Someday/Maybe.
+///
+/// Back navigation returns to the previous task and clears its in-memory
+/// disposition so the user can re-choose. All disposition writes are deferred
+/// to [EveningShutdownNotifier.closeDay].
 class UnfinishedTasksStep extends ConsumerStatefulWidget {
   const UnfinishedTasksStep({super.key});
 
@@ -23,46 +28,47 @@ class UnfinishedTasksStep extends ConsumerStatefulWidget {
 
 class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
   @override
-  Widget build(BuildContext context) {
-    final asyncUnfinished = ref.watch(unfinishedSelectedTodayProvider);
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      if (!mounted) return;
+      ref.read(eveningShutdownProvider.notifier).loadUnfinishedSnapshot();
+    });
+  }
 
-    if (asyncUnfinished.isLoading) {
+  @override
+  Widget build(BuildContext context) {
+    final nav = ref.watch(
+        eveningShutdownProvider.select((s) => s.unfinishedNav));
+
+    if (!nav.isLoaded) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (asyncUnfinished.hasError) {
+    if (nav.isEmpty || nav.isComplete) {
       return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.error_outline, size: 48, color: Colors.red[300]),
-              const SizedBox(height: 16),
-              const Text(
-                'Could not load unfinished tasks',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                textAlign: TextAlign.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.check_circle_outline, size: 56, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text(
+              'All tasks completed today!',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[600],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       );
     }
 
-    final unfinished = asyncUnfinished.asData!.value;
-    if (unfinished.isEmpty) return const SizedBox.shrink();
-
-    final current = unfinished.first;
+    final current = nav.current!;
     final notifier = ref.read(eveningShutdownProvider.notifier);
-    final isLast = unfinished.length == 1;
-
-    void resolve(void Function() apply) {
-      apply();
-      // Advance immediately when the user resolves the last task; otherwise
-      // the stream-driven auto-advance leaves a one-frame blank page.
-      if (isLast) notifier.advanceStep();
-    }
+    final dispositions =
+        ref.watch(eveningShutdownProvider.select((s) => s.dispositions));
 
     return SingleChildScrollView(
       physics: const ClampingScrollPhysics(),
@@ -70,9 +76,10 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
       child: _TaskResolutionCard(
         key: ValueKey(current.id),
         todo: current,
-        onRollOver: () => resolve(() => notifier.rolloverTask(current.id)),
-        onReturn: () => resolve(() => notifier.returnToNextActions(current.id)),
-        onDefer: () => resolve(() => notifier.deferTask(current.id)),
+        lastDisposition: dispositions[current.id],
+        onRollOver: () => notifier.rolloverTask(current.id),
+        onReturn: () => notifier.returnToNextActions(current.id),
+        onDefer: () => notifier.deferTask(current.id),
       ),
     );
   }
@@ -89,12 +96,18 @@ class _TaskResolutionCard extends StatelessWidget {
     required this.onRollOver,
     required this.onReturn,
     required this.onDefer,
+    this.lastDisposition,
   });
 
   final Todo todo;
   final VoidCallback onRollOver;
   final VoidCallback onReturn;
   final VoidCallback onDefer;
+
+  /// The currently-recorded in-memory disposition for this task
+  /// ('rollover' | 'leave' | 'maybe'), or null if no choice has been made yet.
+  /// Drives the "previously selected" affordance shown on the matching button.
+  final String? lastDisposition;
 
   @override
   Widget build(BuildContext context) {
@@ -152,6 +165,7 @@ class _TaskResolutionCard extends StatelessWidget {
           icon: Icons.center_focus_strong_outlined,
           color: const Color(0xFF2563EB),
           onTap: onRollOver,
+          isPreviouslySelected: lastDisposition == 'rollover',
         ),
         const SizedBox(height: 10),
         _ResolutionButton(
@@ -160,6 +174,7 @@ class _TaskResolutionCard extends StatelessWidget {
           icon: Icons.check_circle_outline,
           color: const Color(0xFF6B7280),
           onTap: onReturn,
+          isPreviouslySelected: lastDisposition == 'leave',
         ),
         const SizedBox(height: 10),
         _ResolutionButton(
@@ -168,6 +183,7 @@ class _TaskResolutionCard extends StatelessWidget {
           icon: Icons.star_border,
           color: const Color(0xFF6B7280),
           onTap: onDefer,
+          isPreviouslySelected: lastDisposition == 'maybe',
         ),
       ],
     );
@@ -191,6 +207,7 @@ class _ResolutionButton extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.onTap,
+    this.isPreviouslySelected = false,
   });
 
   final String label;
@@ -199,15 +216,27 @@ class _ResolutionButton extends StatelessWidget {
   final Color color;
   final VoidCallback onTap;
 
+  /// Renders a thicker tinted border when true, signalling that the user has
+  /// previously chosen this disposition for the current task. Re-tapping the
+  /// same button is idempotent; tapping a different one replaces the choice.
+  final bool isPreviouslySelected;
+
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: color.withAlpha(20),
+      color: color.withAlpha(isPreviouslySelected ? 40 : 20),
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
-        child: Padding(
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isPreviouslySelected ? color : Colors.transparent,
+              width: isPreviouslySelected ? 2.0 : 0.0,
+            ),
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             children: [

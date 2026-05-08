@@ -167,6 +167,9 @@
 - `Future.microtask(_preloadRolloverIds)` in `FocusSessionPlanningNotifier.build()` is the correct pattern for one-shot async side-effects in a Riverpod `Notifier` — `build()` must return synchronously, and the microtask fires exactly once per notifier lifetime.
 - Session ID is passed to `FocusSessionReviewScreen` via `GoRouterState.extra`; the review route lives outside `ShellRoute` so it gets a full-screen layout without the bottom nav bar.
 
+## 2026-05-06 (issue #264)
+- Snapshot+index navigation replaces live-stream iteration in both `InboxClarificationStep` and `UnfinishedTasksStep`: a fixed `List<Todo>?` snapshot is loaded once (idempotent), and an `int` index advances through it so the user sees a stable, back-navigable list even if the underlying DB changes mid-session.
+
 ## 2026-05-04
 - OnboardingCard reads hasTodosProvider (a StreamProvider) which depends on databaseProvider. Any test that renders InboxScreen must override hasTodosProvider to avoid pending-timer failures in fakeAsync — see inbox_screen_test.dart for the pattern.
 - `FocusSessionPlanningBanner` now reads three `StreamProvider`s (`hasTodosProvider`, `unfilteredInboxProvider`, `unfilteredNextActionsProvider`). Tests that assert the banner is **visible** need two pumps after `pumpWidget` — one for the stream to emit, one for the widget to rebuild. Tests that assert the banner is **hidden** work with one pump because the banner is also hidden during `AsyncLoading`.

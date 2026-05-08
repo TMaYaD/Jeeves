@@ -41,6 +41,21 @@ ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       ],
     );
 
+Future<void> _insertInboxItem(
+  GtdDatabase db, {
+  required String id,
+  DateTime? createdAt,
+}) async {
+  final now = createdAt ?? DateTime.now();
+  await db.inboxDao.insertTodo(TodosCompanion(
+    id: Value(id),
+    title: Value('Item $id'),
+    userId: const Value('local'),
+    createdAt: Value(now),
+    updatedAt: Value(now),
+  ));
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -101,10 +116,9 @@ void main() {
           reason: 'reEnterPlanning should reset to step 0');
     });
 
-    test('startDay resets step and inbox counters', () async {
+    test('startDay resets step and snapshot navigation', () async {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      notifier.setInitialInboxCount(5);
       notifier.advanceStep();
       notifier.advanceStep();
 
@@ -112,9 +126,9 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.currentStep, 0);
-      expect(state.initialInboxCount, isNull);
-      expect(state.inboxClarifiedCount, 0);
-      expect(state.inboxSkippedCount, 0);
+      expect(state.inboxNav.items, isNull);
+      expect(state.inboxNav.index, 0);
+      expect(state.inboxRoutings, isEmpty);
     });
   });
 
@@ -175,18 +189,12 @@ void main() {
       focusSessionPlanningCompletionNotifier.value = false;
     });
 
-    test('processInboxItem twice concurrently increments count only once',
+    test('processInboxItem twice concurrently updates DB only once',
         () async {
-      final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
-        id: const Value('item-1'),
-        title: const Value('Test item'),
-        userId: const Value('local'),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
+      await _insertInboxItem(db, id: 'item-1');
 
       final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
 
       // Fire both without awaiting the first so they race.
       final first = notifier.processInboxItem('item-1', title: 'Test item');
@@ -194,8 +202,10 @@ void main() {
       await Future.wait([first, second]);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxClarifiedCount, 1,
-          reason: 'Double-process must not increment count twice');
+      expect(state.inboxRoutings[0]?.kind, equals('next_action'),
+          reason: 'Routing recorded exactly once for index 0');
+      expect(state.inboxNav.index, equals(1),
+          reason: 'Index advanced exactly once');
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-1')))
@@ -203,26 +213,21 @@ void main() {
       expect(row.clarified, isTrue);
     });
 
-    test('processInboxItemToMaybe twice concurrently increments count only once',
+    test('processInboxItemToMaybe twice concurrently updates DB only once',
         () async {
-      final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
-        id: const Value('item-2'),
-        title: const Value('Maybe item'),
-        userId: const Value('local'),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
+      await _insertInboxItem(db, id: 'item-2');
 
       final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
 
       final first = notifier.processInboxItemToMaybe('item-2');
       final second = notifier.processInboxItemToMaybe('item-2');
       await Future.wait([first, second]);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxClarifiedCount, 1,
-          reason: 'Double-process to maybe must not increment count twice');
+      expect(state.inboxRoutings[0]?.kind, equals('maybe'),
+          reason: 'Routing recorded exactly once for index 0');
+      expect(state.inboxNav.index, equals(1));
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-2')))
@@ -293,6 +298,435 @@ void main() {
     });
   });
 
+  group('Inbox snapshot navigation', () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+
+    setUp(() {
+      db = GtdDatabase(NativeDatabase.memory());
+      container = _container(db);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+      focusSessionPlanningCompletionNotifier.value = false;
+    });
+
+    test('loadInboxSnapshot populates state from DB in FIFO order', () async {
+      // Insert oldest first, newest last. watchInbox orders DESC by createdAt,
+      // so reversed gives oldest-first (FIFO).
+      final t1 = DateTime(2025, 1, 1);
+      final t2 = DateTime(2025, 1, 2);
+      await _insertInboxItem(db, id: 'old', createdAt: t1);
+      await _insertInboxItem(db, id: 'new', createdAt: t2);
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.items, isNotNull);
+      expect(state.inboxNav.items, equals(['old', 'new']),
+          reason: 'oldest item first (FIFO order)');
+    });
+
+    test('loadInboxSnapshot is idempotent', () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      // Insert a new item; second load should not pick it up.
+      await _insertInboxItem(db, id: 'item-2');
+      await notifier.loadInboxSnapshot();
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.items!.length, equals(1),
+          reason: 'second load is a no-op; snapshot stays frozen');
+    });
+
+    test('nextInboxItem increments index', () async {
+      await _insertInboxItem(db, id: 'item-1');
+      await _insertInboxItem(db, id: 'item-2');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      expect(container.read(focusSessionPlanningProvider).inboxNav.index, 0);
+      notifier.nextInboxItem();
+      expect(container.read(focusSessionPlanningProvider).inboxNav.index, 1);
+    });
+
+    test('previousInboxItem decrements index, clamped at 0', () async {
+      await _insertInboxItem(db, id: 'item-1');
+      await _insertInboxItem(db, id: 'item-2');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+      notifier.nextInboxItem(); // index = 1
+
+      notifier.previousInboxItem(); // index = 0
+      expect(container.read(focusSessionPlanningProvider).inboxNav.index, 0);
+
+      // Already at 0 — must stay at 0.
+      notifier.previousInboxItem();
+      expect(container.read(focusSessionPlanningProvider).inboxNav.index, 0);
+    });
+
+    test('skipInboxItem advances index without DB write and without adding to inboxRoutings',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      notifier.skipInboxItem();
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index, 1);
+      expect(state.inboxRoutings, isEmpty);
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(row.clarified, isFalse,
+          reason: 'skip must not write to DB');
+    });
+
+    test('processInboxItem writes to DB, advances index, and records routing',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+      await notifier.processInboxItem('item-1', title: 'Test item');
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index, 1);
+      expect(state.inboxRoutings[0]?.kind, equals('next_action'));
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(row.clarified, isTrue);
+    });
+
+    test('processInboxItemToMaybe writes to DB, advances index, and records routing',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+      await notifier.processInboxItemToMaybe('item-1');
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index, 1);
+      expect(state.inboxRoutings[0]?.kind, equals('maybe'));
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(row.clarified, isTrue);
+      expect(row.intent, 'maybe');
+    });
+
+    test('processInboxItemToDone writes to DB, advances index, and records routing',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+      await notifier.processInboxItemToDone('item-1');
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index, 1);
+      expect(state.inboxRoutings[0]?.kind, equals('done'));
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(row.doneAt, isNotNull);
+    });
+
+    test('Back is pure navigation; re-route reverts and re-applies', () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      await notifier.processInboxItemToMaybe('item-1');
+      notifier.previousInboxItem(); // pure nav: DB stays in maybe state
+
+      // After Back, the prior routing remains in DB and in inboxRoutings so
+      // the "previously selected" affordance can render.
+      final afterBack = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(afterBack.clarified, isTrue,
+          reason: 'Back must not revert DB state');
+      expect(afterBack.intent, 'maybe');
+      var state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxRoutings[0]?.kind, equals('maybe'));
+
+      // Re-tapping a different destination triggers the revert + re-apply.
+      await notifier.processInboxItem('item-1', title: 'Test item');
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(row.clarified, isTrue);
+      expect(row.intent, 'next',
+          reason: 'revert restored prior intent before re-routing');
+      expect(row.doneAt, isNull);
+      state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxRoutings[0]?.kind, equals('next_action'));
+    });
+
+    test('revert does not modify title, notes, energy, time estimate, due date',
+        () async {
+      final now = DateTime.now();
+      await db.inboxDao.insertTodo(TodosCompanion(
+        id: const Value('rich-item'),
+        title: const Value('My task'),
+        notes: const Value('some notes'),
+        energyLevel: const Value('high'),
+        timeEstimate: const Value(30),
+        userId: const Value('local'),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+      await notifier.processInboxItem('rich-item', title: 'Test item');
+      notifier.previousInboxItem();
+      await notifier.processInboxItemToMaybe('rich-item');
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('rich-item')))
+          .getSingle();
+      expect(row.title, 'My task');
+      expect(row.notes, 'some notes');
+      expect(row.energyLevel, 'high');
+      expect(row.timeEstimate, 30);
+    });
+
+    test('re-routing to a different destination undoes prior routing side effects',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      // Route to Maybe first.
+      await notifier.processInboxItemToMaybe('item-1');
+      notifier.previousInboxItem();
+
+      // Re-route to Next Action — the handler reverts maybe before applying.
+      await notifier.processInboxItem('item-1', title: 'Test item');
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(row.clarified, isTrue);
+      expect(row.intent, 'next',
+          reason: 'revert restored prior intent before next_action routing');
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxRoutings[0]?.kind, equals('next_action'));
+    });
+
+    test('re-routing Done → Next Action clears done_at', () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      await notifier.processInboxItemToDone('item-1');
+      notifier.previousInboxItem();
+      await notifier.processInboxItem('item-1', title: 'Test item');
+
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+      expect(row.doneAt, isNull);
+      expect(row.clarified, isTrue);
+    });
+
+    test('re-tapping the same destination is a net no-op on routing flags',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      await notifier.processInboxItem('item-1', title: 'Test item');
+      final beforeRow = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+
+      notifier.previousInboxItem();
+      await notifier.processInboxItem('item-1', title: 'Test item'); // same destination
+
+      final afterRow = await (db.select(db.todos)
+            ..where((t) => t.id.equals('item-1')))
+          .getSingle();
+
+      expect(afterRow.clarified, equals(beforeRow.clarified));
+      expect(afterRow.intent, equals(beforeRow.intent));
+      expect(afterRow.doneAt, equals(beforeRow.doneAt));
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxRoutings[0]?.kind, equals('next_action'));
+    });
+
+    test('progress fraction is inboxIndex / inboxSnapshot.length', () async {
+      await _insertInboxItem(db, id: 'item-1');
+      await _insertInboxItem(db, id: 'item-2');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      var state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index / state.inboxNav.items!.length, equals(0.0));
+
+      notifier.nextInboxItem();
+      state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index / state.inboxNav.items!.length, equals(0.5));
+    });
+
+    test('isInboxComplete is true when inboxIndex >= inboxSnapshot.length',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      var state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index >= state.inboxNav.items!.length, isFalse);
+
+      await notifier.processInboxItem('item-1', title: 'Test item');
+      state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index >= state.inboxNav.items!.length, isTrue);
+    });
+
+    test('snapshot does not drift when DB changes mid-session', () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      // Insert a new inbox item after loading.
+      await _insertInboxItem(db, id: 'item-2');
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.items!.length, equals(1),
+          reason: 'snapshot frozen at load time');
+    });
+
+    test(
+        'revert preserves pre-existing person tags (no data loss from import/sync)',
+        () async {
+      // Inbox item with a pre-existing person-tag association (e.g. from sync).
+      await _insertInboxItem(db, id: 'item-1');
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('alice'),
+        name: Value('Alice'),
+        type: Value('person'),
+        userId: Value('local'),
+      ));
+      await db.tagDao.assignTag('item-1', 'alice', 'local');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      // Route to maybe, then re-route to next_action — the in-handler revert
+      // path runs and must NOT drop the pre-existing 'alice' tag.
+      await notifier.processInboxItemToMaybe('item-1');
+      notifier.previousInboxItem();
+      await notifier.processInboxItem('item-1', title: 'Test item');
+
+      final tagIds = await db.todoDao.getPersonTagIdsForTodo('item-1');
+      expect(tagIds, contains('alice'),
+          reason: 'pre-existing person tag must survive revert');
+    });
+
+    test('revert restores pre-existing intent (not hardcoded \'next\')',
+        () async {
+      // Pre-existing inbox item with intent='maybe' (e.g. from import).
+      final now = DateTime.now();
+      await db.inboxDao.insertTodo(TodosCompanion(
+        id: const Value('item-1'),
+        title: const Value('Existing maybe item'),
+        intent: const Value('maybe'),
+        userId: const Value('local'),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      // Route to next_action then re-route — revert path runs first.
+      await notifier.processInboxItem('item-1', title: 'Test item');
+      notifier.previousInboxItem();
+      await notifier.processInboxItemToDone('item-1');
+
+      // The done routing replaces, but the routing record's priorIntent
+      // must reflect the original 'maybe', not the hardcoded 'next' default.
+      final state = container.read(focusSessionPlanningProvider);
+      final record = state.inboxRoutings[0];
+      expect(record, isNotNull);
+      expect(record!.priorIntent, equals('maybe'),
+          reason: 'prior intent captured at apply time, not hardcoded');
+    });
+
+    test(
+        'capture is at apply time (live DB), so external writes between '
+        'snapshot load and routing survive revert',
+        () async {
+      // Item starts with intent='next'.
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      // External mutation lands AFTER snapshot load but BEFORE routing —
+      // simulates sync, import, or an ad-hoc edit elsewhere in the UI.
+      await (db.update(db.todos)..where((t) => t.id.equals('item-1')))
+          .write(const TodosCompanion(intent: Value('maybe')));
+
+      // Apply a routing — capture must read the live 'maybe', not the
+      // snapshot's stale 'next'.
+      await notifier.processInboxItemToDone('item-1');
+
+      final state = container.read(focusSessionPlanningProvider);
+      final record = state.inboxRoutings[0]!;
+      expect(record.priorIntent, equals('maybe'),
+          reason: 'capture reads live DB at apply, not the snapshot');
+    });
+
+    test('routing bails out when the snapshot row was deleted before apply',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      // External delete lands AFTER snapshot load but BEFORE routing.
+      await (db.delete(db.todos)..where((t) => t.id.equals('item-1'))).go();
+
+      // Routing must not advance the cursor or record a phantom routing.
+      await notifier.processInboxItem('item-1', title: 'Test item');
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index, equals(0),
+          reason: 'cursor must not advance when row no longer exists');
+      expect(state.inboxRoutings, isEmpty,
+          reason: 'no routing record for a missing row');
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // Step-skip behaviour
   // ---------------------------------------------------------------------------
@@ -339,8 +773,8 @@ void main() {
       final state = container.read(focusSessionPlanningProvider);
       expect(state.currentStep, 1,
           reason: 'step 1 (review) should not be skipped when items exist');
-      expect(state.reviewItems, hasLength(1));
-      expect(state.reviewIndex, 0);
+      expect(state.reviewNav.items, hasLength(1));
+      expect(state.reviewNav.index, 0);
     });
 
     test('advanceStep from step 1 lands on step 2', () async {
@@ -428,7 +862,7 @@ void main() {
       expect(
           await db.todoDao.watchNeedsReview().first, isEmpty);
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('updateReviewItemNextAction: sets nextActionText; stamps lastClarifiedAt; reviewIndex advances',
@@ -448,7 +882,7 @@ void main() {
       expect(todo?.nextActionText, 'Draft the proposal');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('markReviewItemDone: task doneAt set; not in result; reviewIndex advances',
@@ -465,7 +899,7 @@ void main() {
       expect(todo?.doneAt, isNotNull);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('deferReviewItemToSomeday: stale task intent=maybe; leaves result; reviewIndex advances',
@@ -482,7 +916,7 @@ void main() {
       expect(todo?.intent, 'maybe');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('trashReviewItem: task intent=trash; not in result; reviewIndex advances',
@@ -499,7 +933,7 @@ void main() {
       expect(todo?.intent, 'trash');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('deferReviewItemToSomeday on actionless task: leaves result; reviewIndex advances',
@@ -515,7 +949,7 @@ void main() {
           await db.todoDao.watchNeedsReview().first, isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('markReviewItemWaitingFor on stale task: task leaves result; reviewIndex advances',
@@ -530,7 +964,7 @@ void main() {
       expect(await db.todoDao.watchNeedsReview().first, isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('markReviewItemWaitingFor on actionless task: sets next_action_text; task leaves result; reviewIndex advances',
@@ -548,7 +982,7 @@ void main() {
       expect(todo?.nextActionText, 'Waiting for…');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 1);
+      expect(state.reviewNav.index, 1);
     });
 
     test('updateReviewItemNextAction with blank text: stays in result; reviewIndex does not advance; action record cleared',
@@ -559,11 +993,11 @@ void main() {
 
       // Load review items so _revertIfNeeded can look up the task by index.
       await notifier.advanceStep();
-      expect(container.read(focusSessionPlanningProvider).reviewItems, hasLength(1));
+      expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
       // First commit a real action so there's a stale record to clear.
       await notifier.updateReviewItemNextAction(id, 'Draft the proposal');
-      expect(container.read(focusSessionPlanningProvider).reviewIndex, 1);
+      expect(container.read(focusSessionPlanningProvider).reviewNav.index, 1);
       notifier.reviewBack();
 
       // Submit blank — should clear the stale record without advancing.
@@ -572,7 +1006,7 @@ void main() {
       expect(await db.todoDao.watchNeedsReview().first, isNotEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewIndex, 0);
+      expect(state.reviewNav.index, 0);
       expect(state.reviewActions[0], isNull,
           reason: 'stale action record must be cleared so dialog does not pre-fill with old text');
     });
@@ -586,7 +1020,7 @@ void main() {
 
       // Load review items the same way the UI does.
       await notifier.advanceStep(); // step 0 → step 1, loads reviewItems
-      expect(container.read(focusSessionPlanningProvider).reviewItems, hasLength(1));
+      expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
       await notifier.markReviewItemDone(id);
 
@@ -608,7 +1042,7 @@ void main() {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       await notifier.advanceStep();
-      expect(container.read(focusSessionPlanningProvider).reviewItems, hasLength(1));
+      expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
       await notifier.trashReviewItem(id);
 
@@ -700,6 +1134,7 @@ void main() {
     test('processInboxItem sets nextActionText to provided title', () async {
       final id = await insertInboxTask('Buy milk');
       final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
 
       await notifier.processInboxItem(id, title: 'Buy milk');
 
@@ -712,6 +1147,7 @@ void main() {
         () async {
       final id = await insertInboxTask('Buy milk');
       final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
 
       await notifier.processInboxItem(id, title: 'Buy milk');
 
@@ -722,6 +1158,7 @@ void main() {
     test('processInboxItemToMaybe sets intent=maybe and clarified=true', () async {
       final id = await insertInboxTask('Read that book');
       final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
 
       await notifier.processInboxItemToMaybe(id);
 

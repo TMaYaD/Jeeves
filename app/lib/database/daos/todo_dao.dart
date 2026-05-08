@@ -251,9 +251,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Also stamps [last_clarified_at] since marking done is a clarifying act.
   ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
-  Future<void> markDone(String todoId, {DateTime? now}) async {
+  ///
+  /// Returns the number of affected rows (0 if [todoId] not found, 1 on
+  /// success). Inbox callers gate state advancement on a non-zero result.
+  Future<int> markDone(String todoId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
-    await customUpdate(
+    return customUpdate(
       'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
       'WHERE id = ?',
       variables: [Variable(ts), Variable(ts), Variable(ts), Variable(todoId)],
@@ -441,6 +444,18 @@ AND (
     );
   }
 
+  /// Returns the IDs of person-typed tags assigned to [todoId].
+  Future<Set<String>> getPersonTagIdsForTodo(String todoId) async {
+    final rows = await customSelect(
+      'SELECT tt.tag_id FROM todo_tags tt '
+      'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
+      'WHERE tt.todo_id = ?',
+      variables: [Variable('person'), Variable(todoId)],
+      readsFrom: {todoTags, tags},
+    ).get();
+    return rows.map((r) => r.read<String>('tag_id')).toSet();
+  }
+
   /// One-shot check: is [todoId] currently in the re-clarification queue?
   @visibleForTesting
   Future<bool> isNeedsReview(String todoId) async {
@@ -456,6 +471,11 @@ AND (
   ///
   /// Title and due-date edits are clarifying acts: they stamp [lastClarifiedAt]
   /// so a stale task does not remain falsely surfaced after such changes.
+  ///
+  /// To clear a nullable column, pass the matching `clear*` flag (e.g.
+  /// `clearTimeEstimate: true`). Passing `null` for the typed parameter is
+  /// "no change" so callers don't accidentally null-out fields they're not
+  /// editing.
   Future<void> updateFields(
     String todoId, {
     String? title,
@@ -463,6 +483,8 @@ AND (
     String? energyLevel,
     int? timeEstimate,
     DateTime? dueDate,
+    bool clearEnergyLevel = false,
+    bool clearTimeEstimate = false,
     bool clearDueDate = false,
   }) async {
     final ts = DateTime.now().toUtc();
@@ -472,8 +494,16 @@ AND (
       lastClarifiedAt: shouldStampClarified ? Value(ts) : const Value.absent(),
       title: title != null ? Value(title) : const Value.absent(),
       notes: notes != null ? Value(notes) : const Value.absent(),
-      energyLevel: energyLevel != null ? Value(energyLevel) : const Value.absent(),
-      timeEstimate: timeEstimate != null ? Value(timeEstimate) : const Value.absent(),
+      energyLevel: clearEnergyLevel
+          ? const Value(null)
+          : energyLevel != null
+              ? Value(energyLevel)
+              : const Value.absent(),
+      timeEstimate: clearTimeEstimate
+          ? const Value(null)
+          : timeEstimate != null
+              ? Value(timeEstimate)
+              : const Value.absent(),
       // Normalise to UTC; see rescheduleTask for rationale.
       dueDate: clearDueDate
           ? const Value(null)
