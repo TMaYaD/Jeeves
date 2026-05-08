@@ -534,11 +534,17 @@ AND (
   /// | `done`       | true      | leave   | now     | leave                     |
   /// | `trash`      | true      | 'trash' | clear   | leave                     |
   ///
-  /// Person-tag associations: callers manage these out-of-band (the
+  /// Person-tag associations are normally managed out-of-band (the
   /// PersonTagPicker writes them before the routing call). [applyRouting]
-  /// only touches person tags when transitioning *away* from
-  /// [RoutingKind.waitingFor] — those are a waitingFor-specific side effect
-  /// and should not trail into other lists.
+  /// itself touches person tags in two cases, both of which require [userId]:
+  ///   1. Caller passes [personTagIds] — the set is written via
+  ///      [setPersonTagsForTodo] (used for `waitingFor → waitingFor` with a
+  ///      new delegate set).
+  ///   2. [from] is [RoutingKind.waitingFor] and [to] is not — person tags
+  ///      are cleared, since they are a waitingFor-specific side effect and
+  ///      should not trail into other lists.
+  /// All other transitions leave person tags untouched, so pre-existing
+  /// associations from sync/import survive.
   ///
   /// All writes run inside a single transaction so a failure leaves the row
   /// in its prior state.
