@@ -1,5 +1,17 @@
 # Notes
 
+## 2026-05-08 (issue #54 — code review fixes)
+- `kPeriodicReviewActionSkip` was wired to `cancelPeriodicReviewReminder()`, which cancels both recurring + snooze. That meant "Skip today" silently disabled tomorrow's reminder too. Added `skipTodayPeriodicReviewReminder()` that only cancels the snooze id, and updated `main.dart` to call it. Mirrors the existing shutdown handler pattern.
+- `getNextActionsWithProjectTags` filtered with `intent != 'maybe'` which still surfaced `intent = 'trash'` rows. Tightened to `intent = 'next'`.
+- `ObjectivesStep._hydrateFromState` reassigned `_controllers` without disposing the placeholder controllers it had created in `initState`, leaking them whenever prior objectives existed. Fixed with explicit dispose loop before reassignment.
+
+## 2026-05-08 (issue #54)
+- Weekly Review wizard's snapshot loaders pull from DAO `Stream.first` (`watchInbox()`, `watchPersonTagged()`, `watchMaybe()`) rather than `ref.read(streamProvider.future)`. The latter hangs in unit-test ProviderContainers when the stream is otherwise unsubscribed — the planning provider already follows the same DAO-direct pattern.
+- Auto-skip on empty list-driven steps stays inside the async `_onStepEnter` chain (no `WidgetsBinding.instance.addPostFrameCallback`). The hook is invoked from the `advanceStep`/`goToStep` `Future`, so we are already off the build phase; deferring to a post-frame callback would make the notifier untestable in plain `ProviderContainer` tests.
+- `models/todo.dart`'s `Intent` enum collides with Flutter's `Intent` from `material.dart`. Resolved by importing as `import '...todo.dart' as todo_model show Intent;` in the periodic-review step files.
+- `InboxClarifyCard` (extracted from the planning ritual's `_ClarifyCard`) autosaves directly via `databaseProvider`, with routing decisions delegated to a parent-supplied `onRoute(InboxClarifyKind)` callback. Same UI for daily-planning Step 0 and Weekly Review Step 0; flow-specific revert/history wiring stays in each parent.
+- AppShell tests that mount the shell now need to override `periodicReviewBannerEnabledProvider` to false alongside the existing `_NoBannerSettingsNotifier` for the planning banner — otherwise the new banner's pulse animation leaves a `Timer pending` after teardown.
+
 ## 2026-05-01 (issue #237)
 
 - Drift's `DelegatedDatabase.close()` resets the internal `_ensureOpenCalled` flag to `false`. If an async DB query (via `customSelect().get()`) is in-flight when `close()` runs, the query's `runSelect._debugCheckIsOpen()` assert fires. Fix: wrap `_loadInitialReviewCount` in `try { ... } on StateError catch (_) {}` to silently swallow teardown races. This pattern is safe in production because the DB is never closed while the app is running.

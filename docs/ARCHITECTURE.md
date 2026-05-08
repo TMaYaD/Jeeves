@@ -435,6 +435,57 @@ A `NotifierProvider<EveningShutdownNotifier, EveningShutdownState>` that drives 
 - `completedTodayProvider` — tasks in the active session with `doneAt != null`.
 - `unfinishedSelectedTodayProvider` — tasks in the active session with `doneAt == null` that have no in-memory disposition yet; used by the banner and other out-of-ritual consumers to show the remaining count.
 
+## Weekly Review Wizard
+
+A 7-screen ceremony surfaced when the cadence has elapsed (`now − periodic_review_last_completed_at >= 7 days`, or never completed). Internally namespaced `periodic_review`; user-visible copy reads "Weekly Review". The cadence is hardcoded at 7 days.
+
+### State (`providers/periodic_review_provider.dart`)
+
+`PeriodicReviewNotifier` is a `NotifierProvider<PeriodicReviewNotifier, PeriodicReviewState>` whose state is transient — discarded on completion or when the screen is left.
+
+**State fields** (each list-driven step uses the shared `SnapshotNav<T>` primitive from `utils/snapshot_nav.dart`):
+- `currentStep: int` — 0..6.
+- `inboxNav: SnapshotNav<String>` — todo IDs from the inbox.
+- `waitingForNav: SnapshotNav<Todo>` — person-tagged next actions.
+- `projectsNav: SnapshotNav<Todo>` — next actions carrying any project tag.
+- `somedayNav: SnapshotNav<Todo>` — `intent = 'maybe'` tasks.
+- `brainDumpAdded: int` — in-session counter for the brain-dump step.
+- `objectives: List<String>` — pending objectives buffer.
+- `isComplete: bool` — flipped by `completeReview()`.
+
+**Snapshot loaders** are called by `_onStepEnter` each time a step is entered. The Inbox and Waiting For steps auto-skip on entry when their snapshot loads empty; Projects and Someday/Maybe are reflection steps that always require a manual Next.
+
+**`completeReview()`** writes the completion timestamp and the cleaned objectives list to synced preferences via `PeriodicReviewSettingsNotifier`, then flips `isComplete`.
+
+### Settings (`providers/periodic_review_settings_provider.dart`)
+
+Durable state lives entirely in `user_preferences` under the `periodic_review_*` keys; no new tables. Cross-device LWW + tombstone semantics from `syncedPreferencesProvider` ensure all devices suppress the banner on their next sync after completion.
+
+| Key | Type | Purpose |
+|---|---|---|
+| `periodic_review_last_completed_at` | ISO-8601 datetime | Drives `isDue` |
+| `periodic_review_objectives` | JSON list of strings | Pre-populates Step 5 |
+| `periodic_review_banner_dismissed_date` | `yyyy-MM-dd` | Suppresses banner today |
+| `periodic_review_banner_enabled` | `bool` (default `true`) | Banner toggle |
+| `periodic_review_notification_enabled` | `bool` (default `true`) | Notification toggle |
+| `periodic_review_notification_hour` | `int` (default `9`) | Reminder hour |
+| `periodic_review_notification_minute` | `int` (default `0`) | Reminder minute |
+
+Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissedTodayProvider`, `periodicReviewBannerEnabledProvider`, `periodicReviewLastObjectivesProvider`, `periodicReviewLastCompletedProvider`.
+
+### UI
+
+- `screens/periodic_review/periodic_review_screen.dart` — non-swipeable `PageView` of seven step pages. Step transitions go through `advanceStep` / `goToStep`, which fire the entry hook for snapshot loading.
+- Per-item steps (Waiting For, Projects, Someday/Maybe) share `_review_card.dart` (`ReviewItemCard`, `ReviewAction`, `ReviewEmptyState`).
+- Step 0 (Process Inbox) reuses the shared `widgets/inbox_clarify_card.dart` from the daily-planning ritual.
+- `widgets/periodic_review_banner.dart` — teal banner above app-shell views; visible when due, banner enabled, not dismissed today, and at least one todo exists.
+
+### Notifications
+
+`NotificationService.schedulePeriodicReviewReminder(time:)` schedules a recurring daily reminder at the configured time using `matchDateTimeComponents: time`. The notification fires every day; the in-app banner's `isDue` predicate gates relevance so the user only sees the surface when the cadence has elapsed.
+
+Notification actions: Open (→ `/periodic-review`), Snooze (one-off reschedule via `snoozePeriodicReviewReminder(minutes)`), Skip today (cancels only the snooze id via `skipTodayPeriodicReviewReminder()` so tomorrow's recurring reminder still fires).
+
 ## Sprint Timer (Pomodoro Engine)
 
 Focus Mode includes an optional Pomodoro sprint timer bound to the active task. It is not a separate mode — it lives inside the Active Focus Screen as a carousel page revealed by swiping the notes view left. Sprint and break durations are user-configurable (default 20/3 min). The timer persists across app backgrounding via SharedPreferences and fires a local notification at expiry.
@@ -564,6 +615,15 @@ waiting_for IS NOT NULL AND clarified = true AND done_at IS NULL AND intent = 'n
 ### Internal vs UI terminology
 
 Code names planning and review steps **session-relative** (`focus_session_planning`, `focus_session_review`), not date-relative. UI copy retains user-facing "today" / "this week" language. The split is deliberate: dates belong in copy and timezone-aware UI logic, not in entity names. `FocusSession.started_at` / `ended_at` own session lifecycle; "today" is a derived UI concept.
+
+| Internal identifier | User-visible copy |
+| :--- | :--- |
+| `focus_session_planning` | "Daily Planning" |
+| `focus_session` | "Focus" / "Session" |
+| `evening_shutdown` | "Evening Shutdown" |
+| `periodic_review` | "Weekly Review" |
+
+The `periodic_review` namespace covers route (`/periodic-review`), provider class names, all `user_preferences` keys (`periodic_review_last_completed_at`, `periodic_review_objectives`, `periodic_review_banner_*`, `periodic_review_notification_*`), and notification action identifiers. No `weekly_review` identifier exists in code; no `periodic_review` string appears in user-visible text. The cadence is hardcoded at 7 days.
 
 ## Navigation & Global Filter State
 

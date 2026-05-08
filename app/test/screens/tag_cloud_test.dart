@@ -11,6 +11,7 @@ import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/tag_filter_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/database/gtd_database.dart' show Tag;
@@ -73,6 +74,9 @@ Widget _buildShell({
       focusSessionPlanningProvider.overrideWith(() => _MockFocusSessionPlanningNotifier()),
       focusSessionPlanningSettingsProvider
           .overrideWith(() => _NoBannerSettingsNotifier()),
+      // Suppress the Weekly Review banner so its pulse animation doesn't
+      // leave a Timer pending when the test tears down.
+      periodicReviewBannerEnabledProvider.overrideWith((_) => false),
     ],
     child: MaterialApp(
       home: Builder(builder: (ctx) {
@@ -218,6 +222,7 @@ void main() {
               .overrideWith(() => _MockFocusSessionPlanningNotifier()),
           focusSessionPlanningSettingsProvider
               .overrideWith(() => _NoBannerSettingsNotifier()),
+          periodicReviewBannerEnabledProvider.overrideWith((_) => false),
         ],
         child: Consumer(builder: (ctx, ref, _) {
           capturedRef = ref;

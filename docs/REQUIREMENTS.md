@@ -67,12 +67,12 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 ### Epic 5: System Integrity & The Review Guardrails
 **Goal:** Prevent inventory rot through behavioral nudges and progressive friction.
-* **System Trust Score:** Background monitoring of inventory health (unprocessed inbox items, stale tasks, overdue reviews).
-* **Progressive Restriction:**
-    * **Level 1:** Persistent UI banner if the Weekly Review is missed.
-    * **Level 2:** If Weekly Review is >48 hours overdue, or Inbox >50 items, the Daily Planning workflow (Epic 2) is disabled until the backlog is cleared.
-* **Guided Review Wizard:** A low-friction, step-by-step UI for the GTD Weekly Review (Zero Inbox -> Brain Dump -> Review Waiting For -> Review Projects -> Review Maybe list).
-* **Stale Task Sweeper:** Forces a binary choice (Move to Maybe OR Delete) on tasks bypassed/rescheduled more than three times.
+* **Weekly Review Wizard:** A 7-screen ceremony surfaced when the user has not completed a review in seven days. The wizard runs through five GTD review steps (Process Inbox → Brain Dump → Review Waiting For → Review Projects → Review Someday/Maybe), an Objectives step (3–5 goals for the upcoming week, pre-populated from the previous review), and a Summary screen. The cadence is fixed at 7 days.
+    * **Entry points:** A "Start Weekly Review" banner above the main views when due, plus a daily local notification at the user's configured time (default 09:00) with actions Open / Snooze / Skip today.
+    * **Behaviour:** Each list-driven step iterates through items one at a time using a stable snapshot loaded when the step opens, so the order doesn't shift while the user is working. Inbox clarification uses the same card UI as the daily-planning ritual. Steps with empty list snapshots (Inbox, Waiting For) auto-skip on entry; Projects and Someday/Maybe are reflection steps and require a manual Next. Tapping Done finalises the completion timestamp (synced across devices) and returns the user to the inbox.
+    * **Persistence:** Last completion date, weekly objectives, banner-dismissed date, and notification/banner settings are stored as user preferences and replicate across devices.
+* **System Trust Score:** Background monitoring of inventory health (unprocessed inbox items, stale tasks, overdue reviews). *(Deferred — Trust Score and Progressive Restriction levels are tracked in TMaYaD/Jeeves#52.)*
+* **Stale Task Sweeper:** Forces a binary choice (Move to Maybe OR Delete) on tasks bypassed/rescheduled more than three times. *(Deferred to TMaYaD/Jeeves#107 — extends the existing `_needsReviewWhere` predicate with a skip-count axis and prefixes Step 4 of the Weekly Review with a forced-resolution surface.)*
 
 ### Epic 6: Contextual & Geofenced Surfacing
 **Goal:** Reduce cognitive load by hiding irrelevant tasks based on time and physical location.

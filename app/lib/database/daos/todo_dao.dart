@@ -397,6 +397,25 @@ AND (
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
+  /// One-shot snapshot of next-action todos that carry at least one project-
+  /// typed tag. Used by the Weekly Review wizard's projects step.
+  Future<List<Todo>> getNextActionsWithProjectTags() {
+    return customSelect(
+      'SELECT DISTINCT todos.* FROM todos '
+      'JOIN todo_tags tt ON tt.todo_id = todos.id '
+      'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
+      'WHERE todos.clarified = 1 '
+      'AND todos.done_at IS NULL '
+      'AND todos.intent = ? '
+      'ORDER BY todos.created_at',
+      variables: [
+        Variable('project'),
+        Variable('next'),
+      ],
+      readsFrom: {todos, todoTags, tags},
+    ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
   /// One-shot snapshot of tasks needing re-clarification.
   Future<List<Todo>> getNeedsReview() {
     return customSelect(

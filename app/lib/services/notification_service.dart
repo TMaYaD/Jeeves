@@ -20,6 +20,8 @@ const _kSprintEndNotificationId = 2;
 const _kBreakEndNotificationId = 3;
 const _kShutdownNotificationId = 4;
 const _kShutdownSnoozeNotificationId = 5;
+const _kPeriodicReviewNotificationId = 6;
+const _kPeriodicReviewSnoozeNotificationId = 7;
 
 // Action identifiers sent back via onDidReceiveNotificationResponse.
 const kNotificationActionOpen = 'open';
@@ -28,6 +30,9 @@ const kNotificationActionSkip = 'skip_today';
 const kShutdownNotificationActionOpen = 'shutdown_open';
 const kShutdownNotificationActionSnooze = 'shutdown_snooze';
 const kShutdownNotificationActionSkip = 'shutdown_skip_today';
+const kPeriodicReviewActionOpen = 'periodic_review_open';
+const kPeriodicReviewActionSnooze = 'periodic_review_snooze';
+const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
 
 const _kFocusId = 1001;
 
@@ -75,6 +80,17 @@ class NotificationService {
                 kShutdownNotificationActionSnooze, 'Snooze'),
             DarwinNotificationAction.plain(
                 kShutdownNotificationActionSkip, 'Skip today'),
+          ],
+        ),
+        DarwinNotificationCategory(
+          'periodic_review',
+          actions: [
+            DarwinNotificationAction.plain(
+                kPeriodicReviewActionOpen, 'Start Review'),
+            DarwinNotificationAction.plain(
+                kPeriodicReviewActionSnooze, 'Snooze'),
+            DarwinNotificationAction.plain(
+                kPeriodicReviewActionSkip, 'Skip today'),
           ],
         ),
       ],
@@ -237,6 +253,53 @@ class NotificationService {
     await _plugin.cancel(id: _kShutdownSnoozeNotificationId);
   }
 
+  // ---------------------------------------------------------------------------
+  // Weekly review notification
+  // ---------------------------------------------------------------------------
+
+  /// Schedules the recurring weekly-review reminder to fire daily at [time].
+  /// The banner's `isDue` predicate gates relevance: notifications fire daily
+  /// but the in-app surface only nags when the cadence has elapsed.
+  Future<void> schedulePeriodicReviewReminder(
+      {required TimeOfDay time}) async {
+    await _plugin.zonedSchedule(
+      id: _kPeriodicReviewNotificationId,
+      title: 'Time for your Weekly Review',
+      body: 'Clear the backlog and set your focus for the week.',
+      scheduledDate: _nextInstanceOf(time),
+      notificationDetails: _periodicReviewNotificationDetails(),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      matchDateTimeComponents: DateTimeComponents.time,
+    );
+  }
+
+  /// Schedules a one-off snooze reminder [minutes] from now.
+  Future<void> snoozePeriodicReviewReminder(int minutes) async {
+    await _plugin.cancel(id: _kPeriodicReviewSnoozeNotificationId);
+    final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
+    await _plugin.zonedSchedule(
+      id: _kPeriodicReviewSnoozeNotificationId,
+      title: 'Time for your Weekly Review',
+      body: 'Clear the backlog and set your focus for the week.',
+      scheduledDate: fireAt,
+      notificationDetails: _periodicReviewNotificationDetails(),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+    );
+  }
+
+  /// Cancels the recurring schedule and any pending snooze.
+  Future<void> cancelPeriodicReviewReminder() async {
+    await _plugin.cancel(id: _kPeriodicReviewNotificationId);
+    await _plugin.cancel(id: _kPeriodicReviewSnoozeNotificationId);
+  }
+
+  /// Suppresses today's weekly-review reminder without removing the recurring
+  /// daily schedule. Use for the "Skip today" notification action so
+  /// tomorrow's reminder still fires automatically.
+  Future<void> skipTodayPeriodicReviewReminder() async {
+    await _plugin.cancel(id: _kPeriodicReviewSnoozeNotificationId);
+  }
+
   Future<void> cancelReminder(int id) async {
     await _plugin.cancel(id: id);
   }
@@ -396,6 +459,27 @@ class NotificationService {
       ),
       iOS: DarwinNotificationDetails(
         categoryIdentifier: 'daily_planning',
+      ),
+    );
+  }
+
+  NotificationDetails _periodicReviewNotificationDetails() {
+    return const NotificationDetails(
+      android: AndroidNotificationDetails(
+        'periodic_review',
+        'Weekly Review Reminder',
+        channelDescription: 'Weekly review ceremony reminder',
+        importance: Importance.defaultImportance,
+        priority: Priority.defaultPriority,
+        actions: [
+          AndroidNotificationAction(kPeriodicReviewActionOpen, 'Start Review'),
+          AndroidNotificationAction(kPeriodicReviewActionSnooze, 'Snooze'),
+          AndroidNotificationAction(
+              kPeriodicReviewActionSkip, 'Skip today'),
+        ],
+      ),
+      iOS: DarwinNotificationDetails(
+        categoryIdentifier: 'periodic_review',
       ),
     );
   }

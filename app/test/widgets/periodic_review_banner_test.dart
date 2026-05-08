@@ -1,0 +1,160 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:jeeves/providers/onboarding_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart';
+import 'package:jeeves/widgets/periodic_review_banner.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../test_helpers.dart';
+
+Widget _buildBanner({
+  required bool isDue,
+  required bool dismissed,
+  required bool bannerEnabled,
+  Stream<bool>? hasTodosStream,
+}) {
+  final router = GoRouter(
+    initialLocation: '/',
+    routes: [
+      ShellRoute(
+        builder: (context, state, child) => Scaffold(
+          body: Column(
+            children: [
+              const PeriodicReviewBanner(),
+              Expanded(child: child),
+            ],
+          ),
+        ),
+        routes: [
+          GoRoute(path: '/', builder: (_, _) => const Text('home')),
+        ],
+      ),
+      GoRoute(
+        path: '/periodic-review',
+        builder: (_, _) => const Scaffold(body: Text('weekly review')),
+      ),
+    ],
+  );
+
+  return ProviderScope(
+    overrides: [
+      periodicReviewBannerEnabledProvider.overrideWith((_) => bannerEnabled),
+      periodicReviewIsDueProvider.overrideWith((_) => isDue),
+      periodicReviewBannerDismissedTodayProvider.overrideWith((_) => dismissed),
+      hasTodosProvider.overrideWith(
+          (ref) => hasTodosStream ?? Stream.value(true)),
+    ],
+    child: MaterialApp.router(routerConfig: router),
+  );
+}
+
+Future<void> _pumpBanner(WidgetTester tester, Widget widget) async {
+  await tester.pumpWidget(widget);
+  await tester.pump();
+  await tester.pump();
+}
+
+void main() {
+  setUpAll(configureSqliteForTests);
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  testWidgets('banner visible when due and not dismissed', (tester) async {
+    await _pumpBanner(
+      tester,
+      _buildBanner(
+        isDue: true,
+        dismissed: false,
+        bannerEnabled: true,
+      ),
+    );
+    expect(find.byKey(const Key('periodic_review_banner_visible')),
+        findsOneWidget);
+  });
+
+  testWidgets('banner hidden when not due', (tester) async {
+    await _pumpBanner(
+      tester,
+      _buildBanner(
+        isDue: false,
+        dismissed: false,
+        bannerEnabled: true,
+      ),
+    );
+    expect(find.byKey(const Key('periodic_review_banner_visible')),
+        findsNothing);
+  });
+
+  testWidgets('banner hidden when dismissed today', (tester) async {
+    await _pumpBanner(
+      tester,
+      _buildBanner(
+        isDue: true,
+        dismissed: true,
+        bannerEnabled: true,
+      ),
+    );
+    expect(find.byKey(const Key('periodic_review_banner_visible')),
+        findsNothing);
+  });
+
+  testWidgets('banner hidden when bannerEnabled is false', (tester) async {
+    await _pumpBanner(
+      tester,
+      _buildBanner(
+        isDue: true,
+        dismissed: false,
+        bannerEnabled: false,
+      ),
+    );
+    expect(find.byKey(const Key('periodic_review_banner_visible')),
+        findsNothing);
+  });
+
+  testWidgets('banner hidden when no todos exist', (tester) async {
+    await _pumpBanner(
+      tester,
+      _buildBanner(
+        isDue: true,
+        dismissed: false,
+        bannerEnabled: true,
+        hasTodosStream: Stream.value(false),
+      ),
+    );
+    expect(find.byKey(const Key('periodic_review_banner_visible')),
+        findsNothing);
+  });
+
+  testWidgets('banner hidden while hasTodosProvider is loading',
+      (tester) async {
+    await tester.pumpWidget(_buildBanner(
+      isDue: true,
+      dismissed: false,
+      bannerEnabled: true,
+      hasTodosStream: const Stream<bool>.empty(),
+    ));
+    await tester.pump();
+    expect(find.byKey(const Key('periodic_review_banner_visible')),
+        findsNothing);
+  });
+
+  testWidgets('tapping banner navigates to /periodic-review', (tester) async {
+    await _pumpBanner(
+      tester,
+      _buildBanner(
+        isDue: true,
+        dismissed: false,
+        bannerEnabled: true,
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('periodic_review_banner_visible')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('weekly review'), findsOneWidget);
+  });
+}

@@ -101,6 +101,15 @@ void _handleNotificationResponse(NotificationResponse response) async {
     case kShutdownNotificationActionSkip:
       await persistShutdownSkipToday();
       await NotificationService.instance.skipTodayShutdownReminder();
+
+    case kPeriodicReviewActionOpen:
+      appRouter.go('/periodic-review');
+
+    case kPeriodicReviewActionSnooze:
+      await NotificationService.instance.snoozePeriodicReviewReminder(60);
+
+    case kPeriodicReviewActionSkip:
+      await NotificationService.instance.skipTodayPeriodicReviewReminder();
   }
 }
 

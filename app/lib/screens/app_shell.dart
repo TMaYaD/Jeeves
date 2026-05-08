@@ -9,6 +9,7 @@ import '../providers/sync_status_provider.dart';
 import '../providers/tags_provider.dart';
 import '../widgets/jeeves_logo.dart';
 import '../widgets/focus_session_planning_banner.dart';
+import '../widgets/periodic_review_banner.dart';
 import '../widgets/shutdown_banner.dart';
 import 'common/tag_cloud.dart';
 
@@ -54,6 +55,7 @@ class AppShell extends ConsumerWidget {
           body: Column(
             children: [
               const FocusSessionPlanningBanner(),
+              const PeriodicReviewBanner(),
               const ShutdownBanner(),
               Expanded(child: child),
             ],

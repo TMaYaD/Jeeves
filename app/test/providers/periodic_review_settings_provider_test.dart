@@ -1,0 +1,180 @@
+import 'dart:convert';
+
+import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart';
+import 'package:jeeves/providers/synced_preferences_provider.dart';
+import 'package:jeeves/services/notification_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../test_helpers.dart';
+
+class _StubNotificationService extends NotificationService {
+  _StubNotificationService() : super.forTesting();
+
+  @override
+  Future<void> schedulePeriodicReviewReminder(
+      {required TimeOfDay time}) async {}
+
+  @override
+  Future<void> snoozePeriodicReviewReminder(int minutes) async {}
+
+  @override
+  Future<void> cancelPeriodicReviewReminder() async {}
+}
+
+ProviderContainer _container({GtdDatabase? db}) => ProviderContainer(
+      overrides: [
+        databaseProvider
+            .overrideWithValue(db ?? GtdDatabase(NativeDatabase.memory())),
+        notificationServiceProvider
+            .overrideWithValue(_StubNotificationService()),
+      ],
+    );
+
+String _todayDateString() {
+  final now = DateTime.now();
+  return '${now.year.toString().padLeft(4, '0')}-'
+      '${now.month.toString().padLeft(2, '0')}-'
+      '${now.day.toString().padLeft(2, '0')}';
+}
+
+void main() {
+  setUpAll(configureSqliteForTests);
+
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  group('PeriodicReviewSettings derived providers', () {
+    test('isDue is true when last completion key is unset', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      expect(c.read(periodicReviewIsDueProvider), isTrue);
+    });
+
+    test('isDue is true when last completion is older than 7 days', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      final eightDaysAgo =
+          DateTime.now().toUtc().subtract(const Duration(days: 8));
+      await c
+          .read(syncedPreferencesProvider.notifier)
+          .set('periodic_review_last_completed_at', eightDaysAgo.toIso8601String());
+      expect(c.read(periodicReviewIsDueProvider), isTrue);
+    });
+
+    test('isDue is false within 7 days of last completion', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      final twoDaysAgo =
+          DateTime.now().toUtc().subtract(const Duration(days: 2));
+      await c
+          .read(syncedPreferencesProvider.notifier)
+          .set('periodic_review_last_completed_at', twoDaysAgo.toIso8601String());
+      expect(c.read(periodicReviewIsDueProvider), isFalse);
+    });
+
+    test('bannerEnabled defaults to true when key is unset', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      expect(c.read(periodicReviewBannerEnabledProvider), isTrue);
+    });
+
+    test('lastObjectives decodes the stored JSON list', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      await c
+          .read(syncedPreferencesProvider.notifier)
+          .set('periodic_review_objectives', jsonEncode(['Ship #54', 'Touch grass']));
+
+      expect(
+        c.read(periodicReviewLastObjectivesProvider),
+        equals(['Ship #54', 'Touch grass']),
+      );
+    });
+  });
+
+  group('PeriodicReviewSettingsNotifier', () {
+    test('completeReview writes the timestamp via synced prefs', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      await c.read(periodicReviewSettingsProvider.notifier).completeReview();
+
+      final raw = c
+          .read(syncedPreferencesProvider)
+          .asData!
+          .value
+          .get<String>('periodic_review_last_completed_at');
+      expect(raw, isNotNull);
+      final parsed = DateTime.parse(raw!);
+      expect(parsed.isUtc, isTrue);
+      expect(c.read(periodicReviewIsDueProvider), isFalse);
+    });
+
+    test('dismissBannerForToday writes today\'s ISO date key', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      await c
+          .read(periodicReviewSettingsProvider.notifier)
+          .dismissBannerForToday();
+
+      expect(c.read(periodicReviewBannerDismissedTodayProvider), isTrue);
+      final raw = c
+          .read(syncedPreferencesProvider)
+          .asData!
+          .value
+          .get<String>('periodic_review_banner_dismissed_date');
+      expect(raw, equals(_todayDateString()));
+    });
+
+    test('setNotificationTime persists hour and minute', () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      await c
+          .read(periodicReviewSettingsProvider.notifier)
+          .setNotificationTime(const TimeOfDay(hour: 7, minute: 30));
+
+      // Allow the syncedPreferences listener inside the notifier to run.
+      await Future<void>.delayed(Duration.zero);
+
+      final settings = c.read(periodicReviewSettingsProvider);
+      expect(settings.notificationTime.hour, equals(7));
+      expect(settings.notificationTime.minute, equals(30));
+    });
+
+    test('setObjectives JSON-encodes the list under periodic_review_objectives',
+        () async {
+      final c = _container();
+      addTearDown(c.dispose);
+
+      await c.read(syncedPreferencesProvider.future);
+      await c
+          .read(periodicReviewSettingsProvider.notifier)
+          .setObjectives(['Plan Q3', 'Inbox zero']);
+
+      expect(
+        c.read(periodicReviewLastObjectivesProvider),
+        equals(['Plan Q3', 'Inbox zero']),
+      );
+    });
+  });
+}
