@@ -46,7 +46,6 @@ class InboxClarificationStep extends ConsumerWidget {
       key: ValueKey(current.id),
       todo: current,
       index: nav.index,
-      total: nav.length,
       lastRouting: inboxRoutings[nav.index]?.kind,
     );
   }
@@ -61,13 +60,11 @@ class _ClarifyCard extends ConsumerStatefulWidget {
     super.key,
     required this.todo,
     required this.index,
-    required this.total,
     this.lastRouting,
   });
 
   final Todo todo;
   final int index;
-  final int total;
 
   /// The last routing applied to this item ('next_action' | 'waiting_for' |
   /// 'maybe' | 'done'), or null if this item has not yet been processed.
@@ -274,15 +271,8 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
               alignment: Alignment.centerLeft,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 12),
         ],
-
-        // Progress indicator
-        Text(
-          'Item ${widget.index + 1} of ${widget.total}',
-          style: TextStyle(fontSize: 13, color: Colors.grey[500]),
-        ),
-        const SizedBox(height: 12),
 
         // Clarifying question prompt
         Container(
@@ -457,16 +447,6 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 enabled: !_processing,
                 isPreviouslySelected: widget.lastRouting == 'done',
                 onTap: () => _runAction(() => _processToDone(context)),
-              ),
-              const SizedBox(height: 20),
-              ClarifyDestinationButton(
-                label: 'Skip for today',
-                icon: Icons.next_plan_outlined,
-                color: const Color(0xFF6B7280),
-                enabled: !_processing,
-                onTap: () => _runAction(() async {
-                  ref.read(focusSessionPlanningProvider.notifier).skipInboxItem();
-                }),
               ),
             ],
           ),

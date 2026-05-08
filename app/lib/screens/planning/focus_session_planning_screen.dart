@@ -50,7 +50,15 @@ class _FocusSessionPlanningScreenState
   /// Handles the Next button tap, inserting any step-specific side-effects.
   void _handleNext(int step) {
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
-    if (step == 1) {
+    if (step == 0) {
+      final nav = ref.read(focusSessionPlanningProvider).inboxNav;
+      if (nav.isLoaded && !nav.isComplete) {
+        // Still items to clarify — skip the current one.
+        notifier.skipInboxItem();
+      } else {
+        notifier.advanceStep();
+      }
+    } else if (step == 1) {
       final nav = ref.read(focusSessionPlanningProvider).reviewNav;
       if (nav.isLoaded && !nav.isComplete) {
         // Still items to review — skip the current one.
@@ -147,8 +155,9 @@ class _FocusSessionPlanningScreenState
   bool _canAdvance(int step, WidgetRef ref) {
     final s = ref.watch(focusSessionPlanningProvider);
     return switch (step) {
-      // Step 0: inbox snapshot loaded and all items processed or skipped.
-      0 => s.inboxNav.isComplete,
+      // Step 0: inbox — Next is enabled once the snapshot is loaded; tapping
+      // it skips the current item, or advances to step 1 if nothing remains.
+      0 => s.inboxNav.isLoaded,
       // Step 1: task review — always enabled; tapping Next skips the current item.
       1 => true,
       // Step 2: energy check in
