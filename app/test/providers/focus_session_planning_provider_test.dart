@@ -326,8 +326,7 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxNav.items, isNotNull);
-      expect(state.inboxNav.items!.map((t) => t.id).toList(),
-          equals(['old', 'new']),
+      expect(state.inboxNav.items, equals(['old', 'new']),
           reason: 'oldest item first (FIFO order)');
     });
 

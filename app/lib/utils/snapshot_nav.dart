@@ -32,6 +32,15 @@ class SnapshotNav<T> {
   /// the end. Use to detect "all items resolved" / terminal-state UI.
   bool get isComplete => items != null && index >= items!.length;
 
+  /// True when [previous] would move the cursor — i.e. the cursor is past
+  /// the first item. Drives the enabled state of within-flow Back buttons.
+  bool get canGoBack => index > 0;
+
+  /// True when [next] would land on a real item — i.e. the snapshot is
+  /// loaded and the cursor still points at an unconsumed entry. Drives
+  /// Skip / Next affordances mid-flow.
+  bool get canGoForward => items != null && index < items!.length;
+
   int get length => items?.length ?? 0;
 
   /// The item at [index], or null if not loaded / past the end.

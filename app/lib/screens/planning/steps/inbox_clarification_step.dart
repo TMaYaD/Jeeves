@@ -1,7 +1,12 @@
 /// Step 0 of the daily planning ritual: Clarify Inbox.
 ///
-/// Works through each inbox item one at a time using a fixed snapshot loaded
-/// at step start (oldest-first order). Navigation is index-based:
+/// Works through each inbox item one at a time using a fixed snapshot of
+/// **IDs** loaded at step start (oldest-first order). Navigation is
+/// index-based; the snapshot pins the order, while the per-item attributes
+/// (title / notes / energy / time / due) are read live from Drift via
+/// [taskDetailTodoProvider]. Edits autosave on change, so they survive Skip
+/// and Back without any draft layer in the planning state.
+///
 /// 1. Prompts the user to clarify the expected outcome (editable title/notes).
 /// 2. Lets the user set energy level, time estimate, and due date.
 /// 3. Routes the item to the correct GTD list (Next Action, Waiting For,
@@ -13,10 +18,13 @@
 /// fully consumed (inboxNav.isComplete).
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
+import '../../../providers/task_detail_provider.dart';
 import '../../../widgets/clarify_shared_widgets.dart';
 import '../../../widgets/person_tag_picker.dart';
 
@@ -41,11 +49,10 @@ class InboxClarificationStep extends ConsumerWidget {
       return const _InboxCleared();
     }
 
-    final current = nav.current!;
+    final id = nav.current!;
     return _ClarifyCard(
-      key: ValueKey(current.id),
-      todo: current,
-      index: nav.index,
+      key: ValueKey(id),
+      todoId: id,
       lastRouting: inboxRoutings[nav.index]?.kind,
     );
   }
@@ -58,13 +65,11 @@ class InboxClarificationStep extends ConsumerWidget {
 class _ClarifyCard extends ConsumerStatefulWidget {
   const _ClarifyCard({
     super.key,
-    required this.todo,
-    required this.index,
+    required this.todoId,
     this.lastRouting,
   });
 
-  final Todo todo;
-  final int index;
+  final String todoId;
 
   /// The last routing applied to this item ('next_action' | 'waiting_for' |
   /// 'maybe' | 'done'), or null if this item has not yet been processed.
@@ -75,33 +80,107 @@ class _ClarifyCard extends ConsumerStatefulWidget {
 }
 
 class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
-  late TextEditingController _titleCtrl;
-  late TextEditingController _notesCtrl;
+  TextEditingController? _titleCtrl;
+  TextEditingController? _notesCtrl;
   String? _energyLevel;
   int? _timeEstimate;
   DateTime? _dueDate;
+  bool _initialised = false;
   bool _processing = false;
+
+  /// Debounce text writes so we don't hit the DB on every keystroke. The
+  /// debounce is flushed on dispose and before any Process-to call.
+  static const _textDebounceMs = 400;
+  Timer? _textDebouncer;
+  String? _lastSavedTitle;
+  String? _lastSavedNotes;
 
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
-  @override
-  void initState() {
-    super.initState();
-    _titleCtrl = TextEditingController(text: widget.todo.title);
-    _notesCtrl = TextEditingController(text: widget.todo.notes ?? '');
-    _energyLevel = widget.todo.energyLevel;
-    _timeEstimate = widget.todo.timeEstimate;
-    // Storage is UTC; the picker and the year/month/day display below need
-    // local-tz semantics so the user sees the calendar day they chose.
-    _dueDate = widget.todo.dueDate?.toLocal();
+  /// Initialises controllers and chip state from the live todo on first
+  /// build; subsequent live-todo updates are not pushed back into the
+  /// controllers (the user's in-progress edits are the source of truth
+  /// while the card is open and autosave handles the round-trip).
+  void _initialiseFrom(Todo todo) {
+    if (_initialised) return;
+    _initialised = true;
+    _titleCtrl = TextEditingController(text: todo.title);
+    _notesCtrl = TextEditingController(text: todo.notes ?? '');
+    _lastSavedTitle = todo.title;
+    _lastSavedNotes = todo.notes ?? '';
+    _energyLevel = todo.energyLevel;
+    _timeEstimate = todo.timeEstimate;
+    // Storage is UTC; the picker and date display below need local-tz
+    // semantics so the user sees the calendar day they chose.
+    _dueDate = todo.dueDate?.toLocal();
   }
 
   @override
   void dispose() {
-    _titleCtrl.dispose();
-    _notesCtrl.dispose();
+    _textDebouncer?.cancel();
+    // Fire-and-forget flush so a final keystroke before nav lands in DB.
+    // Safe even on a disposed widget — only touches the captured ref / db.
+    unawaited(_flushTextSave());
+    _titleCtrl?.dispose();
+    _notesCtrl?.dispose();
     super.dispose();
   }
+
+  // ---------- Autosave plumbing ---------------------------------------------
+
+  void _onTextChanged() {
+    _textDebouncer?.cancel();
+    _textDebouncer = Timer(
+      const Duration(milliseconds: _textDebounceMs),
+      _flushTextSave,
+    );
+  }
+
+  /// Writes any pending Title / Notes edits to DB. Empty title is skipped
+  /// (a task must have a non-empty title; the user is mid-typing).
+  Future<void> _flushTextSave() async {
+    _textDebouncer?.cancel();
+    _textDebouncer = null;
+    final title = _titleCtrl?.text ?? '';
+    final notes = _notesCtrl?.text ?? '';
+    final trimmedTitle = title.trim();
+    final trimmedNotes = notes.trim();
+    if (trimmedTitle.isEmpty) return;
+    if (title == _lastSavedTitle && notes == _lastSavedNotes) return;
+    _lastSavedTitle = title;
+    _lastSavedNotes = notes;
+    await ref.read(focusSessionPlanningProvider.notifier).updateInboxItemFields(
+          widget.todoId,
+          title: trimmedTitle,
+          notes: trimmedNotes,
+        );
+  }
+
+  Future<void> _saveEnergy(String? level) async {
+    if (level == null) return; // updateFields can't clear; UI doesn't expose null
+    await ref
+        .read(focusSessionPlanningProvider.notifier)
+        .updateInboxItemFields(widget.todoId, energyLevel: level);
+  }
+
+  Future<void> _saveTimeEstimate(int? minutes) async {
+    if (minutes == null) return; // updateFields can't clear time estimate
+    await ref
+        .read(focusSessionPlanningProvider.notifier)
+        .updateInboxItemFields(widget.todoId, timeEstimate: minutes);
+  }
+
+  Future<void> _saveDueDate(DateTime? date, {required bool clear}) async {
+    await ref
+        .read(focusSessionPlanningProvider.notifier)
+        .updateInboxItemFields(
+          widget.todoId,
+          dueDate: date,
+          clearDueDate: clear,
+        );
+  }
+
+  // ---------- Process-to handlers -------------------------------------------
 
   /// Runs [action] with a re-entry guard so rapid taps cannot fire concurrent
   /// DB writes on the same item.
@@ -115,63 +194,47 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     }
   }
 
-  /// Validates and saves editable fields on the current inbox item.
-  ///
-  /// Returns `false` (and shows a validation error) if the title is empty,
-  /// since a task must have a non-empty title before it can be processed.
-  Future<bool> _saveFields(BuildContext context) async {
-    final title = _titleCtrl.text.trim();
-    if (title.isEmpty) {
-      return false;
-    }
-    final notes = _notesCtrl.text.trim();
-    await ref.read(focusSessionPlanningProvider.notifier).updateInboxItemFields(
-          widget.todo.id,
-          title: title,
-          notes: notes.isNotEmpty ? notes : null,
-          energyLevel: _energyLevel,
-          timeEstimate: _timeEstimate,
-          dueDate: _dueDate,
-          clearDueDate: _dueDate == null && widget.todo.dueDate != null,
-        );
-    return true;
+  /// Returns the title to use for a Process-to call after flushing any
+  /// pending text edit to DB. Returns null if the title is empty (in which
+  /// case the routing call should be skipped).
+  Future<String?> _flushAndGetTitle() async {
+    await _flushTextSave();
+    final title = _titleCtrl?.text.trim() ?? '';
+    if (title.isEmpty) return null;
+    return title;
   }
 
   Future<void> _process(BuildContext context) async {
     if (!mounted) return;
+    final title = await _flushAndGetTitle();
+    if (title == null || !context.mounted) return;
     Object? error;
     try {
-      final saved = await _saveFields(context);
-      if (!saved || !context.mounted) return;
       await ref
           .read(focusSessionPlanningProvider.notifier)
-          .processInboxItem(widget.todo.id, title: _titleCtrl.text.trim());
+          .processInboxItem(widget.todoId, title: title);
     } catch (e) {
       error = e;
     }
-
     if (!context.mounted) return;
-    if (error != null) {
-      debugPrint('Error: $error');
-    }
+    if (error != null) debugPrint('Error: $error');
   }
 
   Future<void> _processToWaitingFor(BuildContext context) async {
     if (!mounted) return;
-    final saved = await _saveFields(context);
-    if (!saved || !context.mounted) return;
-    final title = _titleCtrl.text.trim();
+    final title = await _flushAndGetTitle();
+    if (title == null || !context.mounted) return;
 
     // Fetch currently assigned person tags so a revisit pre-selects them.
     final currentTagIds = await ref
         .read(focusSessionPlanningProvider.notifier)
-        .getPersonTagIds(widget.todo.id);
+        .getPersonTagIds(widget.todoId);
 
     if (!context.mounted) return;
 
     await showPersonTagPicker(
       context,
-      todoId: widget.todo.id,
+      todoId: widget.todoId,
       assignedPersonTagIds: currentTagIds,
       requireSelection: true,
       onAfterConfirm: () async {
@@ -180,7 +243,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         try {
           await ref
               .read(focusSessionPlanningProvider.notifier)
-              .processInboxItemToWaitingFor(widget.todo.id, title: title);
+              .processInboxItemToWaitingFor(widget.todoId, title: title);
         } catch (e) {
           error = e;
         }
@@ -207,13 +270,13 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
 
   Future<void> _processToDone(BuildContext context) async {
     if (!mounted) return;
+    final title = await _flushAndGetTitle();
+    if (title == null || !context.mounted) return;
     Object? error;
     try {
-      final saved = await _saveFields(context);
-      if (!saved || !context.mounted) return;
       await ref
           .read(focusSessionPlanningProvider.notifier)
-          .processInboxItemToDone(widget.todo.id);
+          .processInboxItemToDone(widget.todoId);
     } catch (e) {
       error = e;
     }
@@ -223,21 +286,34 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
 
   Future<void> _processToMaybe(BuildContext context) async {
     if (!mounted) return;
+    final title = await _flushAndGetTitle();
+    if (title == null || !context.mounted) return;
     Object? error;
     try {
-      final saved = await _saveFields(context);
-      if (!saved || !context.mounted) return;
       await ref
           .read(focusSessionPlanningProvider.notifier)
-          .processInboxItemToMaybe(widget.todo.id);
+          .processInboxItemToMaybe(widget.todoId);
     } catch (e) {
       error = e;
     }
-
     if (!context.mounted) return;
-    if (error != null) {
-      debugPrint('Error: $error');
+    if (error != null) debugPrint('Error: $error');
+  }
+
+  Future<void> _processToTrash(BuildContext context) async {
+    if (!mounted) return;
+    final title = await _flushAndGetTitle();
+    if (title == null || !context.mounted) return;
+    Object? error;
+    try {
+      await ref
+          .read(focusSessionPlanningProvider.notifier)
+          .processInboxItemToTrash(widget.todoId);
+    } catch (e) {
+      error = e;
     }
+    if (!context.mounted) return;
+    if (error != null) debugPrint('Error: $error');
   }
 
   Future<DateTime?> _pickDate(BuildContext context) {
@@ -253,27 +329,19 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
 
   @override
   Widget build(BuildContext context) {
+    final todoAsync = ref.watch(taskDetailTodoProvider(widget.todoId));
+    final todo = todoAsync.value;
+    if (todo == null) {
+      // First-load (or row gone): show a light placeholder. We do not block
+      // rebuilds on subsequent loads since [_initialised] guards re-init.
+      return const Center(child: CircularProgressIndicator());
+    }
+    _initialiseFrom(todo);
+
     return ListView(
       physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
-        // Within-step Back button (shown when not at the first item).
-        if (widget.index > 0) ...[
-          TextButton.icon(
-            onPressed: () =>
-                ref.read(focusSessionPlanningProvider.notifier).previousInboxItem(),
-            icon: const Icon(Icons.arrow_back, size: 16),
-            label: const Text('Previous item'),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.grey[600],
-              padding: EdgeInsets.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              alignment: Alignment.centerLeft,
-            ),
-          ),
-          const SizedBox(height: 12),
-        ],
-
         // Clarifying question prompt
         Container(
           padding: const EdgeInsets.all(12),
@@ -305,6 +373,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         // Title
         TextField(
           controller: _titleCtrl,
+          onChanged: (_) => _onTextChanged(),
           decoration: InputDecoration(
             labelText: 'Title',
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -320,6 +389,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         // Notes
         TextField(
           controller: _notesCtrl,
+          onChanged: (_) => _onTextChanged(),
           decoration: InputDecoration(
             labelText: 'Notes (optional)',
             hintText: 'Context, desired outcome, dependencies…',
@@ -338,7 +408,10 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
         const SizedBox(height: 8),
         ClarifyEnergyPicker(
           selected: _energyLevel,
-          onSelect: (level) => setState(() => _energyLevel = level),
+          onSelect: (level) {
+            setState(() => _energyLevel = level);
+            unawaited(_saveEnergy(level));
+          },
         ),
         const SizedBox(height: 20),
 
@@ -357,8 +430,11 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                       ? '${m ~/ 60}h'
                       : '${m ~/ 60}h ${m % 60}m',
               selected: selected,
-              onTap: () => setState(
-                  () => _timeEstimate = selected ? null : m),
+              onTap: () {
+                final newValue = selected ? null : m;
+                setState(() => _timeEstimate = newValue);
+                unawaited(_saveTimeEstimate(newValue));
+              },
             );
           }).toList(),
         ),
@@ -374,6 +450,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 final picked = await _pickDate(context);
                 if (picked != null && context.mounted) {
                   setState(() => _dueDate = picked);
+                  unawaited(_saveDueDate(picked, clear: false));
                 }
               },
               icon: const Icon(Icons.calendar_today_outlined, size: 16),
@@ -396,7 +473,10 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: const Icon(Icons.close, size: 18),
                 color: Colors.grey[400],
                 tooltip: 'Clear date',
-                onPressed: () => setState(() => _dueDate = null),
+                onPressed: () {
+                  setState(() => _dueDate = null);
+                  unawaited(_saveDueDate(null, clear: true));
+                },
               ),
             ],
           ],
@@ -441,12 +521,21 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
               ),
               const SizedBox(height: 8),
               ClarifyDestinationButton(
-                label: 'Done (discard)',
-                icon: Icons.delete_outline,
-                color: const Color(0xFFDC2626),
+                label: 'Done',
+                icon: Icons.task_alt,
+                color: const Color(0xFF0EA5E9),
                 enabled: !_processing,
                 isPreviouslySelected: widget.lastRouting == 'done',
                 onTap: () => _runAction(() => _processToDone(context)),
+              ),
+              const SizedBox(height: 8),
+              ClarifyDestinationButton(
+                label: 'Discard',
+                icon: Icons.delete_outline,
+                color: const Color(0xFFDC2626),
+                enabled: !_processing,
+                isPreviouslySelected: widget.lastRouting == 'trash',
+                onTap: () => _runAction(() => _processToTrash(context)),
               ),
             ],
           ),

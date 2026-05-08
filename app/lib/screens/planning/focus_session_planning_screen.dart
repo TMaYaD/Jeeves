@@ -133,10 +133,12 @@ class _FocusSessionPlanningScreenState
               _PlanningFooter(
                 step: step,
                 onBack: step == 0
-                    ? null
+                    ? (ref.watch(focusSessionPlanningProvider).inboxNav.canGoBack
+                        ? () => notifier.previousInboxItem()
+                        : null)
                     : step == 1
                         ? () {
-                            if (ref.read(focusSessionPlanningProvider).reviewNav.index > 0) {
+                            if (ref.read(focusSessionPlanningProvider).reviewNav.canGoBack) {
                               notifier.reviewBack();
                             } else {
                               notifier.goToStep(0);

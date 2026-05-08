@@ -281,7 +281,7 @@ class FocusSessionPlanningState {
     this.availableMinutes = 480, // 8 hours default
     this.availableTimeSet = false,
     this.energyLevel,
-    this.inboxNav = const SnapshotNav<Todo>(),
+    this.inboxNav = const SnapshotNav<String>(),
     this.inboxRoutings = const {},
     this.pendingSelectedTaskIds = const [],
     this.reviewedTaskIds = const [],
@@ -298,10 +298,16 @@ class FocusSessionPlanningState {
   /// User's self-reported energy level for today: 'low' | 'medium' | 'high'.
   final String? energyLevel;
 
-  /// Fixed snapshot of inbox items loaded at the start of Step 0 plus the
-  /// current navigation cursor. items == null until loaded; ordered
-  /// oldest-first (FIFO).
-  final SnapshotNav<Todo> inboxNav;
+  /// Fixed snapshot of inbox item **IDs** loaded at the start of Step 0
+  /// plus the current navigation cursor. items == null until loaded;
+  /// ordered oldest-first (FIFO).
+  ///
+  /// Storing only IDs (not full [Todo] rows) keeps the snapshot's role
+  /// narrow — it pins the order the user is walking through, while the
+  /// authoritative attributes are read live from Drift via
+  /// [taskDetailTodoProvider]. Edits autosave on change, so there is no
+  /// "draft vs. snapshot vs. DB" divergence to reconcile.
+  final SnapshotNav<String> inboxNav;
 
   /// Maps [inboxNav.items] index → routing record (kind + captured prior state).
   /// An absent key means the item at that index has not yet been processed.
@@ -331,7 +337,7 @@ class FocusSessionPlanningState {
     bool? availableTimeSet,
     String? energyLevel,
     bool clearEnergyLevel = false,
-    SnapshotNav<Todo>? inboxNav,
+    SnapshotNav<String>? inboxNav,
     Map<int, InboxRoutingRecord>? inboxRoutings,
     List<String>? pendingSelectedTaskIds,
     List<String>? reviewedTaskIds,
@@ -427,7 +433,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Steps back within the review step to the previous item.
   void reviewBack() {
-    if (state.reviewNav.index > 0) {
+    if (state.reviewNav.canGoBack) {
       state = state.copyWith(reviewNav: state.reviewNav.previous());
     }
   }
@@ -465,7 +471,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       final tagIds = ref.read(tagFilterProvider);
       final items = await _db.inboxDao.watchInbox(tagIds: tagIds).first;
       state = state.copyWith(
-        inboxNav: state.inboxNav.withItems(items.reversed.toList()),
+        inboxNav: state.inboxNav
+            .withItems(items.reversed.map((t) => t.id).toList()),
       );
     } finally {
       _loadingInboxSnapshot = false;
@@ -509,18 +516,18 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// touched by triggers — Drift always reports 0. We trust that the
   /// snapshot already vouches for the row's existence at routing time.
   Future<void> _revertProcessedInboxItem(int idx) async {
-    final todo = state.inboxNav.items![idx];
+    final id = state.inboxNav.items![idx];
     final record = state.inboxRoutings[idx];
     if (record == null) return;
     await _db.transaction(() async {
       await _db.inboxDao.unprocessInboxItem(
-        todo.id,
+        id,
         priorClarified: record.priorClarified,
         priorIntent: record.priorIntent,
         priorDoneAt: record.priorDoneAt,
       );
       await _db.inboxDao.setPersonTagsForTodo(
-        todo.id,
+        id,
         record.priorPersonTagIds,
         _userId,
       );
@@ -544,7 +551,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     String? doneAt,
     Set<String> personTagIds,
   })> _capturePriorInboxState(int idx) async {
-    final id = state.inboxNav.items![idx].id;
+    final id = state.inboxNav.items![idx];
     final todo = await _db.todoDao.getTodo(id);
     final personTagIds = await _db.todoDao.getPersonTagIdsForTodo(id);
     return (
@@ -555,7 +562,10 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
   }
 
-  /// Updates mutable fields on an inbox item before it is processed.
+  /// Persists attribute edits on a todo. Used by the inbox clarify card to
+  /// autosave Title/Notes/Energy/Time/Due as the user types or taps —
+  /// attribute persistence is decoupled from any Process-to routing
+  /// decision, so edits survive Skip / Back even without a routing call.
   Future<void> updateInboxItemFields(
     String id, {
     String? title,
@@ -654,6 +664,32 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         ...state.inboxRoutings,
         idx: InboxRoutingRecord(
           kind: 'maybe',
+          priorClarified: prior.clarified,
+          priorIntent: prior.intent,
+          priorDoneAt: prior.doneAt,
+          priorPersonTagIds: prior.personTagIds,
+        ),
+      },
+    );
+    nextInboxItem();
+  }
+
+  /// Routes the current inbox item to Trash (clarified = true, intent =
+  /// 'trash'). Soft-delete: the row remains in DB and revert restores the
+  /// prior intent.
+  Future<void> processInboxItemToTrash(String id) async {
+    final idx = state.inboxNav.index;
+    if (state.inboxRoutings.containsKey(idx)) {
+      await _revertProcessedInboxItem(idx);
+    }
+    final prior = await _capturePriorInboxState(idx);
+    await _db.inboxDao.processInboxItem(id, intent: 'trash');
+    if (state.inboxNav.index != idx) return;
+    state = state.copyWith(
+      inboxRoutings: {
+        ...state.inboxRoutings,
+        idx: InboxRoutingRecord(
+          kind: 'trash',
           priorClarified: prior.clarified,
           priorIntent: prior.intent,
           priorDoneAt: prior.doneAt,
