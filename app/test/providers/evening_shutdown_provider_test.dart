@@ -448,11 +448,17 @@ void main() {
       final notifier = container.read(eveningShutdownProvider.notifier);
       await notifier.loadUnfinishedSnapshot();
 
-      expect(container.read(eveningShutdownProvider).currentStep, equals(0));
+      // Drive into the unfinished step (where the user actually resolves
+      // tasks) so the assertion exercises the real terminal transition
+      // (1 → 2 / CloseDay), not the 0 → 1 transition.
+      notifier.goToStep(1);
+      expect(container.read(eveningShutdownProvider).currentStep, equals(1));
 
       notifier.rolloverTask('t1'); // index would become 1 >= length 1 → advanceStep
 
-      expect(container.read(eveningShutdownProvider).currentStep, equals(1));
+      final state = container.read(eveningShutdownProvider);
+      expect(state.currentStep, equals(2),
+          reason: 'final disposition should advance off step 1');
     });
 
     test(
@@ -528,6 +534,7 @@ void main() {
 
       final notifier = container.read(eveningShutdownProvider.notifier);
       await notifier.loadUnfinishedSnapshot();
+      notifier.goToStep(1); // simulate user being on the unfinished step
 
       final snapshot =
           container.read(eveningShutdownProvider).unfinishedNav.items!;
@@ -535,8 +542,8 @@ void main() {
       notifier.deferTask(snapshot[1].id);    // index would be 2 >= 2 → advanceStep
 
       final state = container.read(eveningShutdownProvider);
-      expect(state.currentStep, equals(1),
-          reason: 'step advances after all items resolved');
+      expect(state.currentStep, equals(2),
+          reason: 'step advances off Resolve Unfinished onto CloseDay');
     });
 
     test('closeDay commits all accumulated dispositions after snapshot use',

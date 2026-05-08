@@ -471,6 +471,11 @@ AND (
   ///
   /// Title and due-date edits are clarifying acts: they stamp [lastClarifiedAt]
   /// so a stale task does not remain falsely surfaced after such changes.
+  ///
+  /// To clear a nullable column, pass the matching `clear*` flag (e.g.
+  /// `clearTimeEstimate: true`). Passing `null` for the typed parameter is
+  /// "no change" so callers don't accidentally null-out fields they're not
+  /// editing.
   Future<void> updateFields(
     String todoId, {
     String? title,
@@ -478,6 +483,8 @@ AND (
     String? energyLevel,
     int? timeEstimate,
     DateTime? dueDate,
+    bool clearEnergyLevel = false,
+    bool clearTimeEstimate = false,
     bool clearDueDate = false,
   }) async {
     final ts = DateTime.now().toUtc();
@@ -487,8 +494,16 @@ AND (
       lastClarifiedAt: shouldStampClarified ? Value(ts) : const Value.absent(),
       title: title != null ? Value(title) : const Value.absent(),
       notes: notes != null ? Value(notes) : const Value.absent(),
-      energyLevel: energyLevel != null ? Value(energyLevel) : const Value.absent(),
-      timeEstimate: timeEstimate != null ? Value(timeEstimate) : const Value.absent(),
+      energyLevel: clearEnergyLevel
+          ? const Value(null)
+          : energyLevel != null
+              ? Value(energyLevel)
+              : const Value.absent(),
+      timeEstimate: clearTimeEstimate
+          ? const Value(null)
+          : timeEstimate != null
+              ? Value(timeEstimate)
+              : const Value.absent(),
       // Normalise to UTC; see rescheduleTask for rationale.
       dueDate: clearDueDate
           ? const Value(null)

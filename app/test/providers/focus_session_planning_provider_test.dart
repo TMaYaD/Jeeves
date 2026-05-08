@@ -705,6 +705,26 @@ void main() {
       expect(record.priorIntent, equals('maybe'),
           reason: 'capture reads live DB at apply, not the snapshot');
     });
+
+    test('routing bails out when the snapshot row was deleted before apply',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+
+      // External delete lands AFTER snapshot load but BEFORE routing.
+      await (db.delete(db.todos)..where((t) => t.id.equals('item-1'))).go();
+
+      // Routing must not advance the cursor or record a phantom routing.
+      await notifier.processInboxItem('item-1', title: 'Test item');
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.inboxNav.index, equals(0),
+          reason: 'cursor must not advance when row no longer exists');
+      expect(state.inboxRoutings, isEmpty,
+          reason: 'no routing record for a missing row');
+    });
   });
 
   // ---------------------------------------------------------------------------

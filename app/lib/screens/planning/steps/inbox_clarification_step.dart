@@ -147,13 +147,15 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
     final trimmedNotes = notes.trim();
     if (trimmedTitle.isEmpty) return;
     if (title == _lastSavedTitle && notes == _lastSavedNotes) return;
-    _lastSavedTitle = title;
-    _lastSavedNotes = notes;
     await ref.read(focusSessionPlanningProvider.notifier).updateInboxItemFields(
           widget.todoId,
           title: trimmedTitle,
           notes: trimmedNotes,
         );
+    // Stamp the saved markers only after the write succeeds, so a thrown
+    // exception leaves the next flush free to retry the same edit.
+    _lastSavedTitle = title;
+    _lastSavedNotes = notes;
   }
 
   Future<void> _saveEnergy(String? level) async {
@@ -164,10 +166,13 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
   }
 
   Future<void> _saveTimeEstimate(int? minutes) async {
-    if (minutes == null) return; // updateFields can't clear time estimate
     await ref
         .read(focusSessionPlanningProvider.notifier)
-        .updateInboxItemFields(widget.todoId, timeEstimate: minutes);
+        .updateInboxItemFields(
+          widget.todoId,
+          timeEstimate: minutes,
+          clearTimeEstimate: minutes == null,
+        );
   }
 
   Future<void> _saveDueDate(DateTime? date, {required bool clear}) async {

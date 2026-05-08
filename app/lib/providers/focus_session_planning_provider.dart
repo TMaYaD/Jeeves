@@ -539,7 +539,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Captures the current pre-routing state of the item at [idx] by reading
   /// all four fields (clarified / intent / done_at / person tags) from the
-  /// live DB at apply time, not from the snapshot.
+  /// live DB at apply time, not from the snapshot. Returns null if the row
+  /// no longer exists in the DB; callers must bail out without mutating
+  /// state in that case (the snapshot row was deleted out from under us
+  /// between snapshot load and routing apply, so there is nothing to
+  /// route).
   ///
   /// Reading live keeps capture consistent across fields and lets revert
   /// preserve any external mutation (sync, import, ad-hoc edit) that landed
@@ -550,14 +554,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     String intent,
     String? doneAt,
     Set<String> personTagIds,
-  })> _capturePriorInboxState(int idx) async {
+  })?> _capturePriorInboxState(int idx) async {
     final id = state.inboxNav.items![idx];
     final todo = await _db.todoDao.getTodo(id);
+    if (todo == null) return null;
     final personTagIds = await _db.todoDao.getPersonTagIdsForTodo(id);
     return (
-      clarified: todo?.clarified ?? false,
-      intent: todo?.intent ?? 'next',
-      doneAt: todo?.doneAt,
+      clarified: todo.clarified,
+      intent: todo.intent,
+      doneAt: todo.doneAt,
       personTagIds: personTagIds,
     );
   }
@@ -573,6 +578,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     String? energyLevel,
     int? timeEstimate,
     DateTime? dueDate,
+    bool clearEnergyLevel = false,
+    bool clearTimeEstimate = false,
     bool clearDueDate = false,
   }) =>
       _db.todoDao.updateFields(
@@ -582,6 +589,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         energyLevel: energyLevel,
         timeEstimate: timeEstimate,
         dueDate: dueDate,
+        clearEnergyLevel: clearEnergyLevel,
+        clearTimeEstimate: clearTimeEstimate,
         clearDueDate: clearDueDate,
       );
 
@@ -599,6 +608,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
+    if (prior == null) return;
     await _db.transaction(() async {
       await _db.inboxDao.processInboxItem(id);
       await _db.todoDao.setNextActionText(id, title);
@@ -629,6 +639,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
+    if (prior == null) return;
     await _db.transaction(() async {
       await _db.inboxDao.processInboxItem(id);
       await _db.todoDao.setNextActionText(id, title);
@@ -657,6 +668,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
+    if (prior == null) return;
     await _db.inboxDao.processInboxItem(id, intent: 'maybe');
     if (state.inboxNav.index != idx) return;
     state = state.copyWith(
@@ -683,6 +695,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
+    if (prior == null) return;
     await _db.inboxDao.processInboxItem(id, intent: 'trash');
     if (state.inboxNav.index != idx) return;
     state = state.copyWith(
@@ -709,6 +722,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       await _revertProcessedInboxItem(idx);
     }
     final prior = await _capturePriorInboxState(idx);
+    if (prior == null) return;
     await _db.todoDao.markDone(id);
     if (state.inboxNav.index != idx) return;
     state = state.copyWith(
