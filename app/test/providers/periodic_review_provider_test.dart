@@ -145,15 +145,6 @@ void main() {
       expect(last, isNotNull);
     });
 
-    test(
-        'recordBrainDumpItem increments the captured counter without DAO writes',
-        () {
-      container.read(periodicReviewProvider.notifier).recordBrainDumpItem();
-      container.read(periodicReviewProvider.notifier).recordBrainDumpItem();
-
-      expect(container.read(periodicReviewProvider).brainDumpAdded, equals(2));
-    });
-
     test('per-step nav advance/previous mutate the matching nav only', () async {
       await _insertMaybe(db, 'm1');
       await _insertMaybe(db, 'm2');

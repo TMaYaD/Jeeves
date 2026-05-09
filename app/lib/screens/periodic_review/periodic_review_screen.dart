@@ -1,16 +1,20 @@
 /// Weekly Review wizard — outer container screen (Issue #54).
 ///
-/// Renders a non-swipeable [PageView] with seven children: five GTD review
-/// steps, an objectives step, and a final summary. Step transitions go
-/// through [PeriodicReviewNotifier.advanceStep] / [goToStep], which in turn
-/// drives per-step snapshot loading.
+/// Renders a non-swipeable [PageView] with six children: four list-driven
+/// review steps (Inbox, Waiting For, Projects, Someday/Maybe), an objectives
+/// step, and a final summary. There is no separate brain-dump step — capture
+/// happens through the inbox throughout the week, not as a wizard ceremony.
+///
+/// Step transitions go through [PeriodicReviewNotifier.advanceStep] /
+/// [goToStep], which in turn drives per-step snapshot loading. The footer's
+/// Next button advances the per-step item cursor first; only when the cursor
+/// has nothing more to consume does it cross to the next step.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/periodic_review_provider.dart';
-import 'steps/brain_dump_step.dart';
 import 'steps/objectives_step.dart';
 import 'steps/projects_step.dart';
 import 'steps/someday_maybe_step.dart';
@@ -32,13 +36,16 @@ class _PeriodicReviewScreenState
 
   static const _stepTitles = [
     'Process Inbox',
-    'Brain Dump',
     'Review Waiting For',
     'Review Projects',
     'Review Someday/Maybe',
     'Set Objectives',
     'Review Complete',
   ];
+
+  // Six positions in the wizard, but the progress bar reflects only the five
+  // user-driven steps before the summary screen.
+  static const int _kProgressSteps = 5;
 
   @override
   void initState() {
@@ -94,7 +101,6 @@ class _PeriodicReviewScreenState
                 physics: const NeverScrollableScrollPhysics(),
                 children: const [
                   ZeroInboxStep(),
-                  BrainDumpStep(),
                   WaitingForStep(),
                   ProjectsStep(),
                   SomedayMaybeStep(),
@@ -116,36 +122,36 @@ class _PeriodicReviewScreenState
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Back / Next handlers
+  // ---------------------------------------------------------------------------
+  //
+  // List-driven steps (Inbox, Waiting For, Projects, Someday/Maybe) iterate
+  // one item at a time. The footer's Back / Next buttons drive the per-step
+  // cursor first; only when the cursor has no more items to consume does
+  // pressing Next cross into the next step (and Back into the prior one).
+
   VoidCallback? _backHandler(
     int step,
     PeriodicReviewState state,
     PeriodicReviewNotifier notifier,
   ) {
-    if (step == PeriodicReviewNotifier.kStepInbox) return null;
-    return () {
-      switch (step) {
-        case PeriodicReviewNotifier.kStepWaitingFor:
-          if (state.waitingForNav.canGoBack) {
-            notifier.previousWaitingFor();
-          } else {
-            notifier.goToStep(step - 1);
-          }
-        case PeriodicReviewNotifier.kStepProjects:
-          if (state.projectsNav.canGoBack) {
-            notifier.previousProjects();
-          } else {
-            notifier.goToStep(step - 1);
-          }
-        case PeriodicReviewNotifier.kStepSomeMaybe:
-          if (state.somedayNav.canGoBack) {
-            notifier.previousSomeday();
-          } else {
-            notifier.goToStep(step - 1);
-          }
-        default:
-          notifier.goToStep(step - 1);
-      }
-    };
+    switch (step) {
+      case PeriodicReviewNotifier.kStepInbox:
+        if (state.inboxNav.canGoBack) return notifier.previousInbox;
+        return null;
+      case PeriodicReviewNotifier.kStepWaitingFor:
+        if (state.waitingForNav.canGoBack) return notifier.previousWaitingFor;
+        return () => notifier.goToStep(step - 1);
+      case PeriodicReviewNotifier.kStepProjects:
+        if (state.projectsNav.canGoBack) return notifier.previousProjects;
+        return () => notifier.goToStep(step - 1);
+      case PeriodicReviewNotifier.kStepSomeMaybe:
+        if (state.somedayNav.canGoBack) return notifier.previousSomeday;
+        return () => notifier.goToStep(step - 1);
+      default:
+        return () => notifier.goToStep(step - 1);
+    }
   }
 
   VoidCallback? _nextHandler(
@@ -155,14 +161,27 @@ class _PeriodicReviewScreenState
   ) {
     switch (step) {
       case PeriodicReviewNotifier.kStepInbox:
-        // Only let the user advance once the snapshot is loaded — same
-        // pattern as the planning Inbox step.
         if (!state.inboxNav.isLoaded) return null;
+        // Skip the current inbox item (cursor advances). Once the cursor is
+        // past the last item the nav is `isComplete` / `!canGoForward`, and
+        // Next falls through to the step transition below.
+        if (state.inboxNav.canGoForward) return notifier.advanceInbox;
+        return notifier.advanceStep;
+      case PeriodicReviewNotifier.kStepWaitingFor:
+        if (!state.waitingForNav.isLoaded) return null;
+        if (state.waitingForNav.canGoForward) return notifier.advanceWaitingFor;
+        return notifier.advanceStep;
+      case PeriodicReviewNotifier.kStepProjects:
+        if (!state.projectsNav.isLoaded) return null;
+        if (state.projectsNav.canGoForward) return notifier.advanceProjects;
+        return notifier.advanceStep;
+      case PeriodicReviewNotifier.kStepSomeMaybe:
+        if (!state.somedayNav.isLoaded) return null;
+        if (state.somedayNav.canGoForward) return notifier.advanceSomeday;
         return notifier.advanceStep;
       case PeriodicReviewNotifier.kStepObjectives:
         // Finish requires at least one non-empty objective.
-        final hasAny =
-            state.objectives.any((o) => o.trim().isNotEmpty);
+        final hasAny = state.objectives.any((o) => o.trim().isNotEmpty);
         if (!hasAny) return null;
         return notifier.advanceStep;
       default:
@@ -194,8 +213,6 @@ class _PeriodicReviewHeader extends StatelessWidget {
         final nav = state.inboxNav;
         if (!nav.isLoaded || nav.isEmpty) return 0.0;
         return (nav.index / nav.length).clamp(0.0, 1.0);
-      case PeriodicReviewNotifier.kStepBrainDump:
-        return state.brainDumpAdded > 0 ? 1.0 : 0.0;
       case PeriodicReviewNotifier.kStepWaitingFor:
         final nav = state.waitingForNav;
         if (!nav.isLoaded || nav.isEmpty) return 0.0;
@@ -249,7 +266,7 @@ class _PeriodicReviewHeader extends StatelessWidget {
           const SizedBox(height: 14),
           _SegmentedProgressBar(
             currentStep: step,
-            totalSteps: 6,
+            totalSteps: _PeriodicReviewScreenState._kProgressSteps,
             activeFraction: _activeFraction(),
             accent: _accent,
           ),
@@ -257,7 +274,8 @@ class _PeriodicReviewHeader extends StatelessWidget {
           Text(
             step == PeriodicReviewNotifier.kStepSummary
                 ? 'Review complete'
-                : 'Step ${step + 1} of 6',
+                : 'Step ${step + 1} of '
+                    '${_PeriodicReviewScreenState._kProgressSteps}',
             style: TextStyle(fontSize: 12, color: Colors.grey[400]),
           ),
           const SizedBox(height: 8),

@@ -42,7 +42,6 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
   Widget build(BuildContext context) {
     final state = ref.watch(periodicReviewProvider);
     final inboxProcessed = state.inboxNav.length;
-    final captured = state.brainDumpAdded;
     final waitingReviewed = state.waitingForNav.length;
     final projectsReviewed = state.projectsNav.length;
     final somedayReviewed = state.somedayNav.length;
@@ -82,8 +81,6 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
               _StatRow(
                   label: 'Inbox processed',
                   value: inboxProcessed.toString()),
-              _StatRow(
-                  label: 'Items captured', value: captured.toString()),
               _StatRow(
                   label: 'Waiting-for reviewed',
                   value: waitingReviewed.toString()),

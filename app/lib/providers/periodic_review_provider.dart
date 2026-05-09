@@ -26,7 +26,6 @@ class PeriodicReviewState {
     this.waitingForNav = const SnapshotNav<Todo>(),
     this.projectsNav = const SnapshotNav<Todo>(),
     this.somedayNav = const SnapshotNav<Todo>(),
-    this.brainDumpAdded = 0,
     this.objectives = const [],
     this.isComplete = false,
     this.inboxLoadError,
@@ -42,9 +41,6 @@ class PeriodicReviewState {
   final SnapshotNav<Todo> waitingForNav;
   final SnapshotNav<Todo> projectsNav;
   final SnapshotNav<Todo> somedayNav;
-
-  /// Number of items captured during the brain-dump step (in-session).
-  final int brainDumpAdded;
 
   final List<String> objectives;
 
@@ -63,7 +59,6 @@ class PeriodicReviewState {
     SnapshotNav<Todo>? waitingForNav,
     SnapshotNav<Todo>? projectsNav,
     SnapshotNav<Todo>? somedayNav,
-    int? brainDumpAdded,
     List<String>? objectives,
     bool? isComplete,
     String? inboxLoadError,
@@ -81,7 +76,6 @@ class PeriodicReviewState {
         waitingForNav: waitingForNav ?? this.waitingForNav,
         projectsNav: projectsNav ?? this.projectsNav,
         somedayNav: somedayNav ?? this.somedayNav,
-        brainDumpAdded: brainDumpAdded ?? this.brainDumpAdded,
         objectives: objectives ?? this.objectives,
         isComplete: isComplete ?? this.isComplete,
         inboxLoadError: clearInboxLoadError
@@ -105,14 +99,14 @@ final periodicReviewProvider =
 );
 
 class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
-  // Step indices — referenced by the screen and by tests.
+  // Step indices — referenced by the screen and by tests. Capture happens
+  // throughout the week (no dedicated brain-dump step in the wizard).
   static const int kStepInbox = 0;
-  static const int kStepBrainDump = 1;
-  static const int kStepWaitingFor = 2;
-  static const int kStepProjects = 3;
-  static const int kStepSomeMaybe = 4;
-  static const int kStepObjectives = 5;
-  static const int kStepSummary = 6;
+  static const int kStepWaitingFor = 1;
+  static const int kStepProjects = 2;
+  static const int kStepSomeMaybe = 3;
+  static const int kStepObjectives = 4;
+  static const int kStepSummary = 5;
 
   static const int _kMaxStep = kStepSummary;
 
@@ -293,13 +287,6 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
         }
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Brain dump
-  // ---------------------------------------------------------------------------
-
-  void recordBrainDumpItem() =>
-      state = state.copyWith(brainDumpAdded: state.brainDumpAdded + 1);
 
   // ---------------------------------------------------------------------------
   // Objectives

@@ -442,19 +442,20 @@ A `NotifierProvider<EveningShutdownNotifier, EveningShutdownState>` that drives 
 
 ## Weekly Review Wizard
 
-A 7-screen ceremony surfaced when the cadence has elapsed (`now − periodic_review_last_completed_at >= 7 days`, or never completed). Internally namespaced `periodic_review`; user-visible copy reads "Weekly Review". The cadence is hardcoded at 7 days.
+A 6-screen ceremony surfaced when the cadence has elapsed (`now − periodic_review_last_completed_at >= 7 days`, or never completed). Internally namespaced `periodic_review`; user-visible copy reads "Weekly Review". The cadence is hardcoded at 7 days.
+
+There is no dedicated brain-dump step in the wizard: capture happens through the inbox (share-sheet, voice, manual entry) throughout the week, so the review only needs to *clarify* the inbox, not re-elicit it.
 
 ### State (`providers/periodic_review_provider.dart`)
 
 `PeriodicReviewNotifier` is a `NotifierProvider<PeriodicReviewNotifier, PeriodicReviewState>` whose state is transient — discarded on completion or when the screen is left.
 
 **State fields** (each list-driven step uses the shared `SnapshotNav<T>` primitive from `utils/snapshot_nav.dart`):
-- `currentStep: int` — 0..6.
+- `currentStep: int` — 0..5.
 - `inboxNav: SnapshotNav<String>` — todo IDs from the inbox.
 - `waitingForNav: SnapshotNav<Todo>` — person-tagged next actions.
 - `projectsNav: SnapshotNav<Todo>` — next actions carrying any project tag.
 - `somedayNav: SnapshotNav<Todo>` — `intent = 'maybe'` tasks.
-- `brainDumpAdded: int` — in-session counter for the brain-dump step.
 - `objectives: List<String>` — pending objectives buffer.
 - `isComplete: bool` — flipped by `completeReview()`.
 
@@ -480,7 +481,8 @@ Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissed
 
 ### UI
 
-- `screens/periodic_review/periodic_review_screen.dart` — non-swipeable `PageView` of seven step pages. Step transitions go through `advanceStep` / `goToStep`, which fire the entry hook for snapshot loading.
+- `screens/periodic_review/periodic_review_screen.dart` — non-swipeable `PageView` of six step pages. Step transitions go through `advanceStep` / `goToStep`, which fire the entry hook for snapshot loading.
+- Footer Back / Next drive the per-step item cursor first: on a list-driven step, Next advances `inboxNav` / `waitingForNav` / `projectsNav` / `somedayNav` while items remain, and only crosses into the next step once the cursor has nothing more to consume (`!canGoForward`); Back symmetrically retreats the cursor before crossing back.
 - Per-item steps (Waiting For, Projects, Someday/Maybe) share `_review_card.dart` (`ReviewItemCard`, `ReviewAction`, `ReviewEmptyState`).
 - Step 0 (Process Inbox) reuses the shared `widgets/inbox_clarify_card.dart` from the daily-planning ritual.
 - `widgets/periodic_review_banner.dart` — teal banner above app-shell views; visible when due, banner enabled, not dismissed today, and at least one todo exists.

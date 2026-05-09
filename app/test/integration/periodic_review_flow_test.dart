@@ -88,8 +88,9 @@ void main() {
       final notifier = c.read(periodicReviewProvider.notifier);
 
       await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
-      await notifier.advanceStep(); // → BrainDump
-      notifier.recordBrainDumpItem();
+      // Single inbox item: skipping it past the cursor lets the next press
+      // of advanceStep cross into Waiting For.
+      notifier.advanceInbox();
       await notifier.advanceStep(); // → WaitingFor
       await notifier.advanceStep(); // → Projects
       await notifier.advanceStep(); // → SomeMaybe
