@@ -22,6 +22,8 @@ class WaitingForStep extends ConsumerWidget {
         periodicReviewProvider.select((s) => s.waitingForLoadError));
     final routings = ref.watch(
         periodicReviewProvider.select((s) => s.waitingForRoutings));
+    final personTags = ref.watch(
+        periodicReviewProvider.select((s) => s.waitingForPersonTags));
 
     if (loadError != null) {
       return ReviewLoadError(
@@ -67,6 +69,7 @@ class WaitingForStep extends ConsumerWidget {
       todo: todo,
       headline: 'Still waiting on this?',
       lastRouting: routings[index],
+      personTags: personTags[todo.id] ?? const [],
       actions: [
         ReviewAction(
           label: 'Keep waiting',

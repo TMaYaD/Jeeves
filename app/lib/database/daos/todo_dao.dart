@@ -476,6 +476,39 @@ AND (
     return rows.map((r) => r.read<String>('tag_id')).toSet();
   }
 
+  /// One-shot batched lookup of person tags for every todo in [todoIds].
+  /// Returns a map keyed by todo id; todos with no person tag are absent.
+  /// Used by the Weekly Review wizard to render delegate names alongside
+  /// each waiting-for item without spawning one DAO call per item.
+  Future<Map<String, List<Tag>>> getPersonTagsForTodos(
+      Set<String> todoIds) async {
+    if (todoIds.isEmpty) return const {};
+    final placeholders = List.filled(todoIds.length, '?').join(', ');
+    final rows = await customSelect(
+      'SELECT tt.todo_id, tg.id AS tag_id, tg.name AS tag_name, '
+      '       tg.color AS tag_color, tg.type AS tag_type, '
+      '       tg.user_id AS tag_user_id '
+      'FROM todo_tags tt '
+      'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
+      'WHERE tt.todo_id IN ($placeholders) '
+      'ORDER BY tg.name',
+      variables: [Variable('person'), ...todoIds.map(Variable.new)],
+      readsFrom: {todoTags, tags},
+    ).get();
+    final result = <String, List<Tag>>{};
+    for (final row in rows) {
+      final tag = Tag(
+        id: row.read<String>('tag_id'),
+        name: row.read<String>('tag_name'),
+        color: row.readNullable<String>('tag_color'),
+        type: row.read<String>('tag_type'),
+        userId: row.read<String>('tag_user_id'),
+      );
+      (result[row.read<String>('todo_id')] ??= <Tag>[]).add(tag);
+    }
+    return result;
+  }
+
   /// One-shot check: is [todoId] currently in the re-clarification queue?
   @visibleForTesting
   Future<bool> isNeedsReview(String todoId) async {

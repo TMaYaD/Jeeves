@@ -89,6 +89,9 @@ class ProjectsStep extends ConsumerWidget {
       todo: todo,
       headline: 'Is this still your next move?',
       lastRouting: routings[index],
+      // Surface the persisted next-action text so the reviewer sees the
+      // concrete commitment they made, not just the project title.
+      subtext: todo.nextActionText,
       actions: [
         ReviewAction(
           label: 'Keep',

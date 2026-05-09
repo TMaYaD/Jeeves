@@ -28,6 +28,7 @@ class PeriodicReviewState {
     this.waitingForNav = const SnapshotNav<Todo>(),
     this.projectsNav = const SnapshotNav<Todo>(),
     this.somedayNav = const SnapshotNav<Todo>(),
+    this.waitingForPersonTags = const {},
     this.inboxRoutings = const {},
     this.waitingForRoutings = const {},
     this.projectsRoutings = const {},
@@ -47,6 +48,11 @@ class PeriodicReviewState {
   final SnapshotNav<Todo> waitingForNav;
   final SnapshotNav<Todo> projectsNav;
   final SnapshotNav<Todo> somedayNav;
+
+  /// Person tags attached to each todo in [waitingForNav], keyed by todo id.
+  /// Loaded once with the snapshot so the Waiting For card can render the
+  /// delegate name(s) inline without a per-item DAO call.
+  final Map<String, List<Tag>> waitingForPersonTags;
 
   /// In-session record of the last [RoutingKind] applied at each cursor index
   /// for each list-driven step. Drives the "previously selected" affordance
@@ -73,6 +79,7 @@ class PeriodicReviewState {
     SnapshotNav<Todo>? waitingForNav,
     SnapshotNav<Todo>? projectsNav,
     SnapshotNav<Todo>? somedayNav,
+    Map<String, List<Tag>>? waitingForPersonTags,
     Map<int, RoutingKind>? inboxRoutings,
     Map<int, RoutingKind>? waitingForRoutings,
     Map<int, RoutingKind>? projectsRoutings,
@@ -94,6 +101,8 @@ class PeriodicReviewState {
         waitingForNav: waitingForNav ?? this.waitingForNav,
         projectsNav: projectsNav ?? this.projectsNav,
         somedayNav: somedayNav ?? this.somedayNav,
+        waitingForPersonTags:
+            waitingForPersonTags ?? this.waitingForPersonTags,
         inboxRoutings: inboxRoutings ?? this.inboxRoutings,
         waitingForRoutings: waitingForRoutings ?? this.waitingForRoutings,
         projectsRoutings: projectsRoutings ?? this.projectsRoutings,
@@ -175,8 +184,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     state = state.copyWith(clearWaitingForLoadError: true);
     try {
       final todos = await _db.todoDao.watchPersonTagged().first;
+      // Batch the person-tag lookup so the card can render delegate names
+      // without spawning one DAO call per item.
+      final tags = await _db.todoDao
+          .getPersonTagsForTodos({for (final t in todos) t.id});
       state = state.copyWith(
         waitingForNav: state.waitingForNav.withItems(todos),
+        waitingForPersonTags: tags,
       );
     } catch (e) {
       state = state.copyWith(waitingForLoadError: e.toString());

@@ -34,6 +34,8 @@ class ReviewItemCard extends StatefulWidget {
     required this.headline,
     required this.actions,
     this.lastRouting,
+    this.subtext,
+    this.personTags = const [],
   });
 
   final Todo todo;
@@ -45,6 +47,15 @@ class ReviewItemCard extends StatefulWidget {
   /// "Keep"). Drives the highlight on the matching destination button when
   /// the user backs up to revisit the item.
   final RoutingKind? lastRouting;
+
+  /// Free-form subtext rendered between the title and the notes — used by
+  /// the Next Actions step to surface the persisted `next_action_text`.
+  final String? subtext;
+
+  /// Person tags rendered as small chips above the title. The Waiting For
+  /// step passes the delegate(s) attached to the item so reviewers can see
+  /// who they're waiting on without leaving the card.
+  final List<Tag> personTags;
 
   @override
   State<ReviewItemCard> createState() => _ReviewItemCardState();
@@ -105,6 +116,17 @@ class _ReviewItemCardState extends State<ReviewItemCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (widget.personTags.isNotEmpty) ...[
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final tag in widget.personTags)
+                      _PersonTagChip(name: tag.name),
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
               Text(
                 todo.title,
                 style: const TextStyle(
@@ -113,6 +135,31 @@ class _ReviewItemCardState extends State<ReviewItemCard> {
                   color: Color(0xFF1A1A2E),
                 ),
               ),
+              if (widget.subtext != null &&
+                  widget.subtext!.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 2, right: 6),
+                      child: Icon(Icons.arrow_forward,
+                          size: 14, color: Color(0xFF2563EB)),
+                    ),
+                    Expanded(
+                      child: Text(
+                        widget.subtext!,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF1D4ED8),
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               if (todo.notes != null && todo.notes!.trim().isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Text(
@@ -207,6 +254,40 @@ class _ActionButton extends StatelessWidget {
         minimumSize: const Size.fromHeight(44),
         padding: const EdgeInsets.symmetric(horizontal: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+}
+
+class _PersonTagChip extends StatelessWidget {
+  const _PersonTagChip({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3E8FF),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFE9D5FF)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.person_outlined,
+              size: 12, color: Color(0xFF7C3AED)),
+          const SizedBox(width: 4),
+          Text(
+            name,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF6B21A8),
+            ),
+          ),
+        ],
       ),
     );
   }
