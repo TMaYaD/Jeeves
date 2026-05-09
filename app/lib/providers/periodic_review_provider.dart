@@ -315,14 +315,17 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// Persists objectives + completion timestamp via the settings notifier and
   /// flips [PeriodicReviewState.isComplete]. Caller is responsible for
   /// navigating away after this resolves.
+  ///
+  /// Uses a single batched write so a partial failure cannot leave the user
+  /// with persisted objectives but no completion timestamp — which would
+  /// re-prompt the wizard and overwrite the half-saved objectives.
   Future<void> completeReview() async {
     final cleaned = state.objectives
         .map((o) => o.trim())
         .where((o) => o.isNotEmpty)
         .toList();
     final settings = ref.read(periodicReviewSettingsProvider.notifier);
-    await settings.setObjectives(cleaned);
-    await settings.completeReview();
+    await settings.completeReviewWith(cleaned);
     state = state.copyWith(isComplete: true);
   }
 }

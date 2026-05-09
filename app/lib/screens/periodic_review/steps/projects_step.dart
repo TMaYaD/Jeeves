@@ -6,7 +6,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../models/todo.dart' as todo_model show Intent;
+import '../../../models/todo.dart' show RoutingKind;
 import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '_review_card.dart';
@@ -60,12 +60,19 @@ class ProjectsStep extends ConsumerWidget {
             notifier.advanceProjects();
           },
         ),
+        // Route through applyRouting to keep transitions consistent with the
+        // canonical write path (planning ritual + inbox-clarify both go
+        // through it via the planning notifier).
         ReviewAction(
           label: 'Move to Maybe',
           icon: Icons.star_border,
           color: const Color(0xFF6B7280),
           onTap: () async {
-            await db.todoDao.setIntent(todo.id, todo_model.Intent.maybe);
+            await db.todoDao.applyRouting(
+              todo.id,
+              from: RoutingKind.nextAction,
+              to: RoutingKind.maybe,
+            );
             notifier.advanceProjects();
           },
         ),
@@ -74,7 +81,11 @@ class ProjectsStep extends ConsumerWidget {
           icon: Icons.delete_outline,
           color: const Color(0xFFDC2626),
           onTap: () async {
-            await db.todoDao.setIntent(todo.id, todo_model.Intent.trash);
+            await db.todoDao.applyRouting(
+              todo.id,
+              from: RoutingKind.nextAction,
+              to: RoutingKind.trash,
+            );
             notifier.advanceProjects();
           },
         ),

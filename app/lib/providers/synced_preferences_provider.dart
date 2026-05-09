@@ -158,6 +158,29 @@ class SyncedPreferencesNotifier
         SyncedPreferences({key: value}));
   }
 
+  /// Atomically upserts multiple keys in one DB transaction. Use for cases
+  /// where partial persistence would leave the user in an inconsistent state
+  /// (e.g. completing a ceremony where both the timestamp and the captured
+  /// outputs must persist together).
+  ///
+  /// On failure (any single write throws inside the transaction) nothing
+  /// commits and in-memory state is left untouched.
+  Future<void> setMany(Map<String, dynamic> entries) async {
+    if (entries.isEmpty) return;
+    final userId = ref.read(currentUserIdProvider);
+    final encoded = <String, String?>{
+      for (final e in entries.entries)
+        e.key: e.value == null ? null : jsonEncode(e.value),
+    };
+    await ref.read(databaseProvider).userPreferencesDao.setAll(userId, encoded);
+    if (!ref.mounted) return;
+    var next = state.asData?.value ?? const SyncedPreferences({});
+    for (final e in entries.entries) {
+      next = next.copyWith(e.key, e.value);
+    }
+    state = AsyncData(next);
+  }
+
   /// Sets [key] to null (tombstone). Subsequent get/watch return null.
   Future<void> remove(String key) async {
     final userId = ref.read(currentUserIdProvider);

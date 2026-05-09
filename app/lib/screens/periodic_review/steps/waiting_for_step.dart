@@ -6,7 +6,8 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../models/todo.dart' as todo_model show Intent;
+import '../../../models/todo.dart' show RoutingKind;
+import '../../../providers/auth_provider.dart';
 import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '_review_card.dart';
@@ -46,6 +47,7 @@ class WaitingForStep extends ConsumerWidget {
     final todo = nav.current!;
     final db = ref.read(databaseProvider);
     final notifier = ref.read(periodicReviewProvider.notifier);
+    final userId = ref.read(currentUserIdProvider);
 
     return ReviewItemCard(
       key: ValueKey(todo.id),
@@ -61,12 +63,20 @@ class WaitingForStep extends ConsumerWidget {
             notifier.advanceWaitingFor();
           },
         ),
+        // Route Done/Maybe/Discard through applyRouting so person-tag
+        // associations attached to the waitingFor item are cleared as a
+        // side-effect of leaving the kind — see TodoDao.applyRouting.
         ReviewAction(
           label: 'Mark Done',
           icon: Icons.task_alt_outlined,
           color: const Color(0xFF16A34A),
           onTap: () async {
-            await db.todoDao.markDone(todo.id);
+            await db.todoDao.applyRouting(
+              todo.id,
+              from: RoutingKind.waitingFor,
+              to: RoutingKind.done,
+              userId: userId,
+            );
             notifier.advanceWaitingFor();
           },
         ),
@@ -75,7 +85,12 @@ class WaitingForStep extends ConsumerWidget {
           icon: Icons.star_border,
           color: const Color(0xFF6B7280),
           onTap: () async {
-            await db.todoDao.setIntent(todo.id, todo_model.Intent.maybe);
+            await db.todoDao.applyRouting(
+              todo.id,
+              from: RoutingKind.waitingFor,
+              to: RoutingKind.maybe,
+              userId: userId,
+            );
             notifier.advanceWaitingFor();
           },
         ),
@@ -84,7 +99,12 @@ class WaitingForStep extends ConsumerWidget {
           icon: Icons.delete_outline,
           color: const Color(0xFFDC2626),
           onTap: () async {
-            await db.todoDao.setIntent(todo.id, todo_model.Intent.trash);
+            await db.todoDao.applyRouting(
+              todo.id,
+              from: RoutingKind.waitingFor,
+              to: RoutingKind.trash,
+              userId: userId,
+            );
             notifier.advanceWaitingFor();
           },
         ),

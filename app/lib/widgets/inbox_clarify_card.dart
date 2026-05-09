@@ -58,6 +58,11 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
   DateTime? _dueDate;
   bool _initialised = false;
   bool _processing = false;
+  // Mirrors `_titleCtrl.text.trim().isEmpty` for build-time gating of the
+  // routing buttons. Updated synchronously in `_onTextChanged` so the user
+  // sees the destination buttons (and the title's error state) react as
+  // they type — without a SnackBar or other toast surface.
+  bool _titleIsBlank = false;
 
   static const _textDebounceMs = 400;
   Timer? _textDebouncer;
@@ -73,6 +78,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
     _notesCtrl = TextEditingController(text: todo.notes ?? '');
     _lastSavedTitle = todo.title.trim();
     _lastSavedNotes = (todo.notes ?? '').trim();
+    _titleIsBlank = todo.title.trim().isEmpty;
     _energyLevel = todo.energyLevel;
     _timeEstimate = todo.timeEstimate;
     _dueDate = todo.dueDate?.toLocal();
@@ -88,6 +94,10 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
   }
 
   void _onTextChanged() {
+    final blank = (_titleCtrl?.text ?? '').trim().isEmpty;
+    if (blank != _titleIsBlank) {
+      setState(() => _titleIsBlank = blank);
+    }
     _textDebouncer?.cancel();
     _textDebouncer = Timer(
       const Duration(milliseconds: _textDebounceMs),
@@ -255,6 +265,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
           onChanged: (_) => _onTextChanged(),
           decoration: InputDecoration(
             labelText: 'Title',
+            errorText: _titleIsBlank ? 'Title is required to process' : null,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -366,11 +377,14 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
             children: [
               const ClarifyFieldLabel('PROCESS TO'),
               const SizedBox(height: 12),
+              // Routing destinations except Discard require a title — disabling
+              // them mirrors the validation the routing methods enforce, so
+              // the user gets visual feedback rather than a silent no-op.
               ClarifyDestinationButton(
                 label: 'Next Action',
                 icon: Icons.check_circle_outline,
                 color: const Color(0xFF2563EB),
-                enabled: !_processing,
+                enabled: !_processing && !_titleIsBlank,
                 isPreviouslySelected:
                     widget.lastRouting == RoutingKind.nextAction,
                 onTap: () => _runAction(_routeNextAction),
@@ -380,7 +394,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
                 label: 'Waiting For',
                 icon: Icons.person_outlined,
                 color: const Color(0xFF7C3AED),
-                enabled: !_processing,
+                enabled: !_processing && !_titleIsBlank,
                 isPreviouslySelected:
                     widget.lastRouting == RoutingKind.waitingFor,
                 onTap: () => _runAction(() => _routeWaitingFor(context)),
@@ -390,7 +404,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
                 label: 'Maybe',
                 icon: Icons.star_border,
                 color: const Color(0xFF6B7280),
-                enabled: !_processing,
+                enabled: !_processing && !_titleIsBlank,
                 isPreviouslySelected:
                     widget.lastRouting == RoutingKind.maybe,
                 onTap: () => _runAction(_routeMaybe),
@@ -400,12 +414,14 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
                 label: 'Done',
                 icon: Icons.task_alt_outlined,
                 color: const Color(0xFF16A34A),
-                enabled: !_processing,
+                enabled: !_processing && !_titleIsBlank,
                 isPreviouslySelected:
                     widget.lastRouting == RoutingKind.done,
                 onTap: () => _runAction(_routeDone),
               ),
               const SizedBox(height: 8),
+              // Discard intentionally bypasses title validation — a user
+              // shouldn't have to name an item just to throw it away.
               ClarifyDestinationButton(
                 label: 'Discard',
                 icon: Icons.delete_outline,

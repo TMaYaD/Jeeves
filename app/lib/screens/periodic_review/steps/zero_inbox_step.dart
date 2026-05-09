@@ -10,6 +10,7 @@ import '../../../models/todo.dart' show RoutingKind;
 import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/inbox_clarify_card.dart';
+import '_review_card.dart';
 
 class ZeroInboxStep extends ConsumerWidget {
   const ZeroInboxStep({super.key});
@@ -22,7 +23,8 @@ class ZeroInboxStep extends ConsumerWidget {
         periodicReviewProvider.select((s) => s.inboxLoadError));
 
     if (loadError != null) {
-      return _LoadError(
+      return ReviewLoadError(
+        title: "Couldn't load the inbox",
         message: loadError,
         onRetry: () =>
             ref.read(periodicReviewProvider.notifier).loadInboxSnapshot(),
@@ -39,7 +41,7 @@ class ZeroInboxStep extends ConsumerWidget {
     }
 
     if (nav.isEmpty || nav.isComplete) {
-      return _EmptyState(
+      return const ReviewEmptyState(
         icon: Icons.inbox_outlined,
         title: 'Inbox is clear',
         subtitle: 'Tap Next to continue.',
@@ -67,87 +69,6 @@ class ZeroInboxStep extends ConsumerWidget {
         );
         notifier.advanceInbox();
       },
-    );
-  }
-}
-
-class _LoadError extends StatelessWidget {
-  const _LoadError({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.error_outline, size: 56, color: Colors.red[300]),
-            const SizedBox(height: 16),
-            Text(
-              "Couldn't load the inbox",
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[800],
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('Retry'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 56, color: Colors.grey[300]),
-          const SizedBox(height: 16),
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[600],
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            subtitle,
-            style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-          ),
-        ],
-      ),
     );
   }
 }

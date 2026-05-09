@@ -243,6 +243,17 @@ class PeriodicReviewSettingsNotifier
     );
   }
 
+  /// Atomically persists [objectives] alongside the completion timestamp so
+  /// the wizard cannot leave the user in a state where their goals were
+  /// captured but the cadence wasn't reset (which would re-prompt the user
+  /// and overwrite the half-saved objectives on the next pass).
+  Future<void> completeReviewWith(List<String> objectives) async {
+    await syncedPrefs(ref).setMany({
+      _kObjectivesKey: jsonEncode(objectives),
+      _kLastCompletedAtKey: DateTime.now().toUtc().toIso8601String(),
+    });
+  }
+
   Future<void> dismissBannerForToday() async {
     await syncedPrefs(ref).set(_kBannerDismissedDateKey, _todayDateString());
   }
