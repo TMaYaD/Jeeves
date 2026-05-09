@@ -29,6 +29,7 @@ class PeriodicReviewState {
     this.brainDumpAdded = 0,
     this.objectives = const [],
     this.isComplete = false,
+    this.inboxLoadError,
   });
 
   final int currentStep;
@@ -46,6 +47,10 @@ class PeriodicReviewState {
 
   final bool isComplete;
 
+  /// Non-null when the inbox snapshot load failed; rendered inline by the
+  /// step (no toasts in the wizard) with a Retry affordance.
+  final String? inboxLoadError;
+
   PeriodicReviewState copyWith({
     int? currentStep,
     SnapshotNav<String>? inboxNav,
@@ -55,6 +60,8 @@ class PeriodicReviewState {
     int? brainDumpAdded,
     List<String>? objectives,
     bool? isComplete,
+    String? inboxLoadError,
+    bool clearInboxLoadError = false,
   }) =>
       PeriodicReviewState(
         currentStep: currentStep ?? this.currentStep,
@@ -65,6 +72,9 @@ class PeriodicReviewState {
         brainDumpAdded: brainDumpAdded ?? this.brainDumpAdded,
         objectives: objectives ?? this.objectives,
         isComplete: isComplete ?? this.isComplete,
+        inboxLoadError: clearInboxLoadError
+            ? null
+            : (inboxLoadError ?? this.inboxLoadError),
       );
 }
 
@@ -90,6 +100,11 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// snapshot load is still in flight) from racing on [state.currentStep].
   bool _isTransitioning = false;
 
+  /// Idempotency guard for [loadInboxSnapshot]. The widget calls the loader
+  /// from a post-frame callback while the nav is unloaded, so without the
+  /// guard a slow first call would queue a duplicate on every rebuild.
+  bool _loadingInboxSnapshot = false;
+
   @override
   PeriodicReviewState build() => const PeriodicReviewState();
 
@@ -100,9 +115,18 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   // ---------------------------------------------------------------------------
 
   Future<void> loadInboxSnapshot() async {
-    final todos = await _db.inboxDao.watchInbox().first;
-    final ids = todos.reversed.map((t) => t.id).toList();
-    state = state.copyWith(inboxNav: state.inboxNav.withItems(ids));
+    if (state.inboxNav.isLoaded || _loadingInboxSnapshot) return;
+    _loadingInboxSnapshot = true;
+    state = state.copyWith(clearInboxLoadError: true);
+    try {
+      final todos = await _db.inboxDao.watchInbox().first;
+      final ids = todos.reversed.map((t) => t.id).toList();
+      state = state.copyWith(inboxNav: state.inboxNav.withItems(ids));
+    } catch (e) {
+      state = state.copyWith(inboxLoadError: e.toString());
+    } finally {
+      _loadingInboxSnapshot = false;
+    }
   }
 
   Future<void> loadWaitingForSnapshot() async {

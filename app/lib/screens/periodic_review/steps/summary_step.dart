@@ -18,19 +18,21 @@ class SummaryStep extends ConsumerStatefulWidget {
 
 class _SummaryStepState extends ConsumerState<SummaryStep> {
   bool _completing = false;
+  String? _completeError;
 
   Future<void> _onDone() async {
     if (_completing) return;
-    setState(() => _completing = true);
+    setState(() {
+      _completing = true;
+      _completeError = null;
+    });
     try {
       await ref.read(periodicReviewProvider.notifier).completeReview();
       if (!mounted) return;
       context.go('/inbox');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Couldn\'t complete the review: $e')),
-      );
+      setState(() => _completeError = e.toString());
     } finally {
       if (mounted) setState(() => _completing = false);
     }
@@ -129,6 +131,35 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
             ),
         ],
         const SizedBox(height: 32),
+        if (_completeError != null) ...[
+          Container(
+            key: const Key('periodic_review_complete_error'),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF2F2),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFFCA5A5)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline,
+                    size: 18, color: Color(0xFFB91C1C)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Couldn't complete the review: $_completeError",
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF991B1B),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         FilledButton(
           key: const Key('periodic_review_done'),
           onPressed: _completing ? null : _onDone,
@@ -137,9 +168,9 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
             disabledBackgroundColor: const Color(0xFFD1D5DB),
             padding: const EdgeInsets.symmetric(vertical: 16),
           ),
-          child: const Text(
-            'Done',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          child: Text(
+            _completeError != null ? 'Retry' : 'Done',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
           ),
         ),
       ],
