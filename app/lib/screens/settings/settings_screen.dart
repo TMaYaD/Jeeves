@@ -7,6 +7,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
 import '../../providers/focus_settings_provider.dart';
+import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
@@ -448,6 +449,7 @@ class _PeriodicReviewSettings extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(periodicReviewSettingsProvider);
     final notifier = ref.read(periodicReviewSettingsProvider.notifier);
+    final reviewNotifier = ref.read(periodicReviewProvider.notifier);
     final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
 
     return Column(
@@ -515,6 +517,28 @@ class _PeriodicReviewSettings extends ConsumerWidget {
             _formatLastCompleted(lastCompleted),
             style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
+        ),
+        ListTile(
+          key: const Key('start_periodic_review_tile'),
+          leading: const Icon(Icons.refresh, color: Color(0xFF059669)),
+          title: const Text(
+            'Start Weekly Review',
+            style: TextStyle(
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF059669),
+            ),
+          ),
+          subtitle: const Text(
+            'Walk through the wizard now without waiting for the cadence.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () {
+            Navigator.pop(context);
+            // Reset the wizard cursor; the screen's initState reloads
+            // every step's snapshot so a manual start sees current state.
+            reviewNotifier.goToStep(PeriodicReviewNotifier.kStepInbox);
+            context.push('/periodic-review');
+          },
         ),
       ],
     );
