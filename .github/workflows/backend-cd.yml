@@ -6,6 +6,10 @@ on:
     types: [completed]
     branches: [main]
 
+concurrency:
+  group: backend-cd
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy to Dokku
