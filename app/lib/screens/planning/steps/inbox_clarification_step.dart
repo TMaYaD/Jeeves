@@ -23,6 +23,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../models/todo.dart' show RoutingKind;
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/task_detail_provider.dart';
 import '../../../widgets/clarify_shared_widgets.dart';
@@ -71,9 +72,9 @@ class _ClarifyCard extends ConsumerStatefulWidget {
 
   final String todoId;
 
-  /// The last routing applied to this item ('next_action' | 'waiting_for' |
-  /// 'maybe' | 'done'), or null if this item has not yet been processed.
-  final String? lastRouting;
+  /// The last routing applied to this item, or null if it has not yet been
+  /// processed in this planning session.
+  final RoutingKind? lastRouting;
 
   @override
   ConsumerState<_ClarifyCard> createState() => _ClarifyCardState();
@@ -505,7 +506,8 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.check_circle_outline,
                 color: const Color(0xFF2563EB),
                 enabled: !_processing,
-                isPreviouslySelected: widget.lastRouting == 'next_action',
+                isPreviouslySelected:
+                    widget.lastRouting == RoutingKind.nextAction,
                 onTap: () => _runAction(() => _process(context)),
               ),
               const SizedBox(height: 8),
@@ -514,7 +516,8 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.person_outlined,
                 color: const Color(0xFF7C3AED),
                 enabled: !_processing,
-                isPreviouslySelected: widget.lastRouting == 'waiting_for',
+                isPreviouslySelected:
+                    widget.lastRouting == RoutingKind.waitingFor,
                 onTap: () => _runAction(() => _processToWaitingFor(context)),
               ),
               const SizedBox(height: 8),
@@ -523,7 +526,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.star_border,
                 color: const Color(0xFF6B7280),
                 enabled: !_processing,
-                isPreviouslySelected: widget.lastRouting == 'maybe',
+                isPreviouslySelected: widget.lastRouting == RoutingKind.maybe,
                 onTap: () => _runAction(() => _processToMaybe(context)),
               ),
               const SizedBox(height: 8),
@@ -532,7 +535,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.task_alt_outlined,
                 color: const Color(0xFF16A34A),
                 enabled: !_processing,
-                isPreviouslySelected: widget.lastRouting == 'done',
+                isPreviouslySelected: widget.lastRouting == RoutingKind.done,
                 onTap: () => _runAction(() => _processToDone(context)),
               ),
               const SizedBox(height: 8),
@@ -541,7 +544,7 @@ class _ClarifyCardState extends ConsumerState<_ClarifyCard> {
                 icon: Icons.delete_outline,
                 color: const Color(0xFFDC2626),
                 enabled: !_processing,
-                isPreviouslySelected: widget.lastRouting == 'trash',
+                isPreviouslySelected: widget.lastRouting == RoutingKind.trash,
                 onTap: () => _runAction(() => _processToTrash(context)),
               ),
             ],
