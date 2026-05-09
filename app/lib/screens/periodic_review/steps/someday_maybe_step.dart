@@ -18,6 +18,17 @@ class SomedayMaybeStep extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final nav =
         ref.watch(periodicReviewProvider.select((s) => s.somedayNav));
+    final loadError = ref.watch(
+        periodicReviewProvider.select((s) => s.somedayLoadError));
+
+    if (loadError != null) {
+      return ReviewLoadError(
+        title: "Couldn't load Someday/Maybe",
+        message: loadError,
+        onRetry: () =>
+            ref.read(periodicReviewProvider.notifier).loadSomedaySnapshot(),
+      );
+    }
 
     if (!nav.isLoaded) {
       return const Center(child: CircularProgressIndicator());

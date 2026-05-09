@@ -18,6 +18,17 @@ class ProjectsStep extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final nav =
         ref.watch(periodicReviewProvider.select((s) => s.projectsNav));
+    final loadError = ref.watch(
+        periodicReviewProvider.select((s) => s.projectsLoadError));
+
+    if (loadError != null) {
+      return ReviewLoadError(
+        title: "Couldn't load projects",
+        message: loadError,
+        onRetry: () =>
+            ref.read(periodicReviewProvider.notifier).loadProjectsSnapshot(),
+      );
+    }
 
     if (!nav.isLoaded) {
       return const Center(child: CircularProgressIndicator());

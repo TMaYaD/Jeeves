@@ -30,6 +30,9 @@ class PeriodicReviewState {
     this.objectives = const [],
     this.isComplete = false,
     this.inboxLoadError,
+    this.waitingForLoadError,
+    this.projectsLoadError,
+    this.somedayLoadError,
   });
 
   final int currentStep;
@@ -47,9 +50,12 @@ class PeriodicReviewState {
 
   final bool isComplete;
 
-  /// Non-null when the inbox snapshot load failed; rendered inline by the
+  /// Non-null when the matching snapshot load failed; rendered inline by the
   /// step (no toasts in the wizard) with a Retry affordance.
   final String? inboxLoadError;
+  final String? waitingForLoadError;
+  final String? projectsLoadError;
+  final String? somedayLoadError;
 
   PeriodicReviewState copyWith({
     int? currentStep,
@@ -62,6 +68,12 @@ class PeriodicReviewState {
     bool? isComplete,
     String? inboxLoadError,
     bool clearInboxLoadError = false,
+    String? waitingForLoadError,
+    bool clearWaitingForLoadError = false,
+    String? projectsLoadError,
+    bool clearProjectsLoadError = false,
+    String? somedayLoadError,
+    bool clearSomedayLoadError = false,
   }) =>
       PeriodicReviewState(
         currentStep: currentStep ?? this.currentStep,
@@ -75,6 +87,15 @@ class PeriodicReviewState {
         inboxLoadError: clearInboxLoadError
             ? null
             : (inboxLoadError ?? this.inboxLoadError),
+        waitingForLoadError: clearWaitingForLoadError
+            ? null
+            : (waitingForLoadError ?? this.waitingForLoadError),
+        projectsLoadError: clearProjectsLoadError
+            ? null
+            : (projectsLoadError ?? this.projectsLoadError),
+        somedayLoadError: clearSomedayLoadError
+            ? null
+            : (somedayLoadError ?? this.somedayLoadError),
       );
 }
 
@@ -100,10 +121,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// snapshot load is still in flight) from racing on [state.currentStep].
   bool _isTransitioning = false;
 
-  /// Idempotency guard for [loadInboxSnapshot]. The widget calls the loader
-  /// from a post-frame callback while the nav is unloaded, so without the
-  /// guard a slow first call would queue a duplicate on every rebuild.
+  /// Idempotency guards for the per-step snapshot loaders. Prevent duplicate
+  /// in-flight reads (post-frame callbacks fire on every rebuild while the
+  /// nav is unloaded) and let re-entry preserve the user's per-item cursor.
   bool _loadingInboxSnapshot = false;
+  bool _loadingWaitingForSnapshot = false;
+  bool _loadingProjectsSnapshot = false;
+  bool _loadingSomedaySnapshot = false;
 
   @override
   PeriodicReviewState build() => const PeriodicReviewState();
@@ -130,21 +154,48 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   }
 
   Future<void> loadWaitingForSnapshot() async {
-    final todos = await _db.todoDao.watchPersonTagged().first;
-    state = state.copyWith(
-      waitingForNav: state.waitingForNav.withItems(todos),
-    );
+    if (state.waitingForNav.isLoaded || _loadingWaitingForSnapshot) return;
+    _loadingWaitingForSnapshot = true;
+    state = state.copyWith(clearWaitingForLoadError: true);
+    try {
+      final todos = await _db.todoDao.watchPersonTagged().first;
+      state = state.copyWith(
+        waitingForNav: state.waitingForNav.withItems(todos),
+      );
+    } catch (e) {
+      state = state.copyWith(waitingForLoadError: e.toString());
+    } finally {
+      _loadingWaitingForSnapshot = false;
+    }
   }
 
   Future<void> loadProjectsSnapshot() async {
-    final todos = await _db.todoDao.getNextActionsWithProjectTags();
-    state =
-        state.copyWith(projectsNav: state.projectsNav.withItems(todos));
+    if (state.projectsNav.isLoaded || _loadingProjectsSnapshot) return;
+    _loadingProjectsSnapshot = true;
+    state = state.copyWith(clearProjectsLoadError: true);
+    try {
+      final todos = await _db.todoDao.getNextActionsWithProjectTags();
+      state =
+          state.copyWith(projectsNav: state.projectsNav.withItems(todos));
+    } catch (e) {
+      state = state.copyWith(projectsLoadError: e.toString());
+    } finally {
+      _loadingProjectsSnapshot = false;
+    }
   }
 
   Future<void> loadSomedaySnapshot() async {
-    final todos = await _db.todoDao.watchMaybe().first;
-    state = state.copyWith(somedayNav: state.somedayNav.withItems(todos));
+    if (state.somedayNav.isLoaded || _loadingSomedaySnapshot) return;
+    _loadingSomedaySnapshot = true;
+    state = state.copyWith(clearSomedayLoadError: true);
+    try {
+      final todos = await _db.todoDao.watchMaybe().first;
+      state = state.copyWith(somedayNav: state.somedayNav.withItems(todos));
+    } catch (e) {
+      state = state.copyWith(somedayLoadError: e.toString());
+    } finally {
+      _loadingSomedaySnapshot = false;
+    }
   }
 
   // ---------------------------------------------------------------------------
