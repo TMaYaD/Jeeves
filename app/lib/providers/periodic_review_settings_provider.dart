@@ -277,7 +277,16 @@ class PeriodicReviewSettingsNotifier
 
   Future<void> _rescheduleNotification() async {
     final svc = ref.read(notificationServiceProvider);
+    // Only arm the daily reminder while the review is actually due — firing
+    // "Time for your Weekly Review" on a day the cadence has not elapsed
+    // would lie to the user. The schedule is re-evaluated on every prefs
+    // change (the listener in build()) so completion immediately disarms it
+    // and the next cadence flip (driven by writes from any device, e.g.
+    // `last_completed_at` aging out via cross-device sync, or any other
+    // pref write while the app is alive) re-arms it.
+    final isDue = ref.read(periodicReviewIsDueProvider);
     if (state.notificationEnabled &&
+        isDue &&
         !isPeriodicReviewNotificationSuppressedToday()) {
       await svc.schedulePeriodicReviewReminder(time: state.notificationTime);
     } else {

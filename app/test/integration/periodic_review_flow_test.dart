@@ -88,13 +88,15 @@ void main() {
       final notifier = c.read(periodicReviewProvider.notifier);
 
       await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
-      // Single inbox item: skipping it past the cursor lets the next press
-      // of advanceStep cross into Waiting For.
+      // Single inbox item: skipping it past the cursor moves the wizard into
+      // the "Inbox is clear" terminal state. The next advanceStep crosses
+      // out of Inbox; Waiting For, Projects, and Someday/Maybe all auto-skip
+      // on entry because no fixtures populate them, so the wizard lands on
+      // Objectives in a single hop.
       notifier.advanceInbox();
-      await notifier.advanceStep(); // → WaitingFor
-      await notifier.advanceStep(); // → Projects
-      await notifier.advanceStep(); // → SomeMaybe
-      await notifier.advanceStep(); // → Objectives
+      await notifier.advanceStep();
+      expect(c.read(periodicReviewProvider).currentStep,
+          equals(PeriodicReviewNotifier.kStepObjectives));
       notifier.setObjectives(['Ship the wizard']);
       await notifier.advanceStep(); // → Summary
 

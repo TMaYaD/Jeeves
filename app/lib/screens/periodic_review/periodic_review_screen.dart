@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/periodic_review_provider.dart';
+import '../../utils/snapshot_nav.dart';
 import 'steps/objectives_step.dart';
 import 'steps/projects_step.dart';
 import 'steps/someday_maybe_step.dart';
@@ -162,23 +163,24 @@ class _PeriodicReviewScreenState
     switch (step) {
       case PeriodicReviewNotifier.kStepInbox:
         if (!state.inboxNav.isLoaded) return null;
-        // Skip the current inbox item (cursor advances). Once the cursor is
-        // past the last item the nav is `isComplete` / `!canGoForward`, and
-        // Next falls through to the step transition below.
-        if (state.inboxNav.canGoForward) return notifier.advanceInbox;
-        return notifier.advanceStep;
+        return _hasMoreItems(state.inboxNav)
+            ? notifier.advanceInbox
+            : notifier.advanceStep;
       case PeriodicReviewNotifier.kStepWaitingFor:
         if (!state.waitingForNav.isLoaded) return null;
-        if (state.waitingForNav.canGoForward) return notifier.advanceWaitingFor;
-        return notifier.advanceStep;
+        return _hasMoreItems(state.waitingForNav)
+            ? notifier.advanceWaitingFor
+            : notifier.advanceStep;
       case PeriodicReviewNotifier.kStepProjects:
         if (!state.projectsNav.isLoaded) return null;
-        if (state.projectsNav.canGoForward) return notifier.advanceProjects;
-        return notifier.advanceStep;
+        return _hasMoreItems(state.projectsNav)
+            ? notifier.advanceProjects
+            : notifier.advanceStep;
       case PeriodicReviewNotifier.kStepSomeMaybe:
         if (!state.somedayNav.isLoaded) return null;
-        if (state.somedayNav.canGoForward) return notifier.advanceSomeday;
-        return notifier.advanceStep;
+        return _hasMoreItems(state.somedayNav)
+            ? notifier.advanceSomeday
+            : notifier.advanceStep;
       case PeriodicReviewNotifier.kStepObjectives:
         // Finish requires at least one non-empty objective.
         final hasAny = state.objectives.any((o) => o.trim().isNotEmpty);
@@ -188,6 +190,13 @@ class _PeriodicReviewScreenState
         return notifier.advanceStep;
     }
   }
+
+  /// True when the cursor is on an item that still has at least one item
+  /// after it. On the last visible item (or already past the end) this
+  /// returns false, so Next crosses into the following step instead of
+  /// landing on the empty "all clear" placeholder for an extra tap.
+  static bool _hasMoreItems<T>(SnapshotNav<T> nav) =>
+      nav.isLoaded && nav.index < nav.length - 1;
 }
 
 // ---------------------------------------------------------------------------

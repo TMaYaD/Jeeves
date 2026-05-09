@@ -276,8 +276,18 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
         }
       case kStepProjects:
         await loadProjectsSnapshot();
+        if (state.currentStep == kStepProjects &&
+            state.projectsNav.isLoaded &&
+            state.projectsNav.isEmpty) {
+          await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
+        }
       case kStepSomeMaybe:
         await loadSomedaySnapshot();
+        if (state.currentStep == kStepSomeMaybe &&
+            state.somedayNav.isLoaded &&
+            state.somedayNav.isEmpty) {
+          await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
+        }
       case kStepObjectives:
         if (state.objectives.isEmpty) {
           final last = ref.read(periodicReviewLastObjectivesProvider);

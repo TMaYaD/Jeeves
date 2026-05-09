@@ -459,7 +459,7 @@ There is no dedicated brain-dump step in the wizard: capture happens through the
 - `objectives: List<String>` — pending objectives buffer.
 - `isComplete: bool` — flipped by `completeReview()`.
 
-**Snapshot loaders** are called by `_onStepEnter` each time a step is entered. The Inbox and Waiting For steps auto-skip on entry when their snapshot loads empty; Projects and Someday/Maybe are reflection steps that always require a manual Next.
+**Snapshot loaders** are called by `_onStepEnter` each time a step is entered. Every list-driven step (Inbox, Waiting For, Projects, Someday/Maybe) auto-skips on entry when its snapshot loads empty — there is nothing to reflect on if the list has no items, so the wizard advances straight to the next step.
 
 **`completeReview()`** writes the completion timestamp and the cleaned objectives list to synced preferences via `PeriodicReviewSettingsNotifier`, then flips `isComplete`.
 
@@ -489,7 +489,7 @@ Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissed
 
 ### Notifications
 
-`NotificationService.schedulePeriodicReviewReminder(time:)` schedules a recurring daily reminder at the configured time using `matchDateTimeComponents: time`. The notification fires every day; the in-app banner's `isDue` predicate gates relevance so the user only sees the surface when the cadence has elapsed.
+`NotificationService.schedulePeriodicReviewReminder(time:)` schedules a recurring daily reminder at the configured time using `matchDateTimeComponents: time`. `_rescheduleNotification` only arms that schedule while the review is actually due (`periodicReviewIsDueProvider == true`); on completion the reschedule is triggered by the prefs listener and the schedule is canceled, so the user is not nagged daily until the cadence has elapsed again. Re-arm happens via the same listener on the next prefs write (or via `build()` the next time the notifier is constructed at app launch).
 
 Notification actions: Open (→ `/periodic-review`), Snooze (one-off reschedule via `snoozePeriodicReviewReminder(minutes)`), Skip today (cancels only the snooze id via `skipTodayPeriodicReviewReminder()` so tomorrow's recurring reminder still fires).
 
