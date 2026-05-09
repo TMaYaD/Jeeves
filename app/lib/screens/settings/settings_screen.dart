@@ -7,6 +7,8 @@ import '../../providers/auth_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
 import '../../providers/focus_settings_provider.dart';
+import '../../providers/periodic_review_provider.dart';
+import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
 import '../../widgets/jeeves_logo.dart';
@@ -106,6 +108,9 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('FOCUS MODE'),
           _FocusModeSettings(),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+          _sectionHeader('WEEKLY REVIEW'),
+          const _PeriodicReviewSettings(),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('EVENING SHUTDOWN'),
           _EveningShutdownSettings(),
@@ -422,6 +427,121 @@ class _FocusModeSettings extends ConsumerWidget {
       ),
     );
     if (picked != null) await onPicked(picked);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Weekly review settings
+// ---------------------------------------------------------------------------
+
+class _PeriodicReviewSettings extends ConsumerWidget {
+  const _PeriodicReviewSettings();
+
+  String _formatLastCompleted(DateTime? when) {
+    if (when == null) return 'Never';
+    final local = when.toLocal();
+    return '${local.year.toString().padLeft(4, '0')}-'
+        '${local.month.toString().padLeft(2, '0')}-'
+        '${local.day.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settings = ref.watch(periodicReviewSettingsProvider);
+    final notifier = ref.read(periodicReviewSettingsProvider.notifier);
+    final reviewNotifier = ref.read(periodicReviewProvider.notifier);
+    final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
+
+    return Column(
+      children: [
+        ListTile(
+          key: const Key('periodic_review_time_tile'),
+          leading: const Icon(Icons.schedule_outlined,
+              color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Remind me at',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: Text(
+            settings.notificationTime.format(context),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () async {
+            final picked = await showTimePicker(
+              context: context,
+              initialTime: settings.notificationTime,
+            );
+            if (picked != null) {
+              await notifier.setNotificationTime(picked);
+            }
+          },
+        ),
+        SwitchListTile(
+          key: const Key('periodic_review_notification_toggle'),
+          secondary: const Icon(Icons.notifications_outlined,
+              color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Weekly Review Reminder',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          value: settings.notificationEnabled,
+          onChanged: (v) => notifier.setNotificationEnabled(v),
+        ),
+        SwitchListTile(
+          key: const Key('periodic_review_banner_toggle'),
+          secondary: const Icon(Icons.campaign_outlined,
+              color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Show Weekly Review banner',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: const Text(
+            'A reminder banner once a weekly review is due.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          value: settings.bannerEnabled,
+          onChanged: (v) => notifier.setBannerEnabled(v),
+        ),
+        ListTile(
+          key: const Key('periodic_review_last_completed_tile'),
+          leading: const Icon(Icons.history, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Last completed',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: Text(
+            _formatLastCompleted(lastCompleted),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+        ),
+        ListTile(
+          key: const Key('start_periodic_review_tile'),
+          leading: const Icon(Icons.refresh, color: Color(0xFF059669)),
+          title: const Text(
+            'Start Weekly Review',
+            style: TextStyle(
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF059669),
+            ),
+          ),
+          subtitle: const Text(
+            'Walk through the wizard now without waiting for the cadence.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () {
+            context.pop();
+            // Reset the wizard cursor; the screen's initState reloads
+            // every step's snapshot so a manual start sees current state.
+            reviewNotifier.goToStep(PeriodicReviewNotifier.kStepInbox);
+            context.push('/periodic-review');
+          },
+        ),
+      ],
+    );
   }
 }
 

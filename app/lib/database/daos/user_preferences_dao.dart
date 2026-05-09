@@ -17,23 +17,49 @@ class UserPreferencesDao {
 
   /// Upserts [key] → [jsonValue] for [userId].
   ///
-  /// Generates a new UUID for `id` on insert; on conflict for (user_id, key),
-  /// updates value and updated_at in-place (preserving the existing id so
-  /// PowerSync's CRUD queue stays clean).
+  /// SQLite forbids UPSERT (`INSERT ... ON CONFLICT DO UPDATE`) at the parser
+  /// level on views, and PowerSync exposes `user_preferences` as a view in
+  /// production (only [NativeDatabase] tests see a real table). To stay
+  /// compatible with both, the row is looked up first and then either UPDATEd
+  /// in place (preserving the existing `id` so PowerSync's CRUD queue stays
+  /// clean) or INSERTed with a fresh UUID. The select / write pair runs
+  /// inside a transaction so concurrent setters cannot race past the
+  /// UNIQUE(user_id, key) constraint.
   Future<void> set(String userId, String key, String? jsonValue) async {
     final now = DateTime.now().toUtc().toIso8601String();
-    final id = uuid.v4();
-    await _db.customStatement(
-      '''
-      INSERT INTO user_preferences (id, user_id, "key", value, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT (user_id, "key") DO UPDATE SET
-        value      = excluded.value,
-        updated_at = excluded.updated_at
-      ''',
-      [id, userId, key, jsonValue, now],
-    );
-    _db.markTablesUpdated({_db.userPreferences});
+    await _db.transaction(() async {
+      final existing = await _db.customSelect(
+        'SELECT id FROM user_preferences WHERE user_id = ? AND "key" = ?',
+        variables: [Variable(userId), Variable(key)],
+        readsFrom: {_db.userPreferences},
+      ).get();
+      if (existing.isEmpty) {
+        await _db.customInsert(
+          'INSERT INTO user_preferences (id, user_id, "key", value, updated_at) '
+          'VALUES (?, ?, ?, ?, ?)',
+          variables: [
+            Variable(uuid.v4()),
+            Variable(userId),
+            Variable(key),
+            Variable(jsonValue),
+            Variable(now),
+          ],
+          updates: {_db.userPreferences},
+        );
+      } else {
+        await _db.customUpdate(
+          'UPDATE user_preferences SET value = ?, updated_at = ? '
+          'WHERE user_id = ? AND "key" = ?',
+          variables: [
+            Variable(jsonValue),
+            Variable(now),
+            Variable(userId),
+            Variable(key),
+          ],
+          updates: {_db.userPreferences},
+        );
+      }
+    });
   }
 
   /// Returns the raw JSON-encoded value for [key] and [userId], or null if

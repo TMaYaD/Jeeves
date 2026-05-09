@@ -9,6 +9,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next_actions/next_actions_screen.dart';
+import 'screens/periodic_review/periodic_review_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
@@ -70,6 +71,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/focus-session-planning',
       builder: (context, state) => const FocusSessionPlanningScreen(),
+    ),
+    GoRoute(
+      path: '/periodic-review',
+      builder: (context, state) => const PeriodicReviewScreen(),
     ),
     GoRoute(
       path: '/shutdown',
