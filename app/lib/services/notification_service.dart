@@ -293,6 +293,14 @@ class NotificationService {
     await _plugin.cancel(id: _kPeriodicReviewSnoozeNotificationId);
   }
 
+  /// Cancels only the recurring schedule, leaving any pending snooze intact.
+  /// Use when the recurring reminder shouldn't fire today (suppressed by an
+  /// active snooze, etc.) but the user-requested one-off snooze should still
+  /// fire on its scheduled time.
+  Future<void> cancelPeriodicReviewRecurringReminder() async {
+    await _plugin.cancel(id: _kPeriodicReviewNotificationId);
+  }
+
   /// Suppresses today's weekly-review reminder without removing the recurring
   /// daily schedule. Use for the "Skip today" notification action so
   /// tomorrow's reminder still fires automatically.

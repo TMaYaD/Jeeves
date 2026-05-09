@@ -3,35 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
-import 'package:jeeves/services/notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../helpers/periodic_review_test_helpers.dart';
 import '../test_helpers.dart';
 
-class _StubNotificationService extends NotificationService {
-  _StubNotificationService() : super.forTesting();
-
-  @override
-  Future<void> schedulePeriodicReviewReminder(
-      {required TimeOfDay time}) async {}
-
-  @override
-  Future<void> snoozePeriodicReviewReminder(int minutes) async {}
-
-  @override
-  Future<void> cancelPeriodicReviewReminder() async {}
-}
-
-ProviderContainer _container({GtdDatabase? db}) => ProviderContainer(
-      overrides: [
-        databaseProvider
-            .overrideWithValue(db ?? GtdDatabase(NativeDatabase.memory())),
-        notificationServiceProvider
-            .overrideWithValue(_StubNotificationService()),
-      ],
+ProviderContainer _container() => createPeriodicReviewTestContainer(
+      GtdDatabase(NativeDatabase.memory()),
     );
 
 String _todayDateString() {

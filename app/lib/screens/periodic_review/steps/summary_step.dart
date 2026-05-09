@@ -38,13 +38,29 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
     }
   }
 
+  /// Renders `routed / total` so the user sees what they actually
+  /// changed against the snapshot they walked through. Falls back to a
+  /// plain count when nothing was loaded so the row still says "0".
+  String _stat(int routed, int total) =>
+      total == 0 ? '0' : '$routed / $total';
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(periodicReviewProvider);
-    final inboxProcessed = state.inboxNav.length;
-    final waitingReviewed = state.waitingForNav.length;
-    final projectsReviewed = state.projectsNav.length;
-    final somedayReviewed = state.somedayNav.length;
+    // Stats reflect what the user *did*, not what was *available*. Routings
+    // map keys are the cursor indices on which the user ran a real
+    // RoutingKind transition (Mark Done, Move to Maybe, etc); per-step
+    // "Keep" actions intentionally don't enter the map because they are
+    // stamping no-ops, not changes. The denominator is the snapshot size
+    // so the user can see "I changed 3 of 12".
+    final inboxProcessed =
+        _stat(state.inboxRoutings.length, state.inboxNav.length);
+    final waitingReviewed =
+        _stat(state.waitingForRoutings.length, state.waitingForNav.length);
+    final projectsReviewed =
+        _stat(state.projectsRoutings.length, state.projectsNav.length);
+    final somedayReviewed =
+        _stat(state.somedayRoutings.length, state.somedayNav.length);
 
     return ListView(
       physics: const ClampingScrollPhysics(),
@@ -74,18 +90,10 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
           ),
           child: Column(
             children: [
-              _StatRow(
-                  label: 'Inbox processed',
-                  value: inboxProcessed.toString()),
-              _StatRow(
-                  label: 'Waiting-for reviewed',
-                  value: waitingReviewed.toString()),
-              _StatRow(
-                  label: 'Projects reviewed',
-                  value: projectsReviewed.toString()),
-              _StatRow(
-                  label: 'Someday reviewed',
-                  value: somedayReviewed.toString()),
+              _StatRow(label: 'Inbox processed', value: inboxProcessed),
+              _StatRow(label: 'Waiting-for routed', value: waitingReviewed),
+              _StatRow(label: 'Next actions routed', value: projectsReviewed),
+              _StatRow(label: 'Someday routed', value: somedayReviewed),
             ],
           ),
         ),

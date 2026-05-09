@@ -252,6 +252,14 @@ class PeriodicReviewSettingsNotifier
         isDue &&
         !isPeriodicReviewNotificationSuppressedToday()) {
       await svc.schedulePeriodicReviewReminder(time: state.notificationTime);
+    } else if (_periodicReviewNotificationSnoozedActive) {
+      // The user just tapped "Snooze". Don't kill their one-off snooze
+      // fire just because the recurring schedule shouldn't run today —
+      // only cancel the recurring id so the snooze can still fire on
+      // its scheduled time. Once the snooze fires (or expires) the
+      // module-level flag flips false and the next reschedule falls
+      // through to the regular cancel-both branch.
+      await svc.cancelPeriodicReviewRecurringReminder();
     } else {
       await svc.cancelPeriodicReviewReminder();
     }

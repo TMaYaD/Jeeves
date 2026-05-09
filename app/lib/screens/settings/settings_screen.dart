@@ -533,7 +533,7 @@ class _PeriodicReviewSettings extends ConsumerWidget {
             style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
           onTap: () {
-            Navigator.pop(context);
+            context.pop();
             // Reset the wizard cursor; the screen's initState reloads
             // every step's snapshot so a manual start sees current state.
             reviewNotifier.goToStep(PeriodicReviewNotifier.kStepInbox);
