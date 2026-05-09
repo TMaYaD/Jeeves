@@ -14,25 +14,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/todo.dart' show RoutingKind;
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'clarify_shared_widgets.dart';
 import 'person_tag_picker.dart';
 
-/// Routing destinations exposed by [InboxClarifyCard].
-enum InboxClarifyKind {
-  nextAction,
-  waitingFor,
-  maybe,
-  done,
-  trash,
-}
-
 /// Shared clarification card. Renders an editable view of [todoId] plus the
 /// five GTD destinations. Title/notes/energy/time/due autosave directly via
 /// [TodoDao]; destination buttons fire [onRoute].
 ///
-/// For [InboxClarifyKind.waitingFor] the card opens a [PersonTagPickerSheet]
+/// For [RoutingKind.waitingFor] the card opens a [PersonTagPickerSheet]
 /// internally; [onRoute] fires only after the user confirms a person tag, so
 /// the parent doesn't need to know about the picker.
 class InboxClarifyCard extends ConsumerStatefulWidget {
@@ -47,12 +39,12 @@ class InboxClarifyCard extends ConsumerStatefulWidget {
 
   /// The last routing applied to this item, or null. Drives the
   /// "previously selected" affordance on the matching destination button.
-  final InboxClarifyKind? lastRouting;
+  final RoutingKind? lastRouting;
 
   /// Called after pending edits have flushed and any picker has confirmed.
   /// The callback performs the actual DAO routing call (and any flow-specific
   /// side effects).
-  final Future<void> Function(InboxClarifyKind kind) onRoute;
+  final Future<void> Function(RoutingKind kind) onRoute;
 
   @override
   ConsumerState<InboxClarifyCard> createState() => _InboxClarifyCardState();
@@ -166,7 +158,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
 
   Future<void> _routeNextAction() async {
     if (!await _flushAndValidate()) return;
-    await widget.onRoute(InboxClarifyKind.nextAction);
+    await widget.onRoute(RoutingKind.nextAction);
   }
 
   Future<void> _routeWaitingFor(BuildContext context) async {
@@ -183,26 +175,26 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
       requireSelection: true,
       onAfterConfirm: () async {
         if (!context.mounted) return;
-        await widget.onRoute(InboxClarifyKind.waitingFor);
+        await widget.onRoute(RoutingKind.waitingFor);
       },
     );
   }
 
   Future<void> _routeMaybe() async {
     if (!await _flushAndValidate()) return;
-    await widget.onRoute(InboxClarifyKind.maybe);
+    await widget.onRoute(RoutingKind.maybe);
   }
 
   Future<void> _routeDone() async {
     if (!await _flushAndValidate()) return;
-    await widget.onRoute(InboxClarifyKind.done);
+    await widget.onRoute(RoutingKind.done);
   }
 
   Future<void> _routeTrash() async {
     // Discarding bypasses title validation — the user shouldn't have to name
     // an item just to throw it away.
     await _flushTextSave();
-    await widget.onRoute(InboxClarifyKind.trash);
+    await widget.onRoute(RoutingKind.trash);
   }
 
   Future<DateTime?> _pickDate(BuildContext context) {
@@ -380,7 +372,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
                 color: const Color(0xFF2563EB),
                 enabled: !_processing,
                 isPreviouslySelected:
-                    widget.lastRouting == InboxClarifyKind.nextAction,
+                    widget.lastRouting == RoutingKind.nextAction,
                 onTap: () => _runAction(_routeNextAction),
               ),
               const SizedBox(height: 8),
@@ -390,7 +382,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
                 color: const Color(0xFF7C3AED),
                 enabled: !_processing,
                 isPreviouslySelected:
-                    widget.lastRouting == InboxClarifyKind.waitingFor,
+                    widget.lastRouting == RoutingKind.waitingFor,
                 onTap: () => _runAction(() => _routeWaitingFor(context)),
               ),
               const SizedBox(height: 8),
@@ -400,7 +392,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
                 color: const Color(0xFF6B7280),
                 enabled: !_processing,
                 isPreviouslySelected:
-                    widget.lastRouting == InboxClarifyKind.maybe,
+                    widget.lastRouting == RoutingKind.maybe,
                 onTap: () => _runAction(_routeMaybe),
               ),
               const SizedBox(height: 8),
@@ -410,7 +402,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
                 color: const Color(0xFF16A34A),
                 enabled: !_processing,
                 isPreviouslySelected:
-                    widget.lastRouting == InboxClarifyKind.done,
+                    widget.lastRouting == RoutingKind.done,
                 onTap: () => _runAction(_routeDone),
               ),
               const SizedBox(height: 8),
@@ -420,7 +412,7 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
                 color: const Color(0xFFDC2626),
                 enabled: !_processing,
                 isPreviouslySelected:
-                    widget.lastRouting == InboxClarifyKind.trash,
+                    widget.lastRouting == RoutingKind.trash,
                 onTap: () => _runAction(_routeTrash),
               ),
             ],

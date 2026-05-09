@@ -16,6 +16,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../models/todo.dart' show RoutingKind;
 import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../widgets/inbox_clarify_card.dart';
@@ -42,11 +43,10 @@ class InboxClarificationStep extends ConsumerWidget {
     }
 
     final id = nav.current!;
-    final priorKind = _kindFromString(inboxRoutings[nav.index]?.kind);
     return InboxClarifyCard(
       key: ValueKey(id),
       todoId: id,
-      lastRouting: priorKind,
+      lastRouting: inboxRoutings[nav.index]?.kind,
       onRoute: (kind) async {
         final notifier = ref.read(focusSessionPlanningProvider.notifier);
         // Pull the latest title from the live row so the recorded
@@ -55,38 +55,19 @@ class InboxClarificationStep extends ConsumerWidget {
         final todo = await db.todoDao.getTodo(id);
         final title = todo?.title ?? '';
         switch (kind) {
-          case InboxClarifyKind.nextAction:
+          case RoutingKind.nextAction:
             await notifier.processInboxItem(id, title: title);
-          case InboxClarifyKind.waitingFor:
+          case RoutingKind.waitingFor:
             await notifier.processInboxItemToWaitingFor(id, title: title);
-          case InboxClarifyKind.maybe:
+          case RoutingKind.maybe:
             await notifier.processInboxItemToMaybe(id);
-          case InboxClarifyKind.done:
+          case RoutingKind.done:
             await notifier.processInboxItemToDone(id);
-          case InboxClarifyKind.trash:
+          case RoutingKind.trash:
             await notifier.processInboxItemToTrash(id);
         }
       },
     );
-  }
-}
-
-/// Maps the persisted routing-record [kind] string back to the enum used by
-/// the shared card to render the "previously selected" affordance.
-InboxClarifyKind? _kindFromString(String? kind) {
-  switch (kind) {
-    case 'next_action':
-      return InboxClarifyKind.nextAction;
-    case 'waiting_for':
-      return InboxClarifyKind.waitingFor;
-    case 'maybe':
-      return InboxClarifyKind.maybe;
-    case 'done':
-      return InboxClarifyKind.done;
-    case 'trash':
-      return InboxClarifyKind.trash;
-    default:
-      return null;
   }
 }
 

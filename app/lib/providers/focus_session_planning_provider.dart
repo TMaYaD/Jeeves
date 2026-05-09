@@ -20,7 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show Intent;
+import '../models/todo.dart' show RoutingKind;
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
@@ -214,31 +214,16 @@ final skippedNextActionsForFocusSessionPlanningProvider =
 });
 
 // ---------------------------------------------------------------------------
-// Inbox routing record — what was done to an item and how to undo it
+// Inbox routing record — what destination was chosen for an item
 // ---------------------------------------------------------------------------
 
-/// Records a routing applied to an inbox item during planning, plus the
-/// pre-routing state needed to undo it on re-route. The record's [kind] drives
-/// the "previously selected" affordance on revisit; the prior fields let the
-/// revert path restore the exact pre-routing state instead of resetting to
-/// inbox defaults (which would drop pre-existing intent / person tags from
-/// import or sync).
+/// Records the routing applied to an inbox item at a given snapshot index.
+/// Used to render the "previously selected" affordance on revisit and to
+/// drive the (from, to) transition when the user re-routes the item.
 class InboxRoutingRecord {
-  const InboxRoutingRecord({
-    required this.kind,
-    required this.priorClarified,
-    required this.priorIntent,
-    required this.priorDoneAt,
-    required this.priorPersonTagIds,
-  });
+  const InboxRoutingRecord({required this.kind});
 
-  /// Routing kind: 'next_action' | 'waiting_for' | 'maybe' | 'done'.
-  final String kind;
-
-  final bool priorClarified;
-  final String priorIntent;
-  final String? priorDoneAt;
-  final Set<String> priorPersonTagIds;
+  final RoutingKind kind;
 }
 
 // ---------------------------------------------------------------------------
@@ -497,74 +482,44 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Advances the cursor without writing to the DB or recording a routing.
   void skipInboxItem() => nextInboxItem();
 
-  /// Reverts the DB state for the item at [idx] back to the captured
-  /// pre-routing state and removes [idx] from [inboxRoutings].
+  /// Applies a routing transition to the snapshot row at [idx], delegating
+  /// the DB matrix to [TodoDao.applyRouting]. Records [kind] in
+  /// [inboxRoutings] and advances the cursor.
   ///
-  /// Restores intent / clarified / done_at via [InboxDao.unprocessInboxItem]
-  /// and the person-tag set via [InboxDao.setPersonTagsForTodo]; both targets
-  /// come from the [InboxRoutingRecord] captured at routing time. Pre-existing
-  /// person-tag associations (from import / sync) are preserved.
+  /// Bails out without mutating state if the snapshot row no longer exists
+  /// in the DB (deleted between snapshot load and apply). Idempotent under
+  /// rapid re-taps: the cursor advance check at the end discards a second
+  /// call's state mutation when the first call has already advanced.
   ///
-  /// Both writes run in a single DB transaction so the revert is all-or-
-  /// nothing: a failure in the tag restore does not leave the row back in
-  /// inbox state with the wrong assignees, and [inboxRoutings] is only
-  /// cleared after the transaction commits.
-  ///
-  /// Note: we cannot gate on Drift's "affected rows" return value here
-  /// because PowerSync exposes [todos] as a SQLite VIEW backed by an
-  /// INSTEAD OF trigger, and `sqlite3_changes()` does not count rows
-  /// touched by triggers — Drift always reports 0. We trust that the
-  /// snapshot already vouches for the row's existence at routing time.
-  Future<void> _revertProcessedInboxItem(int idx) async {
-    final id = state.inboxNav.items![idx];
-    final record = state.inboxRoutings[idx];
-    if (record == null) return;
-    await _db.transaction(() async {
-      await _db.inboxDao.unprocessInboxItem(
-        id,
-        priorClarified: record.priorClarified,
-        priorIntent: record.priorIntent,
-        priorDoneAt: record.priorDoneAt,
-      );
-      await _db.inboxDao.setPersonTagsForTodo(
-        id,
-        record.priorPersonTagIds,
-        _userId,
-      );
-    });
+  /// Note: PowerSync exposes [todos] as a SQLite VIEW backed by an
+  /// INSTEAD OF trigger, so Drift's "affected rows" return value is always
+  /// 0 even on a successful update. We pre-check for row existence via
+  /// [TodoDao.getTodo] and otherwise trust the snapshot's claim that the
+  /// row exists.
+  Future<void> _routeInboxItem(
+    String id, {
+    required RoutingKind to,
+    String? nextActionText,
+  }) async {
+    final idx = state.inboxNav.index;
+    final prior = state.inboxRoutings[idx]?.kind;
+    final exists = await _db.todoDao.getTodo(id);
+    if (exists == null) return;
+    await _db.todoDao.applyRouting(
+      id,
+      to: to,
+      from: prior,
+      nextActionText: nextActionText,
+      userId: _userId,
+    );
+    if (state.inboxNav.index != idx) return;
     state = state.copyWith(
-      inboxRoutings: Map.from(state.inboxRoutings)..remove(idx),
+      inboxRoutings: {
+        ...state.inboxRoutings,
+        idx: InboxRoutingRecord(kind: to),
+      },
     );
-  }
-
-  /// Captures the current pre-routing state of the item at [idx] by reading
-  /// all four fields (clarified / intent / done_at / person tags) from the
-  /// live DB at apply time, not from the snapshot. Returns null if the row
-  /// no longer exists in the DB; callers must bail out without mutating
-  /// state in that case (the snapshot row was deleted out from under us
-  /// between snapshot load and routing apply, so there is nothing to
-  /// route).
-  ///
-  /// Reading live keeps capture consistent across fields and lets revert
-  /// preserve any external mutation (sync, import, ad-hoc edit) that landed
-  /// between snapshot load and routing apply. The cost is one extra
-  /// row-by-id query per routing call.
-  Future<({
-    bool clarified,
-    String intent,
-    String? doneAt,
-    Set<String> personTagIds,
-  })?> _capturePriorInboxState(int idx) async {
-    final id = state.inboxNav.items![idx];
-    final todo = await _db.todoDao.getTodo(id);
-    if (todo == null) return null;
-    final personTagIds = await _db.todoDao.getPersonTagIdsForTodo(id);
-    return (
-      clarified: todo.clarified,
-      intent: todo.intent,
-      doneAt: todo.doneAt,
-      personTagIds: personTagIds,
-    );
+    nextInboxItem();
   }
 
   /// Persists attribute edits on a todo. Used by the inbox clarify card to
@@ -594,151 +549,32 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         clearDueDate: clearDueDate,
       );
 
-  /// Routes the current inbox item to Next Actions (clarified = true) and
-  /// records [title] as the task's next-action text.
+  /// Routes the current inbox item to Next Actions and records [title] as
+  /// the task's next-action text.
   ///
-  /// If the item was previously routed, that routing is reverted first.
-  /// Setting [next_action_text] prevents the task from immediately surfacing
-  /// as Actionless in the re-clarification surface after inbox-clarify. If
-  /// the DB UPDATE does not affect any row (item not found) the state is not
-  /// changed.
-  Future<void> processInboxItem(String id, {required String title}) async {
-    final idx = state.inboxNav.index;
-    if (state.inboxRoutings.containsKey(idx)) {
-      await _revertProcessedInboxItem(idx);
-    }
-    final prior = await _capturePriorInboxState(idx);
-    if (prior == null) return;
-    await _db.transaction(() async {
-      await _db.inboxDao.processInboxItem(id);
-      await _db.todoDao.setNextActionText(id, title);
-    });
-    if (state.inboxNav.index != idx) return;
-    state = state.copyWith(
-      inboxRoutings: {
-        ...state.inboxRoutings,
-        idx: InboxRoutingRecord(
-          kind: 'next_action',
-          priorClarified: prior.clarified,
-          priorIntent: prior.intent,
-          priorDoneAt: prior.doneAt,
-          priorPersonTagIds: prior.personTagIds,
-        ),
-      },
-    );
-    nextInboxItem();
-  }
+  /// Setting `next_action_text` prevents the task from immediately surfacing
+  /// as Actionless in the re-clarification surface after inbox-clarify.
+  Future<void> processInboxItem(String id, {required String title}) =>
+      _routeInboxItem(id, to: RoutingKind.nextAction, nextActionText: title);
 
-  /// Routes the current inbox item to Waiting For (clarified = true, person
-  /// tags assigned by the caller before this is invoked) and records [title]
-  /// as the task's next-action text.
+  /// Routes the current inbox item to Waiting For. Person-tag assignment is
+  /// performed externally (by the picker) before this is invoked.
   Future<void> processInboxItemToWaitingFor(String id,
-      {required String title}) async {
-    final idx = state.inboxNav.index;
-    if (state.inboxRoutings.containsKey(idx)) {
-      await _revertProcessedInboxItem(idx);
-    }
-    final prior = await _capturePriorInboxState(idx);
-    if (prior == null) return;
-    await _db.transaction(() async {
-      await _db.inboxDao.processInboxItem(id);
-      await _db.todoDao.setNextActionText(id, title);
-    });
-    if (state.inboxNav.index != idx) return;
-    state = state.copyWith(
-      inboxRoutings: {
-        ...state.inboxRoutings,
-        idx: InboxRoutingRecord(
-          kind: 'waiting_for',
-          priorClarified: prior.clarified,
-          priorIntent: prior.intent,
-          priorDoneAt: prior.doneAt,
-          priorPersonTagIds: prior.personTagIds,
-        ),
-      },
-    );
-    nextInboxItem();
-  }
+          {required String title}) =>
+      _routeInboxItem(id, to: RoutingKind.waitingFor, nextActionText: title);
 
-  /// Routes the current inbox item to Someday/Maybe (clarified = true,
-  /// intent = 'maybe').
-  Future<void> processInboxItemToMaybe(String id) async {
-    final idx = state.inboxNav.index;
-    if (state.inboxRoutings.containsKey(idx)) {
-      await _revertProcessedInboxItem(idx);
-    }
-    final prior = await _capturePriorInboxState(idx);
-    if (prior == null) return;
-    await _db.inboxDao.processInboxItem(id, intent: 'maybe');
-    if (state.inboxNav.index != idx) return;
-    state = state.copyWith(
-      inboxRoutings: {
-        ...state.inboxRoutings,
-        idx: InboxRoutingRecord(
-          kind: 'maybe',
-          priorClarified: prior.clarified,
-          priorIntent: prior.intent,
-          priorDoneAt: prior.doneAt,
-          priorPersonTagIds: prior.personTagIds,
-        ),
-      },
-    );
-    nextInboxItem();
-  }
+  /// Routes the current inbox item to Someday/Maybe.
+  Future<void> processInboxItemToMaybe(String id) =>
+      _routeInboxItem(id, to: RoutingKind.maybe);
 
-  /// Routes the current inbox item to Trash (clarified = true, intent =
-  /// 'trash'). Soft-delete: the row remains in DB and revert restores the
-  /// prior intent.
-  Future<void> processInboxItemToTrash(String id) async {
-    final idx = state.inboxNav.index;
-    if (state.inboxRoutings.containsKey(idx)) {
-      await _revertProcessedInboxItem(idx);
-    }
-    final prior = await _capturePriorInboxState(idx);
-    if (prior == null) return;
-    await _db.inboxDao.processInboxItem(id, intent: 'trash');
-    if (state.inboxNav.index != idx) return;
-    state = state.copyWith(
-      inboxRoutings: {
-        ...state.inboxRoutings,
-        idx: InboxRoutingRecord(
-          kind: 'trash',
-          priorClarified: prior.clarified,
-          priorIntent: prior.intent,
-          priorDoneAt: prior.doneAt,
-          priorPersonTagIds: prior.personTagIds,
-        ),
-      },
-    );
-    nextInboxItem();
-  }
+  /// Routes the current inbox item to Trash. Soft-delete: the row remains in
+  /// the DB so the user can re-route on Back.
+  Future<void> processInboxItemToTrash(String id) =>
+      _routeInboxItem(id, to: RoutingKind.trash);
 
-  /// Routes the current inbox item to Done (done_at = now). If the DB UPDATE
-  /// does not affect any row (item deleted out from under us, etc.) the state
-  /// is not changed.
-  Future<void> processInboxItemToDone(String id) async {
-    final idx = state.inboxNav.index;
-    if (state.inboxRoutings.containsKey(idx)) {
-      await _revertProcessedInboxItem(idx);
-    }
-    final prior = await _capturePriorInboxState(idx);
-    if (prior == null) return;
-    await _db.todoDao.markDone(id);
-    if (state.inboxNav.index != idx) return;
-    state = state.copyWith(
-      inboxRoutings: {
-        ...state.inboxRoutings,
-        idx: InboxRoutingRecord(
-          kind: 'done',
-          priorClarified: prior.clarified,
-          priorIntent: prior.intent,
-          priorDoneAt: prior.doneAt,
-          priorPersonTagIds: prior.personTagIds,
-        ),
-      },
-    );
-    nextInboxItem();
-  }
+  /// Routes the current inbox item to Done.
+  Future<void> processInboxItemToDone(String id) =>
+      _routeInboxItem(id, to: RoutingKind.done);
 
   /// Returns the IDs of person-typed tags currently assigned to [todoId].
   /// Used to pre-seed the Waiting For person picker on revisit.
@@ -834,27 +670,59 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Task Review (Step 1) --------------------------------------------------
 
-  /// "Still relevant" — stamps last_clarified_at; only available for Stale tasks.
+  /// Maps a [ReviewActionKind] to the [RoutingKind] its DB-side effects map to.
+  /// Used as the `from` argument for [TodoDao.applyRouting] when the user
+  /// re-selects within the review step.
+  RoutingKind _routingKindFor(ReviewActionKind kind) => switch (kind) {
+        ReviewActionKind.stillRelevant => RoutingKind.nextAction,
+        ReviewActionKind.updateNextAction => RoutingKind.nextAction,
+        ReviewActionKind.waitingFor => RoutingKind.waitingFor,
+        ReviewActionKind.markDone => RoutingKind.done,
+        ReviewActionKind.sendToSomeday => RoutingKind.maybe,
+        ReviewActionKind.trash => RoutingKind.trash,
+      };
+
+  RoutingKind? _priorRoutingForCurrentReviewItem() {
+    final priorKind = state.reviewActions[state.reviewNav.index]?.kind;
+    return priorKind == null ? null : _routingKindFor(priorKind);
+  }
+
+  /// "Still relevant" — only available for Stale tasks. Routes through
+  /// [TodoDao.applyRouting] so a prior in-session resolution (markDone /
+  /// sendToSomeday / trash) is undone in the same write that stamps
+  /// `last_clarified_at`.
   Future<void> confirmReviewItemRelevant(String id) async {
-    await _revertIfNeeded(ReviewActionKind.stillRelevant);
-    await _db.todoDao.stampLastClarifiedAt(id);
-    _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.stillRelevant));
+    final idx = state.reviewNav.index;
+    await _db.todoDao.applyRouting(
+      id,
+      to: RoutingKind.nextAction,
+      from: _priorRoutingForCurrentReviewItem(),
+      userId: _userId,
+    );
+    if (state.reviewNav.index != idx) return;
+    _recordAndAdvance(
+      const ReviewActionRecord(kind: ReviewActionKind.stillRelevant),
+    );
   }
 
   /// "Waiting for…" — called after [PersonTagPickerSheet] assigns a person tag.
   ///
-  /// For Stale tasks, stamps last_clarified_at explicitly to clear the stale
-  /// predicate (does not rely on [assignPersonTag] as an implicit side-effect).
-  /// For Actionless tasks, sets a default next_action_text so the task leaves
-  /// the Actionless predicate.
+  /// For Actionless tasks, supplies "Waiting for…" as a default
+  /// next_action_text so the task leaves the Actionless predicate. For Stale
+  /// tasks, leaves next_action_text untouched; the routing write itself stamps
+  /// last_clarified_at.
   Future<void> markReviewItemWaitingFor(String id, {bool isActionless = false}) async {
-    await _revertIfNeeded(ReviewActionKind.waitingFor);
-    if (isActionless) {
-      await _db.todoDao.setNextActionText(id, 'Waiting for…');
-    } else {
-      await _db.todoDao.stampLastClarifiedAt(id);
-    }
+    final idx = state.reviewNav.index;
+    await _db.todoDao.applyRouting(
+      id,
+      to: RoutingKind.waitingFor,
+      from: _priorRoutingForCurrentReviewItem(),
+      nextActionText: isActionless ? 'Waiting for…' : null,
+      userId: _userId,
+    );
+    if (state.reviewNav.index != idx) return;
     final tagIds = await _db.tagDao.getPersonTagIdsForTodo(id);
+    if (state.reviewNav.index != idx) return;
     _recordAndAdvance(ReviewActionRecord(
       kind: ReviewActionKind.waitingFor,
       personTagIds: tagIds,
@@ -862,20 +730,28 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   }
 
   /// "Update next action" — sets next_action_text and stamps last_clarified_at.
-  /// Blank text is ignored: the task stays Actionless and the index does not advance.
+  /// Blank text normalises the column to NULL; the task stays Actionless and
+  /// the cursor does not advance.
   Future<void> updateReviewItemNextAction(String id, String text) async {
-    await _revertIfNeeded(ReviewActionKind.updateNextAction);
-    await _db.todoDao.setNextActionText(id, text);
-    if (text.trim().isNotEmpty) {
+    final idx = state.reviewNav.index;
+    final trimmed = text.trim();
+    await _db.todoDao.applyRouting(
+      id,
+      to: RoutingKind.nextAction,
+      from: _priorRoutingForCurrentReviewItem(),
+      nextActionText: text,
+      userId: _userId,
+    );
+    if (state.reviewNav.index != idx) return;
+    if (trimmed.isNotEmpty) {
       _recordAndAdvance(ReviewActionRecord(
         kind: ReviewActionKind.updateNextAction,
-        nextActionText: text.trim(),
+        nextActionText: trimmed,
       ));
     } else {
-      // Blank text normalises to NULL and the index does not advance, but any
-      // stale action record must be cleared so the dialog doesn't pre-fill with
-      // the old text when the user navigates back to this item.
-      final idx = state.reviewNav.index;
+      // Blank text normalises to NULL and the cursor does not advance, but
+      // any stale action record must be cleared so the dialog does not
+      // pre-fill with the old text when the user navigates back.
       if (state.reviewActions.containsKey(idx)) {
         state = state.copyWith(
           reviewActions: Map.of(state.reviewActions)..remove(idx),
@@ -884,24 +760,44 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     }
   }
 
-  /// "Mark done" — marks done_at and stamps last_clarified_at internally via DAO.
+  /// "Mark done" — sets done_at and stamps last_clarified_at.
   Future<void> markReviewItemDone(String id) async {
-    await _revertIfNeeded(ReviewActionKind.markDone);
-    await _db.todoDao.markDone(id);
+    final idx = state.reviewNav.index;
+    await _db.todoDao.applyRouting(
+      id,
+      to: RoutingKind.done,
+      from: _priorRoutingForCurrentReviewItem(),
+      userId: _userId,
+    );
+    if (state.reviewNav.index != idx) return;
     _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.markDone));
   }
 
-  /// "Send to Someday" — changes intent to maybe and stamps last_clarified_at.
+  /// "Send to Someday" — sets intent='maybe' and stamps last_clarified_at.
   Future<void> deferReviewItemToSomeday(String id) async {
-    await _revertIfNeeded(ReviewActionKind.sendToSomeday);
-    await _db.todoDao.deferTaskToMaybe(id);
-    _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.sendToSomeday));
+    final idx = state.reviewNav.index;
+    await _db.todoDao.applyRouting(
+      id,
+      to: RoutingKind.maybe,
+      from: _priorRoutingForCurrentReviewItem(),
+      userId: _userId,
+    );
+    if (state.reviewNav.index != idx) return;
+    _recordAndAdvance(
+      const ReviewActionRecord(kind: ReviewActionKind.sendToSomeday),
+    );
   }
 
-  /// "Trash" — sets intent to trash.
+  /// "Trash" — sets intent='trash' and stamps last_clarified_at.
   Future<void> trashReviewItem(String id) async {
-    await _revertIfNeeded(ReviewActionKind.trash);
-    await _db.todoDao.setIntent(id, Intent.trash);
+    final idx = state.reviewNav.index;
+    await _db.todoDao.applyRouting(
+      id,
+      to: RoutingKind.trash,
+      from: _priorRoutingForCurrentReviewItem(),
+      userId: _userId,
+    );
+    if (state.reviewNav.index != idx) return;
     _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.trash));
   }
 
@@ -911,34 +807,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       reviewNav: state.reviewNav.next(),
       reviewActions: {...state.reviewActions, index: record},
     );
-  }
-
-  /// Cleans up only the DB fields that are invalid given the incoming [newKind],
-  /// based on what was previously committed at the current review index.
-  ///
-  /// Rules (others are left untouched — next_action_text and last_clarified_at
-  /// accumulate legitimately across re-selections):
-  /// - Previous was [markDone]: clear done_at — completed_at is not valid
-  ///   alongside any other resolution.
-  /// - Previous was [sendToSomeday] or [trash] and new is a stamp/active action:
-  ///   reset intent to 'next'. Intent is irrelevant for [markDone] tasks.
-  Future<void> _revertIfNeeded(ReviewActionKind newKind) async {
-    final idx = state.reviewNav.index;
-    final previous = state.reviewActions[idx]?.kind;
-    if (previous == null || idx >= state.reviewNav.length) return;
-
-    final id = state.reviewNav.items![idx].id;
-
-    if (previous == ReviewActionKind.markDone) {
-      await _db.todoDao.clearDoneAt(id);
-    }
-
-    if ((previous == ReviewActionKind.sendToSomeday || previous == ReviewActionKind.trash) &&
-        (newKind == ReviewActionKind.stillRelevant ||
-            newKind == ReviewActionKind.waitingFor ||
-            newKind == ReviewActionKind.updateNextAction)) {
-      await _db.todoDao.setIntent(id, Intent.next);
-    }
   }
 
   // ---- Banner dismissal ------------------------------------------------------

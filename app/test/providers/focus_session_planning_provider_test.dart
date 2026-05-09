@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import '../test_helpers.dart';
@@ -202,7 +203,7 @@ void main() {
       await Future.wait([first, second]);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals('next_action'),
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction),
           reason: 'Routing recorded exactly once for index 0');
       expect(state.inboxNav.index, equals(1),
           reason: 'Index advanced exactly once');
@@ -225,7 +226,7 @@ void main() {
       await Future.wait([first, second]);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals('maybe'),
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.maybe),
           reason: 'Routing recorded exactly once for index 0');
       expect(state.inboxNav.index, equals(1));
 
@@ -403,7 +404,7 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxNav.index, 1);
-      expect(state.inboxRoutings[0]?.kind, equals('next_action'));
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction));
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-1')))
@@ -421,7 +422,7 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxNav.index, 1);
-      expect(state.inboxRoutings[0]?.kind, equals('maybe'));
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.maybe));
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-1')))
@@ -440,7 +441,7 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxNav.index, 1);
-      expect(state.inboxRoutings[0]?.kind, equals('done'));
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.done));
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-1')))
@@ -466,7 +467,7 @@ void main() {
           reason: 'Back must not revert DB state');
       expect(afterBack.intent, 'maybe');
       var state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals('maybe'));
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.maybe));
 
       // Re-tapping a different destination triggers the revert + re-apply.
       await notifier.processInboxItem('item-1', title: 'Test item');
@@ -479,7 +480,7 @@ void main() {
           reason: 'revert restored prior intent before re-routing');
       expect(row.doneAt, isNull);
       state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals('next_action'));
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction));
     });
 
     test('revert does not modify title, notes, energy, time estimate, due date',
@@ -533,7 +534,7 @@ void main() {
           reason: 'revert restored prior intent before next_action routing');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals('next_action'));
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction));
     });
 
     test('re-routing Done → Next Action clears done_at', () async {
@@ -577,7 +578,7 @@ void main() {
       expect(afterRow.doneAt, equals(beforeRow.doneAt));
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals('next_action'));
+      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction));
     });
 
     test('progress fraction is inboxIndex / inboxSnapshot.length', () async {
@@ -649,61 +650,6 @@ void main() {
       final tagIds = await db.todoDao.getPersonTagIdsForTodo('item-1');
       expect(tagIds, contains('alice'),
           reason: 'pre-existing person tag must survive revert');
-    });
-
-    test('revert restores pre-existing intent (not hardcoded \'next\')',
-        () async {
-      // Pre-existing inbox item with intent='maybe' (e.g. from import).
-      final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
-        id: const Value('item-1'),
-        title: const Value('Existing maybe item'),
-        intent: const Value('maybe'),
-        userId: const Value('local'),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
-
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      // Route to next_action then re-route — revert path runs first.
-      await notifier.processInboxItem('item-1', title: 'Test item');
-      notifier.previousInboxItem();
-      await notifier.processInboxItemToDone('item-1');
-
-      // The done routing replaces, but the routing record's priorIntent
-      // must reflect the original 'maybe', not the hardcoded 'next' default.
-      final state = container.read(focusSessionPlanningProvider);
-      final record = state.inboxRoutings[0];
-      expect(record, isNotNull);
-      expect(record!.priorIntent, equals('maybe'),
-          reason: 'prior intent captured at apply time, not hardcoded');
-    });
-
-    test(
-        'capture is at apply time (live DB), so external writes between '
-        'snapshot load and routing survive revert',
-        () async {
-      // Item starts with intent='next'.
-      await _insertInboxItem(db, id: 'item-1');
-
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      // External mutation lands AFTER snapshot load but BEFORE routing —
-      // simulates sync, import, or an ad-hoc edit elsewhere in the UI.
-      await (db.update(db.todos)..where((t) => t.id.equals('item-1')))
-          .write(const TodosCompanion(intent: Value('maybe')));
-
-      // Apply a routing — capture must read the live 'maybe', not the
-      // snapshot's stale 'next'.
-      await notifier.processInboxItemToDone('item-1');
-
-      final state = container.read(focusSessionPlanningProvider);
-      final record = state.inboxRoutings[0]!;
-      expect(record.priorIntent, equals('maybe'),
-          reason: 'capture reads live DB at apply, not the snapshot');
     });
 
     test('routing bails out when the snapshot row was deleted before apply',
@@ -991,7 +937,7 @@ void main() {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      // Load review items so _revertIfNeeded can look up the task by index.
+      // Load review items so the prior-action lookup can resolve the task.
       await notifier.advanceStep();
       expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 

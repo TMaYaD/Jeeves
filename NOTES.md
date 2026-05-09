@@ -12,6 +12,13 @@
 - `InboxClarifyCard` (extracted from the planning ritual's `_ClarifyCard`) autosaves directly via `databaseProvider`, with routing decisions delegated to a parent-supplied `onRoute(InboxClarifyKind)` callback. Same UI for daily-planning Step 0 and Weekly Review Step 0; flow-specific revert/history wiring stays in each parent.
 - AppShell tests that mount the shell now need to override `periodicReviewBannerEnabledProvider` to false alongside the existing `_NoBannerSettingsNotifier` for the planning banner — otherwise the new banner's pulse animation leaves a `Timer pending` after teardown.
 
+## 2026-05-08 (issue #270)
+
+- Routing-transition writes for inbox-clarify and re-clarification review now share `TodoDao.applyRouting(todoId, to:, from:, …)` with `RoutingKind` (`nextAction` / `waitingFor` / `maybe` / `done` / `trash`) defining the desired final column state per kind.
+- The shared `applyRouting` method eliminates the need for per-pair `_revertProcessedInboxItem` / `_revertIfNeeded` matrices in the planning provider.
+- `InboxRoutingRecord` simplified to just `{kind: RoutingKind}`.
+- `InboxDao.unprocessInboxItem` and `InboxDao.setPersonTagsForTodo` deleted; the latter moved to `TodoDao`.
+
 ## 2026-05-01 (issue #237)
 
 - Drift's `DelegatedDatabase.close()` resets the internal `_ensureOpenCalled` flag to `false`. If an async DB query (via `customSelect().get()`) is in-flight when `close()` runs, the query's `runSelect._debugCheckIsOpen()` assert fires. Fix: wrap `_loadInitialReviewCount` in `try { ... } on StateError catch (_) {}` to silently swallow teardown races. This pattern is safe in production because the DB is never closed while the app is running.

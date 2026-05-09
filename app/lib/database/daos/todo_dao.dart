@@ -4,8 +4,9 @@ library;
 import 'package:drift/drift.dart';
 import 'package:meta/meta.dart';
 
-import '../../models/todo.dart' show Intent;
+import '../../models/todo.dart' show Intent, RoutingKind;
 import '../gtd_database.dart';
+import 'tag_dao.dart' show todoTagIdFor;
 
 part 'todo_dao.g.dart';
 
@@ -484,6 +485,155 @@ AND (
       readsFrom: {todos},
     ).get();
     return rows.isNotEmpty;
+  }
+
+  /// Sets the person-typed tag associations for [todoId] to exactly
+  /// [targetPersonTagIds]: removes person tags currently assigned but not in
+  /// the target set, and adds tags in the target set that are not currently
+  /// assigned. Non-person tag associations on the todo are left untouched.
+  Future<void> setPersonTagsForTodo(
+    String todoId,
+    Set<String> targetPersonTagIds,
+    String userId,
+  ) async {
+    await transaction(() async {
+      final allPersonTagIds = await (select(tags)
+            ..where((t) => t.type.equals('person')))
+          .map((t) => t.id)
+          .get();
+      final allPersonTagIdSet = allPersonTagIds.toSet();
+      if (allPersonTagIdSet.isEmpty) return;
+
+      final currentRows = await (select(todoTags)
+            ..where(
+              (tt) => tt.todoId.equals(todoId) & tt.tagId.isIn(allPersonTagIds),
+            ))
+          .get();
+      final currentTagIds = currentRows.map((r) => r.tagId).toSet();
+
+      final toRemove = currentTagIds.difference(targetPersonTagIds);
+      final toAdd = targetPersonTagIds
+          .intersection(allPersonTagIdSet)
+          .difference(currentTagIds);
+
+      if (toRemove.isNotEmpty) {
+        await (delete(todoTags)
+              ..where(
+                (tt) => tt.todoId.equals(todoId) & tt.tagId.isIn(toRemove),
+              ))
+            .go();
+      }
+      for (final tagId in toAdd) {
+        await into(todoTags).insert(
+          TodoTagsCompanion(
+            id: Value(todoTagIdFor(todoId, tagId)),
+            todoId: Value(todoId),
+            tagId: Value(tagId),
+            userId: Value(userId),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+      }
+    });
+  }
+
+  /// Single source of truth for routing-transition writes across inbox-clarify
+  /// and re-clarification review.
+  ///
+  /// Each [RoutingKind] in [to] expresses a desired final state for the row's
+  /// clarified / intent / done_at columns; the table below is the forward
+  /// matrix that [applyRouting] enforces. `last_clarified_at` is stamped on
+  /// every call.
+  ///
+  /// | `to`         | clarified | intent  | done_at | next_action_text          |
+  /// |--------------|-----------|---------|---------|---------------------------|
+  /// | `nextAction` | true      | 'next'  | clear   | set if `nextActionText`   |
+  /// | `waitingFor` | true      | 'next'  | clear   | set if `nextActionText`   |
+  /// | `maybe`      | true      | 'maybe' | clear   | leave                     |
+  /// | `done`       | true      | leave   | now     | leave                     |
+  /// | `trash`      | true      | 'trash' | clear   | leave                     |
+  ///
+  /// Person-tag associations are normally managed out-of-band (the
+  /// PersonTagPicker writes them before the routing call). [applyRouting]
+  /// itself touches person tags in two cases, both of which require [userId]:
+  ///   1. Caller passes [personTagIds] — the set is written via
+  ///      [setPersonTagsForTodo] (used for `waitingFor → waitingFor` with a
+  ///      new delegate set).
+  ///   2. [from] is [RoutingKind.waitingFor] and [to] is not — person tags
+  ///      are cleared, since they are a waitingFor-specific side effect and
+  ///      should not trail into other lists.
+  /// All other transitions leave person tags untouched, so pre-existing
+  /// associations from sync/import survive.
+  ///
+  /// All writes run inside a single transaction so a failure leaves the row
+  /// in its prior state.
+  Future<void> applyRouting(
+    String todoId, {
+    required RoutingKind to,
+    RoutingKind? from,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    String? userId,
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final tsIso = ts.toIso8601String();
+    await transaction(() async {
+      final companion = switch (to) {
+        RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
+            clarified: const Value(true),
+            intent: const Value('next'),
+            doneAt: const Value(null),
+            nextActionText: nextActionText != null
+                ? Value(_normaliseText(nextActionText))
+                : const Value.absent(),
+            lastClarifiedAt: Value(ts),
+            updatedAt: Value(ts),
+          ),
+        RoutingKind.maybe => TodosCompanion(
+            clarified: const Value(true),
+            intent: const Value('maybe'),
+            doneAt: const Value(null),
+            lastClarifiedAt: Value(ts),
+            updatedAt: Value(ts),
+          ),
+        RoutingKind.done => TodosCompanion(
+            clarified: const Value(true),
+            doneAt: Value(tsIso),
+            lastClarifiedAt: Value(ts),
+            updatedAt: Value(ts),
+          ),
+        RoutingKind.trash => TodosCompanion(
+            clarified: const Value(true),
+            intent: const Value('trash'),
+            doneAt: const Value(null),
+            lastClarifiedAt: Value(ts),
+            updatedAt: Value(ts),
+          ),
+      };
+      await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
+
+      if (personTagIds != null) {
+        if (userId == null) {
+          throw ArgumentError(
+            'userId is required when personTagIds is provided',
+          );
+        }
+        await setPersonTagsForTodo(todoId, personTagIds, userId);
+      } else if (from == RoutingKind.waitingFor && to != RoutingKind.waitingFor) {
+        if (userId == null) {
+          throw ArgumentError(
+            'userId is required to clear person tags on waitingFor → other transitions',
+          );
+        }
+        await setPersonTagsForTodo(todoId, const <String>{}, userId);
+      }
+    });
+  }
+
+  static String? _normaliseText(String text) {
+    final trimmed = text.trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 
   /// Update mutable todo fields (title, notes, energy level, time estimate, due date).

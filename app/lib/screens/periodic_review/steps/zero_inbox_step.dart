@@ -6,7 +6,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../models/todo.dart' as todo_model show Intent;
+import '../../../models/todo.dart' show RoutingKind;
 import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/inbox_clarify_card.dart';
@@ -53,23 +53,18 @@ class ZeroInboxStep extends ConsumerWidget {
       onRoute: (kind) async {
         final db = ref.read(databaseProvider);
         final notifier = ref.read(periodicReviewProvider.notifier);
-        switch (kind) {
-          case InboxClarifyKind.nextAction:
-          case InboxClarifyKind.waitingFor:
-            await db.inboxDao.processInboxItem(id);
-            final todo = await db.todoDao.getTodo(id);
-            if (todo != null) {
-              await db.todoDao.setNextActionText(id, todo.title);
-            }
-          case InboxClarifyKind.maybe:
-            await db.inboxDao
-                .processInboxItem(id, intent: todo_model.Intent.maybe.value);
-          case InboxClarifyKind.done:
-            await db.todoDao.markDone(id);
-          case InboxClarifyKind.trash:
-            await db.inboxDao
-                .processInboxItem(id, intent: todo_model.Intent.trash.value);
-        }
+        // Pull the latest title so the persisted next_action_text reflects
+        // any in-card autosave that just landed.
+        final todo = await db.todoDao.getTodo(id);
+        final title = todo?.title;
+        await db.todoDao.applyRouting(
+          id,
+          to: kind,
+          nextActionText:
+              kind == RoutingKind.nextAction || kind == RoutingKind.waitingFor
+                  ? title
+                  : null,
+        );
         notifier.advanceInbox();
       },
     );
