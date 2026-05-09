@@ -465,7 +465,7 @@ There is no dedicated brain-dump step in the wizard: capture happens through the
 
 ### Settings (`providers/periodic_review_settings_provider.dart`)
 
-Durable state lives entirely in `user_preferences` under the `periodic_review_*` keys; no new tables. Cross-device LWW + tombstone semantics from `syncedPreferencesProvider` ensure all devices suppress the banner on their next sync after completion.
+Durable state lives in `user_preferences` under the `periodic_review_*` keys; no new tables. Cross-device LWW + tombstone semantics from `syncedPreferencesProvider` ensure all devices suppress the banner on their next sync after completion. Notification skip/snooze additionally dual-write to `SharedPreferences` for cold-start reads before Riverpod loads — same pattern as the focus-session planning ceremony — so a notification suppression survives a restart even before the synced-prefs stream re-emits. The dual-write happens inside `persistPeriodicReviewSkipToday` / `persistPeriodicReviewSnoozedUntil`; `loadPeriodicReviewNotificationSuppression` reads the SharedPreferences side at startup.
 
 | Key | Type | Purpose |
 |---|---|---|
@@ -476,6 +476,8 @@ Durable state lives entirely in `user_preferences` under the `periodic_review_*`
 | `periodic_review_notification_enabled` | `bool` (default `true`) | Notification toggle |
 | `periodic_review_notification_hour` | `int` (default `9`) | Reminder hour |
 | `periodic_review_notification_minute` | `int` (default `0`) | Reminder minute |
+| `periodic_review_notification_skipped_date` | `yyyy-MM-dd` | Suppresses today's reminder (dual-written to SharedPreferences) |
+| `periodic_review_notification_snoozed_until` | ISO-8601 datetime | One-off snooze fire time (dual-written to SharedPreferences) |
 
 Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissedTodayProvider`, `periodicReviewBannerEnabledProvider`, `periodicReviewLastObjectivesProvider`, `periodicReviewLastCompletedProvider`.
 
