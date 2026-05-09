@@ -116,18 +116,9 @@ void main() {
       expect(nav.length, equals(2));
     });
 
-    test('setObjectives accepts any list', () {
-      container
-          .read(periodicReviewProvider.notifier)
-          .setObjectives(['Plan', 'Ship', 'Touch grass']);
-      expect(container.read(periodicReviewProvider).objectives.length, 3);
-    });
-
-    test('completeReview persists objectives JSON and flips isComplete',
-        () async {
+    test('completeReview persists timestamp and flips isComplete', () async {
       await container.read(syncedPreferencesProvider.future);
       final notifier = container.read(periodicReviewProvider.notifier);
-      notifier.setObjectives(['  Plan  ', '', 'Ship']);
 
       await notifier.completeReview();
       // Allow the syncedPreferences listener (which re-derives settings) to run.
@@ -135,10 +126,6 @@ void main() {
 
       final state = container.read(periodicReviewProvider);
       expect(state.isComplete, isTrue);
-
-      final objectives =
-          container.read(periodicReviewLastObjectivesProvider);
-      expect(objectives, equals(['Plan', 'Ship']));
 
       final last =
           container.read(periodicReviewLastCompletedProvider);

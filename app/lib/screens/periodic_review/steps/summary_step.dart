@@ -1,5 +1,5 @@
-/// Step 6 of the Weekly Review wizard: confirmation screen with stats and a
-/// single Done button. Tapping Done persists the completion timestamp and
+/// Final step of the Weekly Review wizard: confirmation screen with stats and
+/// a single Done button. Tapping Done persists the completion timestamp and
 /// returns the user to /inbox.
 library;
 
@@ -45,10 +45,6 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
     final waitingReviewed = state.waitingForNav.length;
     final projectsReviewed = state.projectsNav.length;
     final somedayReviewed = state.somedayNav.length;
-    final objectives = state.objectives
-        .map((o) => o.trim())
-        .where((o) => o.isNotEmpty)
-        .toList();
 
     return ListView(
       physics: const ClampingScrollPhysics(),
@@ -93,40 +89,6 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
             ],
           ),
         ),
-        if (objectives.isNotEmpty) ...[
-          const SizedBox(height: 24),
-          const Text(
-            'Your objectives this week',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.0,
-              color: Color(0xFF6B7280),
-            ),
-          ),
-          const SizedBox(height: 8),
-          for (final o in objectives)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 7, right: 8),
-                    child: Icon(Icons.fiber_manual_record,
-                        size: 8, color: Color(0xFF059669)),
-                  ),
-                  Expanded(
-                    child: Text(
-                      o,
-                      style: const TextStyle(
-                          fontSize: 15, color: Color(0xFF1A1A2E)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
         const SizedBox(height: 32),
         if (_completeError != null) ...[
           Container(

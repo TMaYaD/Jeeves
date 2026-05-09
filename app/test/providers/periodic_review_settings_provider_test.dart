@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -120,32 +118,6 @@ void main() {
       expect(c.read(periodicReviewBannerEnabledProvider), isTrue);
     });
 
-    test('lastObjectives decodes the stored JSON list', () async {
-      final c = _container();
-      addTearDown(c.dispose);
-
-      await c.read(syncedPreferencesProvider.future);
-      await c
-          .read(syncedPreferencesProvider.notifier)
-          .set('periodic_review_objectives', jsonEncode(['Ship #54', 'Touch grass']));
-
-      expect(
-        c.read(periodicReviewLastObjectivesProvider),
-        equals(['Ship #54', 'Touch grass']),
-      );
-    });
-
-    test('lastObjectives returns empty list for malformed JSON', () async {
-      final c = _container();
-      addTearDown(c.dispose);
-
-      await c.read(syncedPreferencesProvider.future);
-      await c
-          .read(syncedPreferencesProvider.notifier)
-          .set('periodic_review_objectives', 'not-valid-json');
-
-      expect(c.read(periodicReviewLastObjectivesProvider), isEmpty);
-    });
   });
 
   group('PeriodicReviewSettingsNotifier', () {
@@ -202,20 +174,5 @@ void main() {
       expect(settings.notificationTime.minute, equals(30));
     });
 
-    test('setObjectives JSON-encodes the list under periodic_review_objectives',
-        () async {
-      final c = _container();
-      addTearDown(c.dispose);
-
-      await c.read(syncedPreferencesProvider.future);
-      await c
-          .read(periodicReviewSettingsProvider.notifier)
-          .setObjectives(['Plan Q3', 'Inbox zero']);
-
-      expect(
-        c.read(periodicReviewLastObjectivesProvider),
-        equals(['Plan Q3', 'Inbox zero']),
-      );
-    });
   });
 }

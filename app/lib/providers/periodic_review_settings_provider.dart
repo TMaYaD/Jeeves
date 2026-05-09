@@ -7,8 +7,6 @@
 /// predicate gates relevance.
 library;
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,7 +16,6 @@ import 'focus_session_planning_provider.dart' show planningToday;
 import 'synced_preferences_provider.dart';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
-const _kObjectivesKey = 'periodic_review_objectives';
 const _kBannerDismissedDateKey = 'periodic_review_banner_dismissed_date';
 const _kBannerEnabledKey = 'periodic_review_banner_enabled';
 const _kNotificationEnabledKey = 'periodic_review_notification_enabled';
@@ -141,25 +138,6 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
       true;
 });
 
-/// Last set of objectives, used to pre-populate Step 5 of the wizard.
-final periodicReviewLastObjectivesProvider = Provider<List<String>>((ref) {
-  final raw = ref
-      .watch(syncedPreferencesProvider)
-      .asData
-      ?.value
-      .get<String>(_kObjectivesKey);
-  if (raw == null) return const [];
-  try {
-    final decoded = jsonDecode(raw);
-    if (decoded is List) {
-      return decoded.whereType<String>().toList();
-    }
-  } catch (_) {
-    // Stored value is malformed — surface as no prior objectives.
-  }
-  return const [];
-});
-
 // ---------------------------------------------------------------------------
 // Settings notifier
 // ---------------------------------------------------------------------------
@@ -243,17 +221,6 @@ class PeriodicReviewSettingsNotifier
     );
   }
 
-  /// Atomically persists [objectives] alongside the completion timestamp so
-  /// the wizard cannot leave the user in a state where their goals were
-  /// captured but the cadence wasn't reset (which would re-prompt the user
-  /// and overwrite the half-saved objectives on the next pass).
-  Future<void> completeReviewWith(List<String> objectives) async {
-    await syncedPrefs(ref).setMany({
-      _kObjectivesKey: jsonEncode(objectives),
-      _kLastCompletedAtKey: DateTime.now().toUtc().toIso8601String(),
-    });
-  }
-
   Future<void> dismissBannerForToday() async {
     await syncedPrefs(ref).set(_kBannerDismissedDateKey, _todayDateString());
   }
@@ -269,10 +236,6 @@ class PeriodicReviewSettingsNotifier
   Future<void> setNotificationTime(TimeOfDay time) async {
     await syncedPrefs(ref).set(_kNotificationHourKey, time.hour);
     await syncedPrefs(ref).set(_kNotificationMinuteKey, time.minute);
-  }
-
-  Future<void> setObjectives(List<String> objectives) async {
-    await syncedPrefs(ref).set(_kObjectivesKey, jsonEncode(objectives));
   }
 
   Future<void> _rescheduleNotification() async {

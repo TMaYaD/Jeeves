@@ -6,8 +6,8 @@
 /// navigation.
 ///
 /// Durable state (last-completed timestamp, banner toggle, notification
-/// settings, last objectives) lives on [periodicReviewSettingsProvider] which
-/// is a thin wrapper over [SyncedPreferencesNotifier].
+/// settings) lives on [periodicReviewSettingsProvider] which is a thin wrapper
+/// over [SyncedPreferencesNotifier].
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,7 +33,6 @@ class PeriodicReviewState {
     this.waitingForRoutings = const {},
     this.projectsRoutings = const {},
     this.somedayRoutings = const {},
-    this.objectives = const [],
     this.isComplete = false,
     this.inboxLoadError,
     this.waitingForLoadError,
@@ -62,8 +61,6 @@ class PeriodicReviewState {
   final Map<int, RoutingKind> projectsRoutings;
   final Map<int, RoutingKind> somedayRoutings;
 
-  final List<String> objectives;
-
   final bool isComplete;
 
   /// Non-null when the matching snapshot load failed; rendered inline by the
@@ -84,7 +81,6 @@ class PeriodicReviewState {
     Map<int, RoutingKind>? waitingForRoutings,
     Map<int, RoutingKind>? projectsRoutings,
     Map<int, RoutingKind>? somedayRoutings,
-    List<String>? objectives,
     bool? isComplete,
     String? inboxLoadError,
     bool clearInboxLoadError = false,
@@ -107,7 +103,6 @@ class PeriodicReviewState {
         waitingForRoutings: waitingForRoutings ?? this.waitingForRoutings,
         projectsRoutings: projectsRoutings ?? this.projectsRoutings,
         somedayRoutings: somedayRoutings ?? this.somedayRoutings,
-        objectives: objectives ?? this.objectives,
         isComplete: isComplete ?? this.isComplete,
         inboxLoadError: clearInboxLoadError
             ? null
@@ -136,8 +131,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   static const int kStepWaitingFor = 1;
   static const int kStepProjects = 2;
   static const int kStepSomeMaybe = 3;
-  static const int kStepObjectives = 4;
-  static const int kStepSummary = 5;
+  static const int kStepSummary = 4;
 
   static const int _kMaxStep = kStepSummary;
 
@@ -367,41 +361,19 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
             state.somedayNav.isEmpty) {
           await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
         }
-      case kStepObjectives:
-        if (state.objectives.isEmpty) {
-          final last = ref.read(periodicReviewLastObjectivesProvider);
-          if (last.isNotEmpty) {
-            state = state.copyWith(objectives: last);
-          }
-        }
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Objectives
-  // ---------------------------------------------------------------------------
-
-  void setObjectives(List<String> objectives) =>
-      state = state.copyWith(objectives: objectives);
 
   // ---------------------------------------------------------------------------
   // Completion
   // ---------------------------------------------------------------------------
 
-  /// Persists objectives + completion timestamp via the settings notifier and
-  /// flips [PeriodicReviewState.isComplete]. Caller is responsible for
-  /// navigating away after this resolves.
-  ///
-  /// Uses a single batched write so a partial failure cannot leave the user
-  /// with persisted objectives but no completion timestamp — which would
-  /// re-prompt the wizard and overwrite the half-saved objectives.
+  /// Persists the completion timestamp via the settings notifier and flips
+  /// [PeriodicReviewState.isComplete]. Caller is responsible for navigating
+  /// away after this resolves.
   Future<void> completeReview() async {
-    final cleaned = state.objectives
-        .map((o) => o.trim())
-        .where((o) => o.isNotEmpty)
-        .toList();
     final settings = ref.read(periodicReviewSettingsProvider.notifier);
-    await settings.completeReviewWith(cleaned);
+    await settings.completeReview();
     state = state.copyWith(isComplete: true);
   }
 }

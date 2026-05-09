@@ -2,9 +2,9 @@
 ///
 /// Drives the wizard through every step via [PeriodicReviewNotifier] /
 /// [PeriodicReviewSettingsNotifier], asserts on the durable side-effects
-/// (completion timestamp, banner suppression, persisted objectives), and
-/// verifies the secondary scenarios listed in the issue plan (banner hidden
-/// within cadence; banner hidden after dismissal).
+/// (completion timestamp, banner suppression), and verifies the secondary
+/// scenarios listed in the issue plan (banner hidden within cadence; banner
+/// hidden after dismissal).
 library;
 
 import 'package:drift/drift.dart' hide isNotNull, isNull;
@@ -92,13 +92,11 @@ void main() {
       // the "Inbox is clear" terminal state. The next advanceStep crosses
       // out of Inbox; Waiting For, Projects, and Someday/Maybe all auto-skip
       // on entry because no fixtures populate them, so the wizard lands on
-      // Objectives in a single hop.
+      // the Summary in a single hop.
       notifier.advanceInbox();
       await notifier.advanceStep();
       expect(c.read(periodicReviewProvider).currentStep,
-          equals(PeriodicReviewNotifier.kStepObjectives));
-      notifier.setObjectives(['Ship the wizard']);
-      await notifier.advanceStep(); // → Summary
+          equals(PeriodicReviewNotifier.kStepSummary));
 
       // 3. Tap "Done" → completeReview.
       await notifier.completeReview();
@@ -107,12 +105,6 @@ void main() {
       final last = c.read(periodicReviewLastCompletedProvider);
       expect(last, isNotNull);
       expect(c.read(periodicReviewIsDueProvider), isFalse);
-
-      // 5. Objectives are now in synced prefs for next week's pre-population.
-      expect(
-        c.read(periodicReviewLastObjectivesProvider),
-        equals(['Ship the wizard']),
-      );
 
       expect(c.read(periodicReviewProvider).isComplete, isTrue);
     });

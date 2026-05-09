@@ -1,5 +1,8 @@
 # Notes
 
+## 2026-05-09
+- Dropped the Objectives step from the Weekly Review wizard. Daily planning has no real estate to surface them, so the captured-but-never-shown loop violated the outcome-over-action tenet. Wizard is now 5 screens (4 review steps + summary). No DB migrations existed — the value lived in the generic `user_preferences` synced-prefs key/value store under `periodic_review_objectives`. Stale entries on existing devices are orphaned but harmless (no reader).
+
 ## 2026-05-08 (issue #54 — code review fixes)
 - `kPeriodicReviewActionSkip` was wired to `cancelPeriodicReviewReminder()`, which cancels both recurring + snooze. That meant "Skip today" silently disabled tomorrow's reminder too. Added `skipTodayPeriodicReviewReminder()` that only cancels the snooze id, and updated `main.dart` to call it. Mirrors the existing shutdown handler pattern.
 - `getNextActionsWithProjectTags` filtered with `intent != 'maybe'` which still surfaced `intent = 'trash'` rows. Tightened to `intent = 'next'`.

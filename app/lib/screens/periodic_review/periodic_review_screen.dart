@@ -1,9 +1,9 @@
 /// Weekly Review wizard — outer container screen (Issue #54).
 ///
-/// Renders a non-swipeable [PageView] with six children: four list-driven
-/// review steps (Inbox, Waiting For, Projects, Someday/Maybe), an objectives
-/// step, and a final summary. There is no separate brain-dump step — capture
-/// happens through the inbox throughout the week, not as a wizard ceremony.
+/// Renders a non-swipeable [PageView] with five children: four list-driven
+/// review steps (Inbox, Waiting For, Projects, Someday/Maybe) and a final
+/// summary. There is no separate brain-dump step — capture happens through
+/// the inbox throughout the week, not as a wizard ceremony.
 ///
 /// Step transitions go through [PeriodicReviewNotifier.advanceStep] /
 /// [goToStep], which in turn drives per-step snapshot loading. The footer's
@@ -16,7 +16,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/periodic_review_provider.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
-import 'steps/objectives_step.dart';
 import 'steps/projects_step.dart';
 import 'steps/someday_maybe_step.dart';
 import 'steps/summary_step.dart';
@@ -40,13 +39,12 @@ class _PeriodicReviewScreenState
     'Review Waiting For',
     'Review Next Actions',
     'Review Someday/Maybe',
-    'Set Objectives',
     'Review Complete',
   ];
 
-  // Six positions in the wizard, but the progress bar reflects only the five
+  // Five positions in the wizard, but the progress bar reflects only the four
   // user-driven steps before the summary screen.
-  static const int _kProgressSteps = 5;
+  static const int _kProgressSteps = 4;
 
   @override
   void initState() {
@@ -113,17 +111,14 @@ class _PeriodicReviewScreenState
                   WaitingForStep(),
                   ProjectsStep(),
                   SomedayMaybeStep(),
-                  ObjectivesStep(),
                   SummaryStep(),
                 ],
               ),
             ),
             if (step != PeriodicReviewNotifier.kStepSummary)
               _PeriodicReviewFooter(
-                step: step,
                 onBack: _backHandler(step, state, notifier),
                 onNext: _nextHandler(step, state, notifier),
-                isFinish: step == PeriodicReviewNotifier.kStepObjectives,
               ),
           ],
         ),
@@ -189,11 +184,6 @@ class _PeriodicReviewScreenState
         return _hasMoreItems(state.somedayNav)
             ? notifier.advanceSomeday
             : notifier.advanceStep;
-      case PeriodicReviewNotifier.kStepObjectives:
-        // Finish requires at least one non-empty objective.
-        final hasAny = state.objectives.any((o) => o.trim().isNotEmpty);
-        if (!hasAny) return null;
-        return notifier.advanceStep;
       default:
         return notifier.advanceStep;
     }
@@ -242,8 +232,6 @@ class _PeriodicReviewHeader extends StatelessWidget {
         final nav = state.somedayNav;
         if (!nav.isLoaded || nav.isEmpty) return 0.0;
         return (nav.index / nav.length).clamp(0.0, 1.0);
-      case PeriodicReviewNotifier.kStepObjectives:
-        return state.objectives.any((o) => o.trim().isNotEmpty) ? 1.0 : 0.0;
       default:
         return 0.0;
     }
@@ -413,16 +401,12 @@ class _SegmentedProgressBar extends StatelessWidget {
 
 class _PeriodicReviewFooter extends StatelessWidget {
   const _PeriodicReviewFooter({
-    required this.step,
     required this.onBack,
     required this.onNext,
-    required this.isFinish,
   });
 
-  final int step;
   final VoidCallback? onBack;
   final VoidCallback? onNext;
-  final bool isFinish;
 
   @override
   Widget build(BuildContext context) {
@@ -449,7 +433,7 @@ class _PeriodicReviewFooter extends StatelessWidget {
               disabledBackgroundColor: const Color(0xFFD1D5DB),
               padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
             ),
-            child: Text(isFinish ? 'Finish' : 'Next'),
+            child: const Text('Next'),
           ),
         ],
       ),

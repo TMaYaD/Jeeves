@@ -442,7 +442,7 @@ A `NotifierProvider<EveningShutdownNotifier, EveningShutdownState>` that drives 
 
 ## Weekly Review Wizard
 
-A 6-screen ceremony surfaced when the cadence has elapsed (`now − periodic_review_last_completed_at >= 7 days`, or never completed). Internally namespaced `periodic_review`; user-visible copy reads "Weekly Review". The cadence is hardcoded at 7 days.
+A 5-screen ceremony surfaced when the cadence has elapsed (`now − periodic_review_last_completed_at >= 7 days`, or never completed). Internally namespaced `periodic_review`; user-visible copy reads "Weekly Review". The cadence is hardcoded at 7 days.
 
 There is no dedicated brain-dump step in the wizard: capture happens through the inbox (share-sheet, voice, manual entry) throughout the week, so the review only needs to *clarify* the inbox, not re-elicit it.
 
@@ -451,17 +451,16 @@ There is no dedicated brain-dump step in the wizard: capture happens through the
 `PeriodicReviewNotifier` is a `NotifierProvider<PeriodicReviewNotifier, PeriodicReviewState>` whose state is transient — discarded on completion or when the screen is left.
 
 **State fields** (each list-driven step uses the shared `SnapshotNav<T>` primitive from `utils/snapshot_nav.dart`):
-- `currentStep: int` — 0..5.
+- `currentStep: int` — 0..4.
 - `inboxNav: SnapshotNav<String>` — todo IDs from the inbox.
 - `waitingForNav: SnapshotNav<Todo>` — person-tagged next actions.
 - `projectsNav: SnapshotNav<Todo>` — next actions carrying any project tag.
 - `somedayNav: SnapshotNav<Todo>` — `intent = 'maybe'` tasks.
-- `objectives: List<String>` — pending objectives buffer.
 - `isComplete: bool` — flipped by `completeReview()`.
 
 **Snapshot loaders** are called by `_onStepEnter` each time a step is entered. Every list-driven step (Inbox, Waiting For, Projects, Someday/Maybe) auto-skips on entry when its snapshot loads empty — there is nothing to reflect on if the list has no items, so the wizard advances straight to the next step.
 
-**`completeReview()`** writes the completion timestamp and the cleaned objectives list to synced preferences via `PeriodicReviewSettingsNotifier`, then flips `isComplete`.
+**`completeReview()`** writes the completion timestamp to synced preferences via `PeriodicReviewSettingsNotifier`, then flips `isComplete`.
 
 ### Settings (`providers/periodic_review_settings_provider.dart`)
 
@@ -470,7 +469,6 @@ Durable state lives in `user_preferences` under the `periodic_review_*` keys; no
 | Key | Type | Purpose |
 |---|---|---|
 | `periodic_review_last_completed_at` | ISO-8601 datetime | Drives `isDue` |
-| `periodic_review_objectives` | JSON list of strings | Pre-populates Step 5 |
 | `periodic_review_banner_dismissed_date` | `yyyy-MM-dd` | Suppresses banner today |
 | `periodic_review_banner_enabled` | `bool` (default `true`) | Banner toggle |
 | `periodic_review_notification_enabled` | `bool` (default `true`) | Notification toggle |
@@ -479,11 +477,11 @@ Durable state lives in `user_preferences` under the `periodic_review_*` keys; no
 | `periodic_review_notification_skipped_date` | `yyyy-MM-dd` | Suppresses today's reminder (dual-written to SharedPreferences) |
 | `periodic_review_notification_snoozed_until` | ISO-8601 datetime | One-off snooze fire time (dual-written to SharedPreferences) |
 
-Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissedTodayProvider`, `periodicReviewBannerEnabledProvider`, `periodicReviewLastObjectivesProvider`, `periodicReviewLastCompletedProvider`.
+Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissedTodayProvider`, `periodicReviewBannerEnabledProvider`, `periodicReviewLastCompletedProvider`.
 
 ### UI
 
-- `screens/periodic_review/periodic_review_screen.dart` — non-swipeable `PageView` of six step pages. Step transitions go through `advanceStep` / `goToStep`, which fire the entry hook for snapshot loading.
+- `screens/periodic_review/periodic_review_screen.dart` — non-swipeable `PageView` of five step pages. Step transitions go through `advanceStep` / `goToStep`, which fire the entry hook for snapshot loading.
 - Footer Back / Next drive the per-step item cursor first: on a list-driven step, Next advances `inboxNav` / `waitingForNav` / `projectsNav` / `somedayNav` while items remain, and only crosses into the next step once the cursor has nothing more to consume (`!canGoForward`); Back symmetrically retreats the cursor before crossing back.
 - Per-item steps (Waiting For, Projects, Someday/Maybe) share `_review_card.dart` (`ReviewItemCard`, `ReviewAction`, `ReviewEmptyState`).
 - Step 0 (Process Inbox) reuses the shared `widgets/inbox_clarify_card.dart` from the daily-planning ritual.
@@ -632,7 +630,7 @@ Code names planning and review steps **session-relative** (`focus_session_planni
 | `evening_shutdown` | "Evening Shutdown" |
 | `periodic_review` | "Weekly Review" |
 
-The `periodic_review` namespace covers route (`/periodic-review`), provider class names, all `user_preferences` keys (`periodic_review_last_completed_at`, `periodic_review_objectives`, `periodic_review_banner_*`, `periodic_review_notification_*`), and notification action identifiers. No `weekly_review` identifier exists in code; no `periodic_review` string appears in user-visible text. The cadence is hardcoded at 7 days.
+The `periodic_review` namespace covers route (`/periodic-review`), provider class names, all `user_preferences` keys (`periodic_review_last_completed_at`, `periodic_review_banner_*`, `periodic_review_notification_*`), and notification action identifiers. No `weekly_review` identifier exists in code; no `periodic_review` string appears in user-visible text. The cadence is hardcoded at 7 days.
 
 ## Navigation & Global Filter State
 
