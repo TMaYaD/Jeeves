@@ -116,20 +116,30 @@ void main() {
       expect(nav.length, equals(2));
     });
 
-    test('completeReview persists timestamp and flips isComplete', () async {
+    test('completeReview persists timestamp and resets in-session state',
+        () async {
+      await _insertInbox(db, 'a');
       await container.read(syncedPreferencesProvider.future);
       final notifier = container.read(periodicReviewProvider.notifier);
+
+      // Walk the wizard far enough to populate state, then complete.
+      await notifier.loadInboxSnapshot();
+      notifier.advanceInbox();
+      await notifier.goToStep(PeriodicReviewNotifier.kStepSummary);
 
       await notifier.completeReview();
       // Allow the syncedPreferences listener (which re-derives settings) to run.
       await Future<void>.delayed(Duration.zero);
 
-      final state = container.read(periodicReviewProvider);
-      expect(state.isComplete, isTrue);
-
       final last =
           container.read(periodicReviewLastCompletedProvider);
       expect(last, isNotNull);
+
+      // State must be back to its initial form so the next ceremony does not
+      // resume the previous one.
+      final state = container.read(periodicReviewProvider);
+      expect(state.currentStep, equals(0));
+      expect(state.inboxNav.isLoaded, isFalse);
     });
 
     test('per-step nav advance/previous mutate the matching nav only', () async {

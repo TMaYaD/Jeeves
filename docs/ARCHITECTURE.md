@@ -448,7 +448,7 @@ There is no dedicated brain-dump step in the wizard: capture happens through the
 
 ### State (`providers/periodic_review_provider.dart`)
 
-`PeriodicReviewNotifier` is a `NotifierProvider<PeriodicReviewNotifier, PeriodicReviewState>` whose state is transient — discarded on completion or when the screen is left.
+`PeriodicReviewNotifier` is a `NotifierProvider<PeriodicReviewNotifier, PeriodicReviewState>` whose state is transient — wiped by `completeReview()`. The provider is not auto-disposed, so navigating away mid-ceremony and back resumes the same wizard; only finishing the review clears the in-session snapshots and cursors.
 
 **State fields** (each list-driven step uses the shared `SnapshotNav<T>` primitive from `utils/snapshot_nav.dart`):
 - `currentStep: int` — 0..4.
@@ -456,11 +456,10 @@ There is no dedicated brain-dump step in the wizard: capture happens through the
 - `waitingForNav: SnapshotNav<Todo>` — person-tagged next actions.
 - `projectsNav: SnapshotNav<Todo>` — next actions carrying any project tag.
 - `somedayNav: SnapshotNav<Todo>` — `intent = 'maybe'` tasks.
-- `isComplete: bool` — flipped by `completeReview()`.
 
 **Snapshot loaders** are called by `_onStepEnter` each time a step is entered. Every list-driven step (Inbox, Waiting For, Projects, Someday/Maybe) auto-skips on entry when its snapshot loads empty — there is nothing to reflect on if the list has no items, so the wizard advances straight to the next step.
 
-**`completeReview()`** writes the completion timestamp to synced preferences via `PeriodicReviewSettingsNotifier`, then flips `isComplete`.
+**`completeReview()`** writes the completion timestamp to synced preferences via `PeriodicReviewSettingsNotifier`, then resets the in-session state to its initial form so the next entry starts on a clean Step 0.
 
 ### Settings (`providers/periodic_review_settings_provider.dart`)
 

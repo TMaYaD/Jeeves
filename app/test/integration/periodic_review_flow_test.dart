@@ -106,7 +106,10 @@ void main() {
       expect(last, isNotNull);
       expect(c.read(periodicReviewIsDueProvider), isFalse);
 
-      expect(c.read(periodicReviewProvider).isComplete, isTrue);
+      // 5. State has been reset so re-entering the wizard starts fresh.
+      final post = c.read(periodicReviewProvider);
+      expect(post.currentStep, equals(0));
+      expect(post.inboxNav.isLoaded, isFalse);
     });
 
     test('banner hidden when completed within 7 days', () async {

@@ -1,6 +1,8 @@
 /// Wizard state for the Weekly Review ceremony (issue #54).
 ///
-/// State is transient — discarded on completion or when the screen is left.
+/// State is transient — discarded by [completeReview]. The provider is not
+/// auto-disposed so a user can navigate away mid-ceremony and resume; only
+/// finishing the wizard wipes the in-session snapshots and cursors.
 /// Per-step list iteration is delegated to [SnapshotNav<T>]; per-step
 /// snapshots are loaded once on step entry and never re-subscribed during
 /// navigation.
@@ -33,7 +35,6 @@ class PeriodicReviewState {
     this.waitingForRoutings = const {},
     this.projectsRoutings = const {},
     this.somedayRoutings = const {},
-    this.isComplete = false,
     this.inboxLoadError,
     this.waitingForLoadError,
     this.projectsLoadError,
@@ -61,8 +62,6 @@ class PeriodicReviewState {
   final Map<int, RoutingKind> projectsRoutings;
   final Map<int, RoutingKind> somedayRoutings;
 
-  final bool isComplete;
-
   /// Non-null when the matching snapshot load failed; rendered inline by the
   /// step (no toasts in the wizard) with a Retry affordance.
   final String? inboxLoadError;
@@ -81,7 +80,6 @@ class PeriodicReviewState {
     Map<int, RoutingKind>? waitingForRoutings,
     Map<int, RoutingKind>? projectsRoutings,
     Map<int, RoutingKind>? somedayRoutings,
-    bool? isComplete,
     String? inboxLoadError,
     bool clearInboxLoadError = false,
     String? waitingForLoadError,
@@ -103,7 +101,6 @@ class PeriodicReviewState {
         waitingForRoutings: waitingForRoutings ?? this.waitingForRoutings,
         projectsRoutings: projectsRoutings ?? this.projectsRoutings,
         somedayRoutings: somedayRoutings ?? this.somedayRoutings,
-        isComplete: isComplete ?? this.isComplete,
         inboxLoadError: clearInboxLoadError
             ? null
             : (inboxLoadError ?? this.inboxLoadError),
@@ -368,13 +365,19 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   // Completion
   // ---------------------------------------------------------------------------
 
-  /// Persists the completion timestamp via the settings notifier and flips
-  /// [PeriodicReviewState.isComplete]. Caller is responsible for navigating
-  /// away after this resolves.
+  /// Persists the completion timestamp via the settings notifier and discards
+  /// the in-session snapshots, cursors, and routing history so the next entry
+  /// starts on a clean Step 0. The provider is not [AutoDisposeNotifier];
+  /// without this, re-entering the screen would resume a finished ceremony
+  /// with stale snapshots. Caller is responsible for navigating away.
   Future<void> completeReview() async {
     final settings = ref.read(periodicReviewSettingsProvider.notifier);
     await settings.completeReview();
-    state = state.copyWith(isComplete: true);
+    _loadingInboxSnapshot = false;
+    _loadingWaitingForSnapshot = false;
+    _loadingProjectsSnapshot = false;
+    _loadingSomedaySnapshot = false;
+    state = const PeriodicReviewState();
   }
 }
 
