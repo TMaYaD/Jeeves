@@ -6,7 +6,6 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../models/todo.dart' show RoutingKind;
 import '../../../providers/auth_provider.dart';
 import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
@@ -21,6 +20,8 @@ class WaitingForStep extends ConsumerWidget {
         ref.watch(periodicReviewProvider.select((s) => s.waitingForNav));
     final loadError = ref.watch(
         periodicReviewProvider.select((s) => s.waitingForLoadError));
+    final routings = ref.watch(
+        periodicReviewProvider.select((s) => s.waitingForRoutings));
 
     if (loadError != null) {
       return ReviewLoadError(
@@ -44,15 +45,28 @@ class WaitingForStep extends ConsumerWidget {
       );
     }
 
+    final index = nav.index;
     final todo = nav.current!;
     final db = ref.read(databaseProvider);
     final notifier = ref.read(periodicReviewProvider.notifier);
     final userId = ref.read(currentUserIdProvider);
 
+    Future<void> route(RoutingKind to) async {
+      await db.todoDao.applyRouting(
+        todo.id,
+        from: RoutingKind.waitingFor,
+        to: to,
+        userId: userId,
+      );
+      notifier.recordWaitingForRouting(index, to);
+      notifier.advanceWaitingFor();
+    }
+
     return ReviewItemCard(
       key: ValueKey(todo.id),
       todo: todo,
       headline: 'Still waiting on this?',
+      lastRouting: routings[index],
       actions: [
         ReviewAction(
           label: 'Keep waiting',
@@ -63,50 +77,36 @@ class WaitingForStep extends ConsumerWidget {
             notifier.advanceWaitingFor();
           },
         ),
-        // Route Done/Maybe/Discard through applyRouting so person-tag
-        // associations attached to the waitingFor item are cleared as a
-        // side-effect of leaving the kind — see TodoDao.applyRouting.
+        // Promoting out of waitingFor clears the person-tag association
+        // (handled inside applyRouting) so the item lands cleanly on the
+        // Next Actions list without a phantom delegate.
+        ReviewAction(
+          label: 'Promote to Next Action',
+          icon: Icons.arrow_upward,
+          color: const Color(0xFF2563EB),
+          routing: RoutingKind.nextAction,
+          onTap: () => route(RoutingKind.nextAction),
+        ),
         ReviewAction(
           label: 'Mark Done',
           icon: Icons.task_alt_outlined,
           color: const Color(0xFF16A34A),
-          onTap: () async {
-            await db.todoDao.applyRouting(
-              todo.id,
-              from: RoutingKind.waitingFor,
-              to: RoutingKind.done,
-              userId: userId,
-            );
-            notifier.advanceWaitingFor();
-          },
+          routing: RoutingKind.done,
+          onTap: () => route(RoutingKind.done),
         ),
         ReviewAction(
           label: 'Send to Maybe',
           icon: Icons.star_border,
           color: const Color(0xFF6B7280),
-          onTap: () async {
-            await db.todoDao.applyRouting(
-              todo.id,
-              from: RoutingKind.waitingFor,
-              to: RoutingKind.maybe,
-              userId: userId,
-            );
-            notifier.advanceWaitingFor();
-          },
+          routing: RoutingKind.maybe,
+          onTap: () => route(RoutingKind.maybe),
         ),
         ReviewAction(
           label: 'Discard',
           icon: Icons.delete_outline,
           color: const Color(0xFFDC2626),
-          onTap: () async {
-            await db.todoDao.applyRouting(
-              todo.id,
-              from: RoutingKind.waitingFor,
-              to: RoutingKind.trash,
-              userId: userId,
-            );
-            notifier.advanceWaitingFor();
-          },
+          routing: RoutingKind.trash,
+          onTap: () => route(RoutingKind.trash),
         ),
       ],
     );

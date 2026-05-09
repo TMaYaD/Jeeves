@@ -13,11 +13,13 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/todo.dart' show RoutingKind;
 import '../utils/snapshot_nav.dart';
 import 'database_provider.dart';
 import 'periodic_review_settings_provider.dart';
 
 export '../database/gtd_database.dart' show Todo;
+export '../models/todo.dart' show RoutingKind;
 
 class PeriodicReviewState {
   const PeriodicReviewState({
@@ -26,6 +28,10 @@ class PeriodicReviewState {
     this.waitingForNav = const SnapshotNav<Todo>(),
     this.projectsNav = const SnapshotNav<Todo>(),
     this.somedayNav = const SnapshotNav<Todo>(),
+    this.inboxRoutings = const {},
+    this.waitingForRoutings = const {},
+    this.projectsRoutings = const {},
+    this.somedayRoutings = const {},
     this.objectives = const [],
     this.isComplete = false,
     this.inboxLoadError,
@@ -41,6 +47,14 @@ class PeriodicReviewState {
   final SnapshotNav<Todo> waitingForNav;
   final SnapshotNav<Todo> projectsNav;
   final SnapshotNav<Todo> somedayNav;
+
+  /// In-session record of the last [RoutingKind] applied at each cursor index
+  /// for each list-driven step. Drives the "previously selected" affordance
+  /// when the user backs up to revisit an item.
+  final Map<int, RoutingKind> inboxRoutings;
+  final Map<int, RoutingKind> waitingForRoutings;
+  final Map<int, RoutingKind> projectsRoutings;
+  final Map<int, RoutingKind> somedayRoutings;
 
   final List<String> objectives;
 
@@ -59,6 +73,10 @@ class PeriodicReviewState {
     SnapshotNav<Todo>? waitingForNav,
     SnapshotNav<Todo>? projectsNav,
     SnapshotNav<Todo>? somedayNav,
+    Map<int, RoutingKind>? inboxRoutings,
+    Map<int, RoutingKind>? waitingForRoutings,
+    Map<int, RoutingKind>? projectsRoutings,
+    Map<int, RoutingKind>? somedayRoutings,
     List<String>? objectives,
     bool? isComplete,
     String? inboxLoadError,
@@ -76,6 +94,10 @@ class PeriodicReviewState {
         waitingForNav: waitingForNav ?? this.waitingForNav,
         projectsNav: projectsNav ?? this.projectsNav,
         somedayNav: somedayNav ?? this.somedayNav,
+        inboxRoutings: inboxRoutings ?? this.inboxRoutings,
+        waitingForRoutings: waitingForRoutings ?? this.waitingForRoutings,
+        projectsRoutings: projectsRoutings ?? this.projectsRoutings,
+        somedayRoutings: somedayRoutings ?? this.somedayRoutings,
         objectives: objectives ?? this.objectives,
         isComplete: isComplete ?? this.isComplete,
         inboxLoadError: clearInboxLoadError
@@ -192,6 +214,20 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     }
   }
 
+  /// Loads every list-driven step's snapshot up front. Called from the
+  /// wizard screen when it first mounts so an item routed in one step (e.g.
+  /// inbox → maybe) does not surface in a later step (Someday/Maybe) where
+  /// the user already decided what to do with it. Each loader is idempotent
+  /// so repeat calls are no-ops.
+  Future<void> loadAllSnapshots() async {
+    await Future.wait<void>([
+      loadInboxSnapshot(),
+      loadWaitingForSnapshot(),
+      loadProjectsSnapshot(),
+      loadSomedaySnapshot(),
+    ]);
+  }
+
   // ---------------------------------------------------------------------------
   // Per-item navigation
   // ---------------------------------------------------------------------------
@@ -226,6 +262,35 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   void previousSomeday() {
     if (!state.somedayNav.canGoBack) return;
     state = state.copyWith(somedayNav: state.somedayNav.previous());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Routing history — drives the "previously selected" affordance when the
+  // user backs up to an item they've already routed in this session.
+  // ---------------------------------------------------------------------------
+
+  void recordInboxRouting(int index, RoutingKind kind) {
+    state = state.copyWith(
+      inboxRoutings: {...state.inboxRoutings, index: kind},
+    );
+  }
+
+  void recordWaitingForRouting(int index, RoutingKind kind) {
+    state = state.copyWith(
+      waitingForRoutings: {...state.waitingForRoutings, index: kind},
+    );
+  }
+
+  void recordProjectsRouting(int index, RoutingKind kind) {
+    state = state.copyWith(
+      projectsRoutings: {...state.projectsRoutings, index: kind},
+    );
+  }
+
+  void recordSomedayRouting(int index, RoutingKind kind) {
+    state = state.copyWith(
+      somedayRoutings: {...state.somedayRoutings, index: kind},
+    );
   }
 
   // ---------------------------------------------------------------------------

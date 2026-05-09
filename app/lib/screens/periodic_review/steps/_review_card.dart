@@ -1,10 +1,11 @@
 /// Shared per-item card and action button widgets used by the Weekly Review
-/// wizard's list-driven steps (Waiting For, Projects, Someday/Maybe).
+/// wizard's list-driven steps (Waiting For, Next Actions, Someday/Maybe).
 library;
 
 import 'package:flutter/material.dart';
 
 import '../../../database/gtd_database.dart';
+import '../../../models/todo.dart' show RoutingKind;
 
 class ReviewAction {
   const ReviewAction({
@@ -12,12 +13,18 @@ class ReviewAction {
     required this.icon,
     required this.color,
     required this.onTap,
+    this.routing,
   });
 
   final String label;
   final IconData icon;
   final Color color;
   final Future<void> Function() onTap;
+
+  /// The [RoutingKind] this action commits the todo to, if any. Drives the
+  /// "previously selected" affordance when [ReviewItemCard.lastRouting]
+  /// matches. Stamping-only actions (e.g. "Keep waiting") leave it null.
+  final RoutingKind? routing;
 }
 
 class ReviewItemCard extends StatefulWidget {
@@ -26,11 +33,18 @@ class ReviewItemCard extends StatefulWidget {
     required this.todo,
     required this.headline,
     required this.actions,
+    this.lastRouting,
   });
 
   final Todo todo;
   final String headline;
   final List<ReviewAction> actions;
+
+  /// The last routing applied to this item in this wizard session, or null
+  /// if the user has not yet routed it (or the prior action was a no-op like
+  /// "Keep"). Drives the highlight on the matching destination button when
+  /// the user backs up to revisit the item.
+  final RoutingKind? lastRouting;
 
   @override
   State<ReviewItemCard> createState() => _ReviewItemCardState();
@@ -126,6 +140,8 @@ class _ReviewItemCardState extends State<ReviewItemCard> {
                   icon: widget.actions[i].icon,
                   color: widget.actions[i].color,
                   enabled: !_processing,
+                  isPreviouslySelected: widget.lastRouting != null &&
+                      widget.actions[i].routing == widget.lastRouting,
                   onTap: () => _run(widget.actions[i]),
                 ),
                 if (i < widget.actions.length - 1)
@@ -145,6 +161,7 @@ class _ActionButton extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.enabled,
+    required this.isPreviouslySelected,
     required this.onTap,
   });
 
@@ -152,18 +169,39 @@ class _ActionButton extends StatelessWidget {
   final IconData icon;
   final Color color;
   final bool enabled;
+  final bool isPreviouslySelected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final iconColor = enabled ? color : color.withValues(alpha: 0.38);
     return OutlinedButton.icon(
       onPressed: enabled ? onTap : null,
-      icon: Icon(icon, size: 18, color: enabled ? color : color.withValues(alpha: 0.38)),
-      label: Text(label),
+      icon: Icon(icon, size: 18, color: iconColor),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label),
+          if (isPreviouslySelected) ...[
+            const SizedBox(width: 8),
+            Icon(Icons.check_circle, size: 16, color: iconColor),
+          ],
+        ],
+      ),
       style: OutlinedButton.styleFrom(
         foregroundColor: color,
+        backgroundColor: isPreviouslySelected
+            ? color.withValues(alpha: 0.08)
+            : null,
         side: BorderSide(
-          color: color.withValues(alpha: enabled ? 0.4 : 0.2),
+          color: color.withValues(
+            alpha: !enabled
+                ? 0.2
+                : isPreviouslySelected
+                    ? 0.85
+                    : 0.4,
+          ),
+          width: isPreviouslySelected ? 1.5 : 1.0,
         ),
         alignment: Alignment.centerLeft,
         minimumSize: const Size.fromHeight(44),

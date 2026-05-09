@@ -15,7 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/periodic_review_provider.dart';
-import '../../utils/snapshot_nav.dart';
+import '../../utils/snapshot_nav.dart' show SnapshotNav;
 import 'steps/objectives_step.dart';
 import 'steps/projects_step.dart';
 import 'steps/someday_maybe_step.dart';
@@ -38,7 +38,7 @@ class _PeriodicReviewScreenState
   static const _stepTitles = [
     'Process Inbox',
     'Review Waiting For',
-    'Review Projects',
+    'Review Next Actions',
     'Review Someday/Maybe',
     'Set Objectives',
     'Review Complete',
@@ -54,12 +54,20 @@ class _PeriodicReviewScreenState
     _pageController = PageController(
       initialPage: ref.read(periodicReviewProvider).currentStep,
     );
-    // Trigger entry-side effects for the initial step.
-    Future.microtask(() {
+    // Pre-load every step's snapshot before the user can interact with the
+    // wizard. Loading lazily on step entry let items routed in an earlier
+    // step (e.g. inbox → maybe) leak into the matching later step
+    // (Someday/Maybe), where the user already decided what to do with them.
+    Future.microtask(() async {
+      if (!mounted) return;
+      final notifier = ref.read(periodicReviewProvider.notifier);
+      await notifier.loadAllSnapshots();
       if (!mounted) return;
       final state = ref.read(periodicReviewProvider);
-      // goToStep is idempotent and fires the entry hook.
-      ref.read(periodicReviewProvider.notifier).goToStep(state.currentStep);
+      // goToStep fires the entry hook; auto-skip on empty list-driven steps
+      // still applies (the loaders are idempotent so this is a no-op for the
+      // snapshots we just loaded).
+      await notifier.goToStep(state.currentStep);
     });
   }
 
@@ -281,16 +289,40 @@ class _PeriodicReviewHeader extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            step == PeriodicReviewNotifier.kStepSummary
-                ? 'Review complete'
-                : 'Step ${step + 1} of '
-                    '${_PeriodicReviewScreenState._kProgressSteps}',
+            _subtitle(),
             style: TextStyle(fontSize: 12, color: Colors.grey[400]),
           ),
           const SizedBox(height: 8),
         ],
       ),
     );
+  }
+
+  /// Header subtitle. Step N of M (with a per-step item count when the step
+  /// is list-driven), or "Review complete" on the final summary.
+  String _subtitle() {
+    if (step == PeriodicReviewNotifier.kStepSummary) return 'Review complete';
+    final stepLabel =
+        'Step ${step + 1} of ${_PeriodicReviewScreenState._kProgressSteps}';
+    switch (step) {
+      case PeriodicReviewNotifier.kStepInbox:
+        return _navSubtitle(stepLabel, state.inboxNav, 'processed');
+      case PeriodicReviewNotifier.kStepWaitingFor:
+        return _navSubtitle(stepLabel, state.waitingForNav, 'reviewed');
+      case PeriodicReviewNotifier.kStepProjects:
+        return _navSubtitle(stepLabel, state.projectsNav, 'reviewed');
+      case PeriodicReviewNotifier.kStepSomeMaybe:
+        return _navSubtitle(stepLabel, state.somedayNav, 'reviewed');
+      default:
+        return stepLabel;
+    }
+  }
+
+  String _navSubtitle<T>(String stepLabel, SnapshotNav<T> nav, String verb) {
+    if (!nav.isLoaded) return '$stepLabel · Loading…';
+    if (nav.isEmpty) return '$stepLabel · Nothing to review';
+    final consumed = nav.index.clamp(0, nav.length);
+    return '$stepLabel · $consumed / ${nav.length} $verb';
   }
 }
 

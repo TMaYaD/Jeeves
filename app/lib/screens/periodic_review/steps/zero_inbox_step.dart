@@ -6,7 +6,6 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../models/todo.dart' show RoutingKind;
 import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/inbox_clarify_card.dart';
@@ -21,6 +20,8 @@ class ZeroInboxStep extends ConsumerWidget {
         ref.watch(periodicReviewProvider.select((s) => s.inboxNav));
     final loadError = ref.watch(
         periodicReviewProvider.select((s) => s.inboxLoadError));
+    final routings = ref.watch(
+        periodicReviewProvider.select((s) => s.inboxRoutings));
 
     if (loadError != null) {
       return ReviewLoadError(
@@ -48,10 +49,12 @@ class ZeroInboxStep extends ConsumerWidget {
       );
     }
 
+    final index = nav.index;
     final id = nav.current!;
     return InboxClarifyCard(
       key: ValueKey(id),
       todoId: id,
+      lastRouting: routings[index],
       onRoute: (kind) async {
         final db = ref.read(databaseProvider);
         final notifier = ref.read(periodicReviewProvider.notifier);
@@ -67,6 +70,7 @@ class ZeroInboxStep extends ConsumerWidget {
                   ? title
                   : null,
         );
+        notifier.recordInboxRouting(index, kind);
         notifier.advanceInbox();
       },
     );

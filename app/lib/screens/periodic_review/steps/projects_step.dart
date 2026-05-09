@@ -1,14 +1,21 @@
 /// Step 3 of the Weekly Review wizard: review each project-tagged next
-/// action. Reflection step — the user manually presses Next; empty list does
-/// not auto-skip.
+/// action one at a time. The user-visible step title is "Review Next
+/// Actions" — these items are next-actions filtered by project tag.
+///
+/// Action set mirrors the daily-planning re-clarification surface: Keep,
+/// Mark Done, Waiting For, Move to Maybe, Discard. Routing decisions go
+/// through [TodoDao.applyRouting] for consistency with the canonical
+/// write path; the in-session [PeriodicReviewState.projectsRoutings] map
+/// drives the "previously selected" highlight on revisit.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../models/todo.dart' show RoutingKind;
+import '../../../providers/auth_provider.dart';
 import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
+import '../../../widgets/person_tag_picker.dart';
 import '_review_card.dart';
 
 class ProjectsStep extends ConsumerWidget {
@@ -20,10 +27,12 @@ class ProjectsStep extends ConsumerWidget {
         ref.watch(periodicReviewProvider.select((s) => s.projectsNav));
     final loadError = ref.watch(
         periodicReviewProvider.select((s) => s.projectsLoadError));
+    final routings = ref.watch(
+        periodicReviewProvider.select((s) => s.projectsRoutings));
 
     if (loadError != null) {
       return ReviewLoadError(
-        title: "Couldn't load projects",
+        title: "Couldn't load Next Actions",
         message: loadError,
         onRetry: () =>
             ref.read(periodicReviewProvider.notifier).loadProjectsSnapshot(),
@@ -42,14 +51,44 @@ class ProjectsStep extends ConsumerWidget {
       );
     }
 
+    final index = nav.index;
     final todo = nav.current!;
     final db = ref.read(databaseProvider);
     final notifier = ref.read(periodicReviewProvider.notifier);
+    final userId = ref.read(currentUserIdProvider);
+
+    Future<void> route(RoutingKind to) async {
+      await db.todoDao.applyRouting(
+        todo.id,
+        from: RoutingKind.nextAction,
+        to: to,
+        userId: userId,
+      );
+      notifier.recordProjectsRouting(index, to);
+      notifier.advanceProjects();
+    }
+
+    Future<void> routeWaitingFor() async {
+      // Waiting For requires at least one person tag — open the picker
+      // first; only after the user confirms a delegate do we run the
+      // routing write and advance the cursor.
+      final currentTagIds =
+          await db.todoDao.getPersonTagIdsForTodo(todo.id);
+      if (!context.mounted) return;
+      await showPersonTagPicker(
+        context,
+        todoId: todo.id,
+        assignedPersonTagIds: currentTagIds,
+        requireSelection: true,
+        onAfterConfirm: () async => route(RoutingKind.waitingFor),
+      );
+    }
 
     return ReviewItemCard(
       key: ValueKey(todo.id),
       todo: todo,
       headline: 'Is this still your next move?',
+      lastRouting: routings[index],
       actions: [
         ReviewAction(
           label: 'Keep',
@@ -60,34 +99,33 @@ class ProjectsStep extends ConsumerWidget {
             notifier.advanceProjects();
           },
         ),
-        // Route through applyRouting to keep transitions consistent with the
-        // canonical write path (planning ritual + inbox-clarify both go
-        // through it via the planning notifier).
+        ReviewAction(
+          label: 'Mark Done',
+          icon: Icons.task_alt_outlined,
+          color: const Color(0xFF16A34A),
+          routing: RoutingKind.done,
+          onTap: () => route(RoutingKind.done),
+        ),
+        ReviewAction(
+          label: 'Waiting For',
+          icon: Icons.person_outlined,
+          color: const Color(0xFF7C3AED),
+          routing: RoutingKind.waitingFor,
+          onTap: routeWaitingFor,
+        ),
         ReviewAction(
           label: 'Move to Maybe',
           icon: Icons.star_border,
           color: const Color(0xFF6B7280),
-          onTap: () async {
-            await db.todoDao.applyRouting(
-              todo.id,
-              from: RoutingKind.nextAction,
-              to: RoutingKind.maybe,
-            );
-            notifier.advanceProjects();
-          },
+          routing: RoutingKind.maybe,
+          onTap: () => route(RoutingKind.maybe),
         ),
         ReviewAction(
           label: 'Discard',
           icon: Icons.delete_outline,
           color: const Color(0xFFDC2626),
-          onTap: () async {
-            await db.todoDao.applyRouting(
-              todo.id,
-              from: RoutingKind.nextAction,
-              to: RoutingKind.trash,
-            );
-            notifier.advanceProjects();
-          },
+          routing: RoutingKind.trash,
+          onTap: () => route(RoutingKind.trash),
         ),
       ],
     );
