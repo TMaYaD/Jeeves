@@ -1,5 +1,12 @@
 # Notes
 
+## 2026-05-10 (issue #276)
+- `ProcessToHandlers` widget owns its DAO writes; callsites speak only `ProcessAction` and never see `RoutingKind`. Bridge for callsites holding a `RoutingKind` from a session record is the co-located `RoutingKind.toProcessAction()` extension — translate at the read site.
+- Picker tests on `ProcessToHandlers` need to override `personTagsProvider` with `Stream.value([…])` because subscribing to the live drift stream leaves a pending `StreamQueryStore.markAsClosed` timer behind on widget-tree teardown, tripping the framework's `!timersPending` assertion. The override avoids drift entirely for the picker's read.
+- `applyRouting(to: trash)` now leaves `done_at` alone (was: clear). Trash is a soft-delete that preserves history; the cleanup rule for non-Done, non-Trash routes still clears `done_at` on transitions away from a completed task.
+- `applyRouting` now writes the intent axis only — the `from` argument is gone, and person tags are mutated only when the caller passes `personTagIds`. Plain Next/Someday/Trash on a delegated task preserves the delegate, so `waiting for trixy` + `call trixy for update` is representable without losing the person tag on intent change.
+- `ProcessToHandlers` no longer accepts `nextActionText`; the routing call is intent-only for plain Next / Waiting For. `InboxClarifyCard` owns the title-as-action coupling at its own write boundary — `onAfterRoute` mirrors the live controller text into `next_action_text` via `setNextActionText` when the user routes from inbox to Next/Waiting For. The `nextActionDialog` modifier remains the only widget-internal path that writes `next_action_text`.
+
 ## 2026-05-09
 - Dropped the Objectives step from the Weekly Review wizard. Daily planning has no real estate to surface them, so the captured-but-never-shown loop violated the outcome-over-action tenet. Wizard is now 5 screens (4 review steps + summary). No DB migrations existed — the value lived in the generic `user_preferences` synced-prefs key/value store under `periodic_review_objectives`. Stale entries on existing devices are orphaned but harmless (no reader).
 

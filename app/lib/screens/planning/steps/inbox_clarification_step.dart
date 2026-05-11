@@ -8,18 +8,17 @@
 /// planning state.
 ///
 /// Renders the shared [InboxClarifyCard] for each item; this step is
-/// responsible only for advancing the snapshot cursor and routing each pick
-/// through the planning notifier (which records routing history for the
-/// "previously selected" affordance and revert-on-re-route).
+/// responsible only for advancing the snapshot cursor and recording each
+/// pick on the planning notifier (which drives the "previously selected"
+/// affordance and revert-on-re-route).
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../models/todo.dart' show RoutingKind;
-import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../widgets/inbox_clarify_card.dart';
+import '../../../widgets/process_to_handlers.dart';
 
 class InboxClarificationStep extends ConsumerWidget {
   const InboxClarificationStep({super.key});
@@ -46,30 +45,34 @@ class InboxClarificationStep extends ConsumerWidget {
     return InboxClarifyCard(
       key: ValueKey(id),
       todoId: id,
-      lastRouting: inboxRoutings[nav.index]?.kind,
-      onRoute: (kind) async {
-        final notifier = ref.read(focusSessionPlanningProvider.notifier);
-        // Pull the latest title from the live row so the recorded
-        // next_action_text matches whatever autosave most recently committed.
-        final db = ref.read(databaseProvider);
-        final todo = await db.todoDao.getTodo(id);
-        final title = todo?.title ?? '';
-        switch (kind) {
-          case RoutingKind.nextAction:
-            await notifier.processInboxItem(id, title: title);
-          case RoutingKind.waitingFor:
-            await notifier.processInboxItemToWaitingFor(id, title: title);
-          case RoutingKind.maybe:
-            await notifier.processInboxItemToMaybe(id);
-          case RoutingKind.done:
-            await notifier.processInboxItemToDone(id);
-          case RoutingKind.trash:
-            await notifier.processInboxItemToTrash(id);
-        }
+      lastAction: inboxRoutings[nav.index]?.kind.toProcessAction(),
+      onAfterRoute: (action) async {
+        final kind = _toRoutingKind(action);
+        if (kind == null) return;
+        ref
+            .read(focusSessionPlanningProvider.notifier)
+            .recordInboxRoutingAndAdvance(kind);
       },
     );
   }
 }
+
+/// [InboxClarifyCard] does not include `keep` or the `nextActionDialog`
+/// modifier, so neither action can actually arrive here. The switch must
+/// stay exhaustive over [ProcessAction], so both branches exist as
+/// defensive fallbacks: `keep` returns null (no routing recorded) and
+/// `nextActionDialog` collapses onto the `next` route — the same target
+/// it would land on if the modifier ever were enabled at this surface.
+RoutingKind? _toRoutingKind(ProcessAction action) => switch (action) {
+      ProcessAction.next ||
+      ProcessAction.nextActionDialog =>
+        RoutingKind.nextAction,
+      ProcessAction.waitingFor => RoutingKind.waitingFor,
+      ProcessAction.someday => RoutingKind.maybe,
+      ProcessAction.done => RoutingKind.done,
+      ProcessAction.trash => RoutingKind.trash,
+      ProcessAction.keep => null,
+    };
 
 class _InboxCleared extends StatelessWidget {
   const _InboxCleared();

@@ -386,7 +386,6 @@ void main() {
       await db.todoDao.applyRouting(
         'r1',
         to: RoutingKind.nextAction,
-        from: null,
         nextActionText: 'Buy milk',
       );
 
@@ -404,7 +403,6 @@ void main() {
       await db.todoDao.applyRouting(
         'r2',
         to: RoutingKind.waitingFor,
-        from: null,
         nextActionText: 'Wait for Alice',
       );
 
@@ -425,7 +423,6 @@ void main() {
       await db.todoDao.applyRouting(
         'r3',
         to: RoutingKind.maybe,
-        from: null,
       );
 
       final row = await db.todoDao.getTodo('r3');
@@ -449,7 +446,6 @@ void main() {
       await db.todoDao.applyRouting(
         'r4',
         to: RoutingKind.done,
-        from: null,
       );
 
       final row = await db.todoDao.getTodo('r4');
@@ -464,7 +460,6 @@ void main() {
       await db.todoDao.applyRouting(
         'r5',
         to: RoutingKind.trash,
-        from: null,
       );
 
       final row = await db.todoDao.getTodo('r5');
@@ -474,34 +469,110 @@ void main() {
     });
   });
 
+  group('TodoDao — applyRouting (cleanup rule: doneAt invariant)', () {
+    // Single source of truth for the invariant: any non-Done, non-Trash route
+    // clears doneAt if set. Done refreshes; Trash preserves history.
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    Future<void> seedDone(String id) async {
+      await _insertTodo(db, id: id, title: 'Task');
+      await db.todoDao.applyRouting(id, to: RoutingKind.done);
+      expect((await db.todoDao.getTodo(id))?.doneAt, isNotNull);
+    }
+
+    test('done → nextAction clears done_at', () async {
+      await seedDone('c1');
+      await db.todoDao.applyRouting(
+        'c1',
+        to: RoutingKind.nextAction,
+      );
+      expect((await db.todoDao.getTodo('c1'))?.doneAt, isNull);
+    });
+
+    test('done → waitingFor clears done_at', () async {
+      await seedDone('c2');
+      await db.todoDao.applyRouting(
+        'c2',
+        to: RoutingKind.waitingFor,
+      );
+      expect((await db.todoDao.getTodo('c2'))?.doneAt, isNull);
+    });
+
+    test('done → maybe clears done_at', () async {
+      await seedDone('c3');
+      await db.todoDao.applyRouting(
+        'c3',
+        to: RoutingKind.maybe,
+      );
+      final row = await db.todoDao.getTodo('c3');
+      expect(row?.doneAt, isNull);
+      expect(row?.intent, 'maybe');
+    });
+
+    test('done → trash preserves done_at (Trash is historical, not "undo")',
+        () async {
+      await seedDone('c4');
+      final beforeDone = (await db.todoDao.getTodo('c4'))?.doneAt;
+      await db.todoDao.applyRouting(
+        'c4',
+        to: RoutingKind.trash,
+      );
+      final row = await db.todoDao.getTodo('c4');
+      expect(row?.intent, 'trash');
+      expect(row?.doneAt, equals(beforeDone),
+          reason: 'trash must not erase the done timestamp');
+    });
+
+    test('done → done refreshes done_at to a new timestamp', () async {
+      await seedDone('c5');
+      final beforeStr = (await db.todoDao.getTodo('c5'))?.doneAt;
+      expect(beforeStr, isNotNull);
+      final beforeDone = DateTime.parse(beforeStr!);
+      final later = beforeDone.add(const Duration(seconds: 1));
+      await db.todoDao.applyRouting(
+        'c5',
+        to: RoutingKind.done,
+        now: later,
+      );
+      final afterStr = (await db.todoDao.getTodo('c5'))?.doneAt;
+      expect(afterStr, isNotNull);
+      final afterDone = DateTime.parse(afterStr!);
+      expect(afterDone.isAfter(beforeDone), isTrue,
+          reason: 'done_at should be refreshed to a new timestamp');
+    });
+
+    test('routes other than done never set done_at on an undone todo',
+        () async {
+      Future<void> assertDoneAtNullAfter(String id, RoutingKind to) async {
+        await _insertTodo(db, id: id, title: 'Task');
+        await db.todoDao.applyRouting(id, to: to);
+        expect((await db.todoDao.getTodo(id))?.doneAt, isNull);
+      }
+
+      await assertDoneAtNullAfter('u1', RoutingKind.nextAction);
+      await assertDoneAtNullAfter('u2', RoutingKind.waitingFor);
+      await assertDoneAtNullAfter('u3', RoutingKind.maybe);
+      await assertDoneAtNullAfter('u4', RoutingKind.trash);
+    });
+  });
+
   group('TodoDao — applyRouting (transitions)', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('done → maybe clears done_at', () async {
-      await _insertTodo(db, id: 't1', title: 'Task');
-      await db.todoDao.applyRouting('t1', to: RoutingKind.done, from: null);
-      expect((await db.todoDao.getTodo('t1'))?.doneAt, isNotNull);
-
-      await db.todoDao
-          .applyRouting('t1', to: RoutingKind.maybe, from: RoutingKind.done);
-
-      final row = await db.todoDao.getTodo('t1');
-      expect(row?.doneAt, isNull);
-      expect(row?.intent, 'maybe');
-    });
-
     test('trash → nextAction resets intent to next', () async {
       await _insertTodo(db, id: 't2', title: 'Task');
-      await db.todoDao.applyRouting('t2', to: RoutingKind.trash, from: null);
+      await db.todoDao.applyRouting('t2', to: RoutingKind.trash);
       expect((await db.todoDao.getTodo('t2'))?.intent, 'trash');
 
       await db.todoDao.applyRouting(
         't2',
         to: RoutingKind.nextAction,
-        from: RoutingKind.trash,
       );
 
       final row = await db.todoDao.getTodo('t2');
@@ -511,12 +582,11 @@ void main() {
 
     test('maybe → nextAction resets intent to next', () async {
       await _insertTodo(db, id: 't3', title: 'Task');
-      await db.todoDao.applyRouting('t3', to: RoutingKind.maybe, from: null);
+      await db.todoDao.applyRouting('t3', to: RoutingKind.maybe);
 
       await db.todoDao.applyRouting(
         't3',
         to: RoutingKind.nextAction,
-        from: RoutingKind.maybe,
         nextActionText: 'Do it',
       );
 
@@ -525,32 +595,32 @@ void main() {
       expect(row?.nextActionText, 'Do it');
     });
 
-    test('waitingFor → nextAction clears person tags when userId is provided',
+    test('waitingFor → nextAction preserves person tags (orthogonality)',
         () async {
+      // Person tags are independent of intent — a delegated task can have
+      // an action route applied to it without losing its delegate. The
+      // picker is the only path that mutates person tags.
       await _insertTodo(db, id: 't4', title: 'Task');
       await _insertPersonTag(db, id: 'alice', name: 'Alice');
       await db.tagDao.assignTag('t4', 'alice', _userId);
 
-      // Apply waitingFor (does not write tags by itself).
       await db.todoDao.applyRouting(
         't4',
         to: RoutingKind.waitingFor,
-        from: null,
       );
       expect(await db.todoDao.getPersonTagIdsForTodo('t4'),
           contains('alice'));
 
-      // Transitioning AWAY from waitingFor clears person tags.
+      // Transitioning to nextAction without explicit `personTagIds` leaves
+      // the delegate intact.
       await db.todoDao.applyRouting(
         't4',
         to: RoutingKind.nextAction,
-        from: RoutingKind.waitingFor,
-        userId: _userId,
       );
 
       final tagIds = await db.todoDao.getPersonTagIdsForTodo('t4');
-      expect(tagIds, isEmpty,
-          reason: 'person tags are cleared on waitingFor → other');
+      expect(tagIds, contains('alice'),
+          reason: 'person tags survive an intent-only transition');
     });
 
     test('waitingFor → waitingFor overwrites person tags when provided',
@@ -563,7 +633,6 @@ void main() {
       await db.todoDao.applyRouting(
         't5',
         to: RoutingKind.waitingFor,
-        from: RoutingKind.waitingFor,
         nextActionText: 'Ping Bob',
         personTagIds: {'bob'},
         userId: _userId,
@@ -582,21 +651,19 @@ void main() {
       await db.tagDao.assignTag('t6', 'alice', _userId);
 
       // maybe → nextAction must not drop pre-existing person tags.
-      await db.todoDao.applyRouting('t6', to: RoutingKind.maybe, from: null);
+      await db.todoDao.applyRouting('t6', to: RoutingKind.maybe);
       await db.todoDao.applyRouting(
         't6',
         to: RoutingKind.nextAction,
-        from: RoutingKind.maybe,
-        userId: _userId,
       );
 
       expect(await db.todoDao.getPersonTagIdsForTodo('t6'), contains('alice'));
     });
 
-    test('from=null first apply does no extra work', () async {
+    test('first apply does no extra work', () async {
       await _insertTodo(db, id: 't7', title: 'Task', clarified: false);
       await db.todoDao
-          .applyRouting('t7', to: RoutingKind.nextAction, from: null);
+          .applyRouting('t7', to: RoutingKind.nextAction);
 
       final row = await db.todoDao.getTodo('t7');
       expect(row?.clarified, isTrue);
@@ -605,13 +672,12 @@ void main() {
 
     test('idempotent: applying same kind twice is a net no-op', () async {
       await _insertTodo(db, id: 't8', title: 'Task');
-      await db.todoDao.applyRouting('t8', to: RoutingKind.maybe, from: null);
+      await db.todoDao.applyRouting('t8', to: RoutingKind.maybe);
       final after1 = await db.todoDao.getTodo('t8');
 
       await db.todoDao.applyRouting(
         't8',
         to: RoutingKind.maybe,
-        from: RoutingKind.maybe,
       );
       final after2 = await db.todoDao.getTodo('t8');
 

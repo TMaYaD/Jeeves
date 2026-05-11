@@ -1,52 +1,32 @@
-/// Shared per-item card and action button widgets used by the Weekly Review
-/// wizard's list-driven steps (Waiting For, Next Actions, Someday/Maybe).
+/// Shared per-item card UI used by the Weekly Review wizard's list-driven
+/// steps (Waiting For, Projects, Someday/Maybe). The card renders the
+/// item's metadata; routing actions are slotted in via a [ProcessToHandlers]
+/// child so callsites only configure presentation (`include`, `except`,
+/// `labels`) rather than re-implementing the action bar.
 library;
 
 import 'package:flutter/material.dart';
 
 import '../../../database/gtd_database.dart';
-import '../../../models/todo.dart' show RoutingKind;
+import '../../../widgets/process_to_handlers.dart';
 
-class ReviewAction {
-  const ReviewAction({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-    this.routing,
-  });
-
-  final String label;
-  final IconData icon;
-  final Color color;
-  final Future<void> Function() onTap;
-
-  /// The [RoutingKind] this action commits the todo to, if any. Drives the
-  /// "previously selected" affordance when [ReviewItemCard.lastRouting]
-  /// matches. Stamping-only actions (e.g. "Keep waiting") leave it null.
-  final RoutingKind? routing;
-}
-
-class ReviewItemCard extends StatefulWidget {
+class ReviewItemCard extends StatelessWidget {
   const ReviewItemCard({
     super.key,
     required this.todo,
     required this.headline,
-    required this.actions,
-    this.lastRouting,
+    required this.process,
     this.subtext,
     this.personTags = const [],
   });
 
   final Todo todo;
   final String headline;
-  final List<ReviewAction> actions;
 
-  /// The last routing applied to this item in this wizard session, or null
-  /// if the user has not yet routed it (or the prior action was a no-op like
-  /// "Keep"). Drives the highlight on the matching destination button when
-  /// the user backs up to revisit the item.
-  final RoutingKind? lastRouting;
+  /// Configured action bar. Callsites build a [ProcessToHandlers] with the
+  /// per-step `include` / `except` / `labels` and an `onAfterRoute` that
+  /// records the routing in wizard state.
+  final ProcessToHandlers process;
 
   /// Free-form subtext rendered between the title and the notes — used by
   /// the Next Actions step to surface the persisted `next_action_text`.
@@ -58,25 +38,7 @@ class ReviewItemCard extends StatefulWidget {
   final List<Tag> personTags;
 
   @override
-  State<ReviewItemCard> createState() => _ReviewItemCardState();
-}
-
-class _ReviewItemCardState extends State<ReviewItemCard> {
-  bool _processing = false;
-
-  Future<void> _run(ReviewAction action) async {
-    if (_processing) return;
-    setState(() => _processing = true);
-    try {
-      await action.onTap();
-    } finally {
-      if (mounted) setState(() => _processing = false);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final todo = widget.todo;
     return ListView(
       physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
@@ -94,7 +56,7 @@ class _ReviewItemCardState extends State<ReviewItemCard> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  widget.headline,
+                  headline,
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -116,12 +78,12 @@ class _ReviewItemCardState extends State<ReviewItemCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (widget.personTags.isNotEmpty) ...[
+              if (personTags.isNotEmpty) ...[
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    for (final tag in widget.personTags)
+                    for (final tag in personTags)
                       _PersonTagChip(name: tag.name),
                   ],
                 ),
@@ -135,8 +97,7 @@ class _ReviewItemCardState extends State<ReviewItemCard> {
                   color: Color(0xFF1A1A2E),
                 ),
               ),
-              if (widget.subtext != null &&
-                  widget.subtext!.trim().isNotEmpty) ...[
+              if (subtext != null && subtext!.trim().isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -148,7 +109,7 @@ class _ReviewItemCardState extends State<ReviewItemCard> {
                     ),
                     Expanded(
                       child: Text(
-                        widget.subtext!,
+                        subtext!,
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
@@ -175,86 +136,8 @@ class _ReviewItemCardState extends State<ReviewItemCard> {
           ),
         ),
         const SizedBox(height: 24),
-        AnimatedOpacity(
-          opacity: _processing ? 0.4 : 1.0,
-          duration: const Duration(milliseconds: 150),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (var i = 0; i < widget.actions.length; i++) ...[
-                _ActionButton(
-                  label: widget.actions[i].label,
-                  icon: widget.actions[i].icon,
-                  color: widget.actions[i].color,
-                  enabled: !_processing,
-                  isPreviouslySelected: widget.lastRouting != null &&
-                      widget.actions[i].routing == widget.lastRouting,
-                  onTap: () => _run(widget.actions[i]),
-                ),
-                if (i < widget.actions.length - 1)
-                  const SizedBox(height: 8),
-              ],
-            ],
-          ),
-        ),
+        process,
       ],
-    );
-  }
-}
-
-class _ActionButton extends StatelessWidget {
-  const _ActionButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.enabled,
-    required this.isPreviouslySelected,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final Color color;
-  final bool enabled;
-  final bool isPreviouslySelected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final iconColor = enabled ? color : color.withValues(alpha: 0.38);
-    return OutlinedButton.icon(
-      onPressed: enabled ? onTap : null,
-      icon: Icon(icon, size: 18, color: iconColor),
-      label: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(label),
-          if (isPreviouslySelected) ...[
-            const SizedBox(width: 8),
-            Icon(Icons.check_circle, size: 16, color: iconColor),
-          ],
-        ],
-      ),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: color,
-        backgroundColor: isPreviouslySelected
-            ? color.withValues(alpha: 0.08)
-            : null,
-        side: BorderSide(
-          color: color.withValues(
-            alpha: !enabled
-                ? 0.2
-                : isPreviouslySelected
-                    ? 0.85
-                    : 0.4,
-          ),
-          width: isPreviouslySelected ? 1.5 : 1.0,
-        ),
-        alignment: Alignment.centerLeft,
-        minimumSize: const Size.fromHeight(44),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
     );
   }
 }

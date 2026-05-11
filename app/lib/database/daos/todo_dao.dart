@@ -590,26 +590,25 @@ AND (
   /// | `waitingFor` | true      | 'next'  | clear   | set if `nextActionText`   |
   /// | `maybe`      | true      | 'maybe' | clear   | leave                     |
   /// | `done`       | true      | leave   | now     | leave                     |
-  /// | `trash`      | true      | 'trash' | clear   | leave                     |
+  /// | `trash`      | true      | 'trash' | leave   | leave                     |
   ///
-  /// Person-tag associations are normally managed out-of-band (the
-  /// PersonTagPicker writes them before the routing call). [applyRouting]
-  /// itself touches person tags in two cases, both of which require [userId]:
-  ///   1. Caller passes [personTagIds] — the set is written via
-  ///      [setPersonTagsForTodo] (used for `waitingFor → waitingFor` with a
-  ///      new delegate set).
-  ///   2. [from] is [RoutingKind.waitingFor] and [to] is not — person tags
-  ///      are cleared, since they are a waitingFor-specific side effect and
-  ///      should not trail into other lists.
-  /// All other transitions leave person tags untouched, so pre-existing
-  /// associations from sync/import survive.
+  /// Cleanup rule: any non-Done, non-Trash route clears `done_at` if set, so
+  /// promoting a previously-completed task back to active state can't leave
+  /// a stale `done_at` behind. Done refreshes the timestamp; Trash leaves it
+  /// alone so a completion record is preserved through soft-delete.
+  ///
+  /// Person-tag associations are orthogonal to the intent axis:
+  /// [applyRouting] only touches them when the caller explicitly passes
+  /// [personTagIds] (in which case [userId] is required), so a delegated
+  /// task can change intent (`next → someday`, `next → trash`, …) without
+  /// silently losing its person-tag attachments. Person tags are managed
+  /// out-of-band by [setPersonTagsForTodo] / the PersonTagPicker.
   ///
   /// All writes run inside a single transaction so a failure leaves the row
   /// in its prior state.
   Future<void> applyRouting(
     String todoId, {
     required RoutingKind to,
-    RoutingKind? from,
     String? nextActionText,
     Set<String>? personTagIds,
     String? userId,
@@ -645,7 +644,6 @@ AND (
         RoutingKind.trash => TodosCompanion(
             clarified: const Value(true),
             intent: const Value('trash'),
-            doneAt: const Value(null),
             lastClarifiedAt: Value(ts),
             updatedAt: Value(ts),
           ),
@@ -659,13 +657,6 @@ AND (
           );
         }
         await setPersonTagsForTodo(todoId, personTagIds, userId);
-      } else if (from == RoutingKind.waitingFor && to != RoutingKind.waitingFor) {
-        if (userId == null) {
-          throw ArgumentError(
-            'userId is required to clear person tags on waitingFor → other transitions',
-          );
-        }
-        await setPersonTagsForTodo(todoId, const <String>{}, userId);
       }
     });
   }
