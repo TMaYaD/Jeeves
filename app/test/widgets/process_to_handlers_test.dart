@@ -363,6 +363,8 @@ void main() {
       // Routing did not happen — clarified flag was already true on insert
       // but lastClarifiedAt should NOT have been bumped.
       expect(row?.lastClarifiedAt, isNull);
+      expect(row?.intent, 'next',
+          reason: 'cancelling the picker must not mutate intent');
       expect(afterCount, 0);
     });
 
@@ -624,6 +626,34 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(fired, [ProcessAction.trash]);
+    });
+
+    testWidgets(
+        'does NOT fire when the row was deleted between render and tap',
+        (tester) async {
+      // Snapshot-based callsites can lose a row between render and tap
+      // (sync/another device hard-deletes it). PowerSync's INSTEAD OF
+      // triggers return 0 affected rows whether the write hit anything or
+      // not, so the widget pre-checks existence and bails before firing
+      // onAfterRoute (which would advance the cursor + record a phantom
+      // routing record).
+      final todo = await _insertTodo(db, id: 'gone1');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+
+      // Hard-delete the row out from under the widget — simulates a race
+      // between snapshot load and the user's tap.
+      await (db.delete(db.todos)..where((t) => t.id.equals('gone1'))).go();
+
+      await tester.tap(find.text('Trash'));
+      await tester.pumpAndSettle();
+
+      expect(fired, isEmpty,
+          reason: 'must not advance the cursor on a deleted snapshot row');
     });
 
     testWidgets(

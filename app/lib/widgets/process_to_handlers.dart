@@ -227,13 +227,27 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     }
   }
 
+  /// Snapshot-based callsites (inbox-clarify, periodic review) can lose a
+  /// row between render and tap — sync or another device may hard-delete it.
+  /// PowerSync exposes `todos` as a SQLite VIEW with INSTEAD OF triggers, so
+  /// the affected-rows count for an UPDATE is always 0; we can't tell from
+  /// the write whether anything happened. Pre-check existence here so we
+  /// don't fire [onAfterRoute] (which advances the snapshot cursor and
+  /// records a phantom routing record) for a row that no longer exists.
+  Future<bool> _todoExists() async {
+    final db = ref.read(databaseProvider);
+    return await db.todoDao.getTodo(widget.todo.id) != null;
+  }
+
   Future<void> _keep() async {
+    if (!await _todoExists()) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.stampLastClarifiedAt(widget.todo.id);
     await widget.onAfterRoute?.call(ProcessAction.keep);
   }
 
   Future<void> _next() async {
+    if (!await _todoExists()) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.applyRouting(
       widget.todo.id,
@@ -253,6 +267,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     );
     if (result == null) return; // user cancelled
     if (!mounted) return;
+    if (!await _todoExists()) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.applyRouting(
       widget.todo.id,
@@ -275,6 +290,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       assignedPersonTagIds: currentTagIds,
       requireSelection: true,
       onAfterConfirm: () async {
+        if (!await _todoExists()) return;
         confirmed = true;
         final selected =
             await db.todoDao.getPersonTagIdsForTodo(widget.todo.id);
@@ -296,6 +312,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   }
 
   Future<void> _route(ProcessAction action) async {
+    if (!await _todoExists()) return;
     final db = ref.read(databaseProvider);
     final to = switch (action) {
       ProcessAction.someday => RoutingKind.maybe,

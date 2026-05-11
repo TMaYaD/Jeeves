@@ -59,16 +59,7 @@ class ZeroInboxStep extends ConsumerWidget {
       lastAction: routings[index]?.toProcessAction(),
       onAfterRoute: (action) async {
         final notifier = ref.read(periodicReviewProvider.notifier);
-        final kind = switch (action) {
-          ProcessAction.next ||
-          ProcessAction.nextActionDialog =>
-            RoutingKind.nextAction,
-          ProcessAction.waitingFor => RoutingKind.waitingFor,
-          ProcessAction.someday => RoutingKind.maybe,
-          ProcessAction.done => RoutingKind.done,
-          ProcessAction.trash => RoutingKind.trash,
-          ProcessAction.keep => null,
-        };
+        final kind = action.toRoutingKind();
         if (kind == null) return;
         notifier.recordInboxRouting(index, kind);
         notifier.advanceInbox();

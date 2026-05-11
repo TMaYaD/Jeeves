@@ -47,7 +47,13 @@ class InboxClarificationStep extends ConsumerWidget {
       todoId: id,
       lastAction: inboxRoutings[nav.index]?.kind.toProcessAction(),
       onAfterRoute: (action) async {
-        final kind = _toRoutingKind(action);
+        // [InboxClarifyCard] does not include `keep` or the
+        // `nextActionDialog` modifier, so neither action can actually
+        // arrive here. The shared extension returns null for `keep`
+        // (no routing recorded) and collapses `nextActionDialog` onto
+        // the `next` route — the same target it would land on if the
+        // modifier ever were enabled at this surface.
+        final kind = action.toRoutingKind();
         if (kind == null) return;
         ref
             .read(focusSessionPlanningProvider.notifier)
@@ -56,23 +62,6 @@ class InboxClarificationStep extends ConsumerWidget {
     );
   }
 }
-
-/// [InboxClarifyCard] does not include `keep` or the `nextActionDialog`
-/// modifier, so neither action can actually arrive here. The switch must
-/// stay exhaustive over [ProcessAction], so both branches exist as
-/// defensive fallbacks: `keep` returns null (no routing recorded) and
-/// `nextActionDialog` collapses onto the `next` route — the same target
-/// it would land on if the modifier ever were enabled at this surface.
-RoutingKind? _toRoutingKind(ProcessAction action) => switch (action) {
-      ProcessAction.next ||
-      ProcessAction.nextActionDialog =>
-        RoutingKind.nextAction,
-      ProcessAction.waitingFor => RoutingKind.waitingFor,
-      ProcessAction.someday => RoutingKind.maybe,
-      ProcessAction.done => RoutingKind.done,
-      ProcessAction.trash => RoutingKind.trash,
-      ProcessAction.keep => null,
-    };
 
 class _InboxCleared extends StatelessWidget {
   const _InboxCleared();
