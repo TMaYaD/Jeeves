@@ -243,6 +243,46 @@ void main() {
       expect(items.length, 1);
       expect(items.first.id, 'mm1');
     });
+
+    test('watchNextActions excludes trashed tasks (#278)', () async {
+      await _insertTodo(db, id: 'tn1', title: 'Active');
+      await _insertTodo(db, id: 'tn2', title: 'Trashed');
+      await db.todoDao.setIntent('tn2', Intent.trash);
+
+      final items = await db.todoDao.watchNextActions().first;
+      expect(items.map((t) => t.id), ['tn1']);
+    });
+
+    test('watchNextActions excludes trashed tasks even with tag filter (#278)',
+        () async {
+      await _insertTodo(db, id: 'tnt1', title: 'Active');
+      await _insertTodo(db, id: 'tnt2', title: 'Trashed');
+      const tagId = 'ctx-tag';
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value(tagId),
+        name: const Value('context'),
+        type: const Value('context'),
+        userId: const Value(_userId),
+      ));
+      await db.tagDao.assignTag('tnt1', tagId, _userId);
+      await db.tagDao.assignTag('tnt2', tagId, _userId);
+      await db.todoDao.setIntent('tnt2', Intent.trash);
+
+      final items = await db.todoDao.watchNextActions(tagIds: {tagId}).first;
+      expect(items.map((t) => t.id), ['tnt1']);
+    });
+
+    test('watchDone excludes trashed tasks even when doneAt is set (#278)',
+        () async {
+      await _insertTodo(db, id: 'td1', title: 'Done');
+      await _insertTodo(db, id: 'td2', title: 'Done then trashed');
+      await db.todoDao.markDone('td1');
+      await db.todoDao.markDone('td2');
+      await db.todoDao.setIntent('td2', Intent.trash);
+
+      final items = await db.todoDao.watchDone().first;
+      expect(items.map((t) => t.id), ['td1']);
+    });
   });
 
   group('TodoDao — setIntent / deferTaskToMaybe', () {

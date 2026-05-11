@@ -42,20 +42,20 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Returns a stream of clarified, non-done [Todo]s whose tags include ALL of
   /// [tagIds] (AND semantics).
   ///
-  /// When [excludeIntent] is non-null, rows with that intent value are excluded.
-  /// Watches both [todos] and [todoTags] so the stream re-emits when either
-  /// table changes.
+  /// When [requireIntent] is non-null, only rows with that intent value are
+  /// returned. Watches both [todos] and [todoTags] so the stream re-emits when
+  /// either table changes.
   Stream<List<Todo>> _watchFilteredByTags(
     Set<String> tagIds, {
-    String? excludeIntent,
+    String? requireIntent,
   }) {
     assert(tagIds.isNotEmpty);
     final n = tagIds.length;
     final placeholders = List.filled(n, '?').join(', ');
     final intentClause =
-        excludeIntent != null ? ' AND todos.intent != ?' : '';
+        requireIntent != null ? ' AND todos.intent = ?' : '';
     final intentVar =
-        excludeIntent != null ? [Variable(excludeIntent)] : <Variable>[];
+        requireIntent != null ? [Variable(requireIntent)] : <Variable>[];
     return customSelect(
       'SELECT todos.* FROM todos '
       'WHERE todos.clarified = 1 '
@@ -72,23 +72,25 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
-  /// Stream of next-action todos (excludes intent = 'maybe').
+  /// Stream of next-action todos: clarified, not done, `intent='next'`.
   ///
-  /// Only clarified (processed) todos are returned.  When [tagIds] is
-  /// non-empty only todos carrying **all** specified tags are returned
-  /// (AND semantics).
+  /// "Next action" is a positive state — what the user plans to do next —
+  /// so the predicate matches `intent='next'` directly. The earlier
+  /// `intent != 'maybe'` formulation admitted `intent='trash'` rows (#278).
+  /// When [tagIds] is non-empty only todos carrying **all** specified tags
+  /// are returned (AND semantics).
   Stream<List<Todo>> watchNextActions({Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return _watchAll().map(
         (all) => all
             .where((t) =>
-                t.intent != 'maybe' &&
+                t.intent == 'next' &&
                 t.clarified &&
                 t.doneAt == null)
             .toList(),
       );
     }
-    return _watchFilteredByTags(tagIds, excludeIntent: 'maybe');
+    return _watchFilteredByTags(tagIds, requireIntent: 'next');
   }
 
   /// Stream of "Waiting For" todos.
@@ -267,9 +269,13 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   }
 
   /// Stream of completed todos, ordered by [done_at] descending.
+  ///
+  /// Done means "completed and not deleted." Trashed rows are excluded so
+  /// the Done list isn't polluted by tasks the user has explicitly removed,
+  /// even if a `done_at` timestamp survived the trash transition (#278).
   Stream<List<Todo>> watchDone() {
     return customSelect(
-      'SELECT * FROM todos WHERE done_at IS NOT NULL '
+      "SELECT * FROM todos WHERE done_at IS NOT NULL AND intent != 'trash' "
       'ORDER BY done_at DESC',
       variables: [],
       readsFrom: {todos},
