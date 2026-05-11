@@ -49,8 +49,9 @@ final powerSyncInstanceProvider =
   Future<void> pending = Future.value();
   var disposed = false;
   var dedupeRan = false;
+  StreamSubscription<ps.SyncStatus>? syncStatusSub;
 
-  void scheduleDedupe() {
+  void runDedupe() {
     if (dedupeRan) return;
     dedupeRan = true;
     // Chain onto [pending] so disposal awaits dedupe before closing the db
@@ -77,6 +78,26 @@ final powerSyncInstanceProvider =
     });
   }
 
+  void scheduleDedupe() {
+    if (dedupeRan || syncStatusSub != null) return;
+    // PowerSync's `connect()` resolves once the websocket is established, not
+    // once the initial download finishes — rows keep streaming in afterwards.
+    // Running dedupe immediately would be a no-op on a fresh device (no
+    // duplicates have arrived yet) and the `dedupeRan` flag would then block
+    // every future attempt. Wait for `hasSynced == true`, which PowerSync
+    // flips after the first replication cycle completes.
+    if (db.currentStatus.hasSynced == true) {
+      runDedupe();
+      return;
+    }
+    syncStatusSub = db.statusStream.listen((status) {
+      if (status.hasSynced != true) return;
+      syncStatusSub?.cancel();
+      syncStatusSub = null;
+      runDedupe();
+    });
+  }
+
   Future<void> applyUser(String userId) {
     final next = pending.then((_) async {
       // Skip if disposal began while this transition was queued, so we
@@ -87,9 +108,10 @@ final powerSyncInstanceProvider =
       } else {
         final connector = JevesBackendConnector(ref.read(apiServiceProvider));
         await db.connect(connector: connector);
-        // After PowerSync connects, collapse any pre-existing duplicate
-        // `(name, type)` tag rows so deletes flow through PowerSync's
-        // INSTEAD OF triggers and reach the backend.
+        // Arm a one-shot dedupe pass for when PowerSync reports its first
+        // completed replication cycle (`hasSynced`). Deletes flow through
+        // PowerSync's INSTEAD OF triggers and reach the backend, so cloud
+        // duplicates do not resync on next startup.
         scheduleDedupe();
       }
     }).catchError((Object e, StackTrace st) {
@@ -128,6 +150,8 @@ final powerSyncInstanceProvider =
   ref.onDispose(() async {
     disposed = true;
     sub.close();
+    await syncStatusSub?.cancel();
+    syncStatusSub = null;
     await pending;
     await db.close();
   });

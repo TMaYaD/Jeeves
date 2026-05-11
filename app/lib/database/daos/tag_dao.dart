@@ -93,9 +93,17 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       findOrCreateTag(name, 'person', userId);
 
   /// Look up an existing person-typed tag by [name].
+  ///
+  /// Uses `orderBy(id).limit(1)` so legacy `(name, 'person')` duplicates that
+  /// may still be on disk before [dedupeTags] completes do not crash
+  /// `getSingleOrNull` with `Bad state: Too many elements`. The result is
+  /// deterministic across calls — matching the canonicalisation rule used by
+  /// [findOrCreateTag] and [dedupeTags] (MIN(id) as the stable choice).
   Future<Tag?> findPersonTagByName(String name) {
     return (select(tags)
-          ..where((t) => t.name.equals(name) & t.type.equals('person')))
+          ..where((t) => t.name.equals(name) & t.type.equals('person'))
+          ..orderBy([(t) => OrderingTerm.asc(t.id)])
+          ..limit(1))
         .getSingleOrNull();
   }
 
@@ -172,9 +180,36 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   }
 
   /// Rename a tag in-place, preserving all other fields.
-  Future<void> rename(String tagId, String newName) => upsertTag(
-        TagsCompanion(id: Value(tagId), name: Value(newName.trim())),
-      );
+  ///
+  /// If another tag already owns the target `(name, type)` pair, this folds
+  /// the source into it via [merge] instead of writing a colliding row — an
+  /// id-addressed rename to an occupied name would otherwise recreate exactly
+  /// the duplicate state [findOrCreateTag] and [dedupeTags] exist to prevent.
+  /// Silently returns when [tagId] is unknown or the name is unchanged.
+  Future<void> rename(String tagId, String newName) {
+    final trimmed = newName.trim();
+    return transaction(() async {
+      final current = await (select(tags)..where((t) => t.id.equals(tagId)))
+          .getSingleOrNull();
+      if (current == null) return;
+      if (current.name == trimmed) return;
+
+      final conflict = await (select(tags)
+            ..where((t) =>
+                t.name.equals(trimmed) &
+                t.type.equals(current.type) &
+                t.id.equals(tagId).not())
+            ..orderBy([(t) => OrderingTerm.asc(t.id)])
+            ..limit(1))
+          .getSingleOrNull();
+      if (conflict != null) {
+        await merge(tagId, conflict.id);
+        return;
+      }
+
+      await upsertTag(TagsCompanion(id: Value(tagId), name: Value(trimmed)));
+    });
+  }
 
   /// Update the colour of a tag; pass null to clear it.
   Future<void> updateColor(String tagId, String? color) => upsertTag(

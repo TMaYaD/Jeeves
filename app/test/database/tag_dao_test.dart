@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -244,6 +244,41 @@ void main() {
     test('findPersonTagByName returns null when no row matches', () async {
       final result = await db.tagDao.findPersonTagByName('Ghost');
       expect(result, isNull);
+    });
+
+    test(
+        'findPersonTagByName tolerates legacy (name, person) duplicates '
+        "and returns a deterministic row instead of crashing", () async {
+      // Replace `tags` with a view-backed schema so duplicate rows can be
+      // inserted directly into the backing table — the unique tripwire on the
+      // real Drift table would otherwise reject the second insert.
+      await db.customStatement('''
+        CREATE TABLE ps_data__tags (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT,
+          type TEXT NOT NULL DEFAULT 'context', user_id TEXT NOT NULL
+        )
+      ''');
+      await db.customStatement('DROP TABLE IF EXISTS tags');
+      await db.customStatement(
+        'CREATE VIEW tags AS SELECT * FROM ps_data__tags',
+      );
+
+      await db.customStatement(
+        "INSERT INTO ps_data__tags (id, name, type, user_id) "
+        "VALUES ('alice-b', 'Alice', 'person', ?)",
+        [_userId],
+      );
+      await db.customStatement(
+        "INSERT INTO ps_data__tags (id, name, type, user_id) "
+        "VALUES ('alice-a', 'Alice', 'person', ?)",
+        [_userId],
+      );
+
+      final tag = await db.tagDao.findPersonTagByName('Alice');
+      expect(tag, isNotNull);
+      // MIN(id) deterministically wins so the read path agrees with
+      // findOrCreateTag and dedupeTags on which row to keep.
+      expect(tag!.id, 'alice-a');
     });
 
     test('createPersonTag is idempotent — returns same id, one row', () async {
