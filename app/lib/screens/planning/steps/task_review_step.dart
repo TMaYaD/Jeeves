@@ -21,9 +21,13 @@ import '../../../widgets/person_tag_picker.dart';
 
 enum ReclarifyHint { noNextAction, updatedSinceClarified }
 
-ReclarifyHint hintFor(Todo t) => t.nextActionText == null
-    ? ReclarifyHint.noNextAction
-    : ReclarifyHint.updatedSinceClarified;
+/// Mirror of [TodoDao] `_needsReviewWhere`'s actionless predicate:
+/// `next_action_text IS NULL OR TRIM(next_action_text) = ''`. Whitespace-only
+/// values land rows in the queue, so the hint must agree (#278).
+ReclarifyHint hintFor(Todo t) =>
+    (t.nextActionText == null || t.nextActionText!.trim().isEmpty)
+        ? ReclarifyHint.noNextAction
+        : ReclarifyHint.updatedSinceClarified;
 
 // ---------------------------------------------------------------------------
 // Step widget
