@@ -1,5 +1,12 @@
 # Notes
 
+## 2026-05-12 (issue #279)
+- Nirvana import maps each source state into four orthogonal fields on the todo row: `clarified` (column), `intent` (`next | maybe | trash`), `doneAt` (set when `COMPLETED` / `completed` is non-empty), and an injected auto-tag. Per-state outcomes: Inbox → `clarified=false`; Next/Waiting → `clarified=true,intent=next`; Someday / Inactive-Later / Scheduled / Scheduled-Repeating / Reference → `clarified=true,intent=maybe`; Trash → `clarified=true,intent=trash`; Logbook (CSV) / `completed!=0` (JSON) → `doneAt` set + `intent=next`.
+- Scheduled / Scheduled-Repeating / Reference also inject a `@scheduled` / `@repeating` / `@reference` context tag so the original Nirvana category is recoverable after import (Jeeves has no Scheduled/Repeating/Reference primitive).
+- Completed wins — Logbook items (CSV) and `completed!=0` rows (JSON) get `doneAt` set and `intent=next`, and do **not** carry the `@scheduled` / `@repeating` / `@reference` auto-tag even if the source state would otherwise inject one.
+- `NirvanaItem.state: String` was replaced with `clarified: bool` to match the DB column directly. The previous `_csvStateMap → 'next_action'` value looked like a routing decision when it was really just "not inbox"; bucketing is driven by `clarified` + `intent` + `doneAt` + person-tags, not by any state literal.
+- `clarified` is gated on a positive whitelist of recognised states (CSV: `next/waiting/someday/inactive-later/scheduled/scheduled-repeating/reference/trash/logbook`; JSON: state ints 1, 2, 3, 4, 5, 6, 7, 9, 10). Anything else — unknown CSV literals like `active`/`focus`, or JSON state 11 (active projects) — falls to `clarified=false` so unknowns surface in the inbox for user review rather than slipping silently into active lists.
+
 ## 2026-05-10 (issue #276)
 - `ProcessToHandlers` widget owns its DAO writes; callsites speak only `ProcessAction` and never see `RoutingKind`. Bridge for callsites holding a `RoutingKind` from a session record is the co-located `RoutingKind.toProcessAction()` extension — translate at the read site.
 - Picker tests on `ProcessToHandlers` need to override `personTagsProvider` with `Stream.value([…])` because subscribing to the live drift stream leaves a pending `StreamQueryStore.markAsClosed` timer behind on widget-tree teardown, tripping the framework's `!timersPending` assertion. The override avoids drift entirely for the picker's read.

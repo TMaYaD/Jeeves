@@ -194,6 +194,72 @@ void main() {
       expect(all.length, 1);
     });
 
+    test('CSV Inactive/Later → clarified=true, intent=maybe', () async {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Inactive task,Inactive/Later,,,,,,,,\n';
+      await importNirvanaLocally(
+        bytes: _bytes(csv),
+        filename: 'test.csv',
+        format: 'csv',
+        userId: _userId,
+        db: db,
+      );
+
+      final all = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      expect(all.length, 1);
+      expect(all.first.clarified, isTrue);
+      expect(all.first.intent, 'maybe');
+    });
+
+    test(
+        'CSV Scheduled/Repeating → @repeating context tag linked via todo_tags',
+        () async {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Repeating task,Scheduled/Repeating,,,,,,,,\n';
+      await importNirvanaLocally(
+        bytes: _bytes(csv),
+        filename: 'test.csv',
+        format: 'csv',
+        userId: _userId,
+        db: db,
+      );
+
+      final contextTags = await db.tagDao.watchByType('context').first;
+      final names = contextTags.map((t) => t.name).toSet();
+      expect(names, contains('@repeating'));
+
+      final repeatingTag =
+          contextTags.firstWhere((t) => t.name == '@repeating');
+      final junctions = await (db.select(db.todoTags)
+            ..where((tt) => tt.tagId.equals(repeatingTag.id)))
+          .get();
+      expect(junctions.length, 1);
+    });
+
+    test('CSV Trash → clarified=true, intent=trash', () async {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Trash task,Trash,,,,,,,,\n';
+      await importNirvanaLocally(
+        bytes: _bytes(csv),
+        filename: 'test.csv',
+        format: 'csv',
+        userId: _userId,
+        db: db,
+      );
+
+      final all = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      expect(all.length, 1);
+      expect(all.first.clarified, isTrue);
+      expect(all.first.intent, 'trash');
+    });
+
     test('latin-1 bytes are decoded without error', () async {
       // Build a minimal CSV with a latin-1 encoded character (é = 0xE9)
       final latin1Bytes = Uint8List.fromList([
@@ -296,6 +362,129 @@ void main() {
             ..where((t) => t.userId.equals(_userId)))
           .get();
       expect(all.length, 1);
+    });
+
+    test('JSON state=4 (Someday) → clarified=true, intent=maybe', () async {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"S","type":0,"state":4}]';
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+      final all = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      expect(all.length, 1);
+      expect(all.first.clarified, isTrue);
+      expect(all.first.intent, 'maybe');
+    });
+
+    test('JSON state=6 (Trash) → clarified=true, intent=trash', () async {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"T","type":0,"state":6}]';
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+      final all = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      expect(all.length, 1);
+      expect(all.first.clarified, isTrue);
+      expect(all.first.intent, 'trash');
+    });
+
+    test('JSON state=9 (Repeating) → @repeating context tag linked', () async {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"R","type":0,"state":9}]';
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+      final contextTags = await db.tagDao.watchByType('context').first;
+      final names = contextTags.map((t) => t.name).toSet();
+      expect(names, contains('@repeating'));
+
+      final repeatingTag =
+          contextTags.firstWhere((t) => t.name == '@repeating');
+      final junctions = await (db.select(db.todoTags)
+            ..where((tt) => tt.tagId.equals(repeatingTag.id)))
+          .get();
+      expect(junctions.length, 1);
+    });
+
+    test('JSON state=2 with waitingfor → person tag linked', () async {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"W","type":0,"state":2,"waitingfor":"Alice"}]';
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+      final personTags = await db.tagDao.watchByType('person').first;
+      final names = personTags.map((t) => t.name).toSet();
+      expect(names, contains('Alice'));
+    });
+
+    test('re-import with states 3/6/9/10 is idempotent — no dup tags/junctions',
+        () async {
+      const json = '['
+          '{"cancelled":0,"deleted":0,"name":"S","type":0,"state":3,"id":"S-3"},'
+          '{"cancelled":0,"deleted":0,"name":"T","type":0,"state":6,"id":"T-6"},'
+          '{"cancelled":0,"deleted":0,"name":"R","type":0,"state":9,"id":"R-9"},'
+          '{"cancelled":0,"deleted":0,"name":"X","type":0,"state":10,"id":"X-10"}'
+          ']';
+
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+
+      final todos = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      expect(todos.length, 4);
+
+      final contextTags = await db.tagDao.watchByType('context').first;
+      final names = contextTags.map((t) => t.name).toList();
+      // No duplicates: each auto-tag must appear exactly once.
+      expect(names.where((n) => n == '@scheduled').length, 1);
+      expect(names.where((n) => n == '@repeating').length, 1);
+      expect(names.where((n) => n == '@reference').length, 1);
+
+      // No duplicate junction rows for any tag.
+      final autoTagIds = {
+        for (final t in contextTags)
+          if ({'@scheduled', '@repeating', '@reference'}.contains(t.name))
+            t.id
+      };
+      for (final tagId in autoTagIds) {
+        final junctions = await (db.select(db.todoTags)
+              ..where((tt) => tt.tagId.equals(tagId)))
+            .get();
+        expect(junctions.length, 1, reason: 'tagId $tagId has duplicates');
+      }
     });
 
     test('invalid JSON throws ParseError wrapped in descriptive message', () async {

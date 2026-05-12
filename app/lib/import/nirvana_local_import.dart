@@ -17,6 +17,7 @@ import 'package:uuid/enums.dart' show Namespace;
 
 import '../database/daos/tag_dao.dart' show todoTagIdFor;
 import '../database/gtd_database.dart';
+import '../models/todo.dart' show Intent;
 import 'nirvana_item.dart';
 import 'nirvana_parser.dart';
 
@@ -135,10 +136,6 @@ Future<ImportResult> importNirvanaLocally({
             ? DateTime.tryParse(item.dueDate!)?.toUtc()
             : null;
 
-        // Items imported with state='inbox' become clarified=false so they
-        // appear in the inbox clarification step.
-        final isClarified = item.state != 'inbox';
-
         // Normalize at the import boundary: blank/whitespace → null so IS NOT
         // NULL checks don't produce phantom Waiting For items.
         final trimmedWaitingFor = item.waitingFor?.trim();
@@ -176,7 +173,7 @@ Future<ImportResult> importNirvanaLocally({
                 doneAt: item.doneAt != null
                     ? Value(item.doneAt!.toUtc().toIso8601String())
                     : const Value(null),
-                clarified: Value(isClarified),
+                clarified: Value(item.clarified),
                 dueDate: Value(dueDate),
                 timeEstimate: Value(item.timeEstimate),
                 energyLevel: Value(item.energyLevel),
@@ -208,6 +205,8 @@ Future<ImportResult> importNirvanaLocally({
         }
         if (item.intent == 'maybe') {
           await db.todoDao.deferTaskToMaybe(todoId, now: now);
+        } else if (item.intent == 'trash') {
+          await db.todoDao.setIntent(todoId, Intent.trash, now: now);
         }
 
         // Resolve project tag for this task.

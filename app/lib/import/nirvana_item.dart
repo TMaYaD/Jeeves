@@ -6,7 +6,7 @@ class NirvanaItem {
     required this.id,
     required this.name,
     required this.type,
-    required this.state,
+    required this.clarified,
     required this.intent,
     required this.doneAt,
     required this.notes,
@@ -25,10 +25,10 @@ class NirvanaItem {
   /// 'task' or 'project'
   final String type;
 
-  /// Normalised GTD state from the Nirvana export: 'inbox' | 'next_action' | 'waiting_for'.
-  /// The importer remaps 'waiting_for' to 'next_action' before writing to the DB;
-  /// the waiting_for text column is the source of truth for the Waiting For list.
-  final String state;
+  /// Direct semantic match to the `todos.clarified` column. False for Nirvana
+  /// inbox items (they need to be clarified inside Jeeves); true for every
+  /// other recognised Nirvana state.
+  final bool clarified;
 
   /// Orthogonal intent: 'next' | 'maybe' | 'trash'
   final String intent;

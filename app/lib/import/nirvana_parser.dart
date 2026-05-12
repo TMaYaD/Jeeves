@@ -1,7 +1,11 @@
 /// CSV and JSON parsers that produce [NirvanaItem] lists.
 ///
-/// Ported from the backend Python implementation in
-/// `backend/app/import_nirvana/parser.py`, keeping identical semantics.
+/// Bucketing in Jeeves is driven by `clarified` + `intent` + `doneAt` +
+/// person-tags; this parser sets those four fields directly per the per-state
+/// table in issue #279 / `NOTES.md`. States with no direct equivalent
+/// (Scheduled / Repeating / Reference) are coerced to `intent='maybe'` plus an
+/// `@scheduled` / `@repeating` / `@reference` context tag so the original
+/// Nirvana category remains identifiable after import.
 library;
 
 import 'dart:convert';
@@ -21,38 +25,62 @@ String _csvItemId(String name, String type, String? parentName) =>
     _uuid.v5(Namespace.url.value, 'jeeves://csv_item/$type/${parentName ?? ""}/$name');
 
 // ---------------------------------------------------------------------------
-// State mapping tables
+// State classification — CSV
 // ---------------------------------------------------------------------------
 
-const _csvStateMap = <String, String>{
-  'inbox': 'inbox',
-  'next': 'next_action',
-  'active': 'inbox',
-  'logbook': 'next_action',
-  'waiting': 'waiting_for',
-  'someday': 'next_action',
-  'later': 'next_action',
-  'focus': 'next_action',
-  'scheduled': 'next_action',
-  'reference': 'next_action',
+// Recognised CSV literals that imply the item has been clarified in Nirvana.
+// Anything outside this set (incl. the explicit 'inbox' literal and any
+// unrecognised value such as the project-only 'active') is treated as inbox —
+// `clarified=false` — so unknowns surface for review rather than slipping
+// silently into active lists.
+const _csvClarifiedStates = {
+  'next',
+  'waiting',
+  'someday',
+  'inactive/later',
+  'scheduled',
+  'scheduled/repeating',
+  'reference',
+  'trash',
+  'logbook',
 };
 
-// CSV states that map to intent = 'maybe' (formerly 'someday_maybe' state).
-const _csvMaybeStates = {'someday', 'later', 'reference'};
-
-const _jsonStateMap = <int, String>{
-  0: 'inbox',
-  1: 'next_action',
-  3: 'next_action',
-  5: 'next_action',
-  7: 'next_action',
-  9: 'waiting_for',
-  11: 'inbox',
-  13: 'inbox',
+// CSV literals → Maybe (intent='maybe').
+const _csvMaybeStates = {
+  'someday',
+  'inactive/later',
+  'scheduled',
+  'scheduled/repeating',
+  'reference',
 };
 
-// JSON state ints that map to intent = 'maybe' (formerly 'someday_maybe' state).
-const _jsonMaybeStateInts = {5};
+// CSV literals → Trash (intent='trash').
+const _csvTrashStates = {'trash'};
+
+// CSV literal → context tag added so states with no direct Jeeves equivalent
+// remain identifiable after import.
+const _csvAutoTags = <String, String>{
+  'scheduled': '@scheduled',
+  'scheduled/repeating': '@repeating',
+  'reference': '@reference',
+};
+
+// ---------------------------------------------------------------------------
+// State classification — JSON
+// ---------------------------------------------------------------------------
+
+// Recognised JSON state ints that imply the item has been clarified in
+// Nirvana. State 0 (Inbox) and any unrecognised int (e.g. 11 for active
+// projects) default to `clarified=false` so unknowns surface for review.
+const _jsonClarifiedStateInts = {1, 2, 3, 4, 5, 6, 7, 9, 10};
+const _jsonMaybeStateInts = {3, 4, 5, 9, 10};
+const _jsonTrashStateInts = {6};
+
+const _jsonAutoTags = <int, String>{
+  3: '@scheduled',
+  9: '@repeating',
+  10: '@reference',
+};
 
 const _jsonEnergyMap = <int, String?>{
   0: null,
@@ -72,9 +100,6 @@ class ParseError implements Exception {
   @override
   String toString() => 'ParseError: $message';
 }
-
-String _normaliseState(String raw) =>
-    _csvStateMap[raw.trim().toLowerCase()] ?? 'inbox';
 
 List<String> _parseCsvTags(String raw) =>
     raw.split(',').map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
@@ -233,12 +258,10 @@ List<List<String>> _parseCsvRaw(String content) {
       continue;
     }
 
-    final rawState = field(row, stateIdx);
+    final lcState = field(row, stateIdx).toLowerCase();
     final rawCompleted = field(row, completedIdx);
     final completed = rawCompleted.isNotEmpty;
 
-    // Completed items are stored as next_action + done_at (not state='done').
-    final String state = _normaliseState(rawState);
     DateTime? doneAt;
     if (completed) {
       final parsedDate = _parseCsvDate(rawCompleted);
@@ -246,10 +269,25 @@ List<List<String>> _parseCsvRaw(String content) {
           ? DateTime.parse('${parsedDate}T00:00:00Z')
           : DateTime.now().toUtc();
     }
-    final String intent = (!completed &&
-            _csvMaybeStates.contains(rawState.trim().toLowerCase()))
-        ? 'maybe'
-        : 'next';
+
+    final clarified = _csvClarifiedStates.contains(lcState);
+
+    final String intent;
+    if (completed) {
+      intent = 'next';
+    } else if (_csvTrashStates.contains(lcState)) {
+      intent = 'trash';
+    } else if (_csvMaybeStates.contains(lcState)) {
+      intent = 'maybe';
+    } else {
+      intent = 'next';
+    }
+
+    final autoTag = completed ? null : _csvAutoTags[lcState];
+    final tags = [
+      ..._parseCsvTags(field(row, tagsIdx)),
+      ?autoTag,
+    ];
 
     final parentRaw = field(row, parentIdx);
     final parentName =
@@ -265,13 +303,13 @@ List<List<String>> _parseCsvRaw(String content) {
       id: _csvItemId(name, itemType, parentName),
       name: name,
       type: itemType,
-      state: state,
+      clarified: clarified,
       intent: intent,
       doneAt: doneAt,
       notes: notesIdx >= 0 && notesIdx < row.length
           ? (row[notesIdx].trim().isNotEmpty ? row[notesIdx].trim() : null)
           : null,
-      tags: _parseCsvTags(field(row, tagsIdx)),
+      tags: tags,
       energyLevel: energyLevel,
       timeEstimate: _parseInt(field(row, timeIdx)),
       dueDate: _parseCsvDate(field(row, dueDateIdx)),
@@ -338,29 +376,42 @@ List<List<String>> _parseCsvRaw(String content) {
 
     final rawState = row['state'];
     final rawStateInt = rawState is int ? rawState : 0;
-    final state = _jsonStateMap[rawStateInt] ?? 'inbox';
 
     final completedTs = row['completed'];
     final completed =
         completedTs != null && completedTs != 0 && completedTs != false;
-    // Completed items are stored as next_action + done_at (not state='done').
     DateTime? doneAt;
     if (completed) {
       doneAt = completedTs is int && completedTs > 0
           ? DateTime.fromMillisecondsSinceEpoch(completedTs * 1000, isUtc: true)
           : DateTime.now().toUtc();
     }
-    final String intent =
-        (!completed && _jsonMaybeStateInts.contains(rawStateInt)) ? 'maybe' : 'next';
+
+    final clarified = _jsonClarifiedStateInts.contains(rawStateInt);
+
+    final String intent;
+    if (completed) {
+      intent = 'next';
+    } else if (_jsonTrashStateInts.contains(rawStateInt)) {
+      intent = 'trash';
+    } else if (_jsonMaybeStateInts.contains(rawStateInt)) {
+      intent = 'maybe';
+    } else {
+      intent = 'next';
+    }
+
+    final autoTag = completed ? null : _jsonAutoTags[rawStateInt];
 
     // Tags: Nirvana stores as ",tag1,tag2," — strip leading/trailing commas.
     final rawTagsStr = row['tags'];
     final tagsStr = rawTagsStr is String ? rawTagsStr : '';
-    final tags = tagsStr
-        .split(',')
-        .map((t) => t.trim())
-        .where((t) => t.isNotEmpty)
-        .toList();
+    final tags = [
+      ...tagsStr
+          .split(',')
+          .map((t) => t.trim())
+          .where((t) => t.isNotEmpty),
+      ?autoTag,
+    ];
 
     final energyRaw = row['energy'];
     final energyLevel =
@@ -396,7 +447,7 @@ List<List<String>> _parseCsvRaw(String content) {
       id: id,
       name: name,
       type: itemType,
-      state: state,
+      clarified: clarified,
       intent: intent,
       doneAt: doneAt,
       notes: notes,
