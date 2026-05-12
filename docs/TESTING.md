@@ -54,12 +54,12 @@ For flows that are impractical to cover with `flutter_test` / integration tests 
 ### Device & app context
 
 - Emulator physical size: **1080x2400** (`adb shell wm size` to confirm). All coordinates below assume this; if the device is different, scale proportionally.
-- Jeeves package (alpha flavor debug): `loonyb.in.jeeves.alpha`
+- Jeeves package (dev flavor debug): `loonyb.in.jeeves.dev`
 - Mock MWA Wallet: `com.solana.mwallet`, PIN **1234** (the "Mock" is the wallet — the app itself must NOT be mocked).
 - Compose stack: `podman compose -f infra/docker-compose.yml up -d` (backend reachable from emulator at `http://10.0.2.2:8000`).
 - SWS build command:
   ```
-  flutter build apk --flavor alpha --debug \
+  flutter build apk --flavor dev --debug \
     --dart-define=JEEVES_AUTH_MODE=sws \
     --dart-define=JEEVES_API_URL=http://10.0.2.2:8000
   ```
@@ -78,7 +78,7 @@ For flows that are impractical to cover with `flutter_test` / integration tests 
   sleep 2
   adb shell screencap -p /sdcard/s.png && adb pull /sdcard/s.png /tmp/s.png
   ```
-- Use `adb shell monkey -p loonyb.in.jeeves.alpha -c android.intent.category.LAUNCHER 1` to cold-launch; prefix with `adb shell am force-stop loonyb.in.jeeves.alpha` for a clean start.
+- Use `adb shell monkey -p loonyb.in.jeeves.dev -c android.intent.category.LAUNCHER 1` to cold-launch; prefix with `adb shell am force-stop loonyb.in.jeeves.dev` for a clean start.
 - Stream Flutter errors: `adb logcat > /tmp/jeeves.log &` then grep for `flutter:` and `AndroidRuntime`. MWA failures surface as `com.solana.mobilewalletadapter.clientlib.*` stacks.
 
 ### Navigation tree with tap coordinates

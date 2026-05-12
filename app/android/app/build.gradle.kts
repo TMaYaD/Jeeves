@@ -34,10 +34,10 @@ android {
         create("production") {
             dimension = "environment"
         }
-        create("alpha") {
+        create("dev") {
             dimension = "environment"
-            applicationIdSuffix = ".alpha"
-            resValue("string", "app_name", "Jeeves \u03b1")
+            applicationIdSuffix = ".dev"
+            resValue("string", "app_name", "Jeeves dev")
         }
     }
 
