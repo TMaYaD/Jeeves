@@ -107,7 +107,7 @@ dev_dependencies:
   # Icon generation: flavored configs live in flutter_launcher_icons-<flavor>.yaml
   # at app/ root (per-flavor is the format flutter_launcher_icons supports; see
   # https://pub.dev/packages/flutter_launcher_icons). Regenerate with:
-  #   dart run flutter_launcher_icons -f flutter_launcher_icons-alpha.yaml
+  #   dart run flutter_launcher_icons -f flutter_launcher_icons-dev.yaml
   #   dart run flutter_launcher_icons -f flutter_launcher_icons-production.yaml
   flutter_launcher_icons: ^0.14.3
 
