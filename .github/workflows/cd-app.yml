@@ -181,7 +181,6 @@ jobs:
       - name: Auto-retag when conventional commits bump target past stage tag
         if: steps.compute.outputs.target_changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           NEW_TARGET: ${{ steps.compute.outputs.target }}
           STAGE: ${{ steps.compute.outputs.stage }}
         run: |
