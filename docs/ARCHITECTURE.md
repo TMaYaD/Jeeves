@@ -160,7 +160,7 @@ Tapping an inbox row navigates to `/inbox/:id/clarify` (`InboxClarifyScreen`), a
 3. On any routing action (Next Action / Waiting For / Maybe / Done), calls the appropriate DAO method and then pops.
 4. "Skip" pops without touching the DB — the item remains in the inbox.
 
-The shared UI primitives (`ClarifyFieldLabel`, `ClarifyEnergyPicker`, `ClarifyEstimateChip`, `ClarifyDestinationButton`) live in `app/lib/widgets/clarify_shared_widgets.dart` and are used by both `InboxClarifyScreen` and the planning wizard's `InboxClarificationStep`.
+The shared UI primitives (`ClarifyFieldLabel`, `ClarifyEnergyPicker`, `ClarifyEstimateChip`, `ClarifyDestinationButton`) live in `app/lib/widgets/clarify_shared_widgets.dart`. `InboxClarifyScreen` (the standalone full-screen flow) uses these primitives directly. The planning wizard's `InboxClarificationStep` and the periodic-review wizard's `ZeroInboxStep` instead share `InboxClarifyCard` (`app/lib/widgets/inbox_clarify_card.dart`), which composes the editor fields with the canonical `ProcessToHandlers` action bar described below.
 
 ### FocusModeNotifier (`providers/focus_session_provider.dart`)
 
@@ -375,22 +375,46 @@ Step 0 (`InboxClarificationStep`) uses a fixed snapshot rather than a live DB st
 
 **State fields on `FocusSessionPlanningState`:**
 - `inboxNav: SnapshotNav<String>` — fixed snapshot of inbox item IDs loaded at step start (oldest-first, respecting the active tag filter), plus the current cursor.
-- `inboxRoutings: Map<int, InboxRoutingRecord>` — maps snapshot index → record holding the chosen `RoutingKind`. Drives the "previously selected" affordance on revisit and supplies the `from` argument when the user re-routes the item.
+- `inboxRoutings: Map<int, InboxRoutingRecord>` — maps snapshot index → record holding the chosen `RoutingKind`. Drives the "previously selected" affordance on revisit (the step translates to `ProcessAction` for the widget via `RoutingKind.toProcessAction()`).
 
 **`FocusSessionPlanningNotifier` methods:**
 - `loadInboxSnapshot()` — idempotent; reads the tag filter at load time, freezes the list oldest-first. Subsequent calls are no-ops.
 - `nextInboxItem()` / `previousInboxItem()` — advance or retreat the cursor. `previousInboxItem()` clamps at 0 (method-level); `nextInboxItem()` has no upper-bound clamp itself — the planning screen's Next button gates further progression at `inboxIndex >= inboxSnapshot!.length` (UI-level gating).
 - `skipInboxItem(id)` — records no routing; just calls `nextInboxItem()`.
-- `processInboxItem(id)` / `processInboxItemToWaitingFor(id)` / `processInboxItemToMaybe(id)` / `processInboxItemToDone(id)` / `processInboxItemToTrash(id)` — each delegates to `TodoDao.applyRouting(from: prior, to: kind, …)` so a single forward write expresses the desired final state regardless of any prior routing on the same index. The returned record's `kind` is stored in `inboxRoutings`, then the cursor advances.
+- `recordInboxRoutingAndAdvance(kind)` — state-only. The DAO write is owned by `ProcessToHandlers` (see "Routing transitions" below); this method simply records the chosen `RoutingKind` in `inboxRoutings` for the current index and advances the cursor.
+- `processInboxItem(id)` / `processInboxItemToWaitingFor(id)` / `processInboxItemToMaybe(id)` / `processInboxItemToDone(id)` / `processInboxItemToTrash(id)` — older bundled helpers that combine `applyRouting` and the state update. Retained because the existing test suite drives them directly; production code (`InboxClarificationStep` / `ZeroInboxStep`) uses the widget-owned write path instead.
 - `getPersonTagIds(todoId)` — returns person-tag IDs for pre-seeding the person picker on a Waiting For revisit.
 
 The **Next** button in `FocusSessionPlanningScreen` is gated on `inboxIndex >= inboxSnapshot!.length` so the user cannot advance until every item is processed or skipped. The screen also auto-advances when a freshly loaded snapshot is empty (inbox was already clear).
 
 ### Routing transitions — single source of truth
 
-`TodoDao.applyRouting(todoId, to:, from:, nextActionText:, personTagIds:, userId:, now:)` is the only path that mutates the `clarified` / `intent` / `done_at` / `next_action_text` columns for a clarification (inbox-clarify or re-clarification review). Both `FocusSessionPlanningNotifier.processInboxItem*` (Step 0) and the review-step actions (`confirmReviewItemRelevant` / `markReviewItemWaitingFor` / `updateReviewItemNextAction` / `markReviewItemDone` / `deferReviewItemToSomeday` / `trashReviewItem`, Step 1) call into it.
+`TodoDao.applyRouting(todoId, to:, nextActionText:, personTagIds:, userId:, now:)` is the only path that mutates the `clarified` / `intent` / `done_at` / `next_action_text` columns for a clarification (inbox-clarify, re-clarification review, or any periodic-review step).
 
-`RoutingKind` (`app/lib/models/todo.dart`) names the destinations: `nextAction`, `waitingFor`, `maybe`, `done`, `trash`. Each value defines the desired final column state (the forward matrix); `applyRouting` writes that state in a single transaction and stamps `last_clarified_at`. Because the matrix is exhaustive, callers do not need a separate revert step before re-applying — passing the prior `RoutingKind` as `from` is sufficient. The only `from`-dependent rule is that transitioning *away* from `RoutingKind.waitingFor` clears person-tag associations (a Waiting For-specific side effect); other transitions leave person tags untouched. Callers that supply `personTagIds` (waitingFor → waitingFor with a new delegate set) overwrite the assignments explicitly.
+`RoutingKind` (`app/lib/models/todo.dart`) names the destinations: `nextAction`, `waitingFor`, `maybe`, `done`, `trash`. Each value defines the desired final column state (the forward matrix); `applyRouting` writes that state in a single transaction and stamps `last_clarified_at`. Because the matrix is exhaustive, callers do not need a separate revert step before re-applying.
+
+**Orthogonality invariant (intent ⊥ delegate ⊥ user-action):** `applyRouting` writes the *intent* axis. The *delegate* axis (person tags) is mutated only when the caller explicitly passes `personTagIds` — a Next/Someday/Trash route on a delegated task does not strip the delegate, so a task can be `waiting for trixy` *and* have a new next action like `call trixy for update` without losing the delegate when the user routes it. The *user-action* axis (`next_action_text`) is written by `applyRouting` only when the caller passes `nextActionText` (typically through the `nextActionDialog` modifier or a callsite-owned setter); plain Next / Waiting For routes from `ProcessToHandlers` do not synthesise a phrase.
+
+**Cleanup invariant on `done_at`:** any non-Done, non-Trash route clears `done_at` if set, so promoting a previously-completed task back to active state can't leave a stale completion timestamp. `Done` refreshes the timestamp; `Trash` leaves it alone so the completion record survives a soft-delete.
+
+### `ProcessToHandlers` — the canonical "process to" action bar
+
+`ProcessToHandlers` (`app/lib/widgets/process_to_handlers.dart`) is the single widget rendered wherever the user routes a Todo: the inbox-clarify card (planning Step 0 and weekly review's zero-inbox step), the daily planning task-review step, and the weekly review's Waiting For / Projects / Someday-Maybe steps.
+
+The widget owns its DAO writes. Callsites speak `ProcessAction` (`keep`, `next`, `waitingFor`, `someday`, `done`, `trash`, plus the `nextActionDialog` modifier on `next`) and never see `RoutingKind`. Callsites that hold a `RoutingKind` from a session record translate at the read site via the co-located `RoutingKind.toProcessAction()` extension.
+
+API:
+
+- `include: Set<ProcessAction>` — surface non-default actions or modifiers (e.g. `keep`, `nextActionDialog`).
+- `except: Set<ProcessAction>` — hide default actions (e.g. the Waiting For step uses `except: {waitingFor}` because the user is already on a waiting item; Keep covers re-confirmation).
+- `disabled: Set<ProcessAction>` — render disabled-state but still draw the button (parent-owned validation, e.g. inbox card disables routes while the title is empty).
+- `labels: Map<ProcessAction, String>` — per-callsite label overrides.
+- `lastAction: ProcessAction?` — drives the "previously selected" affordance on the matching button when the user backs up to revisit an item.
+- `onAfterRoute: (ProcessAction) -> Future<void>` — fires once after a successful write (or after `keep` stamps `last_clarified_at`). Used for callsite-specific bookkeeping (advancing a snapshot cursor, recording the routing for the highlight) and for callsite-owned writes on the user-action axis — e.g. `InboxClarifyCard` mirrors the live title into `next_action_text` here when the user routes to Next/Waiting For from inbox-clarify (title-as-action coupling). Not called when the user cancels a sub-dialog.
+
+Sub-flows owned by the widget:
+- The Waiting For button opens `PersonTagPickerSheet` and writes only the intent + delegate (person tags) on confirm; `next_action_text` is on the orthogonal user-action axis and is left alone.
+- The `nextActionDialog` modifier opens `NextActionDialog` (`app/lib/widgets/next_action_dialog.dart`) prefilled with the existing `next_action_text` and writes the new phrase on save — this is the only widget-internal path that mutates the user-action axis.
 
 ### Planning nudges
 

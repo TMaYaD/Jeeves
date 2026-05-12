@@ -12,8 +12,9 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
-import '../../../widgets/person_tag_picker.dart';
+import '../../../widgets/process_to_handlers.dart';
 
 // ---------------------------------------------------------------------------
 // Hint enum — derived from task state
@@ -59,7 +60,7 @@ class TaskReviewStep extends ConsumerWidget {
 // Per-item review card
 // ---------------------------------------------------------------------------
 
-class _ReviewCard extends ConsumerStatefulWidget {
+class _ReviewCard extends ConsumerWidget {
   const _ReviewCard({
     super.key,
     required this.task,
@@ -75,80 +76,8 @@ class _ReviewCard extends ConsumerStatefulWidget {
   final ReviewActionRecord? previousAction;
 
   @override
-  ConsumerState<_ReviewCard> createState() => _ReviewCardState();
-}
-
-class _ReviewCardState extends ConsumerState<_ReviewCard> {
-  bool _busy = false;
-
-  Future<void> _runOnce(Future<void> Function() action) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      await action();
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _confirmRelevant() => _runOnce(() => ref
-      .read(focusSessionPlanningProvider.notifier)
-      .confirmReviewItemRelevant(widget.task.id));
-
-  Future<void> _waitingFor() => _runOnce(() async {
-        final preselected =
-            widget.previousAction?.kind == ReviewActionKind.waitingFor
-                ? widget.previousAction!.personTagIds
-                : const <String>{};
-        await showPersonTagPicker(
-          context,
-          todoId: widget.task.id,
-          assignedPersonTagIds: preselected,
-          requireSelection: true,
-          onAfterConfirm: () => ref
-              .read(focusSessionPlanningProvider.notifier)
-              .markReviewItemWaitingFor(
-                widget.task.id,
-                isActionless: widget.hint == ReclarifyHint.noNextAction,
-              ),
-        );
-      });
-
-  Future<void> _updateNextAction() => _runOnce(() async {
-        final initial =
-            widget.previousAction?.kind == ReviewActionKind.updateNextAction
-                ? (widget.previousAction!.nextActionText ?? widget.task.nextActionText ?? '')
-                : (widget.task.nextActionText ?? '');
-        final text = await showDialog<String>(
-          context: context,
-          builder: (ctx) => _NextActionDialog(
-            initial: initial,
-            taskTitle: widget.task.title,
-          ),
-        );
-        if (text != null && mounted) {
-          await ref
-              .read(focusSessionPlanningProvider.notifier)
-              .updateReviewItemNextAction(widget.task.id, text);
-        }
-      });
-
-  Future<void> _markDone() => _runOnce(() => ref
-      .read(focusSessionPlanningProvider.notifier)
-      .markReviewItemDone(widget.task.id));
-
-  Future<void> _sendToSomeday() => _runOnce(() => ref
-      .read(focusSessionPlanningProvider.notifier)
-      .deferReviewItemToSomeday(widget.task.id));
-
-  Future<void> _trash() => _runOnce(() => ref
-      .read(focusSessionPlanningProvider.notifier)
-      .trashReviewItem(widget.task.id));
-
-  @override
-  Widget build(BuildContext context) {
-    final isActionless = widget.hint == ReclarifyHint.noNextAction;
-    final selectedKind = widget.previousAction?.kind;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isActionless = hint == ReclarifyHint.noNextAction;
 
     return ListView(
       physics: const ClampingScrollPhysics(),
@@ -201,7 +130,7 @@ class _ReviewCardState extends ConsumerState<_ReviewCard> {
 
         // Task title
         Text(
-          widget.task.title,
+          task.title,
           style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w700,
@@ -210,16 +139,16 @@ class _ReviewCardState extends ConsumerState<_ReviewCard> {
         ),
 
         // Notes (if any)
-        if (widget.task.notes != null && widget.task.notes!.isNotEmpty) ...[
+        if (task.notes != null && task.notes!.isNotEmpty) ...[
           const SizedBox(height: 8),
           Text(
-            widget.task.notes!,
+            task.notes!,
             style: TextStyle(fontSize: 14, color: Colors.grey[600]),
           ),
         ],
 
         // Current next action (if stale)
-        if (!isActionless && widget.task.nextActionText != null) ...[
+        if (!isActionless && task.nextActionText != null) ...[
           const SizedBox(height: 8),
           Row(
             children: [
@@ -228,7 +157,7 @@ class _ReviewCardState extends ConsumerState<_ReviewCard> {
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
-                  widget.task.nextActionText!,
+                  task.nextActionText!,
                   style: TextStyle(
                     fontSize: 13,
                     color: Colors.grey[600],
@@ -242,65 +171,85 @@ class _ReviewCardState extends ConsumerState<_ReviewCard> {
 
         const SizedBox(height: 28),
 
-        // Action buttons
+        // Action buttons — defaults plus the dialog modifier on Next.
+        // Stale tasks add "Still relevant" (keep with a custom label);
+        // Actionless tasks omit it because defining an action is required.
         const _FieldLabel('WHAT DO YOU WANT TO DO?'),
         const SizedBox(height: 12),
 
-        // "Still relevant" — only for Stale tasks
-        if (!isActionless) ...[
-          _ActionButton(
-            label: 'Still relevant',
-            icon: Icons.check_circle_outline,
-            color: const Color(0xFF16A34A),
-            selected: selectedKind == ReviewActionKind.stillRelevant,
-            onTap: _busy ? null : _confirmRelevant,
-          ),
-          const SizedBox(height: 8),
-        ],
-
-        _ActionButton(
-          label: 'Update next action…',
-          icon: Icons.edit_outlined,
-          color: const Color(0xFF2563EB),
-          selected: selectedKind == ReviewActionKind.updateNextAction,
-          onTap: _busy ? null : _updateNextAction,
-        ),
-        const SizedBox(height: 8),
-        _ActionButton(
-          label: 'Waiting for…',
-          icon: Icons.person_outlined,
-          color: const Color(0xFF7C3AED),
-          selected: selectedKind == ReviewActionKind.waitingFor,
-          onTap: _busy ? null : _waitingFor,
-        ),
-        const SizedBox(height: 8),
-        _ActionButton(
-          label: 'Send to Someday',
-          icon: Icons.star_border,
-          color: const Color(0xFF6B7280),
-          selected: selectedKind == ReviewActionKind.sendToSomeday,
-          onTap: _busy ? null : _sendToSomeday,
-        ),
-        const SizedBox(height: 8),
-        _ActionButton(
-          label: 'Mark done',
-          icon: Icons.task_alt_outlined,
-          color: const Color(0xFF16A34A),
-          selected: selectedKind == ReviewActionKind.markDone,
-          onTap: _busy ? null : _markDone,
-        ),
-        const SizedBox(height: 8),
-        _ActionButton(
-          label: 'Trash',
-          icon: Icons.delete_outline,
-          color: const Color(0xFFDC2626),
-          selected: selectedKind == ReviewActionKind.trash,
-          onTap: _busy ? null : _trash,
+        ProcessToHandlers(
+          todo: task,
+          include: {
+            ProcessAction.nextActionDialog,
+            if (!isActionless) ProcessAction.keep,
+          },
+          labels: const {
+            ProcessAction.keep: 'Still relevant',
+            ProcessAction.next: 'Update next action…',
+          },
+          lastAction: _toProcessAction(previousAction?.kind),
+          onAfterRoute: (action) async {
+            final notifier =
+                ref.read(focusSessionPlanningProvider.notifier);
+            if (action == ProcessAction.nextActionDialog) {
+              // Blank dialog text normalises nextActionText to null and
+              // leaves the task in the re-clarification queue — clear the
+              // action record and stay on the same item.
+              final updated =
+                  await ref.read(databaseProvider).todoDao.getTodo(task.id);
+              final txt = updated?.nextActionText?.trim() ?? '';
+              if (txt.isEmpty) {
+                notifier.clearCurrentReviewAction();
+                return;
+              }
+              notifier.recordReviewActionAndAdvance(ReviewActionRecord(
+                kind: ReviewActionKind.updateNextAction,
+                nextActionText: txt,
+              ));
+              return;
+            }
+            final record = _toReviewActionRecord(action);
+            if (record == null) return;
+            notifier.recordReviewActionAndAdvance(record);
+          },
         ),
       ],
     );
   }
 }
+
+ProcessAction? _toProcessAction(ReviewActionKind? kind) => switch (kind) {
+      null => null,
+      ReviewActionKind.stillRelevant => ProcessAction.keep,
+      ReviewActionKind.updateNextAction => ProcessAction.nextActionDialog,
+      ReviewActionKind.waitingFor => ProcessAction.waitingFor,
+      ReviewActionKind.markDone => ProcessAction.done,
+      ReviewActionKind.sendToSomeday => ProcessAction.someday,
+      ReviewActionKind.trash => ProcessAction.trash,
+    };
+
+/// Translates a routed [ProcessAction] to the matching [ReviewActionRecord].
+/// `nextActionDialog` is handled separately because it carries the dialog
+/// text. `keep` records `stillRelevant`. Returns null for actions the
+/// task-review surface does not produce.
+ReviewActionRecord? _toReviewActionRecord(ProcessAction action) =>
+    switch (action) {
+      ProcessAction.keep => const ReviewActionRecord(
+          kind: ReviewActionKind.stillRelevant,
+        ),
+      ProcessAction.next => const ReviewActionRecord(
+          kind: ReviewActionKind.updateNextAction,
+        ),
+      ProcessAction.waitingFor =>
+        const ReviewActionRecord(kind: ReviewActionKind.waitingFor),
+      ProcessAction.someday =>
+        const ReviewActionRecord(kind: ReviewActionKind.sendToSomeday),
+      ProcessAction.done =>
+        const ReviewActionRecord(kind: ReviewActionKind.markDone),
+      ProcessAction.trash =>
+        const ReviewActionRecord(kind: ReviewActionKind.trash),
+      ProcessAction.nextActionDialog => null,
+    };
 
 // ---------------------------------------------------------------------------
 // All-reviewed empty state
@@ -364,80 +313,6 @@ class _AllReviewedCardState extends ConsumerState<_AllReviewedCard> {
 }
 
 // ---------------------------------------------------------------------------
-// "Update next action" dialog
-// ---------------------------------------------------------------------------
-
-class _NextActionDialog extends StatefulWidget {
-  const _NextActionDialog({required this.initial, required this.taskTitle});
-
-  final String initial;
-  final String taskTitle;
-
-  @override
-  State<_NextActionDialog> createState() => _NextActionDialogState();
-}
-
-class _NextActionDialogState extends State<_NextActionDialog> {
-  late final TextEditingController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: widget.initial);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Update next action'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            widget.taskTitle,
-            style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF6B7280)),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _ctrl,
-            autofocus: true,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(
-              hintText: 'What\'s the next physical action?',
-              border: OutlineInputBorder(),
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            ),
-            maxLines: 2,
-            minLines: 1,
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, _ctrl.text.trim()),
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Small widgets
 // ---------------------------------------------------------------------------
 
@@ -454,42 +329,6 @@ class _FieldLabel extends StatelessWidget {
         fontWeight: FontWeight.bold,
         letterSpacing: 1.2,
         color: Color(0xFF9CA3AF),
-      ),
-    );
-  }
-}
-
-class _ActionButton extends StatelessWidget {
-  const _ActionButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-    this.selected = false,
-  });
-
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback? onTap;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: onTap,
-      icon: Icon(icon, size: 18, color: color),
-      label: Text(label),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: color,
-        backgroundColor: selected ? color.withValues(alpha: 0.08) : null,
-        side: BorderSide(
-          color: selected ? color.withValues(alpha: 0.7) : color.withValues(alpha: 0.4),
-        ),
-        alignment: Alignment.centerLeft,
-        minimumSize: const Size.fromHeight(44),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }

@@ -905,7 +905,7 @@ void main() {
 
       expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
 
-      await notifier.markReviewItemWaitingFor(id, isActionless: false);
+      await notifier.markReviewItemWaitingFor(id);
 
       expect(await db.todoDao.watchNeedsReview().first, isEmpty);
 
@@ -913,19 +913,22 @@ void main() {
       expect(state.reviewNav.index, 1);
     });
 
-    test('markReviewItemWaitingFor on actionless task: sets next_action_text; task leaves result; reviewIndex advances',
+    test('markReviewItemWaitingFor on actionless task: leaves next_action_text untouched; task remains in needs-review',
         () async {
+      // Routing is intent-only; per the orthogonality model, the
+      // user-action axis (`next_action_text`) is not touched by a route
+      // to waitingFor. An actionless task therefore stays in the
+      // re-clarification queue until the dialog records a phrase.
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
 
-      await notifier.markReviewItemWaitingFor(id, isActionless: true);
-
-      expect(await db.todoDao.watchNeedsReview().first, isEmpty);
+      await notifier.markReviewItemWaitingFor(id);
 
       final todo = await db.todoDao.getTodo(id);
-      expect(todo?.nextActionText, 'Waiting for…');
+      expect(todo?.nextActionText, isNull,
+          reason: 'orthogonality: routing must not write next_action_text');
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);

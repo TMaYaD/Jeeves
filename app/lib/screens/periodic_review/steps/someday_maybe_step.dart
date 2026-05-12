@@ -1,14 +1,14 @@
 /// Step 4 of the Weekly Review wizard: review each Someday/Maybe item one
-/// at a time. Routing decisions go through [TodoDao.applyRouting]; the
-/// in-session [PeriodicReviewState.somedayRoutings] map drives the
-/// "previously selected" highlight on revisit.
+/// at a time. Routing actions are delegated to the canonical
+/// [ProcessToHandlers] action bar; this step only records the routing for
+/// the "previously selected" affordance and advances the snapshot cursor.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
+import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
 
 class SomedayMaybeStep extends ConsumerWidget {
@@ -46,49 +46,39 @@ class SomedayMaybeStep extends ConsumerWidget {
 
     final index = nav.index;
     final todo = nav.current!;
-    final db = ref.read(databaseProvider);
     final notifier = ref.read(periodicReviewProvider.notifier);
-
-    Future<void> route(RoutingKind to) async {
-      await db.todoDao.applyRouting(
-        todo.id,
-        from: RoutingKind.maybe,
-        to: to,
-      );
-      notifier.recordSomedayRouting(index, to);
-      notifier.advanceSomeday();
-    }
 
     return ReviewItemCard(
       key: ValueKey(todo.id),
       todo: todo,
       headline: 'Worth pursuing now?',
-      lastRouting: routings[index],
-      actions: [
-        ReviewAction(
-          label: 'Keep on Someday',
-          icon: Icons.check_circle_outline,
-          color: const Color(0xFF2563EB),
-          onTap: () async {
-            await db.todoDao.stampLastClarifiedAt(todo.id);
+      // The user can Keep on Someday, promote to Next Actions, or Trash.
+      // Waiting For / Someday / Done don't appear because the item is
+      // already on Someday and these routes wouldn't change much; mirrors
+      // the previous step's surface.
+      process: ProcessToHandlers(
+        todo: todo,
+        include: const {ProcessAction.keep},
+        except: const {
+          ProcessAction.waitingFor,
+          ProcessAction.someday,
+          ProcessAction.done,
+        },
+        labels: const {
+          ProcessAction.keep: 'Keep on Someday',
+        },
+        lastAction: routings[index]?.toProcessAction(),
+        onAfterRoute: (action) async {
+          if (action == ProcessAction.keep) {
             notifier.advanceSomeday();
-          },
-        ),
-        ReviewAction(
-          label: 'Promote to Next Actions',
-          icon: Icons.upgrade,
-          color: const Color(0xFF059669),
-          routing: RoutingKind.nextAction,
-          onTap: () => route(RoutingKind.nextAction),
-        ),
-        ReviewAction(
-          label: 'Discard',
-          icon: Icons.delete_outline,
-          color: const Color(0xFFDC2626),
-          routing: RoutingKind.trash,
-          onTap: () => route(RoutingKind.trash),
-        ),
-      ],
+            return;
+          }
+          final kind = action.toRoutingKind();
+          if (kind == null) return;
+          notifier.recordSomedayRouting(index, kind);
+          notifier.advanceSomeday();
+        },
+      ),
     );
   }
 }

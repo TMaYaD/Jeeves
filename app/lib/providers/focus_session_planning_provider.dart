@@ -482,6 +482,20 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Advances the cursor without writing to the DB or recording a routing.
   void skipInboxItem() => nextInboxItem();
 
+  /// State-only sibling to [_routeInboxItem]. Used by callsites where the
+  /// DAO write has already happened inside the action widget
+  /// ([ProcessToHandlers]) and only the in-session bookkeeping remains.
+  void recordInboxRoutingAndAdvance(RoutingKind kind) {
+    final idx = state.inboxNav.index;
+    state = state.copyWith(
+      inboxRoutings: {
+        ...state.inboxRoutings,
+        idx: InboxRoutingRecord(kind: kind),
+      },
+    );
+    nextInboxItem();
+  }
+
   /// Applies a routing transition to the snapshot row at [idx], delegating
   /// the DB matrix to [TodoDao.applyRouting]. Records [kind] in
   /// [inboxRoutings] and advances the cursor.
@@ -502,13 +516,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     String? nextActionText,
   }) async {
     final idx = state.inboxNav.index;
-    final prior = state.inboxRoutings[idx]?.kind;
     final exists = await _db.todoDao.getTodo(id);
     if (exists == null) return;
     await _db.todoDao.applyRouting(
       id,
       to: to,
-      from: prior,
       nextActionText: nextActionText,
       userId: _userId,
     );
@@ -670,23 +682,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Task Review (Step 1) --------------------------------------------------
 
-  /// Maps a [ReviewActionKind] to the [RoutingKind] its DB-side effects map to.
-  /// Used as the `from` argument for [TodoDao.applyRouting] when the user
-  /// re-selects within the review step.
-  RoutingKind _routingKindFor(ReviewActionKind kind) => switch (kind) {
-        ReviewActionKind.stillRelevant => RoutingKind.nextAction,
-        ReviewActionKind.updateNextAction => RoutingKind.nextAction,
-        ReviewActionKind.waitingFor => RoutingKind.waitingFor,
-        ReviewActionKind.markDone => RoutingKind.done,
-        ReviewActionKind.sendToSomeday => RoutingKind.maybe,
-        ReviewActionKind.trash => RoutingKind.trash,
-      };
-
-  RoutingKind? _priorRoutingForCurrentReviewItem() {
-    final priorKind = state.reviewActions[state.reviewNav.index]?.kind;
-    return priorKind == null ? null : _routingKindFor(priorKind);
-  }
-
   /// "Still relevant" — only available for Stale tasks. Routes through
   /// [TodoDao.applyRouting] so a prior in-session resolution (markDone /
   /// sendToSomeday / trash) is undone in the same write that stamps
@@ -696,7 +691,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await _db.todoDao.applyRouting(
       id,
       to: RoutingKind.nextAction,
-      from: _priorRoutingForCurrentReviewItem(),
       userId: _userId,
     );
     if (state.reviewNav.index != idx) return;
@@ -705,19 +699,17 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
   }
 
-  /// "Waiting for…" — called after [PersonTagPickerSheet] assigns a person tag.
-  ///
-  /// For Actionless tasks, supplies "Waiting for…" as a default
-  /// next_action_text so the task leaves the Actionless predicate. For Stale
-  /// tasks, leaves next_action_text untouched; the routing write itself stamps
-  /// last_clarified_at.
-  Future<void> markReviewItemWaitingFor(String id, {bool isActionless = false}) async {
+  /// "Waiting for…" — called after [PersonTagPickerSheet] assigns a person
+  /// tag. Routing is intent-only; `next_action_text` is on an orthogonal
+  /// axis and is not touched here. The (now-removed) "Waiting for…"
+  /// placeholder for actionless tasks belonged to the user-action axis,
+  /// not the routing axis — the next-action dialog is the user-facing
+  /// path for setting the phrase.
+  Future<void> markReviewItemWaitingFor(String id) async {
     final idx = state.reviewNav.index;
     await _db.todoDao.applyRouting(
       id,
       to: RoutingKind.waitingFor,
-      from: _priorRoutingForCurrentReviewItem(),
-      nextActionText: isActionless ? 'Waiting for…' : null,
       userId: _userId,
     );
     if (state.reviewNav.index != idx) return;
@@ -738,7 +730,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await _db.todoDao.applyRouting(
       id,
       to: RoutingKind.nextAction,
-      from: _priorRoutingForCurrentReviewItem(),
       nextActionText: text,
       userId: _userId,
     );
@@ -766,7 +757,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await _db.todoDao.applyRouting(
       id,
       to: RoutingKind.done,
-      from: _priorRoutingForCurrentReviewItem(),
       userId: _userId,
     );
     if (state.reviewNav.index != idx) return;
@@ -779,7 +769,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await _db.todoDao.applyRouting(
       id,
       to: RoutingKind.maybe,
-      from: _priorRoutingForCurrentReviewItem(),
       userId: _userId,
     );
     if (state.reviewNav.index != idx) return;
@@ -794,7 +783,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await _db.todoDao.applyRouting(
       id,
       to: RoutingKind.trash,
-      from: _priorRoutingForCurrentReviewItem(),
       userId: _userId,
     );
     if (state.reviewNav.index != idx) return;
@@ -806,6 +794,25 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = state.copyWith(
       reviewNav: state.reviewNav.next(),
       reviewActions: {...state.reviewActions, index: record},
+    );
+  }
+
+  /// State-only sibling to the [confirmReviewItemRelevant] /
+  /// [markReviewItem*] family. Used by callsites where the DAO write has
+  /// already happened inside the action widget ([ProcessToHandlers]) and
+  /// only the in-session bookkeeping remains.
+  void recordReviewActionAndAdvance(ReviewActionRecord record) =>
+      _recordAndAdvance(record);
+
+  /// Removes the action record at the current review index without
+  /// advancing the cursor. Used when the user saves a blank
+  /// `next_action_text` via the [nextActionDialog] modifier — the task
+  /// stays Actionless and the cursor does not move.
+  void clearCurrentReviewAction() {
+    final index = state.reviewNav.index;
+    if (!state.reviewActions.containsKey(index)) return;
+    state = state.copyWith(
+      reviewActions: Map.of(state.reviewActions)..remove(index),
     );
   }
 

@@ -1,14 +1,16 @@
 /// Step 0 of the Weekly Review wizard: clarify the inbox using the shared
-/// [InboxClarifyCard]. Routes each pick directly to the relevant DAO and
-/// advances the wizard's nav cursor.
+/// [InboxClarifyCard]. The card delegates its routing buttons to
+/// [ProcessToHandlers] which owns the DAO write; this step only advances the
+/// wizard's snapshot cursor and records the routing for the
+/// "previously selected" affordance.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/inbox_clarify_card.dart';
+import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
 
 class ZeroInboxStep extends ConsumerWidget {
@@ -54,22 +56,11 @@ class ZeroInboxStep extends ConsumerWidget {
     return InboxClarifyCard(
       key: ValueKey(id),
       todoId: id,
-      lastRouting: routings[index],
-      onRoute: (kind) async {
-        final db = ref.read(databaseProvider);
+      lastAction: routings[index]?.toProcessAction(),
+      onAfterRoute: (action) async {
         final notifier = ref.read(periodicReviewProvider.notifier);
-        // Pull the latest title so the persisted next_action_text reflects
-        // any in-card autosave that just landed.
-        final todo = await db.todoDao.getTodo(id);
-        final title = todo?.title;
-        await db.todoDao.applyRouting(
-          id,
-          to: kind,
-          nextActionText:
-              kind == RoutingKind.nextAction || kind == RoutingKind.waitingFor
-                  ? title
-                  : null,
-        );
+        final kind = action.toRoutingKind();
+        if (kind == null) return;
         notifier.recordInboxRouting(index, kind);
         notifier.advanceInbox();
       },

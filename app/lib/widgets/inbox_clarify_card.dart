@@ -2,10 +2,10 @@
 /// inbox-clarify step so the periodic-review wizard can render the same UI.
 ///
 /// The card autosaves attribute edits (title / notes / energy / time / due)
-/// directly to [TodoDao]; it never assumes the planning ritual's notifier or
-/// re-clarification surface. Per-flow side-effects on routing (recording
-/// history, advancing nav, capturing prior state) belong on the parent and
-/// are wired through [onRoute].
+/// directly to [TodoDao]; routing actions are delegated to the canonical
+/// [ProcessToHandlers] action bar, which owns its own DAO writes. Per-flow
+/// nav side-effects (recording routing history, advancing the cursor) are
+/// wired through [onAfterRoute].
 library;
 
 import 'dart:async';
@@ -14,37 +14,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show RoutingKind;
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'clarify_shared_widgets.dart';
-import 'person_tag_picker.dart';
+import 'process_to_handlers.dart';
 
 /// Shared clarification card. Renders an editable view of [todoId] plus the
-/// five GTD destinations. Title/notes/energy/time/due autosave directly via
-/// [TodoDao]; destination buttons fire [onRoute].
-///
-/// For [RoutingKind.waitingFor] the card opens a [PersonTagPickerSheet]
-/// internally; [onRoute] fires only after the user confirms a person tag, so
-/// the parent doesn't need to know about the picker.
+/// canonical "process to" action bar. Title/notes/energy/time/due autosave
+/// directly via [TodoDao]; routing buttons drive [ProcessToHandlers].
 class InboxClarifyCard extends ConsumerStatefulWidget {
   const InboxClarifyCard({
     super.key,
     required this.todoId,
-    this.lastRouting,
-    required this.onRoute,
+    this.lastAction,
+    this.onAfterRoute,
   });
 
   final String todoId;
 
-  /// The last routing applied to this item, or null. Drives the
+  /// The action most recently applied to this item — drives the
   /// "previously selected" affordance on the matching destination button.
-  final RoutingKind? lastRouting;
+  final ProcessAction? lastAction;
 
-  /// Called after pending edits have flushed and any picker has confirmed.
-  /// The callback performs the actual DAO routing call (and any flow-specific
-  /// side effects).
-  final Future<void> Function(RoutingKind kind) onRoute;
+  /// Called once after a successful route. Used for callsite-specific
+  /// concerns like advancing the inbox cursor and recording routing history.
+  final Future<void> Function(ProcessAction action)? onAfterRoute;
 
   @override
   ConsumerState<InboxClarifyCard> createState() => _InboxClarifyCardState();
@@ -57,7 +51,6 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
   int? _timeEstimate;
   DateTime? _dueDate;
   bool _initialised = false;
-  bool _processing = false;
   // Mirrors `_titleCtrl.text.trim().isEmpty` for build-time gating of the
   // routing buttons. Updated synchronously in `_onTextChanged` so the user
   // sees the destination buttons (and the title's error state) react as
@@ -148,65 +141,6 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
     );
   }
 
-  Future<void> _runAction(Future<void> Function() action) async {
-    if (_processing) return;
-    setState(() => _processing = true);
-    try {
-      await action();
-    } finally {
-      if (mounted) setState(() => _processing = false);
-    }
-  }
-
-  /// Flushes any pending text edit and returns true when the title is
-  /// non-empty. The card refuses to route an item with an empty title.
-  Future<bool> _flushAndValidate() async {
-    await _flushTextSave();
-    final title = _titleCtrl?.text.trim() ?? '';
-    return title.isNotEmpty;
-  }
-
-  Future<void> _routeNextAction() async {
-    if (!await _flushAndValidate()) return;
-    await widget.onRoute(RoutingKind.nextAction);
-  }
-
-  Future<void> _routeWaitingFor(BuildContext context) async {
-    if (!await _flushAndValidate()) return;
-    if (!context.mounted) return;
-    final db = ref.read(databaseProvider);
-    final currentTagIds =
-        await db.todoDao.getPersonTagIdsForTodo(widget.todoId);
-    if (!context.mounted) return;
-    await showPersonTagPicker(
-      context,
-      todoId: widget.todoId,
-      assignedPersonTagIds: currentTagIds,
-      requireSelection: true,
-      onAfterConfirm: () async {
-        if (!context.mounted) return;
-        await widget.onRoute(RoutingKind.waitingFor);
-      },
-    );
-  }
-
-  Future<void> _routeMaybe() async {
-    if (!await _flushAndValidate()) return;
-    await widget.onRoute(RoutingKind.maybe);
-  }
-
-  Future<void> _routeDone() async {
-    if (!await _flushAndValidate()) return;
-    await widget.onRoute(RoutingKind.done);
-  }
-
-  Future<void> _routeTrash() async {
-    // Discarding bypasses title validation — the user shouldn't have to name
-    // an item just to throw it away.
-    await _flushTextSave();
-    await widget.onRoute(RoutingKind.trash);
-  }
-
   Future<DateTime?> _pickDate(BuildContext context) {
     final now = DateTime.now();
     final candidate = _dueDate ?? now.add(const Duration(days: 1));
@@ -228,6 +162,18 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
       return const Center(child: CircularProgressIndicator());
     }
     _initialiseFrom(todo);
+
+    // Title is required to route to anything except Trash. Disable the
+    // four committed routes; Trash stays enabled so the user can throw away
+    // an unnamed item.
+    final disabled = _titleIsBlank
+        ? const <ProcessAction>{
+            ProcessAction.next,
+            ProcessAction.waitingFor,
+            ProcessAction.someday,
+            ProcessAction.done,
+          }
+        : const <ProcessAction>{};
 
     return ListView(
       physics: const ClampingScrollPhysics(),
@@ -369,70 +315,36 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
         ),
         const SizedBox(height: 28),
 
-        AnimatedOpacity(
-          opacity: _processing ? 0.4 : 1.0,
-          duration: const Duration(milliseconds: 150),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const ClarifyFieldLabel('PROCESS TO'),
-              const SizedBox(height: 12),
-              // Routing destinations except Discard require a title — disabling
-              // them mirrors the validation the routing methods enforce, so
-              // the user gets visual feedback rather than a silent no-op.
-              ClarifyDestinationButton(
-                label: 'Next Action',
-                icon: Icons.check_circle_outline,
-                color: const Color(0xFF2563EB),
-                enabled: !_processing && !_titleIsBlank,
-                isPreviouslySelected:
-                    widget.lastRouting == RoutingKind.nextAction,
-                onTap: () => _runAction(_routeNextAction),
-              ),
-              const SizedBox(height: 8),
-              ClarifyDestinationButton(
-                label: 'Waiting For',
-                icon: Icons.person_outlined,
-                color: const Color(0xFF7C3AED),
-                enabled: !_processing && !_titleIsBlank,
-                isPreviouslySelected:
-                    widget.lastRouting == RoutingKind.waitingFor,
-                onTap: () => _runAction(() => _routeWaitingFor(context)),
-              ),
-              const SizedBox(height: 8),
-              ClarifyDestinationButton(
-                label: 'Maybe',
-                icon: Icons.star_border,
-                color: const Color(0xFF6B7280),
-                enabled: !_processing && !_titleIsBlank,
-                isPreviouslySelected:
-                    widget.lastRouting == RoutingKind.maybe,
-                onTap: () => _runAction(_routeMaybe),
-              ),
-              const SizedBox(height: 8),
-              ClarifyDestinationButton(
-                label: 'Done',
-                icon: Icons.task_alt_outlined,
-                color: const Color(0xFF16A34A),
-                enabled: !_processing && !_titleIsBlank,
-                isPreviouslySelected:
-                    widget.lastRouting == RoutingKind.done,
-                onTap: () => _runAction(_routeDone),
-              ),
-              const SizedBox(height: 8),
-              // Discard intentionally bypasses title validation — a user
-              // shouldn't have to name an item just to throw it away.
-              ClarifyDestinationButton(
-                label: 'Discard',
-                icon: Icons.delete_outline,
-                color: const Color(0xFFDC2626),
-                enabled: !_processing,
-                isPreviouslySelected:
-                    widget.lastRouting == RoutingKind.trash,
-                onTap: () => _runAction(_routeTrash),
-              ),
-            ],
-          ),
+        const ClarifyFieldLabel('PROCESS TO'),
+        const SizedBox(height: 12),
+        ProcessToHandlers(
+          todo: todo,
+          disabled: disabled,
+          lastAction: widget.lastAction,
+          onAfterRoute: (action) async {
+            // Make sure title/notes are persisted before yielding to the
+            // caller's nav handler — the inbox cursor advance reads the
+            // recorded routing on the next item.
+            await _flushTextSave();
+            // Inbox-clarify title-as-action coupling: when the user routes
+            // to Next Action or Waiting For from the inbox, mirror the
+            // current title into `next_action_text` so the new row leaves
+            // inbox with a defined action. The controller's live value
+            // wins over the (possibly debounced) todos.title column so a
+            // fast typer's edit isn't lost. The dialog modifier writes
+            // its own value, so we skip it here.
+            if (action == ProcessAction.next ||
+                action == ProcessAction.waitingFor) {
+              final title = _titleCtrl?.text.trim() ?? '';
+              if (title.isNotEmpty) {
+                await ref
+                    .read(databaseProvider)
+                    .todoDao
+                    .setNextActionText(widget.todoId, title);
+              }
+            }
+            await widget.onAfterRoute?.call(action);
+          },
         ),
       ],
     );
