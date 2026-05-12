@@ -27,6 +27,7 @@ jobs:
       pubspec_version: ${{ steps.compute.outputs.pubspec_version }}
       is_release: ${{ steps.compute.outputs.is_release }}
       is_prerelease: ${{ steps.compute.outputs.is_prerelease }}
+      firebase_groups: ${{ steps.compute.outputs.firebase_groups }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -69,6 +70,9 @@ jobs:
               echo "is_release=true"
               echo "is_prerelease=false"
               echo "target_changed=false"
+              # GA fans out to every Firebase channel; testers don't get stuck
+              # on stale pre-releases when stable ships.
+              echo "firebase_groups=canary,beta,rc"
             } >> "$GITHUB_OUTPUT"
             echo "Computed: ${VERSION} (GA)"
             exit 0
@@ -172,6 +176,16 @@ jobs:
             IS_RELEASE="false"
           fi
 
+          # Firebase channel fan-out: each stage ships to its own channel and
+          # every less-restrictive one. Internal testers (canary) see every
+          # build; investors/focus groups (beta) skip alphas; FOMO early
+          # adopters (rc) skip alphas and betas.
+          case "$STAGE" in
+            alpha) FIREBASE_GROUPS="canary" ;;
+            beta)  FIREBASE_GROUPS="canary,beta" ;;
+            rc)    FIREBASE_GROUPS="canary,beta,rc" ;;
+          esac
+
           {
             echo "version=${VERSION}"
             echo "pubspec_version=${PUBSPEC_VERSION}"
@@ -180,8 +194,9 @@ jobs:
             echo "target=${TARGET}"
             echo "stage=${STAGE}"
             echo "target_changed=${TARGET_CHANGED}"
+            echo "firebase_groups=${FIREBASE_GROUPS}"
           } >> "$GITHUB_OUTPUT"
-          echo "Computed: ${VERSION} (stage=${STAGE}, target_changed=${TARGET_CHANGED}, release=${IS_RELEASE})"
+          echo "Computed: ${VERSION} (stage=${STAGE}, groups=${FIREBASE_GROUPS}, target_changed=${TARGET_CHANGED}, release=${IS_RELEASE})"
 
       - name: Auto-retag when conventional commits bump target past stage tag
         if: steps.compute.outputs.target_changed == 'true'
@@ -250,6 +265,48 @@ jobs:
           path: |
             app/build/app/outputs/flutter-apk/app-production-release.apk
             app/build/app/outputs/bundle/release/app-production-release.aab
+
+  distribute-android:
+    name: Distribute Android (Firebase)
+    needs: [version, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-artifacts
+          path: artifacts/android
+
+      - name: Compose release notes
+        id: notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${SHA::7}"
+          printf 'notes=%s\n' "${VERSION} (${SHORT_SHA})" >> "$GITHUB_OUTPUT"
+
+      - name: Locate APK
+        id: find_apk
+        run: |
+          set -euo pipefail
+          # upload-artifact v4+ strips the least common ancestor of the
+          # uploaded paths, so the APK lands under artifacts/android/ at a
+          # shorter path than its source. Locate it rather than hardcoding.
+          APK=$(find artifacts/android -type f -name 'app-production-release.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::Could not find app-production-release.apk under artifacts/android"
+            find artifacts/android -type f
+            exit 1
+          fi
+          echo "path=${APK}" >> "$GITHUB_OUTPUT"
+
+      - uses: wzieba/Firebase-Distribution-Github-Action@bd494989dd4bec0343f78adee87fe66e48279ad6 # v1
+        with:
+          appId: ${{ secrets.FIREBASE_APP_ID_PROD }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          groups: ${{ needs.version.outputs.firebase_groups }}
+          file: ${{ steps.find_apk.outputs.path }}
+          releaseNotes: ${{ steps.notes.outputs.notes }}
 
   build-seeker:
     name: Build Seeker (SWS)
@@ -353,13 +410,25 @@ jobs:
           path: artifacts/web
 
       - name: Rename artifacts with version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          mv artifacts/android/app-production-release.apk \
-            "artifacts/android/jeeves-${{ needs.version.outputs.version }}.apk"
-          mv artifacts/android/app-production-release.aab \
-            "artifacts/android/jeeves-${{ needs.version.outputs.version }}.aab"
+          set -euo pipefail
+          # upload-artifact v4+ strips the least common ancestor of uploaded
+          # paths, so the android APK/AAB don't sit at artifacts/android/ root
+          # — they're under flutter-apk/ and bundle/release/. Locate them
+          # rather than hardcoding so renames work regardless of layout.
+          APK=$(find artifacts/android -type f -name 'app-production-release.apk' | head -1)
+          AAB=$(find artifacts/android -type f -name 'app-production-release.aab' | head -1)
+          if [ -z "$APK" ] || [ -z "$AAB" ]; then
+            echo "::error::Missing android artifacts under artifacts/android"
+            find artifacts/android -type f
+            exit 1
+          fi
+          mv "$APK" "artifacts/android/jeeves-${VERSION}.apk"
+          mv "$AAB" "artifacts/android/jeeves-${VERSION}.aab"
           mv artifacts/seeker/app-production-seeker-release.apk \
-            "artifacts/seeker/jeeves-seeker-${{ needs.version.outputs.version }}.apk"
+            "artifacts/seeker/jeeves-seeker-${VERSION}.apk"
 
       - name: Publish to GitHub Releases
         env:
