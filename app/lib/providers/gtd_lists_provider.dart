@@ -79,3 +79,23 @@ final unfilteredNextActionsProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   return db.todoDao.watchNextActions();
 });
+
+/// Stream of waiting-for todos — no context tag filter.
+///
+/// Unlike [waitingForProvider], this ignores [tagFilterProvider] so it covers
+/// the user's full waiting-for list. Used by [PeriodicReviewBanner] to decide
+/// whether the empty-actionable trigger should fire.
+final unfilteredWaitingForProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.todoDao.watchPersonTagged();
+});
+
+/// Stream of maybe-intent todos — no context tag filter.
+///
+/// Unlike [maybeProvider], this ignores [tagFilterProvider] so it covers the
+/// user's full someday/maybe list. Used by [PeriodicReviewBanner] to decide
+/// whether the empty-actionable trigger should fire.
+final unfilteredMaybeProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.todoDao.watchMaybe();
+});

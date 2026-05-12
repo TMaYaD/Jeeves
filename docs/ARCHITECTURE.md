@@ -508,7 +508,7 @@ Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissed
 - Footer Back / Next drive the per-step item cursor first: on a list-driven step, Next advances `inboxNav` / `waitingForNav` / `projectsNav` / `somedayNav` while items remain, and only crosses into the next step once the cursor has nothing more to consume (`!canGoForward`); Back symmetrically retreats the cursor before crossing back.
 - Per-item steps (Waiting For, Projects, Someday/Maybe) share `_review_card.dart` (`ReviewItemCard`, `ReviewAction`, `ReviewEmptyState`).
 - Step 0 (Process Inbox) reuses the shared `widgets/inbox_clarify_card.dart` from the daily-planning ritual.
-- `widgets/periodic_review_banner.dart` — teal banner above app-shell views; visible when due, banner enabled, not dismissed today, and at least one todo exists.
+- `widgets/periodic_review_banner.dart` — teal banner above app-shell views. Banner toggle must be enabled, the user must have at least one todo, and dismissed-today must be false. Given those, it shows when **either** the review is due per the 7-day cadence, **or** the inbox and next-actions are both empty while waiting-for or someday/maybe still holds items. The second trigger fills the gap left by `FocusSessionPlanningBanner` (which suppresses itself in that state per #258) so the user is nudged toward the weekly review when there is nothing to plan today but deferred inventory remains. Both branches read the unfiltered list providers (`unfilteredInboxProvider`, `unfilteredNextActionsProvider`, `unfilteredWaitingForProvider`, `unfilteredMaybeProvider`) so an active context-tag filter does not change visibility.
 
 ### Notifications
 

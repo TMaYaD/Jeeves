@@ -1,18 +1,24 @@
 /// Dismissible banner shown above app-shell views when the Weekly Review is
-/// due and the user has not dismissed it today.
+/// due — or when the inbox and next-actions are both empty while deferred
+/// lists (waiting-for or someday/maybe) still hold items.
 ///
-/// Visibility rules (all must hold):
-/// - banner toggle is enabled
+/// Visibility rules — banner toggle must be enabled, the user must have at
+/// least one todo (skip onboarding state), and dismissed-today must be false.
+/// Given those, the banner shows when **either**:
 /// - the review is "due" per the cadence (>= 7 days since last completion,
-///   or never completed)
-/// - the user has not dismissed today
-/// - the user has at least one todo (skip onboarding state)
+///   or never completed), **or**
+/// - inbox + next-actions are both empty AND (waiting-for OR maybe) is
+///   non-empty. This fills the gap left by [FocusSessionPlanningBanner]
+///   (which suppresses itself in that state per #258) so the user is
+///   nudged toward the weekly review when there is nothing to plan today
+///   but deferred inventory remains.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../providers/gtd_lists_provider.dart';
 import '../providers/onboarding_provider.dart';
 import '../providers/periodic_review_settings_provider.dart';
 
@@ -41,9 +47,6 @@ class PeriodicReviewBanner extends ConsumerWidget {
     if (!ref.watch(periodicReviewBannerEnabledProvider)) {
       return const SizedBox.shrink();
     }
-    if (!ref.watch(periodicReviewIsDueProvider)) {
-      return const SizedBox.shrink();
-    }
     if (ref.watch(periodicReviewBannerDismissedTodayProvider)) {
       return const SizedBox.shrink();
     }
@@ -51,6 +54,26 @@ class PeriodicReviewBanner extends ConsumerWidget {
     final hasTodos = ref.watch(hasTodosProvider);
     if (!hasTodos.hasValue || !hasTodos.requireValue) {
       return const SizedBox.shrink();
+    }
+
+    final isDue = ref.watch(periodicReviewIsDueProvider);
+    final inbox = ref.watch(unfilteredInboxProvider);
+    final next = ref.watch(unfilteredNextActionsProvider);
+    final waiting = ref.watch(unfilteredWaitingForProvider);
+    final maybe = ref.watch(unfilteredMaybeProvider);
+    if (!isDue) {
+      if (!inbox.hasValue ||
+          !next.hasValue ||
+          !waiting.hasValue ||
+          !maybe.hasValue) {
+        return const SizedBox.shrink();
+      }
+      final emptyActionableTrigger = inbox.requireValue.isEmpty &&
+          next.requireValue.isEmpty &&
+          (waiting.requireValue.isNotEmpty || maybe.requireValue.isNotEmpty);
+      if (!emptyActionableTrigger) {
+        return const SizedBox.shrink();
+      }
     }
 
     return _BannerContent(
