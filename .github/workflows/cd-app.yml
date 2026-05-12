@@ -159,9 +159,14 @@ jobs:
           PUBSPEC_VERSION="${VERSION}+${{ github.run_number }}"
 
           # A build is a "release" (gets a GitHub Release entry) when HEAD
-          # carries a tag we recognize as a deliberate publish point — GA
-          # (handled above) or a stage tag at this commit.
-          if [ -n "$HEAD_STAGE_TAG" ]; then
+          # carries a stage tag that *matches* the computed target — i.e.
+          # the tag genuinely names this artifact. If target_changed=true
+          # (a feat!/BREAKING bumped past the tag's declared version), the
+          # tag is mislabelled for this build, so suppress the release. The
+          # subsequent auto-retag creates the correctly-named tag for future
+          # runs to find via git describe.
+          EXPECTED_STAGE_TAG="v${TARGET}-${STAGE}"
+          if [ -n "$HEAD_STAGE_TAG" ] && [ "$HEAD_STAGE_TAG" = "$EXPECTED_STAGE_TAG" ]; then
             IS_RELEASE="true"
           else
             IS_RELEASE="false"
