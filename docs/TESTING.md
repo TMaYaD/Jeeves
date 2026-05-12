@@ -78,7 +78,7 @@ For flows that are impractical to cover with `flutter_test` / integration tests 
   sleep 2
   adb shell screencap -p /sdcard/s.png && adb pull /sdcard/s.png /tmp/s.png
   ```
-- Use `adb shell monkey -p loonyb.in.jeeves.alpha -c android.intent.category.LAUNCHER 1` to cold-launch; prefix with `adb shell am force-stop loonyb.in.jeeves.alpha` for a clean start.
+- Use `adb shell monkey -p loonyb.in.jeeves.dev -c android.intent.category.LAUNCHER 1` to cold-launch; prefix with `adb shell am force-stop loonyb.in.jeeves.dev` for a clean start.
 - Stream Flutter errors: `adb logcat > /tmp/jeeves.log &` then grep for `flutter:` and `AndroidRuntime`. MWA failures surface as `com.solana.mobilewalletadapter.clientlib.*` stacks.
 
 ### Navigation tree with tap coordinates
