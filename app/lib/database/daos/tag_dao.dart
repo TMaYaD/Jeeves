@@ -47,33 +47,63 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Stream of all person-typed tags, ordered by name.
   Stream<List<Tag>> watchPersonTags() => watchByType('person');
 
-  /// Create a new person-typed tag with the given [name] for [userId].
+  /// Return an existing tag's id for the `(name, type)` pair, or create one.
   ///
-  /// Returns the tag id. Assigns a derived color automatically.
-  /// If a person-typed tag with the same name already exists, returns its id
-  /// without creating a duplicate; in that case [userId] is ignored and the
-  /// existing row's user_id is preserved (under the single-user-per-local-DB
-  /// invariant they will normally match).
-  Future<String> createPersonTag(String name, String userId) async {
-    final trimmedName = name.trim();
-    final existing = await findPersonTagByName(trimmedName);
-    if (existing != null) return existing.id;
-    final id = uuid.v4();
-    final colorHex = tagColorToHex(tagColorForName(trimmedName));
-    await upsertTag(TagsCompanion(
-      id: Value(id),
-      name: Value(trimmedName),
-      type: const Value('person'),
-      color: Value(colorHex),
-      userId: Value(userId),
-    ));
-    return id;
+  /// All tag-creation paths must funnel through here so duplicate `(name, type)`
+  /// rows never land in `tags`. `findPersonTagByName` (and its callers) assume
+  /// at most one row per `(name, 'person')`; multiple rows would crash that
+  /// query with `Bad state: Too many elements`.
+  ///
+  /// Assigns a derived color automatically when creating. Under the
+  /// single-user-per-local-DB invariant [userId] matches any pre-existing row's
+  /// user_id; when it doesn't, the existing row is reused unchanged.
+  ///
+  /// Runs inside a transaction so the SELECT and INSERT are serialised against
+  /// the database connection — without this, two concurrent calls awaiting the
+  /// SELECT could interleave and each mint a fresh row for the same
+  /// `(name, type)`. The SELECT is `limit(1)` so legacy duplicates that may
+  /// still be on disk before the startup `dedupeTags` pass completes do not
+  /// crash `getSingleOrNull`.
+  Future<String> findOrCreateTag(String name, String type, String userId) {
+    final trimmed = name.trim();
+    return transaction(() async {
+      final existing = await (select(tags)
+            ..where((t) => t.name.equals(trimmed) & t.type.equals(type))
+            ..orderBy([(t) => OrderingTerm.asc(t.id)])
+            ..limit(1))
+          .getSingleOrNull();
+      if (existing != null) return existing.id;
+      final id = uuid.v4();
+      final colorHex = tagColorToHex(tagColorForName(trimmed));
+      await upsertTag(TagsCompanion(
+        id: Value(id),
+        name: Value(trimmed),
+        type: Value(type),
+        color: Value(colorHex),
+        userId: Value(userId),
+      ));
+      return id;
+    });
   }
 
+  /// Create a new person-typed tag with the given [name] for [userId].
+  ///
+  /// Thin wrapper over [findOrCreateTag] preserved for readability at call sites.
+  Future<String> createPersonTag(String name, String userId) =>
+      findOrCreateTag(name, 'person', userId);
+
   /// Look up an existing person-typed tag by [name].
+  ///
+  /// Uses `orderBy(id).limit(1)` so legacy `(name, 'person')` duplicates that
+  /// may still be on disk before [dedupeTags] completes do not crash
+  /// `getSingleOrNull` with `Bad state: Too many elements`. The result is
+  /// deterministic across calls — matching the canonicalisation rule used by
+  /// [findOrCreateTag] and [dedupeTags] (MIN(id) as the stable choice).
   Future<Tag?> findPersonTagByName(String name) {
     return (select(tags)
-          ..where((t) => t.name.equals(name) & t.type.equals('person')))
+          ..where((t) => t.name.equals(name) & t.type.equals('person'))
+          ..orderBy([(t) => OrderingTerm.asc(t.id)])
+          ..limit(1))
         .getSingleOrNull();
   }
 
@@ -150,9 +180,36 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   }
 
   /// Rename a tag in-place, preserving all other fields.
-  Future<void> rename(String tagId, String newName) => upsertTag(
-        TagsCompanion(id: Value(tagId), name: Value(newName.trim())),
-      );
+  ///
+  /// If another tag already owns the target `(name, type)` pair, this folds
+  /// the source into it via [merge] instead of writing a colliding row — an
+  /// id-addressed rename to an occupied name would otherwise recreate exactly
+  /// the duplicate state [findOrCreateTag] and [dedupeTags] exist to prevent.
+  /// Silently returns when [tagId] is unknown or the name is unchanged.
+  Future<void> rename(String tagId, String newName) {
+    final trimmed = newName.trim();
+    return transaction(() async {
+      final current = await (select(tags)..where((t) => t.id.equals(tagId)))
+          .getSingleOrNull();
+      if (current == null) return;
+      if (current.name == trimmed) return;
+
+      final conflict = await (select(tags)
+            ..where((t) =>
+                t.name.equals(trimmed) &
+                t.type.equals(current.type) &
+                t.id.equals(tagId).not())
+            ..orderBy([(t) => OrderingTerm.asc(t.id)])
+            ..limit(1))
+          .getSingleOrNull();
+      if (conflict != null) {
+        await merge(tagId, conflict.id);
+        return;
+      }
+
+      await upsertTag(TagsCompanion(id: Value(tagId), name: Value(trimmed)));
+    });
+  }
 
   /// Update the colour of a tag; pass null to clear it.
   Future<void> updateColor(String tagId, String? color) => upsertTag(
@@ -239,6 +296,74 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       readsFrom: {todoTags, tags},
     ).get();
     return {for (final r in rows) r.read<String>('tag_id')};
+  }
+
+  /// Collapse duplicate `(name, type)` tag rows into a single canonical row.
+  ///
+  /// Operates on the `tags` view so PowerSync's `INSTEAD OF` triggers fire and
+  /// the deletes/updates flow into the upload queue, reaching the backend
+  /// instead of leaving cloud duplicates that resync on next startup.
+  ///
+  /// Canonicalisation rule for each `(name, type)` group with > 1 row:
+  /// the row with the most `todo_tags` references wins, with `MIN(id)` as the
+  /// deterministic tiebreaker. References on losing rows are repointed to the
+  /// canonical id; colliding junction rows collapse under the
+  /// `(todo_id, tag_id)` PK via `INSERT OR REPLACE` plus an explicit delete of
+  /// the old junction id.
+  ///
+  /// Idempotent: a no-op when there are no duplicates, so it is safe to run on
+  /// every startup without a version gate.
+  Future<void> dedupeTags() {
+    return transaction(() async {
+      final groups = await customSelect(
+        'SELECT name, type FROM tags GROUP BY name, type HAVING COUNT(*) > 1',
+        readsFrom: {tags},
+      ).get();
+      if (groups.isEmpty) return;
+
+      for (final group in groups) {
+        final name = group.read<String>('name');
+        final type = group.read<String>('type');
+
+        final candidates = await customSelect(
+          'SELECT t.id AS id, '
+          '(SELECT COUNT(*) FROM todo_tags WHERE tag_id = t.id) AS ref_count '
+          'FROM tags t WHERE t.name = ? AND t.type = ? '
+          'ORDER BY ref_count DESC, t.id ASC',
+          variables: [Variable(name), Variable(type)],
+          readsFrom: {tags, todoTags},
+        ).get();
+        if (candidates.length < 2) continue;
+
+        final keepId = candidates.first.read<String>('id');
+        final dupIds = candidates
+            .skip(1)
+            .map((r) => r.read<String>('id'))
+            .toList();
+
+        for (final dupId in dupIds) {
+          final junctionRows = await (select(todoTags)
+                ..where((tt) => tt.tagId.equals(dupId)))
+              .get();
+          for (final row in junctionRows) {
+            final newJunctionId = todoTagIdFor(row.todoId, keepId);
+            await into(todoTags).insert(
+              TodoTagsCompanion(
+                id: Value(newJunctionId),
+                todoId: Value(row.todoId),
+                tagId: Value(keepId),
+                userId: Value(row.userId),
+              ),
+              mode: InsertMode.insertOrReplace,
+            );
+            if (row.id != newJunctionId) {
+              await (delete(todoTags)..where((tt) => tt.id.equals(row.id))).go();
+            }
+          }
+          await (delete(tags)..where((t) => t.id.equals(dupId))).go();
+        }
+      }
+    });
   }
 
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].

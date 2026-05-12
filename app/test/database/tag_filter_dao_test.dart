@@ -136,6 +136,56 @@ void main() {
       expect(tags.first.name, 'office');
       expect(tags.first.color, '#ff0000');
     });
+
+    test(
+        'rename into an existing (name, type) folds into the survivor instead '
+        'of recreating duplicates', () async {
+      await _insertTag(db, id: 'ctx-src', name: 'work');
+      await _insertTag(db, id: 'ctx-dst', name: 'office');
+
+      final todoId = await _insertTodo(db, id: 'todo-rename', title: 'Task');
+      await _assignTag(db, todoId, 'ctx-src');
+
+      await db.tagDao.rename('ctx-src', 'office');
+
+      // Source tag is gone, target survives — invariant: one row per
+      // (name, type).
+      final all = await db.tagDao.watchByType('context').first;
+      expect(all, hasLength(1));
+      expect(all.first.id, 'ctx-dst');
+      expect(all.first.name, 'office');
+
+      // Junction repointed to the surviving tag id.
+      final links = await (db.select(db.todoTags)
+            ..where((tt) => tt.todoId.equals(todoId)))
+          .get();
+      expect(links, hasLength(1));
+      expect(links.single.tagId, 'ctx-dst');
+    });
+
+    test('rename into a same-name different-type does not merge', () async {
+      await _insertTag(db, id: 'ctx-shared', name: 'work', type: 'context');
+      await _insertTag(db, id: 'proj-shared', name: 'office', type: 'project');
+
+      await db.tagDao.rename('ctx-shared', 'office');
+
+      final ctx = await db.tagDao.watchByType('context').first;
+      final proj = await db.tagDao.watchByType('project').first;
+      expect(ctx, hasLength(1));
+      expect(ctx.first.id, 'ctx-shared');
+      expect(ctx.first.name, 'office');
+      expect(proj, hasLength(1));
+      expect(proj.first.id, 'proj-shared');
+    });
+
+    test('renaming to the current name is a no-op', () async {
+      await _insertTag(db, id: 'ctx1', name: 'work');
+      await db.tagDao.rename('ctx1', 'work');
+      final tags = await db.tagDao.watchByType('context').first;
+      expect(tags, hasLength(1));
+      expect(tags.first.id, 'ctx1');
+      expect(tags.first.name, 'work');
+    });
   });
 
   group('TagDao.updateColor', () {

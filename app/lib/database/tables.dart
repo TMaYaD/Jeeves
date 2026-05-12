@@ -162,6 +162,20 @@ class Tags extends Table with Synced {
 
   @override
   Set<Column<Object>> get primaryKey => {id};
+
+  /// Test-only tripwire against duplicate `(name, type)` rows.
+  ///
+  /// Drift emits `UNIQUE (name, type)` in the test DB's `CREATE TABLE`, so any
+  /// regression that mints a second row with the same `(name, type)` fails
+  /// the suite loudly. In production `tags` is a PowerSync-managed view over
+  /// `ps_data__tags`; `uniqueKeys` does not propagate to the backing table, so
+  /// production behaviour is unchanged — the invariant is enforced at the
+  /// application layer via `TagDao.findOrCreateTag` and a one-time
+  /// `dedupeTags` pass on startup.
+  @override
+  List<Set<Column<Object>>> get uniqueKeys => [
+        {name, type},
+      ];
 }
 
 // ---------------------------------------------------------------------------

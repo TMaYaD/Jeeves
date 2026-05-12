@@ -17,7 +17,6 @@ import 'package:uuid/enums.dart' show Namespace;
 
 import '../database/daos/tag_dao.dart' show todoTagIdFor;
 import '../database/gtd_database.dart';
-import '../utils/tag_colors.dart';
 import 'nirvana_item.dart';
 import 'nirvana_parser.dart';
 
@@ -105,15 +104,11 @@ Future<ImportResult> importNirvanaLocally({
 
     for (final projectName in allProjectNames) {
       if (!existingProjectNames.contains(projectName)) {
-        final tagId = uuid.v4();
-        final color = tagColorToHex(tagColorForName(projectName));
-        await db.tagDao.upsertTag(TagsCompanion(
-          id: Value(tagId),
-          name: Value(projectName),
-          type: const Value('project'),
-          color: Value(color),
-          userId: Value(userId),
-        ));
+        final tagId = await db.tagDao.findOrCreateTag(
+          projectName,
+          'project',
+          userId,
+        );
         projectTagIds[projectName] = tagId;
         projectTagsCreated++;
       }
@@ -239,7 +234,7 @@ Future<ImportResult> importNirvanaLocally({
         // Upsert generic (context) tags.
         for (final tagName in item.tags) {
           final tagId = contextTagIds[tagName] ??
-              await _upsertContextTag(db, tagName, userId);
+              await db.tagDao.findOrCreateTag(tagName, 'context', userId);
           contextTagIds[tagName] = tagId;
           await db.into(db.todoTags).insert(
                 TodoTagsCompanion(
@@ -284,31 +279,6 @@ Future<Set<String>> _existingPersonTagNamesForTodo(
             db.tags.type.equals('person')))
       .get();
   return {for (final r in rows) r.readTable(db.tags).name};
-}
-
-/// Look up or insert a context tag by [name] for [userId].
-///
-/// Returns the tag's id.
-Future<String> _upsertContextTag(
-    GtdDatabase db, String name, String userId) async {
-  final existing = await (db.select(db.tags)
-        ..where((t) =>
-            t.name.equals(name) &
-            t.userId.equals(userId) &
-            t.type.equals('context')))
-      .getSingleOrNull();
-  if (existing != null) return existing.id;
-
-  final tagId = uuid.v4();
-  final color = tagColorToHex(tagColorForName(name));
-  await db.tagDao.upsertTag(TagsCompanion(
-    id: Value(tagId),
-    name: Value(name),
-    type: const Value('context'),
-    color: Value(color),
-    userId: Value(userId),
-  ));
-  return tagId;
 }
 
 /// Deletes all person-typed tag links for [todoId], leaving project/context

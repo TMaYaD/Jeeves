@@ -47,6 +47,7 @@ final powerSyncInstanceProvider =
   // disconnect() calls on the same PowerSync DB.
   Future<void> pending = Future.value();
   var disposed = false;
+
   Future<void> applyUser(String userId) {
     final next = pending.then((_) async {
       // Skip if disposal began while this transition was queued, so we
