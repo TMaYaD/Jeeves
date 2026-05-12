@@ -380,13 +380,25 @@ jobs:
           path: artifacts/web
 
       - name: Rename artifacts with version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          mv artifacts/android/app-production-release.apk \
-            "artifacts/android/jeeves-${{ needs.version.outputs.version }}.apk"
-          mv artifacts/android/app-production-release.aab \
-            "artifacts/android/jeeves-${{ needs.version.outputs.version }}.aab"
+          set -euo pipefail
+          # upload-artifact v4+ strips the least common ancestor of uploaded
+          # paths, so the android APK/AAB don't sit at artifacts/android/ root
+          # — they're under flutter-apk/ and bundle/release/. Locate them
+          # rather than hardcoding so renames work regardless of layout.
+          APK=$(find artifacts/android -type f -name 'app-production-release.apk' | head -1)
+          AAB=$(find artifacts/android -type f -name 'app-production-release.aab' | head -1)
+          if [ -z "$APK" ] || [ -z "$AAB" ]; then
+            echo "::error::Missing android artifacts under artifacts/android"
+            find artifacts/android -type f
+            exit 1
+          fi
+          mv "$APK" "artifacts/android/jeeves-${VERSION}.apk"
+          mv "$AAB" "artifacts/android/jeeves-${VERSION}.aab"
           mv artifacts/seeker/app-production-seeker-release.apk \
-            "artifacts/seeker/jeeves-seeker-${{ needs.version.outputs.version }}.apk"
+            "artifacts/seeker/jeeves-seeker-${VERSION}.apk"
 
       - name: Publish to GitHub Releases
         env:
