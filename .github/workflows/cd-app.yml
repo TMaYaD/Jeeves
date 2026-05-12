@@ -27,6 +27,7 @@ jobs:
       pubspec_version: ${{ steps.compute.outputs.pubspec_version }}
       is_release: ${{ steps.compute.outputs.is_release }}
       is_prerelease: ${{ steps.compute.outputs.is_prerelease }}
+      firebase_groups: ${{ steps.compute.outputs.firebase_groups }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -69,6 +70,9 @@ jobs:
               echo "is_release=true"
               echo "is_prerelease=false"
               echo "target_changed=false"
+              # GA fans out to every Firebase channel; testers don't get stuck
+              # on stale pre-releases when stable ships.
+              echo "firebase_groups=canary,beta,rc"
             } >> "$GITHUB_OUTPUT"
             echo "Computed: ${VERSION} (GA)"
             exit 0
@@ -153,6 +157,16 @@ jobs:
             IS_RELEASE="false"
           fi
 
+          # Firebase channel fan-out: each stage ships to its own channel and
+          # every less-restrictive one. Internal testers (canary) see every
+          # build; investors/focus groups (beta) skip alphas; FOMO early
+          # adopters (rc) skip alphas and betas.
+          case "$STAGE" in
+            alpha) FIREBASE_GROUPS="canary" ;;
+            beta)  FIREBASE_GROUPS="canary,beta" ;;
+            rc)    FIREBASE_GROUPS="canary,beta,rc" ;;
+          esac
+
           {
             echo "version=${VERSION}"
             echo "pubspec_version=${PUBSPEC_VERSION}"
@@ -161,8 +175,9 @@ jobs:
             echo "target=${TARGET}"
             echo "stage=${STAGE}"
             echo "target_changed=${TARGET_CHANGED}"
+            echo "firebase_groups=${FIREBASE_GROUPS}"
           } >> "$GITHUB_OUTPUT"
-          echo "Computed: ${VERSION} (stage=${STAGE}, target_changed=${TARGET_CHANGED}, release=${IS_RELEASE})"
+          echo "Computed: ${VERSION} (stage=${STAGE}, groups=${FIREBASE_GROUPS}, target_changed=${TARGET_CHANGED}, release=${IS_RELEASE})"
 
       - name: Auto-retag when conventional commits bump target past stage tag
         if: steps.compute.outputs.target_changed == 'true'
@@ -220,6 +235,34 @@ jobs:
           path: |
             app/build/app/outputs/flutter-apk/app-production-release.apk
             app/build/app/outputs/bundle/release/app-production-release.aab
+
+  distribute-android:
+    name: Distribute Android (Firebase)
+    needs: [version, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-artifacts
+          path: artifacts/android
+
+      - name: Compose release notes
+        id: notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          STAGE: ${{ needs.version.outputs.firebase_groups }}
+          SHA: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${SHA::7}"
+          printf 'notes=%s\n' "${VERSION} (${SHORT_SHA})" >> "$GITHUB_OUTPUT"
+
+      - uses: wzieba/Firebase-Distribution-Github-Action@bd494989dd4bec0343f78adee87fe66e48279ad6 # v1
+        with:
+          appId: ${{ secrets.FIREBASE_APP_ID_PROD }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          groups: ${{ needs.version.outputs.firebase_groups }}
+          file: artifacts/android/app-production-release.apk
+          releaseNotes: ${{ steps.notes.outputs.notes }}
 
   build-seeker:
     name: Build Seeker (SWS)

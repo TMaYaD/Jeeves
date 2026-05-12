@@ -67,8 +67,39 @@ This is acceptable at single-contributor scale. Switch to a release branch (`rel
 - The workflow triggers on `workflow_run` of `Flutter CI` on `main` (alpha builds) and on `push` of GA / stage tags (release builds).
 - GitHub Releases are created only when HEAD carries a GA or stage tag. Mid-stage builds (alphas, post-tag betas/rcs) produce artifacts but no Release entry.
 
+## Firebase App Distribution channels
+
+Channels are tester groups in Firebase App Distribution, named for the audience they serve:
+
+| Channel | Audience | Source build | Tester expectation |
+|---|---|---|---|
+| `dev` | Internal engineering / PM / testers in the trenches | every PR (`pr-apk.yml`) | may be outright broken; fresh install every time |
+| `canary` | Internal users tolerating breakage (the bagel-bringers) | every `main` commit (`cd-app.yml`) | mostly stable, occasional regressions |
+| `beta` | External focus groups, investors, C-suites | `v<target>-beta` tag onward | stable enough to demo |
+| `rc` | FOMO early adopters who want latest-and-greatest | `v<target>-rc` tag onward | believed shippable |
+
+Each stage's build fans out to its own channel **and every less-restrictive one**. Internal testers (canary) see every build; investors (beta) skip alphas; FOMO adopters (rc) skip alphas and betas:
+
+| Build | dev | canary | beta | rc |
+|---|---|---|---|---|
+| PR (`pr-apk.yml`) | ✓ | | | |
+| `main` commit, alpha stage | | ✓ | | |
+| beta-stage build | | ✓ | ✓ | |
+| rc-stage build | | ✓ | ✓ | ✓ |
+| GA tag | | ✓ | ✓ | ✓ |
+
+The fan-out is driven by `firebase_groups` computed in the version job and passed to the `wzieba/Firebase-Distribution-Github-Action` step.
+
+### Firebase project setup
+
+Two Android apps must exist in the Firebase project:
+
+- **Dev app** — applicationId `loonyb.in.jeeves.dev` (PR/dev-flavor builds). Configured via secret `FIREBASE_APP_ID_DEV`.
+- **Production app** — applicationId `loonyb.in.jeeves` (production-flavor builds across canary/beta/rc/GA). Configured via secret `FIREBASE_APP_ID_PROD`.
+
+Tester groups (`dev`, `canary`, `beta`, `rc`) are created in the Firebase console under each app's distribution settings. Both apps share `FIREBASE_SERVICE_ACCOUNT_JSON` (one service account, one Firebase project, two apps).
+
 ## Not yet wired
 
-- **Firebase App Distribution channels.** Today `pr-apk.yml` distributes PR builds to a `qa` group; `cd-app.yml` doesn't distribute to Firebase at all. Planned channels (audience-named): `dev` (PR builds), `canary` (alphas from main), `beta`, `rc`. A single build fans out to its own channel plus all less-restrictive channels — e.g. a GA build is published to canary, beta, and rc as well, so internal testers aren't stuck on stale pre-releases.
 - **Play Store track upload.** GA and rc builds will eventually upload to Play Store production / internal tracks. Not in place yet.
-- **Flutter flavor rename.** PR builds currently use `--flavor alpha`, a misnomer — these are dev builds, not alpha builds. Renaming the flavor touches `android/app/build.gradle`, app icons, and signing config and is a separate PR.
+- **Seeker variant distribution.** The Solana dApp Store APK (`build-seeker` job) is built but not distributed through Firebase; it goes through the dApp Store pipeline separately.

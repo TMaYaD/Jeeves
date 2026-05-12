@@ -96,8 +96,8 @@ jobs:
 
       - uses: wzieba/Firebase-Distribution-Github-Action@bd494989dd4bec0343f78adee87fe66e48279ad6 # v1
         with:
-          appId: ${{ secrets.FIREBASE_APP_ID }}
+          appId: ${{ secrets.FIREBASE_APP_ID_DEV }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-          groups: qa
+          groups: dev
           file: app/build/app/outputs/flutter-apk/app-arm64-v8a-alpha-profile.apk
           releaseNotes: ${{ steps.notes.outputs.notes }}
