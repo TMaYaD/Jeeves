@@ -86,15 +86,21 @@ jobs:
           fi
 
           BUMP="patch"
-          while IFS= read -r msg; do
+          # NUL-delimit per commit (-z) so each $msg holds one full message.
+          # The subject-anchored regexes must only see the subject line —
+          # otherwise a revert/quoted body line starting with `feat:` or
+          # `fix!:` would falsely trigger a bump. BREAKING CHANGE is a
+          # footer convention, so we scan the whole message for it.
+          while IFS= read -r -d '' msg; do
             [ -z "$msg" ] && continue
-            if echo "$msg" | grep -qE '^[a-z]+(\(.+\))?!:' \
-               || echo "$msg" | grep -q 'BREAKING CHANGE'; then
+            subject="${msg%%$'\n'*}"
+            if printf '%s' "$subject" | grep -qE '^[a-z]+(\(.+\))?!:' \
+               || printf '%s' "$msg" | grep -q 'BREAKING CHANGE'; then
               BUMP="major"; break
-            elif echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
+            elif printf '%s' "$subject" | grep -qE '^feat(\(.+\))?:'; then
               [ "$BUMP" != "major" ] && BUMP="minor"
             fi
-          done < <(git log "$LOG_RANGE" --format="%B" 2>/dev/null || true)
+          done < <(git log -z "$LOG_RANGE" --format="%B" 2>/dev/null || true)
 
           MAJOR=$(echo "$BASE" | cut -d. -f1)
           MINOR=$(echo "$BASE" | cut -d. -f2)
@@ -112,6 +118,14 @@ jobs:
                         --match 'v[0-9]*.[0-9]*.[0-9]*-beta' \
                         --match 'v[0-9]*.[0-9]*.[0-9]*-rc' \
                         HEAD 2>/dev/null || true)
+
+          # Discard stage tags from an already-GA'd cycle: after v1.2.0 ships,
+          # v1.2.0-rc / v1.2.0-beta remain in HEAD's ancestry but the next
+          # cycle should start fresh as alpha, not inherit the prior rc.
+          if [ -n "$STAGE_TAG" ] && [ -n "$LAST_STABLE" ] \
+             && git merge-base --is-ancestor "$STAGE_TAG" "$LAST_STABLE"; then
+            STAGE_TAG=""
+          fi
 
           TARGET_CHANGED="false"
           if [ -n "$STAGE_TAG" ]; then
