@@ -7,8 +7,11 @@ on:
     branches: [main]
   push:
     tags:
+      # GA release: v1.2.3
       - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-*"
+      # Stage transition markers (unnumbered). Alpha is computed, never tagged.
+      - "v[0-9]+.[0-9]+.[0-9]+-beta"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc"
 
 jobs:
   version:
@@ -17,6 +20,8 @@ jobs:
       github.event_name == 'push' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to push auto-retag when conventional commits bump target
     outputs:
       version: ${{ steps.compute.outputs.version }}
       pubspec_version: ${{ steps.compute.outputs.pubspec_version }}
@@ -30,77 +35,183 @@ jobs:
       - name: Compute version
         id: compute
         run: |
-          # Semver tag pattern — matches stable (v1.2.3) and pre-release (v1.2.3-alpha.1)
-          SEMVER_PAT='^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)*$'
+          set -euo pipefail
 
-          # Check if HEAD is exactly at a semver tag (distance = 0 → release build)
-          HEAD_TAG=$(git tag --points-at HEAD | grep -E "$SEMVER_PAT" | sort -V | tail -1)
+          GA_PAT='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          STAGE_PAT='^v[0-9]+\.[0-9]+\.[0-9]+-(beta|rc)$'
 
-          if [ -n "$HEAD_TAG" ]; then
-            # Release build: use the tag as the version, no dev suffix
-            VERSION="${HEAD_TAG#v}"
+          # --- Versioning model ---------------------------------------------
+          # Stage tags (v1.3.0-beta, v1.3.0-rc) and the GA tag (v1.3.0) are
+          # stage transition markers. Artifact versions are computed:
+          #   <target>-<stage>.<N>      e.g. 1.3.0-beta.4
+          # where <stage> is the most recent stage tag's suffix in HEAD's
+          # ancestry (alpha if none), and N resets at each stage boundary:
+          #   alpha:   commits since LAST_STABLE
+          #   beta/rc: commits since the stage tag, +1 (tagged commit is .1)
+          # Conventional-commit bumps since LAST_STABLE may push <target>
+          # above what the stage tag declared; if so, auto-retag at HEAD with
+          # the bumped target so future runs stay consistent.
+          # versionCode (pubspec build number) = github.run_number — globally
+          # monotonic, decoupled from version name arithmetic.
+          # ------------------------------------------------------------------
+
+          HEAD_TAGS=$(git tag --points-at HEAD)
+          HEAD_GA=$(echo "$HEAD_TAGS" | grep -E "$GA_PAT" | sort -V | tail -1 || true)
+          HEAD_STAGE_TAG=$(echo "$HEAD_TAGS" | grep -E "$STAGE_PAT" | sort -V | tail -1 || true)
+
+          # GA build: HEAD is at a v1.2.3 tag — emit it verbatim, done.
+          if [ -n "$HEAD_GA" ]; then
+            VERSION="${HEAD_GA#v}"
             PUBSPEC_VERSION="${VERSION}+${{ github.run_number }}"
-            IS_RELEASE="true"
-            # Mark as pre-release when the version contains a pre-release label (e.g. -alpha.1)
-            if echo "$VERSION" | grep -q '-'; then
-              IS_PRERELEASE="true"
-            else
-              IS_PRERELEASE="false"
-            fi
-          else
-            # Dev build: compute next bumped version + dev suffix
-            # Base bump off the last stable tag so pre-release tags don't skew the bump
-            LAST_STABLE=$(git tag --list 'v*' \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -V | tail -1)
-
-            if [ -z "$LAST_STABLE" ]; then
-              BASE_VERSION="0.0.0"
-              LOG_RANGE="HEAD"
-              DIST=$(git rev-list --count HEAD)
-            else
-              BASE_VERSION="${LAST_STABLE#v}"
-              LOG_RANGE="${LAST_STABLE}..HEAD"
-              DIST=$(git rev-list --count "${LAST_STABLE}..HEAD")
-            fi
-
-            # Determine bump level from conventional commit messages
-            BUMP="patch"
-            while IFS= read -r msg; do
-              [ -z "$msg" ] && continue
-              if echo "$msg" | grep -qE '^[a-z]+(\(.+\))?!:' \
-                 || echo "$msg" | grep -q 'BREAKING CHANGE'; then
-                BUMP="major"; break
-              elif echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
-                [ "$BUMP" != "major" ] && BUMP="minor"
-              fi
-            done < <(git log "$LOG_RANGE" --format="%s" 2>/dev/null || true)
-
-            # Apply bump to base version
-            MAJOR=$(echo "$BASE_VERSION" | cut -d. -f1)
-            MINOR=$(echo "$BASE_VERSION" | cut -d. -f2)
-            PATCH=$(echo "$BASE_VERSION" | cut -d. -f3)
-            case "$BUMP" in
-              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-              patch) PATCH=$((PATCH + 1)) ;;
-            esac
-            NEXT="${MAJOR}.${MINOR}.${PATCH}"
-            HASH=$(git rev-parse --short HEAD)
-
-            # Full version for release notes (semver-ish with hash in build metadata)
-            VERSION="${NEXT}-dev.${DIST}+${HASH}"
-            # pubspec.yaml: build number must be an integer
-            PUBSPEC_VERSION="${NEXT}-dev.${DIST}+${DIST}"
-            IS_RELEASE="false"
-            IS_PRERELEASE="true"
+            {
+              echo "version=${VERSION}"
+              echo "pubspec_version=${PUBSPEC_VERSION}"
+              echo "is_release=true"
+              echo "is_prerelease=false"
+              echo "target_changed=false"
+            } >> "$GITHUB_OUTPUT"
+            echo "Computed: ${VERSION} (GA)"
+            exit 0
           fi
 
-          echo "version=${VERSION}"                   >> "$GITHUB_OUTPUT"
-          echo "pubspec_version=${PUBSPEC_VERSION}"   >> "$GITHUB_OUTPUT"
-          echo "is_release=${IS_RELEASE}"             >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=${IS_PRERELEASE}"       >> "$GITHUB_OUTPUT"
-          echo "Computed: ${VERSION} (release=${IS_RELEASE}, prerelease=${IS_PRERELEASE})"
+          LAST_STABLE=$(git tag --list 'v*' | grep -E "$GA_PAT" | sort -V | tail -1 || true)
+
+          # Compute target version from conventional commits since LAST_STABLE.
+          if [ -z "$LAST_STABLE" ]; then
+            BASE="0.0.0"
+            LOG_RANGE="HEAD"
+          else
+            BASE="${LAST_STABLE#v}"
+            LOG_RANGE="${LAST_STABLE}..HEAD"
+          fi
+
+          BUMP="patch"
+          # NUL-delimit per commit (-z) so each $msg holds one full message.
+          # The subject-anchored regexes must only see the subject line —
+          # otherwise a revert/quoted body line starting with `feat:` or
+          # `fix!:` would falsely trigger a bump. BREAKING CHANGE is a
+          # footer convention, so we scan the whole message for it.
+          while IFS= read -r -d '' msg; do
+            [ -z "$msg" ] && continue
+            subject="${msg%%$'\n'*}"
+            if printf '%s' "$subject" | grep -qE '^[a-z]+(\(.+\))?!:' \
+               || printf '%s' "$msg" | grep -q 'BREAKING CHANGE'; then
+              BUMP="major"; break
+            elif printf '%s' "$subject" | grep -qE '^feat(\(.+\))?:'; then
+              [ "$BUMP" != "major" ] && BUMP="minor"
+            fi
+          done < <(git log -z "$LOG_RANGE" --format="%B" 2>/dev/null || true)
+
+          MAJOR=$(echo "$BASE" | cut -d. -f1)
+          MINOR=$(echo "$BASE" | cut -d. -f2)
+          PATCH=$(echo "$BASE" | cut -d. -f3)
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+          COMPUTED_TARGET="${MAJOR}.${MINOR}.${PATCH}"
+
+          # Find the most recent stage tag in HEAD's ancestry (rc beats beta
+          # by recency, not by name — most recent ancestor wins).
+          STAGE_TAG=$(git describe --tags --abbrev=0 \
+                        --match 'v[0-9]*.[0-9]*.[0-9]*-beta' \
+                        --match 'v[0-9]*.[0-9]*.[0-9]*-rc' \
+                        HEAD 2>/dev/null || true)
+
+          # Discard stage tags from an already-GA'd cycle: after v1.2.0 ships,
+          # v1.2.0-rc / v1.2.0-beta remain in HEAD's ancestry but the next
+          # cycle should start fresh as alpha, not inherit the prior rc.
+          if [ -n "$STAGE_TAG" ] && [ -n "$LAST_STABLE" ] \
+             && git merge-base --is-ancestor "$STAGE_TAG" "$LAST_STABLE"; then
+            STAGE_TAG=""
+          fi
+
+          TARGET_CHANGED="false"
+          if [ -n "$STAGE_TAG" ]; then
+            STAGE="${STAGE_TAG##*-}"                        # beta | rc
+            TAG_TARGET="${STAGE_TAG#v}"; TAG_TARGET="${TAG_TARGET%-*}"
+
+            # Pick the higher of tag's declared target and computed target.
+            HIGHER=$(printf '%s\n%s\n' "$TAG_TARGET" "$COMPUTED_TARGET" | sort -V | tail -1)
+            if [ "$HIGHER" = "$COMPUTED_TARGET" ] && [ "$TAG_TARGET" != "$COMPUTED_TARGET" ]; then
+              TARGET="$COMPUTED_TARGET"
+              TARGET_CHANGED="true"
+              # Anticipate the auto-retag: N=1 so this build matches what
+              # future runs will compute once v${TARGET}-${STAGE} exists.
+              N=1
+            else
+              TARGET="$TAG_TARGET"
+              DIST=$(git rev-list --count "${STAGE_TAG}..HEAD")
+              N=$((DIST + 1))
+            fi
+          else
+            STAGE="alpha"
+            TARGET="$COMPUTED_TARGET"
+            if [ -z "$LAST_STABLE" ]; then
+              N=$(git rev-list --count HEAD)
+            else
+              N=$(git rev-list --count "${LAST_STABLE}..HEAD")
+            fi
+          fi
+
+          VERSION="${TARGET}-${STAGE}.${N}"
+          PUBSPEC_VERSION="${VERSION}+${{ github.run_number }}"
+
+          # A build is a "release" (gets a GitHub Release entry) when HEAD
+          # carries a stage tag that *matches* the computed target — i.e.
+          # the tag genuinely names this artifact. If target_changed=true
+          # (a feat!/BREAKING bumped past the tag's declared version), the
+          # tag is mislabelled for this build, so suppress the release. The
+          # subsequent auto-retag creates the correctly-named tag for future
+          # runs to find via git describe.
+          EXPECTED_STAGE_TAG="v${TARGET}-${STAGE}"
+          if [ -n "$HEAD_STAGE_TAG" ] && [ "$HEAD_STAGE_TAG" = "$EXPECTED_STAGE_TAG" ]; then
+            IS_RELEASE="true"
+          else
+            IS_RELEASE="false"
+          fi
+
+          {
+            echo "version=${VERSION}"
+            echo "pubspec_version=${PUBSPEC_VERSION}"
+            echo "is_release=${IS_RELEASE}"
+            echo "is_prerelease=true"
+            echo "target=${TARGET}"
+            echo "stage=${STAGE}"
+            echo "target_changed=${TARGET_CHANGED}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Computed: ${VERSION} (stage=${STAGE}, target_changed=${TARGET_CHANGED}, release=${IS_RELEASE})"
+
+      - name: Auto-retag when conventional commits bump target past stage tag
+        if: steps.compute.outputs.target_changed == 'true'
+        env:
+          NEW_TARGET: ${{ steps.compute.outputs.target }}
+          STAGE: ${{ steps.compute.outputs.stage }}
+        run: |
+          set -euo pipefail
+          NEW_TAG="v${NEW_TARGET}-${STAGE}"
+          if git rev-parse "refs/tags/${NEW_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${NEW_TAG} already exists; nothing to do."
+            exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$NEW_TAG" -m "Auto-retag: conventional commits bumped target to ${NEW_TARGET}" HEAD
+          # A concurrent run may have created the same tag between the
+          # local rev-parse check above and this push — accept that as
+          # success rather than failing the workflow.
+          if git push origin "$NEW_TAG"; then
+            echo "Pushed ${NEW_TAG} at $(git rev-parse --short HEAD)"
+          else
+            git fetch --tags origin
+            if git rev-parse "refs/tags/${NEW_TAG}" >/dev/null 2>&1; then
+              echo "Tag ${NEW_TAG} was created by a concurrent run; nothing to do."
+            else
+              echo "::error::Failed to push ${NEW_TAG} and it does not exist on remote"
+              exit 1
+            fi
+          fi
 
   build-android:
     name: Build Android
