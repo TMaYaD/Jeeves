@@ -250,18 +250,32 @@ jobs:
         id: notes
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          STAGE: ${{ needs.version.outputs.firebase_groups }}
           SHA: ${{ github.sha }}
         run: |
           SHORT_SHA="${SHA::7}"
           printf 'notes=%s\n' "${VERSION} (${SHORT_SHA})" >> "$GITHUB_OUTPUT"
+
+      - name: Locate APK
+        id: find_apk
+        run: |
+          set -euo pipefail
+          # upload-artifact v4+ strips the least common ancestor of the
+          # uploaded paths, so the APK lands under artifacts/android/ at a
+          # shorter path than its source. Locate it rather than hardcoding.
+          APK=$(find artifacts/android -type f -name 'app-production-release.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::Could not find app-production-release.apk under artifacts/android"
+            find artifacts/android -type f
+            exit 1
+          fi
+          echo "path=${APK}" >> "$GITHUB_OUTPUT"
 
       - uses: wzieba/Firebase-Distribution-Github-Action@bd494989dd4bec0343f78adee87fe66e48279ad6 # v1
         with:
           appId: ${{ secrets.FIREBASE_APP_ID_PROD }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           groups: ${{ needs.version.outputs.firebase_groups }}
-          file: artifacts/android/app-production-release.apk
+          file: ${{ steps.find_apk.outputs.path }}
           releaseNotes: ${{ steps.notes.outputs.notes }}
 
   build-seeker:
