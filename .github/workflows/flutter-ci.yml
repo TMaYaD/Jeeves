@@ -98,3 +98,68 @@ jobs:
       - run: dart run build_runner build --delete-conflicting-outputs
       - run: flutter analyze
       - run: flutter test
+
+  android-build-changes:
+    name: Detect Android-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'app/android/**'
+              - 'app/pubspec.yaml'
+              - 'app/pubspec.lock'
+              - 'app/.fvmrc'
+              - '.github/workflows/flutter-ci.yml'
+
+  android-build:
+    name: Android Gradle Build
+    needs: android-build-changes
+    if: needs.android-build-changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: app/.fvmrc
+          channel: stable
+          cache: true
+
+      - uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ hashFiles('app/pubspec.lock') }}
+          restore-keys: pub-
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.gradle/build-cache
+          key: gradle-${{ hashFiles('app/android/gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: gradle-
+
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+
+      # Exercises the full Gradle/AGP/Kotlin plugin chain so toolchain-incompatible
+      # version bumps (e.g. Dependabot AGP majors) fail this PR check instead of
+      # slipping through and breaking main. Debug + single ABI keeps it fast and
+      # avoids any signing/secret requirements.
+      - run: flutter build apk --debug --flavor production --target-platform android-arm64
