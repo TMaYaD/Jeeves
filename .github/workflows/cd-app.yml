@@ -193,8 +193,20 @@ jobs:
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git tag -a "$NEW_TAG" -m "Auto-retag: conventional commits bumped target to ${NEW_TARGET}" HEAD
-          git push origin "$NEW_TAG"
-          echo "Pushed ${NEW_TAG} at $(git rev-parse --short HEAD)"
+          # A concurrent run may have created the same tag between the
+          # local rev-parse check above and this push — accept that as
+          # success rather than failing the workflow.
+          if git push origin "$NEW_TAG"; then
+            echo "Pushed ${NEW_TAG} at $(git rev-parse --short HEAD)"
+          else
+            git fetch --tags origin
+            if git rev-parse "refs/tags/${NEW_TAG}" >/dev/null 2>&1; then
+              echo "Tag ${NEW_TAG} was created by a concurrent run; nothing to do."
+            else
+              echo "::error::Failed to push ${NEW_TAG} and it does not exist on remote"
+              exit 1
+            fi
+          fi
 
   build-android:
     name: Build Android
