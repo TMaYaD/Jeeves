@@ -30,10 +30,11 @@ void main() {
       expect(done.length, 2);
     });
 
-    test('next state maps to next_action', () {
+    test('next state is clarified, intent=next', () {
       final (items, _) = parseCsv(_fixture('nirvana_sample.csv'));
-      final next =
-          items.where((i) => i.state == 'next_action' && i.doneAt == null).toList();
+      final next = items
+          .where((i) => i.clarified && i.intent == 'next' && i.doneAt == null)
+          .toList();
       expect(next.length, 2);
     });
 
@@ -41,12 +42,15 @@ void main() {
       final (items, _) = parseCsv(_fixture('nirvana_sample.csv'));
       final withParent = items.where((i) => i.parentName != null).toList();
       expect(withParent.length, 2);
-      expect(withParent.every((i) => i.parentName == 'Brush up on GTD®'), isTrue);
+      expect(withParent.every((i) => i.parentName == 'Brush up on GTD®'),
+          isTrue);
     });
 
     test('Standalone parent is treated as no project', () {
       final (items, _) = parseCsv(_fixture('nirvana_sample.csv'));
-      final standalone = items.where((i) => i.parentName == null && i.type == 'task').toList();
+      final standalone = items
+          .where((i) => i.parentName == null && i.type == 'task')
+          .toList();
       // The 2 logbook tasks have PARENT=Standalone → parentName=null
       expect(standalone.length, 2);
     });
@@ -72,7 +76,8 @@ void main() {
     });
 
     test('empty NAME rows are skipped', () {
-      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           'Task,,Next,,,,,,,, \n'
           'Task,Valid task,Next,,,,,,,,\n';
       final (items, skipped) = parseCsv(csv);
@@ -81,7 +86,8 @@ void main() {
     });
 
     test('unknown TYPE rows are skipped', () {
-      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           'Checklist,Bad row,Next,,,,,,,,\n'
           'Task,Good row,Next,,,,,,,,\n';
       final (items, skipped) = parseCsv(csv);
@@ -90,40 +96,163 @@ void main() {
     });
 
     test('malformed due dates are tolerated (returns null)', () {
-      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           'Task,X,Next,,,,,,,not-a-date,\n';
       final (items, _) = parseCsv(csv);
       expect(items.first.dueDate, isNull);
     });
 
     test('well-formed date with single-digit month/day is normalised', () {
-      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           'Task,X,Next,,,,,,,2024-4-3,\n';
       final (items, _) = parseCsv(csv);
       expect(items.first.dueDate, '2024-04-03');
     });
 
-    test('completed task has doneAt set regardless of state column', () {
-      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+    test('completed task has doneAt set; clarified=true, intent=next', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           'Task,Done task,Next,2024-01-01,,,,,,, \n';
       final (items, _) = parseCsv(csv);
-      expect(items.first.state, 'next_action');
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'next');
       expect(items.first.doneAt, isNotNull);
     });
 
     test('notes with embedded newlines are parsed correctly', () {
-      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           '"Task","Multi-line note task","Next","","Line1\nLine2",,,,,, \n';
       final (items, _) = parseCsv(csv);
       expect(items.first.notes, contains('Line1'));
       expect(items.first.notes, contains('Line2'));
     });
 
-    test('scheduled state maps to next_action (not raw scheduled)', () {
-      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+    // --- New per-state cases (issue #279) -----------------------------------
+
+    test('Inbox CSV → clarified=false, intent=next', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Inbox task,Inbox,,,,,,,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.clarified, isFalse);
+      expect(items.first.intent, 'next');
+      expect(items.first.tags, isNot(contains(startsWith('@'))));
+    });
+
+    test('Waiting CSV → clarified=true, intent=next', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Waiting task,Waiting,,,,,,Alice,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'next');
+    });
+
+    test('Scheduled CSV → clarified=true, intent=maybe, @scheduled tag', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           'Task,Scheduled task,Scheduled,,,,,,,,\n';
       final (items, _) = parseCsv(csv);
-      expect(items.first.state, 'next_action');
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, contains('@scheduled'));
+    });
+
+    test('Someday CSV → clarified=true, intent=maybe, no auto-tag', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Someday task,Someday,,,,,,,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, isEmpty);
+    });
+
+    test('Inactive/Later CSV → clarified=true, intent=maybe, no auto-tag', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Inactive task,Inactive/Later,,,,,,,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, isEmpty);
+    });
+
+    test(
+        'Scheduled/Repeating CSV → clarified=true, intent=maybe, @repeating tag',
+        () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Repeating task,Scheduled/Repeating,,,,,,,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, contains('@repeating'));
+    });
+
+    test('Reference CSV → clarified=true, intent=maybe, @reference tag', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Reference task,Reference,,,,,,,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, contains('@reference'));
+    });
+
+    test('Trash CSV → clarified=true, intent=trash, no auto-tag', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Trash task,Trash,,,,,,,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'trash');
+      expect(items.first.tags, isEmpty);
+    });
+
+    test('Active CSV (removed key) → unknown → clarified=false', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Active task,Active,,,,,,,,\n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.clarified, isFalse);
+      expect(items.first.intent, 'next');
+    });
+
+    test('Completed Inactive/Later → doneAt set, intent=next, no auto-tag',
+        () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Done inactive,Inactive/Later,2024-01-01,,,,,,, \n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.doneAt, isNotNull);
+      expect(items.first.intent, 'next');
+      expect(items.first.tags, isEmpty);
+    });
+
+    test('Completed Trash → completed wins; doneAt set, intent=next', () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Done trashed,Trash,2024-01-01,,,,,,, \n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.doneAt, isNotNull);
+      expect(items.first.intent, 'next');
+      expect(items.first.tags, isEmpty);
+    });
+
+    test(
+        'Completed Scheduled/Repeating → doneAt set, intent=next, NO @repeating tag',
+        () {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Done repeating,Scheduled/Repeating,2024-01-01,,,,,,, \n';
+      final (items, _) = parseCsv(csv);
+      expect(items.first.doneAt, isNotNull);
+      expect(items.first.intent, 'next');
+      expect(items.first.tags, isNot(contains('@repeating')));
     });
   });
 
@@ -141,17 +270,19 @@ void main() {
       expect(skipped, 2);
     });
 
-    test('completed items have doneAt set', () {
+    test('completed items have doneAt set and clarified=true', () {
       final (items, _) = parseJson(_fixture('nirvana_sample.json'));
       final done = items.where((i) => i.doneAt != null).toList();
       expect(done.length, 2);
-      expect(done.every((i) => i.state == 'next_action'), isTrue);
+      expect(done.every((i) => i.clarified), isTrue);
+      expect(done.every((i) => i.intent == 'next'), isTrue);
     });
 
-    test('state=1 (next_action) is mapped correctly', () {
+    test('state=1 (Next) is clarified, intent=next', () {
       final (items, _) = parseJson(_fixture('nirvana_sample.json'));
-      final next =
-          items.where((i) => i.state == 'next_action' && i.doneAt == null).toList();
+      final next = items
+          .where((i) => i.clarified && i.intent == 'next' && i.doneAt == null)
+          .toList();
       expect(next.length, 2);
     });
 
@@ -165,9 +296,8 @@ void main() {
     test('parentid is populated for child tasks', () {
       final (items, _) = parseJson(_fixture('nirvana_sample.json'));
       const projectId = '540503BC-6CBA-4104-9FA7-6AD4414C6724';
-      final children = items
-          .where((i) => i.parentId == projectId)
-          .toList();
+      final children =
+          items.where((i) => i.parentId == projectId).toList();
       expect(children.length, 2);
     });
 
@@ -192,7 +322,8 @@ void main() {
     });
 
     test('empty name rows are skipped', () {
-      const json = '[{"cancelled":0,"deleted":0,"name":"","type":0,"state":0}]';
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"","type":0,"state":0}]';
       final (items, skipped) = parseJson(json);
       expect(items, isEmpty);
       expect(skipped, 1);
@@ -206,10 +337,101 @@ void main() {
       expect(() => parseJson('{}'), throwsA(isA<ParseError>()));
     });
 
-    test('state=3 (Nirvana scheduled) maps to next_action (not raw scheduled)', () {
-      const json = '[{"cancelled":0,"deleted":0,"name":"Scheduled task","type":0,"state":3}]';
+    // --- New per-state cases (issue #279) -----------------------------------
+
+    test('JSON state=0 (Inbox) → clarified=false, intent=next', () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"Inbox","type":0,"state":0}]';
       final (items, _) = parseJson(json);
-      expect(items.first.state, 'next_action');
+      expect(items.first.clarified, isFalse);
+      expect(items.first.intent, 'next');
+    });
+
+    test('JSON state=2 (Waiting) → clarified=true, intent=next', () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"Wait","type":0,"state":2}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'next');
+    });
+
+    test(
+        'JSON state=3 (Scheduled) → clarified=true, intent=maybe, @scheduled tag',
+        () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"S","type":0,"state":3}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, contains('@scheduled'));
+    });
+
+    test('JSON state=4 (Someday) → clarified=true, intent=maybe, no auto-tag',
+        () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"S","type":0,"state":4}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, isEmpty);
+    });
+
+    test(
+        'JSON state=5 (Inactive/Later) → clarified=true, intent=maybe, no auto-tag',
+        () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"L","type":0,"state":5}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, isEmpty);
+    });
+
+    test('JSON state=6 (Trash) → clarified=true, intent=trash, no auto-tag',
+        () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"T","type":0,"state":6}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'trash');
+      expect(items.first.tags, isEmpty);
+    });
+
+    test(
+        'JSON state=9 (Repeating) → clarified=true, intent=maybe, @repeating tag',
+        () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"R","type":0,"state":9}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, contains('@repeating'));
+    });
+
+    test(
+        'JSON state=10 (Reference) → clarified=true, intent=maybe, @reference tag',
+        () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"R","type":0,"state":10}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.clarified, isTrue);
+      expect(items.first.intent, 'maybe');
+      expect(items.first.tags, contains('@reference'));
+    });
+
+    test('JSON state=9 with waitingfor → person-tag context preserved', () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"R","type":0,"state":9,"waitingfor":"Alice"}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.waitingFor, 'Alice');
+      expect(items.first.tags, contains('@repeating'));
+    });
+
+    test('JSON state=3 with user-supplied tag → both tags appear', () {
+      const json =
+          '[{"cancelled":0,"deleted":0,"name":"S","type":0,"state":3,"tags":",mytag,"}]';
+      final (items, _) = parseJson(json);
+      expect(items.first.tags, containsAll(['mytag', '@scheduled']));
     });
   });
 
