@@ -94,7 +94,7 @@ jobs:
             elif echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
               [ "$BUMP" != "major" ] && BUMP="minor"
             fi
-          done < <(git log "$LOG_RANGE" --format="%s" 2>/dev/null || true)
+          done < <(git log "$LOG_RANGE" --format="%B" 2>/dev/null || true)
 
           MAJOR=$(echo "$BASE" | cut -d. -f1)
           MINOR=$(echo "$BASE" | cut -d. -f2)
