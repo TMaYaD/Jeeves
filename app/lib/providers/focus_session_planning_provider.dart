@@ -28,7 +28,7 @@ import 'database_provider.dart';
 import 'synced_preferences_provider.dart';
 import 'tag_filter_provider.dart';
 
-export '../database/gtd_database.dart' show Todo, FocusSession;
+export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
 
 // ---------------------------------------------------------------------------
 // Date helpers
@@ -272,6 +272,7 @@ class FocusSessionPlanningState {
     this.reviewedTaskIds = const [],
     this.reviewNav = const SnapshotNav<Todo>(),
     this.reviewActions = const {},
+    this.reviewPersonTags = const {},
   });
 
   final int currentStep;
@@ -316,6 +317,12 @@ class FocusSessionPlanningState {
   /// when the user navigates back within the review step.
   final Map<int, ReviewActionRecord> reviewActions;
 
+  /// Person-typed tags for each task in [reviewNav.items], keyed by task id.
+  /// Loaded alongside the review snapshot so the card can render the delegate
+  /// name(s) for the stale waiting-for variant without a per-frame DAO call.
+  /// Tasks with no person tag are absent from the map.
+  final Map<String, List<Tag>> reviewPersonTags;
+
   FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
@@ -328,6 +335,7 @@ class FocusSessionPlanningState {
     List<String>? reviewedTaskIds,
     SnapshotNav<Todo>? reviewNav,
     Map<int, ReviewActionRecord>? reviewActions,
+    Map<String, List<Tag>>? reviewPersonTags,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -341,6 +349,7 @@ class FocusSessionPlanningState {
         reviewedTaskIds: reviewedTaskIds ?? this.reviewedTaskIds,
         reviewNav: reviewNav ?? this.reviewNav,
         reviewActions: reviewActions ?? this.reviewActions,
+        reviewPersonTags: reviewPersonTags ?? this.reviewPersonTags,
       );
 }
 
@@ -407,9 +416,16 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       if (items.isEmpty) {
         next = 2;
       } else {
+        // Batched person-tag lookup so the stale waiting-for card variant
+        // can render delegate names without a per-frame DAO call.
+        final personTags = await _db.todoDao.getPersonTagsForTodos(
+          items.map((t) => t.id).toSet(),
+        );
+        if (!ref.mounted) return;
         state = state.copyWith(
           reviewNav: SnapshotNav<Todo>(items: items),
           reviewActions: {},
+          reviewPersonTags: personTags,
         );
       }
     }

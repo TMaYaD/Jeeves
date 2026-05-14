@@ -14,7 +14,6 @@ import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/tag_filter_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
-import 'package:jeeves/database/gtd_database.dart' show Tag;
 import 'package:jeeves/models/focus_session_planning_settings.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import '../test_helpers.dart';

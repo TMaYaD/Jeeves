@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-05-14 (issue #289)
+- `_needsReviewWhere`'s actionless branch now ANDs on `NOT EXISTS person tag`. Delegated tasks (any person-typed `todo_tags` row) are excluded from the daily re-clarification surface — waiting-for cadence belongs to the weekly review, not the daily card. The stale branch is untouched, so a delegated task you nudged today still surfaces.
+- `readsFrom` for the three `_needsReviewWhere` callers (`watchNeedsReview`, `getNeedsReview`/`getNeedsReviewCount`/`isNeedsReview`) widened from `{todos}` to `{todos, todoTags, tags}`. Without the widening, Drift's stream invalidation doesn't fire when a person tag is attached/detached, and the live daily card would not drop a newly-tagged task until the next cold reload.
+- `FocusSessionPlanningState.reviewPersonTags` is loaded alongside the review snapshot in `advanceStep` (one batched `getPersonTagsForTodos` query) so the new `staleWaitingFor` card variant can name the delegate without a per-frame DAO call.
+
 ## 2026-05-14 (issue #290)
 - Weekly Review's third step renamed from Projects → Next Actions and broadened to iterate **all** active next actions excluding person-tagged ones (which Waiting For already covers). The disjointness invariant — each task surfaces in at most one wizard step — is now enforced at the SQL layer via `TodoDao.getNextActionsExcludingPersonTagged()`. The old `getNextActionsWithProjectTags()` and `Projects*` symbols are gone. A future dedicated Projects step is deferred until full Projects support lands; resurrecting it will require re-establishing the disjointness matrix (project-tagged ⊂ next-actions).
 
