@@ -66,9 +66,9 @@ void main() {
       await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
       // Single inbox item: skipping it past the cursor moves the wizard into
       // the "Inbox is clear" terminal state. The next advanceStep crosses
-      // out of Inbox; Waiting For, Projects, and Someday/Maybe all auto-skip
-      // on entry because no fixtures populate them, so the wizard lands on
-      // the Summary in a single hop.
+      // out of Inbox; Waiting For, Next Actions, and Someday/Maybe all
+      // auto-skip on entry because no fixtures populate them, so the wizard
+      // lands on the Summary in a single hop.
       notifier.advanceInbox();
       await notifier.advanceStep();
       expect(c.read(periodicReviewProvider).currentStep,
@@ -120,6 +120,88 @@ void main() {
       // Auto-skip fires synchronously inside _onStepEnter once the snapshot
       // load resolves, so currentStep must have advanced past Step 0.
       expect(state.currentStep, isNot(PeriodicReviewNotifier.kStepInbox));
+    });
+
+    test('disjointness — person-tagged next action appears in Waiting For '
+        'only, plain next action appears in Next Actions only', () async {
+      await c.read(syncedPreferencesProvider.future);
+      final now = DateTime.now();
+
+      // Person-tagged next action — should land in Waiting For only.
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('wf1'),
+            title: const Value('Delegated task'),
+            clarified: const Value(true),
+            intent: const Value('next'),
+            userId: const Value('local'),
+            createdAt: Value(now),
+            updatedAt: Value(now),
+          ));
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('alice'),
+        name: Value('Alice'),
+        type: Value('person'),
+        userId: Value('local'),
+      ));
+      await db.tagDao.assignTag('wf1', 'alice', 'local');
+
+      // Plain next action with no person tag — should land in Next Actions.
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('na1'),
+            title: const Value('Plain next'),
+            clarified: const Value(true),
+            intent: const Value('next'),
+            userId: const Value('local'),
+            createdAt: Value(now.add(const Duration(seconds: 1))),
+            updatedAt: Value(now.add(const Duration(seconds: 1))),
+          ));
+
+      // Project-tagged next action with NO person tag — must still appear in
+      // Next Actions (project-tag exclusion no longer applies).
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('na2'),
+            title: const Value('Project task'),
+            clarified: const Value(true),
+            intent: const Value('next'),
+            userId: const Value('local'),
+            createdAt: Value(now.add(const Duration(seconds: 2))),
+            updatedAt: Value(now.add(const Duration(seconds: 2))),
+          ));
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('garage'),
+        name: Value('Garage'),
+        type: Value('project'),
+        userId: Value('local'),
+      ));
+      await db.tagDao.assignTag('na2', 'garage', 'local');
+
+      final notifier = c.read(periodicReviewProvider.notifier);
+      await notifier.loadAllSnapshots();
+
+      final state = c.read(periodicReviewProvider);
+      expect(state.waitingForNav.isLoaded, isTrue);
+      expect(state.nextActionsNav.isLoaded, isTrue);
+      final waitingIds =
+          state.waitingForNav.items!.map((t) => t.id).toSet();
+      final nextIds =
+          state.nextActionsNav.items!.map((t) => t.id).toSet();
+
+      expect(waitingIds, equals({'wf1'}));
+      expect(nextIds, equals({'na1', 'na2'}));
+      // Disjointness invariant: no task surfaces in both snapshots.
+      expect(waitingIds.intersection(nextIds), isEmpty);
+    });
+
+    test('Next Actions step auto-skips when its snapshot is empty', () async {
+      await c.read(syncedPreferencesProvider.future);
+      final notifier = c.read(periodicReviewProvider.notifier);
+
+      await notifier.goToStep(PeriodicReviewNotifier.kStepNextActions);
+      final state = c.read(periodicReviewProvider);
+      expect(state.nextActionsNav.isLoaded, isTrue);
+      expect(state.nextActionsNav.isEmpty, isTrue);
+      expect(state.currentStep,
+          isNot(PeriodicReviewNotifier.kStepNextActions));
     });
   });
 }

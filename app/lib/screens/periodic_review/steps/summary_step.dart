@@ -57,8 +57,8 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
         _stat(state.inboxRoutings.length, state.inboxNav.length);
     final waitingReviewed =
         _stat(state.waitingForRoutings.length, state.waitingForNav.length);
-    final projectsReviewed =
-        _stat(state.projectsRoutings.length, state.projectsNav.length);
+    final nextActionsReviewed = _stat(
+        state.nextActionsRoutings.length, state.nextActionsNav.length);
     final somedayReviewed =
         _stat(state.somedayRoutings.length, state.somedayNav.length);
 
@@ -92,7 +92,7 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
             children: [
               _StatRow(label: 'Inbox processed', value: inboxProcessed),
               _StatRow(label: 'Waiting-for routed', value: waitingReviewed),
-              _StatRow(label: 'Next actions routed', value: projectsReviewed),
+              _StatRow(label: 'Next actions routed', value: nextActionsReviewed),
               _StatRow(label: 'Someday routed', value: somedayReviewed),
             ],
           ),

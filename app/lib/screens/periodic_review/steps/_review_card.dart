@@ -1,5 +1,5 @@
 /// Shared per-item card UI used by the Weekly Review wizard's list-driven
-/// steps (Waiting For, Projects, Someday/Maybe). The card renders the
+/// steps (Waiting For, Next Actions, Someday/Maybe). The card renders the
 /// item's metadata; routing actions are slotted in via a [ProcessToHandlers]
 /// child so callsites only configure presentation (`include`, `except`,
 /// `labels`) rather than re-implementing the action bar.

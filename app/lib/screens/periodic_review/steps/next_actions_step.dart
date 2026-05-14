@@ -1,6 +1,8 @@
-/// Step 3 of the Weekly Review wizard: review each project-tagged next
-/// action one at a time. The user-visible step title is "Review Next
-/// Actions" — these items are next-actions filtered by project tag.
+/// Step 3 of the Weekly Review wizard: review each active next action one at
+/// a time. Person-tagged items are excluded at the DAO level
+/// ([TodoDao.getNextActionsExcludingPersonTagged]) because they are surfaced
+/// by the prior Waiting For step — the wizard's disjointness invariant
+/// guarantees each task shows up in at most one step.
 ///
 /// Routing actions are delegated to the canonical [ProcessToHandlers]
 /// action bar; this step only records the routing for the
@@ -14,24 +16,25 @@ import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
 
-class ProjectsStep extends ConsumerWidget {
-  const ProjectsStep({super.key});
+class NextActionsStep extends ConsumerWidget {
+  const NextActionsStep({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final nav =
-        ref.watch(periodicReviewProvider.select((s) => s.projectsNav));
+        ref.watch(periodicReviewProvider.select((s) => s.nextActionsNav));
     final loadError = ref.watch(
-        periodicReviewProvider.select((s) => s.projectsLoadError));
+        periodicReviewProvider.select((s) => s.nextActionsLoadError));
     final routings = ref.watch(
-        periodicReviewProvider.select((s) => s.projectsRoutings));
+        periodicReviewProvider.select((s) => s.nextActionsRoutings));
 
     if (loadError != null) {
       return ReviewLoadError(
         title: "Couldn't load Next Actions",
         message: loadError,
-        onRetry: () =>
-            ref.read(periodicReviewProvider.notifier).loadProjectsSnapshot(),
+        onRetry: () => ref
+            .read(periodicReviewProvider.notifier)
+            .loadNextActionsSnapshot(),
       );
     }
 
@@ -41,8 +44,8 @@ class ProjectsStep extends ConsumerWidget {
 
     if (nav.isEmpty || nav.isComplete) {
       return const ReviewEmptyState(
-        icon: Icons.folder_outlined,
-        title: 'No active project tasks',
+        icon: Icons.task_alt_outlined,
+        title: 'No next actions to review',
         subtitle: 'Tap Next to continue.',
       );
     }
@@ -56,7 +59,7 @@ class ProjectsStep extends ConsumerWidget {
       todo: todo,
       headline: 'Is this still your next move?',
       // Surface the persisted next-action text so the reviewer sees the
-      // concrete commitment they made, not just the project title.
+      // concrete commitment they made, not just the task title.
       subtext: todo.nextActionText,
       // Defaults minus Next: the item is already on the Next list, so
       // re-confirming as Next is what Keep is for.
@@ -67,13 +70,19 @@ class ProjectsStep extends ConsumerWidget {
         lastAction: routings[index]?.toProcessAction(),
         onAfterRoute: (action) async {
           if (action == ProcessAction.keep) {
-            notifier.advanceProjects();
+            notifier.advanceNextActions();
             return;
           }
           final kind = action.toRoutingKind();
-          if (kind == null) return;
-          notifier.recordProjectsRouting(index, kind);
-          notifier.advanceProjects();
+          // `keep` is the only action whose toRoutingKind() returns null, and
+          // it is handled above. The guard below keeps the wizard advancing
+          // even if that invariant is ever violated.
+          assert(kind != null,
+              'ProcessAction.keep should already be handled before this point');
+          if (kind != null) {
+            notifier.recordNextActionsRouting(index, kind);
+          }
+          notifier.advanceNextActions();
         },
       ),
     );
