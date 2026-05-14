@@ -28,16 +28,16 @@ class PeriodicReviewState {
     this.currentStep = 0,
     this.inboxNav = const SnapshotNav<String>(),
     this.waitingForNav = const SnapshotNav<Todo>(),
-    this.projectsNav = const SnapshotNav<Todo>(),
+    this.nextActionsNav = const SnapshotNav<Todo>(),
     this.somedayNav = const SnapshotNav<Todo>(),
     this.waitingForPersonTags = const {},
     this.inboxRoutings = const {},
     this.waitingForRoutings = const {},
-    this.projectsRoutings = const {},
+    this.nextActionsRoutings = const {},
     this.somedayRoutings = const {},
     this.inboxLoadError,
     this.waitingForLoadError,
-    this.projectsLoadError,
+    this.nextActionsLoadError,
     this.somedayLoadError,
   });
 
@@ -46,7 +46,7 @@ class PeriodicReviewState {
   /// Snapshot of inbox todo IDs to clarify (oldest-first).
   final SnapshotNav<String> inboxNav;
   final SnapshotNav<Todo> waitingForNav;
-  final SnapshotNav<Todo> projectsNav;
+  final SnapshotNav<Todo> nextActionsNav;
   final SnapshotNav<Todo> somedayNav;
 
   /// Person tags attached to each todo in [waitingForNav], keyed by todo id.
@@ -59,33 +59,33 @@ class PeriodicReviewState {
   /// when the user backs up to revisit an item.
   final Map<int, RoutingKind> inboxRoutings;
   final Map<int, RoutingKind> waitingForRoutings;
-  final Map<int, RoutingKind> projectsRoutings;
+  final Map<int, RoutingKind> nextActionsRoutings;
   final Map<int, RoutingKind> somedayRoutings;
 
   /// Non-null when the matching snapshot load failed; rendered inline by the
   /// step (no toasts in the wizard) with a Retry affordance.
   final String? inboxLoadError;
   final String? waitingForLoadError;
-  final String? projectsLoadError;
+  final String? nextActionsLoadError;
   final String? somedayLoadError;
 
   PeriodicReviewState copyWith({
     int? currentStep,
     SnapshotNav<String>? inboxNav,
     SnapshotNav<Todo>? waitingForNav,
-    SnapshotNav<Todo>? projectsNav,
+    SnapshotNav<Todo>? nextActionsNav,
     SnapshotNav<Todo>? somedayNav,
     Map<String, List<Tag>>? waitingForPersonTags,
     Map<int, RoutingKind>? inboxRoutings,
     Map<int, RoutingKind>? waitingForRoutings,
-    Map<int, RoutingKind>? projectsRoutings,
+    Map<int, RoutingKind>? nextActionsRoutings,
     Map<int, RoutingKind>? somedayRoutings,
     String? inboxLoadError,
     bool clearInboxLoadError = false,
     String? waitingForLoadError,
     bool clearWaitingForLoadError = false,
-    String? projectsLoadError,
-    bool clearProjectsLoadError = false,
+    String? nextActionsLoadError,
+    bool clearNextActionsLoadError = false,
     String? somedayLoadError,
     bool clearSomedayLoadError = false,
   }) =>
@@ -93,13 +93,13 @@ class PeriodicReviewState {
         currentStep: currentStep ?? this.currentStep,
         inboxNav: inboxNav ?? this.inboxNav,
         waitingForNav: waitingForNav ?? this.waitingForNav,
-        projectsNav: projectsNav ?? this.projectsNav,
+        nextActionsNav: nextActionsNav ?? this.nextActionsNav,
         somedayNav: somedayNav ?? this.somedayNav,
         waitingForPersonTags:
             waitingForPersonTags ?? this.waitingForPersonTags,
         inboxRoutings: inboxRoutings ?? this.inboxRoutings,
         waitingForRoutings: waitingForRoutings ?? this.waitingForRoutings,
-        projectsRoutings: projectsRoutings ?? this.projectsRoutings,
+        nextActionsRoutings: nextActionsRoutings ?? this.nextActionsRoutings,
         somedayRoutings: somedayRoutings ?? this.somedayRoutings,
         inboxLoadError: clearInboxLoadError
             ? null
@@ -107,9 +107,9 @@ class PeriodicReviewState {
         waitingForLoadError: clearWaitingForLoadError
             ? null
             : (waitingForLoadError ?? this.waitingForLoadError),
-        projectsLoadError: clearProjectsLoadError
+        nextActionsLoadError: clearNextActionsLoadError
             ? null
-            : (projectsLoadError ?? this.projectsLoadError),
+            : (nextActionsLoadError ?? this.nextActionsLoadError),
         somedayLoadError: clearSomedayLoadError
             ? null
             : (somedayLoadError ?? this.somedayLoadError),
@@ -126,7 +126,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   // throughout the week (no dedicated brain-dump step in the wizard).
   static const int kStepInbox = 0;
   static const int kStepWaitingFor = 1;
-  static const int kStepProjects = 2;
+  static const int kStepNextActions = 2;
   static const int kStepSomeMaybe = 3;
   static const int kStepSummary = 4;
 
@@ -142,7 +142,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// nav is unloaded) and let re-entry preserve the user's per-item cursor.
   bool _loadingInboxSnapshot = false;
   bool _loadingWaitingForSnapshot = false;
-  bool _loadingProjectsSnapshot = false;
+  bool _loadingNextActionsSnapshot = false;
   bool _loadingSomedaySnapshot = false;
 
   @override
@@ -190,18 +190,18 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     }
   }
 
-  Future<void> loadProjectsSnapshot() async {
-    if (state.projectsNav.isLoaded || _loadingProjectsSnapshot) return;
-    _loadingProjectsSnapshot = true;
-    state = state.copyWith(clearProjectsLoadError: true);
+  Future<void> loadNextActionsSnapshot() async {
+    if (state.nextActionsNav.isLoaded || _loadingNextActionsSnapshot) return;
+    _loadingNextActionsSnapshot = true;
+    state = state.copyWith(clearNextActionsLoadError: true);
     try {
-      final todos = await _db.todoDao.getNextActionsWithProjectTags();
-      state =
-          state.copyWith(projectsNav: state.projectsNav.withItems(todos));
+      final todos = await _db.todoDao.getNextActionsExcludingPersonTagged();
+      state = state.copyWith(
+          nextActionsNav: state.nextActionsNav.withItems(todos));
     } catch (e) {
-      state = state.copyWith(projectsLoadError: e.toString());
+      state = state.copyWith(nextActionsLoadError: e.toString());
     } finally {
-      _loadingProjectsSnapshot = false;
+      _loadingNextActionsSnapshot = false;
     }
   }
 
@@ -228,7 +228,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     await Future.wait<void>([
       loadInboxSnapshot(),
       loadWaitingForSnapshot(),
-      loadProjectsSnapshot(),
+      loadNextActionsSnapshot(),
       loadSomedaySnapshot(),
     ]);
   }
@@ -253,12 +253,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     state = state.copyWith(waitingForNav: state.waitingForNav.previous());
   }
 
-  void advanceProjects() =>
-      state = state.copyWith(projectsNav: state.projectsNav.next());
+  void advanceNextActions() =>
+      state = state.copyWith(nextActionsNav: state.nextActionsNav.next());
 
-  void previousProjects() {
-    if (!state.projectsNav.canGoBack) return;
-    state = state.copyWith(projectsNav: state.projectsNav.previous());
+  void previousNextActions() {
+    if (!state.nextActionsNav.canGoBack) return;
+    state =
+        state.copyWith(nextActionsNav: state.nextActionsNav.previous());
   }
 
   void advanceSomeday() =>
@@ -286,9 +287,9 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     );
   }
 
-  void recordProjectsRouting(int index, RoutingKind kind) {
+  void recordNextActionsRouting(int index, RoutingKind kind) {
     state = state.copyWith(
-      projectsRoutings: {...state.projectsRoutings, index: kind},
+      nextActionsRoutings: {...state.nextActionsRoutings, index: kind},
     );
   }
 
@@ -344,11 +345,11 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
             state.waitingForNav.isEmpty) {
           await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
         }
-      case kStepProjects:
-        await loadProjectsSnapshot();
-        if (state.currentStep == kStepProjects &&
-            state.projectsNav.isLoaded &&
-            state.projectsNav.isEmpty) {
+      case kStepNextActions:
+        await loadNextActionsSnapshot();
+        if (state.currentStep == kStepNextActions &&
+            state.nextActionsNav.isLoaded &&
+            state.nextActionsNav.isEmpty) {
           await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
         }
       case kStepSomeMaybe:
@@ -375,9 +376,8 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     await settings.completeReview();
     _loadingInboxSnapshot = false;
     _loadingWaitingForSnapshot = false;
-    _loadingProjectsSnapshot = false;
+    _loadingNextActionsSnapshot = false;
     _loadingSomedaySnapshot = false;
     state = const PeriodicReviewState();
   }
 }
-

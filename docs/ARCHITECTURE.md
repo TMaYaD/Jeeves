@@ -399,7 +399,7 @@ The **Next** button in `FocusSessionPlanningScreen` is gated on `inboxIndex >= i
 
 ### `ProcessToHandlers` — the canonical "process to" action bar
 
-`ProcessToHandlers` (`app/lib/widgets/process_to_handlers.dart`) is the single widget rendered wherever the user routes a Todo: the inbox-clarify card (planning Step 0 and weekly review's zero-inbox step), the daily planning task-review step, and the weekly review's Waiting For / Projects / Someday-Maybe steps.
+`ProcessToHandlers` (`app/lib/widgets/process_to_handlers.dart`) is the single widget rendered wherever the user routes a Todo: the inbox-clarify card (planning Step 0 and weekly review's zero-inbox step), the daily planning task-review step, and the weekly review's Waiting For / Next Actions / Someday-Maybe steps.
 
 The widget owns its DAO writes. Callsites speak `ProcessAction` (`keep`, `next`, `waitingFor`, `someday`, `done`, `trash`, plus the `nextActionDialog` modifier on `next`) and never see `RoutingKind`. Callsites that hold a `RoutingKind` from a session record translate at the read site via the co-located `RoutingKind.toProcessAction()` extension.
 
@@ -478,10 +478,12 @@ There is no dedicated brain-dump step in the wizard: capture happens through the
 - `currentStep: int` — 0..4.
 - `inboxNav: SnapshotNav<String>` — todo IDs from the inbox.
 - `waitingForNav: SnapshotNav<Todo>` — person-tagged next actions.
-- `projectsNav: SnapshotNav<Todo>` — next actions carrying any project tag.
+- `nextActionsNav: SnapshotNav<Todo>` — active next actions, excluding those that carry a person tag (those are handled by Waiting For).
 - `somedayNav: SnapshotNav<Todo>` — `intent = 'maybe'` tasks.
 
-**Snapshot loaders** are called by `_onStepEnter` each time a step is entered. Every list-driven step (Inbox, Waiting For, Projects, Someday/Maybe) auto-skips on entry when its snapshot loads empty — there is nothing to reflect on if the list has no items, so the wizard advances straight to the next step.
+**Disjointness invariant:** each task surfaces in at most one wizard step. The selectors are pairwise disjoint by construction — Inbox vs everything is split on `clarified`; Waiting For vs Someday and Next Actions vs Someday split on `intent`; Waiting For vs Next Actions split on whether the task carries any person-typed tag (`getNextActionsExcludingPersonTagged` enforces the exclusion in SQL). A future dedicated Projects step will need to re-establish this matrix (project-tagged ⊂ next-actions, so it would have to be ordered ahead of Next Actions or the Next Actions snapshot would have to also exclude project-tagged items).
+
+**Snapshot loaders** are called by `_onStepEnter` each time a step is entered. Every list-driven step (Inbox, Waiting For, Next Actions, Someday/Maybe) auto-skips on entry when its snapshot loads empty — there is nothing to reflect on if the list has no items, so the wizard advances straight to the next step.
 
 **`completeReview()`** writes the completion timestamp to synced preferences via `PeriodicReviewSettingsNotifier`, then resets the in-session state to its initial form so the next entry starts on a clean Step 0.
 
@@ -505,8 +507,8 @@ Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissed
 ### UI
 
 - `screens/periodic_review/periodic_review_screen.dart` — non-swipeable `PageView` of five step pages. Step transitions go through `advanceStep` / `goToStep`, which fire the entry hook for snapshot loading.
-- Footer Back / Next drive the per-step item cursor first: on a list-driven step, Next advances `inboxNav` / `waitingForNav` / `projectsNav` / `somedayNav` while items remain, and only crosses into the next step once the cursor has nothing more to consume (`!canGoForward`); Back symmetrically retreats the cursor before crossing back.
-- Per-item steps (Waiting For, Projects, Someday/Maybe) share `_review_card.dart` (`ReviewItemCard`, `ReviewAction`, `ReviewEmptyState`).
+- Footer Back / Next drive the per-step item cursor first: on a list-driven step, Next advances `inboxNav` / `waitingForNav` / `nextActionsNav` / `somedayNav` while items remain, and only crosses into the next step once the cursor has nothing more to consume (`!canGoForward`); Back symmetrically retreats the cursor before crossing back.
+- Per-item steps (Waiting For, Next Actions, Someday/Maybe) share `_review_card.dart` (`ReviewItemCard`, `ReviewAction`, `ReviewEmptyState`).
 - Step 0 (Process Inbox) reuses the shared `widgets/inbox_clarify_card.dart` from the daily-planning ritual.
 - `widgets/periodic_review_banner.dart` — teal banner above app-shell views. Banner toggle must be enabled, the user must have at least one todo, and dismissed-today must be false. Given those, it shows when **either** the review is due per the 7-day cadence, **or** the inbox and next-actions are both empty while waiting-for or someday/maybe still holds items. The second trigger fills the gap left by `FocusSessionPlanningBanner` (which suppresses itself in that state per #258) so the user is nudged toward the weekly review when there is nothing to plan today but deferred inventory remains. Both branches read the unfiltered list providers (`unfilteredInboxProvider`, `unfilteredNextActionsProvider`, `unfilteredWaitingForProvider`, `unfilteredMaybeProvider`) so an active context-tag filter does not change visibility.
 

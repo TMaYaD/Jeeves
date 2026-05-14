@@ -1,5 +1,8 @@
 # Notes
 
+## 2026-05-14 (issue #290)
+- Weekly Review's third step renamed from Projects → Next Actions and broadened to iterate **all** active next actions excluding person-tagged ones (which Waiting For already covers). The disjointness invariant — each task surfaces in at most one wizard step — is now enforced at the SQL layer via `TodoDao.getNextActionsExcludingPersonTagged()`. The old `getNextActionsWithProjectTags()` and `Projects*` symbols are gone. A future dedicated Projects step is deferred until full Projects support lands; resurrecting it will require re-establishing the disjointness matrix (project-tagged ⊂ next-actions).
+
 ## 2026-05-12 (issue #279)
 - Nirvana import maps each source state into four orthogonal fields on the todo row: `clarified` (column), `intent` (`next | maybe | trash`), `doneAt` (set when `COMPLETED` / `completed` is non-empty), and an injected auto-tag. Per-state outcomes: Inbox → `clarified=false`; Next/Waiting → `clarified=true,intent=next`; Someday / Inactive-Later / Scheduled / Scheduled-Repeating / Reference → `clarified=true,intent=maybe`; Trash → `clarified=true,intent=trash`; Logbook (CSV) / `completed!=0` (JSON) → `doneAt` set + `intent=next`.
 - Scheduled / Scheduled-Repeating / Reference also inject a `@scheduled` / `@repeating` / `@reference` context tag so the original Nirvana category is recoverable after import (Jeeves has no Scheduled/Repeating/Reference primitive).
