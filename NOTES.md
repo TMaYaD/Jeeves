@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-05-14 (issue #289)
+- `_needsReviewWhere`'s actionless branch now ANDs on `NOT EXISTS person tag`. Delegated tasks (any person-typed `todo_tags` row) are excluded from the daily re-clarification surface — waiting-for cadence belongs to the weekly review, not the daily card. The stale branch is untouched, so a delegated task you nudged today still surfaces.
+- `readsFrom` for the three `_needsReviewWhere` callers (`watchNeedsReview`, `getNeedsReview`/`getNeedsReviewCount`/`isNeedsReview`) widened from `{todos}` to `{todos, todoTags, tags}`. Without the widening, Drift's stream invalidation doesn't fire when a person tag is attached/detached, and the live daily card would not drop a newly-tagged task until the next cold reload.
+- `FocusSessionPlanningState.reviewPersonTags` is loaded alongside the review snapshot in `advanceStep` (one batched `getPersonTagsForTodos` query) so the new `staleWaitingFor` card variant can name the delegate without a per-frame DAO call.
+
 ## 2026-05-12 (issue #279)
 - Nirvana import maps each source state into four orthogonal fields on the todo row: `clarified` (column), `intent` (`next | maybe | trash`), `doneAt` (set when `COMPLETED` / `completed` is non-empty), and an injected auto-tag. Per-state outcomes: Inbox → `clarified=false`; Next/Waiting → `clarified=true,intent=next`; Someday / Inactive-Later / Scheduled / Scheduled-Repeating / Reference → `clarified=true,intent=maybe`; Trash → `clarified=true,intent=trash`; Logbook (CSV) / `completed!=0` (JSON) → `doneAt` set + `intent=next`.
 - Scheduled / Scheduled-Repeating / Reference also inject a `@scheduled` / `@repeating` / `@reference` context tag so the original Nirvana category is recoverable after import (Jeeves has no Scheduled/Repeating/Reference primitive).

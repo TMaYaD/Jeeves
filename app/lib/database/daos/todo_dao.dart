@@ -388,19 +388,28 @@ AND (
   (last_next_action_completion_at IS NOT NULL
    AND (last_clarified_at IS NULL
         OR last_clarified_at < last_next_action_completion_at))
-  OR next_action_text IS NULL
-  OR TRIM(next_action_text) = ''
+  OR (
+    (next_action_text IS NULL OR TRIM(next_action_text) = '')
+    AND NOT EXISTS (
+      SELECT 1 FROM todo_tags tt
+      JOIN tags tg ON tg.id = tt.tag_id
+      WHERE tt.todo_id = todos.id AND tg.type = 'person'
+    )
+  )
 )''';
 
   /// Stream of tasks needing re-clarification: Stale or Actionless per spec.
   ///
   /// Stale: worked on in a session more recently than last clarified.
-  /// Actionless: no next action defined (regardless of session history).
+  /// Actionless: no next action defined AND not delegated. Delegated tasks
+  /// (carrying any person-typed tag) are excluded from the actionless branch —
+  /// their cadence belongs to the weekly Waiting For review, not the daily
+  /// re-clarification surface.
   Stream<List<Todo>> watchNeedsReview() {
     return customSelect(
       'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
       variables: [],
-      readsFrom: {todos},
+      readsFrom: {todos, todoTags, tags},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -428,7 +437,7 @@ AND (
     return customSelect(
       'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
       variables: [],
-      readsFrom: {todos},
+      readsFrom: {todos, todoTags, tags},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -438,7 +447,7 @@ AND (
     final rows = await customSelect(
       'SELECT COUNT(*) AS cnt FROM todos WHERE $_needsReviewWhere',
       variables: [],
-      readsFrom: {todos},
+      readsFrom: {todos, todoTags, tags},
     ).get();
     return rows.first.read<int>('cnt');
   }
@@ -521,7 +530,7 @@ AND (
     final rows = await customSelect(
       'SELECT 1 FROM todos WHERE id = ? AND $_needsReviewWhere',
       variables: [Variable(todoId)],
-      readsFrom: {todos},
+      readsFrom: {todos, todoTags, tags},
     ).get();
     return rows.isNotEmpty;
   }

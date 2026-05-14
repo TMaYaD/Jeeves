@@ -2,10 +2,12 @@
 ///
 /// Surfaces tasks needing re-clarification one at a time:
 /// - Stale tasks: worked on in a session more recently than last clarified.
-/// - Actionless tasks: no next action defined.
+/// - Actionless tasks: no next action defined (excluding delegated tasks).
 ///
 /// Context-aware action menu:
-/// - Stale tasks show "Still relevant" (stamps last_clarified_at, clears stale).
+/// - Stale tasks without a delegate show "Still relevant" (stamps
+///   last_clarified_at, clears stale).
+/// - Stale delegated tasks show "Still waiting" (same write, waiting-for copy).
 /// - Actionless tasks omit "Still relevant" — defining an action is required.
 library;
 
@@ -20,15 +22,39 @@ import '../../../widgets/process_to_handlers.dart';
 // Hint enum — derived from task state
 // ---------------------------------------------------------------------------
 
-enum ReclarifyHint { noNextAction, updatedSinceClarified }
+enum ReclarifyHint {
+  noNextAction,
+  updatedSinceClarified,
+  staleWaitingFor,
+}
+
+/// Returns true when [t]'s session timestamps mark it as stale per the
+/// `_needsReviewWhere` stale branch: a session completion happened after the
+/// last clarification stamp.
+bool isStaleReclarification(Todo t) =>
+    t.lastNextActionCompletionAt != null &&
+    (t.lastClarifiedAt == null ||
+        t.lastClarifiedAt!.isBefore(t.lastNextActionCompletionAt!));
 
 /// Mirror of [TodoDao] `_needsReviewWhere`'s actionless predicate:
 /// `next_action_text IS NULL OR TRIM(next_action_text) = ''`. Whitespace-only
 /// values land rows in the queue, so the hint must agree (#278).
-ReclarifyHint hintFor(Todo t) =>
-    (t.nextActionText == null || t.nextActionText!.trim().isEmpty)
-        ? ReclarifyHint.noNextAction
-        : ReclarifyHint.updatedSinceClarified;
+///
+/// [hasPersonTag] and [isStale] are computed by the caller (the widget reads
+/// person tags from [FocusSessionPlanningState.reviewPersonTags] and stale
+/// from [isStaleReclarification]). Keeping the helper pure makes it
+/// trivially unit-testable.
+ReclarifyHint hintFor(
+  Todo t, {
+  required bool hasPersonTag,
+  required bool isStale,
+}) {
+  if (isStale && hasPersonTag) return ReclarifyHint.staleWaitingFor;
+  if (t.nextActionText == null || t.nextActionText!.trim().isEmpty) {
+    return ReclarifyHint.noNextAction;
+  }
+  return ReclarifyHint.updatedSinceClarified;
+}
 
 // ---------------------------------------------------------------------------
 // Step widget
@@ -47,10 +73,16 @@ class TaskReviewStep extends ConsumerWidget {
     }
 
     final task = nav.current!;
+    final personTags = state.reviewPersonTags[task.id] ?? const <Tag>[];
     return _ReviewCard(
       key: ValueKey(task.id),
       task: task,
-      hint: hintFor(task),
+      hint: hintFor(
+        task,
+        hasPersonTag: personTags.isNotEmpty,
+        isStale: isStaleReclarification(task),
+      ),
+      personTags: personTags,
       previousAction: state.reviewActions[nav.index],
     );
   }
@@ -65,11 +97,16 @@ class _ReviewCard extends ConsumerWidget {
     super.key,
     required this.task,
     required this.hint,
+    this.personTags = const [],
     this.previousAction,
   });
 
   final Todo task;
   final ReclarifyHint hint;
+
+  /// Person-typed tags assigned to [task]. Drives the delegate name(s) in
+  /// the [ReclarifyHint.staleWaitingFor] badge.
+  final List<Tag> personTags;
 
   /// Action recorded for this index on a previous pass — drives selection
   /// affordances and pre-fills dialogs when the user navigates back.
@@ -78,6 +115,32 @@ class _ReviewCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isActionless = hint == ReclarifyHint.noNextAction;
+    final isWaitingFor = hint == ReclarifyHint.staleWaitingFor;
+    final showKeep = !isActionless;
+
+    final badgeBg = isActionless
+        ? const Color(0xFFFEF3C7)
+        : const Color(0xFFEFF6FF);
+    final badgeBorder = isActionless
+        ? const Color(0xFFFDE68A)
+        : const Color(0xFFDBEAFE);
+    final badgeIconColor = isActionless
+        ? const Color(0xFFD97706)
+        : const Color(0xFF2563EB);
+    final badgeTextColor = isActionless
+        ? const Color(0xFF92400E)
+        : const Color(0xFF1D4ED8);
+    final badgeIcon = switch (hint) {
+      ReclarifyHint.noNextAction => Icons.warning_amber_outlined,
+      ReclarifyHint.updatedSinceClarified => Icons.update_outlined,
+      ReclarifyHint.staleWaitingFor => Icons.person_outline,
+    };
+    final badgeText = switch (hint) {
+      ReclarifyHint.noNextAction => 'No next action defined',
+      ReclarifyHint.updatedSinceClarified => 'Updated since last clarified',
+      ReclarifyHint.staleWaitingFor =>
+        'Waiting for ${personTags.map((t) => t.name).join(', ')} — still waiting?',
+    };
 
     return ListView(
       physics: const ClampingScrollPhysics(),
@@ -87,39 +150,21 @@ class _ReviewCard extends ConsumerWidget {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: isActionless
-                ? const Color(0xFFFEF3C7)
-                : const Color(0xFFEFF6FF),
+            color: badgeBg,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isActionless
-                  ? const Color(0xFFFDE68A)
-                  : const Color(0xFFDBEAFE),
-            ),
+            border: Border.all(color: badgeBorder),
           ),
           child: Row(
             children: [
-              Icon(
-                isActionless
-                    ? Icons.warning_amber_outlined
-                    : Icons.update_outlined,
-                size: 18,
-                color: isActionless
-                    ? const Color(0xFFD97706)
-                    : const Color(0xFF2563EB),
-              ),
+              Icon(badgeIcon, size: 18, color: badgeIconColor),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  isActionless
-                      ? 'No next action defined'
-                      : 'Updated since last clarified',
+                  badgeText,
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: isActionless
-                        ? const Color(0xFF92400E)
-                        : const Color(0xFF1D4ED8),
+                    color: badgeTextColor,
                   ),
                 ),
               ),
@@ -147,7 +192,7 @@ class _ReviewCard extends ConsumerWidget {
           ),
         ],
 
-        // Current next action (if stale)
+        // Current next action (if present)
         if (!isActionless && task.nextActionText != null) ...[
           const SizedBox(height: 8),
           Row(
@@ -172,8 +217,9 @@ class _ReviewCard extends ConsumerWidget {
         const SizedBox(height: 28),
 
         // Action buttons — defaults plus the dialog modifier on Next.
-        // Stale tasks add "Still relevant" (keep with a custom label);
-        // Actionless tasks omit it because defining an action is required.
+        // Stale tasks add a "keep" variant (label depends on whether the task
+        // is delegated); Actionless tasks omit it because defining an action
+        // is required.
         const _FieldLabel('WHAT DO YOU WANT TO DO?'),
         const SizedBox(height: 12),
 
@@ -181,10 +227,11 @@ class _ReviewCard extends ConsumerWidget {
           todo: task,
           include: {
             ProcessAction.nextActionDialog,
-            if (!isActionless) ProcessAction.keep,
+            if (showKeep) ProcessAction.keep,
           },
-          labels: const {
-            ProcessAction.keep: 'Still relevant',
+          labels: {
+            ProcessAction.keep:
+                isWaitingFor ? 'Still waiting' : 'Still relevant',
             ProcessAction.next: 'Update next action…',
           },
           lastAction: _toProcessAction(previousAction?.kind),

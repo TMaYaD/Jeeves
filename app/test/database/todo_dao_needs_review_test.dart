@@ -37,6 +37,28 @@ Future<String> _insertClarifiedTask(
   return id;
 }
 
+/// Inserts a person-typed tag and links it to [todoId]. Returns the tag id.
+Future<String> _attachPersonTag(
+  GtdDatabase db,
+  String todoId, {
+  String name = 'Trixy',
+}) async {
+  final tagId = 'ptag-${DateTime.now().microsecondsSinceEpoch}-$todoId';
+  await db.into(db.tags).insert(TagsCompanion(
+    id: Value(tagId),
+    name: Value(name),
+    type: const Value('person'),
+    userId: Value(_userId),
+  ));
+  await db.into(db.todoTags).insert(TodoTagsCompanion(
+    id: Value('tt-$tagId-$todoId'),
+    todoId: Value(todoId),
+    tagId: Value(tagId),
+    userId: Value(_userId),
+  ));
+  return tagId;
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -334,6 +356,119 @@ void main() {
       await db.todoDao.setNextActionText(id,'Do something');
 
       expect(await db.todoDao.isNeedsReview(id), isFalse);
+    });
+
+    // ----- Delegated (person-tagged) actionless branch (#289) ----------------
+
+    // Delegated + actionless task does NOT surface — waiting-for cadence
+    // belongs to the weekly review, not the daily re-clarification surface.
+    test('delegated actionless task — not in result', () async {
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: null,
+        lastNextActionCompletionAt: null,
+      );
+      await _attachPersonTag(db, id);
+
+      final result = await db.todoDao.watchNeedsReview().first;
+      expect(result, isEmpty);
+      expect(await db.todoDao.getNeedsReviewCount(), 0);
+      expect(await db.todoDao.isNeedsReview(id), isFalse);
+    });
+
+    // Delegated + whitespace-only next_action_text — also excluded (guards
+    // the TRIM(...) = '' branch).
+    test('delegated whitespace-only next_action_text task — not in result',
+        () async {
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: '   ',
+        lastNextActionCompletionAt: null,
+      );
+      await _attachPersonTag(db, id);
+
+      final result = await db.todoDao.watchNeedsReview().first;
+      expect(result, isEmpty);
+      expect(await db.todoDao.isNeedsReview(id), isFalse);
+    });
+
+    // Delegated + stale (lastNextActionCompletionAt > lastClarifiedAt) DOES
+    // surface — the stale branch fires regardless of person-tag presence.
+    test('delegated stale task — in result (stale branch unaffected)',
+        () async {
+      final clarifiedAt =
+          DateTime.now().subtract(const Duration(hours: 2)).toUtc();
+      final completedAt =
+          DateTime.now().subtract(const Duration(hours: 1)).toUtc();
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: 'Draft email',
+        lastClarifiedAt: clarifiedAt,
+        lastNextActionCompletionAt: completedAt,
+      );
+      await _attachPersonTag(db, id);
+
+      final result = await db.todoDao.watchNeedsReview().first;
+      expect(result, hasLength(1));
+      expect(result.first.id, id);
+      expect(await db.todoDao.isNeedsReview(id), isTrue);
+    });
+
+    // Delegated + stale + actionless DOES surface — the stale branch fires
+    // even when the task is delegated and has no next-action phrase.
+    test('delegated stale actionless task — in result (stale branch fires)',
+        () async {
+      final clarifiedAt =
+          DateTime.now().subtract(const Duration(hours: 2)).toUtc();
+      final completedAt =
+          DateTime.now().subtract(const Duration(hours: 1)).toUtc();
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: null,
+        lastClarifiedAt: clarifiedAt,
+        lastNextActionCompletionAt: completedAt,
+      );
+      await _attachPersonTag(db, id);
+
+      final result = await db.todoDao.watchNeedsReview().first;
+      expect(result, hasLength(1));
+      expect(result.first.id, id);
+    });
+
+    // Stream invalidation: attaching a person tag to an actionless task must
+    // remove it from the live stream. Locks in the readsFrom widening to
+    // {todos, todoTags, tags}.
+    test(
+        'stream invalidates on person-tag attach — actionless task disappears',
+        () async {
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: null,
+        lastNextActionCompletionAt: null,
+      );
+
+      final emissions = <List<Todo>>[];
+      final sub = db.todoDao.watchNeedsReview().listen(emissions.add);
+
+      // Let the initial emission settle.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(emissions, isNotEmpty,
+          reason: 'stream should have emitted an initial value');
+      expect(emissions.last.any((t) => t.id == id), isTrue,
+          reason: 'baseline: actionless task should surface');
+
+      // Attach a person tag — the predicate must now exclude this row.
+      await _attachPersonTag(db, id);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await sub.cancel();
+
+      expect(emissions.length, greaterThanOrEqualTo(2),
+          reason:
+              'stream should re-emit after person-tag attach (proves readsFrom '
+              'covers todo_tags/tags)');
+      expect(emissions.last.any((t) => t.id == id), isFalse,
+          reason:
+              'after person-tag attach, actionless+delegated task must leave the stream');
     });
   });
 }
