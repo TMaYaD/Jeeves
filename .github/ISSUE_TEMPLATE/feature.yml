@@ -32,10 +32,9 @@ body:
     attributes:
       label: Acceptance Criteria
       description: Checkbox list of testable conditions. Each box must be independently verifiable.
-      value: |
-        - [ ]
-        - [ ]
-        - [ ]
+      placeholder: |
+        - [ ] First testable condition
+        - [ ] Second testable condition
     validations:
       required: true
   - type: textarea
