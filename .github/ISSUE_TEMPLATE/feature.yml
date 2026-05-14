@@ -1,0 +1,53 @@
+name: Feature / Task
+description: Standard issue format — user story, scope, acceptance criteria.
+title: "Short, imperative summary of the change"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for all new issues (features, bugs, refactors, infra).
+        See #58 for a worked example. Fill out every section — sections left blank
+        will block triage.
+  - type: textarea
+    id: user-story
+    attributes:
+      label: User Story
+      description: "Format: As a <persona>, I want <capability>, so I can <outcome>."
+      placeholder: "As a mobile user, I want to share text from any app to my inbox, so I can capture tasks without opening the app."
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Bullet list of what is in scope. Keep it concrete and bounded.
+      placeholder: |
+        - Register app as Android Share Sheet target
+        - Accept text, URLs, and image attachments
+        - Create inbox item with shared content as title/notes
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Checkbox list of testable conditions. Each box must be independently verifiable.
+      placeholder: |
+        - [ ] First testable condition
+        - [ ] Second testable condition
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of Scope (optional)
+      description: Anything explicitly NOT covered by this issue. Helps prevent scope creep.
+    validations:
+      required: false
+  - type: textarea
+    id: related
+    attributes:
+      label: Related (optional)
+      description: Linked issues, PRs, docs, or proposals.
+    validations:
+      required: false

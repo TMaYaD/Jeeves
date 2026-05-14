@@ -79,6 +79,25 @@ Strictly follow Semantic Versioning.
 5. **Verify** - Full test suite, build check
 6. **Update scratchpad** - Mark goal done, set next goal
 
+## Creating GitHub Issues
+
+All issues must follow the project's issue template (`.github/ISSUE_TEMPLATE/`).
+The GitHub UI enforces this on humans; agents creating issues via the API must
+match it manually.
+
+Required sections, in order:
+
+- **User Story** — `As a <persona>, I want <capability>, so I can <outcome>.`
+- **Scope** — bullet list of what's in scope.
+- **Acceptance Criteria** — checkbox list of testable conditions.
+
+Optional sections (include when they add value):
+
+- **Out of Scope** — what is explicitly NOT covered.
+- **Related** — linked issues, PRs, docs, proposals.
+
+Do not open issues that skip the required sections.
+
 ## Scratchpad (`SCRATCHPAD.md`)
 
 Maintain a scratchpad with:
