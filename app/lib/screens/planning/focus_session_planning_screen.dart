@@ -4,7 +4,9 @@
 /// - A 5-segment progress bar (Inbox → Review → Energy → Time → Plan Summary).
 ///   The 6th screen (Today's Schedule) is the completion view: all 5 filled.
 /// - A non-swipeable [PageView] that displays each step.
-/// - Back / Next navigation buttons at the bottom (hidden on the last step).
+/// - A Back button plus a single forward affordance at the bottom (hidden on
+///   the last step): a secondary Skip while the step's item cursor still has
+///   items, swapping to a primary Next step once it is spent.
 library;
 
 import 'package:flutter/material.dart';
@@ -47,30 +49,39 @@ class _FocusSessionPlanningScreenState
     );
   }
 
-  /// Handles the Next button tap, inserting any step-specific side-effects.
-  void _handleNext(int step) {
+  /// Picks the footer's single forward affordance for [step] and the callback
+  /// that drives it, preserving the screen's existing per-step behaviour:
+  /// Skip advances the per-item cursor while items remain; Next step crosses
+  /// into the following step, carrying any step-specific side effect.
+  ///
+  /// A null callback means a disabled button — the only such case is Step 0's
+  /// Next step before the inbox snapshot has loaded.
+  (_FooterAction, VoidCallback?) _footerAction(int step) {
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
-    if (step == 0) {
-      final nav = ref.read(focusSessionPlanningProvider).inboxNav;
-      if (nav.isLoaded && !nav.isComplete) {
-        // Still items to clarify — skip the current one.
-        notifier.skipInboxItem();
-      } else {
-        notifier.advanceStep();
-      }
-    } else if (step == 1) {
-      final nav = ref.read(focusSessionPlanningProvider).reviewNav;
-      if (nav.isLoaded && !nav.isComplete) {
-        // Still items to review — skip the current one.
-        notifier.skipReviewItem();
-      } else {
-        notifier.advanceStep();
-      }
-    } else if (step == 2) {
-      // Energy → Time: auto-skip tasks that exceed today's energy.
-      notifier.autoSkipByEnergy().then((_) => notifier.advanceStep());
-    } else {
-      notifier.advanceStep();
+    final state = ref.watch(focusSessionPlanningProvider);
+    switch (step) {
+      case 0:
+        // Inbox — Next step is disabled until the snapshot loads. Once loaded,
+        // Skip advances the per-item cursor until nothing remains.
+        if (!state.inboxNav.isLoaded) return (_FooterAction.nextStep, null);
+        return state.inboxNav.isComplete
+            ? (_FooterAction.nextStep, notifier.advanceStep)
+            : (_FooterAction.skip, notifier.skipInboxItem);
+      case 1:
+        // Task review — Skip advances the per-item cursor while items remain;
+        // otherwise (including before the snapshot loads) Next step crosses.
+        if (state.reviewNav.isLoaded && !state.reviewNav.isComplete) {
+          return (_FooterAction.skip, notifier.skipReviewItem);
+        }
+        return (_FooterAction.nextStep, notifier.advanceStep);
+      case 2:
+        // Energy → Time: auto-skip tasks that exceed today's energy first.
+        return (
+          _FooterAction.nextStep,
+          () => notifier.autoSkipByEnergy().whenComplete(notifier.advanceStep),
+        );
+      default:
+        return (_FooterAction.nextStep, notifier.advanceStep);
     }
   }
 
@@ -85,6 +96,7 @@ class _FocusSessionPlanningScreenState
     final planningState = ref.watch(focusSessionPlanningProvider);
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
     final step = planningState.currentStep;
+    final footer = _footerAction(step);
 
     // Animate the PageView when currentStep changes; also auto-advance from
     // Step 0 when the inbox snapshot loads and is empty.
@@ -131,7 +143,6 @@ class _FocusSessionPlanningScreenState
             ),
             if (step < 5)
               _PlanningFooter(
-                step: step,
                 onBack: step == 0
                     ? (ref.watch(focusSessionPlanningProvider).inboxNav.canGoBack
                         ? () => notifier.previousInboxItem()
@@ -145,7 +156,8 @@ class _FocusSessionPlanningScreenState
                             }
                           }
                         : () => notifier.goToStep(step - 1),
-                onNext: _canAdvance(step, ref) ? () => _handleNext(step) : null,
+                action: footer.$1,
+                onPressed: footer.$2,
               ),
           ],
         ),
@@ -153,26 +165,6 @@ class _FocusSessionPlanningScreenState
     );
   }
 
-  /// Returns true when the user is allowed to proceed from [step].
-  bool _canAdvance(int step, WidgetRef ref) {
-    final s = ref.watch(focusSessionPlanningProvider);
-    return switch (step) {
-      // Step 0: inbox — Next is enabled once the snapshot is loaded; tapping
-      // it skips the current item, or advances to step 1 if nothing remains.
-      0 => s.inboxNav.isLoaded,
-      // Step 1: task review — always enabled; tapping Next skips the current item.
-      1 => true,
-      // Step 2: energy check in
-      2 => true,
-      // Step 3: time check in
-      3 => true,
-      // Step 4: Plan Summary and Next Actions view is fully controllable
-      4 => true,
-      // Step 5: ScheduledReviewStep is last page
-      5 => false,
-      _ => false,
-    };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -372,19 +364,35 @@ class _SegmentedProgressBar extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Footer: Back / Next buttons
+// Footer: Back + a single forward affordance (Skip or Next step)
 // ---------------------------------------------------------------------------
+
+/// Which forward affordance the footer renders. The two never co-exist; the
+/// footer swaps between them inside a fixed-size slot so the button's shape,
+/// size, and position are identical across the swap.
+enum _FooterAction { skip, nextStep }
 
 class _PlanningFooter extends StatelessWidget {
   const _PlanningFooter({
-    required this.step,
     required this.onBack,
-    required this.onNext,
+    required this.action,
+    required this.onPressed,
   });
 
-  final int step;
   final VoidCallback? onBack;
-  final VoidCallback? onNext;
+
+  /// Selects which forward button to render.
+  final _FooterAction action;
+
+  /// Tap handler for the rendered button. Always non-null for [_FooterAction.skip];
+  /// null for [_FooterAction.nextStep] only while Step 0's inbox snapshot is
+  /// still loading (renders a disabled Next step).
+  final VoidCallback? onPressed;
+
+  // Fixed slot dimensions so the OutlinedButton ↔ FilledButton swap causes no
+  // layout shift. Width is sized to comfortably fit the "Next step" label.
+  static const double _slotWidth = 148;
+  static const double _slotHeight = 48;
 
   @override
   Widget build(BuildContext context) {
@@ -403,17 +411,45 @@ class _PlanningFooter extends StatelessWidget {
               child: const Text('Back'),
             ),
           const Spacer(),
-          FilledButton(
-            onPressed: onNext,
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF2563EB),
-              disabledBackgroundColor: const Color(0xFFD1D5DB),
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          SizedBox(
+            key: const Key('planning_footer_slot'),
+            width: _slotWidth,
+            height: _slotHeight,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 150),
+              child: _buildAction(),
             ),
-            child: const Text('Next'),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildAction() {
+    switch (action) {
+      case _FooterAction.skip:
+        return OutlinedButton(
+          key: const Key('planning_skip'),
+          onPressed: onPressed,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF6B7280),
+            minimumSize: const Size(_slotWidth, _slotHeight),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          ),
+          child: const Text('Skip'),
+        );
+      case _FooterAction.nextStep:
+        return FilledButton(
+          key: const Key('planning_next_step'),
+          onPressed: onPressed,
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF2563EB),
+            disabledBackgroundColor: const Color(0xFFD1D5DB),
+            minimumSize: const Size(_slotWidth, _slotHeight),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          ),
+          child: const Text('Next step'),
+        );
+    }
   }
 }

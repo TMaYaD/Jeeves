@@ -26,6 +26,11 @@ Pointillist dot palette (top→hook order):
   brand  #2667B7   sky  #60A5FA   lav  #C4B5FD
   peach  #FDBA74   blush #F9A8D4  mint #6EE7B7
   butter #FDE68A
+
+Wizard footer tokens:
+  SKIP_GREY      #6B7280   — Skip button foreground (de-emphasised escape hatch)
+  ACCENT_WEEKLY  #059669   — Weekly Review accent (emerald)
+  ACCENT_DAILY   #2563EB   — Daily Planning accent (blue)
 ```
 
 ### Canonical source files
@@ -110,3 +115,22 @@ Our UI elements feature **maximum, pill-shaped (3)** roundedness, contributing t
 
 ### Spacing
 We maintain a **normal (2)** level of spacing, balancing information density with visual comfort and ease of use.
+
+### Wizard footers — one forward affordance at a time
+The Weekly Review and Daily Planning Ritual footers expose a single forward
+affordance, never two. The footer reserves one fixed-size slot on the right
+and renders exactly one button into it:
+
+*   **Skip** — secondary, outlined, `SKIP_GREY` (`#6B7280`) foreground. Shown
+    (always enabled) while the current step's per-item cursor still has items
+    to consume. It advances the cursor by one; it never crosses steps.
+*   **Next step** — primary `FilledButton` in the screen's accent
+    (`ACCENT_WEEKLY` `#059669` for Weekly Review, `ACCENT_DAILY` `#2563EB` for
+    Daily Planning). Shown when the cursor is spent, or the step has no
+    per-item cursor. It crosses into the following step. It is disabled only
+    while a list-driven step's snapshot is still loading.
+
+The two are mutually exclusive and swap inside the same fixed-width, fixed-height
+slot, so the button's shape, size, and position never shift across the swap.
+Skip is the de-emphasised escape hatch; Next step is the emphasised path of
+progress.
