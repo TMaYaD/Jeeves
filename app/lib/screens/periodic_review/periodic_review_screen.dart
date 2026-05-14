@@ -1,7 +1,7 @@
 /// Weekly Review wizard — outer container screen (Issue #54).
 ///
 /// Renders a non-swipeable [PageView] with five children: four list-driven
-/// review steps (Inbox, Waiting For, Projects, Someday/Maybe) and a final
+/// review steps (Inbox, Waiting For, Next Actions, Someday/Maybe) and a final
 /// summary. There is no separate brain-dump step — capture happens through
 /// the inbox throughout the week, not as a wizard ceremony.
 ///
@@ -16,7 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/periodic_review_provider.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
-import 'steps/projects_step.dart';
+import 'steps/next_actions_step.dart';
 import 'steps/someday_maybe_step.dart';
 import 'steps/summary_step.dart';
 import 'steps/waiting_for_step.dart';
@@ -109,7 +109,7 @@ class _PeriodicReviewScreenState
                 children: const [
                   ZeroInboxStep(),
                   WaitingForStep(),
-                  ProjectsStep(),
+                  NextActionsStep(),
                   SomedayMaybeStep(),
                   SummaryStep(),
                 ],
@@ -130,10 +130,10 @@ class _PeriodicReviewScreenState
   // Back / Next handlers
   // ---------------------------------------------------------------------------
   //
-  // List-driven steps (Inbox, Waiting For, Projects, Someday/Maybe) iterate
-  // one item at a time. The footer's Back / Next buttons drive the per-step
-  // cursor first; only when the cursor has no more items to consume does
-  // pressing Next cross into the next step (and Back into the prior one).
+  // List-driven steps (Inbox, Waiting For, Next Actions, Someday/Maybe)
+  // iterate one item at a time. The footer's Back / Next buttons drive the
+  // per-step cursor first; only when the cursor has no more items to consume
+  // does pressing Next cross into the next step (and Back into the prior one).
 
   VoidCallback? _backHandler(
     int step,
@@ -147,8 +147,10 @@ class _PeriodicReviewScreenState
       case PeriodicReviewNotifier.kStepWaitingFor:
         if (state.waitingForNav.canGoBack) return notifier.previousWaitingFor;
         return () => notifier.goToStep(step - 1);
-      case PeriodicReviewNotifier.kStepProjects:
-        if (state.projectsNav.canGoBack) return notifier.previousProjects;
+      case PeriodicReviewNotifier.kStepNextActions:
+        if (state.nextActionsNav.canGoBack) {
+          return notifier.previousNextActions;
+        }
         return () => notifier.goToStep(step - 1);
       case PeriodicReviewNotifier.kStepSomeMaybe:
         if (state.somedayNav.canGoBack) return notifier.previousSomeday;
@@ -174,10 +176,10 @@ class _PeriodicReviewScreenState
         return _hasMoreItems(state.waitingForNav)
             ? notifier.advanceWaitingFor
             : notifier.advanceStep;
-      case PeriodicReviewNotifier.kStepProjects:
-        if (!state.projectsNav.isLoaded) return null;
-        return _hasMoreItems(state.projectsNav)
-            ? notifier.advanceProjects
+      case PeriodicReviewNotifier.kStepNextActions:
+        if (!state.nextActionsNav.isLoaded) return null;
+        return _hasMoreItems(state.nextActionsNav)
+            ? notifier.advanceNextActions
             : notifier.advanceStep;
       case PeriodicReviewNotifier.kStepSomeMaybe:
         if (!state.somedayNav.isLoaded) return null;
@@ -224,8 +226,8 @@ class _PeriodicReviewHeader extends StatelessWidget {
         final nav = state.waitingForNav;
         if (!nav.isLoaded || nav.isEmpty) return 0.0;
         return (nav.index / nav.length).clamp(0.0, 1.0);
-      case PeriodicReviewNotifier.kStepProjects:
-        final nav = state.projectsNav;
+      case PeriodicReviewNotifier.kStepNextActions:
+        final nav = state.nextActionsNav;
         if (!nav.isLoaded || nav.isEmpty) return 0.0;
         return (nav.index / nav.length).clamp(0.0, 1.0);
       case PeriodicReviewNotifier.kStepSomeMaybe:
@@ -297,8 +299,8 @@ class _PeriodicReviewHeader extends StatelessWidget {
         return _navSubtitle(stepLabel, state.inboxNav, 'processed');
       case PeriodicReviewNotifier.kStepWaitingFor:
         return _navSubtitle(stepLabel, state.waitingForNav, 'reviewed');
-      case PeriodicReviewNotifier.kStepProjects:
-        return _navSubtitle(stepLabel, state.projectsNav, 'reviewed');
+      case PeriodicReviewNotifier.kStepNextActions:
+        return _navSubtitle(stepLabel, state.nextActionsNav, 'reviewed');
       case PeriodicReviewNotifier.kStepSomeMaybe:
         return _navSubtitle(stepLabel, state.somedayNav, 'reviewed');
       default:

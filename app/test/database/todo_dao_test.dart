@@ -185,6 +185,102 @@ void main() {
 
   });
 
+  group('TodoDao — getNextActionsExcludingPersonTagged', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('returns clarified, non-done, intent=next todos with no person tag',
+        () async {
+      await _insertTodo(db, id: 'nx1', title: 'Plain next');
+
+      final items =
+          await db.todoDao.getNextActionsExcludingPersonTagged();
+      expect(items.map((t) => t.id), ['nx1']);
+    });
+
+    test('excludes todos that carry any person-typed tag', () async {
+      await _insertTodo(db, id: 'nx2', title: 'Delegated next');
+      await _insertPersonTag(db, id: 'pa', name: 'Alice');
+      await db.tagDao.assignTag('nx2', 'pa', _userId);
+
+      final items =
+          await db.todoDao.getNextActionsExcludingPersonTagged();
+      expect(items.any((t) => t.id == 'nx2'), isFalse);
+    });
+
+    test('does NOT exclude todos that carry only non-person tags '
+        '(project / context)', () async {
+      await _insertTodo(db, id: 'nx3', title: 'Project-tagged next');
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('proj-tag'),
+        name: Value('Garage'),
+        type: Value('project'),
+        userId: Value(_userId),
+      ));
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('ctx-tag'),
+        name: Value('Home'),
+        type: Value('context'),
+        userId: Value(_userId),
+      ));
+      await db.tagDao.assignTag('nx3', 'proj-tag', _userId);
+      await db.tagDao.assignTag('nx3', 'ctx-tag', _userId);
+
+      final items =
+          await db.todoDao.getNextActionsExcludingPersonTagged();
+      expect(items.map((t) => t.id), contains('nx3'));
+    });
+
+    test('excludes todos that carry both person and non-person tags',
+        () async {
+      await _insertTodo(db, id: 'nx8', title: 'Delegated + project-tagged');
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('proj-tag-mix'),
+        name: Value('Garage'),
+        type: Value('project'),
+        userId: Value(_userId),
+      ));
+      await _insertPersonTag(db, id: 'pa-mix', name: 'Alice');
+      await db.tagDao.assignTag('nx8', 'proj-tag-mix', _userId);
+      await db.tagDao.assignTag('nx8', 'pa-mix', _userId);
+
+      final items =
+          await db.todoDao.getNextActionsExcludingPersonTagged();
+      expect(items.any((t) => t.id == 'nx8'), isFalse);
+    });
+
+    test('excludes unclarified, done, and non-next-intent todos', () async {
+      // Unclarified
+      await _insertTodo(
+          db, id: 'nx4', title: 'Unclarified', clarified: false);
+      // Done
+      await _insertTodo(db, id: 'nx5', title: 'Done');
+      await db.todoDao.markDone('nx5');
+      // Maybe-intent
+      await _insertTodo(db, id: 'nx6', title: 'Maybe');
+      await db.todoDao.deferTaskToMaybe('nx6');
+      // Trash-intent
+      await _insertTodo(db, id: 'nx7', title: 'Trash');
+      await db.todoDao.setIntent('nx7', Intent.trash);
+
+      final items =
+          await db.todoDao.getNextActionsExcludingPersonTagged();
+      final ids = items.map((t) => t.id).toSet();
+      expect(ids, isNot(contains('nx4')));
+      expect(ids, isNot(contains('nx5')));
+      expect(ids, isNot(contains('nx6')));
+      expect(ids, isNot(contains('nx7')));
+    });
+
+    test('returns empty list when no matching todos exist', () async {
+      final items =
+          await db.todoDao.getNextActionsExcludingPersonTagged();
+      expect(items, isEmpty);
+    });
+  });
+
   group('TodoDao — markDone', () {
     late GtdDatabase db;
 

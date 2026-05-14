@@ -404,21 +404,23 @@ AND (
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
-  /// One-shot snapshot of next-action todos that carry at least one project-
-  /// typed tag. Used by the Weekly Review wizard's projects step.
-  Future<List<Todo>> getNextActionsWithProjectTags() {
+  /// One-shot snapshot of active next-action todos that carry **no** person-
+  /// typed tag. Used by the Weekly Review wizard's Next Actions step; the
+  /// person-tag exclusion keeps it disjoint from Waiting For's snapshot so
+  /// each task surfaces in at most one wizard step.
+  Future<List<Todo>> getNextActionsExcludingPersonTagged() {
     return customSelect(
-      'SELECT DISTINCT todos.* FROM todos '
-      'JOIN todo_tags tt ON tt.todo_id = todos.id '
-      'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
+      'SELECT todos.* FROM todos '
       'WHERE todos.clarified = 1 '
       'AND todos.done_at IS NULL '
       'AND todos.intent = ? '
+      'AND NOT EXISTS ('
+      '  SELECT 1 FROM todo_tags tt '
+      '  JOIN tags tg ON tg.id = tt.tag_id '
+      '  WHERE tt.todo_id = todos.id AND tg.type = ?'
+      ') '
       'ORDER BY todos.created_at',
-      variables: [
-        Variable('project'),
-        Variable('next'),
-      ],
+      variables: [Variable('next'), Variable('person')],
       readsFrom: {todos, todoTags, tags},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
