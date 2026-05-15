@@ -41,8 +41,12 @@ android {
         versionName = flutter.versionName
     }
 
+    // Each signing config requires all four properties. If only some are set
+    // in a hand-edited local key.properties, fail fast here instead of letting
+    // AGP raise a less-obvious null-keystore error at signing time.
     signingConfigs {
-        if (hasKey("releaseStoreFile")) {
+        if (hasKey("releaseStoreFile") && hasKey("releaseStorePassword") &&
+            hasKey("releaseKeyAlias") && hasKey("releaseKeyPassword")) {
             create("release") {
                 storeFile = rootProject.file(keystoreProperties.getProperty("releaseStoreFile"))
                 storePassword = keystoreProperties.getProperty("releaseStorePassword")
@@ -50,7 +54,8 @@ android {
                 keyPassword = keystoreProperties.getProperty("releaseKeyPassword")
             }
         }
-        if (hasKey("devStoreFile")) {
+        if (hasKey("devStoreFile") && hasKey("devStorePassword") &&
+            hasKey("devKeyAlias") && hasKey("devKeyPassword")) {
             create("devRelease") {
                 storeFile = rootProject.file(keystoreProperties.getProperty("devStoreFile"))
                 storePassword = keystoreProperties.getProperty("devStorePassword")

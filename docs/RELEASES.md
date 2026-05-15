@@ -171,7 +171,11 @@ gh secret set ANDROID_RELEASE_KEY_PASSWORD     --body '…'
 apksigner verify --print-certs path/to/jeeves-<version>.apk
 ```
 
-The certificate's SHA-256 must match the recorded canonical fingerprint above. `cd-app.yml` runs this step automatically against the production-release APK after each build; for the AAB, run the same command locally against `jeeves-<version>.aab` after downloading it from the release.
+The certificate's SHA-256 must match the recorded canonical fingerprint above. `cd-app.yml` runs this step automatically against the production-release APK after each build. `apksigner` only handles APKs, so to verify an AAB use `keytool` (ships with the JDK) against `jeeves-<version>.aab` after downloading it from the release:
+
+```bash
+keytool -printcert -jarfile path/to/jeeves-<version>.aab
+```
 
 ### Rotating the release key
 
