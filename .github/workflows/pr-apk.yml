@@ -77,6 +77,14 @@ jobs:
           key: gradle-${{ hashFiles('app/android/gradle/wrapper/gradle-wrapper.properties') }}-${{ hashFiles('**/*.gradle*') }}
           restore-keys: gradle-
 
+      - name: Set up Android signing
+        uses: ./.github/actions/setup-android-signing
+        with:
+          dev-keystore-base64: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
+          dev-keystore-password: ${{ secrets.ANDROID_DEV_KEYSTORE_PASSWORD }}
+          dev-key-alias: ${{ secrets.ANDROID_DEV_KEY_ALIAS }}
+          dev-key-password: ${{ secrets.ANDROID_DEV_KEY_PASSWORD }}
+
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: dart run build_runner build --delete-conflicting-outputs

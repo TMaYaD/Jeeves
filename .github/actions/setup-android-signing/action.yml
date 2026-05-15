@@ -1,0 +1,117 @@
+name: Set up Android signing
+description: >-
+  Decodes base64-encoded release and/or dev keystores from inputs and writes
+  app/android/key.properties. Either keystore may be omitted; the Gradle build
+  falls back to debug-signing for any flavor whose keystore is not provided.
+  Set require-release=true on prod CD paths so a missing release keystore fails
+  fast instead of silently shipping a debug-signed artifact.
+
+inputs:
+  release-keystore-base64:
+    description: Base64-encoded .jks for production-flavor signing.
+    required: false
+    default: ''
+  release-keystore-password:
+    description: Store password for the release keystore.
+    required: false
+    default: ''
+  release-key-alias:
+    description: Key alias inside the release keystore.
+    required: false
+    default: ''
+  release-key-password:
+    description: Key password for the release alias.
+    required: false
+    default: ''
+  dev-keystore-base64:
+    description: Base64-encoded .jks for dev-flavor signing.
+    required: false
+    default: ''
+  dev-keystore-password:
+    description: Store password for the dev keystore.
+    required: false
+    default: ''
+  dev-key-alias:
+    description: Key alias inside the dev keystore.
+    required: false
+    default: ''
+  dev-key-password:
+    description: Key password for the dev alias.
+    required: false
+    default: ''
+  require-release:
+    description: Fail if release-keystore-base64 is empty.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: app/android
+      env:
+        RELEASE_KEYSTORE_BASE64: ${{ inputs.release-keystore-base64 }}
+        RELEASE_KEYSTORE_PASSWORD: ${{ inputs.release-keystore-password }}
+        RELEASE_KEY_ALIAS: ${{ inputs.release-key-alias }}
+        RELEASE_KEY_PASSWORD: ${{ inputs.release-key-password }}
+        DEV_KEYSTORE_BASE64: ${{ inputs.dev-keystore-base64 }}
+        DEV_KEYSTORE_PASSWORD: ${{ inputs.dev-keystore-password }}
+        DEV_KEY_ALIAS: ${{ inputs.dev-key-alias }}
+        DEV_KEY_PASSWORD: ${{ inputs.dev-key-password }}
+        REQUIRE_RELEASE: ${{ inputs.require-release }}
+      run: |
+        set -euo pipefail
+
+        # Start with an empty key.properties; append per-flavor blocks below.
+        : > key.properties
+        wrote_any=false
+
+        if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+          missing=()
+          [ -z "$RELEASE_KEYSTORE_PASSWORD" ] && missing+=("release-keystore-password")
+          [ -z "$RELEASE_KEY_ALIAS" ]         && missing+=("release-key-alias")
+          [ -z "$RELEASE_KEY_PASSWORD" ]      && missing+=("release-key-password")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::release-keystore-base64 provided but missing: ${missing[*]}. Refusing to write a broken key.properties."
+            exit 1
+          fi
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 -d > keystore-release.jks
+          {
+            echo "releaseStoreFile=keystore-release.jks"
+            echo "releaseStorePassword=$RELEASE_KEYSTORE_PASSWORD"
+            echo "releaseKeyAlias=$RELEASE_KEY_ALIAS"
+            echo "releaseKeyPassword=$RELEASE_KEY_PASSWORD"
+          } >> key.properties
+          wrote_any=true
+          echo "Release keystore configured."
+        elif [ "$REQUIRE_RELEASE" = "true" ]; then
+          echo "::error::release-keystore-base64 is empty but require-release=true. Refusing to ship an unsigned/debug-signed release artifact."
+          exit 1
+        else
+          echo "::warning::No release keystore provided; production-flavor release builds will fall back to debug signing."
+        fi
+
+        if [ -n "$DEV_KEYSTORE_BASE64" ]; then
+          missing=()
+          [ -z "$DEV_KEYSTORE_PASSWORD" ] && missing+=("dev-keystore-password")
+          [ -z "$DEV_KEY_ALIAS" ]         && missing+=("dev-key-alias")
+          [ -z "$DEV_KEY_PASSWORD" ]      && missing+=("dev-key-password")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::dev-keystore-base64 provided but missing: ${missing[*]}. Refusing to write a broken key.properties."
+            exit 1
+          fi
+          printf '%s' "$DEV_KEYSTORE_BASE64" | base64 -d > keystore-dev.jks
+          {
+            echo "devStoreFile=keystore-dev.jks"
+            echo "devStorePassword=$DEV_KEYSTORE_PASSWORD"
+            echo "devKeyAlias=$DEV_KEY_ALIAS"
+            echo "devKeyPassword=$DEV_KEY_PASSWORD"
+          } >> key.properties
+          wrote_any=true
+          echo "Dev keystore configured."
+        fi
+
+        if [ "$wrote_any" = "false" ]; then
+          rm -f key.properties
+          echo "::warning::No keystores configured; all flavors will fall back to debug signing."
+        fi

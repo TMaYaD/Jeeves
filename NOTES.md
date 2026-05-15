@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-05-15 (issue #300)
+- Android release signing now reads `app/android/key.properties` (gitignored) and creates `release` + `devRelease` signing configs only when their keystore properties are present. The production and dev product flavors each carry their own `signingConfig`; AGP's flavor-level config takes precedence over the (now-empty) `buildTypes.release` block, and both fall back to `signingConfigs.getByName("debug")` so a missing `key.properties` doesn't break local `flutter run --release`. Profile-stage PR builds inherit the dev flavor's signing config the same way.
+- `.github/actions/setup-android-signing` is a shared composite action that decodes the `*_KEYSTORE_BASE64` secrets and writes `key.properties`. `cd-app.yml` passes `require-release: 'true'` so a missing prod secret fails fast; `pr-apk.yml` omits it so dev PRs without a configured dev key fall back to debug signing with a warning rather than failing.
+- `flutter-ci.yml`'s smoke build deliberately doesn't invoke the signing action — `--debug` builds are signed by AGP's auto-managed `~/.android/debug.keystore` regardless of `signingConfigs`. The comment in the workflow now spells this out so a future reader doesn't add the step speculatively.
+
 ## 2026-05-14 (issue #292)
 - The single dual-semantics footer "Next" in both wizard screens is split into Skip (secondary/outlined escape hatch) and Next step (primary progress); a screen-private `_FooterAction` enum + `_footerAction()` picks which one renders into a single fixed-size slot, so the two never co-exist and the swap causes no layout shift.
 - The DPR-vs-Weekly-Review "last item" threshold inconsistency was left as-is (DPR shows Next step on the empty placeholder, Weekly Review on the last real item) — orthogonal bug, out of scope for #292; each screen's Skip↔Next-step boundary is exactly its prior skip↔advanceStep boundary, so zero navigation-behaviour change.

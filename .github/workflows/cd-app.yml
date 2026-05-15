@@ -253,11 +253,37 @@ jobs:
         run: |
           sed -i "s/^version: .*/version: ${{ needs.version.outputs.pubspec_version }}/" pubspec.yaml
 
+      - name: Set up Android signing
+        uses: ./.github/actions/setup-android-signing
+        with:
+          release-keystore-base64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          release-keystore-password: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          release-key-alias: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          release-key-password: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          require-release: 'true'
+
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: dart run build_runner build --delete-conflicting-outputs
       - run: flutter build apk --release --flavor production
       - run: flutter build appbundle --release --flavor production
+
+      - name: Verify APK is signed with the release key
+        # apksigner ships with the Android SDK build-tools that flutter-action
+        # installs. Surfacing the certs in the log makes a fingerprint drift
+        # (wrong key loaded, secrets misconfigured) obvious from the job output.
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_HOME:-}" ] || [ ! -d "$ANDROID_HOME/build-tools" ]; then
+            echo "::warning::ANDROID_HOME not set or build-tools directory missing; skipping verification."
+            exit 0
+          fi
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::warning::apksigner not found under ANDROID_HOME/build-tools; skipping verification."
+            exit 0
+          fi
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-production-release.apk
 
       - uses: actions/upload-artifact@v7
         with:
@@ -333,6 +359,15 @@ jobs:
         run: |
           sed -i "s/^version: .*/version: ${{ needs.version.outputs.pubspec_version }}/" pubspec.yaml
 
+      - name: Set up Android signing
+        uses: ./.github/actions/setup-android-signing
+        with:
+          release-keystore-base64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          release-keystore-password: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          release-key-alias: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          release-key-password: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          require-release: 'true'
+
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: dart run build_runner build --delete-conflicting-outputs
@@ -347,6 +382,20 @@ jobs:
         run: |
           mv build/app/outputs/flutter-apk/app-production-release.apk \
              build/app/outputs/flutter-apk/app-production-seeker-release.apk
+
+      - name: Verify APK is signed with the release key
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_HOME:-}" ] || [ ! -d "$ANDROID_HOME/build-tools" ]; then
+            echo "::warning::ANDROID_HOME not set or build-tools directory missing; skipping verification."
+            exit 0
+          fi
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::warning::apksigner not found under ANDROID_HOME/build-tools; skipping verification."
+            exit 0
+          fi
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-production-seeker-release.apk
 
       - uses: actions/upload-artifact@v7
         with:
