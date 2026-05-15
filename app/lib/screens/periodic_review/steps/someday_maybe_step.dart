@@ -83,7 +83,7 @@ class SomedayMaybeStep extends ConsumerWidget {
             // than recording a routing or advancing the cursor.
             final updated =
                 await ref.read(databaseProvider).todoDao.getTodo(todo.id);
-            final txt = updated?.nextActionText ?? '';
+            final txt = updated?.nextActionText?.trim() ?? '';
             if (txt.isEmpty) return;
             notifier.recordSomedayRouting(index, RoutingKind.nextAction);
             notifier.advanceSomeday();
