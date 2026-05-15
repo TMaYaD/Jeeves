@@ -5,6 +5,11 @@
 - The contextual multi-select bar is rendered **inside** `PlanSummaryStep`, above the scrollable list — not in the screen-level app bar. The app bar slot is owned by `FocusSessionPlanningScreen` and is busy with step progress + title; reusing it would mean either hiding step state or fighting the planning header layout.
 - Multi-select is scoped to Pending Review only. Long-press is wired only on those cards; Today's Plan and Skipped rows have `onLongPress: null` so they never enter the mode.
 
+## 2026-05-14 (issue #292)
+- The single dual-semantics footer "Next" in both wizard screens is split into Skip (secondary/outlined escape hatch) and Next step (primary progress); a screen-private `_FooterAction` enum + `_footerAction()` picks which one renders into a single fixed-size slot, so the two never co-exist and the swap causes no layout shift.
+- The DPR-vs-Weekly-Review "last item" threshold inconsistency was left as-is (DPR shows Next step on the empty placeholder, Weekly Review on the last real item) — orthogonal bug, out of scope for #292; each screen's Skip↔Next-step boundary is exactly its prior skip↔advanceStep boundary, so zero navigation-behaviour change.
+- Footer widget tests must pump the snapshot loads under `tester.runAsync()` (drift watch-streams only emit in the real async zone) and then unmount the screen before the test ends, so drift's stream-close `FakeTimer` fires before the pending-timer invariant check.
+
 ## 2026-05-14 (issue #289)
 - `_needsReviewWhere`'s actionless branch now ANDs on `NOT EXISTS person tag`. Delegated tasks (any person-typed `todo_tags` row) are excluded from the daily re-clarification surface — waiting-for cadence belongs to the weekly review, not the daily card. The stale branch is untouched, so a delegated task you nudged today still surfaces.
 - `readsFrom` for the three `_needsReviewWhere` callers (`watchNeedsReview`, `getNeedsReview`/`getNeedsReviewCount`/`isNeedsReview`) widened from `{todos}` to `{todos, todoTags, tags}`. Without the widening, Drift's stream invalidation doesn't fire when a person tag is attached/detached, and the live daily card would not drop a newly-tagged task until the next cold reload.
@@ -223,3 +228,6 @@
 - OnboardingCard reads hasTodosProvider (a StreamProvider) which depends on databaseProvider. Any test that renders InboxScreen must override hasTodosProvider to avoid pending-timer failures in fakeAsync — see inbox_screen_test.dart for the pattern.
 - `FocusSessionPlanningBanner` now reads three `StreamProvider`s (`hasTodosProvider`, `unfilteredInboxProvider`, `unfilteredNextActionsProvider`). Tests that assert the banner is **visible** need two pumps after `pumpWidget` — one for the stream to emit, one for the widget to rebuild. Tests that assert the banner is **hidden** work with one pump because the banner is also hidden during `AsyncLoading`.
 - After `tester.tap()` on a `GestureDetector`, use `pumpAndSettle()` (not `pump()`) to drain the gesture-debounce timer. This is safe when the tapped widget is immediately removed from the tree (its animation controller disposes synchronously).
+
+## 2026-05-15 (issue #293)
+- `ProcessToHandlers.nextActionDialog` flipped to default-on after auditing every `next`-rendering callsite — 3 of 4 wanted the dialog. Inbox-clarify opts out via `except: {nextActionDialog}` (its title-as-action coupling already supplies the phrase); the Next Actions weekly-review step excepts it too (no Next button to modify).

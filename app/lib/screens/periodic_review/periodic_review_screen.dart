@@ -6,9 +6,10 @@
 /// the inbox throughout the week, not as a wizard ceremony.
 ///
 /// Step transitions go through [PeriodicReviewNotifier.advanceStep] /
-/// [goToStep], which in turn drives per-step snapshot loading. The footer's
-/// Next button advances the per-step item cursor first; only when the cursor
-/// has nothing more to consume does it cross to the next step.
+/// [goToStep], which in turn drives per-step snapshot loading. The footer
+/// shows exactly one forward affordance at a time: a secondary **Skip** while
+/// the step's item cursor still has items to consume, swapping to a primary
+/// **Next step** once the cursor is spent (or the step has no cursor).
 library;
 
 import 'package:flutter/material.dart';
@@ -80,6 +81,7 @@ class _PeriodicReviewScreenState
     final state = ref.watch(periodicReviewProvider);
     final notifier = ref.read(periodicReviewProvider.notifier);
     final step = state.currentStep;
+    final footer = _footerAction(step, state, notifier);
 
     ref.listen<PeriodicReviewState>(periodicReviewProvider, (prev, next) {
       if (prev?.currentStep != next.currentStep &&
@@ -118,7 +120,8 @@ class _PeriodicReviewScreenState
             if (step != PeriodicReviewNotifier.kStepSummary)
               _PeriodicReviewFooter(
                 onBack: _backHandler(step, state, notifier),
-                onNext: _nextHandler(step, state, notifier),
+                action: footer.$1,
+                onPressed: footer.$2,
               ),
           ],
         ),
@@ -127,13 +130,15 @@ class _PeriodicReviewScreenState
   }
 
   // ---------------------------------------------------------------------------
-  // Back / Next handlers
+  // Back / forward handlers
   // ---------------------------------------------------------------------------
   //
   // List-driven steps (Inbox, Waiting For, Next Actions, Someday/Maybe)
-  // iterate one item at a time. The footer's Back / Next buttons drive the
-  // per-step cursor first; only when the cursor has no more items to consume
-  // does pressing Next cross into the next step (and Back into the prior one).
+  // iterate one item at a time. Back drives the per-step cursor first, only
+  // crossing into the prior step once the cursor is at the start. The forward
+  // affordance is split in two: Skip advances the per-step cursor while items
+  // remain; Next step crosses into the following step once the cursor is
+  // spent. The footer renders exactly one of them at a time.
 
   VoidCallback? _backHandler(
     int step,
@@ -160,34 +165,45 @@ class _PeriodicReviewScreenState
     }
   }
 
-  VoidCallback? _nextHandler(
+  /// Picks the footer's single forward affordance for [step] and the callback
+  /// that drives it. Returns `(skip, advance<List>)` while the step's cursor
+  /// still has items to consume, otherwise `(nextStep, advanceStep)`. A
+  /// list-driven step whose snapshot is still loading yields
+  /// `(nextStep, null)` — a disabled Next step, the only loading state.
+  (_FooterAction, VoidCallback?) _footerAction(
     int step,
     PeriodicReviewState state,
     PeriodicReviewNotifier notifier,
   ) {
     switch (step) {
       case PeriodicReviewNotifier.kStepInbox:
-        if (!state.inboxNav.isLoaded) return null;
+        if (!state.inboxNav.isLoaded) return (_FooterAction.nextStep, null);
         return _hasMoreItems(state.inboxNav)
-            ? notifier.advanceInbox
-            : notifier.advanceStep;
+            ? (_FooterAction.skip, notifier.advanceInbox)
+            : (_FooterAction.nextStep, notifier.advanceStep);
       case PeriodicReviewNotifier.kStepWaitingFor:
-        if (!state.waitingForNav.isLoaded) return null;
+        if (!state.waitingForNav.isLoaded) {
+          return (_FooterAction.nextStep, null);
+        }
         return _hasMoreItems(state.waitingForNav)
-            ? notifier.advanceWaitingFor
-            : notifier.advanceStep;
+            ? (_FooterAction.skip, notifier.advanceWaitingFor)
+            : (_FooterAction.nextStep, notifier.advanceStep);
       case PeriodicReviewNotifier.kStepNextActions:
-        if (!state.nextActionsNav.isLoaded) return null;
+        if (!state.nextActionsNav.isLoaded) {
+          return (_FooterAction.nextStep, null);
+        }
         return _hasMoreItems(state.nextActionsNav)
-            ? notifier.advanceNextActions
-            : notifier.advanceStep;
+            ? (_FooterAction.skip, notifier.advanceNextActions)
+            : (_FooterAction.nextStep, notifier.advanceStep);
       case PeriodicReviewNotifier.kStepSomeMaybe:
-        if (!state.somedayNav.isLoaded) return null;
+        if (!state.somedayNav.isLoaded) {
+          return (_FooterAction.nextStep, null);
+        }
         return _hasMoreItems(state.somedayNav)
-            ? notifier.advanceSomeday
-            : notifier.advanceStep;
+            ? (_FooterAction.skip, notifier.advanceSomeday)
+            : (_FooterAction.nextStep, notifier.advanceStep);
       default:
-        return notifier.advanceStep;
+        return (_FooterAction.nextStep, notifier.advanceStep);
     }
   }
 
@@ -398,17 +414,35 @@ class _SegmentedProgressBar extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Footer — Back / Next
+// Footer — Back + a single forward affordance (Skip or Next step)
 // ---------------------------------------------------------------------------
+
+/// Which forward affordance the footer renders. The two never co-exist; the
+/// footer swaps between them inside a fixed-size slot so the button's shape,
+/// size, and position are identical across the swap.
+enum _FooterAction { skip, nextStep }
 
 class _PeriodicReviewFooter extends StatelessWidget {
   const _PeriodicReviewFooter({
     required this.onBack,
-    required this.onNext,
+    required this.action,
+    required this.onPressed,
   });
 
   final VoidCallback? onBack;
-  final VoidCallback? onNext;
+
+  /// Selects which forward button to render.
+  final _FooterAction action;
+
+  /// Tap handler for the rendered button. Always non-null for [_FooterAction.skip];
+  /// null for [_FooterAction.nextStep] only while a list-driven step's snapshot
+  /// is still loading (renders a disabled Next step).
+  final VoidCallback? onPressed;
+
+  // Fixed slot dimensions so the OutlinedButton ↔ FilledButton swap causes no
+  // layout shift. Width is sized to comfortably fit the "Next step" label.
+  static const double _slotWidth = 148;
+  static const double _slotHeight = 48;
 
   @override
   Widget build(BuildContext context) {
@@ -427,18 +461,45 @@ class _PeriodicReviewFooter extends StatelessWidget {
               child: const Text('Back'),
             ),
           const Spacer(),
-          FilledButton(
-            key: const Key('periodic_review_next'),
-            onPressed: onNext,
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF059669),
-              disabledBackgroundColor: const Color(0xFFD1D5DB),
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          SizedBox(
+            key: const Key('periodic_review_footer_slot'),
+            width: _slotWidth,
+            height: _slotHeight,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 150),
+              child: _buildAction(),
             ),
-            child: const Text('Next'),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildAction() {
+    switch (action) {
+      case _FooterAction.skip:
+        return OutlinedButton(
+          key: const Key('periodic_review_skip'),
+          onPressed: onPressed,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF6B7280),
+            minimumSize: const Size(_slotWidth, _slotHeight),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          ),
+          child: const Text('Skip'),
+        );
+      case _FooterAction.nextStep:
+        return FilledButton(
+          key: const Key('periodic_review_next'),
+          onPressed: onPressed,
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF059669),
+            disabledBackgroundColor: const Color(0xFFD1D5DB),
+            minimumSize: const Size(_slotWidth, _slotHeight),
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+          ),
+          child: const Text('Next step'),
+        );
+    }
   }
 }

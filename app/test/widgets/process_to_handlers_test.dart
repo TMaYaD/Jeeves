@@ -282,7 +282,13 @@ void main() {
       final todo = (await db.todoDao.getTodo('d1'))!;
       expect(todo.doneAt, isNotNull);
 
-      await tester.pumpWidget(_harness(db, todo: todo));
+      // Plain-next behaviour: except the default-on dialog modifier so the
+      // tap routes immediately without opening NextActionDialog.
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        except: const {ProcessAction.nextActionDialog},
+      ));
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
@@ -405,29 +411,31 @@ void main() {
     tearDown(() async => db.close());
 
     testWidgets(
-        'Next without modifier writes immediately; dialog never opens',
-        (tester) async {
+        'Next with the modifier excepted writes immediately; dialog never '
+        'opens', (tester) async {
       final todo =
           await _insertTodo(db, id: 'nd1', nextActionText: 'pre-existing');
-      await tester.pumpWidget(_harness(db, todo: todo));
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        except: const {ProcessAction.nextActionDialog},
+      ));
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      // Dialog absent.
+      // Dialog absent — except reverts Next to a plain one-tap route.
       expect(find.byType(NextActionDialog), findsNothing);
       final row = await db.todoDao.getTodo('nd1');
       expect(row?.intent, 'next');
     });
 
-    testWidgets('Next with modifier opens prefilled dialog; cancel = no write',
+    testWidgets(
+        'Next opens the prefilled dialog by default; cancel = no write',
         (tester) async {
       final todo = await _insertTodo(db, id: 'nd2', nextActionText: 'old');
-      await tester.pumpWidget(_harness(
-        db,
-        todo: todo,
-        include: const {ProcessAction.nextActionDialog},
-      ));
+      // No include needed — the dialog modifier is on by default.
+      await tester.pumpWidget(_harness(db, todo: todo));
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
@@ -451,14 +459,10 @@ void main() {
     });
 
     testWidgets(
-        'Next with modifier — Save writes new nextActionText and routes',
+        'Next (dialog default-on) — Save writes new nextActionText and routes',
         (tester) async {
       final todo = await _insertTodo(db, id: 'nd3');
-      await tester.pumpWidget(_harness(
-        db,
-        todo: todo,
-        include: const {ProcessAction.nextActionDialog},
-      ));
+      await tester.pumpWidget(_harness(db, todo: todo));
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
@@ -516,8 +520,8 @@ void main() {
         'Next on a delegated todo preserves person tags (orthogonality)',
         (tester) async {
       // The example from #276: "task is waiting for trixy, but
-      // 'call trixy for update' could be next action." Tapping Next must
-      // not strip Trixy.
+      // 'call trixy for update' could be next action." Promoting to Next
+      // (through the default-on dialog) must not strip Trixy.
       await _insertTodo(db, id: 'wt2');
       await _insertPersonTag(db, id: 'trixy', name: 'Trixy');
       await db.tagDao.assignTag('wt2', 'trixy', _userId);
@@ -530,6 +534,15 @@ void main() {
       ));
 
       await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+        'Call Trixy for update',
+      );
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
       final tagIds = await db.todoDao.getPersonTagIdsForTodo('wt2');
@@ -588,14 +601,18 @@ void main() {
     });
 
     testWidgets(
-        'Next (no modifier) does NOT overwrite an existing next_action_text',
-        (tester) async {
+        'Next with the dialog excepted does NOT overwrite an existing '
+        'next_action_text', (tester) async {
       final todo = await _insertTodo(
         db,
         id: 'na2',
         nextActionText: 'pre-existing phrase',
       );
-      await tester.pumpWidget(_harness(db, todo: todo));
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        except: const {ProcessAction.nextActionDialog},
+      ));
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
@@ -661,10 +678,10 @@ void main() {
         (tester) async {
       final todo = await _insertTodo(db, id: 'a2');
       final fired = <ProcessAction>[];
+      // Dialog modifier is default-on — no include needed.
       await tester.pumpWidget(_harness(
         db,
         todo: todo,
-        include: const {ProcessAction.nextActionDialog},
         onAfterRoute: (action) async => fired.add(action),
       ));
 
