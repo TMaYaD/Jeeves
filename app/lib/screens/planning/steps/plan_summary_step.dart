@@ -1,22 +1,73 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
 
-class PlanSummaryStep extends ConsumerWidget {
+class PlanSummaryStep extends ConsumerStatefulWidget {
   const PlanSummaryStep({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PlanSummaryStep> createState() => _PlanSummaryStepState();
+}
+
+class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
+  final Set<String> _selectedIds = {};
+
+  bool get _selectionMode => _selectedIds.isNotEmpty;
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+    HapticFeedback.selectionClick();
+  }
+
+  void _enterSelectionMode(String id) {
+    if (_selectedIds.contains(id)) return;
+    setState(() => _selectedIds.add(id));
+    HapticFeedback.selectionClick();
+  }
+
+  void _clearSelection() {
+    setState(_selectedIds.clear);
+  }
+
+  void _selectAll(List<Todo> pendingTasks) {
+    setState(() {
+      _selectedIds
+        ..clear()
+        ..addAll(pendingTasks.map((t) => t.id));
+    });
+    HapticFeedback.selectionClick();
+  }
+
+  void _addSelectedToToday(List<Todo> pendingTasks) {
+    final pendingIds = pendingTasks.map((t) => t.id).toSet();
+    final notifier = ref.read(focusSessionPlanningProvider.notifier);
+    // Filter against the live pending snapshot so a stale id (row deleted
+    // between selection and commit) cannot be falsely reported as added.
+    final committable = _selectedIds.intersection(pendingIds);
+    for (final id in committable) {
+      notifier.selectTask(id);
+    }
+    setState(_selectedIds.clear);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final planningState = ref.watch(focusSessionPlanningProvider);
     final availableMinutes = planningState.availableMinutes;
     final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
     final asyncPending = ref.watch(nextActionsForFocusSessionPlanningProvider);
     final asyncSkipped = ref.watch(skippedNextActionsForFocusSessionPlanningProvider);
 
-    // Simple combinations of states
     if (asyncSelected.isLoading || asyncPending.isLoading || asyncSkipped.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -30,6 +81,12 @@ class PlanSummaryStep extends ConsumerWidget {
     final ratio = availableMinutes > 0
         ? totalMinutes / availableMinutes
         : double.infinity;
+
+    final previewMinutes = _selectionMode
+        ? pendingTasks
+            .where((t) => _selectedIds.contains(t.id))
+            .fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0))
+        : 0;
 
     return Column(
       children: [
@@ -54,6 +111,17 @@ class PlanSummaryStep extends ConsumerWidget {
         ),
         const Divider(height: 1, color: Color(0xFFF3F4F6)),
 
+        if (_selectionMode)
+          _MultiSelectActionBar(
+            selectedCount: _selectedIds.length,
+            pendingCount: pendingTasks.length,
+            previewMinutes: previewMinutes,
+            onClear: _clearSelection,
+            onSelectAll:
+                pendingTasks.isEmpty ? null : () => _selectAll(pendingTasks),
+            onAddToToday: () => _addSelectedToToday(pendingTasks),
+          ),
+
         // --- Scrollable task list ---
         Expanded(
           child: ScrollConfiguration(
@@ -74,8 +142,8 @@ class PlanSummaryStep extends ConsumerWidget {
                   ...selectedTasks.map((t) => _ReviewCard(
                         todo: t,
                         isSelected: true,
-                        onUndo: () => _handleUndo(ref, t),
-                        onSkip: () => _handleSkip(ref, t),
+                        onUndo: () => _handleUndo(t),
+                        onSkip: () => _handleSkip(t),
                       )),
                   const SizedBox(height: 16),
                 ],
@@ -86,8 +154,12 @@ class PlanSummaryStep extends ConsumerWidget {
                   const SizedBox(height: 8),
                   ...pendingTasks.map((t) => _ReviewCard(
                         todo: t,
-                        onSelect: () => _handleSelect(ref, t),
-                        onSkip: () => _handleSkip(ref, t),
+                        onSelect: () => _handleSelect(t),
+                        onSkip: () => _handleSkip(t),
+                        selectionMode: _selectionMode,
+                        isChecked: _selectedIds.contains(t.id),
+                        onLongPress: () => _enterSelectionMode(t.id),
+                        onTapInSelectionMode: () => _toggleSelection(t.id),
                       )),
                   const SizedBox(height: 16),
                 ],
@@ -99,8 +171,8 @@ class PlanSummaryStep extends ConsumerWidget {
                   ...skippedTasks.map((t) => _ReviewCard(
                         todo: t,
                         isSkipped: true,
-                        onSelect: () => _handleSelect(ref, t),
-                        onUndo: () => _handleUndo(ref, t),
+                        onSelect: () => _handleSelect(t),
+                        onUndo: () => _handleUndo(t),
                       )),
                 ],
 
@@ -123,15 +195,15 @@ class PlanSummaryStep extends ConsumerWidget {
     );
   }
 
-  void _handleSelect(WidgetRef ref, Todo todo) {
+  void _handleSelect(Todo todo) {
     ref.read(focusSessionPlanningProvider.notifier).selectTask(todo.id);
   }
 
-  void _handleSkip(WidgetRef ref, Todo todo) {
+  void _handleSkip(Todo todo) {
     ref.read(focusSessionPlanningProvider.notifier).skipTask(todo.id);
   }
 
-  void _handleUndo(WidgetRef ref, Todo todo) {
+  void _handleUndo(Todo todo) {
     ref.read(focusSessionPlanningProvider.notifier).undoTaskReview(todo.id);
   }
 
@@ -147,14 +219,14 @@ class PlanSummaryStep extends ConsumerWidget {
     final available = _formatMinutes(availableMinutes);
     return '$count task${count == 1 ? '' : 's'} · $planned planned of $available available';
   }
+}
 
-  String _formatMinutes(int minutes) {
-    final h = minutes ~/ 60;
-    final m = minutes % 60;
-    if (h == 0) return '${m}m';
-    if (m == 0) return '${h}h';
-    return '${h}h ${m}m';
-  }
+String _formatMinutes(int minutes) {
+  final h = minutes ~/ 60;
+  final m = minutes % 60;
+  if (h == 0) return '${m}m';
+  if (m == 0) return '${h}h';
+  return '${h}h ${m}m';
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +279,106 @@ class _CapacityBar extends StatelessWidget {
   }
 }
 
+/// Contextual bar shown above the Pending Review list while multi-select is
+/// active. Sits inside the step (not the screen-level app bar, which is owned
+/// by [FocusSessionPlanningScreen] and renders step progress).
+class _MultiSelectActionBar extends StatelessWidget {
+  const _MultiSelectActionBar({
+    required this.selectedCount,
+    required this.pendingCount,
+    required this.previewMinutes,
+    required this.onClear,
+    required this.onSelectAll,
+    required this.onAddToToday,
+  });
+
+  final int selectedCount;
+  final int pendingCount;
+  final int previewMinutes;
+  final VoidCallback onClear;
+  final VoidCallback? onSelectAll;
+  final VoidCallback onAddToToday;
+
+  @override
+  Widget build(BuildContext context) {
+    final allSelected = selectedCount >= pendingCount && pendingCount > 0;
+    return Semantics(
+      label: '$selectedCount task${selectedCount == 1 ? '' : 's'} selected',
+      container: true,
+      child: Material(
+        color: const Color(0xFFEFF6FF),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
+          child: Row(
+            children: [
+              Tooltip(
+                message: 'Clear selection',
+                child: IconButton(
+                  icon: const Icon(Icons.close, size: 20),
+                  color: const Color(0xFF374151),
+                  onPressed: onClear,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '$selectedCount selected',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1A1A2E),
+                      ),
+                    ),
+                    if (previewMinutes > 0)
+                      Text(
+                        '+${_formatMinutes(previewMinutes)} planned',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (onSelectAll != null && !allSelected)
+                TextButton(
+                  onPressed: onSelectAll,
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF2563EB),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('Select all'),
+                ),
+              const SizedBox(width: 4),
+              Tooltip(
+                message:
+                    'Add $selectedCount task${selectedCount == 1 ? '' : 's'} to today\'s plan',
+                child: FilledButton(
+                  onPressed: onAddToToday,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    minimumSize: Size.zero,
+                  ),
+                  child: const Text('Add to Today'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Card representing a task in the plan-summary review list.
 ///
 /// Two buttons are always shown in fixed positions so the layout never shifts:
@@ -218,6 +390,11 @@ class _CapacityBar extends StatelessWidget {
 ///   - skipped → Undo (un-skip)
 ///
 /// This means "only the button that was pressed changes to Undo".
+///
+/// When [selectionMode] is true, the trailing icon slot is hidden and a
+/// leading checkbox is shown instead; the whole card responds to taps via
+/// [onTapInSelectionMode]. [onLongPress] is the entry point into selection
+/// mode and is only meaningful on Pending Review rows.
 class _ReviewCard extends StatelessWidget {
   const _ReviewCard({
     required this.todo,
@@ -226,6 +403,10 @@ class _ReviewCard extends StatelessWidget {
     this.onSelect,
     this.onSkip,
     this.onUndo,
+    this.selectionMode = false,
+    this.isChecked = false,
+    this.onLongPress,
+    this.onTapInSelectionMode,
   });
 
   final Todo todo;
@@ -234,13 +415,17 @@ class _ReviewCard extends StatelessWidget {
   final VoidCallback? onSelect;
   final VoidCallback? onSkip;
   final VoidCallback? onUndo;
+  final bool selectionMode;
+  final bool isChecked;
+  final VoidCallback? onLongPress;
+  final VoidCallback? onTapInSelectionMode;
 
   @override
   Widget build(BuildContext context) {
     final textColor = isSkipped ? Colors.grey[500] : const Color(0xFF1A1A2E);
     final backgroundColor = isSkipped ? const Color(0xFFF9FAFB) : Colors.white;
 
-    return Card(
+    final card = Card(
       elevation: 0,
       color: backgroundColor,
       margin: const EdgeInsets.only(bottom: 8),
@@ -254,6 +439,20 @@ class _ReviewCard extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
+            if (selectionMode)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Tooltip(
+                  message: 'Select',
+                  child: Checkbox(
+                    value: isChecked,
+                    onChanged: onTapInSelectionMode == null
+                        ? null
+                        : (_) => onTapInSelectionMode!(),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -291,52 +490,64 @@ class _ReviewCard extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            // Fixed two-button layout — positions never shift:
-            //   pending  → [select] [skip]
-            //   selected → [undo]   [skip]   ← only left changes
-            //   skipped  → [select] [undo]   ← only right changes
-            SizedBox(
-              width: 80,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  // Left slot: Select (pending/skipped) or Undo-of-select (planned)
-                  if (isSelected && onUndo != null)
-                    _IconBtn(
-                      icon: Icons.undo,
-                      color: const Color(0xFF6B7280),
-                      tooltip: 'Remove from today',
-                      onTap: onUndo!,
-                    )
-                  else if (!isSelected && onSelect != null)
-                    _IconBtn(
-                      icon: Icons.check_circle_outline,
-                      color: const Color(0xFF16A34A),
-                      tooltip: 'Select for today',
-                      onTap: onSelect!,
-                    ),
-                  // Right slot: Skip (pending/planned) or Undo-of-skip (skipped)
-                  if (isSkipped && onUndo != null)
-                    _IconBtn(
-                      icon: Icons.undo,
-                      color: const Color(0xFF6B7280),
-                      tooltip: 'Un-skip',
-                      onTap: onUndo!,
-                    )
-                  else if (!isSkipped && onSkip != null)
-                    _IconBtn(
-                      icon: Icons.remove_circle_outline,
-                      color: const Color(0xFF6B7280),
-                      tooltip: 'Skip for today',
-                      onTap: onSkip!,
-                    ),
-                ],
+            if (!selectionMode) ...[
+              const SizedBox(width: 8),
+              // Fixed two-button layout — positions never shift:
+              //   pending  → [select] [skip]
+              //   selected → [undo]   [skip]   ← only left changes
+              //   skipped  → [select] [undo]   ← only right changes
+              SizedBox(
+                width: 80,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    // Left slot: Select (pending/skipped) or Undo-of-select (planned)
+                    if (isSelected && onUndo != null)
+                      _IconBtn(
+                        icon: Icons.undo,
+                        color: const Color(0xFF6B7280),
+                        tooltip: 'Remove from today',
+                        onTap: onUndo!,
+                      )
+                    else if (!isSelected && onSelect != null)
+                      _IconBtn(
+                        icon: Icons.check_circle_outline,
+                        color: const Color(0xFF16A34A),
+                        tooltip: 'Select for today',
+                        onTap: onSelect!,
+                      ),
+                    // Right slot: Skip (pending/planned) or Undo-of-skip (skipped)
+                    if (isSkipped && onUndo != null)
+                      _IconBtn(
+                        icon: Icons.undo,
+                        color: const Color(0xFF6B7280),
+                        tooltip: 'Un-skip',
+                        onTap: onUndo!,
+                      )
+                    else if (!isSkipped && onSkip != null)
+                      _IconBtn(
+                        icon: Icons.remove_circle_outline,
+                        color: const Color(0xFF6B7280),
+                        tooltip: 'Skip for today',
+                        onTap: onSkip!,
+                      ),
+                  ],
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
+    );
+
+    if (onLongPress == null && onTapInSelectionMode == null) {
+      return card;
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: onLongPress,
+      onTap: selectionMode ? onTapInSelectionMode : null,
+      child: card,
     );
   }
 
@@ -346,12 +557,6 @@ class _ReviewCard extends StatelessWidget {
         'high' => 'High',
         _ => level,
       };
-
-  String _formatMinutes(int m) {
-    if (m < 60) return '${m}m';
-    if (m % 60 == 0) return '${m ~/ 60}h';
-    return '${m ~/ 60}h ${m % 60}m';
-  }
 }
 
 class _Chip extends StatelessWidget {

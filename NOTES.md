@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-05-15 (issue #247)
+- Multi-select on Step 3 (Review Next Actions) lives in widget-local state on `PlanSummaryStep`; no provider/DAO change. `selectTask(id)` is already idempotent and "Add to Today" simply loops it. The committable set is filtered against the current pending snapshot so a row deleted between selection and commit can't be falsely reported as added.
+- The contextual multi-select bar is rendered **inside** `PlanSummaryStep`, above the scrollable list — not in the screen-level app bar. The app bar slot is owned by `FocusSessionPlanningScreen` and is busy with step progress + title; reusing it would mean either hiding step state or fighting the planning header layout.
+- Multi-select is scoped to Pending Review only. Long-press is wired only on those cards; Today's Plan and Skipped rows have `onLongPress: null` so they never enter the mode.
+
 ## 2026-05-14 (issue #289)
 - `_needsReviewWhere`'s actionless branch now ANDs on `NOT EXISTS person tag`. Delegated tasks (any person-typed `todo_tags` row) are excluded from the daily re-clarification surface — waiting-for cadence belongs to the weekly review, not the daily card. The stale branch is untouched, so a delegated task you nudged today still surfaces.
 - `readsFrom` for the three `_needsReviewWhere` callers (`watchNeedsReview`, `getNeedsReview`/`getNeedsReviewCount`/`isNeedsReview`) widened from `{todos}` to `{todos, todoTags, tags}`. Without the widening, Drift's stream invalidation doesn't fire when a person tag is attached/detached, and the live daily card would not drop a newly-tagged task until the next cold reload.
