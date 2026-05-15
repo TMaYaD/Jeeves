@@ -1,3 +1,5 @@
+import java.io.FileInputStream
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -6,6 +8,17 @@ plugins {
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Load signing material from app/android/key.properties when present. The file
+// is gitignored; CI populates it via the setup-android-signing composite action.
+// When the file (or a flavor's section) is missing, the corresponding signing
+// config is not created and the flavor falls back to debug signing so local
+// `flutter run --release` still works.
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) FileInputStream(f).use { load(it) }
+}
+fun hasKey(key: String) = keystoreProperties.getProperty(key)?.isNotBlank() == true
 
 android {
     namespace = "loonyb.in.jeeves"
@@ -28,24 +41,53 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasKey("releaseStoreFile")) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("releaseStoreFile"))
+                storePassword = keystoreProperties.getProperty("releaseStorePassword")
+                keyAlias = keystoreProperties.getProperty("releaseKeyAlias")
+                keyPassword = keystoreProperties.getProperty("releaseKeyPassword")
+            }
+        }
+        if (hasKey("devStoreFile")) {
+            create("devRelease") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("devStoreFile"))
+                storePassword = keystoreProperties.getProperty("devStorePassword")
+                keyAlias = keystoreProperties.getProperty("devKeyAlias")
+                keyPassword = keystoreProperties.getProperty("devKeyPassword")
+            }
+        }
+    }
+
     flavorDimensions += "environment"
 
     productFlavors {
         create("production") {
             dimension = "environment"
+            // Production-flavor signing comes from the project release key when
+            // key.properties is configured; otherwise we fall back to the debug
+            // keystore so unconfigured local builds still succeed.
+            signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("debug")
         }
         create("dev") {
             dimension = "environment"
             applicationIdSuffix = ".dev"
             resValue("string", "app_name", "Jeeves dev")
+            // Dev-flavor PR/profile builds use a separate keystore so a leaked
+            // dev key doesn't endanger production. Same debug fallback applies.
+            signingConfig = signingConfigs.findByName("devRelease")
+                ?: signingConfigs.getByName("debug")
         }
     }
 
+    // signingConfig is selected per product flavor above (so release, profile
+    // and any other non-debug build types all pick up the flavor's key). The
+    // release block is kept so AGP knows this build type exists, but no
+    // explicit signingConfig is required here.
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
         }
     }
 }

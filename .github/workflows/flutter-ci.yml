@@ -161,5 +161,7 @@ jobs:
       # Exercises the full Gradle/AGP/Kotlin plugin chain so toolchain-incompatible
       # version bumps (e.g. Dependabot AGP majors) fail this PR check instead of
       # slipping through and breaking main. Debug + single ABI keeps it fast and
-      # avoids any signing/secret requirements.
+      # avoids any signing/secret requirements: debug builds are signed by AGP's
+      # auto-managed ~/.android/debug.keystore regardless of signingConfigs, so
+      # the setup-android-signing action is intentionally not invoked here.
       - run: flutter build apk --debug --flavor production --target-platform android-arm64

@@ -99,7 +99,96 @@ Two Android apps must exist in the Firebase project:
 
 Tester groups (`dev`, `canary`, `beta`, `rc`) are created in the Firebase console under each app's distribution settings. Both apps share `FIREBASE_SERVICE_ACCOUNT_JSON` (one service account, one Firebase project, two apps).
 
+## Android signing
+
+Every distributable Android artifact is signed with a stable, project-owned keystore so installs upgrade in place across CI runs and Play Store uploads are feasible. There are two keys, not one:
+
+- **release key** — signs the production-flavor APK + AAB and the Seeker variant APK. This is the key end users get; rotating it forces every installed user to uninstall and reinstall.
+- **dev key** — signs the dev-flavor (PR/canary engineering) APKs distributed via `pr-apk.yml`. The dev and production flavors already have distinct `applicationId`s (`loonyb.in.jeeves.dev` vs `loonyb.in.jeeves`) so they install side-by-side; the separate key purely limits blast radius — a leaked dev key (more exposure: every PR build) doesn't endanger production users.
+
+### GitHub Actions secrets
+
+| Secret | Used by | Purpose |
+|---|---|---|
+| `ANDROID_RELEASE_KEYSTORE_BASE64` | `cd-app.yml` (build-android, build-seeker) | base64-encoded `.jks` for production signing |
+| `ANDROID_RELEASE_KEYSTORE_PASSWORD` | `cd-app.yml` | store password |
+| `ANDROID_RELEASE_KEY_ALIAS` | `cd-app.yml` | alias inside the store |
+| `ANDROID_RELEASE_KEY_PASSWORD` | `cd-app.yml` | key password |
+| `ANDROID_DEV_KEYSTORE_BASE64` | `pr-apk.yml` | base64-encoded `.jks` for dev-flavor PR builds |
+| `ANDROID_DEV_KEYSTORE_PASSWORD` | `pr-apk.yml` | store password |
+| `ANDROID_DEV_KEY_ALIAS` | `pr-apk.yml` | alias inside the store |
+| `ANDROID_DEV_KEY_PASSWORD` | `pr-apk.yml` | key password |
+
+The `.github/actions/setup-android-signing` composite action decodes whichever secrets are populated and writes `app/android/key.properties` before the Flutter build runs. `cd-app.yml` passes `require-release: 'true'` so a missing release secret fails the job rather than silently shipping a debug-signed artifact. `pr-apk.yml` does not set `require-release` — if the dev secret is unset, PR builds fall back to debug signing with a warning.
+
+### Where the keystores live
+
+The two `.jks` files are kept outside the repo (the `app/android/` `.gitignore` blocks `*.jks` and `key.properties`). Canonical backups belong in the team's shared secret store alongside the Firebase service account JSON. Keep at least two copies in independent locations — losing the release key means the user-facing app can never be upgraded again, only re-published under a new package name.
+
+Record the SHA-256 fingerprint of each canonical key in this doc once generated so a future build's `apksigner verify --print-certs` output can be sanity-checked against the known-good value:
+
+- **release key SHA-256:** _record once generated_
+- **dev key SHA-256:** _record once generated_
+
+### Generating a new keystore
+
+Use a long validity (Play Store requires the upload key to be valid past 2033, so pick ≥25 years):
+
+```bash
+keytool -genkeypair -v \
+  -keystore keystore-release.jks \
+  -keyalg RSA -keysize 2048 -validity 10000 \
+  -alias jeeves-release
+```
+
+Repeat with `keystore-dev.jks` / `-alias jeeves-dev` for the dev key.
+
+Encode the keystore for the GitHub secret. The value must be a single line, otherwise the GitHub secret stores the wrapped form and the workflow's base64 decode produces garbage. On GNU coreutils (Linux), `base64 -w0` does this directly; on macOS the `-w` flag doesn't exist, so strip newlines instead. Repeat for `keystore-dev.jks` to populate `ANDROID_DEV_KEYSTORE_BASE64`:
+
+```bash
+# Linux (GNU coreutils):
+base64 -w0 keystore-release.jks
+
+# macOS / cross-platform:
+base64 keystore-release.jks | tr -d '\n'
+```
+
+Set the eight secrets with `gh` (swap `base64 -w0` for `base64 … | tr -d '\n'` on macOS):
+
+```bash
+gh secret set ANDROID_RELEASE_KEYSTORE_BASE64 --body "$(base64 -w0 keystore-release.jks)"
+gh secret set ANDROID_RELEASE_KEYSTORE_PASSWORD --body '…'
+gh secret set ANDROID_RELEASE_KEY_ALIAS       --body 'jeeves-release'
+gh secret set ANDROID_RELEASE_KEY_PASSWORD     --body '…'
+# …and the four ANDROID_DEV_* equivalents.
+```
+
+### Verifying a build
+
+`apksigner` ships with the Android SDK build-tools. To inspect the signing certificate of an APK:
+
+```bash
+apksigner verify --print-certs path/to/jeeves-<version>.apk
+```
+
+The certificate's SHA-256 must match the recorded canonical fingerprint above. `cd-app.yml` runs this step automatically against the production-release APK after each build; for the AAB, run the same command locally against `jeeves-<version>.aab` after downloading it from the release.
+
+### Rotating the release key
+
+Rotation is one-way pain: signature changes force every installed user to uninstall and reinstall, and previously installed APKs cannot be upgraded in place. Only rotate if the key is compromised. (Adopting Play App Signing — see below — lets the upload key rotate freely without user-visible effects, which is the long-term mitigation.)
+
+To rotate:
+
+1. Generate a new keystore as above.
+2. Update all four `ANDROID_RELEASE_*` secrets in GitHub.
+3. Update the recorded SHA-256 fingerprint in this doc.
+4. Bump the version and ship a release. The next CI build will be signed with the new key.
+5. Communicate to testers that they must uninstall the old build before installing the new one.
+
+The dev key may be rotated more freely — PR APKs are throwaway and installed only by internal testers.
+
 ## Not yet wired
 
-- **Play Store track upload.** GA and rc builds will eventually upload to Play Store production / internal tracks. Not in place yet.
+- **Play Store track upload.** GA and rc builds will eventually upload to the Play Store production / internal tracks. Not in place yet.
+- **Play App Signing enrollment.** Once enrolled, Play holds the canonical app-signing key and the project keystore becomes an upload-only key that can rotate without forcing reinstalls. Separate work item from this signing rollout.
 - **Seeker variant distribution.** The Solana dApp Store APK (`build-seeker` job) is built but not distributed through Firebase; it goes through the dApp Store pipeline separately.
