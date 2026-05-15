@@ -134,3 +134,10 @@ The two are mutually exclusive and swap inside the same fixed-width, fixed-heigh
 slot, so the button's shape, size, and position never shift across the swap.
 Skip is the de-emphasised escape hatch; Next step is the emphasised path of
 progress.
+
+## Interaction Patterns
+
+### Long-press multi-select
+Lists that surface batchable actions enter a multi-select mode on **long-press**, mirroring the long-press affordance the tag cloud uses for tag management. Once selection mode is active, a **contextual bar** appears immediately above the list (not in the screen-level app bar — that slot is reserved for step progress and titles) showing the selected count, a per-batch preview where relevant (e.g. total planned time), a "Select all" shortcut, a Clear (×) button, and a primary commit button. Cards in selection mode replace per-row trailing actions with a leading checkbox; tapping a card toggles its membership. Deselecting the last item auto-exits the mode. Each selection toggle fires a light haptic.
+
+This pattern is used on Step 3 (Review Next Actions) of the Daily Planning ritual to add several Pending Review tasks to today's plan in one gesture; the bar there exposes "Add to Today" as the commit button.

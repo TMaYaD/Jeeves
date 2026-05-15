@@ -37,7 +37,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Daily Planning Ritual:** A guided 6-step workflow:
     1. **Clarify Inbox (Step 1):** Process every inbox item before queueing work. For each item, the user answers "What's the expected outcome?", sets fields (energy level, time estimate, due date), and routes it to the correct GTD list (Next Action, Scheduled, Waiting For, Maybe, or Done). Advancing is gated on an empty inbox.
     2. **Day Check-in (Step 2):** User reports today's energy level (Low / Medium / High) and available time (hours + minutes).
-    3. **Review Next Actions (Step 3):** Swipe-card review of unreviewed next-action tasks — select for today, skip, or defer to Maybe.
+    3. **Review Next Actions (Step 3):** Review unreviewed next-action tasks — select for today (individually or via long-press multi-select), skip, or defer to Maybe. In multi-select mode a contextual bar above the list shows the selected count, the previewed planned time, "Select all" / "Clear" actions, and a primary "Add to Today" button that commits the batch.
     4. **Today's Schedule (Step 4):** Confirm or reschedule tasks that are due today.
     5. **Time Estimates (Step 5):** Set time estimates on any selected task that is still missing one.
     6. **Today's Plan (Step 6):** Summary showing tasks sorted by priority — due date (ascending) → scheduled → next actions. Capacity bar warns if planned time exceeds available time. "Start Day" finalises the plan.
