@@ -809,6 +809,10 @@ void main() {
       final row = await db.todoDao.getTodo('rc3');
       // No routing happened: intent unchanged from the seed.
       expect(row?.intent, 'next');
+      // Back-out invokes the real _keep(): the todo must be stamped so the
+      // review step advances past it on the next pass instead of resurfacing.
+      expect(row?.lastClarifiedAt, isNotNull,
+          reason: 'back-out must stamp lastClarifiedAt like a Keep tap');
     });
   });
 }

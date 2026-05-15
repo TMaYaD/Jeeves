@@ -329,8 +329,11 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       ),
     );
     if (!mounted) return;
-    final bubbled = routed ?? ProcessAction.keep;
-    await widget.onAfterRoute?.call(bubbled);
+    if (routed == null) {
+      await _keep();
+      return;
+    }
+    await widget.onAfterRoute?.call(routed);
   }
 
   Future<void> _next() async {
