@@ -1,27 +1,53 @@
 #!/usr/bin/env bash
 # Generates a Java keystore containing two RSA key entries — alias `release`
-# and alias `dev` — and prints the keystore's base64 encoding to stdout.
-#
-# The output is suitable for both ANDROID_RELEASE_KEYSTORE_BASE64 and
-# ANDROID_DEV_KEYSTORE_BASE64 GitHub secrets consumed by
-# .github/actions/setup-android-signing. Set the matching `*-key-alias` inputs
-# to `release` and `dev` respectively.
+# and alias `dev` — and uploads the eight Android signing secrets the
+# .github/actions/setup-android-signing composite action expects (see #301).
 #
 # Usage:
-#   tool/generate_signing_keystore.sh <keystore-pw> <release-key-pw> <dev-key-pw> > keystore.b64
+#   tool/generate_signing_keystore.sh [OPTIONS] <store-pw> <release-key-pw> <dev-key-pw>
 #
-# Subject DN is read from $KEYSTORE_DN (default: a generic Jeeves DN).
+# Options:
+#   --repo OWNER/REPO   Target repo for `gh secret set`. Defaults to whichever
+#                       repo `gh` detects from the current working directory.
+#   --no-secrets        Don't touch GitHub. Print the base64 blob to stdout.
+#   -h, --help          Show this help.
+#
+# Secrets written (default mode):
+#   ANDROID_RELEASE_KEYSTORE_BASE64   = <base64 of keystore>
+#   ANDROID_RELEASE_KEYSTORE_PASSWORD = <store-pw>
+#   ANDROID_RELEASE_KEY_ALIAS         = release
+#   ANDROID_RELEASE_KEY_PASSWORD      = <release-key-pw>
+#   ANDROID_DEV_KEYSTORE_BASE64       = <base64 of keystore>  (same blob)
+#   ANDROID_DEV_KEYSTORE_PASSWORD     = <store-pw>
+#   ANDROID_DEV_KEY_ALIAS             = dev
+#   ANDROID_DEV_KEY_PASSWORD          = <dev-key-pw>
+#
+# Override the certificate subject DN by exporting KEYSTORE_DN.
+#
+# Note: passwords appear in argv, which is world-readable in /proc on a busy
+# host. On a single-user dev machine this is fine; for shared hosts, pipe a
+# wrapper that calls `read -s`.
 set -euo pipefail
 
+usage() {
+  sed -n 's/^# \{0,1\}//;6,29p' "$0"
+}
+
+repo=""
+set_secrets=true
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo) repo="$2"; shift 2 ;;
+    --no-secrets) set_secrets=false; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
+    *) break ;;
+  esac
+done
+
 if [ "$#" -ne 3 ]; then
-  cat >&2 <<'EOF'
-Usage: generate_signing_keystore.sh <keystore-password> <release-key-password> <dev-key-password>
-
-Generates a JKS keystore with two key entries (alias `release` and alias `dev`)
-and writes its base64 encoding to stdout. Status messages go to stderr.
-
-Override the certificate subject by exporting KEYSTORE_DN before running.
-EOF
+  usage >&2
   exit 1
 fi
 
@@ -32,6 +58,10 @@ dn="${KEYSTORE_DN:-CN=Jeeves, OU=Mobile, O=loonyb.in, L=Unknown, ST=Unknown, C=U
 
 if ! command -v keytool >/dev/null 2>&1; then
   echo "keytool not found on PATH; install a JDK (e.g. apt install default-jdk)." >&2
+  exit 1
+fi
+if [ "$set_secrets" = "true" ] && ! command -v gh >/dev/null 2>&1; then
+  echo "gh not found on PATH; install GitHub CLI or pass --no-secrets." >&2
   exit 1
 fi
 
@@ -60,11 +90,34 @@ keytool -genkeypair \
 echo "Keystore contents:" >&2
 keytool -list -keystore "$keystore" -storepass "$storepass" >&2
 
-# Emit a single-line base64 blob so it pastes cleanly into a GitHub secret.
-# `base64 -w0` is GNU; fall back to stripping newlines for BSD/macOS.
 if base64 --help 2>&1 | grep -q -- '-w'; then
-  base64 -w0 "$keystore"
+  b64="$(base64 -w0 "$keystore")"
 else
-  base64 "$keystore" | tr -d '\n'
+  b64="$(base64 "$keystore" | tr -d '\n')"
 fi
-echo
+
+if [ "$set_secrets" = "false" ]; then
+  printf '%s\n' "$b64"
+  exit 0
+fi
+
+repo_args=()
+[ -n "$repo" ] && repo_args=(--repo "$repo")
+
+set_secret() {
+  local name="$1" value="$2"
+  printf '%s' "$value" | gh secret set "$name" "${repo_args[@]}"
+  echo "  set $name" >&2
+}
+
+echo "Writing 8 secrets via gh${repo:+ to $repo}..." >&2
+set_secret ANDROID_RELEASE_KEYSTORE_BASE64    "$b64"
+set_secret ANDROID_RELEASE_KEYSTORE_PASSWORD  "$storepass"
+set_secret ANDROID_RELEASE_KEY_ALIAS          "release"
+set_secret ANDROID_RELEASE_KEY_PASSWORD       "$release_keypass"
+set_secret ANDROID_DEV_KEYSTORE_BASE64        "$b64"
+set_secret ANDROID_DEV_KEYSTORE_PASSWORD      "$storepass"
+set_secret ANDROID_DEV_KEY_ALIAS              "dev"
+set_secret ANDROID_DEV_KEY_PASSWORD           "$dev_keypass"
+
+echo "Done." >&2
