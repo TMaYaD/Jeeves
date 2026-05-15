@@ -13,6 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
 
@@ -78,6 +80,9 @@ Widget _harness(
       // Use a single-value stream so drift's StreamQueryStore (which leaves
       // a pending timer behind on dispose) is not subscribed to in tests.
       personTagsProvider.overrideWith((ref) => Stream.value(personTags)),
+      // The reclarify sub-flow renders a [ClarifyCard] which watches this
+      // provider; static stream avoids drift's StreamQuery timer.
+      taskDetailTodoProvider(todo.id).overrideWith((_) => Stream.value(todo)),
     ],
     child: MaterialApp(
       home: Scaffold(
@@ -138,6 +143,21 @@ void main() {
       ));
 
       expect(find.text('Keep'), findsOneWidget);
+    });
+
+    testWidgets('Re-clarify… is hidden by default; include surfaces it',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'rc-render');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      expect(find.text('Re-clarify…'), findsNothing);
+
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        include: const {ProcessAction.reclarify},
+      ));
+      await tester.pump();
+      expect(find.text('Re-clarify…'), findsOneWidget);
     });
 
     testWidgets('except hides specified default actions', (tester) async {
@@ -698,6 +718,97 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(fired, [ProcessAction.nextActionDialog]);
+    });
+  });
+
+  group('ProcessToHandlers — reclarify sub-flow', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    /// The full ClarifyCard + Scaffold AppBar exceeds the default 600px test
+    /// viewport, pushing the bottom action buttons off-screen and making
+    /// `tester.tap` miss. Enlarge the viewport so every sub-flow button is
+    /// visible without per-test scrolling.
+    Future<void> useTallViewport(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() async => tester.binding.setSurfaceSize(null));
+    }
+
+    testWidgets(
+        'tapping Re-clarify… opens the ClarifyCard sub-flow on this item',
+        (tester) async {
+      await useTallViewport(tester);
+      final todo = await _insertTodo(db, id: 'rc1', title: 'Pick a topic');
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        include: const {ProcessAction.reclarify},
+      ));
+
+      await tester.tap(find.text('Re-clarify…'));
+      await tester.pumpAndSettle();
+
+      // Sub-flow card is on screen, scaffolded with the Re-clarify app bar.
+      expect(find.byType(ClarifyCard), findsOneWidget);
+      expect(find.widgetWithText(AppBar, 'Re-clarify'), findsOneWidget);
+    });
+
+    testWidgets(
+        'routing inside the sub-flow closes it and bubbles the action via '
+        'onAfterRoute', (tester) async {
+      await useTallViewport(tester);
+      final todo = await _insertTodo(db, id: 'rc2');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        include: const {ProcessAction.reclarify},
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+
+      await tester.tap(find.text('Re-clarify…'));
+      await tester.pumpAndSettle();
+
+      // Route inside the sub-flow via Trash (no sub-dialog to dismiss).
+      await tester.tap(find.text('Trash'));
+      await tester.pumpAndSettle();
+
+      // Sub-flow is gone, outer received the routed action.
+      expect(find.byType(ClarifyCard), findsNothing);
+      expect(fired, [ProcessAction.trash]);
+      final row = await db.todoDao.getTodo('rc2');
+      expect(row?.intent, 'trash',
+          reason: 'inner ProcessToHandlers owns the routing write');
+    });
+
+    testWidgets(
+        'backing out of the sub-flow without routing bubbles as keep',
+        (tester) async {
+      await useTallViewport(tester);
+      final todo = await _insertTodo(db, id: 'rc3');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        include: const {ProcessAction.reclarify},
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+
+      await tester.tap(find.text('Re-clarify…'));
+      await tester.pumpAndSettle();
+
+      // Pop the route (back arrow) without routing.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ClarifyCard), findsNothing);
+      expect(fired, [ProcessAction.keep],
+          reason: 'back-out of the sub-flow maps to keep');
+      final row = await db.todoDao.getTodo('rc3');
+      // No routing happened: intent unchanged from the seed.
+      expect(row?.intent, 'next');
     });
   });
 }

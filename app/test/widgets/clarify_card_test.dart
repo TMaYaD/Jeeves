@@ -1,6 +1,6 @@
-/// Widget tests for [InboxClarifyCard]'s routing behaviour (#293 regression).
+/// Widget tests for [ClarifyCard]'s routing behaviour (#293 regression).
 ///
-/// `InboxClarifyCard` opts out of the default-on `nextActionDialog` modifier
+/// `ClarifyCard` opts out of the default-on `nextActionDialog` modifier
 /// (`except: {nextActionDialog}`) because it supplies the next-action phrase
 /// through the title-as-action coupling instead. Tapping Next must therefore
 /// stay a one-tap route — no dialog — and still leave the row with a defined
@@ -17,7 +17,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
-import 'package:jeeves/widgets/inbox_clarify_card.dart';
+import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
 
@@ -47,6 +47,7 @@ Future<Todo> _insertInboxTodo(
 Widget _harness(
   GtdDatabase db, {
   required Todo todo,
+  ClarifyMode mode = ClarifyMode.inbox,
   Future<void> Function(ProcessAction)? onAfterRoute,
 }) {
   return ProviderScope(
@@ -59,8 +60,9 @@ Widget _harness(
     ],
     child: MaterialApp(
       home: Scaffold(
-        body: InboxClarifyCard(
+        body: ClarifyCard(
           todoId: todo.id,
+          mode: mode,
           onAfterRoute: onAfterRoute,
         ),
       ),
@@ -71,7 +73,7 @@ Widget _harness(
 void main() {
   setUpAll(configureSqliteForTests);
 
-  group('InboxClarifyCard — Next stays a one-tap route (#293)', () {
+  group('ClarifyCard — Next stays a one-tap route (#293)', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
@@ -102,6 +104,77 @@ void main() {
       // Title-as-action coupling still mirrors the title into the phrase so
       // the row leaves the inbox with a defined action.
       expect(row?.nextActionText, 'Buy milk');
+    });
+  });
+
+  group('ClarifyCard — title-as-action mirror is mode-aware', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'reclarify mode does NOT clobber an existing next_action_text',
+        (tester) async {
+      // Seed a previously-clarified row that already has a deliberate phrase.
+      final now = DateTime.now();
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('rc-mirror-1'),
+            title: const Value('Plan party'),
+            clarified: const Value(true),
+            intent: const Value('next'),
+            nextActionText: const Value('Email guest list'),
+            userId: const Value(_userId),
+            createdAt: Value(now),
+            updatedAt: Value(now),
+          ));
+      final todo = (await db.todoDao.getTodo('rc-mirror-1'))!;
+
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        mode: ClarifyMode.reclarify,
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('rc-mirror-1');
+      expect(row?.nextActionText, 'Email guest list',
+          reason: 'reclarify must not overwrite a deliberate phrase with the '
+              'title');
+      expect(row?.intent, 'next');
+    });
+
+    testWidgets(
+        'reclarify mode DOES set next_action_text from title when previously '
+        'empty', (tester) async {
+      await _insertInboxTodo(
+        db,
+        id: 'rc-mirror-2',
+        title: 'Decide on venue',
+      );
+      // Promote into a clarified-but-actionless state to mirror the
+      // production scenario the guard targets.
+      await db.todoDao
+          .applyRouting('rc-mirror-2', to: RoutingKind.nextAction);
+      final fresh = (await db.todoDao.getTodo('rc-mirror-2'))!;
+
+      await tester.pumpWidget(_harness(
+        db,
+        todo: fresh,
+        mode: ClarifyMode.reclarify,
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('rc-mirror-2');
+      expect(row?.nextActionText, 'Decide on venue',
+          reason: 'an empty next_action_text in reclarify mode is filled from '
+              'the title so the row leaves with a defined action');
     });
   });
 }

@@ -61,7 +61,7 @@ class SomedayMaybeStep extends ConsumerWidget {
       // a defined action — the ellipsis label signals it.
       process: ProcessToHandlers(
         todo: todo,
-        include: const {ProcessAction.keep},
+        include: const {ProcessAction.keep, ProcessAction.reclarify},
         except: const {
           ProcessAction.waitingFor,
           ProcessAction.someday,

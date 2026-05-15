@@ -1,11 +1,15 @@
-/// Shared clarification card UI extracted from the daily-planning ritual's
-/// inbox-clarify step so the periodic-review wizard can render the same UI.
+/// Generic clarification card. Renders an editable view of a [Todo] plus the
+/// canonical [ProcessToHandlers] action bar.
 ///
 /// The card autosaves attribute edits (title / notes / energy / time / due)
 /// directly to [TodoDao]; routing actions are delegated to the canonical
 /// [ProcessToHandlers] action bar, which owns its own DAO writes. Per-flow
 /// nav side-effects (recording routing history, advancing the cursor) are
 /// wired through [onAfterRoute].
+///
+/// Used by the daily-planning ritual's inbox-clarify step and by the
+/// Weekly Review wizard (zero-inbox step + the `reclarify` sub-flow opened
+/// from the Waiting For / Next Actions / Someday-Maybe steps).
 library;
 
 import 'dart:async';
@@ -19,18 +23,30 @@ import '../providers/task_detail_provider.dart';
 import 'clarify_shared_widgets.dart';
 import 'process_to_handlers.dart';
 
-/// Shared clarification card. Renders an editable view of [todoId] plus the
+/// Distinguishes the inbox-clarify caller (always mirror title into
+/// `next_action_text` on Next/WaitingFor) from the re-clarify sub-flow on a
+/// previously-clarified item (only mirror when the existing
+/// `next_action_text` is null/empty so a deliberately written phrase is not
+/// clobbered).
+enum ClarifyMode { inbox, reclarify }
+
+/// Generic clarification card. Renders an editable view of [todoId] plus the
 /// canonical "process to" action bar. Title/notes/energy/time/due autosave
 /// directly via [TodoDao]; routing buttons drive [ProcessToHandlers].
-class InboxClarifyCard extends ConsumerStatefulWidget {
-  const InboxClarifyCard({
+class ClarifyCard extends ConsumerStatefulWidget {
+  const ClarifyCard({
     super.key,
     required this.todoId,
+    this.mode = ClarifyMode.inbox,
     this.lastAction,
     this.onAfterRoute,
   });
 
   final String todoId;
+
+  /// Selects the title-as-action mirror policy applied in [onAfterRoute].
+  /// See [ClarifyMode].
+  final ClarifyMode mode;
 
   /// The action most recently applied to this item — drives the
   /// "previously selected" affordance on the matching destination button.
@@ -41,10 +57,10 @@ class InboxClarifyCard extends ConsumerStatefulWidget {
   final Future<void> Function(ProcessAction action)? onAfterRoute;
 
   @override
-  ConsumerState<InboxClarifyCard> createState() => _InboxClarifyCardState();
+  ConsumerState<ClarifyCard> createState() => _ClarifyCardState();
 }
 
-class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
+class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   TextEditingController? _titleCtrl;
   TextEditingController? _notesCtrl;
   String? _energyLevel;
@@ -80,7 +96,23 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
   @override
   void dispose() {
     _textDebouncer?.cancel();
-    unawaited(_flushTextSave());
+    _textDebouncer = null;
+    // Snapshot pending edits and the DAO reference up-front so the
+    // fire-and-forget flush below doesn't touch disposed controllers or
+    // assign back into a disposed State (which `_flushTextSave` would do
+    // when updating `_lastSavedTitle` / `_lastSavedNotes` after its await).
+    final trimmedTitle = (_titleCtrl?.text ?? '').trim();
+    final trimmedNotes = (_notesCtrl?.text ?? '').trim();
+    final hasPendingWrite = trimmedTitle.isNotEmpty &&
+        (trimmedTitle != _lastSavedTitle || trimmedNotes != _lastSavedNotes);
+    if (hasPendingWrite) {
+      final dao = ref.read(databaseProvider).todoDao;
+      unawaited(dao.updateFields(
+        widget.todoId,
+        title: trimmedTitle,
+        notes: trimmedNotes,
+      ));
+    }
     _titleCtrl?.dispose();
     _notesCtrl?.dispose();
     super.dispose();
@@ -320,8 +352,8 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
         ProcessToHandlers(
           todo: todo,
           disabled: disabled,
-          // Opt out of the default-on `nextActionDialog` modifier: inbox
-          // clarification supplies the phrase via the title-as-action
+          // Opt out of the default-on `nextActionDialog` modifier: the
+          // clarify card supplies the phrase via the title-as-action
           // coupling below, so tapping Next should route immediately
           // rather than popping the dialog.
           except: const {ProcessAction.nextActionDialog},
@@ -331,21 +363,40 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
             // caller's nav handler — the inbox cursor advance reads the
             // recorded routing on the next item.
             await _flushTextSave();
-            // Inbox-clarify title-as-action coupling: when the user routes
-            // to Next Action or Waiting For from the inbox, mirror the
-            // current title into `next_action_text` so the new row leaves
-            // inbox with a defined action. The controller's live value
-            // wins over the (possibly debounced) todos.title column so a
-            // fast typer's edit isn't lost. With the dialog modifier
-            // excepted, the inbox Next button always reports plain `next`.
+            // Title-as-action coupling: when the user routes to Next or
+            // Waiting For from a clarify card, mirror the current title
+            // into `next_action_text` so the row leaves with a defined
+            // action. The controller's live value wins over the (possibly
+            // debounced) todos.title column so a fast typer's edit isn't
+            // lost. With the dialog modifier excepted, Next reports plain
+            // `next`.
+            //
+            // ClarifyMode.inbox     → always mirror (the row is fresh, so
+            //                         any existing phrase is stale or
+            //                         missing).
+            // ClarifyMode.reclarify → only mirror when `next_action_text`
+            //                         is null/empty; otherwise the user
+            //                         has already written a deliberate
+            //                         phrase and we must not clobber it.
             if (action == ProcessAction.next ||
                 action == ProcessAction.waitingFor) {
               final title = _titleCtrl?.text.trim() ?? '';
               if (title.isNotEmpty) {
-                await ref
-                    .read(databaseProvider)
-                    .todoDao
-                    .setNextActionText(widget.todoId, title);
+                var shouldMirror = widget.mode == ClarifyMode.inbox;
+                if (!shouldMirror) {
+                  final current = await ref
+                      .read(databaseProvider)
+                      .todoDao
+                      .getTodo(widget.todoId);
+                  final existing = current?.nextActionText?.trim() ?? '';
+                  shouldMirror = existing.isEmpty;
+                }
+                if (shouldMirror) {
+                  await ref
+                      .read(databaseProvider)
+                      .todoDao
+                      .setNextActionText(widget.todoId, title);
+                }
               }
             }
             await widget.onAfterRoute?.call(action);

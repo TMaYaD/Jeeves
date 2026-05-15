@@ -1,7 +1,7 @@
 /// Shared UI widgets for the inbox clarification flow.
 ///
 /// Used by both the planning wizard's [InboxClarificationStep] (via
-/// _ClarifyCard) and the standalone [InboxClarifyScreen] so the two surfaces
+/// [ClarifyCard]) and the standalone [InboxClarifyScreen] so the two surfaces
 /// stay visually identical without duplicating code.
 library;
 

@@ -1,7 +1,7 @@
 /// Single canonical "process to" action bar for a Todo.
 ///
 /// Replaces the four near-parallel button strips that used to live inline in
-/// [InboxClarifyCard], the planning ritual's task-review card, and three
+/// [ClarifyCard], the planning ritual's task-review card, and three
 /// periodic-review steps (Waiting For, Projects, Someday/Maybe). Owns its DAO
 /// writes; callsites configure presentation only and never see [RoutingKind].
 ///
@@ -18,6 +18,7 @@ import '../database/gtd_database.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
+import 'clarify_card.dart';
 import 'next_action_dialog.dart';
 import 'person_tag_picker.dart';
 
@@ -30,7 +31,10 @@ export '../models/todo.dart' show RoutingKind;
 /// `nextActionDialog` is a modifier on the `next` button (not a standalone
 /// button) — it is on by default, so tapping Next opens [NextActionDialog]
 /// before invoking the `next` mapping unless a callsite removes it via
-/// [ProcessToHandlers.except].
+/// [ProcessToHandlers.except]; `reclarify` is a non-routing entry that opens
+/// the [ClarifyCard] sub-flow as a full-page route, distinct from
+/// `nextActionDialog` because it renders its own button rather than modifying
+/// an existing one.
 enum ProcessAction {
   keep,
   next,
@@ -39,6 +43,7 @@ enum ProcessAction {
   done,
   trash,
   nextActionDialog,
+  reclarify,
 }
 
 /// Co-located translation: callsites holding a [RoutingKind] from a session
@@ -55,10 +60,13 @@ extension RoutingKindToProcessAction on RoutingKind {
 
 /// Inverse of [RoutingKindToProcessAction]. Callsites that need to persist a
 /// routed [ProcessAction] as a [RoutingKind] (e.g. wizard step records) use
-/// this to translate at the write site. [ProcessAction.keep] has no
-/// [RoutingKind] equivalent and returns null; [ProcessAction.nextActionDialog]
-/// collapses onto [RoutingKind.nextAction] (it's a UI modifier, not a
-/// distinct route).
+/// this to translate at the write site. [ProcessAction.keep] and
+/// [ProcessAction.reclarify] have no [RoutingKind] equivalent and return
+/// null (`reclarify` opens a sub-flow rather than committing a routing —
+/// the inner card's own [ProcessToHandlers] performs any routing it
+/// produces and the sub-flow result bubbles back as the routed action).
+/// [ProcessAction.nextActionDialog] collapses onto [RoutingKind.nextAction]
+/// (it's a UI modifier, not a distinct route).
 extension ProcessActionToRoutingKind on ProcessAction {
   RoutingKind? toRoutingKind() => switch (this) {
         ProcessAction.next ||
@@ -68,7 +76,7 @@ extension ProcessActionToRoutingKind on ProcessAction {
         ProcessAction.someday => RoutingKind.maybe,
         ProcessAction.done => RoutingKind.done,
         ProcessAction.trash => RoutingKind.trash,
-        ProcessAction.keep => null,
+        ProcessAction.keep || ProcessAction.reclarify => null,
       };
 }
 
@@ -86,9 +94,12 @@ const _kDefaultActions = <ProcessAction>{
 };
 
 /// Button-rendering order for the action bar. Modifier-only actions
-/// (`nextActionDialog`) don't render their own button.
+/// (`nextActionDialog`) don't render their own button. `reclarify` sits
+/// next to `keep` because both are "soft" non-routing entries — `keep`
+/// stays put, `reclarify` opens the sub-flow.
 const _kRenderOrder = <ProcessAction>[
   ProcessAction.keep,
+  ProcessAction.reclarify,
   ProcessAction.next,
   ProcessAction.waitingFor,
   ProcessAction.someday,
@@ -99,6 +110,7 @@ const _kRenderOrder = <ProcessAction>[
 /// Default user-visible labels for each renderable action.
 const _kDefaultLabels = <ProcessAction, String>{
   ProcessAction.keep: 'Keep',
+  ProcessAction.reclarify: 'Re-clarify…',
   ProcessAction.next: 'Next Action',
   ProcessAction.waitingFor: 'Waiting For',
   ProcessAction.someday: 'Someday',
@@ -112,6 +124,7 @@ const _kDefaultIcons = <ProcessAction, IconData>{
   // `isPreviouslySelected` button — and so a future callsite surfacing
   // both (Keep + Next) reads unambiguously.
   ProcessAction.keep: Icons.bookmark_outline,
+  ProcessAction.reclarify: Icons.tune,
   ProcessAction.next: Icons.check_circle_outline,
   ProcessAction.waitingFor: Icons.person_outlined,
   ProcessAction.someday: Icons.star_border,
@@ -121,6 +134,7 @@ const _kDefaultIcons = <ProcessAction, IconData>{
 
 const _kDefaultColors = <ProcessAction, Color>{
   ProcessAction.keep: Color(0xFF2563EB),
+  ProcessAction.reclarify: Color(0xFF6B7280),
   ProcessAction.next: Color(0xFF2563EB),
   ProcessAction.waitingFor: Color(0xFF7C3AED),
   ProcessAction.someday: Color(0xFF6B7280),
@@ -247,6 +261,8 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     switch (action) {
       case ProcessAction.keep:
         await _runOnce(_keep);
+      case ProcessAction.reclarify:
+        await _runOnce(_reclarify);
       case ProcessAction.next:
         if (_dialogModifierActive()) {
           await _runOnce(_nextWithDialog);
@@ -284,6 +300,37 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     final db = ref.read(databaseProvider);
     await db.todoDao.stampLastClarifiedAt(widget.todo.id);
     await widget.onAfterRoute?.call(ProcessAction.keep);
+  }
+
+  /// Opens the [ClarifyCard] sub-flow as a full-page route. The pushed
+  /// card owns its own [ProcessToHandlers], so any routing performed
+  /// inside is committed by that inner widget — this outer call only
+  /// bubbles the chosen action through [onAfterRoute] for callsite
+  /// bookkeeping (record routing, advance cursor). Backing out without
+  /// routing maps to [ProcessAction.keep] so the review step advances
+  /// without recording a routing.
+  Future<void> _reclarify() async {
+    if (!await _todoExists()) return;
+    if (!mounted) return;
+    final routed = await Navigator.of(context).push<ProcessAction>(
+      MaterialPageRoute<ProcessAction>(
+        builder: (routeContext) => Scaffold(
+          appBar: AppBar(title: const Text('Re-clarify')),
+          body: ClarifyCard(
+            todoId: widget.todo.id,
+            mode: ClarifyMode.reclarify,
+            onAfterRoute: (action) async {
+              if (Navigator.of(routeContext).canPop()) {
+                Navigator.of(routeContext).pop(action);
+              }
+            },
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    final bubbled = routed ?? ProcessAction.keep;
+    await widget.onAfterRoute?.call(bubbled);
   }
 
   Future<void> _next() async {

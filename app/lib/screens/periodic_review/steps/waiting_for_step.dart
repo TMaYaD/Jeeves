@@ -64,7 +64,7 @@ class WaitingForStep extends ConsumerWidget {
       // the Next list with a defined action — the ellipsis label signals it.
       process: ProcessToHandlers(
         todo: todo,
-        include: const {ProcessAction.keep},
+        include: const {ProcessAction.keep, ProcessAction.reclarify},
         except: const {ProcessAction.waitingFor},
         labels: const {
           ProcessAction.keep: 'Keep waiting',
