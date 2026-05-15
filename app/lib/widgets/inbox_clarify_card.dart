@@ -320,6 +320,11 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
         ProcessToHandlers(
           todo: todo,
           disabled: disabled,
+          // Opt out of the default-on `nextActionDialog` modifier: inbox
+          // clarification supplies the phrase via the title-as-action
+          // coupling below, so tapping Next should route immediately
+          // rather than popping the dialog.
+          except: const {ProcessAction.nextActionDialog},
           lastAction: widget.lastAction,
           onAfterRoute: (action) async {
             // Make sure title/notes are persisted before yielding to the
@@ -331,8 +336,8 @@ class _InboxClarifyCardState extends ConsumerState<InboxClarifyCard> {
             // current title into `next_action_text` so the new row leaves
             // inbox with a defined action. The controller's live value
             // wins over the (possibly debounced) todos.title column so a
-            // fast typer's edit isn't lost. The dialog modifier writes
-            // its own value, so we skip it here.
+            // fast typer's edit isn't lost. With the dialog modifier
+            // excepted, the inbox Next button always reports plain `next`.
             if (action == ProcessAction.next ||
                 action == ProcessAction.waitingFor) {
               final title = _titleCtrl?.text.trim() ?? '';

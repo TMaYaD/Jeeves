@@ -10,6 +10,7 @@
 /// [RoutingKindToProcessAction] extension.
 library;
 
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -27,8 +28,9 @@ export '../models/todo.dart' show RoutingKind;
 /// Five real routes (`next`, `waitingFor`, `someday`, `done`, `trash`) map to
 /// [TodoDao.applyRouting] internally; `keep` stamps `last_clarified_at` only;
 /// `nextActionDialog` is a modifier on the `next` button (not a standalone
-/// button) — when included, tapping Next opens [NextActionDialog] before
-/// invoking the `next` mapping.
+/// button) — it is on by default, so tapping Next opens [NextActionDialog]
+/// before invoking the `next` mapping unless a callsite removes it via
+/// [ProcessToHandlers.except].
 enum ProcessAction {
   keep,
   next,
@@ -70,14 +72,17 @@ extension ProcessActionToRoutingKind on ProcessAction {
       };
 }
 
-/// Default actions rendered when neither [ProcessToHandlers.include] nor
-/// [ProcessToHandlers.except] override the set.
+/// Default actions (and modifiers) active when neither
+/// [ProcessToHandlers.include] nor [ProcessToHandlers.except] override the
+/// set. `nextActionDialog` is in here as a default-on modifier: promoting to
+/// Next always captures a phrase unless a callsite opts out via `except`.
 const _kDefaultActions = <ProcessAction>{
   ProcessAction.next,
   ProcessAction.waitingFor,
   ProcessAction.someday,
   ProcessAction.done,
   ProcessAction.trash,
+  ProcessAction.nextActionDialog,
 };
 
 /// Button-rendering order for the action bar. Modifier-only actions
@@ -137,10 +142,13 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
 
   final Todo todo;
 
-  /// Surfaces non-default actions or modifiers (e.g. `keep`, `nextActionDialog`).
+  /// Surfaces non-default actions (e.g. `keep`). The `nextActionDialog`
+  /// modifier is on by default — remove it via [except], don't add it here.
   final Set<ProcessAction> include;
 
-  /// Hides default actions.
+  /// Hides default actions, including the default-on `nextActionDialog`
+  /// modifier — add `nextActionDialog` here to make Next route immediately
+  /// without opening [NextActionDialog].
   final Set<ProcessAction> except;
 
   /// Renders these actions but disables their tap. Parent-owned validation
@@ -184,14 +192,46 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
 class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   bool _processing = false;
 
-  Set<ProcessAction> _renderableActions() {
-    final actions = <ProcessAction>{
-      ..._kDefaultActions,
-      ...widget.include,
-    }..removeAll(widget.except);
-    actions.remove(ProcessAction.nextActionDialog);
-    return actions;
+  /// Cached result of [_computeResolvedActions]: the default actions plus
+  /// [ProcessToHandlers.include], minus [ProcessToHandlers.except]. Recomputed
+  /// only when `include` / `except` change (see [didUpdateWidget]) so build
+  /// doesn't reallocate the set on every frame.
+  late Set<ProcessAction> _resolvedActions;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolvedActions = _computeResolvedActions();
   }
+
+  @override
+  void didUpdateWidget(ProcessToHandlers oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!setEquals(oldWidget.include, widget.include) ||
+        !setEquals(oldWidget.except, widget.except)) {
+      _resolvedActions = _computeResolvedActions();
+    }
+  }
+
+  /// The default actions plus [ProcessToHandlers.include], minus
+  /// [ProcessToHandlers.except]. Includes `nextActionDialog` when active.
+  Set<ProcessAction> _computeResolvedActions() => <ProcessAction>{
+        ..._kDefaultActions,
+        ...widget.include,
+      }..removeAll(widget.except);
+
+  /// Renderable buttons: the resolved set minus modifier-only actions.
+  /// `nextActionDialog` never renders its own button. Returns a fresh copy so
+  /// the cached [_resolvedActions] set is never mutated.
+  Set<ProcessAction> _renderableActions() =>
+      Set<ProcessAction>.of(_resolvedActions)
+        ..remove(ProcessAction.nextActionDialog);
+
+  /// Whether the `nextActionDialog` modifier is active for this callsite —
+  /// on by default, removed via [ProcessToHandlers.except]. When active,
+  /// tapping Next opens [NextActionDialog] before routing.
+  bool _dialogModifierActive() =>
+      _resolvedActions.contains(ProcessAction.nextActionDialog);
 
   Future<void> _runOnce(Future<void> Function() action) async {
     if (_processing) return;
@@ -208,7 +248,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       case ProcessAction.keep:
         await _runOnce(_keep);
       case ProcessAction.next:
-        if (widget.include.contains(ProcessAction.nextActionDialog)) {
+        if (_dialogModifierActive()) {
           await _runOnce(_nextWithDialog);
         } else {
           await _runOnce(_next);
@@ -268,12 +308,20 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     if (result == null) return; // user cancelled
     if (!mounted) return;
     if (!await _todoExists()) return;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.applyRouting(
-      widget.todo.id,
-      to: RoutingKind.nextAction,
-      nextActionText: result,
-    );
+    if (result.isNotEmpty) {
+      // A blank save must not route: promoting to Next with no phrase
+      // would land the item actionless on the Next list — the exact
+      // outcome the dialog modifier exists to prevent. Skip the write but
+      // still notify the callsite so it can react (e.g. clear a stale
+      // action record); its handler re-reads the row and sees the
+      // unchanged value.
+      final db = ref.read(databaseProvider);
+      await db.todoDao.applyRouting(
+        widget.todo.id,
+        to: RoutingKind.nextAction,
+        nextActionText: result,
+      );
+    }
     await widget.onAfterRoute?.call(ProcessAction.nextActionDialog);
   }
 

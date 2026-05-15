@@ -7,6 +7,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
@@ -55,7 +56,9 @@ class SomedayMaybeStep extends ConsumerWidget {
       // The user can Keep on Someday, promote to Next Actions, or Trash.
       // Waiting For / Someday / Done don't appear because the item is
       // already on Someday and these routes wouldn't change much; mirrors
-      // the previous step's surface.
+      // the previous step's surface. Promoting to Next uses the default-on
+      // `nextActionDialog` modifier so the item lands on the Next list with
+      // a defined action — the ellipsis label signals it.
       process: ProcessToHandlers(
         todo: todo,
         include: const {ProcessAction.keep},
@@ -66,10 +69,23 @@ class SomedayMaybeStep extends ConsumerWidget {
         },
         labels: const {
           ProcessAction.keep: 'Keep on Someday',
+          ProcessAction.next: 'Next Action…',
         },
         lastAction: routings[index]?.toProcessAction(),
         onAfterRoute: (action) async {
           if (action == ProcessAction.keep) {
+            notifier.advanceSomeday();
+            return;
+          }
+          if (action == ProcessAction.nextActionDialog) {
+            // A blank save does not route (the widget skips the write), so
+            // the row stays on Someday/Maybe — stay on the item rather
+            // than recording a routing or advancing the cursor.
+            final updated =
+                await ref.read(databaseProvider).todoDao.getTodo(todo.id);
+            final txt = updated?.nextActionText ?? '';
+            if (txt.isEmpty) return;
+            notifier.recordSomedayRouting(index, RoutingKind.nextAction);
             notifier.advanceSomeday();
             return;
           }

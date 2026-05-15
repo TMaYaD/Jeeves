@@ -62,11 +62,16 @@ class NextActionsStep extends ConsumerWidget {
       // concrete commitment they made, not just the task title.
       subtext: todo.nextActionText,
       // Defaults minus Next: the item is already on the Next list, so
-      // re-confirming as Next is what Keep is for.
+      // re-confirming as Next is what Keep is for. With no Next button the
+      // default-on `nextActionDialog` modifier is inert; except it too so
+      // the resolved action set reads cleanly.
       process: ProcessToHandlers(
         todo: todo,
         include: const {ProcessAction.keep},
-        except: const {ProcessAction.next},
+        except: const {
+          ProcessAction.next,
+          ProcessAction.nextActionDialog,
+        },
         lastAction: routings[index]?.toProcessAction(),
         onAfterRoute: (action) async {
           if (action == ProcessAction.keep) {

@@ -7,6 +7,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../providers/database_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
@@ -58,17 +59,32 @@ class WaitingForStep extends ConsumerWidget {
       personTags: personTags[todo.id] ?? const [],
       // Hide Waiting For — re-confirming is the Keep button.
       // Keep gets a callsite-specific label so the user knows what state is
-      // being preserved.
+      // being preserved. Promoting to Next uses the default-on
+      // `nextActionDialog` modifier so the freshly-promoted task lands on
+      // the Next list with a defined action — the ellipsis label signals it.
       process: ProcessToHandlers(
         todo: todo,
         include: const {ProcessAction.keep},
         except: const {ProcessAction.waitingFor},
         labels: const {
           ProcessAction.keep: 'Keep waiting',
+          ProcessAction.next: 'Next Action…',
         },
         lastAction: routings[index]?.toProcessAction(),
         onAfterRoute: (action) async {
           if (action == ProcessAction.keep) {
+            notifier.advanceWaitingFor();
+            return;
+          }
+          if (action == ProcessAction.nextActionDialog) {
+            // A blank save does not route (the widget skips the write), so
+            // the row still has no next action — stay on the item rather
+            // than recording a routing or advancing the cursor.
+            final updated =
+                await ref.read(databaseProvider).todoDao.getTodo(todo.id);
+            final txt = updated?.nextActionText ?? '';
+            if (txt.isEmpty) return;
+            notifier.recordWaitingForRouting(index, RoutingKind.nextAction);
             notifier.advanceWaitingFor();
             return;
           }
