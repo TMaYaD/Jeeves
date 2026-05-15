@@ -67,6 +67,11 @@ fi
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+# JKS, not PKCS12: keytool's PKCS12 writer silently forces every key password
+# to equal the store password ("Different store and key passwords not
+# supported for PKCS12 KeyStores. Ignoring user-specified -keypass value."),
+# which would collapse the three-password contract this script offers down
+# to one. JKS preserves distinct per-key passwords.
 keystore="$tmpdir/keystore.jks"
 
 echo "Generating release key (alias=release)..." >&2
