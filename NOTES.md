@@ -223,3 +223,6 @@
 - OnboardingCard reads hasTodosProvider (a StreamProvider) which depends on databaseProvider. Any test that renders InboxScreen must override hasTodosProvider to avoid pending-timer failures in fakeAsync — see inbox_screen_test.dart for the pattern.
 - `FocusSessionPlanningBanner` now reads three `StreamProvider`s (`hasTodosProvider`, `unfilteredInboxProvider`, `unfilteredNextActionsProvider`). Tests that assert the banner is **visible** need two pumps after `pumpWidget` — one for the stream to emit, one for the widget to rebuild. Tests that assert the banner is **hidden** work with one pump because the banner is also hidden during `AsyncLoading`.
 - After `tester.tap()` on a `GestureDetector`, use `pumpAndSettle()` (not `pump()`) to drain the gesture-debounce timer. This is safe when the tapped widget is immediately removed from the tree (its animation controller disposes synchronously).
+
+## 2026-05-15 (issue #293)
+- `ProcessToHandlers.nextActionDialog` flipped to default-on after auditing every `next`-rendering callsite — 3 of 4 wanted the dialog. Inbox-clarify opts out via `except: {nextActionDialog}` (its title-as-action coupling already supplies the phrase); the Next Actions weekly-review step excepts it too (no Next button to modify).

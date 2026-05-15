@@ -216,17 +216,16 @@ class _ReviewCard extends ConsumerWidget {
 
         const SizedBox(height: 28),
 
-        // Action buttons — defaults plus the dialog modifier on Next.
-        // Stale tasks add a "keep" variant (label depends on whether the task
-        // is delegated); Actionless tasks omit it because defining an action
-        // is required.
+        // Action buttons — defaults (which include the on-by-default dialog
+        // modifier on Next). Stale tasks add a "keep" variant (label depends
+        // on whether the task is delegated); Actionless tasks omit it because
+        // defining an action is required.
         const _FieldLabel('WHAT DO YOU WANT TO DO?'),
         const SizedBox(height: 12),
 
         ProcessToHandlers(
           todo: task,
           include: {
-            ProcessAction.nextActionDialog,
             if (showKeep) ProcessAction.keep,
           },
           labels: {
@@ -239,8 +238,8 @@ class _ReviewCard extends ConsumerWidget {
             final notifier =
                 ref.read(focusSessionPlanningProvider.notifier);
             if (action == ProcessAction.nextActionDialog) {
-              // Blank dialog text normalises nextActionText to null and
-              // leaves the task in the re-clarification queue — clear the
+              // A blank save does not route (the widget skips the write),
+              // so the row keeps whatever next action it had — clear the
               // action record and stay on the same item.
               final updated =
                   await ref.read(databaseProvider).todoDao.getTodo(task.id);

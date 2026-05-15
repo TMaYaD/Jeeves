@@ -403,10 +403,12 @@ The **Next** button in `FocusSessionPlanningScreen` is gated on `inboxIndex >= i
 
 The widget owns its DAO writes. Callsites speak `ProcessAction` (`keep`, `next`, `waitingFor`, `someday`, `done`, `trash`, plus the `nextActionDialog` modifier on `next`) and never see `RoutingKind`. Callsites that hold a `RoutingKind` from a session record translate at the read site via the co-located `RoutingKind.toProcessAction()` extension.
 
+The `nextActionDialog` modifier is **on by default** — promoting a Todo to Next always opens `NextActionDialog` to capture a phrase, so a freshly-promoted task lands on the Next list with a defined action rather than re-surfacing in the daily re-clarification queue. The inbox-clarify card opts out via `except: {nextActionDialog}` because it supplies the phrase through the title-as-action coupling instead; the Next Actions weekly-review step also excepts it (it has no Next button at all).
+
 API:
 
-- `include: Set<ProcessAction>` — surface non-default actions or modifiers (e.g. `keep`, `nextActionDialog`).
-- `except: Set<ProcessAction>` — hide default actions (e.g. the Waiting For step uses `except: {waitingFor}` because the user is already on a waiting item; Keep covers re-confirmation).
+- `include: Set<ProcessAction>` — surface non-default actions (e.g. `keep`). The `nextActionDialog` modifier is default-on, so it is removed via `except`, not added via `include`.
+- `except: Set<ProcessAction>` — hide default actions and the default-on `nextActionDialog` modifier (e.g. the Waiting For step uses `except: {waitingFor}` because the user is already on a waiting item, Keep covers re-confirmation; inbox-clarify uses `except: {nextActionDialog}` to keep Next as a one-tap route).
 - `disabled: Set<ProcessAction>` — render disabled-state but still draw the button (parent-owned validation, e.g. inbox card disables routes while the title is empty).
 - `labels: Map<ProcessAction, String>` — per-callsite label overrides.
 - `lastAction: ProcessAction?` — drives the "previously selected" affordance on the matching button when the user backs up to revisit an item.
@@ -414,7 +416,7 @@ API:
 
 Sub-flows owned by the widget:
 - The Waiting For button opens `PersonTagPickerSheet` and writes only the intent + delegate (person tags) on confirm; `next_action_text` is on the orthogonal user-action axis and is left alone.
-- The `nextActionDialog` modifier opens `NextActionDialog` (`app/lib/widgets/next_action_dialog.dart`) prefilled with the existing `next_action_text` and writes the new phrase on save — this is the only widget-internal path that mutates the user-action axis.
+- The `nextActionDialog` modifier opens `NextActionDialog` (`app/lib/widgets/next_action_dialog.dart`) prefilled with the existing `next_action_text` and writes the new phrase on save — this is the only widget-internal path that mutates the user-action axis. Because the modifier is default-on, this is the standard Next behaviour everywhere except the callsites that `except` it. The weekly review's Waiting For and Someday/Maybe steps rely on it so a promotion to Next captures a phrase; their `onAfterRoute` reads the phrase back and, if the user saved it blank, stays on the item rather than advancing an actionless task onto the Next list. Promoting a delegated Waiting For item to Next keeps its person tags (intent ⊥ delegate) — `applyRouting` only touches the delegate axis when `personTagIds` is passed.
 
 ### Planning nudges
 
