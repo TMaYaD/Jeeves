@@ -7,7 +7,7 @@
 /// change so they survive Skip and Back without any draft layer in the
 /// planning state.
 ///
-/// Renders the shared [InboxClarifyCard] for each item; this step is
+/// Renders the shared [ClarifyCard] for each item; this step is
 /// responsible only for advancing the snapshot cursor and recording each
 /// pick on the planning notifier (which drives the "previously selected"
 /// affordance and revert-on-re-route).
@@ -17,7 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
-import '../../../widgets/inbox_clarify_card.dart';
+import '../../../widgets/clarify_card.dart';
 import '../../../widgets/process_to_handlers.dart';
 
 class InboxClarificationStep extends ConsumerWidget {
@@ -42,12 +42,12 @@ class InboxClarificationStep extends ConsumerWidget {
     }
 
     final id = nav.current!;
-    return InboxClarifyCard(
+    return ClarifyCard(
       key: ValueKey(id),
       todoId: id,
       lastAction: inboxRoutings[nav.index]?.kind.toProcessAction(),
       onAfterRoute: (action) async {
-        // [InboxClarifyCard] does not include `keep` or the
+        // [ClarifyCard] does not include `keep` or the
         // `nextActionDialog` modifier, so neither action can actually
         // arrive here. The shared extension returns null for `keep`
         // (no routing recorded) and collapses `nextActionDialog` onto

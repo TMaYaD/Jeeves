@@ -67,7 +67,7 @@ class NextActionsStep extends ConsumerWidget {
       // the resolved action set reads cleanly.
       process: ProcessToHandlers(
         todo: todo,
-        include: const {ProcessAction.keep},
+        include: const {ProcessAction.keep, ProcessAction.reclarify},
         except: const {
           ProcessAction.next,
           ProcessAction.nextActionDialog,

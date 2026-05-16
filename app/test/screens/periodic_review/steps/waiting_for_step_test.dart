@@ -18,7 +18,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/periodic_review/steps/waiting_for_step.dart';
+import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 
 import '../../../test_helpers.dart';
@@ -62,10 +64,23 @@ Future<String> _insertWaitingForTodo(
   return id;
 }
 
-Widget _harness(GtdDatabase db) {
+Widget _harness(
+  GtdDatabase db, {
+  /// Todo IDs whose `taskDetailTodoProvider` should be overridden with a
+  /// static stream so the inner [ClarifyCard] (rendered by the `reclarify`
+  /// sub-flow) does not subscribe to drift's `watchTodo` — that
+  /// subscription installs a recurring timer that never settles in
+  /// `pumpAndSettle` and trips the post-test "Timer is still pending"
+  /// invariant.
+  List<String> reclarifyIds = const [],
+}) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      for (final id in reclarifyIds)
+        taskDetailTodoProvider(id).overrideWith((ref) async* {
+          yield await db.todoDao.getTodo(id);
+        }),
     ],
     child: const MaterialApp(
       home: Scaffold(body: WaitingForStep()),
@@ -76,8 +91,11 @@ Widget _harness(GtdDatabase db) {
 /// Pumps the step and loads the Waiting For snapshot via the real notifier
 /// so the card renders against the production plumbing.
 Future<ProviderContainer> _enterStep(
-    WidgetTester tester, GtdDatabase db) async {
-  await tester.pumpWidget(_harness(db));
+  WidgetTester tester,
+  GtdDatabase db, {
+  List<String> reclarifyIds = const [],
+}) async {
+  await tester.pumpWidget(_harness(db, reclarifyIds: reclarifyIds));
   final container = ProviderScope.containerOf(
     tester.element(find.byType(WaitingForStep)),
   );
@@ -186,6 +204,87 @@ void main() {
       final state = container.read(periodicReviewProvider);
       expect(state.waitingForRoutings, isEmpty);
       expect(state.waitingForNav.index, 0);
+    });
+  });
+
+  group('WaitingForStep — Re-clarify… sub-flow (#294)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    /// Enlarge the test viewport so the sub-flow's bottom action buttons
+    /// (Trash, Done…) fit on screen for `tester.tap`.
+    Future<void> useTallViewport(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() async => tester.binding.setSurfaceSize(null));
+    }
+
+    testWidgets('Re-clarify… is rendered as a button on the action bar',
+        (tester) async {
+      await _insertWaitingForTodo(db, id: 'wf1');
+      await _enterStep(tester, db);
+
+      expect(find.text('Re-clarify…'), findsOneWidget);
+    });
+
+    testWidgets(
+        'tapping Re-clarify… opens the ClarifyCard sub-flow on this item',
+        (tester) async {
+      await useTallViewport(tester);
+      await _insertWaitingForTodo(db, id: 'wf1');
+      await _enterStep(tester, db, reclarifyIds: const ['wf1']);
+
+      await tester.tap(find.text('Re-clarify…'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ClarifyCard), findsOneWidget);
+      expect(find.widgetWithText(AppBar, 'Re-clarify'), findsOneWidget);
+    });
+
+    testWidgets(
+        'routing to Trash inside the sub-flow records the routing and '
+        'advances the cursor', (tester) async {
+      await useTallViewport(tester);
+      await _insertWaitingForTodo(db, id: 'wf1');
+      final container =
+          await _enterStep(tester, db, reclarifyIds: const ['wf1']);
+
+      await tester.tap(find.text('Re-clarify…'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Trash'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('wf1');
+      expect(row?.intent, 'trash');
+
+      final state = container.read(periodicReviewProvider);
+      expect(state.waitingForRoutings[0], RoutingKind.trash);
+      expect(state.waitingForNav.isComplete, isTrue);
+    });
+
+    testWidgets(
+        'backing out of the sub-flow records no routing and advances like keep',
+        (tester) async {
+      await useTallViewport(tester);
+      await _insertWaitingForTodo(db, id: 'wf1');
+      final container =
+          await _enterStep(tester, db, reclarifyIds: const ['wf1']);
+
+      await tester.tap(find.text('Re-clarify…'));
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      final state = container.read(periodicReviewProvider);
+      expect(state.waitingForRoutings, isEmpty,
+          reason: 'a back-out of the sub-flow records no routing');
+      expect(state.waitingForNav.isComplete, isTrue,
+          reason: 'a back-out of the sub-flow advances the cursor like keep');
+      // The DB row is untouched: a back-out neither writes a routing nor
+      // mutates the intent.
+      final row = await db.todoDao.getTodo('wf1');
+      expect(row?.intent, 'next');
     });
   });
 }

@@ -1,5 +1,5 @@
 /// Step 0 of the Weekly Review wizard: clarify the inbox using the shared
-/// [InboxClarifyCard]. The card delegates its routing buttons to
+/// [ClarifyCard]. The card delegates its routing buttons to
 /// [ProcessToHandlers] which owns the DAO write; this step only advances the
 /// wizard's snapshot cursor and records the routing for the
 /// "previously selected" affordance.
@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/periodic_review_provider.dart';
-import '../../../widgets/inbox_clarify_card.dart';
+import '../../../widgets/clarify_card.dart';
 import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
 
@@ -53,7 +53,7 @@ class ZeroInboxStep extends ConsumerWidget {
 
     final index = nav.index;
     final id = nav.current!;
-    return InboxClarifyCard(
+    return ClarifyCard(
       key: ValueKey(id),
       todoId: id,
       lastAction: routings[index]?.toProcessAction(),

@@ -294,7 +294,9 @@ ReviewActionRecord? _toReviewActionRecord(ProcessAction action) =>
         const ReviewActionRecord(kind: ReviewActionKind.markDone),
       ProcessAction.trash =>
         const ReviewActionRecord(kind: ReviewActionKind.trash),
-      ProcessAction.nextActionDialog => null,
+      ProcessAction.nextActionDialog ||
+      ProcessAction.reclarify =>
+        null,
     };
 
 // ---------------------------------------------------------------------------

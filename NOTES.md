@@ -236,3 +236,6 @@
 
 ## 2026-05-15 (issue #293)
 - `ProcessToHandlers.nextActionDialog` flipped to default-on after auditing every `next`-rendering callsite — 3 of 4 wanted the dialog. Inbox-clarify opts out via `except: {nextActionDialog}` (its title-as-action coupling already supplies the phrase); the Next Actions weekly-review step excepts it too (no Next button to modify).
+
+## 2026-05-15 (issue #294)
+- `ProcessAction.reclarify` is a button (renders its own row, like `keep`) — distinct from `nextActionDialog`, which is a button-modifier. Sub-flow back-out maps to `ProcessAction.keep` so the review steps' existing "advance without recording" branch handles both back-outs and explicit Keeps with one path. `ClarifyMode.reclarify` guards the title-as-action mirror (write `next_action_text` only when the existing one is empty) so a re-clarification touch never clobbers a deliberately written phrase.
