@@ -44,9 +44,14 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   /// Upload locally-queued writes to the backend REST API.
   ///
   /// Each CRUD entry maps to the corresponding REST endpoint:
-  ///   - todos:     POST /todos/,       PATCH /todos/{id},      DELETE /todos/{id}
-  ///   - tags:      POST /tags/,        PATCH /tags/{id},       DELETE /tags/{id}
-  ///   - todo_tags: POST /todo_tags/,                           DELETE /todo_tags/{id}
+  ///   - todos:             POST /todos/,             PATCH /todos/{id},             DELETE /todos/{id}
+  ///   - tags:              POST /tags/,              PATCH /tags/{id},              DELETE /tags/{id}
+  ///   - todo_tags:         POST /todo_tags/,                                        DELETE /todo_tags/{id}
+  ///   - user_preferences:  POST /user_preferences/,  PATCH /user_preferences/{id},  DELETE /user_preferences/{id}
+  ///
+  /// Unknown tables must throw — otherwise `batch.complete()` would clear
+  /// the local CRUD queue without ever talking to the server, silently
+  /// losing the user's offline writes.
   ///
   /// Errors are classified per-entry so one bad row doesn't poison the batch:
   ///   - 4xx (except 401) is fatal for THAT entry — log it and skip; the
@@ -68,9 +73,13 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
             await _uploadTag(entry);
           case 'todo_tags':
             await _uploadTodoTag(entry);
+          case 'user_preferences':
+            await _uploadUserPreference(entry);
           default:
-            debugPrint(
-              'JevesBackendConnector: unhandled table ${entry.table}',
+            throw StateError(
+              'JevesBackendConnector: no upload handler for table '
+              '"${entry.table}". Add a case to uploadData() or rows on '
+              'this table will be silently lost from the CRUD queue.',
             );
         }
       } on DioException catch (e) {
@@ -126,6 +135,19 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
         break;
       case ps.UpdateType.delete:
         await _api.delete('/todo_tags/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadUserPreference(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/user_preferences/', body);
+      case ps.UpdateType.patch:
+        await _api.patch('/user_preferences/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/user_preferences/${entry.id}');
     }
   }
 

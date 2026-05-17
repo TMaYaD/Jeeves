@@ -174,6 +174,34 @@ class TagOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class UserPreferenceCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    key: str
+    value: str | None = None
+    updated_at: datetime
+
+    _normalise_updated_at = field_validator("updated_at", mode="before")(_normalise_drift_iso)
+
+
+class UserPreferenceUpdate(BaseModel):
+    # Both fields are optional in the schema but the connector always sends
+    # `updated_at` alongside any `value` change so LWW arbitration has a
+    # truthful timestamp.
+    value: str | None = None
+    updated_at: datetime | None = None
+
+    _normalise_updated_at = field_validator("updated_at", mode="before")(_normalise_drift_iso)
+
+
+class UserPreferenceOut(BaseModel):
+    id: str
+    key: str
+    value: str | None
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class TimeLogOut(BaseModel):
     id: str
     user_id: str
