@@ -140,25 +140,22 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
       true;
 });
 
-/// Single-source-of-truth predicate for "should the Weekly Review banner
-/// render?". Pure function so both `PeriodicReviewBanner` (which keeps
-/// its own inline `ref.watch` calls — changing that breaks its widget
-/// tests' pump timing) and the daily focus-session-planning banner (which
-/// reads it via [periodicReviewBannerVisibleProvider]) share one rule.
-bool computePeriodicReviewBannerVisible({
-  required bool enabled,
-  required bool dismissed,
-  required AsyncValue<bool> hasTodos,
-  required bool isDue,
+/// The "empty actionable" leg of the Weekly Review banner predicate:
+/// true when inbox + next are both empty but waiting-for or maybe still
+/// hold items. Extracted so both `PeriodicReviewBanner` and
+/// [periodicReviewBannerVisibleProvider] share the same rule.
+///
+/// Stays as a pure function (over `AsyncValue`s) rather than as another
+/// Provider so callers can keep the original short-circuit order — the
+/// cheap `enabled` / `dismissed` / `hasTodos` watches must run before
+/// the list watches subscribe `unfilteredInboxProvider` et al., which
+/// pull in the full `databaseProvider` chain.
+bool emptyActionableBannerTrigger({
   required AsyncValue<List<Todo>> inbox,
   required AsyncValue<List<Todo>> next,
   required AsyncValue<List<Todo>> waiting,
   required AsyncValue<List<Todo>> maybe,
 }) {
-  if (!enabled) return false;
-  if (dismissed) return false;
-  if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
-  if (isDue) return true;
   if (!inbox.hasValue ||
       !next.hasValue ||
       !waiting.hasValue ||
@@ -173,12 +170,20 @@ bool computePeriodicReviewBannerVisible({
 /// True when the Weekly Review banner would render. Used by the daily
 /// focus-session-planning banner so it can yield the slot whenever the
 /// weekly banner is taking it — the two never stack.
+///
+/// The cheap watches (`enabled`, `dismissed`, `hasTodos`) run before
+/// the list watches so callers gated off via `enabled=false` never pay
+/// the cost of subscribing to the database-backed list streams.
 final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
-  return computePeriodicReviewBannerVisible(
-    enabled: ref.watch(periodicReviewBannerEnabledProvider),
-    dismissed: ref.watch(periodicReviewBannerDismissedTodayProvider),
-    hasTodos: ref.watch(hasTodosProvider),
-    isDue: ref.watch(periodicReviewIsDueProvider),
+  if (!ref.watch(periodicReviewBannerEnabledProvider)) return false;
+  if (ref.watch(periodicReviewBannerDismissedTodayProvider)) return false;
+
+  final hasTodos = ref.watch(hasTodosProvider);
+  if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
+
+  if (ref.watch(periodicReviewIsDueProvider)) return true;
+
+  return emptyActionableBannerTrigger(
     inbox: ref.watch(unfilteredInboxProvider),
     next: ref.watch(unfilteredNextActionsProvider),
     waiting: ref.watch(unfilteredWaitingForProvider),

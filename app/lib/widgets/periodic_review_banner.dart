@@ -44,23 +44,36 @@ class PeriodicReviewBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Inline `ref.watch` calls (not via periodicReviewBannerVisibleProvider)
-    // keep the widget's rebuild dependency graph exactly as its existing
-    // tests were calibrated for — routing the eight watches through a
-    // derived Provider<bool> measurably changes pump-to-emission timing
-    // and was breaking the tests. The predicate itself is deduped via
-    // computePeriodicReviewBannerVisible.
-    final visible = computePeriodicReviewBannerVisible(
-      enabled: ref.watch(periodicReviewBannerEnabledProvider),
-      dismissed: ref.watch(periodicReviewBannerDismissedTodayProvider),
-      hasTodos: ref.watch(hasTodosProvider),
-      isDue: ref.watch(periodicReviewIsDueProvider),
-      inbox: ref.watch(unfilteredInboxProvider),
-      next: ref.watch(unfilteredNextActionsProvider),
-      waiting: ref.watch(unfilteredWaitingForProvider),
-      maybe: ref.watch(unfilteredMaybeProvider),
-    );
-    if (!visible) return const SizedBox.shrink();
+    // Cheap watches first — gating callers (e.g. tag_cloud_test) flip
+    // `periodicReviewBannerEnabledProvider` off to suppress this banner
+    // without overriding `databaseProvider`, so the list watches below
+    // must not run in that case.
+    if (!ref.watch(periodicReviewBannerEnabledProvider)) {
+      return const SizedBox.shrink();
+    }
+    if (ref.watch(periodicReviewBannerDismissedTodayProvider)) {
+      return const SizedBox.shrink();
+    }
+
+    final hasTodos = ref.watch(hasTodosProvider);
+    if (!hasTodos.hasValue || !hasTodos.requireValue) {
+      return const SizedBox.shrink();
+    }
+
+    final isDue = ref.watch(periodicReviewIsDueProvider);
+    final inbox = ref.watch(unfilteredInboxProvider);
+    final next = ref.watch(unfilteredNextActionsProvider);
+    final waiting = ref.watch(unfilteredWaitingForProvider);
+    final maybe = ref.watch(unfilteredMaybeProvider);
+    if (!isDue &&
+        !emptyActionableBannerTrigger(
+          inbox: inbox,
+          next: next,
+          waiting: waiting,
+          maybe: maybe,
+        )) {
+      return const SizedBox.shrink();
+    }
 
     return _BannerContent(
       key: const Key('periodic_review_banner_visible'),
