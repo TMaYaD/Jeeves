@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-05-17 (branch `claude/fix-banner-persistence-rzQsa`)
+- `user_preferences` had no REST upload route on the backend and no case in `JevesBackendConnector.uploadData`'s switch. The `default:` branch was a silent `debugPrint`, so the CRUD entry fell through to `batch.complete()` and was deleted from the local queue without ever talking to the server. Next sync pull then reconciled the row away because the server had no record. End result: any local-only `user_preferences` write (e.g. a banner dismissal, `last_completed`) vanished on the first online round-trip. Fix: add `POST/PATCH/DELETE /user_preferences/`, add the connector case, and turn `default:` into a `throw StateError` so future Synced tables can't repeat the same data-loss footgun silently.
+- The `_isFatal` 4xx-drop behaviour in the connector is dormant for the current bug — no handler ran today, so no `DioException` was ever thrown. It becomes a live data-loss risk the moment any handler can hit a 4xx (e.g. the new `user_preferences` route returning 409 on `(user_id, key)` collisions). Tracked separately as #305; out of scope here.
+- Reconciliation when local row exists but server snapshot omits it is the read-side mirror of this bug and is **not** covered by adding the upload route — see #306. The right resolution likely differs per `user_preferences` key (LWW vs set-merge vs hold-until-acked); audit needed.
+
 ## 2026-05-15 (issue #247)
 - Multi-select on Step 3 (Review Next Actions) lives in widget-local state on `PlanSummaryStep`; no provider/DAO change. `selectTask(id)` is already idempotent and "Add to Today" simply loops it. The committable set is filtered against the current pending snapshot so a row deleted between selection and commit can't be falsely reported as added.
 - The contextual multi-select bar is rendered **inside** `PlanSummaryStep`, above the scrollable list — not in the screen-level app bar. The app bar slot is owned by `FocusSessionPlanningScreen` and is busy with step progress + title; reusing it would mean either hiding step state or fighting the planning header layout.
