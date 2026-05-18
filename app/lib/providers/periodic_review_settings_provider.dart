@@ -140,25 +140,25 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
       true;
 });
 
-/// True when the Weekly Review banner would render given current state.
-///
-/// Mirrors the visibility predicate in `PeriodicReviewBanner` so other UI
-/// (notably the daily focus-session-planning banner) can suppress itself
-/// while the weekly banner is occupying the slot — preventing both banners
-/// from stacking when the weekly review is due.
-final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
-  if (!ref.watch(periodicReviewBannerEnabledProvider)) return false;
-  if (ref.watch(periodicReviewBannerDismissedTodayProvider)) return false;
-
-  final hasTodos = ref.watch(hasTodosProvider);
+/// Single-source-of-truth predicate for "should the Weekly Review banner
+/// render?". Pure function so both `PeriodicReviewBanner` (which keeps
+/// its own inline `ref.watch` calls — changing that breaks its widget
+/// tests' pump timing) and the daily focus-session-planning banner (which
+/// reads it via [periodicReviewBannerVisibleProvider]) share one rule.
+bool computePeriodicReviewBannerVisible({
+  required bool enabled,
+  required bool dismissed,
+  required AsyncValue<bool> hasTodos,
+  required bool isDue,
+  required AsyncValue<List<Todo>> inbox,
+  required AsyncValue<List<Todo>> next,
+  required AsyncValue<List<Todo>> waiting,
+  required AsyncValue<List<Todo>> maybe,
+}) {
+  if (!enabled) return false;
+  if (dismissed) return false;
   if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
-
-  if (ref.watch(periodicReviewIsDueProvider)) return true;
-
-  final inbox = ref.watch(unfilteredInboxProvider);
-  final next = ref.watch(unfilteredNextActionsProvider);
-  final waiting = ref.watch(unfilteredWaitingForProvider);
-  final maybe = ref.watch(unfilteredMaybeProvider);
+  if (isDue) return true;
   if (!inbox.hasValue ||
       !next.hasValue ||
       !waiting.hasValue ||
@@ -168,6 +168,22 @@ final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
   return inbox.requireValue.isEmpty &&
       next.requireValue.isEmpty &&
       (waiting.requireValue.isNotEmpty || maybe.requireValue.isNotEmpty);
+}
+
+/// True when the Weekly Review banner would render. Used by the daily
+/// focus-session-planning banner so it can yield the slot whenever the
+/// weekly banner is taking it — the two never stack.
+final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
+  return computePeriodicReviewBannerVisible(
+    enabled: ref.watch(periodicReviewBannerEnabledProvider),
+    dismissed: ref.watch(periodicReviewBannerDismissedTodayProvider),
+    hasTodos: ref.watch(hasTodosProvider),
+    isDue: ref.watch(periodicReviewIsDueProvider),
+    inbox: ref.watch(unfilteredInboxProvider),
+    next: ref.watch(unfilteredNextActionsProvider),
+    waiting: ref.watch(unfilteredWaitingForProvider),
+    maybe: ref.watch(unfilteredMaybeProvider),
+  );
 });
 
 // ---------------------------------------------------------------------------
