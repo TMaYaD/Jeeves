@@ -142,23 +142,31 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
 
 /// True when the Weekly Review banner would render given current state.
 ///
-/// Mirrors the visibility predicate in `PeriodicReviewBanner` so other UI
-/// (notably the daily focus-session-planning banner) can suppress itself
-/// while the weekly banner is occupying the slot — preventing both banners
-/// from stacking when the weekly review is due.
+/// Single source of truth for the visibility predicate — both
+/// `PeriodicReviewBanner` and the daily `FocusSessionPlanningBanner`
+/// watch this provider (the daily banner uses it to yield the slot so the
+/// two never stack).
+///
+/// All eight dependencies are watched unconditionally — the obvious
+/// early-return shape (skipping the list watches when `isDue` is true)
+/// changes the dependency graph between `isDue==true` and `isDue==false`
+/// frames, which leaves widget tests with steady-state values that the
+/// inline predicate had already settled. Watching everything every time
+/// keeps the rebuild semantics identical to the original inline build.
 final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
-  if (!ref.watch(periodicReviewBannerEnabledProvider)) return false;
-  if (ref.watch(periodicReviewBannerDismissedTodayProvider)) return false;
-
+  final enabled = ref.watch(periodicReviewBannerEnabledProvider);
+  final dismissed = ref.watch(periodicReviewBannerDismissedTodayProvider);
   final hasTodos = ref.watch(hasTodosProvider);
-  if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
-
-  if (ref.watch(periodicReviewIsDueProvider)) return true;
-
+  final isDue = ref.watch(periodicReviewIsDueProvider);
   final inbox = ref.watch(unfilteredInboxProvider);
   final next = ref.watch(unfilteredNextActionsProvider);
   final waiting = ref.watch(unfilteredWaitingForProvider);
   final maybe = ref.watch(unfilteredMaybeProvider);
+
+  if (!enabled) return false;
+  if (dismissed) return false;
+  if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
+  if (isDue) return true;
   if (!inbox.hasValue ||
       !next.hasValue ||
       !waiting.hasValue ||
