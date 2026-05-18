@@ -18,6 +18,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../providers/gtd_lists_provider.dart';
+import '../providers/onboarding_provider.dart';
 import '../providers/periodic_review_settings_provider.dart';
 
 class PeriodicReviewBanner extends ConsumerWidget {
@@ -42,8 +44,36 @@ class PeriodicReviewBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (!ref.watch(periodicReviewBannerVisibleProvider)) {
+    if (!ref.watch(periodicReviewBannerEnabledProvider)) {
       return const SizedBox.shrink();
+    }
+    if (ref.watch(periodicReviewBannerDismissedTodayProvider)) {
+      return const SizedBox.shrink();
+    }
+
+    final hasTodos = ref.watch(hasTodosProvider);
+    if (!hasTodos.hasValue || !hasTodos.requireValue) {
+      return const SizedBox.shrink();
+    }
+
+    final isDue = ref.watch(periodicReviewIsDueProvider);
+    final inbox = ref.watch(unfilteredInboxProvider);
+    final next = ref.watch(unfilteredNextActionsProvider);
+    final waiting = ref.watch(unfilteredWaitingForProvider);
+    final maybe = ref.watch(unfilteredMaybeProvider);
+    if (!isDue) {
+      if (!inbox.hasValue ||
+          !next.hasValue ||
+          !waiting.hasValue ||
+          !maybe.hasValue) {
+        return const SizedBox.shrink();
+      }
+      final emptyActionableTrigger = inbox.requireValue.isEmpty &&
+          next.requireValue.isEmpty &&
+          (waiting.requireValue.isNotEmpty || maybe.requireValue.isNotEmpty);
+      if (!emptyActionableTrigger) {
+        return const SizedBox.shrink();
+      }
     }
 
     return _BannerContent(
