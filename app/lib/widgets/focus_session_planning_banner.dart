@@ -6,6 +6,7 @@ import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_planning_settings_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/onboarding_provider.dart';
+import '../providers/periodic_review_settings_provider.dart';
 
 /// A dismissible banner shown at the top of shell views when the daily
 /// planning ritual is incomplete and the user hasn't dismissed it today.
@@ -66,6 +67,13 @@ class FocusSessionPlanningBanner extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(focusSessionPlanningSettingsProvider);
     if (!settings.bannerEnabled) return const SizedBox.shrink();
+
+    // Yield the slot when the weekly review banner is taking it, so the two
+    // banners never stack. Re-evaluates automatically once the user dismisses
+    // the weekly banner or completes the review.
+    if (ref.watch(periodicReviewBannerVisibleProvider)) {
+      return const SizedBox.shrink();
+    }
 
     final hasTodos = ref.watch(hasTodosProvider);
     if (!hasTodos.hasValue) return const SizedBox.shrink();

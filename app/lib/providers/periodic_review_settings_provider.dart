@@ -13,6 +13,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/notification_service.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
+import 'gtd_lists_provider.dart';
+import 'onboarding_provider.dart';
 import 'synced_preferences_provider.dart';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
@@ -136,6 +138,36 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
           ?.value
           .get<bool>(_kBannerEnabledKey) ??
       true;
+});
+
+/// True when the Weekly Review banner would render given current state.
+///
+/// Mirrors the visibility predicate in `PeriodicReviewBanner` so other UI
+/// (notably the daily focus-session-planning banner) can suppress itself
+/// while the weekly banner is occupying the slot — preventing both banners
+/// from stacking when the weekly review is due.
+final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
+  if (!ref.watch(periodicReviewBannerEnabledProvider)) return false;
+  if (ref.watch(periodicReviewBannerDismissedTodayProvider)) return false;
+
+  final hasTodos = ref.watch(hasTodosProvider);
+  if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
+
+  if (ref.watch(periodicReviewIsDueProvider)) return true;
+
+  final inbox = ref.watch(unfilteredInboxProvider);
+  final next = ref.watch(unfilteredNextActionsProvider);
+  final waiting = ref.watch(unfilteredWaitingForProvider);
+  final maybe = ref.watch(unfilteredMaybeProvider);
+  if (!inbox.hasValue ||
+      !next.hasValue ||
+      !waiting.hasValue ||
+      !maybe.hasValue) {
+    return false;
+  }
+  return inbox.requireValue.isEmpty &&
+      next.requireValue.isEmpty &&
+      (waiting.requireValue.isNotEmpty || maybe.requireValue.isNotEmpty);
 });
 
 // ---------------------------------------------------------------------------
