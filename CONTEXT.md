@@ -1,3 +1,5 @@
+<!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
+
 # Jeeves
 
 Jeeves is an opinionated, offline-first, AI-augmented Getting Things Done (GTD) productivity app. This glossary defines the vocabulary of the system across its bounded contexts (GTD Core, Engagement, Ceremony Framework, Sync, AI Augmentation — codified as each is grilled).
@@ -124,11 +126,11 @@ The implicit List of Outcomes the user has deferred. Defined by: `Intent = maybe
 _Avoid_: Maybe, Later, Backlog
 
 **Done**:
-The implicit List of completed Outcomes. Defined by: `Completion is not null`.
+The implicit List of completed Outcomes the user still considers part of their record. Defined by: `Completion is not null` AND `Intent != trash`. A trashed-and-completed Outcome surfaces in **Trash**, not Done — the user's stance to discard takes precedence over the historical Completion fact, so the GTD lists remain pairwise disjoint.
 _Avoid_: Completed, Finished, Archive (Archive implies removal from active concerns; Done is just the achieved set)
 
 **Trash**:
-The implicit List of Outcomes the user has discarded. Defined by: `Intent = trash`. User-facing surface deferred.
+The implicit List of Outcomes the user has discarded. Defined by: `Intent = trash` (regardless of Completion). User-facing surface deferred.
 _Avoid_: Deleted, Removed (the row persists; Intent expresses the user's stance)
 
 #### Relationships
@@ -155,28 +157,28 @@ _Avoid_: Deleted, Removed (the row persists; Intent expresses the user's stance)
 
 > **Dev:** "If the user dictates 'remind me to call John' into the inbox, is that an Action?"
 > **Domain expert:** "It's a Capture. During clarification it becomes an Outcome — 'Catch up with John' — whose current Action is 'call John'. The Capture is the raw input; clarification produces the structure."
-
+>
 > **Dev:** "When the user finishes the current Action, is the Outcome automatically done?"
 > **Domain expert:** "Only if that Action was the last one needed. Otherwise the Outcome enters the no-current-Action state, and the user re-clarifies — possibly by promoting a planned Action."
-
+>
 > **Dev:** "If the user types three planned Actions during clarification but doesn't promote any, what's the Outcome's status?"
 > **Domain expert:** "It has three planned Actions and no current Action. The Outcome is on the radar but nothing is engageable yet. The user has externalised their thinking — the next clarification is where one gets promoted."
-
+>
 > **Dev:** "How can an Outcome have a Blocker *and* a current Action at the same time? Isn't a block the absence of a doable action?"
 > **Domain expert:** "No. The Blocker is on the Outcome — the outcome is waiting on Trixy. The current Action is 'follow up with Trixy' — something the user can do *while waiting*, that might even resolve the Blocker. Acting and waiting coexist."
-
+>
 > **Dev:** "If I move an Outcome to Someday/Maybe and then mark it done later, what was its Intent during the gap?"
 > **Domain expert:** "`maybe`. Intent is willingness — the user was willing to do it eventually. Completion is what happened. They're independent axes; the gap isn't a contradiction."
-
+>
 > **Dev:** "If the user finishes the current Action in a Focus session, does that stamp `last_clarified_at`?"
 > **Domain expert:** "No. Completion of an Action is engagement, not clarification. It's the *signal* that re-clarification is now needed — the Outcome flips to Stale — but the act of finishing isn't itself an act of thinking about the Outcome. The user has to come back and clarify what's next; that re-clarification is what stamps."
-
+>
 > **Dev:** "And declaring the *Outcome* itself done?"
 > **Domain expert:** "Stamps. Saying 'this is achieved' is a structural decision about the Outcome — a clarification act. Same for trashing."
-
+>
 > **Dev:** "If a user moves an Outcome from Next to Someday/Maybe, is the Outcome 'removed from' Next and 'added to' Someday/Maybe?"
 > **Domain expert:** "No — neither List has a membership column. Both are implicit Lists. The user changes the Outcome's Intent from `next` to `maybe`, and the Outcome's membership in both Lists changes as a consequence of the filter. The Lists are projections, not buckets — the model doesn't move the Outcome anywhere."
-
+>
 > **Dev:** "What about the Focus Session's task list? Is that the same kind of thing?"
 > **Domain expert:** "No — that's an explicit List. It has a stored membership (which Outcomes were selected for today). Both are Lists, but the explicit/implicit split matters for how mutation works: adding to Next means changing an Outcome's Intent; adding to a Focus Session's task list means writing a membership row."
 
