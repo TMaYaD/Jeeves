@@ -1,0 +1,7 @@
+# Capture distinct from Outcome
+
+The current schema conflates two states into one `Todo` row via a `clarified` boolean: unclarified inbox items (`clarified=false`) and clarified Outcomes (`clarified=true`). The conceptual model treats them as distinct entities.
+
+Capture and Outcome are separate concepts in the model. A **Capture** is a raw, unprocessed fragment the user has put into the system because it has their attention — pending clarification, not yet an Outcome. An **Outcome** is the product of clarifying one or more Captures. The relationship between them is many-to-many: multiple Captures may merge into one Outcome during clarification; one Capture may spawn multiple Outcomes. Implementation timing is a separate concern — the conceptual split holds regardless of when the schema is refactored.
+
+Forcing capture to fit the Outcome shape (must have a title, must have an Intent, must eventually have an Action) puts the cart before the horse. Many GTD captures are reference material, duplicates, or fragments that get merged or discarded during clarification; the conflation under `clarified=false` loses that semantics. The M:N relationship preserves it: a busy week of fragmentary thoughts can clarify into a coherent set of Outcomes without losing the trail of how the user got there, and an Outcome's clarification history is itself useful information for retrospection and AI augmentation.
