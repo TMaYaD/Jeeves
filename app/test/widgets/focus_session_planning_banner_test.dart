@@ -7,6 +7,7 @@ import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/widgets/focus_session_planning_banner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
@@ -67,6 +68,7 @@ Widget _buildBanner({
   required bool planningComplete,
   required bool bannerDismissed,
   required bool bannerEnabled,
+  bool weeklyReviewBannerVisible = false,
   Stream<bool>? hasTodosStream,
   Stream<List<Todo>>? inboxStream,
   Stream<List<Todo>>? nextStream,
@@ -110,6 +112,8 @@ Widget _buildBanner({
       focusSessionPlanningSettingsProvider.overrideWith(
           () => _MockFocusSessionPlanningSettingsNotifier(settings)),
       focusSessionPlanningProvider.overrideWith(() => mockPlanning),
+      periodicReviewBannerVisibleProvider
+          .overrideWith((_) => weeklyReviewBannerVisible),
       hasTodosProvider.overrideWith(
           (ref) => hasTodosStream ?? Stream.value(true)),
       unfilteredInboxProvider.overrideWith(
@@ -336,5 +340,40 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Weekly review precedence
+  // ---------------------------------------------------------------------------
+
+  testWidgets('banner hidden when weekly review banner is visible',
+      (tester) async {
+    await _pumpBanner(
+      tester,
+      _buildBanner(
+        planningComplete: false,
+        bannerDismissed: false,
+        bannerEnabled: true,
+        weeklyReviewBannerVisible: true,
+      ),
+    );
+
+    expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
+  });
+
+  testWidgets(
+      'banner visible when weekly review banner is not visible',
+      (tester) async {
+    await _pumpBanner(
+      tester,
+      _buildBanner(
+        planningComplete: false,
+        bannerDismissed: false,
+        bannerEnabled: true,
+        weeklyReviewBannerVisible: false,
+      ),
+    );
+
+    expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
   });
 }

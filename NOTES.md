@@ -244,3 +244,6 @@
 
 ## 2026-05-15 (issue #294)
 - `ProcessAction.reclarify` is a button (renders its own row, like `keep`) — distinct from `nextActionDialog`, which is a button-modifier. Sub-flow back-out maps to `ProcessAction.keep` so the review steps' existing "advance without recording" branch handles both back-outs and explicit Keeps with one path. `ClarifyMode.reclarify` guards the title-as-action mirror (write `next_action_text` only when the existing one is empty) so a re-clarification touch never clobbers a deliberately written phrase.
+
+## 2026-05-18
+- `periodicReviewBannerVisibleProvider` consolidates the weekly banner's visibility predicate so `FocusSessionPlanningBanner` can yield the slot by watching one provider — keeps the precedence rule (REQUIREMENTS.md §Daily Planning Entry) from drifting between the two widgets.

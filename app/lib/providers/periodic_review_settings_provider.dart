@@ -13,6 +13,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/notification_service.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
+import 'gtd_lists_provider.dart';
+import 'onboarding_provider.dart';
 import 'synced_preferences_provider.dart';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
@@ -136,6 +138,57 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
           ?.value
           .get<bool>(_kBannerEnabledKey) ??
       true;
+});
+
+/// The "empty actionable" leg of the Weekly Review banner predicate:
+/// true when inbox + next are both empty but waiting-for or maybe still
+/// hold items. Extracted so both `PeriodicReviewBanner` and
+/// [periodicReviewBannerVisibleProvider] share the same rule.
+///
+/// Stays as a pure function (over `AsyncValue`s) rather than as another
+/// Provider so callers can keep the original short-circuit order — the
+/// cheap `enabled` / `dismissed` / `hasTodos` watches must run before
+/// the list watches subscribe `unfilteredInboxProvider` et al., which
+/// pull in the full `databaseProvider` chain.
+bool emptyActionableBannerTrigger({
+  required AsyncValue<List<Todo>> inbox,
+  required AsyncValue<List<Todo>> next,
+  required AsyncValue<List<Todo>> waiting,
+  required AsyncValue<List<Todo>> maybe,
+}) {
+  if (!inbox.hasValue ||
+      !next.hasValue ||
+      !waiting.hasValue ||
+      !maybe.hasValue) {
+    return false;
+  }
+  return inbox.requireValue.isEmpty &&
+      next.requireValue.isEmpty &&
+      (waiting.requireValue.isNotEmpty || maybe.requireValue.isNotEmpty);
+}
+
+/// True when the Weekly Review banner would render. Used by the daily
+/// focus-session-planning banner so it can yield the slot whenever the
+/// weekly banner is taking it — the two never stack.
+///
+/// The cheap watches (`enabled`, `dismissed`, `hasTodos`) run before
+/// the list watches so callers gated off via `enabled=false` never pay
+/// the cost of subscribing to the database-backed list streams.
+final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
+  if (!ref.watch(periodicReviewBannerEnabledProvider)) return false;
+  if (ref.watch(periodicReviewBannerDismissedTodayProvider)) return false;
+
+  final hasTodos = ref.watch(hasTodosProvider);
+  if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
+
+  if (ref.watch(periodicReviewIsDueProvider)) return true;
+
+  return emptyActionableBannerTrigger(
+    inbox: ref.watch(unfilteredInboxProvider),
+    next: ref.watch(unfilteredNextActionsProvider),
+    waiting: ref.watch(unfilteredWaitingForProvider),
+    maybe: ref.watch(unfilteredMaybeProvider),
+  );
 });
 
 // ---------------------------------------------------------------------------

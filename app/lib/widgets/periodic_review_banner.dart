@@ -44,6 +44,10 @@ class PeriodicReviewBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Cheap watches first — gating callers (e.g. tag_cloud_test) flip
+    // `periodicReviewBannerEnabledProvider` off to suppress this banner
+    // without overriding `databaseProvider`, so the list watches below
+    // must not run in that case.
     if (!ref.watch(periodicReviewBannerEnabledProvider)) {
       return const SizedBox.shrink();
     }
@@ -61,19 +65,14 @@ class PeriodicReviewBanner extends ConsumerWidget {
     final next = ref.watch(unfilteredNextActionsProvider);
     final waiting = ref.watch(unfilteredWaitingForProvider);
     final maybe = ref.watch(unfilteredMaybeProvider);
-    if (!isDue) {
-      if (!inbox.hasValue ||
-          !next.hasValue ||
-          !waiting.hasValue ||
-          !maybe.hasValue) {
-        return const SizedBox.shrink();
-      }
-      final emptyActionableTrigger = inbox.requireValue.isEmpty &&
-          next.requireValue.isEmpty &&
-          (waiting.requireValue.isNotEmpty || maybe.requireValue.isNotEmpty);
-      if (!emptyActionableTrigger) {
-        return const SizedBox.shrink();
-      }
+    if (!isDue &&
+        !emptyActionableBannerTrigger(
+          inbox: inbox,
+          next: next,
+          waiting: waiting,
+          maybe: maybe,
+        )) {
+      return const SizedBox.shrink();
     }
 
     return _BannerContent(
