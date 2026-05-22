@@ -1,0 +1,9 @@
+# Cadence as anchor-with-period today, strategy deferred
+
+A Cadence today carries two properties — shape (daily, weekly) and anchor (specific moment within the shape) — and a Ritual's period runs anchor-to-anchor. The Cadence Trigger fires when "current time has crossed into a new period AND the Ritual has not been completed in this period." This is the simplest model that supports the three current Rituals (Daily Planning, Evening Shutdown, Weekly Review).
+
+A richer alternative would treat Cadence as a strategy abstraction: per-Ritual policy over how the next due moment is computed. Plausible strategies include sliding-from-last-completion (Weekly Review on Wednesday → next due in 7 days from Wednesday), calendar-aligned (always on Monday regardless of when the previous one happened), user-tunable per-Ritual (the user picks which to apply), one-off overrides (vacation skip), and "wait until the user is in a state of attention" (event-driven). Each Ritual would carry its own Cadence strategy implementing a `next_due()` and `current_period()` interface.
+
+We chose the simple model. Introducing the strategy abstraction now would create a Strategy-shaped seam for a single concrete strategy ("anchor-to-anchor"); one adapter is a hypothetical seam, not a real one. Real diversity in Cadence shapes does not exist in the product today and will not exist until the user asks for it.
+
+The decision is reversible at moderate cost: when a second strategy is needed, today's anchor-and-period properties become the implementation of one strategy, and the Cadence concept is broadened to a strategy-with-anchor-strategy-as-the-current-default. Until then, naming Cadence as if it were already a strategy invents a vocabulary the model does not earn. A future ADR will record the strategy split if and when it lands.
