@@ -434,12 +434,14 @@ void main() {
       expect(row?.lastClarifiedAt, isNotNull);
     });
 
-    test('notes-only change does not stamp lastClarifiedAt', () async {
+    test('notes edit stamps lastClarifiedAt', () async {
+      // Per CONTEXT.md ~L152: title/notes/Intent/due-date edits are clarifying
+      // micro-acts and must stamp last_clarified_at.
       await _insertTodo(db, id: 'u3', title: 'Task');
       await db.todoDao.updateFields('u3', notes: 'New notes');
 
       final row = await db.todoDao.getTodo('u3');
-      expect(row?.lastClarifiedAt, isNull);
+      expect(row?.lastClarifiedAt, isNotNull);
     });
 
     test('clearDueDate stamps lastClarifiedAt', () async {
@@ -450,6 +452,103 @@ void main() {
       await db.todoDao.updateFields('u4', clearDueDate: true);
 
       final row = await db.todoDao.getTodo('u4');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
+
+    test('energyLevel edit stamps lastClarifiedAt', () async {
+      // energyLevel is an Action cursor-field (ADR-0001). Action mutations
+      // count as clarifying micro-acts per CONTEXT.md ~L152.
+      await _insertTodo(db, id: 'u5', title: 'Task');
+      await db.todoDao.updateFields('u5', energyLevel: 'high');
+
+      final row = await db.todoDao.getTodo('u5');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
+
+    test('clearEnergyLevel stamps lastClarifiedAt', () async {
+      await _insertTodo(db, id: 'u5c', title: 'Task');
+      await db.todoDao.updateFields('u5c', clearEnergyLevel: true);
+
+      final row = await db.todoDao.getTodo('u5c');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
+
+    test('timeEstimate edit stamps lastClarifiedAt', () async {
+      // timeEstimate is an Action cursor-field (ADR-0001). Action mutations
+      // count as clarifying micro-acts per CONTEXT.md ~L152.
+      await _insertTodo(db, id: 'u6', title: 'Task');
+      await db.todoDao.updateFields('u6', timeEstimate: 30);
+
+      final row = await db.todoDao.getTodo('u6');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
+
+    test('clearTimeEstimate stamps lastClarifiedAt', () async {
+      await _insertTodo(db, id: 'u6c', title: 'Task');
+      await db.todoDao.updateFields('u6c', clearTimeEstimate: true);
+
+      final row = await db.todoDao.getTodo('u6c');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
+  });
+
+  group('TodoDao — rescheduleTask stamps lastClarifiedAt', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('rescheduleTask stamps lastClarifiedAt', () async {
+      // Due-date edit is a clarifying micro-act per CONTEXT.md ~L152.
+      await _insertTodo(db, id: 'rs1', title: 'Reschedulable');
+      await db.todoDao.rescheduleTask('rs1', DateTime(2026, 5, 1));
+
+      final row = await db.todoDao.getTodo('rs1');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
+  });
+
+  group('TodoDao — restore stamps lastClarifiedAt', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('restore stamps lastClarifiedAt', () async {
+      // Restoring a done/trashed Outcome is an Intent edit (sets
+      // intent='next', clears done_at) — a clarifying micro-act.
+      await _insertTodo(db, id: 'res1', title: 'Task');
+      await db.todoDao.markDone('res1');
+      // Wipe the stamp set by markDone so we can verify restore stamps too.
+      await (db.update(db.todos)..where((t) => t.id.equals('res1')))
+          .write(const TodosCompanion(lastClarifiedAt: Value(null)));
+
+      await db.todoDao.restore('res1');
+
+      final row = await db.todoDao.getTodo('res1');
+      expect(row?.lastClarifiedAt, isNotNull);
+    });
+  });
+
+  group('TodoDao — clearDoneAt stamps lastClarifiedAt', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('clearDoneAt stamps lastClarifiedAt', () async {
+      // Reverting a Completion is a structural decision about the Outcome —
+      // the dual of marking done, which itself stamps. Per CONTEXT.md ~L152
+      // Outcome completion stamps; un-doing it is the same kind of micro-act.
+      await _insertTodo(db, id: 'cd1', title: 'Task');
+      await db.todoDao.markDone('cd1');
+      // Wipe the stamp set by markDone.
+      await (db.update(db.todos)..where((t) => t.id.equals('cd1')))
+          .write(const TodosCompanion(lastClarifiedAt: Value(null)));
+
+      await db.todoDao.clearDoneAt('cd1');
+
+      final row = await db.todoDao.getTodo('cd1');
       expect(row?.lastClarifiedAt, isNotNull);
     });
   });

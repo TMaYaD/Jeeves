@@ -68,6 +68,10 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   /// Sets clarified = true on the given inbox item, optionally updating
   /// [intent] and [dueDate].
   ///
+  /// Stamps [last_clarified_at]: promoting a Capture (clarified=false) to a
+  /// clarified Outcome IS Outcome creation per ADR-0006, and Outcome creation
+  /// is a clarifying micro-act per CONTEXT.md.
+  ///
   /// Returns the number of affected rows (0 if already clarified or not found,
   /// 1 on success). Callers can use this to guard against double-processing.
   Future<int> processInboxItem(
@@ -75,6 +79,7 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
     String? intent,
     DateTime? dueDate,
   }) {
+    final ts = DateTime.now();
     return (update(todos)
           ..where(
             (t) => t.id.equals(id) & t.clarified.equals(false),
@@ -83,7 +88,8 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
       clarified: const Value(true),
       intent: intent != null ? Value(intent) : const Value.absent(),
       dueDate: dueDate != null ? Value(dueDate) : const Value.absent(),
-      updatedAt: Value(DateTime.now()),
+      lastClarifiedAt: Value(ts.toUtc()),
+      updatedAt: Value(ts),
     ));
   }
 }

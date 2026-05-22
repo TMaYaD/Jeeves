@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -85,6 +85,26 @@ void main() {
           await (db.select(db.todos)..where((t) => t.id.equals('x')))
               .getSingle();
       expect(row.clarified, isTrue);
+    });
+
+    test('processInboxItem stamps lastClarifiedAt', () async {
+      // Promoting a Capture to a clarified Outcome IS Outcome creation
+      // (ADR-0006: Capture is distinct from Outcome). Per CONTEXT.md ~L152
+      // Outcome creation stamps last_clarified_at.
+      await db.inboxDao.insertTodo(_companion(id: 'lc', title: 'Process me'));
+
+      // Confirm freshly captured rows are unclarified-and-unstamped.
+      final beforeRow =
+          await (db.select(db.todos)..where((t) => t.id.equals('lc')))
+              .getSingle();
+      expect(beforeRow.lastClarifiedAt, isNull);
+
+      await db.inboxDao.processInboxItem('lc');
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('lc')))
+              .getSingle();
+      expect(row.lastClarifiedAt, isNotNull);
     });
 
     test('processInboxItem removes row from inbox watch', () async {

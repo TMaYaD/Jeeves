@@ -236,12 +236,17 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       }
 
       // Update intent to 'maybe' for each 'maybe' disposition task.
+      //
+      // Sending an Outcome to Someday/Maybe is an Intent edit — a clarifying
+      // micro-act per CONTEXT.md — so last_clarified_at is stamped alongside.
       for (final entry in dispositions.entries) {
         if (entry.value == 'maybe') {
           await customUpdate(
-            'UPDATE todos SET intent = ?, updated_at = ? WHERE id = ?',
+            'UPDATE todos SET intent = ?, updated_at = ?, '
+            'last_clarified_at = ? WHERE id = ?',
             variables: [
               Variable('maybe'),
+              Variable(ts),
               Variable(ts),
               Variable(entry.key),
             ],

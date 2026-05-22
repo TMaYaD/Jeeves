@@ -328,8 +328,9 @@ void main() {
       expect(result, isEmpty);
     });
 
-    // updateFields notes-only change does NOT remove a stale task.
-    test('updateFields notes-only change does not remove stale task', () async {
+    // updateFields notes-only change clears stale status (CONTEXT.md ~L152:
+    // notes edits are clarifying micro-acts that stamp last_clarified_at).
+    test('updateFields notes-only change removes stale task', () async {
       final clarifiedAt =
           DateTime.now().subtract(const Duration(hours: 2)).toUtc();
       final completedAt =
@@ -341,10 +342,12 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      await db.todoDao.updateFields(id,notes: 'Added a note');
+      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+
+      await db.todoDao.updateFields(id, notes: 'Added a note');
 
       final result = await db.todoDao.watchNeedsReview().first;
-      expect(result.any((t) => t.id == id), isTrue);
+      expect(result, isEmpty);
     });
 
     // isNeedsReview returns correct values.
