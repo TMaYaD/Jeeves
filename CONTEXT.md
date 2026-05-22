@@ -271,36 +271,73 @@ _Avoid_: Resolution, Decision, Handling, Action (overloaded)
 
 **Ceremony**:
 A guided activity the user performs with the app's facilitation. The app surfaces structure, prompts, and sequencing; the user provides the decisions and judgments. A Ceremony is a core domain concept — *what* the user is doing — independent of *how* the app surfaces it. May be implemented as a Wizard (the most common form), but other shapes are possible (single modal, inline form, voice flow, etc.). The current set: `focus_session_planning`, `focus_session_review`, `periodic_review`, and the in-flight inbox-clarification flow (when it splits from session planning per #184).
+
+Each Ceremony **performance** has a lifecycle: **not-started** (no performance currently underway) → **in-progress** (the user has opened the Ceremony but not yet finished or abandoned it) → **terminated**. Termination splits two ways: **completed** (the user finished the Ceremony successfully — Triggers may treat this as the Ritual being satisfied) and **abandoned** (the user exited without finishing — Triggers treat this as if the performance hadn't happened). Multiple performances accumulate over a Ritual's lifetime; a Trigger may consult performance history (most recent completion, completion within a freshness window, etc.) as part of its own predicate. The **in-progress** state is the basis of the Nudge's in-progress hygiene rule (see ADR-0009 and the Nudge entry): no Nudge of this Ritual surfaces while one of its performances is in progress.
 _Avoid_: Ritual (narrower — see below), Wizard (an implementation form, see Implementation tier), Flow
 
 **Ritual**:
-A Ceremony that the app treats as integral to the user's practice — strongly suggested, regularly nudged for, expected to recur. The "Daily Planning Ritual" is a Ritual because the app considers it core to Jeeves' opinionated GTD discipline. An ad-hoc clarification of a one-off Capture is just a Ceremony, not a Ritual. The Ritual designation adds *discipline overlay* (recommended cadence, Nudge surfacing, completion tracking) on top of the underlying Ceremony — not a separate kind of activity.
+A Ceremony that the app treats as integral to the user's practice — strongly suggested, regularly nudged for, expected to recur. The "Daily Planning Ritual" is a Ritual because the app considers it core to Jeeves' opinionated GTD discipline. An ad-hoc clarification of a one-off Capture is just a Ceremony, not a Ritual. The Ritual designation adds a *discipline overlay* on top of the underlying Ceremony — not a separate kind of activity. Today the discipline overlay takes the shape of a **Cadence** and a **Nudge**; other shapes are conceivable (streak tracking, partner accountability, etc.) but not modelled. The abstract layer is left informal until a second shape is needed.
 _Avoid_: Habit, Practice, Routine (none carry the "integral to the app's discipline" connotation precisely)
+
+**Trigger**:
+An autonomous predicate-with-edge-detection that fires its Nudge to visible when the predicate transitions false→true. A Nudge has one or more Triggers; Triggers are independent of each other and of Cadence period semantics — each Trigger owns its full domain logic, including any "is the Ritual stale enough to nag again?" check.
+
+A Trigger's predicate may consult any domain state — Ceremony completion history, content-state queries, time-based windows, anything — and produces an edge each time it newly evaluates true. Each Trigger defines its own refire semantics:
+
+- The **Cadence Trigger** is the canonical shape — fires once per anchor-to-anchor period (the predicate is "current time has crossed into a new period AND the Ritual has not been completed in this period"); refires at the next period boundary.
+- **Content-state Triggers** are domain predicates over the user's data. Today's only example: the Weekly Review's "Next list is empty AND Waiting For / Someday-Maybe still holds items" Trigger, which refires whenever the predicate transitions false→true mid-period.
+
+A Trigger may borrow a default snooze duration from Cadence; the reference is explicit in the Trigger's implementation rather than a model-wide default.
+_Avoid_: Event (Triggers are predicates with edge semantics, not point-in-time events), Condition (too generic), Predicate (a Trigger *contains* a predicate but adds edge-detection and Nudge-firing)
 
 **Nudge**:
 The app's mechanism for suggesting a Ritual to the user — a contextual reminder that the disciplined Ceremony is due. Belongs only to Rituals (not all Ceremonies); ad-hoc Ceremonies are user-initiated and need no Nudge.
 
-A Nudge has state across its lifecycle:
+A Nudge is composed of:
 
-- *visible* — the Ritual is due (per Cadence or other trigger) and not yet completed in the current period.
-- *dismissed* — user dismissed the Nudge for the current period ("not this time"); suppressed until the period turns.
-- *snoozed* — user deferred to a specific later time within the current period; the Nudge re-surfaces when that time arrives.
-- *completed* — the Ritual happened in the current period; the Nudge is suppressed until the period turns.
+- One or more **Triggers** — autonomous predicates that, on transitioning false→true, fire the Nudge to visible.
+- Persisted user-interaction state — `dismissed_at` (timestamp of the most recent dismiss action) and `snoozed_until` (timestamp the snooze expires).
 
-A Ritual has at most one active Nudge at a time. The Nudge's *surfaces* — how the user actually sees it — are Implementation: see **Banner** and **Notification** in the Implementation tier.
+A Nudge's visibility is a *computed predicate*, not stored:
+
+```text
+visible =
+    (some Trigger is currently firing)
+  ∧ (no Ceremony performance of this Ritual is currently in progress)   ← in-progress hygiene, see ADR-0009
+  ∧ (snoozed_until is null or now > snoozed_until)
+  ∧ (dismissed_at is earlier than the most recent Trigger firing edge)
+```
+
+**Dismiss** is scoped to the *current firing*, not to a time window. A dismiss hides the Nudge until any Trigger next fires (per that Trigger's own rules); it is not period-scoped, so a Trigger that fires immediately after a dismiss re-surfaces the Nudge.
+
+**Snooze** is time-bound. Snoozes may be **user-explicit** (chosen duration) or **system-implicit** (a default duration applied by a surface — e.g., a Notification swipe-away which the system interprets as a low-signal "not now"). The default duration for a system-implicit snooze may be borrowed from Cadence, but that is an explicit per-Nudge reference in the snoozing surface, not a model-wide default.
+
+**Completion** of a Ritual is a Ceremony-level fact (see Ceremony's lifecycle), not a Nudge state. Each Trigger decides for itself whether and how to incorporate completion into its predicate (the Cadence Trigger naturally respects "not completed in current period"; content-state Triggers define their own freshness rules).
+
+**In-progress hygiene** is the one centralised non-content rule the Nudge model carries: while any Ceremony performance of this Ritual is in progress, the Nudge is hidden regardless of Trigger state. Triggers remain autonomous about their content; the hygiene rule is content-independent and applies uniformly. See ADR-0009.
+
+A Ritual has at most one Nudge. The Nudge's *surfaces* — how the user actually sees it — are Implementation: see **Banner** and **Notification** in the Implementation tier. Surfaces are pure projections: they read Nudge state to render and write Nudge state on user action. Each surface's user-action → Nudge-transition mapping is calibrated to its **signal fidelity** (Banner ✕ is an explicit in-app gesture and maps to dismiss; a Notification swipe is low-signal — possibly mass-dismiss fatigue — and maps to a system-implicit snooze).
 _Avoid_: Reminder (a separate concept — see ambiguities), Prompt, Suggestion (overloaded with AI surfaces)
 
 **Cadence**:
-The recurring schedule that determines when a Ritual is due — daily, weekly, or longer-period. Drives the *visible* transition of the Ritual's Nudge: when the period turns and the Ritual hasn't been completed in the new period, the Nudge becomes visible. Resets the Nudge's *completed* and *dismissed* states at period boundaries.
+The recurring schedule that determines when a Ritual is due. A Cadence has two properties:
 
-Belongs only to Rituals; ad-hoc Ceremonies have no Cadence (they happen when the user chooses). Current Rituals carry hardcoded Cadences: Daily Planning (daily), Evening Shutdown (daily), Weekly Review (every 7 days). Future cadences may be user-configurable.
+- **shape** — the calendar pattern (daily, weekly, every-N-days). Drives cadence-flavoured copy ("Today's Plan" at the daily cadence, "This Week's Review" at the weekly cadence). Hardcoded per Ritual today.
+- **anchor** — the specific moment within the shape on which period boundaries land (e.g., 8 AM for a daily cadence, Sunday-09:00 for a weekly cadence). Some Rituals carry hardcoded anchors; others read them from synced preferences. Whether a given anchor is hardcoded or user-tunable is an implementation detail *inside* the Cadence; the conceptual model treats the anchor as a Cadence property either way.
+
+The period runs anchor-to-anchor (see ADR-0008 for the trade-off and the future possibility of Cadence-as-strategy). The Cadence powers exactly one Trigger of the Ritual's Nudge — the Cadence Trigger — which fires when "current time has crossed into a new period AND the Ritual has not been completed in this period." Other Triggers (content-state, event-based) are independent of Cadence and define their own firing semantics.
+
+Belongs only to Rituals; ad-hoc Ceremonies have no Cadence (they happen when the user chooses). Current Rituals carry hardcoded shapes: Daily Planning (daily), Evening Shutdown (daily), Weekly Review (every 7 days). Anchors are user-configurable for some surfaces today (Daily Planning's notification time, for instance) and hardcoded for others.
 _Avoid_: Schedule (overloaded — implies fixed times of day), Frequency (less precise), Period (too generic), Rhythm (informal)
 
 #### Relationships
 
-- A **Ritual** is a **Ceremony** combined with a **Cadence** and a **Nudge**. Removing the Cadence + Nudge demotes a Ritual to a plain Ceremony; adding them to a Ceremony promotes it.
-- A **Nudge** has zero or more *surfaces* (currently **Banner** and **Notification**) that deliver it to the user. The conceptual state of the Nudge is independent of which surfaces are wired up; changing or adding surfaces does not change what a Nudge *is*.
-- **Cadence** drives the Nudge's *visible* transition and the period-boundary reset of *completed* and *dismissed*; a Nudge without a Cadence (not currently a real configuration) would need an alternative trigger.
+- A **Ritual** is a **Ceremony** with a *discipline overlay*. Today the overlay is composed of a **Cadence** and a **Nudge**; removing both demotes a Ritual to a plain Ceremony, adding them promotes a Ceremony to a Ritual. The abstract "discipline overlay" layer is left informal until a second shape is needed.
+- A **Nudge** is composed of one or more **Triggers** plus persisted dismiss/snooze state. Visibility is computed from Trigger firings, snooze, dismiss, and the Ceremony's in-progress state (see the Nudge entry for the predicate).
+- A **Trigger** is autonomous — independent of other Triggers and of Cadence period semantics. The **Cadence Trigger** is the canonical shape; content-state Triggers (per Ritual) are others. Each Trigger owns its full domain logic, including completion-freshness rules.
+- **Completion** of a Ceremony performance is a Ceremony fact, not a Nudge state. Triggers may consult Ceremony lifecycle and performance history per their own predicates; the Nudge does not centralise completion.
+- The **in-progress hygiene rule** is centralised at the Nudge level: while any Ceremony performance of this Ritual is in progress, no Nudge of this Ritual is visible regardless of Trigger state (ADR-0009). This is the one non-content rule the Nudge model carries.
+- A **Nudge** has zero or more *surfaces* (currently **Banner** and **Notification**) that deliver it to the user. Surfaces are pure projections — they read Nudge state to render and write Nudge state on user action. Each surface's user-action → Nudge-transition mapping is calibrated to its signal fidelity (e.g., Banner ✕ → dismiss because it is an explicit in-app gesture; Notification swipe → system-implicit snooze because it is low-signal). Adding or removing surfaces does not change what a Nudge *is*.
 - A **Ceremony** may be implemented as a **Wizard** (current default for all three Rituals) or any other UI form. The implementation form is independent of the Ceremony concept.
 - **Disposition** (defined in Engagement) is the per-Outcome decision used inside FocusSession's Review-type Ceremonies (Evening Shutdown). Other Ceremonies — notably the forthcoming PeriodicSession review — may introduce their own decision vocabularies.
 
@@ -308,6 +345,7 @@ _Avoid_: Schedule (overloaded — implies fixed times of day), Frequency (less p
 
 - **Nudge** (this context) and **Reminder** (forthcoming, GTD Core) are different concepts. A Nudge targets a *Ritual* — the app suggesting "it's time for your weekly review." A Reminder targets an *individual Action* — "remind me to call John at 5pm." Different scopes, different triggers, different lifecycles. Do not collapse them into a single primitive even though both involve OS notifications under the hood.
 - **Banner and Notification machinery is currently duplicated per Ritual** (one set of state and code for Daily Planning, another for Evening Shutdown, another for Weekly Review). The Nudge abstraction is the consolidation target — a single Nudge-aware Banner and a single Nudge-aware Notification scheduler, parametrised by Ritual, replacing the three bespoke implementations.
+- **Today's Banner / Notification dismissal is implemented as period-scoped** (per-day SharedPreferences keys, e.g. `planning_banner_dismissed_date`). The conceptual model treats dismiss as scoped to the *current firing* — re-firing of any Trigger surfaces the Nudge again, regardless of period. The two models coincide for Cadence-only Rituals (the only firing edge is the per-period one), so the divergence is invisible today for Daily Planning and Evening Shutdown. They diverge for multi-Trigger Rituals: Weekly Review's content-state Trigger refires on each false→true predicate edge under the new model, but the existing `*_dismissed_date` flag would suppress the Banner across all firings within the same day. Reconciliation is part of the Nudge consolidation work above.
 
 ### Sync
 
@@ -328,11 +366,18 @@ The shared storage row backing several conceptual entities, discriminated by a `
 _Avoid_: (none — Tag is the canonical name for the storage)
 
 **Banner** *(an in-app surface for a Nudge)*:
-A persistent visual element rendered at the top of shell-hosted screens, suggesting a Ritual to the user when its Nudge is *visible*. Dismissible (sets the Nudge to *dismissed* for the current period) and tappable (opens the underlying Ceremony). User-facing dismissal copy is cadence-flavoured ("Not today" at daily cadence, "Not this week" at weekly), but the underlying state transition is the same. Today each Ritual has its own bespoke Banner implementation — a target for consolidation under a single Nudge-driven Banner abstraction.
+A persistent visual element rendered at the top of shell-hosted screens, suggesting a Ritual to the user when its Nudge is visible (see the Nudge visibility predicate). The Banner ✕ is a high-signal in-app gesture and maps to a Nudge **dismiss** (suppress the current firing — re-surfaces on the next Trigger firing edge). Tapping the body opens the underlying Ceremony. User-facing dismissal copy is cadence-flavoured ("Not today" at daily cadence, "Not this week" at weekly), but the underlying state transition is the same. Today each Ritual has its own bespoke Banner implementation — a target for consolidation under a single Nudge-driven Banner abstraction.
 _Avoid_: Toast (transient), Snackbar (transient), Alert (overloaded)
 
 **Notification** *(an OS-level surface for a Nudge)*:
-A platform-delivered alert (Android / iOS / web push) that surfaces a Nudge even when the app is not in the foreground. Carries the same actions as the in-app Banner: open (opens the Ceremony), snooze (sets the Nudge to *snoozed* with a deferred time within the current period), skip (sets the Nudge to *dismissed* for the current period). User-facing skip copy is cadence-flavoured ("Skip today" at daily cadence, "Skip this week" at weekly). Today each Ritual schedules its own Notification — same consolidation target as Banner.
+A platform-delivered alert (Android / iOS / web push) that surfaces a Nudge even when the app is not in the foreground. The user-facing actions and their Nudge mappings:
+
+- **open** — opens the underlying Ceremony.
+- **snooze** (explicit action button) — user-explicit Nudge **snooze** with a chosen duration.
+- **skip** (explicit action button) — high-signal **dismiss** (current firing). User-facing copy is cadence-flavoured ("Skip today" at daily cadence, "Skip this week" at weekly).
+- **implicit swipe-away** — low-signal; mass-dismiss fatigue makes this an unreliable indicator of intent, so the surface maps it to a **system-implicit snooze** with a default duration (which the implementation may borrow from the Ritual's Cadence; see the Nudge entry).
+
+Today each Ritual schedules its own Notification — same consolidation target as Banner.
 _Avoid_: Push, Alert, Reminder (Reminder is a separate concept — see ambiguities)
 
 **PowerSync** *(the current Sync engine)*:

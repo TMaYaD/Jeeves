@@ -247,3 +247,7 @@
 
 ## 2026-05-18
 - `periodicReviewBannerVisibleProvider` consolidates the weekly banner's visibility predicate so `FocusSessionPlanningBanner` can yield the slot by watching one provider — keeps the precedence rule (REQUIREMENTS.md §Daily Planning Entry) from drifting between the two widgets.
+
+## 2026-05-22 (Ceremony Framework grilling pass)
+- Conceptual cleanup of the Ceremony Framework context. Promoted **Trigger** to a first-class concept (autonomous predicate-with-edge-detection firing a Nudge); split **Cadence** into shape + anchor with period running anchor-to-anchor; collapsed the four Nudge "states" into a computed `visible` predicate plus persisted `dismissed_at` / `snoozed_until`; moved completion onto Ceremony's lifecycle (not Nudge state); added Ceremony performance lifecycle (in-progress / completed / abandoned). ADR-0008 defers Cadence-as-strategy. ADR-0009 records the centralised in-progress hygiene rule (rejected alternative: split start/continue Nudges per Ceremony).
+- Under the new model, dismiss is current-firing-scoped — divergent from today's period-scoped `*_dismissed_date` SharedPreferences flags. The two coincide for Cadence-only Rituals (Daily Planning, Evening Shutdown), so the divergence is invisible there; they diverge for the Weekly Review banner's content-state Trigger ("Next empty + deferred inventory exists"), which today is suppressed for the day even after the Trigger refires. Reconciliation falls into the Nudge consolidation implementation.
