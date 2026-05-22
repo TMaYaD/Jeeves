@@ -14,13 +14,6 @@ ProviderContainer _container() => createPeriodicReviewTestContainer(
       GtdDatabase(NativeDatabase.memory()),
     );
 
-String _todayDateString() {
-  final now = DateTime.now();
-  return '${now.year.toString().padLeft(4, '0')}-'
-      '${now.month.toString().padLeft(2, '0')}-'
-      '${now.day.toString().padLeft(2, '0')}';
-}
-
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -119,23 +112,9 @@ void main() {
       expect(c.read(periodicReviewIsDueProvider), isFalse);
     });
 
-    test('dismissBannerForToday writes today\'s ISO date key', () async {
-      final c = _container();
-      addTearDown(c.dispose);
-
-      await c.read(syncedPreferencesProvider.future);
-      await c
-          .read(periodicReviewSettingsProvider.notifier)
-          .dismissBannerForToday();
-
-      expect(c.read(periodicReviewBannerDismissedTodayProvider), isTrue);
-      final raw = c
-          .read(syncedPreferencesProvider)
-          .asData!
-          .value
-          .get<String>('periodic_review_banner_dismissed_date');
-      expect(raw, equals(_todayDateString()));
-    });
+    // dismissBannerForToday test removed: banner dismiss state now lives
+    // in the Nudge module's synced-prefs entry (covered by
+    // nudge_provider_test.dart's visibility-predicate tests).
 
     test('setNotificationTime persists hour and minute', () async {
       final c = _container();

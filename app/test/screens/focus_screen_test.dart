@@ -88,7 +88,6 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     focusSessionPlanningCompletionNotifier.value = false;
-    focusSessionPlanningBannerDismissedNotifier.value = false;
   });
 
   testWidgets('FocusScreen renders without auto-navigating when planning is incomplete',

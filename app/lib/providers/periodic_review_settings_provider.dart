@@ -14,12 +14,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
-import 'gtd_lists_provider.dart';
-import 'onboarding_provider.dart';
+import 'gtd_lists_provider.dart' show Todo;
 import 'synced_preferences_provider.dart';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
-const _kBannerDismissedDateKey = 'periodic_review_banner_dismissed_date';
 const _kBannerEnabledKey = 'periodic_review_banner_enabled';
 const _kNotificationEnabledKey = 'periodic_review_notification_enabled';
 const _kNotificationHourKey = 'periodic_review_notification_hour';
@@ -30,14 +28,6 @@ const _kNotificationSnoozedUntilKey =
     'periodic_review_notification_snoozed_until';
 
 const int _kCadenceDays = 7;
-
-/// Returns today's date as a yyyy-MM-dd string in local time.
-String _todayDateString() {
-  final now = DateTime.now();
-  return '${now.year.toString().padLeft(4, '0')}-'
-      '${now.month.toString().padLeft(2, '0')}-'
-      '${now.day.toString().padLeft(2, '0')}';
-}
 
 // ---------------------------------------------------------------------------
 // Notification suppression helpers
@@ -121,16 +111,6 @@ final periodicReviewIsDueProvider = Provider<bool>((ref) {
   return DateTime.now().difference(last).inDays >= _kCadenceDays;
 });
 
-/// True when the user has dismissed the banner today.
-final periodicReviewBannerDismissedTodayProvider = Provider<bool>((ref) {
-  final raw = ref
-      .watch(syncedPreferencesProvider)
-      .asData
-      ?.value
-      .get<String>(_kBannerDismissedDateKey);
-  return raw == _todayDateString();
-});
-
 /// Whether the Weekly Review banner is enabled (defaults to true).
 final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
   return ref
@@ -141,16 +121,13 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
       true;
 });
 
-/// The "empty actionable" leg of the Weekly Review banner predicate:
+/// The "empty actionable" leg of the Weekly Review Content-state Trigger:
 /// true when inbox + next are both empty but waiting-for or maybe still
-/// hold items. Extracted so both the Weekly Review Content-state Trigger
-/// and [periodicReviewBannerVisibleProvider] share the same rule.
+/// hold items.
 ///
-/// Stays as a pure function (over `AsyncValue`s) rather than as another
-/// Provider so callers can keep the original short-circuit order — the
-/// cheap `enabled` / `dismissed` / `hasTodos` watches must run before
-/// the list watches subscribe `unfilteredInboxProvider` et al., which
-/// pull in the full `databaseProvider` chain.
+/// Stays as a pure function (over `AsyncValue`s) rather than a Provider
+/// so callers can short-circuit cheap checks before subscribing the
+/// list streams that pull in the full `databaseProvider` chain.
 bool emptyActionableBannerTrigger({
   required AsyncValue<List<Todo>> inbox,
   required AsyncValue<List<Todo>> next,
@@ -167,30 +144,6 @@ bool emptyActionableBannerTrigger({
       next.requireValue.isEmpty &&
       (waiting.requireValue.isNotEmpty || maybe.requireValue.isNotEmpty);
 }
-
-/// True when the Weekly Review banner would render. Used by the daily
-/// focus-session-planning banner so it can yield the slot whenever the
-/// weekly banner is taking it — the two never stack.
-///
-/// The cheap watches (`enabled`, `dismissed`, `hasTodos`) run before
-/// the list watches so callers gated off via `enabled=false` never pay
-/// the cost of subscribing to the database-backed list streams.
-final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
-  if (!ref.watch(periodicReviewBannerEnabledProvider)) return false;
-  if (ref.watch(periodicReviewBannerDismissedTodayProvider)) return false;
-
-  final hasTodos = ref.watch(hasTodosProvider);
-  if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
-
-  if (ref.watch(periodicReviewIsDueProvider)) return true;
-
-  return emptyActionableBannerTrigger(
-    inbox: ref.watch(unfilteredInboxProvider),
-    next: ref.watch(unfilteredNextActionsProvider),
-    waiting: ref.watch(unfilteredWaitingForProvider),
-    maybe: ref.watch(unfilteredMaybeProvider),
-  );
-});
 
 // ---------------------------------------------------------------------------
 // Settings notifier
@@ -273,10 +226,6 @@ class PeriodicReviewSettingsNotifier
       _kLastCompletedAtKey,
       DateTime.now().toUtc().toIso8601String(),
     );
-  }
-
-  Future<void> dismissBannerForToday() async {
-    await syncedPrefs(ref).set(_kBannerDismissedDateKey, _todayDateString());
   }
 
   Future<void> setBannerEnabled(bool enabled) async {

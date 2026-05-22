@@ -83,7 +83,6 @@ void main() {
     tearDown(() async {
       await db.close();
       focusSessionPlanningCompletionNotifier.value = false;
-      focusSessionPlanningBannerDismissedNotifier.value = false;
     });
 
     testWidgets('Inbox step with items remaining shows Skip, not Next step',

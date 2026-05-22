@@ -22,13 +22,9 @@ Future<void> main() async {
   // Seed onboarding dismissal state before the first frame.
   await initOnboardingCompletion();
 
-  // Seed suppression flags before any notification scheduling so that a
+  // Seed notification-suppression flags before any scheduling so that a
   // previously skipped/snoozed reminder is not re-enabled on restart.
-  await initFocusSessionPlanningCompletion();
   await loadFocusSessionPlanningNotificationSuppression();
-
-  // Seed shutdown state from SharedPreferences before the first frame.
-  await initShutdownCompletion();
   await loadShutdownNotificationSuppression();
 
   // Seed periodic-review notification suppression so a previously skipped/

@@ -25,9 +25,6 @@ class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   Future<void> reEnterPlanning() async {}
 
   @override
-  Future<void> dismissBannerForToday() async {}
-
-  @override
   Future<void> skipPlanningToday() async {}
 
   @override
@@ -154,7 +151,6 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     focusSessionPlanningCompletionNotifier.value = false;
-    focusSessionPlanningBannerDismissedNotifier.value = false;
   });
 
   testWidgets('AppShell renders CustomDrawer that can be opened', (tester) async {
