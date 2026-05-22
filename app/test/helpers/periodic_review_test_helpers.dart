@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/services/notification_service.dart';
 
@@ -21,17 +22,20 @@ class StubPeriodicReviewNotificationService extends NotificationService {
   StubPeriodicReviewNotificationService() : super.forTesting();
 
   @override
-  Future<void> schedulePeriodicReviewReminder(
-      {required TimeOfDay time}) async {}
+  Future<void> scheduleRitualReminder(
+      RitualId ritual, TimeOfDay time) async {}
 
   @override
-  Future<void> snoozePeriodicReviewReminder(int minutes) async {}
+  Future<void> snoozeRitualReminder(RitualId ritual, int minutes) async {}
 
   @override
-  Future<void> cancelPeriodicReviewReminder() async {}
+  Future<void> cancelRitualReminder(RitualId ritual) async {}
 
   @override
-  Future<void> cancelPeriodicReviewRecurringReminder() async {}
+  Future<void> cancelRecurringRitualReminder(RitualId ritual) async {}
+
+  @override
+  Future<void> skipTodayRitualReminder(RitualId ritual) async {}
 }
 
 /// Standard [ProviderContainer] for periodic-review tests: real Drift

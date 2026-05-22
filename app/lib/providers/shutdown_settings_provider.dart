@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/ritual.dart';
 import '../models/shutdown_settings.dart';
 import '../services/notification_service.dart';
 import 'evening_shutdown_provider.dart';
@@ -62,9 +63,10 @@ class ShutdownSettingsNotifier extends Notifier<ShutdownSettings> {
   Future<void> _rescheduleShutdownReminder() async {
     final svc = ref.read(notificationServiceProvider);
     if (state.notificationEnabled && !isShutdownNotificationSuppressedToday()) {
-      await svc.scheduleShutdownReminder(time: state.shutdownTime);
+      await svc.scheduleRitualReminder(
+          RitualId.eveningShutdown, state.shutdownTime);
     } else {
-      await svc.cancelShutdownReminder();
+      await svc.cancelRitualReminder(RitualId.eveningShutdown);
     }
   }
 }
@@ -76,12 +78,12 @@ Future<void> initShutdownNotificationSchedule() async {
   final notificationEnabled =
       prefs.getBool(_kShutdownNotificationEnabled) ?? true;
   if (!notificationEnabled || isShutdownNotificationSuppressedToday()) {
-    await svc.cancelShutdownReminder();
+    await svc.cancelRitualReminder(RitualId.eveningShutdown);
     return;
   }
 
   final hour = prefs.getInt(_kShutdownTimeHour) ?? 18;
   final minute = prefs.getInt(_kShutdownTimeMinute) ?? 0;
-  await svc.scheduleShutdownReminder(
-      time: TimeOfDay(hour: hour, minute: minute));
+  await svc.scheduleRitualReminder(
+      RitualId.eveningShutdown, TimeOfDay(hour: hour, minute: minute));
 }

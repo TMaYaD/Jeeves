@@ -13,6 +13,8 @@ import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../models/ritual.dart';
+
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
 const _kFocusSessionPlanningSnoozeNotificationId = 1;
@@ -159,153 +161,63 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
-  // Daily planning notification
+  // Ritual notifications — unified surface for every Ritual's Nudge.
+  // The per-Ritual notification IDs, channel IDs, titles, action IDs, and
+  // iOS category identifiers live in [_ritualConfigs]; adding a fourth
+  // Ritual is one entry in that matrix, not five new methods.
   // ---------------------------------------------------------------------------
 
-  /// Schedules (or re-schedules) the daily planning notification to fire at
-  /// [time] every day. Uses [DateTimeComponents.time] so the OS reschedules it
-  /// automatically each day without any app interaction.
-  Future<void> scheduleFocusSessionPlanningReminder({required TimeOfDay time}) async {
+  /// Schedules (or re-schedules) [ritual]'s recurring daily reminder at [time].
+  /// Uses [DateTimeComponents.time] so the OS reschedules it automatically
+  /// each day without any app interaction.
+  Future<void> scheduleRitualReminder(RitualId ritual, TimeOfDay time) async {
+    final cfg = _ritualConfigs[ritual]!;
     await _plugin.zonedSchedule(
-      id: _kFocusSessionPlanningNotificationId,
-      title: 'Time to plan your day',
-      body: 'Tap to open your Daily Planning Ritual.',
+      id: cfg.recurringId,
+      title: cfg.title,
+      body: cfg.body,
       scheduledDate: _nextInstanceOf(time),
-      notificationDetails: _planningNotificationDetails(),
+      notificationDetails: _ritualNotificationDetails(cfg),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
       matchDateTimeComponents: DateTimeComponents.time,
     );
   }
 
-  /// Schedules a one-off snooze notification [minutes] from now. Leaves the
-  /// recurring daily schedule untouched so tomorrow's reminder still fires.
-  Future<void> snoozeFocusSessionPlanningReminder(int minutes) async {
-    await _plugin.cancel(id: _kFocusSessionPlanningSnoozeNotificationId);
+  /// Schedules a one-off snooze fire [minutes] from now. Leaves the recurring
+  /// daily schedule untouched so tomorrow's reminder still fires.
+  Future<void> snoozeRitualReminder(RitualId ritual, int minutes) async {
+    final cfg = _ritualConfigs[ritual]!;
+    await _plugin.cancel(id: cfg.snoozeId);
     final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
-    // No matchDateTimeComponents — fires once only.
     await _plugin.zonedSchedule(
-      id: _kFocusSessionPlanningSnoozeNotificationId,
-      title: 'Time to plan your day',
-      body: 'Tap to open your Daily Planning Ritual.',
+      id: cfg.snoozeId,
+      title: cfg.title,
+      body: cfg.body,
       scheduledDate: fireAt,
-      notificationDetails: _planningNotificationDetails(),
+      notificationDetails: _ritualNotificationDetails(cfg),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
   }
 
-  /// Cancels both the recurring daily reminder and any pending snooze.
-  /// Use when notifications are fully disabled by the user.
-  Future<void> cancelFocusSessionPlanningReminder() async {
-    await _plugin.cancel(id: _kFocusSessionPlanningNotificationId);
-    await _plugin.cancel(id: _kFocusSessionPlanningSnoozeNotificationId);
+  /// Cancels both the recurring daily reminder and any pending snooze for
+  /// [ritual]. Use when notifications are fully disabled by the user.
+  Future<void> cancelRitualReminder(RitualId ritual) async {
+    final cfg = _ritualConfigs[ritual]!;
+    await _plugin.cancel(id: cfg.recurringId);
+    await _plugin.cancel(id: cfg.snoozeId);
   }
 
   /// Cancels only the recurring daily reminder, leaving any pending snooze
-  /// intact. Use when notifications are temporarily suppressed (skip/snooze).
-  Future<void> cancelRecurringFocusSessionPlanningReminder() async {
-    await _plugin.cancel(id: _kFocusSessionPlanningNotificationId);
+  /// intact. Use when notifications are temporarily suppressed but the
+  /// user-requested one-off snooze should still fire.
+  Future<void> cancelRecurringRitualReminder(RitualId ritual) async {
+    await _plugin.cancel(id: _ritualConfigs[ritual]!.recurringId);
   }
 
-  // ---------------------------------------------------------------------------
-  // Evening shutdown notification
-  // ---------------------------------------------------------------------------
-
-  /// Schedules (or re-schedules) the daily evening shutdown notification to
-  /// fire at [time] every day.
-  Future<void> scheduleShutdownReminder({required TimeOfDay time}) async {
-    await _plugin.zonedSchedule(
-      id: _kShutdownNotificationId,
-      title: 'Time to close out the day',
-      body: 'Review your completed work and roll over unfinished tasks.',
-      scheduledDate: _nextInstanceOf(time),
-      notificationDetails: _shutdownNotificationDetails(),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      matchDateTimeComponents: DateTimeComponents.time,
-    );
-  }
-
-  /// Schedules a one-off snooze shutdown notification [minutes] from now.
-  Future<void> snoozeShutdownReminder(int minutes) async {
-    await _plugin.cancel(id: _kShutdownSnoozeNotificationId);
-    final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
-    await _plugin.zonedSchedule(
-      id: _kShutdownSnoozeNotificationId,
-      title: 'Time to close out the day',
-      body: 'Review your completed work and roll over unfinished tasks.',
-      scheduledDate: fireAt,
-      notificationDetails: _shutdownNotificationDetails(),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-    );
-  }
-
-  /// Permanently disables the shutdown reminder — cancels both the recurring
-  /// daily schedule and any pending snooze. Use when the user turns off
-  /// shutdown notifications in Settings.
-  Future<void> cancelShutdownReminder() async {
-    await _plugin.cancel(id: _kShutdownNotificationId);
-    await _plugin.cancel(id: _kShutdownSnoozeNotificationId);
-  }
-
-  /// Suppresses today's shutdown reminder without removing the recurring daily
-  /// schedule. Use for the "Skip today" notification action so tomorrow's
-  /// reminder still fires automatically.
-  Future<void> skipTodayShutdownReminder() async {
-    await _plugin.cancel(id: _kShutdownSnoozeNotificationId);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Weekly review notification
-  // ---------------------------------------------------------------------------
-
-  /// Schedules the recurring weekly-review reminder to fire daily at [time].
-  /// The banner's `isDue` predicate gates relevance: notifications fire daily
-  /// but the in-app surface only nags when the cadence has elapsed.
-  Future<void> schedulePeriodicReviewReminder(
-      {required TimeOfDay time}) async {
-    await _plugin.zonedSchedule(
-      id: _kPeriodicReviewNotificationId,
-      title: 'Time for your Weekly Review',
-      body: 'Clear the backlog and set your focus for the week.',
-      scheduledDate: _nextInstanceOf(time),
-      notificationDetails: _periodicReviewNotificationDetails(),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      matchDateTimeComponents: DateTimeComponents.time,
-    );
-  }
-
-  /// Schedules a one-off snooze reminder [minutes] from now.
-  Future<void> snoozePeriodicReviewReminder(int minutes) async {
-    await _plugin.cancel(id: _kPeriodicReviewSnoozeNotificationId);
-    final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
-    await _plugin.zonedSchedule(
-      id: _kPeriodicReviewSnoozeNotificationId,
-      title: 'Time for your Weekly Review',
-      body: 'Clear the backlog and set your focus for the week.',
-      scheduledDate: fireAt,
-      notificationDetails: _periodicReviewNotificationDetails(),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-    );
-  }
-
-  /// Cancels the recurring schedule and any pending snooze.
-  Future<void> cancelPeriodicReviewReminder() async {
-    await _plugin.cancel(id: _kPeriodicReviewNotificationId);
-    await _plugin.cancel(id: _kPeriodicReviewSnoozeNotificationId);
-  }
-
-  /// Cancels only the recurring schedule, leaving any pending snooze intact.
-  /// Use when the recurring reminder shouldn't fire today (suppressed by an
-  /// active snooze, etc.) but the user-requested one-off snooze should still
-  /// fire on its scheduled time.
-  Future<void> cancelPeriodicReviewRecurringReminder() async {
-    await _plugin.cancel(id: _kPeriodicReviewNotificationId);
-  }
-
-  /// Suppresses today's weekly-review reminder without removing the recurring
-  /// daily schedule. Use for the "Skip today" notification action so
-  /// tomorrow's reminder still fires automatically.
-  Future<void> skipTodayPeriodicReviewReminder() async {
-    await _plugin.cancel(id: _kPeriodicReviewSnoozeNotificationId);
+  /// Cancels only the pending snooze (the "Skip today" notification action).
+  /// The recurring daily schedule still fires tomorrow.
+  Future<void> skipTodayRitualReminder(RitualId ritual) async {
+    await _plugin.cancel(id: _ritualConfigs[ritual]!.snoozeId);
   }
 
   Future<void> cancelReminder(int id) async {
@@ -451,68 +363,110 @@ class NotificationService {
     return scheduled;
   }
 
-  NotificationDetails _planningNotificationDetails() {
-    return const NotificationDetails(
+  NotificationDetails _ritualNotificationDetails(
+      _RitualNotificationConfig cfg) {
+    return NotificationDetails(
       android: AndroidNotificationDetails(
-        'daily_planning',
-        'Daily Planning',
-        channelDescription: 'Daily planning ritual reminder',
-        importance: Importance.high,
-        priority: Priority.high,
+        cfg.androidChannelId,
+        cfg.androidChannelName,
+        channelDescription: cfg.androidChannelDescription,
+        importance: cfg.androidImportance,
+        priority: cfg.androidPriority,
         actions: [
-          AndroidNotificationAction(kNotificationActionOpen, 'Open'),
-          AndroidNotificationAction(kNotificationActionSnooze, 'Snooze'),
-          AndroidNotificationAction(kNotificationActionSkip, 'Skip today'),
+          AndroidNotificationAction(cfg.openAction, cfg.openLabel),
+          AndroidNotificationAction(cfg.snoozeAction, 'Snooze'),
+          AndroidNotificationAction(cfg.skipAction, 'Skip today'),
         ],
       ),
-      iOS: DarwinNotificationDetails(
-        categoryIdentifier: 'daily_planning',
-      ),
-    );
-  }
-
-  NotificationDetails _periodicReviewNotificationDetails() {
-    return const NotificationDetails(
-      android: AndroidNotificationDetails(
-        'periodic_review',
-        'Weekly Review Reminder',
-        channelDescription: 'Weekly review ceremony reminder',
-        importance: Importance.defaultImportance,
-        priority: Priority.defaultPriority,
-        actions: [
-          AndroidNotificationAction(kPeriodicReviewActionOpen, 'Start Review'),
-          AndroidNotificationAction(kPeriodicReviewActionSnooze, 'Snooze'),
-          AndroidNotificationAction(
-              kPeriodicReviewActionSkip, 'Skip today'),
-        ],
-      ),
-      iOS: DarwinNotificationDetails(
-        categoryIdentifier: 'periodic_review',
-      ),
-    );
-  }
-
-  NotificationDetails _shutdownNotificationDetails() {
-    return const NotificationDetails(
-      android: AndroidNotificationDetails(
-        'evening_shutdown',
-        'Evening Shutdown',
-        channelDescription: 'Evening shutdown ritual reminder',
-        importance: Importance.high,
-        priority: Priority.high,
-        actions: [
-          AndroidNotificationAction(kShutdownNotificationActionOpen, 'Open'),
-          AndroidNotificationAction(kShutdownNotificationActionSnooze, 'Snooze'),
-          AndroidNotificationAction(
-              kShutdownNotificationActionSkip, 'Skip today'),
-        ],
-      ),
-      iOS: DarwinNotificationDetails(
-        categoryIdentifier: 'evening_shutdown',
-      ),
+      iOS: DarwinNotificationDetails(categoryIdentifier: cfg.iOSCategoryId),
     );
   }
 }
+
+class _RitualNotificationConfig {
+  const _RitualNotificationConfig({
+    required this.recurringId,
+    required this.snoozeId,
+    required this.title,
+    required this.body,
+    required this.androidChannelId,
+    required this.androidChannelName,
+    required this.androidChannelDescription,
+    required this.androidImportance,
+    required this.androidPriority,
+    required this.iOSCategoryId,
+    required this.openAction,
+    required this.snoozeAction,
+    required this.skipAction,
+    required this.openLabel,
+  });
+
+  final int recurringId;
+  final int snoozeId;
+  final String title;
+  final String body;
+  final String androidChannelId;
+  final String androidChannelName;
+  final String androidChannelDescription;
+  final Importance androidImportance;
+  final Priority androidPriority;
+  final String iOSCategoryId;
+  final String openAction;
+  final String snoozeAction;
+  final String skipAction;
+  final String openLabel;
+}
+
+const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
+  RitualId.dailyPlanning: _RitualNotificationConfig(
+    recurringId: _kFocusSessionPlanningNotificationId,
+    snoozeId: _kFocusSessionPlanningSnoozeNotificationId,
+    title: 'Time to plan your day',
+    body: 'Tap to open your Daily Planning Ritual.',
+    androidChannelId: 'daily_planning',
+    androidChannelName: 'Daily Planning',
+    androidChannelDescription: 'Daily planning ritual reminder',
+    androidImportance: Importance.high,
+    androidPriority: Priority.high,
+    iOSCategoryId: 'daily_planning',
+    openAction: kNotificationActionOpen,
+    snoozeAction: kNotificationActionSnooze,
+    skipAction: kNotificationActionSkip,
+    openLabel: 'Open',
+  ),
+  RitualId.eveningShutdown: _RitualNotificationConfig(
+    recurringId: _kShutdownNotificationId,
+    snoozeId: _kShutdownSnoozeNotificationId,
+    title: 'Time to close out the day',
+    body: 'Review your completed work and roll over unfinished tasks.',
+    androidChannelId: 'evening_shutdown',
+    androidChannelName: 'Evening Shutdown',
+    androidChannelDescription: 'Evening shutdown ritual reminder',
+    androidImportance: Importance.high,
+    androidPriority: Priority.high,
+    iOSCategoryId: 'evening_shutdown',
+    openAction: kShutdownNotificationActionOpen,
+    snoozeAction: kShutdownNotificationActionSnooze,
+    skipAction: kShutdownNotificationActionSkip,
+    openLabel: 'Open',
+  ),
+  RitualId.weeklyReview: _RitualNotificationConfig(
+    recurringId: _kPeriodicReviewNotificationId,
+    snoozeId: _kPeriodicReviewSnoozeNotificationId,
+    title: 'Time for your Weekly Review',
+    body: 'Clear the backlog and set your focus for the week.',
+    androidChannelId: 'periodic_review',
+    androidChannelName: 'Weekly Review Reminder',
+    androidChannelDescription: 'Weekly review ceremony reminder',
+    androidImportance: Importance.defaultImportance,
+    androidPriority: Priority.defaultPriority,
+    iOSCategoryId: 'periodic_review',
+    openAction: kPeriodicReviewActionOpen,
+    snoozeAction: kPeriodicReviewActionSnooze,
+    skipAction: kPeriodicReviewActionSkip,
+    openLabel: 'Start Review',
+  ),
+};
 
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService.instance;

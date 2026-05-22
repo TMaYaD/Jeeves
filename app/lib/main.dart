@@ -4,6 +4,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'models/ritual.dart';
 import 'providers/auth_provider.dart';
 import 'providers/evening_shutdown_provider.dart';
 import 'providers/focus_session_planning_provider.dart';
@@ -90,11 +91,13 @@ void _handleNotificationResponse(NotificationResponse response) async {
       final snoozeMins = await _readDefaultSnoozeDuration();
       final until = DateTime.now().add(Duration(minutes: snoozeMins));
       await persistFocusSessionPlanningSnoozedUntil(until);
-      await NotificationService.instance.snoozeFocusSessionPlanningReminder(snoozeMins);
+      await NotificationService.instance
+          .snoozeRitualReminder(RitualId.dailyPlanning, snoozeMins);
 
     case kNotificationActionSkip:
       await persistFocusSessionPlanningSkipToday();
-      await NotificationService.instance.cancelFocusSessionPlanningReminder();
+      await NotificationService.instance
+          .cancelRitualReminder(RitualId.dailyPlanning);
 
     case kShutdownNotificationActionOpen:
       appRouter.go('/shutdown');
@@ -102,11 +105,13 @@ void _handleNotificationResponse(NotificationResponse response) async {
     case kShutdownNotificationActionSnooze:
       final until = DateTime.now().add(const Duration(minutes: 60));
       await persistShutdownSnoozedUntil(until);
-      await NotificationService.instance.snoozeShutdownReminder(60);
+      await NotificationService.instance
+          .snoozeRitualReminder(RitualId.eveningShutdown, 60);
 
     case kShutdownNotificationActionSkip:
       await persistShutdownSkipToday();
-      await NotificationService.instance.skipTodayShutdownReminder();
+      await NotificationService.instance
+          .skipTodayRitualReminder(RitualId.eveningShutdown);
 
     case kPeriodicReviewActionOpen:
       appRouter.go('/periodic-review');
@@ -114,11 +119,13 @@ void _handleNotificationResponse(NotificationResponse response) async {
     case kPeriodicReviewActionSnooze:
       final until = DateTime.now().add(const Duration(minutes: 60));
       await persistPeriodicReviewSnoozedUntil(until);
-      await NotificationService.instance.snoozePeriodicReviewReminder(60);
+      await NotificationService.instance
+          .snoozeRitualReminder(RitualId.weeklyReview, 60);
 
     case kPeriodicReviewActionSkip:
       await persistPeriodicReviewSkipToday();
-      await NotificationService.instance.skipTodayPeriodicReviewReminder();
+      await NotificationService.instance
+          .skipTodayRitualReminder(RitualId.weeklyReview);
   }
 }
 

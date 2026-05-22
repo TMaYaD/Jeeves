@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
 import 'gtd_lists_provider.dart';
@@ -304,7 +305,8 @@ class PeriodicReviewSettingsNotifier
     if (state.notificationEnabled &&
         isDue &&
         !isPeriodicReviewNotificationSuppressedToday()) {
-      await svc.schedulePeriodicReviewReminder(time: state.notificationTime);
+      await svc.scheduleRitualReminder(
+          RitualId.weeklyReview, state.notificationTime);
     } else if (_periodicReviewNotificationSnoozedActive) {
       // The user just tapped "Snooze". Don't kill their one-off snooze
       // fire just because the recurring schedule shouldn't run today —
@@ -312,9 +314,9 @@ class PeriodicReviewSettingsNotifier
       // its scheduled time. Once the snooze fires (or expires) the
       // module-level flag flips false and the next reschedule falls
       // through to the regular cancel-both branch.
-      await svc.cancelPeriodicReviewRecurringReminder();
+      await svc.cancelRecurringRitualReminder(RitualId.weeklyReview);
     } else {
-      await svc.cancelPeriodicReviewReminder();
+      await svc.cancelRitualReminder(RitualId.weeklyReview);
     }
   }
 }

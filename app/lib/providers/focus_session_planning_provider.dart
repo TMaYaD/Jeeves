@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
+import '../models/ritual.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
@@ -826,7 +827,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// any scheduled notification for today.
   Future<void> skipPlanningToday() async {
     await persistFocusSessionPlanningSkipToday(ref: ref);
-    await NotificationService.instance.cancelFocusSessionPlanningReminder();
+    await NotificationService.instance
+        .cancelRitualReminder(RitualId.dailyPlanning);
   }
 
   /// Snoozes the planning notification by [minutes] and reschedules it as a
@@ -834,7 +836,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> snoozePlanningNotification(int minutes) async {
     final until = DateTime.now().add(Duration(minutes: minutes));
     await persistFocusSessionPlanningSnoozedUntil(until, ref: ref);
-    await NotificationService.instance.snoozeFocusSessionPlanningReminder(minutes);
+    await NotificationService.instance
+        .snoozeRitualReminder(RitualId.dailyPlanning, minutes);
   }
 
   // ---- Ritual lifecycle ------------------------------------------------------

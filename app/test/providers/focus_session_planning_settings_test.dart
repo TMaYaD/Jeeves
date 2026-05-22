@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
@@ -18,17 +19,20 @@ class _StubNotificationService extends NotificationService {
   _StubNotificationService() : super.forTesting();
 
   @override
-  Future<void> scheduleFocusSessionPlanningReminder(
-      {required TimeOfDay time}) async {}
+  Future<void> scheduleRitualReminder(
+      RitualId ritual, TimeOfDay time) async {}
 
   @override
-  Future<void> cancelFocusSessionPlanningReminder() async {}
+  Future<void> cancelRitualReminder(RitualId ritual) async {}
 
   @override
-  Future<void> cancelRecurringFocusSessionPlanningReminder() async {}
+  Future<void> cancelRecurringRitualReminder(RitualId ritual) async {}
 
   @override
-  Future<void> snoozeFocusSessionPlanningReminder(int minutes) async {}
+  Future<void> snoozeRitualReminder(RitualId ritual, int minutes) async {}
+
+  @override
+  Future<void> skipTodayRitualReminder(RitualId ritual) async {}
 
   @override
   Future<void> cancelReminder(int id) async {}

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/focus_session_planning_settings.dart';
+import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import 'focus_session_planning_provider.dart';
 import 'synced_preferences_provider.dart';
@@ -69,11 +70,12 @@ class FocusSessionPlanningSettingsNotifier
     final svc = ref.read(notificationServiceProvider);
     if (state.notificationEnabled &&
         !isFocusSessionPlanningNotificationSuppressed()) {
-      await svc.scheduleFocusSessionPlanningReminder(time: state.planningTime);
+      await svc.scheduleRitualReminder(
+          RitualId.dailyPlanning, state.planningTime);
     } else if (!state.notificationEnabled) {
-      await svc.cancelFocusSessionPlanningReminder();
+      await svc.cancelRitualReminder(RitualId.dailyPlanning);
     } else {
-      await svc.cancelRecurringFocusSessionPlanningReminder();
+      await svc.cancelRecurringRitualReminder(RitualId.dailyPlanning);
     }
   }
 }
@@ -90,15 +92,15 @@ Future<void> initFocusSessionPlanningNotificationSchedule() async {
   final svc = NotificationService.instance;
   final notificationEnabled = prefs.getBool(_kNotificationEnabled) ?? true;
   if (!notificationEnabled) {
-    await svc.cancelFocusSessionPlanningReminder();
+    await svc.cancelRitualReminder(RitualId.dailyPlanning);
     return;
   }
   if (isFocusSessionPlanningNotificationSuppressed()) {
-    await svc.cancelRecurringFocusSessionPlanningReminder();
+    await svc.cancelRecurringRitualReminder(RitualId.dailyPlanning);
     return;
   }
   final hour = prefs.getInt(_kTimeHour) ?? 8;
   final minute = prefs.getInt(_kTimeMinute) ?? 0;
-  await svc.scheduleFocusSessionPlanningReminder(
-      time: TimeOfDay(hour: hour, minute: minute));
+  await svc.scheduleRitualReminder(
+      RitualId.dailyPlanning, TimeOfDay(hour: hour, minute: minute));
 }

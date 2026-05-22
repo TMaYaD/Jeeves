@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
+import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'database_provider.dart';
@@ -343,13 +344,15 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
 
   Future<void> skipShutdownToday() async {
     await persistShutdownSkipToday(ref: ref);
-    await NotificationService.instance.cancelShutdownReminder();
+    await NotificationService.instance
+        .cancelRitualReminder(RitualId.eveningShutdown);
   }
 
   Future<void> snoozeShutdownNotification(int minutes) async {
     final until = DateTime.now().add(Duration(minutes: minutes));
     await persistShutdownSnoozedUntil(until, ref: ref);
-    await NotificationService.instance.snoozeShutdownReminder(minutes);
+    await NotificationService.instance
+        .snoozeRitualReminder(RitualId.eveningShutdown, minutes);
   }
 
   // ---- Shutdown lifecycle ----------------------------------------------------
