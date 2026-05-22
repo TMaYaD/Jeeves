@@ -114,6 +114,19 @@ TriggerState _dprCadenceTrigger(Ref ref) {
   // World-state precondition: no FocusSession currently active. Opening
   // a new one is incoherent if one is already running.
   if (session.requireValue != null) return TriggerState.idle;
+
+  // Content precondition: DPR is meaningful only when there is something
+  // to plan. hasTodos gates the onboarding state; inbox-or-next non-empty
+  // gates the "everything is done already" state.
+  final hasTodos = ref.watch(hasTodosProvider);
+  if (!hasTodos.hasValue || !hasTodos.requireValue) return TriggerState.idle;
+  final inbox = ref.watch(unfilteredInboxProvider);
+  final next = ref.watch(unfilteredNextActionsProvider);
+  if (!inbox.hasValue || !next.hasValue) return TriggerState.idle;
+  if (inbox.requireValue.isEmpty && next.requireValue.isEmpty) {
+    return TriggerState.idle;
+  }
+
   return TriggerState(isFiring: true, firingSince: _startOfToday());
 }
 
@@ -134,6 +147,10 @@ TriggerState _esCadenceTrigger(Ref ref) {
 
 TriggerState _wrCadenceTrigger(Ref ref) {
   if (!ref.watch(periodicReviewIsDueProvider)) return TriggerState.idle;
+
+  // Content precondition: WR has nothing to review in the onboarding state.
+  final hasTodos = ref.watch(hasTodosProvider);
+  if (!hasTodos.hasValue || !hasTodos.requireValue) return TriggerState.idle;
 
   final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
   // firingSince: when the cadence-due edge would have fired. For a

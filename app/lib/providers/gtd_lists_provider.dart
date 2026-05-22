@@ -63,7 +63,7 @@ final doneProvider = StreamProvider<List<Todo>>((ref) {
 /// Stream of inbox todos (clarified = false), newest first — no context tag filter.
 ///
 /// Unlike [inboxProvider], this ignores [tagFilterProvider] so it covers the
-/// user's entire inbox. Used by [FocusSessionPlanningBanner] to decide whether
+/// user's entire inbox. Used by the Daily Planning Cadence Trigger to decide whether
 /// there is anything to plan.
 final unfilteredInboxProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -73,7 +73,7 @@ final unfilteredInboxProvider = StreamProvider<List<Todo>>((ref) {
 /// Stream of next-action todos — no context tag filter.
 ///
 /// Unlike [nextActionsProvider], this ignores [tagFilterProvider] so it covers
-/// the user's full next-action list. Used by [FocusSessionPlanningBanner] to
+/// the user's full next-action list. Used by the Daily Planning Cadence Trigger to
 /// decide whether there is anything to plan.
 final unfilteredNextActionsProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -83,7 +83,7 @@ final unfilteredNextActionsProvider = StreamProvider<List<Todo>>((ref) {
 /// Stream of waiting-for todos — no context tag filter.
 ///
 /// Unlike [waitingForProvider], this ignores [tagFilterProvider] so it covers
-/// the user's full waiting-for list. Used by [PeriodicReviewBanner] to decide
+/// the user's full waiting-for list. Used by the Weekly Review Content-state Trigger to decide
 /// whether the empty-actionable trigger should fire.
 final unfilteredWaitingForProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -93,7 +93,7 @@ final unfilteredWaitingForProvider = StreamProvider<List<Todo>>((ref) {
 /// Stream of maybe-intent todos — no context tag filter.
 ///
 /// Unlike [maybeProvider], this ignores [tagFilterProvider] so it covers the
-/// user's full someday/maybe list. Used by [PeriodicReviewBanner] to decide
+/// user's full someday/maybe list. Used by the Weekly Review Content-state Trigger to decide
 /// whether the empty-actionable trigger should fire.
 final unfilteredMaybeProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);

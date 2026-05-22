@@ -13,6 +13,8 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/ritual.dart';
+import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/focus_session_planning_provider.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/day_checkin_energy_step.dart';
@@ -22,9 +24,16 @@ import 'steps/plan_summary_step.dart';
 import 'steps/scheduled_review_step.dart';
 import 'steps/task_review_step.dart';
 
-class FocusSessionPlanningScreen extends ConsumerWidget {
+class FocusSessionPlanningScreen extends ConsumerStatefulWidget {
   const FocusSessionPlanningScreen({super.key});
 
+  @override
+  ConsumerState<FocusSessionPlanningScreen> createState() =>
+      _FocusSessionPlanningScreenState();
+}
+
+class _FocusSessionPlanningScreenState
+    extends ConsumerState<FocusSessionPlanningScreen> {
   static const _ceremonyId = 'planning';
   static const _stepTitles = [
     'Clarify Inbox',
@@ -38,7 +47,25 @@ class FocusSessionPlanningScreen extends ConsumerWidget {
   static const int _kProgressSegmentCount = 5;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void initState() {
+    super.initState();
+    // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref
+          .read(ceremonyInProgressProvider.notifier)
+          .enter(RitualId.dailyPlanning);
+    });
+  }
+
+  @override
+  void dispose() {
+    ref.read(ceremonyInProgressProvider.notifier).exit(RitualId.dailyPlanning);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(focusSessionPlanningProvider);
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
     final step = state.currentStep;

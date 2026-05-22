@@ -25,6 +25,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/ritual.dart';
+import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
 import '../../widgets/ceremony/wizard.dart';
@@ -61,6 +63,13 @@ class _PeriodicReviewScreenState
   @override
   void initState() {
     super.initState();
+    // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref
+          .read(ceremonyInProgressProvider.notifier)
+          .enter(RitualId.weeklyReview);
+    });
     // Pre-load every step's snapshot before the user can interact with
     // the wizard. Loading lazily on step entry let items routed in an
     // earlier step (e.g. inbox → maybe) leak into the matching later
@@ -71,6 +80,12 @@ class _PeriodicReviewScreenState
       final notifier = ref.read(periodicReviewProvider.notifier);
       await notifier.loadAllSnapshots();
     });
+  }
+
+  @override
+  void dispose() {
+    ref.read(ceremonyInProgressProvider.notifier).exit(RitualId.weeklyReview);
+    super.dispose();
   }
 
   @override

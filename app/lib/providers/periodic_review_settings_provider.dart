@@ -142,8 +142,8 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
 
 /// The "empty actionable" leg of the Weekly Review banner predicate:
 /// true when inbox + next are both empty but waiting-for or maybe still
-/// hold items. Extracted so both `PeriodicReviewBanner` and
-/// [periodicReviewBannerVisibleProvider] share the same rule.
+/// hold items. Extracted so both the Weekly Review Content-state Trigger
+/// and [periodicReviewBannerVisibleProvider] share the same rule.
 ///
 /// Stays as a pure function (over `AsyncValue`s) rather than as another
 /// Provider so callers can keep the original short-circuit order — the

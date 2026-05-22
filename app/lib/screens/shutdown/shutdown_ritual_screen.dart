@@ -15,6 +15,8 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/ritual.dart';
+import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/close_day_step.dart';
@@ -36,6 +38,26 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
   static const _ceremonyId = 'shutdown';
   static const _accent = Color(0xFF1E3A5F);
   static const _stepTitles = ['Review Your Day', 'Resolve Unfinished'];
+
+  @override
+  void initState() {
+    super.initState();
+    // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref
+          .read(ceremonyInProgressProvider.notifier)
+          .enter(RitualId.eveningShutdown);
+    });
+  }
+
+  @override
+  void dispose() {
+    ref
+        .read(ceremonyInProgressProvider.notifier)
+        .exit(RitualId.eveningShutdown);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
