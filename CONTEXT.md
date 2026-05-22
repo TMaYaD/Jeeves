@@ -114,11 +114,11 @@ The implicit List of Captures pending clarification. The user's trusted bucket f
 _Avoid_: Capture queue, Capture List
 
 **Next**:
-The implicit List of Outcomes the user has expressed willingness to handle next, without any Blocker preventing progress. Defined by: `Intent = next`, `Completion is null`, no PersonBlocker. The user engages with the row's *current Action* — but the List contains Outcomes, not Actions.
+The implicit List of Outcomes the user is willing to handle next. Defined by: `Intent = next`, `Completion is null`. The user engages with the row's *current Action* — but the List contains Outcomes, not Actions. A PersonBlocker does **not** exclude an Outcome from Next: per the Blocker definition above, the current Action coexists with the Blocker and is doable — `"call Trixy for a follow up"` belongs on Next even while the Outcome is waiting on Trixy. Such an Outcome surfaces on Next *and* on Waiting For simultaneously.
 _Avoid_: Next Actions (the list is of Outcomes, not Actions — though "Next Action" remains the user-facing label for the role of the row's current Action), Todo, Ready
 
 **Waiting For**:
-The implicit List of Outcomes that are PersonBlocked, grouped by the blocking Person. An Outcome blocked on multiple Persons appears under each Person it is blocked on. Disjoint from **Next** by construction (Next excludes PersonBlocked Outcomes), so the same Outcome never appears in both.
+The implicit List of Outcomes that are PersonBlocked, grouped by the blocking Person. An Outcome blocked on multiple Persons appears under each Person it is blocked on. **Overlaps with Next** when the Outcome is actionable (`Intent = next ∧ Completion is null`): the Outcome appears on Next because the current Action is doable *and* under Waiting For because the dependency is real. The overlap is by design — it surfaces "I can do this *while* waiting" without losing either fact.
 _Avoid_: Waiting, Blocked, Pending
 
 **Someday/Maybe**:
@@ -126,7 +126,7 @@ The implicit List of Outcomes the user has deferred. Defined by: `Intent = maybe
 _Avoid_: Maybe, Later, Backlog
 
 **Done**:
-The implicit List of completed Outcomes the user still considers part of their record. Defined by: `Completion is not null` AND `Intent != trash`. A trashed-and-completed Outcome surfaces in **Trash**, not Done — the user's stance to discard takes precedence over the historical Completion fact, so the GTD lists remain pairwise disjoint.
+The implicit List of completed Outcomes the user still considers part of their record. Defined by: `Completion is not null` AND `Intent != trash`. A trashed-and-completed Outcome surfaces in **Trash**, not Done — the user's stance to discard takes precedence over the historical Completion fact, so Done and Trash stay disjoint.
 _Avoid_: Completed, Finished, Archive (Archive implies removal from active concerns; Done is just the achieved set)
 
 **Trash**:
@@ -151,7 +151,7 @@ _Avoid_: Deleted, Removed (the row persists; Intent expresses the user's stance)
 - **TimeLog** records are attributed to an Action (not an Outcome) — you log time against the specific *action being performed*. An Outcome's total time invested is summed from the TimeLogs of its current and past Actions.
 - **Clarification stamps `last_clarified_at` per micro-act.** The principle: a write stamps iff it constitutes thinking-about-the-Outcome. Stamping writes include Outcome creation; title/notes/Intent/due-date edits; any Action mutation (create, edit, supersede, promote, demote, reorder, remove); Blocker add/remove (including PersonBlocker, however stored); explicit "still relevant" confirmation; Outcome completion or trashing. Non-stamping writes include current Action completion (engagement signal, not clarification), TimeLog writes, and Area / Label changes (organising).
 - **The three Freshness predicates compose freely.** An Outcome may be {Stale + has-current-Action}, {Actionless but with planned Actions}, {Planless and Stale}, etc. Different review surfaces emphasise different combinations — Daily Planning's re-clarify queue surfaces *Stale ∨ Actionless*; a future "abandoned Outcomes" surface might emphasise *Planless ∧ ¬Stale-but-old* (never thought about much, never planned). The predicates are the contract; the surfaces are downstream.
-- **The GTD lists (Inbox, Next, Waiting For, Someday/Maybe, Done, Trash) are pairwise disjoint by construction.** An Outcome is in at most one Outcome-bearing list at any time, and Inbox is over Captures so doesn't overlap with any of them. The disjointness is enforced by the filter definitions, not by an explicit "membership" column — they are implicit Lists.
+- **GTD List membership is defined by filter, not by an "ownership" column** — the Lists are implicit projections, so an Outcome's membership in each is decided independently by that List's predicate. Most pairs are disjoint by construction: `Intent` (`next` / `maybe` / `trash`) partitions Next, Someday/Maybe, and Trash; `Completion` separates Done from the active set; Inbox is over Captures so does not overlap with any Outcome-bearing list. The single deliberate overlap is **Next ∩ Waiting For**: an actionable PersonBlocked Outcome appears on both — Next because the current Action is doable, Waiting For because the dependency is real. Wizard surfaces that need step-disjointness (Weekly Review's Next-step snapshot, daily re-clarification's actionless branch) apply their own per-step person-tag exclusion; the everyday Next List does not.
 
 #### Example dialogue
 
@@ -166,6 +166,9 @@ _Avoid_: Deleted, Removed (the row persists; Intent expresses the user's stance)
 >
 > **Dev:** "How can an Outcome have a Blocker *and* a current Action at the same time? Isn't a block the absence of a doable action?"
 > **Domain expert:** "No. The Blocker is on the Outcome — the outcome is waiting on Trixy. The current Action is 'follow up with Trixy' — something the user can do *while waiting*, that might even resolve the Blocker. Acting and waiting coexist."
+>
+> **Dev:** "So where does this Outcome show up — on Next, or on Waiting For?"
+> **Domain expert:** "Both. The Lists are projections — they overlap when both predicates apply. Next picks it up because `Intent = next` and the current Action is doable; Waiting For picks it up because the PersonBlocker is real. The wizard surfaces that need step-disjointness (Weekly Review's Next step, daily re-clarification's actionless branch) apply their own person-tag exclusion; the everyday Next List does not."
 >
 > **Dev:** "If I move an Outcome to Someday/Maybe and then mark it done later, what was its Intent during the gap?"
 > **Domain expert:** "`maybe`. Intent is willingness — the user was willing to do it eventually. Completion is what happened. They're independent axes; the gap isn't a contradiction."

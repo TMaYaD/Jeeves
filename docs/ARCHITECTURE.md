@@ -649,11 +649,11 @@ WHERE todos.clarified = 1
 
 `TodoDao.watchPersonTagged()` returns the flat list and `TodoDao.watchPersonTaggedGrouped()` returns it bucketed by `Tag`. Adding or removing a PersonBlocker is a Tag-link mutation on `todo_tags` — the same junction table that backs Areas, Labels, and Contexts — and stamps `last_clarified_at` on the Outcome because PersonBlocker is conceptually Clarification (it is a Blocker on the Outcome, not a categorisation), even though the storage shape looks like a Tag link.
 
-Waiting For is disjoint from Next by construction: the Weekly Review's Next Actions snapshot excludes any Outcome carrying a person-typed tag (`TodoDao.getNextActionsExcludingPersonTagged`), and the daily re-clarification surface excludes delegated tasks from its "actionless" branch for the same reason — their cadence belongs to the weekly Waiting For review, not the daily Next list.
+Waiting For **overlaps with Next** when the Outcome is actionable: an Outcome with `intent='next'` carrying at least one `Tag(type='person')` appears on both. `TodoDao.watchNext` (the everyday Next List query) does **not** exclude person-tagged Outcomes — the current Action is doable (`"call Trixy for a follow up"` belongs on Next even while the Outcome is waiting on Trixy), and `TodoDao.watchPersonTagged*` surfaces the same Outcome inside the Waiting For grouping. Two wizard surfaces apply per-step person-tag exclusion to keep their own steps disjoint: the Weekly Review wizard's Next-step snapshot (`TodoDao.getNextActionsExcludingPersonTagged`) and the daily re-clarification's "actionless" branch (`TodoDao.watchNeedsReview` — delegated Outcomes' cadence belongs to the weekly Waiting For review, not daily re-clarification). The general daily Next List does not filter person-tagged.
 
 ### Intent semantics
 
-- `next` — normal actionable item; appears in Next / Waiting For views (Waiting For if the Outcome carries any `Tag(type='person')`, Next otherwise).
+- `next` — normal actionable item; appears on Next, and **also** on Waiting For (grouped by Person) when the Outcome carries any `Tag(type='person')`. The two views overlap by design when both predicates apply.
 - `maybe` — deferred for later consideration; surfaces in the Maybe view; excluded from Next Actions and planning reviews.
 - `trash` — marked for deletion (UX deferred; column domain enforced at DB level).
 
