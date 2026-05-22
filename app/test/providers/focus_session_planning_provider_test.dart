@@ -1116,4 +1116,96 @@ void main() {
       expect(todo?.clarified, isTrue);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // 'rollover' Disposition → next-session pre-selection
+  //
+  // CONTEXT.md (Engagement, Disposition):
+  //   rollover — pre-select this Outcome for the next FocusSession's
+  //   Planning (user can deselect there).
+  //
+  // The build() of FocusSessionPlanningNotifier schedules a microtask that
+  // reads the most-recently-closed session's rollover task IDs and prepends
+  // them to pendingSelectedTaskIds.
+  // ---------------------------------------------------------------------------
+
+  group("FocusSessionPlanningNotifier — 'rollover' pre-selection", () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+
+    setUp(() {
+      db = GtdDatabase(NativeDatabase.memory());
+      container = _container(db);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    Future<void> insertTodo(String id) async {
+      final now = DateTime.now();
+      await db.into(db.todos).insert(TodosCompanion(
+        id: Value(id),
+        title: Value('Task $id'),
+        clarified: const Value(true),
+        userId: const Value('local'),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+    }
+
+    test(
+        'pendingSelectedTaskIds includes IDs from the most-recently-closed '
+        "session's 'rollover' disposition", () async {
+      await insertTodo('X');
+      await insertTodo('Y');
+
+      // Close a session with X dispositioned 'rollover'; Y dispositioned 'leave'.
+      final sid = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['X', 'Y'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sid,
+        dispositions: {'X': 'rollover', 'Y': 'leave'},
+        now: DateTime(2026, 5, 1, 17, 0),
+      );
+
+      // Read the provider — build() schedules _preloadRolloverIds via a
+      // microtask.  We force the microtask to drain, then verify state.
+      container.read(focusSessionPlanningProvider);
+      await Future<void>.delayed(Duration.zero);
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.pendingSelectedTaskIds, contains('X'),
+          reason:
+              "rollover-dispositioned Outcomes pre-select for the next session's Planning.");
+      expect(state.pendingSelectedTaskIds, isNot(contains('Y')),
+          reason: 'leave-dispositioned Outcomes do not pre-select.');
+    });
+
+    test(
+        'pendingSelectedTaskIds is empty when the prior session had no '
+        'rollover dispositions', () async {
+      await insertTodo('Y');
+      final sid = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['Y'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sid,
+        dispositions: {'Y': 'leave'},
+        now: DateTime(2026, 5, 1, 17, 0),
+      );
+
+      container.read(focusSessionPlanningProvider);
+      await Future<void>.delayed(Duration.zero);
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.pendingSelectedTaskIds, isEmpty);
+    });
+  });
 }
