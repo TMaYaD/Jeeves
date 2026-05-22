@@ -14,44 +14,37 @@ class _RecordingNudgeActions extends NudgeActions {
   Future<void> dismiss(RitualId ritual) async => onDismiss(ritual);
 }
 
-Widget _wrap({
-  required List<Override> overrides,
-}) {
-  final router = GoRouter(
-    initialLocation: '/',
-    routes: [
-      GoRoute(
-        path: '/',
-        builder: (_, __) => const Scaffold(body: NudgeBanner()),
-      ),
-      GoRoute(
-        path: '/focus-session-planning',
-        builder: (_, __) => const Scaffold(body: Text('planning')),
-      ),
-      GoRoute(
-        path: '/shutdown',
-        builder: (_, __) => const Scaffold(body: Text('shutdown')),
-      ),
-      GoRoute(
-        path: '/periodic-review',
-        builder: (_, __) => const Scaffold(body: Text('review')),
-      ),
-    ],
-  );
-  return ProviderScope(
-    overrides: overrides,
-    child: MaterialApp.router(routerConfig: router),
-  );
-}
+GoRouter _router() => GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (_, _) => const Scaffold(body: NudgeBanner()),
+        ),
+        GoRoute(
+          path: '/focus-session-planning',
+          builder: (_, _) => const Scaffold(body: Text('planning')),
+        ),
+        GoRoute(
+          path: '/shutdown',
+          builder: (_, _) => const Scaffold(body: Text('shutdown')),
+        ),
+        GoRoute(
+          path: '/periodic-review',
+          builder: (_, _) => const Scaffold(body: Text('review')),
+        ),
+      ],
+    );
 
 void main() {
   group('NudgeBanner', () {
     testWidgets('renders nothing when the queue is empty', (tester) async {
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(ProviderScope(
         overrides: [
           nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
         ],
+        child: MaterialApp.router(routerConfig: _router()),
       ));
       await tester.pump();
       expect(find.byKey(const Key('planning_banner_visible')), findsNothing);
@@ -64,13 +57,14 @@ void main() {
 
     testWidgets('renders the queue head when its banner is enabled',
         (tester) async {
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(ProviderScope(
         overrides: [
           nudgeQueueProvider.overrideWith(
             (ref) => const [RitualId.dailyPlanning, RitualId.eveningShutdown],
           ),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
         ],
+        child: MaterialApp.router(routerConfig: _router()),
       ));
       await tester.pump();
       expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
@@ -80,7 +74,7 @@ void main() {
     testWidgets(
         'skips the head and renders the next visible Ritual whose banner is enabled',
         (tester) async {
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(ProviderScope(
         overrides: [
           nudgeQueueProvider.overrideWith(
             (ref) => const [RitualId.weeklyReview, RitualId.dailyPlanning],
@@ -89,6 +83,7 @@ void main() {
             (ref, r) => r != RitualId.weeklyReview,
           ),
         ],
+        child: MaterialApp.router(routerConfig: _router()),
       ));
       await tester.pump();
       expect(
@@ -101,7 +96,7 @@ void main() {
     testWidgets('dismiss button calls NudgeActions.dismiss with the right Ritual',
         (tester) async {
       RitualId? dismissed;
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(ProviderScope(
         overrides: [
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.eveningShutdown]),
@@ -113,6 +108,7 @@ void main() {
             ),
           ),
         ],
+        child: MaterialApp.router(routerConfig: _router()),
       ));
       await tester.pump();
       await tester.tap(find.byKey(const Key('shutdown_banner_dismiss')));
