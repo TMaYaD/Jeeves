@@ -32,6 +32,7 @@ class ShutdownRitualScreen extends ConsumerStatefulWidget {
 }
 
 class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
+  late final CeremonyInProgressNotifier _ceremonyNotifier;
   int? _resolveInitialTotal;
   bool _showCloseDay = false;
 
@@ -42,20 +43,19 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
   @override
   void initState() {
     super.initState();
+    // Capture the notifier now so dispose() can call exit() without
+    // touching `ref` after the widget has been unmounted.
+    _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
     // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref
-          .read(ceremonyInProgressProvider.notifier)
-          .enter(RitualId.eveningShutdown);
+      _ceremonyNotifier.enter(RitualId.eveningShutdown);
     });
   }
 
   @override
   void dispose() {
-    ref
-        .read(ceremonyInProgressProvider.notifier)
-        .exit(RitualId.eveningShutdown);
+    _ceremonyNotifier.exit(RitualId.eveningShutdown);
     super.dispose();
   }
 

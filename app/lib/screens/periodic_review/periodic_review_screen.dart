@@ -46,6 +46,8 @@ class PeriodicReviewScreen extends ConsumerStatefulWidget {
 
 class _PeriodicReviewScreenState
     extends ConsumerState<PeriodicReviewScreen> {
+  late final CeremonyInProgressNotifier _ceremonyNotifier;
+
   static const _ceremonyId = 'periodic_review';
   static const _accent = Color(0xFF059669);
   static const _stepTitles = [
@@ -63,12 +65,13 @@ class _PeriodicReviewScreenState
   @override
   void initState() {
     super.initState();
+    // Capture the notifier now so dispose() can call exit() without
+    // touching `ref` after the widget has been unmounted.
+    _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
     // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref
-          .read(ceremonyInProgressProvider.notifier)
-          .enter(RitualId.weeklyReview);
+      _ceremonyNotifier.enter(RitualId.weeklyReview);
     });
     // Pre-load every step's snapshot before the user can interact with
     // the wizard. Loading lazily on step entry let items routed in an
@@ -84,7 +87,7 @@ class _PeriodicReviewScreenState
 
   @override
   void dispose() {
-    ref.read(ceremonyInProgressProvider.notifier).exit(RitualId.weeklyReview);
+    _ceremonyNotifier.exit(RitualId.weeklyReview);
     super.dispose();
   }
 

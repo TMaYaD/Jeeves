@@ -112,7 +112,9 @@ void main() {
       ));
       await tester.pump();
       await tester.tap(find.byKey(const Key('shutdown_banner_dismiss')));
-      await tester.pumpAndSettle();
+      // The banner's pulse animation `repeat(reverse: true)` runs forever, so
+      // `pumpAndSettle` never returns. One frame is enough to flush the tap.
+      await tester.pump();
       expect(dismissed, RitualId.eveningShutdown);
     });
   });

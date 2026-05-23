@@ -34,6 +34,8 @@ class FocusSessionPlanningScreen extends ConsumerStatefulWidget {
 
 class _FocusSessionPlanningScreenState
     extends ConsumerState<FocusSessionPlanningScreen> {
+  late final CeremonyInProgressNotifier _ceremonyNotifier;
+
   static const _ceremonyId = 'planning';
   static const _stepTitles = [
     'Clarify Inbox',
@@ -49,18 +51,20 @@ class _FocusSessionPlanningScreenState
   @override
   void initState() {
     super.initState();
+    // Capture the notifier now so dispose() can call exit() without
+    // touching `ref` after the widget has been unmounted (Riverpod
+    // forbids ref access in dispose).
+    _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
     // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref
-          .read(ceremonyInProgressProvider.notifier)
-          .enter(RitualId.dailyPlanning);
+      _ceremonyNotifier.enter(RitualId.dailyPlanning);
     });
   }
 
   @override
   void dispose() {
-    ref.read(ceremonyInProgressProvider.notifier).exit(RitualId.dailyPlanning);
+    _ceremonyNotifier.exit(RitualId.dailyPlanning);
     super.dispose();
   }
 
