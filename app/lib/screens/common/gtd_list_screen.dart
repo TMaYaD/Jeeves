@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
 import '../../widgets/active_filter_bar.dart';
+import '../../widgets/async_list.dart';
 
 /// Shared list screen for all GTD views (Next Actions, Waiting For, etc.).
 ///
@@ -14,10 +15,16 @@ class GtdListScreen extends ConsumerWidget {
     super.key,
     required this.title,
     required this.provider,
+    this.emptyIcon = Icons.inbox_outlined,
+    this.emptyTitle = 'Nothing here yet',
+    this.emptySubtitle,
   });
 
   final String title;
   final StreamProvider<List<Todo>> provider;
+  final IconData? emptyIcon;
+  final String emptyTitle;
+  final String? emptySubtitle;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -54,29 +61,19 @@ class GtdListScreen extends ConsumerWidget {
             ),
             const ActiveFilterBar(),
             Expanded(
-              child: asyncItems.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
-                error: (err, _) => Center(child: Text('Error: $err')),
-                data: (items) {
-                  if (items.isEmpty) {
-                    return Center(
-                      child: Text(
-                        'Nothing here yet',
-                        style:
-                            TextStyle(color: const Color(0xFF9CA3AF)),
-                      ),
-                    );
-                  }
-                  return ListView.builder(
-                    padding: const EdgeInsets.only(top: 8, bottom: 24),
-                    itemCount: items.length,
-                    itemBuilder: (_, i) => _GtdListItem(
-                      todo: items[i],
-                      onTap: () => context.push('/task/${items[i].id}'),
-                    ),
-                  );
-                },
+              child: AsyncList<Todo>(
+                asyncValue: asyncItems,
+                emptyIcon: emptyIcon,
+                emptyTitle: emptyTitle,
+                emptySubtitle: emptySubtitle,
+                dataBuilder: (context, items) => ListView.builder(
+                  padding: const EdgeInsets.only(top: 8, bottom: 24),
+                  itemCount: items.length,
+                  itemBuilder: (_, i) => _GtdListItem(
+                    todo: items[i],
+                    onTap: () => context.push('/task/${items[i].id}'),
+                  ),
+                ),
               ),
             ),
           ],

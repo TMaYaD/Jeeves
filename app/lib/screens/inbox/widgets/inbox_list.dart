@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../providers/inbox_provider.dart';
 import '../../../providers/onboarding_provider.dart';
+import '../../../widgets/async_list.dart';
 import '../../../widgets/onboarding_card.dart';
 import 'todo_list_item.dart';
 
@@ -42,52 +43,55 @@ class InboxList extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncItems = ref.watch(inboxItemsProvider);
 
-    return asyncItems.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (err, stack) {
-        debugPrint('InboxList error: $err\n$stack');
-        return const Center(
-          child: Text('Could not load inbox. Pull to refresh and try again.'),
-        );
-      },
-      data: (items) => RefreshIndicator(
-        onRefresh: onRefresh,
-        child: ListView.builder(
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: AsyncList<Todo>(
+        asyncValue: asyncItems,
+        emptyIsScrollable: true,
+        emptyTitle: 'No items yet — add something above',
+        emptyBuilder: (_) => const _InboxEmptyState(),
+        dataBuilder: (context, items) => ListView.builder(
           physics: const _TightBouncingScrollPhysics(
             parent: AlwaysScrollableScrollPhysics(),
           ),
           padding: const EdgeInsets.only(top: 8),
-          itemCount: items.isEmpty ? 1 : items.length,
-          itemBuilder: (_, index) {
-            if (items.isEmpty) {
-              return ValueListenableBuilder<bool>(
-                valueListenable: onboardingSeenNotifier,
-                builder: (context, seen, _) {
-                  if (!seen) {
-                    return const Padding(
-                      padding: EdgeInsets.only(top: 120),
-                      child: OnboardingCard(),
-                    );
-                  }
-                  return const Padding(
-                    padding: EdgeInsets.only(top: 120),
-                    child: Center(
-                      child: Text(
-                        'No items yet — add something above',
-                        style: TextStyle(color: Color(0xFF9CA3AF)),
-                      ),
-                    ),
-                  );
-                },
-              );
-            }
-            return TodoListItem(
-              todo: items[index],
-              onTap: () => context.push('/inbox/${items[index].id}/clarify'),
-            );
-          },
+          itemCount: items.length,
+          itemBuilder: (_, index) => TodoListItem(
+            todo: items[index],
+            onTap: () => context.push('/inbox/${items[index].id}/clarify'),
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// Inbox's empty surface: shows the OnboardingCard CTA until the user has
+/// seen it, then a simple text prompt pointing at the QuickAddBar above.
+class _InboxEmptyState extends StatelessWidget {
+  const _InboxEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: onboardingSeenNotifier,
+      builder: (context, seen, _) {
+        if (!seen) {
+          return const Padding(
+            padding: EdgeInsets.only(top: 120),
+            child: OnboardingCard(),
+          );
+        }
+        return const Padding(
+          padding: EdgeInsets.only(top: 120),
+          child: Center(
+            child: Text(
+              'No items yet — add something above',
+              style: TextStyle(color: Color(0xFF9CA3AF)),
+            ),
+          ),
+        );
+      },
     );
   }
 }
