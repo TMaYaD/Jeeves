@@ -313,14 +313,14 @@ class _BannerContentState extends State<_BannerContent>
                   onTap: widget.onTap,
                 ),
                 const SizedBox(width: 4),
-                GestureDetector(
+                IconButton(
                   key: Key('${widget.ritual.keyPrefix}_banner_dismiss'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap: widget.onDismiss,
-                  child: Padding(
-                    padding: const EdgeInsets.all(6),
-                    child: Icon(Icons.close, size: 18, color: skin.inkMuted),
-                  ),
+                  tooltip: 'Dismiss',
+                  onPressed: widget.onDismiss,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.all(6),
+                  constraints: const BoxConstraints(),
+                  icon: Icon(Icons.close, size: 18, color: skin.inkMuted),
                 ),
               ],
             ),
