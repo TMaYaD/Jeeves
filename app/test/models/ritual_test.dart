@@ -28,6 +28,11 @@ void main() {
       }
     });
 
+    test('ritualsByPriority contains each RitualId exactly once', () {
+      expect(ritualsByPriority.length, RitualId.values.length);
+      expect(ritualsByPriority.toSet(), RitualId.values.toSet());
+    });
+
     test('keyPrefix matches existing per-Ritual storage namespaces', () {
       expect(RitualId.dailyPlanning.keyPrefix, 'planning');
       expect(RitualId.eveningShutdown.keyPrefix, 'shutdown');
