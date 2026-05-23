@@ -102,10 +102,21 @@ final nudgeStateProvider =
 // Visibility predicate
 // ---------------------------------------------------------------------------
 
+/// True once synced prefs have completed their initial load. Until this is
+/// true the [NudgeState] returned by [nudgeStateProvider] is the empty
+/// default, which would mask a real dismiss/snooze and flash the banner on
+/// before the persisted state arrives. Surface predicates gate on it.
+final nudgePrefsReadyProvider = Provider<bool>((ref) {
+  return ref.watch(syncedPreferencesProvider).asData?.value != null;
+});
+
 /// True iff [ritual]'s Nudge is currently visible. See file-level docs for
 /// the predicate.
 final nudgeVisibleProvider =
     Provider.family<bool, RitualId>((ref, ritual) {
+  // Defer until synced prefs have loaded — see [nudgePrefsReadyProvider].
+  if (!ref.watch(nudgePrefsReadyProvider)) return false;
+
   // In-progress hygiene — ADR-0009. Hidden regardless of Trigger state.
   if (ref.watch(ceremonyInProgressForProvider(ritual))) return false;
 

@@ -58,6 +58,7 @@ void main() {
         ...inProgressSet,
       };
       return ProviderContainer(overrides: [
+        nudgePrefsReadyProvider.overrideWith((ref) => true),
         mostRecentFiringEdgeProvider.overrideWith(
           (ref, r) => edges[r],
         ),
@@ -80,6 +81,21 @@ void main() {
       final c = makeContainer(firingEdge: DateTime(2026, 5, 22, 0));
       addTearDown(c.dispose);
       expect(c.read(nudgeVisibleProvider(RitualId.dailyPlanning)), isTrue);
+    });
+
+    test('not visible while synced prefs are still loading', () {
+      // Same firing-edge scenario as the previous test, but with the
+      // readiness gate flipped off — guard must take precedence.
+      final c = ProviderContainer(overrides: [
+        nudgePrefsReadyProvider.overrideWith((ref) => false),
+        mostRecentFiringEdgeProvider.overrideWith(
+          (ref, r) => DateTime(2026, 5, 22, 0),
+        ),
+        ceremonyInProgressForProvider.overrideWith((ref, r) => false),
+        nudgeStateProvider.overrideWith((ref, r) => const NudgeState()),
+      ]);
+      addTearDown(c.dispose);
+      expect(c.read(nudgeVisibleProvider(RitualId.dailyPlanning)), isFalse);
     });
 
     test('not visible while the Ceremony is in progress', () {
