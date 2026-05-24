@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -14,10 +13,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 /// The *only* legitimate per-screen variation is empty-state copy and the
 /// optional CTA. Pass [emptyBuilder] for the rare case where a callsite
 /// needs a fully custom empty surface (e.g. Search's hidden-done hint).
-///
-/// Set [emptyIsScrollable] when an ancestor [RefreshIndicator] needs to fire
-/// even on the empty state — that wraps the empty surface in a
-/// [ListView] so the gesture has something to drag.
+/// When [emptyBuilder] is provided its widget is rendered verbatim — the
+/// caller owns scrollability, physics and any [RefreshIndicator] wiring.
 class AsyncList<T> extends StatelessWidget {
   const AsyncList({
     super.key,
@@ -28,7 +25,6 @@ class AsyncList<T> extends StatelessWidget {
     this.emptySubtitle,
     this.emptyCta,
     this.emptyBuilder,
-    this.emptyIsScrollable = false,
   });
 
   /// The async list to render.
@@ -54,27 +50,22 @@ class AsyncList<T> extends StatelessWidget {
 
   /// Escape hatch for callsites that need a fully custom empty surface
   /// (e.g. Search's "no results" hint with a deep-link to include completed
-  /// matches). When provided, this fully replaces the standard empty layout.
+  /// matches, or the inbox's pull-to-refresh-friendly onboarding card).
+  /// When provided, this fully replaces the standard empty layout and is
+  /// rendered verbatim — the caller owns scrollability and physics.
   final WidgetBuilder? emptyBuilder;
-
-  /// When true, the loading / error / empty surfaces render inside a
-  /// [ListView] so an enclosing [RefreshIndicator] can fire its gesture
-  /// even when there's no data to scroll.
-  final bool emptyIsScrollable;
 
   @override
   Widget build(BuildContext context) {
     return asyncValue.when(
-      loading: () => _wrapForScrolling(
-        const Center(child: CircularProgressIndicator()),
-      ),
+      loading: () => const Center(child: CircularProgressIndicator()),
       error: (err, stack) {
         debugPrint('AsyncList error: $err\n$stack');
-        return _wrapForScrolling(const _ErrorSurface());
+        return const _ErrorSurface();
       },
       data: (items) {
         if (items.isEmpty) {
-          final empty = emptyBuilder != null
+          return emptyBuilder != null
               ? emptyBuilder!(context)
               : _EmptySurface(
                   icon: emptyIcon,
@@ -82,25 +73,9 @@ class AsyncList<T> extends StatelessWidget {
                   subtitle: emptySubtitle,
                   cta: emptyCta,
                 );
-          return _wrapForScrolling(empty);
         }
         return dataBuilder(context, items);
       },
-    );
-  }
-
-  Widget _wrapForScrolling(Widget child) {
-    if (!emptyIsScrollable) return child;
-    // A single-child ListView gives a RefreshIndicator something to drag
-    // even when the content fits the viewport.
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      children: [
-        SizedBox(
-          height: 400,
-          child: child,
-        ),
-      ],
     );
   }
 }

@@ -206,23 +206,25 @@ void main() {
     });
 
     testWidgets(
-        'emptyIsScrollable wraps empty state inside a scroll view '
-        '(enables enclosing pull-to-refresh)', (tester) async {
+        'emptyBuilder is rendered verbatim — AsyncList adds no wrapper',
+        (tester) async {
+      // Caller owns scrollability / physics / RefreshIndicator wiring when
+      // they supply emptyBuilder. AsyncList must not impose a Scrollable.
       await tester.pumpWidget(
         _wrap(
           AsyncList<String>(
             asyncValue: const AsyncData<List<String>>(<String>[]),
             emptyIcon: Icons.inbox_outlined,
             emptyTitle: 'Nothing here yet',
-            emptyIsScrollable: true,
+            emptyBuilder: (_) => const Text('Bare empty'),
             dataBuilder: (_, _) => const SizedBox.shrink(),
           ),
         ),
       );
 
-      expect(find.text('Nothing here yet'), findsOneWidget);
-      // A Scrollable ancestor must exist so RefreshIndicator gestures resolve.
-      expect(find.byType(Scrollable), findsWidgets);
+      expect(find.text('Bare empty'), findsOneWidget);
+      // No Scrollable should be introduced by AsyncList itself.
+      expect(find.byType(Scrollable), findsNothing);
     });
   });
 }
