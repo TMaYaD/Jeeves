@@ -66,11 +66,20 @@ void main() {
       await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
       // Single inbox item: skipping it past the cursor moves the wizard into
       // the "Inbox is clear" terminal state. The next advanceStep crosses
-      // out of Inbox; Waiting For, Next Actions, and Someday/Maybe all
-      // auto-skip on entry because no fixtures populate them, so the wizard
-      // lands on the Summary in a single hop.
+      // out of Inbox. Empty steps (Waiting For, Next Actions, Someday/Maybe)
+      // no longer auto-skip — they show an inline empty-state; the user
+      // clicks Next to proceed. Walk each one manually.
       notifier.advanceInbox();
-      await notifier.advanceStep();
+      await notifier.advanceStep(); // Inbox → Waiting For
+      expect(c.read(periodicReviewProvider).currentStep,
+          equals(PeriodicReviewNotifier.kStepWaitingFor));
+      await notifier.advanceStep(); // Waiting For → Next Actions
+      expect(c.read(periodicReviewProvider).currentStep,
+          equals(PeriodicReviewNotifier.kStepNextActions));
+      await notifier.advanceStep(); // Next Actions → Someday/Maybe
+      expect(c.read(periodicReviewProvider).currentStep,
+          equals(PeriodicReviewNotifier.kStepSomeMaybe));
+      await notifier.advanceStep(); // Someday/Maybe → Summary
       expect(c.read(periodicReviewProvider).currentStep,
           equals(PeriodicReviewNotifier.kStepSummary));
 
@@ -108,7 +117,7 @@ void main() {
       expect(c.read(periodicReviewBannerDismissedTodayProvider), isTrue);
     });
 
-    test('inbox auto-skip — empty inbox advances past Step 0 on entry',
+    test('empty inbox — snapshot loads on Step 0, step does not auto-skip',
         () async {
       await c.read(syncedPreferencesProvider.future);
       final notifier = c.read(periodicReviewProvider.notifier);
@@ -117,9 +126,9 @@ void main() {
       final state = c.read(periodicReviewProvider);
       expect(state.inboxNav.isLoaded, isTrue);
       expect(state.inboxNav.isEmpty, isTrue);
-      // Auto-skip fires synchronously inside _onStepEnter once the snapshot
-      // load resolves, so currentStep must have advanced past Step 0.
-      expect(state.currentStep, isNot(PeriodicReviewNotifier.kStepInbox));
+      // Empty inbox no longer auto-skips. The step shows an inline empty-state
+      // and waits for the user to tap Next.
+      expect(state.currentStep, equals(PeriodicReviewNotifier.kStepInbox));
     });
 
     test('disjointness — person-tagged next action appears in Waiting For '
@@ -192,7 +201,8 @@ void main() {
       expect(waitingIds.intersection(nextIds), isEmpty);
     });
 
-    test('Next Actions step auto-skips when its snapshot is empty', () async {
+    test('empty Next Actions step — snapshot loads, step does not auto-skip',
+        () async {
       await c.read(syncedPreferencesProvider.future);
       final notifier = c.read(periodicReviewProvider.notifier);
 
@@ -200,8 +210,10 @@ void main() {
       final state = c.read(periodicReviewProvider);
       expect(state.nextActionsNav.isLoaded, isTrue);
       expect(state.nextActionsNav.isEmpty, isTrue);
+      // Empty Next Actions no longer auto-skips. The step shows an inline
+      // empty-state and waits for the user to tap Next.
       expect(state.currentStep,
-          isNot(PeriodicReviewNotifier.kStepNextActions));
+          equals(PeriodicReviewNotifier.kStepNextActions));
     });
   });
 }

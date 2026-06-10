@@ -203,7 +203,7 @@ void main() {
       await Future.wait([first, second]);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction),
+      expect(state.inboxRoutings[0], equals(RoutingKind.nextAction),
           reason: 'Routing recorded exactly once for index 0');
       expect(state.inboxNav.index, equals(1),
           reason: 'Index advanced exactly once');
@@ -226,7 +226,7 @@ void main() {
       await Future.wait([first, second]);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.maybe),
+      expect(state.inboxRoutings[0], equals(RoutingKind.maybe),
           reason: 'Routing recorded exactly once for index 0');
       expect(state.inboxNav.index, equals(1));
 
@@ -404,7 +404,7 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxNav.index, 1);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction));
+      expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-1')))
@@ -422,7 +422,7 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxNav.index, 1);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.maybe));
+      expect(state.inboxRoutings[0], equals(RoutingKind.maybe));
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-1')))
@@ -441,7 +441,7 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.inboxNav.index, 1);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.done));
+      expect(state.inboxRoutings[0], equals(RoutingKind.done));
 
       final row = await (db.select(db.todos)
             ..where((t) => t.id.equals('item-1')))
@@ -467,7 +467,7 @@ void main() {
           reason: 'Back must not revert DB state');
       expect(afterBack.intent, 'maybe');
       var state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.maybe));
+      expect(state.inboxRoutings[0], equals(RoutingKind.maybe));
 
       // Re-tapping a different destination triggers the revert + re-apply.
       await notifier.processInboxItem('item-1', title: 'Test item');
@@ -480,7 +480,7 @@ void main() {
           reason: 'revert restored prior intent before re-routing');
       expect(row.doneAt, isNull);
       state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction));
+      expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
     });
 
     test('revert does not modify title, notes, energy, time estimate, due date',
@@ -534,7 +534,7 @@ void main() {
           reason: 'revert restored prior intent before next_action routing');
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction));
+      expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
     });
 
     test('re-routing Done → Next Action clears done_at', () async {
@@ -578,7 +578,7 @@ void main() {
       expect(afterRow.doneAt, equals(beforeRow.doneAt));
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0]?.kind, equals(RoutingKind.nextAction));
+      expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
     });
 
     test('progress fraction is inboxIndex / inboxSnapshot.length', () async {

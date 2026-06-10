@@ -36,7 +36,6 @@ class SomedayMaybeStep extends ConsumerWidget {
     if (!nav.isLoaded) {
       return const Center(child: CircularProgressIndicator());
     }
-
     if (nav.isEmpty || nav.isComplete) {
       return const ReviewEmptyState(
         icon: Icons.star_border,
@@ -48,7 +47,6 @@ class SomedayMaybeStep extends ConsumerWidget {
     final index = nav.index;
     final todo = nav.current!;
     final notifier = ref.read(periodicReviewProvider.notifier);
-
     return ReviewItemCard(
       key: ValueKey(todo.id),
       todo: todo,

@@ -313,9 +313,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     await _transitionTo(step.clamp(0, _kMaxStep));
   }
 
-  /// Performs the step transition while holding [_isTransitioning]. Internal
-  /// callers (auto-skip in [_onStepEnter]) use this directly so the guard set
-  /// by the outer [advanceStep] / [goToStep] does not block their reentry.
+  /// Performs the step transition while holding [_isTransitioning].
   Future<void> _transitionTo(int step) async {
     _isTransitioning = true;
     try {
@@ -326,39 +324,19 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     }
   }
 
+  /// Loads the snapshot for the step that was just entered. Empty snapshots
+  /// are shown to the user as an empty-state view inside the step body; the
+  /// step does not auto-skip. The user clicks Next to advance.
   Future<void> _onStepEnter(int step) async {
     switch (step) {
       case kStepInbox:
         await loadInboxSnapshot();
-        // Auto-skip: empty inbox advances past Step 0 on entry. Loader has
-        // already returned so we are outside any build phase, and the
-        // _isTransitioning guard prevents external concurrent entries.
-        if (state.currentStep == kStepInbox &&
-            state.inboxNav.isLoaded &&
-            state.inboxNav.isEmpty) {
-          await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
-        }
       case kStepWaitingFor:
         await loadWaitingForSnapshot();
-        if (state.currentStep == kStepWaitingFor &&
-            state.waitingForNav.isLoaded &&
-            state.waitingForNav.isEmpty) {
-          await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
-        }
       case kStepNextActions:
         await loadNextActionsSnapshot();
-        if (state.currentStep == kStepNextActions &&
-            state.nextActionsNav.isLoaded &&
-            state.nextActionsNav.isEmpty) {
-          await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
-        }
       case kStepSomeMaybe:
         await loadSomedaySnapshot();
-        if (state.currentStep == kStepSomeMaybe &&
-            state.somedayNav.isLoaded &&
-            state.somedayNav.isEmpty) {
-          await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
-        }
     }
   }
 

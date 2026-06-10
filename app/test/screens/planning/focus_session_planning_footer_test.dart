@@ -7,12 +7,10 @@
 /// against an in-memory [GtdDatabase] so the snapshot plumbing and step
 /// rendering exercise the production path.
 ///
-/// Note on thresholds: DPR's Skip↔Next-step boundary is the screen's existing
-/// skip↔advanceStep boundary — `!inboxNav.isComplete`. On the last *real*
-/// inbox item the footer still shows Skip; Next step appears only once the
-/// cursor has moved past the end. That DPR-vs-Weekly-Review threshold
-/// difference is a known, orthogonal inconsistency, out of scope for #292;
-/// these tests assert DPR's actual behaviour.
+/// Both DPR and WR now share the same Skip↔Next-step threshold:
+/// `!nav.isComplete`. On the last *real* item the footer still shows Skip;
+/// Next step appears only once the cursor has moved past the end and the step
+/// body shows its completion placeholder.
 library;
 
 import 'package:drift/drift.dart' hide isNotNull, isNull;
@@ -157,10 +155,28 @@ void main() {
     testWidgets(
         'a step with no per-item cursor shows an enabled Next step',
         (tester) async {
-      // Empty inbox auto-advances out of Step 0; with nothing to review the
-      // ritual lands on the Energy step (Step 2), which has no per-item cursor.
+      // Empty inbox stays on Step 0 — auto-advance off an empty inbox was
+      // removed; empty steps now show an inline empty-state and let the user
+      // click Next. hasMoreItems=false (length=0) + isLoaded=true → footer
+      // shows an enabled Next step.
       await tester.pumpWidget(_screen(db));
       await _settle(tester);
+
+      expect(_stateOf(tester).currentStep, 0);
+      expect(find.byKey(_nextKey), findsOneWidget);
+      expect(find.byKey(_skipKey), findsNothing);
+      expect(
+        tester.widget<FilledButton>(find.byKey(_nextKey)).onPressed,
+        isNotNull,
+      );
+
+      // Navigate directly to the Energy step (Step 2, no per-item cursor)
+      // to verify it always shows an enabled Next step, never Skip.
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(FocusSessionPlanningScreen)),
+      );
+      container.read(focusSessionPlanningProvider.notifier).goToStep(2);
+      await tester.pumpAndSettle();
 
       expect(_stateOf(tester).currentStep, 2);
       expect(find.byKey(_nextKey), findsOneWidget);
@@ -170,8 +186,8 @@ void main() {
         isNotNull,
       );
 
-      // Crossing into the Time step (also no per-item cursor) still shows
-      // Next step — never Skip.
+      // Crossing into the Time step (Step 3, also no per-item cursor) still
+      // shows Next step — never Skip.
       await tester.tap(find.byKey(_nextKey));
       await tester.pumpAndSettle();
 

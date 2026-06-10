@@ -26,7 +26,6 @@ import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'synced_preferences_provider.dart';
-import 'tag_filter_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
 
@@ -160,7 +159,33 @@ final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
 // Stream providers — planning data
 // ---------------------------------------------------------------------------
 
-/// Next-action tasks not yet reviewed in today's planning session.
+/// Energy-level ordering: 'low' < 'medium' < 'high'. Tasks tagged at or
+/// below the day's energy level fit today; tasks above it do not. Unknown
+/// strings (incl. null on the task side) are treated as "no constraint" —
+/// the task always fits, and a null day-energy means no filtering at all.
+const _kEnergyOrder = {'low': 1, 'medium': 2, 'high': 3};
+
+/// True when [taskEnergy] is at or below [dayEnergy]. Null day-energy or
+/// null task-energy → true (no constraint). Unknown energy strings also
+/// return true (no constraint) — unknown values should never hide tasks.
+bool _energyFits(String? taskEnergy, String? dayEnergy) {
+  if (dayEnergy == null) return true;
+  if (taskEnergy == null) return true;
+  final day = _kEnergyOrder[dayEnergy];
+  if (day == null) return true;
+  final task = _kEnergyOrder[taskEnergy];
+  if (task == null) return true;
+  return task <= day;
+}
+
+/// Next-action tasks not yet reviewed in today's planning session, filtered
+/// down to the ones whose energy requirement fits the user's self-reported
+/// day-energy. Reactive: changing [FocusSessionPlanningState.energyLevel]
+/// re-evaluates the visible Pending Review list with no imperative state
+/// mutation in between.
+///
+/// A null day-energy (Energy step not yet visited) means no filtering at
+/// all; tasks with no energy tag are never filtered out.
 final nextActionsForFocusSessionPlanningProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -169,9 +194,11 @@ final nextActionsForFocusSessionPlanningProvider =
     ...planningState.reviewedTaskIds,
     ...planningState.pendingSelectedTaskIds,
   };
-  return db.todoDao
-      .watchNextActions()
-      .map((all) => all.where((t) => !reviewed.contains(t.id)).toList());
+  final dayEnergy = planningState.energyLevel;
+  return db.todoDao.watchNextActions().map((all) => all
+      .where((t) =>
+          !reviewed.contains(t.id) && _energyFits(t.energyLevel, dayEnergy))
+      .toList());
 });
 
 /// Tasks selected for today (in-memory pending list, ordered by selection).
@@ -212,19 +239,6 @@ final skippedNextActionsForFocusSessionPlanningProvider =
       .toList();
   return db.todoDao.watchTodosById(skippedIds);
 });
-
-// ---------------------------------------------------------------------------
-// Inbox routing record — what destination was chosen for an item
-// ---------------------------------------------------------------------------
-
-/// Records the routing applied to an inbox item at a given snapshot index.
-/// Used to render the "previously selected" affordance on revisit and to
-/// drive the (from, to) transition when the user re-routes the item.
-class InboxRoutingRecord {
-  const InboxRoutingRecord({required this.kind});
-
-  final RoutingKind kind;
-}
 
 // ---------------------------------------------------------------------------
 // Review action tracking — used to show affordances when going back
@@ -295,9 +309,11 @@ class FocusSessionPlanningState {
   /// "draft vs. snapshot vs. DB" divergence to reconcile.
   final SnapshotNav<String> inboxNav;
 
-  /// Maps [inboxNav.items] index → routing record (kind + captured prior state).
-  /// An absent key means the item at that index has not yet been processed.
-  final Map<int, InboxRoutingRecord> inboxRoutings;
+  /// Maps [inboxNav.items] index → the [RoutingKind] last applied at that
+  /// position. An absent key means the item at that index has not yet been
+  /// processed. Mirrors [PeriodicReviewState.inboxRoutings] so both ceremonies
+  /// use the same shape — no projection needed at the call site.
+  final Map<int, RoutingKind> inboxRoutings;
 
   /// Task IDs the user has selected for today's plan (in selection order).
   /// Committed to the DB atomically when [FocusSessionPlanningNotifier.startDay]
@@ -330,7 +346,7 @@ class FocusSessionPlanningState {
     String? energyLevel,
     bool clearEnergyLevel = false,
     SnapshotNav<String>? inboxNav,
-    Map<int, InboxRoutingRecord>? inboxRoutings,
+    Map<int, RoutingKind>? inboxRoutings,
     List<String>? pendingSelectedTaskIds,
     List<String>? reviewedTaskIds,
     SnapshotNav<Todo>? reviewNav,
@@ -463,14 +479,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   /// Loads the inbox snapshot once. Idempotent: subsequent calls are no-ops.
   ///
-  /// The tag filter is captured at load time; later filter changes do not
-  /// affect the snapshot.
+  /// Matches Weekly Review's loader — the full inbox, unfiltered by the
+  /// user's active context-tag filter. Daily Planning's purpose is the same
+  /// as Weekly Review's at this step: clear every inbox item by giving it a
+  /// disposition.
   Future<void> loadInboxSnapshot() async {
     if (state.inboxNav.isLoaded || _loadingInboxSnapshot) return;
     _loadingInboxSnapshot = true;
     try {
-      final tagIds = ref.read(tagFilterProvider);
-      final items = await _db.inboxDao.watchInbox(tagIds: tagIds).first;
+      final items = await _db.inboxDao.watchInbox().first;
       state = state.copyWith(
         inboxNav: state.inboxNav
             .withItems(items.reversed.map((t) => t.id).toList()),
@@ -506,7 +523,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = state.copyWith(
       inboxRoutings: {
         ...state.inboxRoutings,
-        idx: InboxRoutingRecord(kind: kind),
+        idx: kind,
       },
     );
     nextInboxItem();
@@ -544,7 +561,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = state.copyWith(
       inboxRoutings: {
         ...state.inboxRoutings,
-        idx: InboxRoutingRecord(kind: to),
+        idx: to,
       },
     );
     nextInboxItem();
@@ -655,46 +672,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   Future<void> setTimeEstimate(String id, int minutes) =>
       _db.todoDao.updateFields(id, timeEstimate: minutes);
-
-  // ---- Energy-based auto-skip ------------------------------------------------
-
-  /// Skips all pending next-action tasks whose energy requirement exceeds the
-  /// day's energy level.
-  ///
-  /// Called when the user advances past the Energy Check-in step so that the
-  /// Plan Summary only shows tasks the user can realistically do today.
-  ///
-  /// - 'low' day  → auto-skips 'medium' and 'high' tasks.
-  /// - 'medium' day → auto-skips 'high' tasks.
-  /// - 'high' day or no energy set → no auto-skips.
-  /// - Tasks with no energy tag are never auto-skipped.
-  Future<void> autoSkipByEnergy() async {
-    final dayEnergy = state.energyLevel;
-    if (dayEnergy == null || dayEnergy == 'high') return;
-
-    const energyOrder = {'low': 1, 'medium': 2, 'high': 3};
-    final dayLevel = energyOrder[dayEnergy] ?? 0;
-
-    final allNextActions = await _db.todoDao.watchNextActions().first;
-    final alreadyReviewed = {
-      ...state.reviewedTaskIds,
-      ...state.pendingSelectedTaskIds,
-    };
-
-    final toSkip = allNextActions
-        .where((t) =>
-            !alreadyReviewed.contains(t.id) &&
-            t.energyLevel != null &&
-            (energyOrder[t.energyLevel!] ?? 0) > dayLevel)
-        .map((t) => t.id)
-        .toList();
-
-    if (toSkip.isNotEmpty) {
-      state = state.copyWith(
-        reviewedTaskIds: [...state.reviewedTaskIds, ...toSkip],
-      );
-    }
-  }
 
   // ---- Task Review (Step 1) --------------------------------------------------
 

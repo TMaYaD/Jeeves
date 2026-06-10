@@ -1,17 +1,22 @@
 /// Evening shutdown ritual — outer container screen (Issue #83).
 ///
-/// Steps 0–1 share a header (segmented progress bar) and footer (Back/Next).
-/// Step 2 — Close Day — is rendered full-screen with the moon-rise animation;
-/// it commits dispositions, fades out, and exits the app.
+/// Steps 0–1 are composed against the shared [Wizard] widget; Step 2
+/// (Close Day) is rendered standalone — full-screen moon-rise animation
+/// that commits dispositions, fades out, and exits the app. The wizard
+/// chrome is owned by [Wizard] per issue #322; each [WizardStep] owns its
+/// own footer widget through [WizardStep.footer].
 ///
 /// Step 1 → Step 2 advances automatically once the user resolves the last
-/// unfinished task.
+/// unfinished task; the screen latches onto [CloseDayStep] once reached so
+/// `closeDay()` resetting `currentStep` mid fade-out cannot expose the
+/// Review step underneath.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/evening_shutdown_provider.dart';
+import '../../widgets/ceremony/wizard.dart';
 import 'steps/close_day_step.dart';
 import 'steps/completed_review_step.dart';
 import 'steps/unfinished_tasks_step.dart';
@@ -25,26 +30,12 @@ class ShutdownRitualScreen extends ConsumerStatefulWidget {
 }
 
 class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
-  late final PageController _pageController;
   int? _resolveInitialTotal;
   bool _showCloseDay = false;
 
+  static const _ceremonyId = 'shutdown';
+  static const _accent = Color(0xFF1E3A5F);
   static const _stepTitles = ['Review Your Day', 'Resolve Unfinished'];
-
-  @override
-  void initState() {
-    super.initState();
-    final initialStep = ref.read(eveningShutdownProvider).currentStep;
-    _pageController = PageController(
-      initialPage: initialStep.clamp(0, _stepTitles.length - 1),
-    );
-  }
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -63,18 +54,6 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
       });
     }
     if (_showCloseDay || step == 2) return const CloseDayStep();
-
-    ref.listen<EveningShutdownState>(eveningShutdownProvider, (prev, next) {
-      if (prev?.currentStep != next.currentStep &&
-          next.currentStep < _stepTitles.length &&
-          _pageController.hasClients) {
-        _pageController.animateToPage(
-          next.currentStep,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
-      }
-    });
 
     // Latch the initial unfinished count once so the resolve progress fills
     // correctly. Auto-advance off step 1 whenever the list is empty — covers
@@ -106,7 +85,7 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
       });
     }
 
-    double? resolveProgress;
+    double resolveProgress = 0.0;
     if (step == 1 && _resolveInitialTotal != null && _resolveInitialTotal! > 0) {
       final current =
           ref.watch(unfinishedSelectedTodayProvider).asData?.value.length;
@@ -116,235 +95,41 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
       }
     }
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _ShutdownHeader(
-              step: step,
-              stepTitle: _stepTitles[step],
-              activeStepProgress: resolveProgress,
-            ),
-            Expanded(
-              child: PageView(
-                controller: _pageController,
-                physics: const NeverScrollableScrollPhysics(),
-                children: const [
-                  CompletedReviewStep(),
-                  UnfinishedTasksStep(),
-                ],
-              ),
-            ),
-            _ShutdownFooter(
-              step: step,
-              // Step 1 walks the unfinished snapshot cursor back like the
-              // planning Inbox / Review steps; once at the first task, the
-              // next Back lands on Step 0 (Review Your Day).
-              onBack: step == 0
-                  ? null
-                  : step == 1
-                      ? () {
-                          if (shutdownState.unfinishedNav.canGoBack) {
-                            notifier.previousUnfinishedTask();
-                          } else {
-                            notifier.goToStep(0);
-                          }
-                        }
-                      : () => notifier.goToStep(step - 1),
-              onNext: _canAdvance(step, ref) ? () => notifier.advanceStep() : null,
-            ),
-          ],
+    final steps = <WizardStep>[
+      WizardStep(
+        title: _stepTitles[0],
+        body: const CompletedReviewStep(),
+        subtitle: 'Step 1 of 2',
+        footer: WizardFooter(
+          ceremonyId: _ceremonyId,
+          accentColor: _accent,
+          onBack: null,
+          onNext: notifier.advanceStep,
         ),
       ),
-    );
-  }
-
-  /// Returns true when the user is allowed to proceed from [step].
-  bool _canAdvance(int step, WidgetRef ref) {
-    return switch (step) {
-      // Step 0: completed review — always navigable (informational).
-      0 => true,
-      // Step 1: dispositions handle navigation; if the list was empty to
-      // begin with, auto-advance still kicks in via the stream listener.
-      _ => false,
-    };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Header: title + segmented progress bar
-// ---------------------------------------------------------------------------
-
-class _ShutdownHeader extends StatelessWidget {
-  const _ShutdownHeader({
-    required this.step,
-    required this.stepTitle,
-    this.activeStepProgress,
-  });
-
-  final int step;
-  final String stepTitle;
-  final double? activeStepProgress;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.nightlight_outlined,
-                  color: Color(0xFF1E3A5F), size: 20),
-              const SizedBox(width: 8),
-              Text(
-                'Evening Shutdown',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey[500],
-                  letterSpacing: 0.8,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            stepTitle,
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF1A1A2E),
-            ),
-          ),
-          const SizedBox(height: 14),
-          _SegmentedProgressBar(
-            currentStep: step,
-            totalSteps: 2,
-            activeStepProgress: activeStepProgress,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Step ${step + 1} of 2',
-            style: TextStyle(fontSize: 12, color: Colors.grey[400]),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-}
-
-class _SegmentedProgressBar extends StatelessWidget {
-  const _SegmentedProgressBar({
-    required this.currentStep,
-    required this.totalSteps,
-    this.activeStepProgress,
-  });
-
-  final int currentStep;
-  final int totalSteps;
-
-  /// If set, the active step renders as a partial fill (0.0–1.0) instead of solid.
-  final double? activeStepProgress;
-
-  Widget _buildBar(bool completed, bool active, double? progress) {
-    if (completed) {
-      return Container(
-        height: 4,
-        decoration: BoxDecoration(
-          color: const Color(0xFF1E3A5F),
-          borderRadius: BorderRadius.circular(2),
+      WizardStep(
+        title: _stepTitles[1],
+        body: const UnfinishedTasksStep(),
+        activeFraction: resolveProgress,
+        subtitle: 'Step 2 of 2',
+        // Dispositions on each task drive advancement here; the footer
+        // offers no forward affordance, only Back. Back retreats the
+        // unfinished snapshot cursor before crossing to Step 0.
+        footer: BackOnlyFooter(
+          ceremonyId: _ceremonyId,
+          onBack: shutdownState.unfinishedNav.canGoBack
+              ? notifier.previousUnfinishedTask
+              : () => notifier.goToStep(0),
         ),
-      );
-    }
-    if (active && progress != null) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(2),
-        child: LinearProgressIndicator(
-          value: progress,
-          minHeight: 4,
-          backgroundColor: const Color(0xFFE5E7EB),
-          valueColor:
-              const AlwaysStoppedAnimation<Color>(Color(0xFF1E3A5F)),
-        ),
-      );
-    }
-    return Container(
-      height: 4,
-      decoration: BoxDecoration(
-        color: active ? const Color(0xFF1E3A5F) : const Color(0xFFE5E7EB),
-        borderRadius: BorderRadius.circular(2),
       ),
-    );
-  }
+    ];
 
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: List.generate(totalSteps, (i) {
-        return Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(right: i < totalSteps - 1 ? 4 : 0),
-            child: _buildBar(
-              i < currentStep,
-              i == currentStep,
-              i == currentStep ? activeStepProgress : null,
-            ),
-          ),
-        );
-      }),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Footer: Back / Next buttons
-// ---------------------------------------------------------------------------
-
-class _ShutdownFooter extends StatelessWidget {
-  const _ShutdownFooter({
-    required this.step,
-    required this.onBack,
-    required this.onNext,
-  });
-
-  final int step;
-  final VoidCallback? onBack;
-  final VoidCallback? onNext;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-      child: Row(
-        children: [
-          if (onBack != null)
-            OutlinedButton(
-              onPressed: onBack,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF374151),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-              ),
-              child: const Text('Back'),
-            ),
-          const Spacer(),
-          if (onNext != null)
-            FilledButton(
-              onPressed: onNext,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF1E3A5F),
-                disabledBackgroundColor: const Color(0xFFD1D5DB),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-              ),
-              child: const Text('Next'),
-            ),
-        ],
-      ),
+    return Wizard(
+      ceremonyLabel: 'Evening Shutdown',
+      ceremonyIcon: Icons.nightlight_outlined,
+      accentColor: _accent,
+      currentStep: step,
+      steps: steps,
     );
   }
 }
