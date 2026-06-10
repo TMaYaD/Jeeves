@@ -93,11 +93,6 @@ updates:
     groups:
       app-flutter:
         update-types: [minor, patch]
-    ignore:
-      # Pinned to a git SHA on purpose; the release watcher in
-      # flutter-ci.yml (riverpod-generator-stable-watch) handles this.
-      - dependency-name: riverpod_generator
-      - dependency-name: riverpod_analyzer_utils
 
   # ---------------------------------------------------------------------------
   # Android side of the Flutter app (app/android/build.gradle.kts).
