@@ -11,7 +11,7 @@ environment:
   # SDK-vendored packages (meta, analyzer, dart_style, …).
   # Each Flutter release ships exactly one Dart SDK, so pinning Flutter alone
   # fully determines the resolution. Keep in sync with .fvmrc.
-  flutter: "3.41.7"
+  flutter: "3.44.1"
 
 dependencies:
   flutter:
@@ -101,7 +101,7 @@ dev_dependencies:
   build_runner: ^2.14.0
   freezed: ^3.2.5
   json_serializable: ^6.13.1
-  riverpod_generator: ^4.0.3
+  riverpod_generator: ^4.0.4
   drift_dev: ^2.32.0
   retrofit_generator: ^10.2.5
   # Icon generation: flavored configs live in flutter_launcher_icons-<flavor>.yaml
@@ -110,28 +110,6 @@ dev_dependencies:
   #   dart run flutter_launcher_icons -f flutter_launcher_icons-dev.yaml
   #   dart run flutter_launcher_icons -f flutter_launcher_icons-production.yaml
   flutter_launcher_icons: ^0.14.3
-
-# TODO(#127-revert): Remove these overrides once riverpod_generator publishes a
-# stable release that supports analyzer ^10 (tracking: rrousselGit/riverpod#4727,
-# merged 2026-04-04). The CI gate in flutter-ci.yml will hard-fail when a
-# newer stable version is available, forcing this block to be cleaned up.
-#
-# riverpod_analyzer_utils must be overridden alongside riverpod_generator:
-# the git build of riverpod_generator pins riverpod_analyzer_utils 1.0.0-dev.9
-# but the pub.dev copy of that package requires analyzer ^9, which conflicts
-# with the >=10.0.0 constraint used by both the git build and drift_dev 2.32.
-# The git copy of riverpod_analyzer_utils correctly requires analyzer >=10.0.0.
-dependency_overrides:
-  riverpod_generator:
-    git:
-      url: https://github.com/rrousselGit/riverpod.git
-      ref: e8b84952e40b395ef47ab1f581eddddf64f0b2fd
-      path: packages/riverpod_generator
-  riverpod_analyzer_utils:
-    git:
-      url: https://github.com/rrousselGit/riverpod.git
-      ref: e8b84952e40b395ef47ab1f581eddddf64f0b2fd
-      path: packages/riverpod_analyzer_utils
 
 flutter:
   uses-material-design: true

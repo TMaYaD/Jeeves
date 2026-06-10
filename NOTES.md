@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-06-10 (riverpod_generator 4.0.4 forced a Flutter minor bump)
+- Removing the #127 git overrides was not override-removal-only: riverpod_generator 4.0.4 requires analyzer ^12, which needs meta ^1.18.0, but Flutter 3.41.x (Dart 3.11) vendors meta 1.17.0 via flutter_test. Had to bump the Flutter pin 3.41.7 → 3.44.1 (pubspec `environment.flutter` + `.fvmrc`) to resolve. Generated code under 4.0.4 is byte-identical to the e8b8495 git build.
+- Emulator gotcha: the AVD's `default_boot` snapshot was wedged (bootanim never stopped, `pm` half up — installs fail with "Broken pipe"/"Can't find service"). A `-no-snapshot` cold boot was attempted but is NOT the confirmed fix — the user repaired the emulator manually out-of-band (remedy unrecorded). Only verified fact: `-no-snapshot-save` still *loads* a stale snapshot, so post-snapshot installs/uninstalls are silently discarded on exit.
+- TESTING.md's drawer coords had drifted ((106,170) now lands on Weekly Review); verified hamburger at (105,423) and updated the doc. Other rows in the coordinate table are unverified and may also be stale.
+
 ## 2026-05-29 (refactor candidate — next_actions_step onAfterRoute)
 - `next_actions_step.dart:75–87` `onAfterRoute` callback. `keep` is the only `ProcessAction` whose `toRoutingKind()` returns null, currently special-cased ahead of the routing record with a defensive assert + redundant null-guard. Worth either (a) pushing the keep-vs-route fork into a sealed result type on `ProcessAction`, or (b) moving the record-then-advance step into the notifier so the widget just hands it the action. Same pattern likely repeats in DPR inbox/review routing — fold into the broader clarify-step extraction floated on PR #330.
 

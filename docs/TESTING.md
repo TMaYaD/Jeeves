@@ -87,7 +87,7 @@ Coordinates are `(x, y)` in device pixels. The drawer lives under a hamburger ic
 
 | Location | Coords | Notes |
 |---|---|---|
-| **App shell (Inbox etc.)** → hamburger / drawer | `(106, 170)` | Top-left icon, ~7% of a 1080-wide screen. |
+| **App shell (Inbox etc.)** → hamburger / drawer | `(105, 423)` | Top-left button below the large title header; bounds `[42,360][168,486]`. |
 | **Drawer** → Settings row | `(250, 2280)` | Near bottom of drawer; wait ~1s after opening. |
 | **Settings** → back arrow | `(106, 170)` | Top-left `BackButton`. |
 | **Settings (signed-in)** → Sign out tile | `(540, 552)` | Second tile under SYNC. |
