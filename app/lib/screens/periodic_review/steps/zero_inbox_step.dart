@@ -1,7 +1,25 @@
-/// Step 0 of the Weekly Review wizard: clarify the inbox using the shared
-/// [ClarifyCard]. The card delegates its routing buttons to
-/// [ProcessToHandlers] which owns the DAO write; this step only advances the
-/// wizard's snapshot cursor and records the routing for the
+/// Step 0 of the Weekly Review wizard: Clarify Inbox.
+///
+/// Delegates the per-item / loading / completion branching to the shared
+/// [ClarifyStep] widget — the exact same class used by DPR's
+/// InboxClarificationStep. Passing:
+///
+/// - [nav] — the WR inbox snapshot cursor.
+/// - [routings] — in-session routing history keyed by cursor index
+///   ([PeriodicReviewState.inboxRoutings] already carries [RoutingKind] values
+///   directly).
+/// - [onAfterRoute] — records the routing in WR state and advances the inbox
+///   cursor.
+/// - [onLoad] — kicks [PeriodicReviewNotifier.loadInboxSnapshot] on the first
+///   frame the snapshot is not yet loaded (mirrors the original lazy-load
+///   postFrameCallback pattern).
+///
+/// The completion widget is owned by [ClarifyStep] (same copy for both
+/// ceremonies). Load-error rendering is delegated separately via the [loadError]
+/// guard below.
+///
+/// The card delegates routing buttons to [ProcessToHandlers]; this step only
+/// advances the wizard's snapshot cursor and records the routing for the
 /// "previously selected" affordance.
 library;
 
@@ -9,7 +27,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/periodic_review_provider.dart';
-import '../../../widgets/clarify_card.dart';
+import '../../../widgets/ceremony/clarify_step.dart';
 import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
 
@@ -34,36 +52,19 @@ class ZeroInboxStep extends ConsumerWidget {
       );
     }
 
-    if (!nav.isLoaded) {
-      // Mirrors the daily-planning step: kick the lazy load from a post-
-      // frame callback. The notifier guards against duplicate fires.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        ref.read(periodicReviewProvider.notifier).loadInboxSnapshot();
-      });
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (nav.isEmpty || nav.isComplete) {
-      return const ReviewEmptyState(
-        icon: Icons.inbox_outlined,
-        title: 'Inbox is clear',
-        subtitle: 'Tap Next to continue.',
-      );
-    }
-
-    final index = nav.index;
-    final id = nav.current!;
-    return ClarifyCard(
-      key: ValueKey(id),
-      todoId: id,
-      lastAction: routings[index]?.toProcessAction(),
+    return ClarifyStep(
+      nav: nav,
+      routings: routings,
       onAfterRoute: (action) async {
         final notifier = ref.read(periodicReviewProvider.notifier);
+        final index = nav.index;
         final kind = action.toRoutingKind();
         if (kind == null) return;
         notifier.recordInboxRouting(index, kind);
         notifier.advanceInbox();
       },
+      onLoad: () =>
+          ref.read(periodicReviewProvider.notifier).loadInboxSnapshot(),
     );
   }
 }

@@ -303,25 +303,8 @@ ReviewActionRecord? _toReviewActionRecord(ProcessAction action) =>
 // All-reviewed empty state
 // ---------------------------------------------------------------------------
 
-class _AllReviewedCard extends ConsumerStatefulWidget {
+class _AllReviewedCard extends StatelessWidget {
   const _AllReviewedCard();
-
-  @override
-  ConsumerState<_AllReviewedCard> createState() => _AllReviewedCardState();
-}
-
-class _AllReviewedCardState extends ConsumerState<_AllReviewedCard> {
-  bool _busy = false;
-
-  Future<void> _advance() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      await ref.read(focusSessionPlanningProvider.notifier).advanceStep();
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -343,16 +326,6 @@ class _AllReviewedCardState extends ConsumerState<_AllReviewedCard> {
           Text(
             'Tap Next to continue planning.',
             style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-          ),
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _busy ? null : _advance,
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF2563EB),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-            ),
-            child: const Text('Continue'),
           ),
         ],
       ),

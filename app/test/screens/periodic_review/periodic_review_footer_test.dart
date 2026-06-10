@@ -24,7 +24,7 @@ import '../../helpers/periodic_review_test_helpers.dart';
 import '../../test_helpers.dart';
 
 const _skipKey = Key('periodic_review_skip');
-const _nextKey = Key('periodic_review_next');
+const _nextKey = Key('periodic_review_next_step');
 const _slotKey = Key('periodic_review_footer_slot');
 
 Future<void> _insertInbox(GtdDatabase db, String id) async {
@@ -128,16 +128,30 @@ void main() {
       await _dispose(tester);
     });
 
-    testWidgets('Inbox step on the last item shows Next step, not Skip',
+    testWidgets(
+        'Inbox step on the last real item shows Skip; '
+        'Next step appears only on the completion placeholder',
         (tester) async {
       await _insertInbox(db, 'only');
 
       await tester.pumpWidget(_screen(db));
       await _settle(tester);
 
-      // Single item: the cursor is already on the last one, so the footer
-      // crosses straight to Next step (matches the screen's _hasMoreItems
-      // threshold — no extra tap on an empty placeholder).
+      // Single item: cursor is on the only real item — footer shows Skip,
+      // not Next step. "Next step" appears only after all items are processed.
+      expect(find.byKey(_skipKey), findsOneWidget);
+      expect(find.byKey(_nextKey), findsNothing);
+      expect(
+        tester.widget<OutlinedButton>(find.byKey(_skipKey)).onPressed,
+        isNotNull,
+      );
+
+      await tester.tap(find.byKey(_skipKey));
+      await tester.pumpAndSettle();
+
+      // Cursor is now past the end (isComplete) — step body shows completion
+      // placeholder and footer swaps to Next step.
+      expect(_stateOf(tester).inboxNav.isComplete, isTrue);
       expect(find.byKey(_nextKey), findsOneWidget);
       expect(find.byKey(_skipKey), findsNothing);
       expect(find.text('Next step'), findsOneWidget);
@@ -149,8 +163,8 @@ void main() {
       await _dispose(tester);
     });
 
-    testWidgets('tapping Skip advances the inbox cursor and swaps in Next step',
-        (tester) async {
+    testWidgets('tapping Skip advances the inbox cursor; '
+        'Next step appears only once isComplete', (tester) async {
       await _insertInbox(db, 'i1');
       await _insertInbox(db, 'i2');
 
@@ -163,8 +177,17 @@ void main() {
       await tester.tap(find.byKey(_skipKey));
       await tester.pumpAndSettle();
 
-      // Cursor moved to the last item — footer swaps Skip → Next step.
+      // Cursor is on the last real item (index=1) — Skip still shows,
+      // not Next step. The DPR contract: "Next step" only after isComplete.
       expect(_stateOf(tester).inboxNav.index, 1);
+      expect(find.byKey(_skipKey), findsOneWidget);
+      expect(find.byKey(_nextKey), findsNothing);
+
+      await tester.tap(find.byKey(_skipKey));
+      await tester.pumpAndSettle();
+
+      // Cursor is now past the end (isComplete) — footer swaps to Next step.
+      expect(_stateOf(tester).inboxNav.isComplete, isTrue);
       expect(find.byKey(_nextKey), findsOneWidget);
       expect(find.byKey(_skipKey), findsNothing);
 
@@ -181,9 +204,8 @@ void main() {
       await tester.pumpWidget(_screen(db));
       await _settle(tester);
 
-      // Drive into the Waiting For step explicitly: once every snapshot is
-      // loaded, goToStep is deterministic (the screen's auto-skip-on-entry
-      // races with the per-step lazy loads, which is orthogonal to #292).
+      // Drive into the Waiting For step explicitly via the notifier so the
+      // test controls step position deterministically.
       final container = ProviderScope.containerOf(
         tester.element(find.byType(PeriodicReviewScreen)),
       );
@@ -218,8 +240,9 @@ void main() {
 
     testWidgets('the footer slot keeps a fixed footprint across the swap',
         (tester) async {
-      await _insertInbox(db, 'i1');
-      await _insertInbox(db, 'i2');
+      // Single inbox item: one Skip tap reaches isComplete, swapping the
+      // footer from Skip (OutlinedButton) to Next step (FilledButton).
+      await _insertInbox(db, 'only');
 
       await tester.pumpWidget(_screen(db));
       await _settle(tester);
