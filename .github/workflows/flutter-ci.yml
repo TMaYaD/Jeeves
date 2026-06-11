@@ -31,9 +31,15 @@ jobs:
       # _fe_analyzer_shared, dart_style, …) than the lockfile expects. With
       # the SDK pinned via .fvmrc, any diff here means a developer either
       # forgot to commit a `pub upgrade` or resolved against a different SDK.
+      #
+      # The `-I` pattern ignores the lockfile's `sdks.flutter` line: Dependabot's
+      # pub helper records the Flutter constraint as `">=X.Y.Z"` where real
+      # `flutter pub get` writes the verbatim pin `"X.Y.Z"`. The package
+      # resolution is identical either way, and without the exception every
+      # Dependabot pub PR fails this guard on that one cosmetic line.
       - name: Verify pubspec.lock is up to date
         run: |
-          if ! git diff --exit-code pubspec.lock; then
+          if ! git diff -I'^  flutter: ".*"$' --exit-code pubspec.lock; then
             echo "::error::pubspec.lock changed after 'flutter pub get'."
             echo "::error::Run 'flutter pub get' locally (with the Flutter version pinned in app/.fvmrc) and commit the result."
             exit 1
