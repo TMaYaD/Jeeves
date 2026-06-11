@@ -1,5 +1,10 @@
 # Notes
 
+## 2026-06-11 (Dependabot lockfile drift + stale-watcher discovery)
+- Dependabot's pub helper renders the lockfile `sdks.flutter` entry as `">=X.Y.Z"` where real `flutter pub get` under the exact environment pin writes `"X.Y.Z"` — package resolution is identical, but the byte-compare drift guard failed every Dependabot pub PR on that one line (#338, #339). Guard now ignores it via `git diff -I` (this branch). The exact-pin scheme still does its real job: package versions resolve identically.
+- While verifying #339 on the emulator, found a latent main bug (#342): clarify-routing persists correctly (verified via `adb exec-out run-as … cat` of the sqlite db + WAL) but Inbox/Next Actions watchers go stale until app restart. Reproduces on first launches of a new planning day (morning); same flow refreshed live in the previous evening's sessions. flutter_local_notifications 22 exonerated by counter-test on main.
+- Debugging technique that paid off: when UI and intent disagree, pull `app_flutter/jeeves.sqlite{,-wal,-shm}` via run-as (debug build) and query `ps_data__todos` directly — separates persistence bugs from watcher bugs in one step.
+
 ## 2026-06-10 (riverpod_generator 4.0.4 forced a Flutter minor bump)
 - Removing the #127 git overrides was not override-removal-only: riverpod_generator 4.0.4 requires analyzer ^12, which needs meta ^1.18.0, but Flutter 3.41.x (Dart 3.11) vendors meta 1.17.0 via flutter_test. Had to bump the Flutter pin 3.41.7 → 3.44.1 (pubspec `environment.flutter` + `.fvmrc`) to resolve. Generated code under 4.0.4 is byte-identical to the e8b8495 git build.
 - Emulator gotcha: the AVD's `default_boot` snapshot was wedged (bootanim never stopped, `pm` half up — installs fail with "Broken pipe"/"Can't find service"). A `-no-snapshot` cold boot was attempted but is NOT the confirmed fix — the user repaired the emulator manually out-of-band (remedy unrecorded). Only verified fact: `-no-snapshot-save` still *loads* a stale snapshot, so post-snapshot installs/uninstalls are silently discarded on exit.
