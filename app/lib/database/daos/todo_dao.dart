@@ -33,6 +33,25 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // GTD list watchers
   // ---------------------------------------------------------------------------
 
+  /// SQL fragment excluding the actionless+PersonBlocked quadrant from the
+  /// Next List. See [watchNext] for the precise rule; pulled out as a
+  /// constant so the predicate is named and shared with any future caller
+  /// that needs the same exclusion shape.
+  ///
+  /// Mirrors the actionless-treatment of `_needsReviewWhere`: a whitespace-
+  /// only `next_action_text` is treated as actionless, matching the
+  /// `setNextActionText` normalisation that already coerces such writes to
+  /// NULL.
+  static const _excludeActionlessPersonBlockedClause = '''
+(
+  (todos.next_action_text IS NOT NULL AND TRIM(todos.next_action_text) != '')
+  OR NOT EXISTS (
+    SELECT 1 FROM todo_tags tt
+    JOIN tags tg ON tg.id = tt.tag_id
+    WHERE tt.todo_id = todos.id AND tg.type = 'person'
+  )
+)''';
+
   /// Stream of clarified, non-done todos filtered by [intent] and, optionally,
   /// by an AND-set of [tagIds].
   ///
@@ -42,20 +61,34 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// filter ever needs to change (ANY-of-tags, null-handling on the join, …)
   /// the change happens here, once.
   ///
+  /// When [excludeActionlessPersonBlocked] is true the query additionally
+  /// strips the (no current Action) ∧ (carries Tag(type='person')) quadrant
+  /// — used by [watchNext] to enforce the precise Next List rule.
+  /// Off by default so other lists (Someday/Maybe, …) keep their semantics.
+  ///
   /// Watches `todos` always and `todo_tags` when a tag filter is supplied, so
-  /// the stream re-emits when either side changes.
+  /// the stream re-emits when either side changes. The exclusion clause also
+  /// reads `tags` (for `tg.type = 'person'`); it is added to `readsFrom` when
+  /// active.
   Stream<List<Todo>> _watchByIntentAndTags({
     required Intent intent,
     Set<String> tagIds = const {},
+    bool excludeActionlessPersonBlocked = false,
   }) {
     final intentVar = Variable(intent.value);
+    final extraWhere = excludeActionlessPersonBlocked
+        ? ' AND $_excludeActionlessPersonBlockedClause'
+        : '';
     if (tagIds.isEmpty) {
       return customSelect(
         'SELECT * FROM todos '
-        'WHERE clarified = 1 AND done_at IS NULL AND intent = ? '
+        'WHERE clarified = 1 AND done_at IS NULL AND intent = ?'
+        '$extraWhere '
         'ORDER BY created_at',
         variables: [intentVar],
-        readsFrom: {todos},
+        readsFrom: excludeActionlessPersonBlocked
+            ? {todos, todoTags, tags}
+            : {todos},
       ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
     }
     final n = tagIds.length;
@@ -67,22 +100,43 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       'AND todos.intent = ? '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id '
-      '       AND tag_id IN ($placeholders)) = $n '
+      '       AND tag_id IN ($placeholders)) = $n'
+      '$extraWhere '
       'ORDER BY todos.created_at',
       variables: [intentVar, ...tagIds.map(Variable.new)],
-      readsFrom: {todos, todoTags},
+      readsFrom: excludeActionlessPersonBlocked
+          ? {todos, todoTags, tags}
+          : {todos, todoTags},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
-  /// Stream of next-action todos: clarified, not done, `intent='next'`.
+  /// Stream of Outcomes on the Next List.
   ///
-  /// "Next action" is a positive state — what the user plans to do next —
-  /// so the predicate matches `intent='next'` directly. The earlier
-  /// `intent != 'maybe'` formulation admitted `intent='trash'` rows (#278).
-  /// When [tagIds] is non-empty only todos carrying **all** specified tags
-  /// are returned (AND semantics).
+  /// The Next List rule is:
+  ///
+  /// ```text
+  /// Next = intent='next' ∧ clarified ∧ done_at IS NULL ∧
+  ///        (next_action_text IS NOT NULL ∨ no PersonBlocker on the Outcome)
+  /// ```
+  ///
+  /// The single excluded quadrant is **actionless** (`next_action_text` null
+  /// or whitespace) **AND** PersonBlocked (carries any `Tag(type='person')`)
+  /// — that combination is a pure wait and surfaces only on Waiting For. An
+  /// Outcome with a current Action (`next_action_text IS NOT NULL`) belongs
+  /// on Next regardless of any PersonBlocker: `"call Trixy for a follow up"`
+  /// is doable and eligible for engagement; it also surfaces under Waiting
+  /// For. This overlap is by design — see CONTEXT.md § Next / Waiting For.
+  ///
+  /// The earlier `intent != 'maybe'` formulation admitted `intent='trash'`
+  /// rows (#278). When [tagIds] is non-empty only todos carrying **all**
+  /// specified tags are returned (AND semantics); the actionless+
+  /// PersonBlocked exclusion applies under tag-filtering too.
   Stream<List<Todo>> watchNext({Set<String> tagIds = const {}}) {
-    return _watchByIntentAndTags(intent: Intent.next, tagIds: tagIds);
+    return _watchByIntentAndTags(
+      intent: Intent.next,
+      tagIds: tagIds,
+      excludeActionlessPersonBlocked: true,
+    );
   }
 
   /// Stream of "Waiting For" todos.

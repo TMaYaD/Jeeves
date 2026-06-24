@@ -185,6 +185,138 @@ void main() {
 
   });
 
+  group('TodoDao — watchNext (actionless+PersonBlocked exclusion)', () {
+    // The Next List membership rule:
+    //
+    //   Next = intent='next' ∧ clarified ∧ done_at IS NULL ∧
+    //          (next_action_text IS NOT NULL ∨ no PersonBlocker on the Outcome)
+    //
+    // The single excluded quadrant is actionless (next_action_text IS NULL)
+    // AND PersonBlocked (carries any Tag(type='person')) — that combination
+    // is a pure wait and surfaces only on Waiting For, not on the daily
+    // Next List. Cross-reference CONTEXT.md § Next / Waiting For and the
+    // refined rule at
+    // https://github.com/TMaYaD/Jeeves/pull/315#discussion_r3468901021.
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('Q1: intent=next, has next_action_text, no person-tag → on Next',
+        () async {
+      await _insertTodo(db, id: 'q1', title: 'Buy milk');
+      await db.todoDao.setNextActionText('q1', 'Buy milk');
+
+      final items = await db.todoDao.watchNext().first;
+      expect(items.map((t) => t.id), contains('q1'));
+    });
+
+    test(
+        'Q2: intent=next, has next_action_text, has person-tag → on Next '
+        '(actionable+PersonBlocked overlap)', () async {
+      // The "call Trixy for a follow up" case: PersonBlocker coexists with a
+      // doable current Action, so the Outcome belongs on Next AND on Waiting
+      // For. This PR must NOT exclude it from Next.
+      await _insertTodo(db, id: 'q2', title: 'Catch up with Trixy');
+      await db.todoDao.setNextActionText('q2', 'Call Trixy for a follow up');
+      await _insertPersonTag(db, id: 'q2-trixy', name: 'Trixy');
+      await db.tagDao.assignTag('q2', 'q2-trixy', _userId);
+
+      final items = await db.todoDao.watchNext().first;
+      expect(items.map((t) => t.id), contains('q2'),
+          reason: 'actionable+PersonBlocked must remain on Next');
+    });
+
+    test(
+        'Q3: intent=next, no next_action_text, no person-tag → on Next '
+        '(re-clarify candidate; still surfaces)', () async {
+      // An actionless Outcome with no PersonBlocker is on Next — the daily
+      // re-clarification surface will pick it up via watchNeedsReview,
+      // but it remains a member of the Next List itself.
+      await _insertTodo(db, id: 'q3', title: 'Plan vacation');
+
+      final items = await db.todoDao.watchNext().first;
+      expect(items.map((t) => t.id), contains('q3'));
+    });
+
+    test(
+        'Q4: intent=next, no next_action_text, has person-tag → NOT on Next '
+        '(pure wait — surfaces only on Waiting For)', () async {
+      // The excluded quadrant this PR introduces. Without a current Action
+      // the Outcome offers nothing the user can do today; its cadence
+      // belongs to the weekly Waiting For pass, not the daily Next List.
+      await _insertTodo(db, id: 'q4', title: 'Hear back from Dave');
+      await _insertPersonTag(db, id: 'q4-dave', name: 'Dave');
+      await db.tagDao.assignTag('q4', 'q4-dave', _userId);
+
+      final items = await db.todoDao.watchNext().first;
+      expect(items.any((t) => t.id == 'q4'), isFalse,
+          reason: 'actionless+PersonBlocked must be excluded from Next');
+    });
+
+    test(
+        'Q4 (tag-filtered): exclusion also applies under context-tag filter',
+        () async {
+      // The tag-filtered path of watchNext must enforce the same
+      // exclusion as the unfiltered path; otherwise the actionless+
+      // PersonBlocked Outcome leaks onto Next the moment the user
+      // activates a context filter.
+      const ctxTagId = 'ctx-home';
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value(ctxTagId),
+        name: Value('Home'),
+        type: Value('context'),
+        userId: Value(_userId),
+      ));
+
+      // q4f: actionless + person-tagged + context-tagged → must NOT appear.
+      await _insertTodo(db, id: 'q4f', title: 'Hear back from Dave');
+      await _insertPersonTag(db, id: 'q4f-dave', name: 'Dave-f');
+      await db.tagDao.assignTag('q4f', 'q4f-dave', _userId);
+      await db.tagDao.assignTag('q4f', ctxTagId, _userId);
+
+      // q2f: actionable + person-tagged + context-tagged → must appear.
+      await _insertTodo(db, id: 'q2f', title: 'Catch up with Trixy');
+      await db.todoDao.setNextActionText('q2f', 'Call Trixy');
+      await _insertPersonTag(db, id: 'q2f-trixy', name: 'Trixy-f');
+      await db.tagDao.assignTag('q2f', 'q2f-trixy', _userId);
+      await db.tagDao.assignTag('q2f', ctxTagId, _userId);
+
+      final items =
+          await db.todoDao.watchNext(tagIds: {ctxTagId}).first;
+      final ids = items.map((t) => t.id).toSet();
+      expect(ids, contains('q2f'),
+          reason: 'actionable+PersonBlocked stays on filtered Next');
+      expect(ids, isNot(contains('q4f')),
+          reason: 'actionless+PersonBlocked excluded from filtered Next too');
+    });
+
+    test('empty next_action_text (whitespace) counts as actionless', () async {
+      // Defensive: a Todo whose next_action_text is whitespace-only is
+      // effectively actionless; setNextActionText normalises to NULL but
+      // a direct write could leak in. The predicate should treat
+      // TRIM(next_action_text) = '' the same as NULL, mirroring the
+      // actionless branch in _needsReviewWhere.
+      final now = DateTime.now();
+      await db.into(db.todos).insert(TodosCompanion(
+        id: const Value('q4w'),
+        title: const Value('Whitespace action, person-blocked'),
+        clarified: const Value(true),
+        userId: const Value(_userId),
+        nextActionText: const Value('   '),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+      await _insertPersonTag(db, id: 'q4w-eve', name: 'Eve');
+      await db.tagDao.assignTag('q4w', 'q4w-eve', _userId);
+
+      final items = await db.todoDao.watchNext().first;
+      expect(items.any((t) => t.id == 'q4w'), isFalse,
+          reason:
+              'whitespace next_action_text + person-tag treated as actionless');
+    });
+  });
+
   group('TodoDao — getNextExcludingPersonTagged', () {
     late GtdDatabase db;
 
