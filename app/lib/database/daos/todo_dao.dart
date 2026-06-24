@@ -271,6 +271,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// Updates the due date for a scheduled task (reschedule without state change).
   ///
+  /// Stamps [last_clarified_at]: a due-date edit is a clarifying micro-act
+  /// per CONTEXT.md ("Clarification stamps last_clarified_at per micro-act").
+  ///
   /// [now] overrides the timestamp used for [updatedAt]; defaults to
   /// [DateTime.now()]. Pass an explicit value in tests for determinism.
   Future<void> rescheduleTask(String id, DateTime newDueDate,
@@ -282,6 +285,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       // uploads "...000 +05:30" which asyncpg's TIMESTAMPTZ encoder
       // rejects, poisoning the CRUD queue.
       dueDate: Value(newDueDate.toUtc()),
+      lastClarifiedAt: Value(ts.toUtc()),
       updatedAt: Value(ts),
     ));
   }
@@ -318,7 +322,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// Stamps [last_clarified_at] to now for [todoId].
   ///
-  /// Called whenever a person-typed TodoTag is added to or removed from the todo.
+  /// Escape hatch for clarifying micro-acts whose primary write happens on
+  /// another table (e.g. person-tag — a PersonBlocker — assignment writes a
+  /// row to `todo_tags`, but the Outcome itself needs its clarification
+  /// timestamp updated). DAO methods that mutate `todos` directly stamp
+  /// internally and do not need this helper.
+  ///
   /// [now] overrides the timestamp for deterministic testing.
   Future<void> stampLastClarifiedAt(String todoId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
@@ -426,22 +435,31 @@ AND (
   /// Clears [done_at], returning the task to an undone state without touching
   /// any other fields. Called when a "mark done" review action is replaced by a
   /// different resolution.
+  ///
+  /// Stamps [last_clarified_at]: reverting an Outcome's completion is a
+  /// structural decision about the Outcome, the dual of marking it done —
+  /// both ends of the Completion axis are clarifying micro-acts per CONTEXT.md.
   Future<void> clearDoneAt(String id) async {
     final ts = DateTime.now().toUtc();
     await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
       doneAt: const Value(null),
+      lastClarifiedAt: Value(ts),
       updatedAt: Value(ts),
     ));
   }
 
   /// Restores a done or trashed todo to active next-action status.
+  ///
+  /// Stamps [last_clarified_at]: restoring is an Intent edit (sets
+  /// intent='next', clears done_at) — a clarifying micro-act per CONTEXT.md.
   Future<void> restore(String todoId) async {
     final ts = DateTime.now().toUtc().toIso8601String();
     await customUpdate(
-      'UPDATE todos SET done_at = NULL, intent = ?, updated_at = ? '
-      'WHERE id = ?',
+      'UPDATE todos SET done_at = NULL, intent = ?, updated_at = ?, '
+      'last_clarified_at = ? WHERE id = ?',
       variables: [
         Variable('next'),
+        Variable(ts),
         Variable(ts),
         Variable(todoId),
       ],
@@ -648,8 +666,10 @@ AND (
 
   /// Update mutable todo fields (title, notes, energy level, time estimate, due date).
   ///
-  /// Title and due-date edits are clarifying acts: they stamp [lastClarifiedAt]
-  /// so a stale task does not remain falsely surfaced after such changes.
+  /// Every field this method can change is a clarifying micro-act per
+  /// CONTEXT.md (title / notes / due-date edits, and Action cursor-fields
+  /// energy / time-estimate — Actions are first-class per ADR-0001 and their
+  /// mutations stamp). Any non-no-op call therefore stamps [lastClarifiedAt].
   ///
   /// To clear a nullable column, pass the matching `clear*` flag (e.g.
   /// `clearTimeEstimate: true`). Passing `null` for the typed parameter is
@@ -662,17 +682,33 @@ AND (
     String? energyLevel,
     int? timeEstimate,
     DateTime? dueDate,
+    bool clearNotes = false,
     bool clearEnergyLevel = false,
     bool clearTimeEstimate = false,
     bool clearDueDate = false,
   }) async {
     final ts = DateTime.now().toUtc();
-    final shouldStampClarified = title != null || dueDate != null || clearDueDate;
+    // A no-op call (no field provided, no clear flag set) must not stamp —
+    // stamping requires an actual mutation. Any provided field or clear flag
+    // means the user is actively editing the Outcome and the stamp is owed.
+    final hasMutation = title != null ||
+        notes != null ||
+        energyLevel != null ||
+        timeEstimate != null ||
+        dueDate != null ||
+        clearNotes ||
+        clearEnergyLevel ||
+        clearTimeEstimate ||
+        clearDueDate;
     final companion = TodosCompanion(
       updatedAt: Value(ts),
-      lastClarifiedAt: shouldStampClarified ? Value(ts) : const Value.absent(),
+      lastClarifiedAt: hasMutation ? Value(ts) : const Value.absent(),
       title: title != null ? Value(title) : const Value.absent(),
-      notes: notes != null ? Value(notes) : const Value.absent(),
+      notes: clearNotes
+          ? const Value(null)
+          : notes != null
+              ? Value(notes)
+              : const Value.absent(),
       energyLevel: clearEnergyLevel
           ? const Value(null)
           : energyLevel != null

@@ -52,8 +52,21 @@ class Todos extends Table with Synced {
   TextColumn get locationId => text().nullable()();
   TextColumn get userId => text()();
 
-  /// Timestamp of the last time a person-tag was assigned to or removed from this todo.
-  /// Set by the server/client whenever a TodoTag with type='person' is created or deleted.
+  /// Timestamp of the last clarifying micro-act on this Outcome.
+  ///
+  /// Stamped by the DAO whenever the user performs an act of *thinking about
+  /// the Outcome* per CONTEXT.md ("Clarification stamps last_clarified_at per
+  /// micro-act"). Stamping writes include:
+  ///   - Outcome creation (Capture → clarified=true)
+  ///   - title / notes / Intent / due-date edits
+  ///   - any Action mutation (next-action text, energy, time-estimate, …)
+  ///   - PersonBlocker (person-tag) add / remove
+  ///   - Outcome completion or trashing (and the reverse: restore, clearDoneAt)
+  ///
+  /// Non-stamping writes include current-Action completion (engagement, not
+  /// clarification), TimeLog writes, and Area / Label changes (organising).
+  /// Drives the re-clarification ("Stale") predicate; see todo_dao.dart's
+  /// _needsReviewWhere.
   DateTimeColumn get lastClarifiedAt => dateTime().nullable()();
 
   /// Cumulative time spent in minutes across all focus stints.

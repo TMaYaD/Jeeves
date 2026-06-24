@@ -74,25 +74,17 @@ class TaskDetailNotifier {
         energyLevel: level,
       );
 
-  Future<void> clearEnergyLevel() async {
-    await (_db.update(_db.todos)
-          ..where(
-              (t) => t.id.equals(_todoId) & t.userId.equals(_userId)))
-        .write(TodosCompanion(
-          energyLevel: const Value(null),
-          updatedAt: Value(DateTime.now()),
-        ));
-  }
+  // Route clear-cursor writes through the DAO so last_clarified_at is stamped
+  // consistently with every other Action mutation (ADR-0001 + CONTEXT.md L152).
+  Future<void> clearEnergyLevel() => _db.todoDao.updateFields(
+        _todoId,
+        clearEnergyLevel: true,
+      );
 
-  Future<void> clearTimeEstimate() async {
-    await (_db.update(_db.todos)
-          ..where(
-              (t) => t.id.equals(_todoId) & t.userId.equals(_userId)))
-        .write(TodosCompanion(
-          timeEstimate: const Value(null),
-          updatedAt: Value(DateTime.now()),
-        ));
-  }
+  Future<void> clearTimeEstimate() => _db.todoDao.updateFields(
+        _todoId,
+        clearTimeEstimate: true,
+      );
 
   Future<void> setTimeEstimate(int minutes) => _db.todoDao.updateFields(
         _todoId,

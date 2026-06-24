@@ -472,6 +472,26 @@ void main() {
       expect(todo.intent, 'maybe');
     });
 
+    test("stamps lastClarifiedAt on tasks routed to intent='maybe'", () async {
+      // Per CONTEXT.md ~L152, Intent edits stamp last_clarified_at. Sending a
+      // task to Someday/Maybe via session review is an Intent edit.
+      await _insertTodo(db, id: 'tCs', title: 'Task C-stamp');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['tCs'],
+      );
+
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sessionId,
+        dispositions: {'tCs': 'maybe'},
+      );
+
+      final todo = await (db.select(db.todos)
+            ..where((t) => t.id.equals('tCs')))
+          .getSingle();
+      expect(todo.lastClarifiedAt, isNotNull);
+    });
+
     test("does not change intent for 'rollover' or 'leave' tasks", () async {
       await _insertTodo(db, id: 'tD', title: 'Task D');
       final sessionId = await db.focusSessionDao.openSession(

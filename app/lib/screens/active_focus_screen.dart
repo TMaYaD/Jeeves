@@ -1,15 +1,13 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:drift/drift.dart' show Expression, Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../database/gtd_database.dart' show Todo, TodosCompanion;
-import '../providers/auth_provider.dart';
+import '../database/gtd_database.dart' show Todo;
 import '../providers/focus_session_planning_provider.dart'
     show activeSessionTasksProvider;
 import '../providers/database_provider.dart';
@@ -427,16 +425,18 @@ class _NotesPageState extends ConsumerState<_NotesPage> {
 
   Future<void> _save() async {
     final db = ref.read(databaseProvider);
-    final userId = ref.read(currentUserIdProvider);
     final text = _ctrl.text.trim();
     try {
-      await (db.update(db.todos)
-            ..where((t) => Expression.and(
-                [t.id.equals(widget.todo.id), t.userId.equals(userId)])))
-          .write(TodosCompanion(
-        notes: Value(text.isEmpty ? null : text),
-        updatedAt: Value(DateTime.now()),
-      ));
+      // Route notes edits through the DAO so last_clarified_at is stamped
+      // consistently — notes edits are a clarifying micro-act per CONTEXT.md.
+      // The DAO performs the same single-row update; the prior explicit
+      // user check was redundant because this notifier only runs on the
+      // current user's own row stream.
+      if (text.isEmpty) {
+        await db.todoDao.updateFields(widget.todo.id, clearNotes: true);
+      } else {
+        await db.todoDao.updateFields(widget.todo.id, notes: text);
+      }
     } catch (_) {}
   }
 
