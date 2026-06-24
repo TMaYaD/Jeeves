@@ -619,7 +619,7 @@ A task's lifecycle decomposes along orthogonal axes — each axis is a separate 
 | Intent | `todos.intent` (`next` \| `maybe` \| `trash`) | What the user wants to do with this task |
 | Completion | `todos.done_at` (timestamp, nullable) | Non-null = done; value = when |
 | Schedule | `todos.due_date` (date, nullable) | Specific calendar date |
-| Waiting on | `todos.waiting_for` (text, nullable) | Who/what is blocking; non-null surfaces the row in Waiting For |
+| PersonBlocker | `todo_tags` rows referencing a `Tag` with `type = 'person'` | Outcome is blocked on a Person; existence of the link is the block, removal is its resolution |
 | Active focus | `focus_sessions.current_task_id` | Which task is currently in progress |
 | Today's plan | `focus_session_tasks` rows | Membership in the open session |
 
@@ -629,21 +629,31 @@ A task is **actionable** when:
 clarified = true ∧ done_at IS NULL ∧ intent = 'next'
 ```
 
-Polymorphic blockers (Task / Person / Time / Location) are currently tracked separately in TMaYaD/Jeeves#181 and are not part of this model yet.
+PersonBlocker is the only Blocker shape modelled today; the remaining shapes from the polymorphic-blockers design (Task / Time / Location) are tracked in TMaYaD/Jeeves#181 and are not part of this model yet.
 
 ### Waiting For list
 
-A task appears in the Waiting For view when:
+The Waiting For list is the implicit grouping of actionable Outcomes that carry at least one `Tag(type='person')` link, grouped by the blocking Person. The List is a SQL projection — there is no `waiting_for` column and no membership table. An Outcome appears under each Person it is blocked on; an Outcome with two PersonBlockers appears twice in the grouped view, once under each Person.
+
+The predicate that selects a row into the list is:
 
 ```sql
-waiting_for IS NOT NULL AND clarified = true AND done_at IS NULL AND intent = 'next'
+SELECT DISTINCT todos.*
+FROM todos
+JOIN todo_tags tt ON tt.todo_id = todos.id
+JOIN tags tg     ON tg.id      = tt.tag_id AND tg.type = 'person'
+WHERE todos.clarified = 1
+  AND todos.done_at IS NULL
+  AND todos.intent   = 'next'
 ```
 
-`TodoDao.setWaitingFor(todoId, userId, text)` writes (or clears) the column. Empty string is coerced to `NULL` so the predicate never produces phantom rows.
+`TodoDao.watchPersonTagged()` returns the flat list and `TodoDao.watchPersonTaggedGrouped()` returns it bucketed by `Tag`. Adding or removing a PersonBlocker is a Tag-link mutation on `todo_tags` — the same junction table that backs Areas, Labels, and Contexts — and stamps `last_clarified_at` on the Outcome because PersonBlocker is conceptually Clarification (it is a Blocker on the Outcome, not a categorisation), even though the storage shape looks like a Tag link.
+
+Waiting For **overlaps with Next** when the Outcome is actionable: an Outcome with `intent='next'` carrying at least one `Tag(type='person')` appears on both. `TodoDao.watchNext` (the everyday Next List query) does **not** exclude person-tagged Outcomes — the current Action is doable (`"call Trixy for a follow up"` belongs on Next even while the Outcome is waiting on Trixy), and `TodoDao.watchPersonTagged*` surfaces the same Outcome inside the Waiting For grouping. Two wizard surfaces apply per-step person-tag exclusion to keep their own steps disjoint: the Weekly Review wizard's Next-step snapshot (`TodoDao.getNextActionsExcludingPersonTagged`) and the daily re-clarification's "actionless" branch (`TodoDao.watchNeedsReview` — delegated Outcomes' cadence belongs to the weekly Waiting For review, not daily re-clarification). The general daily Next List does not filter person-tagged.
 
 ### Intent semantics
 
-- `next` — normal actionable item; appears in Next Actions / Waiting For views.
+- `next` — normal actionable item; appears on Next, and **also** on Waiting For (grouped by Person) when the Outcome carries any `Tag(type='person')`. The two views overlap by design when both predicates apply.
 - `maybe` — deferred for later consideration; surfaces in the Maybe view; excluded from Next Actions and planning reviews.
 - `trash` — marked for deletion (UX deferred; column domain enforced at DB level).
 
