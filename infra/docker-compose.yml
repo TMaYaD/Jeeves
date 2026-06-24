@@ -8,7 +8,7 @@ version: "3.9"
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:1b1689b20d16a014a3d195653381cf2caa75a41a92d93b255a9d6ea29fd353aa
     restart: unless-stopped
     environment:
       POSTGRES_USER: jeeves
@@ -48,7 +48,7 @@ services:
   # Both variables are then picked up below.
 
   powersync:
-    image: journeyapps/powersync-service:1.23.0
+    image: journeyapps/powersync-service:1.23.0@sha256:6405a437bf527957c99e670497a537903af8e1469724b70d030a74aaef5241fa
     restart: unless-stopped
     depends_on:
       postgres:
@@ -89,7 +89,7 @@ services:
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   redis:
-    image: redis:8-alpine
+    image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     restart: unless-stopped
     ports:
       - "6379:6379"

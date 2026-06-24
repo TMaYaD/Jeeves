@@ -29,7 +29,7 @@ jobs:
       is_prerelease: ${{ steps.compute.outputs.is_prerelease }}
       firebase_groups: ${{ steps.compute.outputs.firebase_groups }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
@@ -236,14 +236,14 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version-file: app/.fvmrc
           channel: stable
@@ -285,7 +285,7 @@ jobs:
           fi
           "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-production-release.apk
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-artifacts
           path: |
@@ -297,7 +297,7 @@ jobs:
     needs: [version, build-android]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: android-artifacts
           path: artifacts/android
@@ -342,14 +342,14 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version-file: app/.fvmrc
           channel: stable
@@ -397,7 +397,7 @@ jobs:
           fi
           "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-production-seeker-release.apk
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: seeker-artifact
           path: app/build/app/outputs/flutter-apk/app-production-seeker-release.apk
@@ -410,9 +410,9 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version-file: app/.fvmrc
           channel: stable
@@ -430,7 +430,7 @@ jobs:
         run: tar -czf "../jeeves-web-${{ needs.version.outputs.version }}.tar.gz" web/
         working-directory: app/build
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: web-artifact
           path: app/jeeves-web-${{ needs.version.outputs.version }}.tar.gz
@@ -443,17 +443,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: android-artifacts
           path: artifacts/android
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: seeker-artifact
           path: artifacts/seeker
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: web-artifact
           path: artifacts/web
