@@ -16,8 +16,8 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
@@ -38,7 +38,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18-alpine
+        image: postgres:18-alpine@sha256:1b1689b20d16a014a3d195653381cf2caa75a41a92d93b255a9d6ea29fd353aa
         env:
           POSTGRES_USER: jeeves
           POSTGRES_PASSWORD: jeeves
@@ -52,8 +52,8 @@ jobs:
           - 5432:5432
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
