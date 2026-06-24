@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../models/search_result.dart';
 import '../../providers/search_provider.dart';
+import '../../widgets/async_list.dart';
 import 'widgets/recent_searches_list.dart';
 import 'widgets/search_filter_bar.dart';
 import 'widgets/search_result_tile.dart';
@@ -200,57 +201,67 @@ class _Results extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    return AsyncList<SearchResult>(
+      asyncValue: resultsAsync,
+      emptyTitle: 'No tasks match "$queryText"',
+      // The hidden-done hint is search-specific behaviour that the standard
+      // empty surface can't express; route through emptyBuilder so loading /
+      // error still use the shared visuals while the hint stays put.
+      emptyBuilder: (context) => _SearchEmptyState(queryText: queryText),
+      dataBuilder: (_, results) => ListView(
+        padding: const EdgeInsets.only(bottom: 24),
+        children: results.map((r) => SearchResultTile(result: r)).toList(),
+      ),
+    );
+  }
+}
+
+class _SearchEmptyState extends ConsumerWidget {
+  const _SearchEmptyState({required this.queryText});
+
+  final String queryText;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     final hiddenCountAsync = ref.watch(hiddenDoneMatchCountProvider);
+    final hiddenCount = hiddenCountAsync.maybeWhen(
+      data: (v) => v,
+      orElse: () => 0,
+    );
 
-    return resultsAsync.when(
-      loading: () => const LinearProgressIndicator(),
-      error: (err, _) =>
-          Center(child: Text('Error: $err', style: const TextStyle(color: Color(0xFFDC2626)))),
-      data: (results) {
-        if (results.isEmpty) {
-          final hiddenCount = hiddenCountAsync.maybeWhen(
-            data: (v) => v,
-            orElse: () => 0,
-          );
-          return Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.search_off, size: 48, color: Color(0xFFD1D5DB)),
-                const SizedBox(height: 12),
-                Text(
-                  'No tasks match "$queryText"',
-                  style: const TextStyle(color: Color(0xFF6B7280)),
-                  textAlign: TextAlign.center,
-                ),
-                if (hiddenCount > 0) ...[
-                  const SizedBox(height: 8),
-                  GestureDetector(
-                    onTap: () => ref.read(searchQueryProvider.notifier).update(
-                          ref.read(searchQueryProvider).copyWith(includeDone: true),
-                        ),
-                    child: Text(
-                      '$hiddenCount ${hiddenCount == 1 ? 'match' : 'matches'} in completed tasks.',
-                      style: const TextStyle(
-                        color: Color(0xFF3B82F6),
-                        fontSize: 13,
-                        decoration: TextDecoration.underline,
-                        decorationColor: Color(0xFF3B82F6),
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.search_off, size: 48, color: Color(0xFFD1D5DB)),
+          const SizedBox(height: 12),
+          Text(
+            'No tasks match "$queryText"',
+            style: const TextStyle(color: Color(0xFF6B7280)),
+            textAlign: TextAlign.center,
+          ),
+          if (hiddenCount > 0) ...[
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => ref.read(searchQueryProvider.notifier).update(
+                    ref
+                        .read(searchQueryProvider)
+                        .copyWith(includeDone: true),
                   ),
-                ],
-              ],
+              child: Text(
+                '$hiddenCount ${hiddenCount == 1 ? 'match' : 'matches'} in completed tasks.',
+                style: const TextStyle(
+                  color: Color(0xFF3B82F6),
+                  fontSize: 13,
+                  decoration: TextDecoration.underline,
+                  decorationColor: Color(0xFF3B82F6),
+                ),
+                textAlign: TextAlign.center,
+              ),
             ),
-          );
-        }
-
-        return ListView(
-          padding: const EdgeInsets.only(bottom: 24),
-          children: results.map((r) => SearchResultTile(result: r)).toList(),
-        );
-      },
+          ],
+        ],
+      ),
     );
   }
 }

@@ -11,6 +11,9 @@ class SomedayMaybeScreen extends StatelessWidget {
     return GtdListScreen(
       title: 'Maybe',
       provider: maybeProvider,
+      emptyIcon: Icons.bedtime_outlined,
+      emptyTitle: 'Nothing in Maybe',
+      emptySubtitle: 'Park ideas you might revisit later here.',
     );
   }
 }
