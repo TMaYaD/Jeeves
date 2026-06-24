@@ -46,7 +46,7 @@ fi
 PS_APP="$1"
 BACKEND_APP="$2"
 PS_DOMAIN="$3"
-PS_IMAGE="${PS_IMAGE:-journeyapps/powersync-service:1.20.5@sha256:dfdb914b1d7a160dad9b8743af8f5f931552b1a210b890216a08c09e054dae76}"
+PS_IMAGE="${PS_IMAGE:-journeyapps/powersync-service:1.23.0@sha256:6405a437bf527957c99e670497a537903af8e1469724b70d030a74aaef5241fa}"
 CONFIG_STORAGE="/var/lib/dokku/data/storage/${PS_APP}"
 DOKKU_UID="${DOKKU_UID:-32767}"
 
