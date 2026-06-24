@@ -328,4 +328,51 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       readsFrom: {focusSessionTasks, focusSessions, todos},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
+
+  /// One-shot query of the Review surface for [sessionId] — the union of
+  ///
+  /// 1. Outcomes on the session's Plan (rows in [focus_session_tasks]), and
+  /// 2. Outcomes engaged with during the session (rows in [time_logs] whose
+  ///    [focus_session_id] = [sessionId]).
+  ///
+  /// Per CONTEXT.md (Engagement context, line ~259): "The Review phase
+  /// surfaces every Outcome that was either on the Plan or engaged with
+  /// during the session (the union), so neither off-Plan work nor
+  /// planned-but-untouched Outcomes slip past disposition."
+  ///
+  /// Plan members are ordered by their [focus_session_tasks.position];
+  /// off-Plan engaged Outcomes follow, ordered by the start time of their
+  /// earliest TimeLog for the session. The list contains no duplicates.
+  Future<List<Todo>> getReviewSurface(String sessionId) async {
+    final rows = await customSelect(
+      // Plan members first (ordered by position), then off-Plan engaged
+      // Outcomes (ordered by earliest TimeLog start for the session).  The
+      // GROUP BY on the engaged side de-duplicates Todos that have multiple
+      // TimeLogs for the session.  The NOT EXISTS clause keeps Plan members
+      // from appearing a second time in the engaged half of the UNION.
+      'SELECT t.*, 0 AS surface_order, fst.position AS sort_key '
+      'FROM todos t '
+      'JOIN focus_session_tasks fst ON fst.task_id = t.id '
+      'WHERE fst.focus_session_id = ? '
+      'UNION ALL '
+      'SELECT t.*, 1 AS surface_order, '
+      '       CAST(strftime(\'%s\', MIN(tl.started_at)) AS INTEGER) AS sort_key '
+      'FROM todos t '
+      'JOIN time_logs tl ON tl.task_id = t.id '
+      'WHERE tl.focus_session_id = ? '
+      '  AND NOT EXISTS ('
+      '    SELECT 1 FROM focus_session_tasks fst2 '
+      '    WHERE fst2.focus_session_id = ? AND fst2.task_id = t.id'
+      '  ) '
+      'GROUP BY t.id '
+      'ORDER BY surface_order, sort_key',
+      variables: [
+        Variable<String>(sessionId),
+        Variable<String>(sessionId),
+        Variable<String>(sessionId),
+      ],
+      readsFrom: {focusSessionTasks, timeLogs, todos},
+    ).get();
+    return rows.map((r) => todos.map(r.data)).toList();
+  }
 }
