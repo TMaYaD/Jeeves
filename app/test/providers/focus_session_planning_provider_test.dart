@@ -10,6 +10,20 @@ import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import '../test_helpers.dart';
 
+/// Pumps the event loop until [predicate] holds or [timeout] elapses. Async
+/// preloads scheduled from a notifier's build() (the rollover pre-selection DAO
+/// read) can take more than one microtask to settle, so a single
+/// `Future.delayed(Duration.zero)` races them — poll for the expected state.
+Future<void> _settleUntil(
+  bool Function() predicate, {
+  Duration timeout = const Duration(seconds: 2),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!predicate() && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+}
+
 // Minimal stub — avoids hitting NotificationService platform channels in unit tests.
 class _StubFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
@@ -1173,10 +1187,14 @@ void main() {
         now: DateTime(2026, 5, 1, 17, 0),
       );
 
-      // Read the provider — build() schedules _preloadRolloverIds via a
-      // microtask.  We force the microtask to drain, then verify state.
+      // Read the provider — build() schedules the rollover preload via a
+      // microtask that awaits a DAO read. Poll for the expected state so we
+      // don't assert before the async preload settles.
       container.read(focusSessionPlanningProvider);
-      await Future<void>.delayed(Duration.zero);
+      await _settleUntil(() => container
+          .read(focusSessionPlanningProvider)
+          .pendingSelectedTaskIds
+          .contains('X'));
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.pendingSelectedTaskIds, contains('X'),
@@ -1201,8 +1219,10 @@ void main() {
         now: DateTime(2026, 5, 1, 17, 0),
       );
 
+      // Empty is also the initial state, so there's no positive signal to poll
+      // for; drain the event queue fully to let the preload run, then assert.
       container.read(focusSessionPlanningProvider);
-      await Future<void>.delayed(Duration.zero);
+      await pumpEventQueue();
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.pendingSelectedTaskIds, isEmpty);
