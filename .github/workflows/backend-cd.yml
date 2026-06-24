@@ -21,6 +21,9 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          # Deploy pushes to Dokku over SSH (ssh-agent); the GITHUB_TOKEN is
+          # never used, so don't persist it into .git/config.
+          persist-credentials: false
 
       - name: Check for backend changes
         id: backend-changes
