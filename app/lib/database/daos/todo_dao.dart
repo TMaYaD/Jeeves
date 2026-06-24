@@ -33,43 +33,45 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // GTD list watchers
   // ---------------------------------------------------------------------------
 
-  Stream<List<Todo>> _watchAll() {
-    return (select(todos)
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
-        .watch();
-  }
-
-  /// Returns a stream of clarified, non-done [Todo]s whose tags include ALL of
-  /// [tagIds] (AND semantics).
+  /// Stream of clarified, non-done todos filtered by [intent] and, optionally,
+  /// by an AND-set of [tagIds].
   ///
-  /// When [requireIntent] is non-null, only rows with that intent value are
-  /// returned. Watches both [todos] and [todoTags] so the stream re-emits when
-  /// either table changes.
-  Stream<List<Todo>> _watchFilteredByTags(
-    Set<String> tagIds, {
-    String? requireIntent,
+  /// The tag-filter shape (`COUNT(DISTINCT tag_id) = n` over `todo_tags`) is
+  /// the single source of truth for "all of these tags" semantics. Callers
+  /// like [watchNextActions] and [watchMaybe] vary only by [intent]; if the
+  /// filter ever needs to change (ANY-of-tags, null-handling on the join, …)
+  /// the change happens here, once.
+  ///
+  /// Watches `todos` always and `todo_tags` when a tag filter is supplied, so
+  /// the stream re-emits when either side changes.
+  Stream<List<Todo>> _watchByIntentAndTags({
+    required Intent intent,
+    Set<String> tagIds = const {},
   }) {
-    assert(tagIds.isNotEmpty);
+    final intentVar = Variable(intent.value);
+    if (tagIds.isEmpty) {
+      return customSelect(
+        'SELECT * FROM todos '
+        'WHERE clarified = 1 AND done_at IS NULL AND intent = ? '
+        'ORDER BY created_at',
+        variables: [intentVar],
+        readsFrom: {todos},
+      ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
+    }
     final n = tagIds.length;
     final placeholders = List.filled(n, '?').join(', ');
-    final intentClause =
-        requireIntent != null ? ' AND todos.intent = ?' : '';
-    final intentVar =
-        requireIntent != null ? [Variable(requireIntent)] : <Variable>[];
     return customSelect(
       'SELECT todos.* FROM todos '
       'WHERE todos.clarified = 1 '
       'AND todos.done_at IS NULL '
+      'AND todos.intent = ? '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id '
-      '       AND tag_id IN ($placeholders)) = $n$intentClause '
+      '       AND tag_id IN ($placeholders)) = $n '
       'ORDER BY todos.created_at',
-      variables: [
-        ...tagIds.map(Variable.new),
-        ...intentVar,
-      ],
+      variables: [intentVar, ...tagIds.map(Variable.new)],
       readsFrom: {todos, todoTags},
-    ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
   /// Stream of next-action todos: clarified, not done, `intent='next'`.
@@ -80,17 +82,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// When [tagIds] is non-empty only todos carrying **all** specified tags
   /// are returned (AND semantics).
   Stream<List<Todo>> watchNextActions({Set<String> tagIds = const {}}) {
-    if (tagIds.isEmpty) {
-      return _watchAll().map(
-        (all) => all
-            .where((t) =>
-                t.intent == 'next' &&
-                t.clarified &&
-                t.doneAt == null)
-            .toList(),
-      );
-    }
-    return _watchFilteredByTags(tagIds, requireIntent: 'next');
+    return _watchByIntentAndTags(intent: Intent.next, tagIds: tagIds);
   }
 
   /// Stream of "Waiting For" todos.
@@ -98,6 +90,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Returns clarified, non-done, intent='next' todos that have at least one
   /// person-typed tag. When [tagIds] is non-empty only todos carrying **all**
   /// specified (context/filter) tags are returned (AND semantics).
+  ///
+  /// Stays bespoke (rather than wrapping [_watchByIntentAndTags]) because the
+  /// "at least one person-typed tag" requirement is enforced by a JOIN onto
+  /// `tags` filtered by `type='person'` — a JOIN shape the helper does not
+  /// model. The tag-filter `COUNT(DISTINCT)` subquery still mirrors the
+  /// helper's SQL so semantics stay aligned.
   Stream<List<Todo>> watchPersonTagged({Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return customSelect(
@@ -115,12 +113,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         readsFrom: {todos, todoTags, tags},
       ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
     }
-    return _watchPersonTaggedFilteredByTags(tagIds);
-  }
-
-  /// Tag-filtered variant of [watchPersonTagged].
-  Stream<List<Todo>> _watchPersonTaggedFilteredByTags(Set<String> tagIds) {
-    assert(tagIds.isNotEmpty);
     final n = tagIds.length;
     final placeholders = List.filled(n, '?').join(', ');
     return customSelect(
@@ -194,30 +186,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// non-empty only todos carrying **all** specified tags are returned
   /// (AND semantics).
   Stream<List<Todo>> watchMaybe({Set<String> tagIds = const {}}) {
-    if (tagIds.isEmpty) {
-      return customSelect(
-        'SELECT * FROM todos WHERE intent = ? AND done_at IS NULL'
-        ' AND clarified = 1 ORDER BY created_at',
-        variables: [Variable('maybe')],
-        readsFrom: {todos},
-      ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
-    }
-    final n = tagIds.length;
-    final placeholders = List.filled(n, '?').join(', ');
-    return customSelect(
-      'SELECT todos.* FROM todos '
-      'WHERE todos.intent = ? AND todos.done_at IS NULL '
-      'AND todos.clarified = 1 '
-      'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
-      '     WHERE todo_id = todos.id '
-      '       AND tag_id IN ($placeholders)) = $n '
-      'ORDER BY todos.created_at',
-      variables: [
-        Variable('maybe'),
-        ...tagIds.map(Variable.new),
-      ],
-      readsFrom: {todos, todoTags},
-    ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
+    return _watchByIntentAndTags(intent: Intent.maybe, tagIds: tagIds);
   }
 
   /// Stream of todos associated with a specific project tag [projectTagId].
