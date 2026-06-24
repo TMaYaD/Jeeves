@@ -93,16 +93,21 @@ updates:
     groups:
       app-flutter:
         update-types: [minor, patch]
-    ignore:
-      # file_picker 12.x is still pre-release (12.0.0-beta.x). The beta
-      # deprecates `withData`/`bytes`, which lib/screens/import_screen.dart
-      # uses and which `flutter analyze` reports as fatal infos — so the beta
-      # breaks CI. Skip only the 12.0.0 pre-releases; the lower `-0` bound
-      # opts pre-releases in and `<12.0.0` stops at (but excludes) stable, so
-      # Dependabot will still raise 12.0.0 once it ships — as an individual
-      # major PR — letting us migrate off the deprecated API deliberately.
-      - dependency-name: "file_picker"
-        versions: [">=12.0.0-0 <12.0.0"]
+        # Keep file_picker OUT of the group. Its 12.x line is still pre-release
+        # (latest 12.0.0-beta.7) and deprecates `withData`/`bytes` — used in
+        # lib/screens/import_screen.dart — which `flutter analyze` treats as
+        # fatal. A grouped lockfile bump pulled 12.0.0-beta.7 in and red the
+        # analyze gate (closed #352); that group leak, not a missing ignore,
+        # was the actual bug (the `>=12.0.0-0 <12.0.0` range ignore never
+        # caught the pre-release).
+        #
+        # Excluded → file_picker updates individually, where Dependabot's
+        # default skips pre-releases (we track stable ^11.0.0) yet still raises
+        # 12.0.0 as its own PR once it ships stable. That individual PR is the
+        # deliberate-migration trigger we want: it stays red until we move
+        # import_screen.dart off the deprecated API, then we land both at once.
+        exclude-patterns:
+          - "file_picker"
 
   # ---------------------------------------------------------------------------
   # Android side of the Flutter app (app/android/build.gradle.kts).
@@ -118,3 +123,11 @@ updates:
     groups:
       app-android:
         update-types: [minor, patch]
+    ignore:
+      # Hold Gradle on the 9.5.x line. Gradle 9.6.0 removed the internal API
+      # `org.gradle.api.problems.internal.InternalProblems` that AGP 8.x
+      # (com.android.application 8.11.1) relies on, so the Android Gradle Build
+      # job fails to apply the plugin (see closed #350). Unblocks once we
+      # migrate to AGP 9.x — drop this rule then. 9.5.x patches still flow.
+      - dependency-name: "gradle-wrapper"
+        versions: [">=9.6.0"]
