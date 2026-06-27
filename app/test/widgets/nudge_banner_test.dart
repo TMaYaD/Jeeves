@@ -7,7 +7,12 @@ import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/widgets/nudge_banner.dart';
 
 class _RecordingNudgeActions extends NudgeActions {
-  _RecordingNudgeActions(Ref ref, {required this.onDismiss}) : super(ref);
+  // Use the super-parameter shorthand to forward the positional Ref to
+  // NudgeActions(this._ref). The `use_super_parameters` lint enforces this
+  // form; an earlier CodeRabbit review flagged it as unsound, but that
+  // claim was incorrect — Dart binds super.ref to the matching positional
+  // super parameter by position, and CI proves the form works.
+  _RecordingNudgeActions(super.ref, {required this.onDismiss});
   final void Function(RitualId) onDismiss;
 
   @override
