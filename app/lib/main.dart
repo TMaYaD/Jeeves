@@ -93,7 +93,7 @@ void _handleNotificationResponse(NotificationResponse response) async {
     case kNotificationActionSkip:
       await persistFocusSessionPlanningSkipToday();
       await NotificationService.instance
-          .cancelRitualReminder(RitualId.dailyPlanning);
+          .skipTodayRitualReminder(RitualId.dailyPlanning);
 
     case kShutdownNotificationActionOpen:
       appRouter.go('/shutdown');

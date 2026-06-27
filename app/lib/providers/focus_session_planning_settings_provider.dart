@@ -68,14 +68,21 @@ class FocusSessionPlanningSettingsNotifier
 
   Future<void> _rescheduleFocusSessionPlanningReminder() async {
     final svc = ref.read(notificationServiceProvider);
-    if (state.notificationEnabled &&
-        !isFocusSessionPlanningNotificationSuppressed()) {
+    // Three states, in priority order:
+    //   1. Notifications disabled — kill both the recurring schedule and any
+    //      pending snooze. The user has opted out entirely.
+    //   2. Skipped today — cancel today's pending recurring fire but leave
+    //      any pending snooze alone (the snooze is on a separate id).
+    //   3. Otherwise — re-arm the recurring schedule. `scheduleRitualReminder`
+    //      is idempotent and does not touch the snooze id, so this covers the
+    //      "only snoozed" case without disturbing the user's one-off.
+    if (!state.notificationEnabled) {
+      await svc.cancelRitualReminder(RitualId.dailyPlanning);
+    } else if (isFocusSessionPlanningNotificationSkippedToday()) {
+      await svc.cancelRecurringRitualReminder(RitualId.dailyPlanning);
+    } else {
       await svc.scheduleRitualReminder(
           RitualId.dailyPlanning, state.planningTime);
-    } else if (!state.notificationEnabled) {
-      await svc.cancelRitualReminder(RitualId.dailyPlanning);
-    } else {
-      await svc.cancelRecurringRitualReminder(RitualId.dailyPlanning);
     }
   }
 }
@@ -95,10 +102,15 @@ Future<void> initFocusSessionPlanningNotificationSchedule() async {
     await svc.cancelRitualReminder(RitualId.dailyPlanning);
     return;
   }
-  if (isFocusSessionPlanningNotificationSuppressed()) {
+  if (isFocusSessionPlanningNotificationSkippedToday()) {
+    // Skip-today only suppresses today's recurring fire. Tomorrow's
+    // recurring is left intact via the schedule below — we cancel the
+    // recurring first to drop any pending today fire, then re-arm.
     await svc.cancelRecurringRitualReminder(RitualId.dailyPlanning);
     return;
   }
+  // Normal path (covers the "snoozed but not skipped" case too — the snooze
+  // one-off is on a separate id and is preserved by scheduleRitualReminder).
   final hour = prefs.getInt(_kTimeHour) ?? 8;
   final minute = prefs.getInt(_kTimeMinute) ?? 0;
   await svc.scheduleRitualReminder(

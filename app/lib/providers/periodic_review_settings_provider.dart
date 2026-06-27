@@ -48,6 +48,13 @@ bool isPeriodicReviewNotificationSuppressedToday() =>
     _periodicReviewNotificationSkippedToday ||
     _periodicReviewNotificationSnoozedActive;
 
+/// Returns true iff the user tapped "Skip today" (as distinct from an active
+/// snooze). The reschedule logic uses this to suppress *today*'s recurring
+/// fire while leaving tomorrow's intact; the snooze is satisfied by its own
+/// one-off and does not need to touch the recurring schedule.
+bool isPeriodicReviewNotificationSkippedToday() =>
+    _periodicReviewNotificationSkippedToday;
+
 /// Reads periodic-review skip/snooze state from [SharedPreferences] into
 /// module-level flags. Call once on startup before scheduling.
 Future<void> loadPeriodicReviewNotificationSuppression() async {
@@ -243,29 +250,25 @@ class PeriodicReviewSettingsNotifier
 
   Future<void> _rescheduleNotification() async {
     final svc = ref.read(notificationServiceProvider);
-    // Only arm the daily reminder while the review is actually due — firing
-    // "Time for your Weekly Review" on a day the cadence has not elapsed
-    // would lie to the user. The schedule is re-evaluated on every prefs
-    // change (the listener in build()) so completion immediately disarms it
-    // and the next cadence flip (driven by writes from any device, e.g.
-    // `last_completed_at` aging out via cross-device sync, or any other
-    // pref write while the app is alive) re-arms it.
+    // Priority order:
+    //   1. Notifications disabled — kill recurring and snooze ids together.
+    //      Must come first so a still-active snooze cannot keep firing after
+    //      the user turns notifications off.
+    //   2. Skipped today — cancel today's recurring fire only; preserve any
+    //      pending snooze on its separate id.
+    //   3. Due and not suppressed — arm the recurring reminder.
+    //   4. Not due — drop the recurring; a pending snooze (if any) stays.
     final isDue = ref.read(periodicReviewIsDueProvider);
-    if (state.notificationEnabled &&
-        isDue &&
-        !isPeriodicReviewNotificationSuppressedToday()) {
+    if (!state.notificationEnabled) {
+      await svc.cancelRitualReminder(RitualId.weeklyReview);
+    } else if (isPeriodicReviewNotificationSkippedToday()) {
+      await svc.cancelRecurringRitualReminder(RitualId.weeklyReview);
+    } else if (isDue) {
       await svc.scheduleRitualReminder(
           RitualId.weeklyReview, state.notificationTime);
-    } else if (_periodicReviewNotificationSnoozedActive) {
-      // The user just tapped "Snooze". Don't kill their one-off snooze
-      // fire just because the recurring schedule shouldn't run today —
-      // only cancel the recurring id so the snooze can still fire on
-      // its scheduled time. Once the snooze fires (or expires) the
-      // module-level flag flips false and the next reschedule falls
-      // through to the regular cancel-both branch.
-      await svc.cancelRecurringRitualReminder(RitualId.weeklyReview);
     } else {
-      await svc.cancelRitualReminder(RitualId.weeklyReview);
+      // Not due — drop the recurring, but leave a pending snooze alone.
+      await svc.cancelRecurringRitualReminder(RitualId.weeklyReview);
     }
   }
 }

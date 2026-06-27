@@ -58,6 +58,13 @@ bool _parseSnoozedActive(String? snoozedUntilStr) {
 bool isShutdownNotificationSuppressedToday() =>
     _shutdownNotificationSkippedToday || _shutdownNotificationSnoozedActive;
 
+/// Returns true iff the user has tapped "Skip today" (as distinct from an
+/// active snooze). The reschedule logic uses this to suppress *today*'s
+/// recurring fire while leaving tomorrow's intact; a snooze is satisfied by
+/// its own one-off and does not need to touch the recurring schedule.
+bool isShutdownNotificationSkippedToday() =>
+    _shutdownNotificationSkippedToday;
+
 /// Reads shutdown skip/snooze state from [SharedPreferences] into module-level flags.
 Future<void> loadShutdownNotificationSuppression() async {
   final prefs = await SharedPreferences.getInstance();
@@ -300,8 +307,9 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
 
   Future<void> skipShutdownToday() async {
     await persistShutdownSkipToday(ref: ref);
+    // Skip today only — leave tomorrow's recurring reminder intact.
     await NotificationService.instance
-        .cancelRitualReminder(RitualId.eveningShutdown);
+        .skipTodayRitualReminder(RitualId.eveningShutdown);
   }
 
   Future<void> snoozeShutdownNotification(int minutes) async {

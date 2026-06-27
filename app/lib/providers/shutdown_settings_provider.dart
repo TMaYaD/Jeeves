@@ -62,11 +62,17 @@ class ShutdownSettingsNotifier extends Notifier<ShutdownSettings> {
 
   Future<void> _rescheduleShutdownReminder() async {
     final svc = ref.read(notificationServiceProvider);
-    if (state.notificationEnabled && !isShutdownNotificationSuppressedToday()) {
+    // See focus_session_planning_settings_provider for the rationale: three
+    // states, in priority order — disabled / skipped-today / otherwise. A
+    // pending snooze falls through to the schedule path so its one-off (on a
+    // separate id) is preserved while the recurring schedule is re-armed.
+    if (!state.notificationEnabled) {
+      await svc.cancelRitualReminder(RitualId.eveningShutdown);
+    } else if (isShutdownNotificationSkippedToday()) {
+      await svc.cancelRecurringRitualReminder(RitualId.eveningShutdown);
+    } else {
       await svc.scheduleRitualReminder(
           RitualId.eveningShutdown, state.shutdownTime);
-    } else {
-      await svc.cancelRitualReminder(RitualId.eveningShutdown);
     }
   }
 }
@@ -77,11 +83,17 @@ Future<void> initShutdownNotificationSchedule() async {
   final svc = NotificationService.instance;
   final notificationEnabled =
       prefs.getBool(_kShutdownNotificationEnabled) ?? true;
-  if (!notificationEnabled || isShutdownNotificationSuppressedToday()) {
+  if (!notificationEnabled) {
     await svc.cancelRitualReminder(RitualId.eveningShutdown);
     return;
   }
-
+  if (isShutdownNotificationSkippedToday()) {
+    // Skip-today only — drop today's recurring fire; preserve any pending
+    // snooze on its own id by not calling cancelRitualReminder.
+    await svc.cancelRecurringRitualReminder(RitualId.eveningShutdown);
+    return;
+  }
+  // Normal path (and snoozed-only): re-arm the recurring schedule.
   final hour = prefs.getInt(_kShutdownTimeHour) ?? 18;
   final minute = prefs.getInt(_kShutdownTimeMinute) ?? 0;
   await svc.scheduleRitualReminder(

@@ -75,6 +75,14 @@ bool isFocusSessionPlanningNotificationSuppressed() {
   return _notificationSkippedToday || _notificationSnoozedActive;
 }
 
+/// Returns true iff the user has chosen "Skip today" (as distinct from an
+/// active snooze). The reschedule logic uses this to suppress *today*'s
+/// recurring fire while leaving tomorrow's intact — a snooze, by contrast,
+/// is satisfied by its own one-off and does not need to touch the recurring
+/// schedule.
+bool isFocusSessionPlanningNotificationSkippedToday() =>
+    _notificationSkippedToday;
+
 bool _notificationSkippedToday = false;
 bool _notificationSnoozedActive = false;
 
@@ -801,8 +809,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// any scheduled notification for today.
   Future<void> skipPlanningToday() async {
     await persistFocusSessionPlanningSkipToday(ref: ref);
+    // Skip today only — leave tomorrow's recurring reminder intact.
     await NotificationService.instance
-        .cancelRitualReminder(RitualId.dailyPlanning);
+        .skipTodayRitualReminder(RitualId.dailyPlanning);
   }
 
   /// Snoozes the planning notification by [minutes] and reschedules it as a
