@@ -56,10 +56,9 @@ class _FocusSessionPlanningScreenState
     // forbids ref access in dispose).
     _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
     // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _ceremonyNotifier.enter(RitualId.dailyPlanning);
-    });
+    // Enter synchronously so the Nudge is suppressed from the moment the
+    // wizard mounts, not one frame later.
+    _ceremonyNotifier.enter(RitualId.dailyPlanning);
   }
 
   @override

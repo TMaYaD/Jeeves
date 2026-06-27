@@ -7,7 +7,7 @@ import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/widgets/nudge_banner.dart';
 
 class _RecordingNudgeActions extends NudgeActions {
-  _RecordingNudgeActions(super.ref, {required this.onDismiss});
+  _RecordingNudgeActions(Ref ref, {required this.onDismiss}) : super(ref);
   final void Function(RitualId) onDismiss;
 
   @override
