@@ -191,22 +191,34 @@ class PeriodicReviewSettingsNotifier
   PeriodicReviewSettings build() {
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
-        final today = planningToday();
-        _periodicReviewNotificationSkippedToday =
-            next.value.get<String>(_kNotificationSkippedDateKey) == today;
-        _periodicReviewNotificationSnoozedActive = _parseSnoozedActive(
-          next.value.get<String>(_kNotificationSnoozedUntilKey),
-        );
+        _refreshNotificationSuppression(next.value);
         state = _fromPrefs(next.value);
         _rescheduleNotification();
       }
     });
     final current = ref.read(syncedPreferencesProvider).asData?.value;
+    // Seed the suppression flags from the current snapshot before the
+    // initial reschedule below; the listener above only fires on later
+    // synced-prefs events, so without this the first reschedule would
+    // see stale process defaults and ignore a persisted skip-today /
+    // active snooze.
+    if (current != null) {
+      _refreshNotificationSuppression(current);
+    }
     final initial = current != null ? _fromPrefs(current) : _defaults();
     // The listener above only fires on subsequent prefs changes, so kick off
     // an initial reschedule once the notifier is constructed.
     Future.microtask(_rescheduleNotification);
     return initial;
+  }
+
+  void _refreshNotificationSuppression(SyncedPreferences prefs) {
+    final today = planningToday();
+    _periodicReviewNotificationSkippedToday =
+        prefs.get<String>(_kNotificationSkippedDateKey) == today;
+    _periodicReviewNotificationSnoozedActive = _parseSnoozedActive(
+      prefs.get<String>(_kNotificationSnoozedUntilKey),
+    );
   }
 
   static PeriodicReviewSettings _defaults() => const PeriodicReviewSettings(
@@ -254,15 +266,15 @@ class PeriodicReviewSettingsNotifier
     //   1. Notifications disabled — kill recurring and snooze ids together.
     //      Must come first so a still-active snooze cannot keep firing after
     //      the user turns notifications off.
-    //   2. Skipped today — cancel today's recurring fire only; preserve any
-    //      pending snooze on its separate id.
+    //   2. Skipped today — cancel today's snooze id only; the recurring
+    //      schedule keeps firing tomorrow via matchDateTimeComponents.
     //   3. Due and not suppressed — arm the recurring reminder.
     //   4. Not due — drop the recurring; a pending snooze (if any) stays.
     final isDue = ref.read(periodicReviewIsDueProvider);
     if (!state.notificationEnabled) {
       await svc.cancelRitualReminder(RitualId.weeklyReview);
     } else if (isPeriodicReviewNotificationSkippedToday()) {
-      await svc.cancelRecurringRitualReminder(RitualId.weeklyReview);
+      await svc.skipTodayRitualReminder(RitualId.weeklyReview);
     } else if (isDue) {
       await svc.scheduleRitualReminder(
           RitualId.weeklyReview, state.notificationTime);

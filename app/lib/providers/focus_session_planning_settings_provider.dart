@@ -79,7 +79,9 @@ class FocusSessionPlanningSettingsNotifier
     if (!state.notificationEnabled) {
       await svc.cancelRitualReminder(RitualId.dailyPlanning);
     } else if (isFocusSessionPlanningNotificationSkippedToday()) {
-      await svc.cancelRecurringRitualReminder(RitualId.dailyPlanning);
+      // Skip-today only suppresses today's snooze id; the recurring
+      // schedule continues to fire tomorrow via matchDateTimeComponents.
+      await svc.skipTodayRitualReminder(RitualId.dailyPlanning);
     } else {
       await svc.scheduleRitualReminder(
           RitualId.dailyPlanning, state.planningTime);
@@ -103,10 +105,9 @@ Future<void> initFocusSessionPlanningNotificationSchedule() async {
     return;
   }
   if (isFocusSessionPlanningNotificationSkippedToday()) {
-    // Skip-today only suppresses today's recurring fire. Tomorrow's
-    // recurring is left intact via the schedule below — we cancel the
-    // recurring first to drop any pending today fire, then re-arm.
-    await svc.cancelRecurringRitualReminder(RitualId.dailyPlanning);
+    // Skip-today only — cancel today's snooze id; the recurring schedule
+    // stays armed and fires tomorrow via matchDateTimeComponents.
+    await svc.skipTodayRitualReminder(RitualId.dailyPlanning);
     return;
   }
   // Normal path (covers the "snoozed but not skipped" case too — the snooze

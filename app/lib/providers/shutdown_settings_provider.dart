@@ -69,7 +69,9 @@ class ShutdownSettingsNotifier extends Notifier<ShutdownSettings> {
     if (!state.notificationEnabled) {
       await svc.cancelRitualReminder(RitualId.eveningShutdown);
     } else if (isShutdownNotificationSkippedToday()) {
-      await svc.cancelRecurringRitualReminder(RitualId.eveningShutdown);
+      // Skip-today only suppresses today's snooze id; the recurring
+      // schedule continues to fire tomorrow via matchDateTimeComponents.
+      await svc.skipTodayRitualReminder(RitualId.eveningShutdown);
     } else {
       await svc.scheduleRitualReminder(
           RitualId.eveningShutdown, state.shutdownTime);
@@ -79,6 +81,10 @@ class ShutdownSettingsNotifier extends Notifier<ShutdownSettings> {
 
 /// Restores the shutdown notification schedule on app startup.
 Future<void> initShutdownNotificationSchedule() async {
+  // Defensively re-load the persisted suppression flags before reading them.
+  // main.dart calls loadShutdownNotificationSuppression() before this, but
+  // a wrong call order would otherwise silently use stale process defaults.
+  await loadShutdownNotificationSuppression();
   final prefs = await SharedPreferences.getInstance();
   final svc = NotificationService.instance;
   final notificationEnabled =
@@ -88,9 +94,9 @@ Future<void> initShutdownNotificationSchedule() async {
     return;
   }
   if (isShutdownNotificationSkippedToday()) {
-    // Skip-today only — drop today's recurring fire; preserve any pending
-    // snooze on its own id by not calling cancelRitualReminder.
-    await svc.cancelRecurringRitualReminder(RitualId.eveningShutdown);
+    // Skip-today only — cancel today's snooze id; the recurring schedule
+    // stays armed and fires tomorrow via matchDateTimeComponents.
+    await svc.skipTodayRitualReminder(RitualId.eveningShutdown);
     return;
   }
   // Normal path (and snoozed-only): re-arm the recurring schedule.
