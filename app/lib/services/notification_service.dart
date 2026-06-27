@@ -176,6 +176,7 @@ class NotificationService {
       id: cfg.recurringId,
       title: cfg.title,
       body: cfg.body,
+      payload: cfg.payload,
       scheduledDate: _nextInstanceOf(time),
       notificationDetails: _ritualNotificationDetails(cfg),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -193,6 +194,7 @@ class NotificationService {
       id: cfg.snoozeId,
       title: cfg.title,
       body: cfg.body,
+      payload: cfg.payload,
       scheduledDate: fireAt,
       notificationDetails: _ritualNotificationDetails(cfg),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -399,6 +401,7 @@ class _RitualNotificationConfig {
     required this.snoozeAction,
     required this.skipAction,
     required this.openLabel,
+    required this.payload,
   });
 
   final int recurringId;
@@ -415,7 +418,36 @@ class _RitualNotificationConfig {
   final String snoozeAction;
   final String skipAction;
   final String openLabel;
+
+  /// Stable string identifying the Ritual on a notification body tap
+  /// (`response.actionId == null`). The action-handler maps it back to a
+  /// `RitualId` via [ritualIdFromNotificationPayload].
+  final String payload;
 }
+
+/// Prefix on every Ritual notification's payload. Picked to be distinct from
+/// the Pomodoro sprint notifications, which use payload `'focus'`.
+const _kNudgePayloadPrefix = 'nudge:';
+
+/// Maps a notification payload back to its [RitualId] for body-tap routing
+/// in the notification-action handler. Returns null when the payload is
+/// absent or does not look like a Nudge payload (e.g. a sprint notification).
+RitualId? ritualIdFromNotificationPayload(String? payload) {
+  if (payload == null || !payload.startsWith(_kNudgePayloadPrefix)) return null;
+  final prefix = payload.substring(_kNudgePayloadPrefix.length);
+  for (final r in RitualId.values) {
+    if (r.keyPrefix == prefix) return r;
+  }
+  return null;
+}
+
+/// Route to navigate to when the body of [ritual]'s notification is tapped.
+/// Mirrors the per-Ritual wizard routes used by the in-app `NudgeBanner`.
+String ritualNotificationRoute(RitualId ritual) => switch (ritual) {
+      RitualId.dailyPlanning => '/focus-session-planning',
+      RitualId.eveningShutdown => '/shutdown',
+      RitualId.weeklyReview => '/periodic-review',
+    };
 
 const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
   RitualId.dailyPlanning: _RitualNotificationConfig(
@@ -433,6 +465,7 @@ const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
     snoozeAction: kNotificationActionSnooze,
     skipAction: kNotificationActionSkip,
     openLabel: 'Open',
+    payload: '${_kNudgePayloadPrefix}planning',
   ),
   RitualId.eveningShutdown: _RitualNotificationConfig(
     recurringId: _kShutdownNotificationId,
@@ -449,6 +482,7 @@ const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
     snoozeAction: kShutdownNotificationActionSnooze,
     skipAction: kShutdownNotificationActionSkip,
     openLabel: 'Open',
+    payload: '${_kNudgePayloadPrefix}shutdown',
   ),
   RitualId.weeklyReview: _RitualNotificationConfig(
     recurringId: _kPeriodicReviewNotificationId,
@@ -465,6 +499,7 @@ const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
     snoozeAction: kPeriodicReviewActionSnooze,
     skipAction: kPeriodicReviewActionSkip,
     openLabel: 'Start Review',
+    payload: '${_kNudgePayloadPrefix}periodic_review',
   ),
 };
 

@@ -72,13 +72,17 @@ void _handleNotificationResponse(NotificationResponse response) async {
   switch (actionId) {
     case kNotificationActionOpen:
     case null:
-      // Null actionId means the notification body was tapped.
-      // Focus/sprint notifications carry payload 'focus' and return to the
-      // active focus screen; all others go to the planning ritual.
+      // Null actionId means the notification body was tapped. Route by
+      // payload — focus/sprint carries 'focus', Ritual notifications carry
+      // `nudge:<keyPrefix>` and resolve to the matching wizard route. A
+      // body tap on an unknown payload falls back to inbox.
       if (response.payload == 'focus') {
         appRouter.go('/focus/active');
       } else {
-        appRouter.go('/focus-session-planning');
+        final ritual = ritualIdFromNotificationPayload(response.payload);
+        appRouter.go(ritual != null
+            ? ritualNotificationRoute(ritual)
+            : '/inbox');
       }
 
     case kNotificationActionSnooze:
