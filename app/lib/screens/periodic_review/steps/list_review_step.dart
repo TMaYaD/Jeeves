@@ -9,11 +9,10 @@
 /// shaped identically across all three steps; only the slice it writes to
 /// and the action filters differ.
 ///
-/// Auto-skip-on-entry-empty is owned by [PeriodicReviewNotifier] (its
-/// `_onStepEnter` loads the snapshot but does not skip), not this widget — by
-/// the time an empty step renders, the wizard has already moved on. The
-/// empty-state UI is the fallback for the step-revisit case (user backs into
-/// a step whose snapshot is empty).
+/// [PeriodicReviewNotifier]'s `_onStepEnter` loads the snapshot on step entry
+/// but does not auto-skip — empty snapshots are shown to the user. This widget
+/// renders the empty-state UI whenever the snapshot is empty, whether on first
+/// entry or when the user backs into the step.
 library;
 
 import 'package:flutter/material.dart';

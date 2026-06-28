@@ -435,8 +435,8 @@ void main() {
     testWidgets(
         'phrase + Save writes next_action_text, records nextAction at the '
         'live cursor index, and advances', (tester) async {
-      final todo1 = await _insertTodo(db, id: 't1');
-      final todo2 = await _insertTodo(db, id: 't2');
+      final todo1 = await _insertTodo(db, id: 't1', intent: 'waiting');
+      final todo2 = await _insertTodo(db, id: 't2', intent: 'waiting');
       var advances = 0;
       final recorded = <MapEntry<int, RoutingKind>>[];
       await tester.pumpWidget(_harness(
@@ -482,7 +482,7 @@ void main() {
     testWidgets(
         'blank Save re-reads the row, records no routing, and does not advance',
         (tester) async {
-      final todo = await _insertTodo(db, id: 't1');
+      final todo = await _insertTodo(db, id: 't1', intent: 'waiting');
       var advances = 0;
       final recorded = <MapEntry<int, RoutingKind>>[];
       await tester.pumpWidget(_harness(
@@ -507,6 +507,8 @@ void main() {
       await tester.pumpAndSettle();
 
       final row = await db.todoDao.getTodo('t1');
+      expect(row?.intent, 'waiting',
+          reason: 'blank Save must not change the intent');
       expect(row?.nextActionText, isNull,
           reason: 'blank Save must not write a phrase');
       expect(recorded, isEmpty,
