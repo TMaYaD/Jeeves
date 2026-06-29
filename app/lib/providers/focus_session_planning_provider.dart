@@ -179,7 +179,7 @@ bool _energyFits(String? taskEnergy, String? dayEnergy) {
 ///
 /// A null day-energy (Energy step not yet visited) means no filtering at
 /// all; tasks with no energy tag are never filtered out.
-final nextActionsForFocusSessionPlanningProvider =
+final nextForFocusSessionPlanningProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final planningState = ref.watch(focusSessionPlanningProvider);
@@ -188,7 +188,7 @@ final nextActionsForFocusSessionPlanningProvider =
     ...planningState.pendingSelectedTaskIds,
   };
   final dayEnergy = planningState.energyLevel;
-  return db.todoDao.watchNextActions().map((all) => all
+  return db.todoDao.watchNext().map((all) => all
       .where((t) =>
           !reviewed.contains(t.id) && _energyFits(t.energyLevel, dayEnergy))
       .toList());
@@ -223,7 +223,7 @@ final focusSessionPlanningTasksMissingEstimatesProvider =
 });
 
 /// Tasks reviewed today but not selected (skipped / deferred).
-final skippedNextActionsForFocusSessionPlanningProvider =
+final skippedNextForFocusSessionPlanningProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final planningState = ref.watch(focusSessionPlanningProvider);

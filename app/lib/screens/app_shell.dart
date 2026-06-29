@@ -69,7 +69,7 @@ class CustomDrawer extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).uri.path;
     final inboxCount = ref.watch(inboxItemsProvider).asData?.value.length ?? 0;
-    final nextActionsCount = ref.watch(nextActionsProvider).asData?.value.length ?? 0;
+    final nextCount = ref.watch(nextProvider).asData?.value.length ?? 0;
     final waitingForCount = ref.watch(waitingForProvider).asData?.value.length ?? 0;
     final maybeCount = ref.watch(maybeProvider).asData?.value.length ?? 0;
     final syncAsync = ref.watch(syncStatusProvider);
@@ -147,7 +147,7 @@ class CustomDrawer extends ConsumerWidget {
                       title: 'Next Actions',
                       path: '/next-actions',
                       location: location,
-                      count: nextActionsCount),
+                      count: nextCount),
                   _buildNavItem(context,
                       icon: Icons.hourglass_empty,
                       title: 'Waiting For',

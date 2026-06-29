@@ -177,7 +177,7 @@ class _FocusSessionPlanningScreenState
     FocusSessionPlanningNotifier notifier,
   ) {
     // Energy-based filtering of Pending Review is a reactive selector on
-    // `state.energyLevel` (see `nextActionsForFocusSessionPlanningProvider`);
+    // `state.energyLevel` (see `nextForFocusSessionPlanningProvider`);
     // crossing into Time is a plain step advance.
     return WizardStep(
       title: _stepTitles[2],

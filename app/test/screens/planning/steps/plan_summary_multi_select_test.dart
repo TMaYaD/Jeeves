@@ -1,8 +1,8 @@
 /// Widget tests for the [PlanSummaryStep] multi-select flow (#247).
 ///
-/// The three list streams ([nextActionsForFocusSessionPlanningProvider],
+/// The three list streams ([nextForFocusSessionPlanningProvider],
 /// [focusSessionPlanningSelectedTasksProvider], and
-/// [skippedNextActionsForFocusSessionPlanningProvider]) are overridden with
+/// [skippedNextForFocusSessionPlanningProvider]) are overridden with
 /// single-value streams over an in-memory todo source so the test does not
 /// subscribe to drift's `StreamQueryStore` — that store leaves a pending
 /// `markAsClosed` timer behind on widget-tree teardown, tripping
@@ -56,7 +56,7 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
       databaseProvider.overrideWithValue(db),
       _testTodosProvider.overrideWith((_) => todos),
       // Pending Review: next-action todos minus anything already reviewed.
-      nextActionsForFocusSessionPlanningProvider.overrideWith((ref) {
+      nextForFocusSessionPlanningProvider.overrideWith((ref) {
         final state = ref.watch(focusSessionPlanningProvider);
         final reviewed = {
           ...state.reviewedTaskIds,
@@ -80,7 +80,7 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
         return Stream.value(ordered);
       }),
       // Skipped: reviewed but not selected.
-      skippedNextActionsForFocusSessionPlanningProvider
+      skippedNextForFocusSessionPlanningProvider
           .overrideWith((ref) {
         final state = ref.watch(focusSessionPlanningProvider);
         final skippedIds = state.reviewedTaskIds

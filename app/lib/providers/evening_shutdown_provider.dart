@@ -286,7 +286,7 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   }
 
   /// Marks [id] to remain in next-actions and advances the index.
-  void returnToNextActions(String id) {
+  void returnToNext(String id) {
     _setDisposition(id, _kDispLeave);
     nextUnfinishedTask();
   }

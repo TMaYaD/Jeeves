@@ -8,7 +8,7 @@ import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
-import 'screens/next_actions/next_actions_screen.dart';
+import 'screens/next/next_screen.dart';
 import 'screens/periodic_review/periodic_review_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
@@ -93,7 +93,7 @@ final appRouter = GoRouter(
         ),
         GoRoute(
           path: '/next-actions',
-          builder: (context, state) => const NextActionsScreen(),
+          builder: (context, state) => const NextScreen(),
         ),
         GoRoute(
           path: '/waiting-for',

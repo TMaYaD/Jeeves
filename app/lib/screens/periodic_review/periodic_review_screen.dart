@@ -30,7 +30,7 @@ import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
 import '../../widgets/ceremony/wizard.dart';
-import 'steps/next_actions_step.dart';
+import 'steps/next_step.dart';
 import 'steps/someday_maybe_step.dart';
 import 'steps/summary_step.dart';
 import 'steps/waiting_for_step.dart';
@@ -133,13 +133,13 @@ class _PeriodicReviewScreenState
       ),
       _listStep(
         title: _stepTitles[2],
-        body: const NextActionsStep(),
-        nav: state.nextActionsNav,
+        body: const NextStep(),
+        nav: state.nextNav,
         verb: 'reviewed',
         stepIndex: 2,
         currentStep: step,
-        skip: notifier.advanceNextActions,
-        previous: notifier.previousNextActions,
+        skip: notifier.advanceNext,
+        previous: notifier.previousNext,
         notifier: notifier,
       ),
       _listStep(

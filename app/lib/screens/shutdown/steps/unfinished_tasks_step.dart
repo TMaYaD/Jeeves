@@ -78,7 +78,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
         todo: current,
         lastDisposition: dispositions[current.id],
         onRollOver: () => notifier.rolloverTask(current.id),
-        onReturn: () => notifier.returnToNextActions(current.id),
+        onReturn: () => notifier.returnToNext(current.id),
         onDefer: () => notifier.deferTask(current.id),
       ),
     );

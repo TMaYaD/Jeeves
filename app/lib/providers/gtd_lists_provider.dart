@@ -20,10 +20,10 @@ final inboxProvider = StreamProvider<List<Todo>>((ref) {
 ///
 /// Automatically filtered by the active context tag set from
 /// [tagFilterProvider] (AND semantics when multiple tags are selected).
-final nextActionsProvider = StreamProvider<List<Todo>>((ref) {
+final nextProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchNextActions(tagIds: tagIds);
+  return db.todoDao.watchNext(tagIds: tagIds);
 });
 
 /// Stream of waiting-for todos (todos with at least one person-typed tag).
@@ -72,12 +72,12 @@ final unfilteredInboxProvider = StreamProvider<List<Todo>>((ref) {
 
 /// Stream of next-action todos — no context tag filter.
 ///
-/// Unlike [nextActionsProvider], this ignores [tagFilterProvider] so it covers
+/// Unlike [nextProvider], this ignores [tagFilterProvider] so it covers
 /// the user's full next-action list. Used by the Daily Planning Cadence Trigger to
 /// decide whether there is anything to plan.
-final unfilteredNextActionsProvider = StreamProvider<List<Todo>>((ref) {
+final unfilteredNextProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao.watchNextActions();
+  return db.todoDao.watchNext();
 });
 
 /// Stream of waiting-for todos — no context tag filter.

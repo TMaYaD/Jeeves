@@ -28,16 +28,16 @@ class PeriodicReviewState {
     this.currentStep = 0,
     this.inboxNav = const SnapshotNav<String>(),
     this.waitingForNav = const SnapshotNav<Todo>(),
-    this.nextActionsNav = const SnapshotNav<Todo>(),
+    this.nextNav = const SnapshotNav<Todo>(),
     this.somedayNav = const SnapshotNav<Todo>(),
     this.waitingForPersonTags = const {},
     this.inboxRoutings = const {},
     this.waitingForRoutings = const {},
-    this.nextActionsRoutings = const {},
+    this.nextRoutings = const {},
     this.somedayRoutings = const {},
     this.inboxLoadError,
     this.waitingForLoadError,
-    this.nextActionsLoadError,
+    this.nextLoadError,
     this.somedayLoadError,
   });
 
@@ -46,7 +46,7 @@ class PeriodicReviewState {
   /// Snapshot of inbox todo IDs to clarify (oldest-first).
   final SnapshotNav<String> inboxNav;
   final SnapshotNav<Todo> waitingForNav;
-  final SnapshotNav<Todo> nextActionsNav;
+  final SnapshotNav<Todo> nextNav;
   final SnapshotNav<Todo> somedayNav;
 
   /// Person tags attached to each todo in [waitingForNav], keyed by todo id.
@@ -59,33 +59,33 @@ class PeriodicReviewState {
   /// when the user backs up to revisit an item.
   final Map<int, RoutingKind> inboxRoutings;
   final Map<int, RoutingKind> waitingForRoutings;
-  final Map<int, RoutingKind> nextActionsRoutings;
+  final Map<int, RoutingKind> nextRoutings;
   final Map<int, RoutingKind> somedayRoutings;
 
   /// Non-null when the matching snapshot load failed; rendered inline by the
   /// step (no toasts in the wizard) with a Retry affordance.
   final String? inboxLoadError;
   final String? waitingForLoadError;
-  final String? nextActionsLoadError;
+  final String? nextLoadError;
   final String? somedayLoadError;
 
   PeriodicReviewState copyWith({
     int? currentStep,
     SnapshotNav<String>? inboxNav,
     SnapshotNav<Todo>? waitingForNav,
-    SnapshotNav<Todo>? nextActionsNav,
+    SnapshotNav<Todo>? nextNav,
     SnapshotNav<Todo>? somedayNav,
     Map<String, List<Tag>>? waitingForPersonTags,
     Map<int, RoutingKind>? inboxRoutings,
     Map<int, RoutingKind>? waitingForRoutings,
-    Map<int, RoutingKind>? nextActionsRoutings,
+    Map<int, RoutingKind>? nextRoutings,
     Map<int, RoutingKind>? somedayRoutings,
     String? inboxLoadError,
     bool clearInboxLoadError = false,
     String? waitingForLoadError,
     bool clearWaitingForLoadError = false,
-    String? nextActionsLoadError,
-    bool clearNextActionsLoadError = false,
+    String? nextLoadError,
+    bool clearNextLoadError = false,
     String? somedayLoadError,
     bool clearSomedayLoadError = false,
   }) =>
@@ -93,13 +93,13 @@ class PeriodicReviewState {
         currentStep: currentStep ?? this.currentStep,
         inboxNav: inboxNav ?? this.inboxNav,
         waitingForNav: waitingForNav ?? this.waitingForNav,
-        nextActionsNav: nextActionsNav ?? this.nextActionsNav,
+        nextNav: nextNav ?? this.nextNav,
         somedayNav: somedayNav ?? this.somedayNav,
         waitingForPersonTags:
             waitingForPersonTags ?? this.waitingForPersonTags,
         inboxRoutings: inboxRoutings ?? this.inboxRoutings,
         waitingForRoutings: waitingForRoutings ?? this.waitingForRoutings,
-        nextActionsRoutings: nextActionsRoutings ?? this.nextActionsRoutings,
+        nextRoutings: nextRoutings ?? this.nextRoutings,
         somedayRoutings: somedayRoutings ?? this.somedayRoutings,
         inboxLoadError: clearInboxLoadError
             ? null
@@ -107,9 +107,9 @@ class PeriodicReviewState {
         waitingForLoadError: clearWaitingForLoadError
             ? null
             : (waitingForLoadError ?? this.waitingForLoadError),
-        nextActionsLoadError: clearNextActionsLoadError
+        nextLoadError: clearNextLoadError
             ? null
-            : (nextActionsLoadError ?? this.nextActionsLoadError),
+            : (nextLoadError ?? this.nextLoadError),
         somedayLoadError: clearSomedayLoadError
             ? null
             : (somedayLoadError ?? this.somedayLoadError),
@@ -126,7 +126,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   // throughout the week (no dedicated brain-dump step in the wizard).
   static const int kStepInbox = 0;
   static const int kStepWaitingFor = 1;
-  static const int kStepNextActions = 2;
+  static const int kStepNext = 2;
   static const int kStepSomeMaybe = 3;
   static const int kStepSummary = 4;
 
@@ -142,7 +142,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// nav is unloaded) and let re-entry preserve the user's per-item cursor.
   bool _loadingInboxSnapshot = false;
   bool _loadingWaitingForSnapshot = false;
-  bool _loadingNextActionsSnapshot = false;
+  bool _loadingNextSnapshot = false;
   bool _loadingSomedaySnapshot = false;
 
   @override
@@ -190,18 +190,18 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     }
   }
 
-  Future<void> loadNextActionsSnapshot() async {
-    if (state.nextActionsNav.isLoaded || _loadingNextActionsSnapshot) return;
-    _loadingNextActionsSnapshot = true;
-    state = state.copyWith(clearNextActionsLoadError: true);
+  Future<void> loadNextSnapshot() async {
+    if (state.nextNav.isLoaded || _loadingNextSnapshot) return;
+    _loadingNextSnapshot = true;
+    state = state.copyWith(clearNextLoadError: true);
     try {
-      final todos = await _db.todoDao.getNextActionsExcludingPersonTagged();
+      final todos = await _db.todoDao.getNextExcludingPersonTagged();
       state = state.copyWith(
-          nextActionsNav: state.nextActionsNav.withItems(todos));
+          nextNav: state.nextNav.withItems(todos));
     } catch (e) {
-      state = state.copyWith(nextActionsLoadError: e.toString());
+      state = state.copyWith(nextLoadError: e.toString());
     } finally {
-      _loadingNextActionsSnapshot = false;
+      _loadingNextSnapshot = false;
     }
   }
 
@@ -228,7 +228,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     await Future.wait<void>([
       loadInboxSnapshot(),
       loadWaitingForSnapshot(),
-      loadNextActionsSnapshot(),
+      loadNextSnapshot(),
       loadSomedaySnapshot(),
     ]);
   }
@@ -253,13 +253,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     state = state.copyWith(waitingForNav: state.waitingForNav.previous());
   }
 
-  void advanceNextActions() =>
-      state = state.copyWith(nextActionsNav: state.nextActionsNav.next());
+  void advanceNext() =>
+      state = state.copyWith(nextNav: state.nextNav.next());
 
-  void previousNextActions() {
-    if (!state.nextActionsNav.canGoBack) return;
+  void previousNext() {
+    if (!state.nextNav.canGoBack) return;
     state =
-        state.copyWith(nextActionsNav: state.nextActionsNav.previous());
+        state.copyWith(nextNav: state.nextNav.previous());
   }
 
   void advanceSomeday() =>
@@ -287,9 +287,9 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     );
   }
 
-  void recordNextActionsRouting(int index, RoutingKind kind) {
+  void recordNextRouting(int index, RoutingKind kind) {
     state = state.copyWith(
-      nextActionsRoutings: {...state.nextActionsRoutings, index: kind},
+      nextRoutings: {...state.nextRoutings, index: kind},
     );
   }
 
@@ -333,8 +333,8 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
         await loadInboxSnapshot();
       case kStepWaitingFor:
         await loadWaitingForSnapshot();
-      case kStepNextActions:
-        await loadNextActionsSnapshot();
+      case kStepNext:
+        await loadNextSnapshot();
       case kStepSomeMaybe:
         await loadSomedaySnapshot();
     }
@@ -354,7 +354,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     await settings.completeReview();
     _loadingInboxSnapshot = false;
     _loadingWaitingForSnapshot = false;
-    _loadingNextActionsSnapshot = false;
+    _loadingNextSnapshot = false;
     _loadingSomedaySnapshot = false;
     state = const PeriodicReviewState();
   }

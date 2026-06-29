@@ -74,7 +74,7 @@ void main() {
           equals(PeriodicReviewNotifier.kStepWaitingFor));
       await notifier.advanceStep(); // Waiting For → Next Actions
       expect(c.read(periodicReviewProvider).currentStep,
-          equals(PeriodicReviewNotifier.kStepNextActions));
+          equals(PeriodicReviewNotifier.kStepNext));
       await notifier.advanceStep(); // Next Actions → Someday/Maybe
       expect(c.read(periodicReviewProvider).currentStep,
           equals(PeriodicReviewNotifier.kStepSomeMaybe));
@@ -184,11 +184,11 @@ void main() {
 
       final state = c.read(periodicReviewProvider);
       expect(state.waitingForNav.isLoaded, isTrue);
-      expect(state.nextActionsNav.isLoaded, isTrue);
+      expect(state.nextNav.isLoaded, isTrue);
       final waitingIds =
           state.waitingForNav.items!.map((t) => t.id).toSet();
       final nextIds =
-          state.nextActionsNav.items!.map((t) => t.id).toSet();
+          state.nextNav.items!.map((t) => t.id).toSet();
 
       expect(waitingIds, equals({'wf1'}));
       expect(nextIds, equals({'na1', 'na2'}));
@@ -201,14 +201,14 @@ void main() {
       await c.read(syncedPreferencesProvider.future);
       final notifier = c.read(periodicReviewProvider.notifier);
 
-      await notifier.goToStep(PeriodicReviewNotifier.kStepNextActions);
+      await notifier.goToStep(PeriodicReviewNotifier.kStepNext);
       final state = c.read(periodicReviewProvider);
-      expect(state.nextActionsNav.isLoaded, isTrue);
-      expect(state.nextActionsNav.isEmpty, isTrue);
+      expect(state.nextNav.isLoaded, isTrue);
+      expect(state.nextNav.isEmpty, isTrue);
       // Empty Next Actions no longer auto-skips. The step shows an inline
       // empty-state and waits for the user to tap Next.
       expect(state.currentStep,
-          equals(PeriodicReviewNotifier.kStepNextActions));
+          equals(PeriodicReviewNotifier.kStepNext));
     });
   });
 }
