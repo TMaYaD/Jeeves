@@ -15,6 +15,8 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/ritual.dart';
+import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/close_day_step.dart';
@@ -30,12 +32,34 @@ class ShutdownRitualScreen extends ConsumerStatefulWidget {
 }
 
 class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
+  late final CeremonyInProgressNotifier _ceremonyNotifier;
   int? _resolveInitialTotal;
   bool _showCloseDay = false;
 
   static const _ceremonyId = 'shutdown';
   static const _accent = Color(0xFF1E3A5F);
   static const _stepTitles = ['Review Your Day', 'Resolve Unfinished'];
+
+  @override
+  void initState() {
+    super.initState();
+    // Capture the notifier now so dispose() can call exit() without
+    // touching `ref` after the widget has been unmounted.
+    _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
+    // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
+    // Defer `enter()` to the post-frame callback — Riverpod 3.x forbids
+    // notifier mutation during the build phase, which initState is part of.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _ceremonyNotifier.enter(RitualId.eveningShutdown);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ceremonyNotifier.exit(RitualId.eveningShutdown);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

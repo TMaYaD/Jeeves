@@ -7,21 +7,17 @@
 /// closes the session via [FocusSessionDao.reviewAndCloseSession].
 ///
 /// Public surface:
-/// - [shutdownCompletionNotifier], [shutdownBannerDismissedNotifier] —
-///   [ValueNotifier]s consumed by the banner / app shell.
-/// - [initShutdownCompletion] — seeds notifiers from [SharedPreferences];
-///   call once in [main] before [runApp].
 /// - Notification skip/snooze helpers used by main.dart on action taps.
 /// - [completedTodayProvider], [unfinishedSelectedTodayProvider] — stream
 ///   providers driven by the active focus session's members.
 /// - [eveningShutdownProvider] — step / disposition state for the ritual.
 library;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
+import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'database_provider.dart';
@@ -37,7 +33,6 @@ export '../database/gtd_database.dart' show Todo;
 // ---------------------------------------------------------------------------
 
 const _kShutdownCompletedDateKey = 'shutdown_ritual_completed_date';
-const _kShutdownBannerDismissedDateKey = 'shutdown_banner_dismissed_date';
 const _kShutdownNotificationSkippedDateKey =
     'shutdown_notification_skipped_date';
 const _kShutdownNotificationSnoozedUntilKey =
@@ -45,29 +40,6 @@ const _kShutdownNotificationSnoozedUntilKey =
 
 /// Total number of shutdown ritual steps (0-indexed max).
 const int _kShutdownMaxStep = 2;
-
-// ---------------------------------------------------------------------------
-// Router refresh notifiers
-// ---------------------------------------------------------------------------
-
-/// Tracks whether the shutdown ritual has been completed today.
-final shutdownCompletionNotifier = ValueNotifier<bool>(false);
-
-/// Global notifier for shutdown banner dismissal state.
-final shutdownBannerDismissedNotifier = ValueNotifier<bool>(false);
-
-/// Initialises [shutdownCompletionNotifier] and [shutdownBannerDismissedNotifier]
-/// from [SharedPreferences].
-///
-/// Must be called once in [main] after [WidgetsFlutterBinding.ensureInitialized].
-Future<void> initShutdownCompletion() async {
-  final prefs = await SharedPreferences.getInstance();
-  final today = planningToday();
-  shutdownCompletionNotifier.value =
-      prefs.getString(_kShutdownCompletedDateKey) == today;
-  shutdownBannerDismissedNotifier.value =
-      prefs.getString(_kShutdownBannerDismissedDateKey) == today;
-}
 
 // ---------------------------------------------------------------------------
 // Notification suppression helpers
@@ -85,6 +57,13 @@ bool _parseSnoozedActive(String? snoozedUntilStr) {
 /// Returns true if the user has skipped/snoozed shutdown notifications today.
 bool isShutdownNotificationSuppressedToday() =>
     _shutdownNotificationSkippedToday || _shutdownNotificationSnoozedActive;
+
+/// Returns true iff the user has tapped "Skip today" (as distinct from an
+/// active snooze). The reschedule logic uses this to suppress *today*'s
+/// recurring fire while leaving tomorrow's intact; a snooze is satisfied by
+/// its own one-off and does not need to touch the recurring schedule.
+bool isShutdownNotificationSkippedToday() =>
+    _shutdownNotificationSkippedToday;
 
 /// Reads shutdown skip/snooze state from [SharedPreferences] into module-level flags.
 Future<void> loadShutdownNotificationSuppression() async {
@@ -227,17 +206,12 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
 
   @override
   EveningShutdownState build() {
-    // Update shutdown ValueNotifiers and suppression flags when Drift receives cross-device sync.
+    // Refresh notification-suppression flags when Drift receives cross-device
+    // sync. Banner dismiss state is now persisted by the Nudge module (see
+    // nudgeStateProvider).
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
         final today = planningToday();
-        final completed =
-            next.value.get<String>(_kShutdownCompletedDateKey) == today;
-        final bannerDismissed =
-            next.value.get<String>(_kShutdownBannerDismissedDateKey) == today;
-        shutdownCompletionNotifier.value = completed;
-        shutdownBannerDismissedNotifier.value = bannerDismissed;
-
         _shutdownNotificationSkippedToday =
             next.value.get<String>(_kShutdownNotificationSkippedDateKey) == today;
 
@@ -329,34 +303,28 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     );
   }
 
-  // ---- Banner dismissal ------------------------------------------------------
-
-  Future<void> dismissBannerForToday() async {
-    final today = planningToday();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kShutdownBannerDismissedDateKey, today);
-    shutdownBannerDismissedNotifier.value = true;
-    await syncedPrefs(ref).set(_kShutdownBannerDismissedDateKey, today);
-  }
-
   // ---- Notification skip / snooze --------------------------------------------
 
   Future<void> skipShutdownToday() async {
     await persistShutdownSkipToday(ref: ref);
-    await NotificationService.instance.cancelShutdownReminder();
+    // Skip today only — leave tomorrow's recurring reminder intact.
+    await NotificationService.instance
+        .skipTodayRitualReminder(RitualId.eveningShutdown);
   }
 
   Future<void> snoozeShutdownNotification(int minutes) async {
     final until = DateTime.now().add(Duration(minutes: minutes));
     await persistShutdownSnoozedUntil(until, ref: ref);
-    await NotificationService.instance.snoozeShutdownReminder(minutes);
+    await NotificationService.instance
+        .snoozeRitualReminder(RitualId.eveningShutdown, minutes);
   }
 
   // ---- Shutdown lifecycle ----------------------------------------------------
 
-  /// Atomically commits accumulated dispositions, closes the active focus
-  /// session, and flips the completion notifier so the banner / focus-screen
-  /// entry stand down for the rest of today.
+  /// Atomically commits accumulated dispositions and closes the active focus
+  /// session. The Nudge module's ES Cadence Trigger predicate is gated on
+  /// "active session exists" — closing the session makes the ES Nudge stand
+  /// down without any explicit completion flag.
   ///
   /// Tasks not present in [state.dispositions] are left as-is on
   /// [focus_session_tasks] (their disposition column stays at its default).
@@ -376,7 +344,6 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     final prefs = await SharedPreferences.getInstance();
     try {
       await prefs.setString(_kShutdownCompletedDateKey, today);
-      shutdownCompletionNotifier.value = true;
       await syncedPrefs(ref).set(_kShutdownCompletedDateKey, today);
       state = const EveningShutdownState();
     } catch (e) {

@@ -70,8 +70,6 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    shutdownCompletionNotifier.value = false;
-    shutdownBannerDismissedNotifier.value = false;
   });
 
   group('EveningShutdownNotifier', () {
@@ -116,14 +114,6 @@ void main() {
 
     // ---- closeDay ------------------------------------------------------------
 
-    test('closeDay sets shutdownCompletionNotifier to true', () async {
-      await _openSessionWith(db, []);
-
-      final notifier = container.read(eveningShutdownProvider.notifier);
-      await notifier.closeDay();
-      expect(shutdownCompletionNotifier.value, isTrue);
-    });
-
     test('closeDay persists completion date to SharedPreferences', () async {
       await _openSessionWith(db, []);
 
@@ -161,29 +151,11 @@ void main() {
     });
 
     test('closeDay tolerates running with no active session', () async {
-      // No session opened; closeDay should still flip the completion flag
+      // No session opened; closeDay should still complete without throwing
       // (e.g. user opens settings -> "Start Evening Shutdown" before planning).
       final notifier = container.read(eveningShutdownProvider.notifier);
       await notifier.closeDay();
-      expect(shutdownCompletionNotifier.value, isTrue);
-    });
-
-    // ---- dismissBannerForToday -----------------------------------------------
-
-    test('dismissBannerForToday sets shutdownBannerDismissedNotifier',
-        () async {
-      final notifier = container.read(eveningShutdownProvider.notifier);
-      await notifier.dismissBannerForToday();
-      expect(shutdownBannerDismissedNotifier.value, isTrue);
-    });
-
-    test('dismissBannerForToday persists dismissed date', () async {
-      final notifier = container.read(eveningShutdownProvider.notifier);
-      await notifier.dismissBannerForToday();
-
-      final prefs = await SharedPreferences.getInstance();
-      final stored = prefs.getString('shutdown_banner_dismissed_date');
-      expect(stored, isNotNull);
+      // No assertion — the absence of an exception is the contract.
     });
 
     // ---- Disposition recording (in-memory) -----------------------------------

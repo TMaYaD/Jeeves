@@ -25,6 +25,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/ritual.dart';
+import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
 import '../../widgets/ceremony/wizard.dart';
@@ -44,6 +46,8 @@ class PeriodicReviewScreen extends ConsumerStatefulWidget {
 
 class _PeriodicReviewScreenState
     extends ConsumerState<PeriodicReviewScreen> {
+  late final CeremonyInProgressNotifier _ceremonyNotifier;
+
   static const _ceremonyId = 'periodic_review';
   static const _accent = Color(0xFF059669);
   static const _stepTitles = [
@@ -61,6 +65,16 @@ class _PeriodicReviewScreenState
   @override
   void initState() {
     super.initState();
+    // Capture the notifier now so dispose() can call exit() without
+    // touching `ref` after the widget has been unmounted.
+    _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
+    // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
+    // Defer `enter()` to the post-frame callback — Riverpod 3.x forbids
+    // notifier mutation during the build phase, which initState is part of.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _ceremonyNotifier.enter(RitualId.weeklyReview);
+    });
     // Pre-load every step's snapshot before the user can interact with
     // the wizard. Loading lazily on step entry let items routed in an
     // earlier step (e.g. inbox → maybe) leak into the matching later
@@ -71,6 +85,12 @@ class _PeriodicReviewScreenState
       final notifier = ref.read(periodicReviewProvider.notifier);
       await notifier.loadAllSnapshots();
     });
+  }
+
+  @override
+  void dispose() {
+    _ceremonyNotifier.exit(RitualId.weeklyReview);
+    super.dispose();
   }
 
   @override

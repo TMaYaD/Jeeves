@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/focus_session_planning_settings.dart';
+import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import 'focus_session_planning_provider.dart';
 import 'synced_preferences_provider.dart';
@@ -67,13 +68,23 @@ class FocusSessionPlanningSettingsNotifier
 
   Future<void> _rescheduleFocusSessionPlanningReminder() async {
     final svc = ref.read(notificationServiceProvider);
-    if (state.notificationEnabled &&
-        !isFocusSessionPlanningNotificationSuppressed()) {
-      await svc.scheduleFocusSessionPlanningReminder(time: state.planningTime);
-    } else if (!state.notificationEnabled) {
-      await svc.cancelFocusSessionPlanningReminder();
+    // Three states, in priority order:
+    //   1. Notifications disabled — kill both the recurring schedule and any
+    //      pending snooze. The user has opted out entirely.
+    //   2. Skipped today — cancel today's pending recurring fire but leave
+    //      any pending snooze alone (the snooze is on a separate id).
+    //   3. Otherwise — re-arm the recurring schedule. `scheduleRitualReminder`
+    //      is idempotent and does not touch the snooze id, so this covers the
+    //      "only snoozed" case without disturbing the user's one-off.
+    if (!state.notificationEnabled) {
+      await svc.cancelRitualReminder(RitualId.dailyPlanning);
+    } else if (isFocusSessionPlanningNotificationSkippedToday()) {
+      // Skip-today only suppresses today's snooze id; the recurring
+      // schedule continues to fire tomorrow via matchDateTimeComponents.
+      await svc.skipTodayRitualReminder(RitualId.dailyPlanning);
     } else {
-      await svc.cancelRecurringFocusSessionPlanningReminder();
+      await svc.scheduleRitualReminder(
+          RitualId.dailyPlanning, state.planningTime);
     }
   }
 }
@@ -90,15 +101,19 @@ Future<void> initFocusSessionPlanningNotificationSchedule() async {
   final svc = NotificationService.instance;
   final notificationEnabled = prefs.getBool(_kNotificationEnabled) ?? true;
   if (!notificationEnabled) {
-    await svc.cancelFocusSessionPlanningReminder();
+    await svc.cancelRitualReminder(RitualId.dailyPlanning);
     return;
   }
-  if (isFocusSessionPlanningNotificationSuppressed()) {
-    await svc.cancelRecurringFocusSessionPlanningReminder();
+  if (isFocusSessionPlanningNotificationSkippedToday()) {
+    // Skip-today only — cancel today's snooze id; the recurring schedule
+    // stays armed and fires tomorrow via matchDateTimeComponents.
+    await svc.skipTodayRitualReminder(RitualId.dailyPlanning);
     return;
   }
+  // Normal path (covers the "snoozed but not skipped" case too — the snooze
+  // one-off is on a separate id and is preserved by scheduleRitualReminder).
   final hour = prefs.getInt(_kTimeHour) ?? 8;
   final minute = prefs.getInt(_kTimeMinute) ?? 0;
-  await svc.scheduleFocusSessionPlanningReminder(
-      time: TimeOfDay(hour: hour, minute: minute));
+  await svc.scheduleRitualReminder(
+      RitualId.dailyPlanning, TimeOfDay(hour: hour, minute: minute));
 }

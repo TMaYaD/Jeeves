@@ -63,7 +63,6 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     focusSessionPlanningCompletionNotifier.value = false;
-    focusSessionPlanningBannerDismissedNotifier.value = false;
   });
 
   testWidgets(

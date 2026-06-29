@@ -54,9 +54,8 @@ void main() {
         () async {
       await c.read(syncedPreferencesProvider.future);
 
-      // 1. Pre-completion state: due, not dismissed, banner enabled.
+      // 1. Pre-completion state: due, banner enabled.
       expect(c.read(periodicReviewIsDueProvider), isTrue);
-      expect(c.read(periodicReviewBannerDismissedTodayProvider), isFalse);
       expect(c.read(periodicReviewBannerEnabledProvider), isTrue);
 
       // 2. Walk every step in the wizard.
@@ -108,14 +107,10 @@ void main() {
       expect(c.read(periodicReviewIsDueProvider), isFalse);
     });
 
-    test('banner hidden after dismissBannerForToday', () async {
-      await c.read(syncedPreferencesProvider.future);
-      await c
-          .read(periodicReviewSettingsProvider.notifier)
-          .dismissBannerForToday();
-
-      expect(c.read(periodicReviewBannerDismissedTodayProvider), isTrue);
-    });
+    // dismissBannerForToday integration test removed: banner dismiss is
+    // now exercised end-to-end via NudgeBanner → NudgeActions.dismiss in
+    // nudge_banner_test.dart, and the visibility predicate is covered by
+    // nudge_provider_test.dart.
 
     test('empty inbox — snapshot loads on Step 0, step does not auto-skip',
         () async {

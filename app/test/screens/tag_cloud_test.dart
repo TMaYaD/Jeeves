@@ -15,6 +15,8 @@ import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/tag_filter_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/models/focus_session_planning_settings.dart';
+import 'package:jeeves/models/ritual.dart';
+import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import '../test_helpers.dart';
 
@@ -76,6 +78,10 @@ Widget _buildShell({
       // Suppress the Weekly Review banner so its pulse animation doesn't
       // leave a Timer pending when the test tears down.
       periodicReviewBannerEnabledProvider.overrideWith((_) => false),
+      // The Nudge queue would otherwise reach into the Trigger chain and
+      // construct a second GtdDatabase via the un-overridden databaseProvider;
+      // force the queue empty so AppShell's NudgeBanner stays hidden.
+      nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
     ],
     child: MaterialApp(
       home: Builder(builder: (ctx) {
@@ -222,6 +228,7 @@ void main() {
           focusSessionPlanningSettingsProvider
               .overrideWith(() => _NoBannerSettingsNotifier()),
           periodicReviewBannerEnabledProvider.overrideWith((_) => false),
+          nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
         ],
         child: Consumer(builder: (ctx, ref, _) {
           capturedRef = ref;

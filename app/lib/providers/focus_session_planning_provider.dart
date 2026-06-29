@@ -1,8 +1,9 @@
 /// Providers and state management for the focus session planning ritual (Issue #82).
 ///
 /// Architecture:
-/// - [focusSessionPlanningCompletionNotifier] — a [ValueNotifier] wired to GoRouter's
-///   [refreshListenable] so the router re-evaluates the redirect on change.
+/// - [focusSessionPlanningCompletionNotifier] — a [ValueNotifier] read by
+///   [FocusScreen] to gate the "Begin Evening Shutdown" entry on the
+///   home schedule once today's planning has been completed.
 /// - [FocusSessionPlanningNotifier] — manages step navigation and task selection
 ///   state; delegates database writes to [FocusSessionDao] and [TodoDao].
 /// - Task selection during the ritual is accumulated in-memory
@@ -20,6 +21,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
+import '../models/ritual.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
@@ -41,7 +43,6 @@ String planningToday() {
       '${now.day.toString().padLeft(2, '0')}';
 }
 
-const _kBannerDismissedDateKey = 'planning_banner_dismissed_date';
 const _kNotificationSkippedDateKey = 'planning_notification_skipped_date';
 const _kNotificationSnoozedUntilKey = 'planning_notification_snoozed_until';
 
@@ -54,28 +55,12 @@ const int _maxStepIndex = 5;
 
 /// Tracks whether the focus session planning ritual has been completed today.
 ///
-/// GoRouter uses this as its [refreshListenable] so the redirect guard
-/// re-evaluates whenever completion state changes (e.g. after [startDay] or
-/// [reEnterPlanning]).
+/// Read by [FocusScreen] to gate the "Begin Evening Shutdown" entry on the
+/// home schedule. In-memory only — [startDay] sets it true; cold start
+/// resets it to false (the banner's own visibility is now driven by the
+/// Nudge module's persisted dismiss state and the active-session
+/// world-state precondition on the Daily Planning Cadence Trigger).
 final focusSessionPlanningCompletionNotifier = ValueNotifier<bool>(false);
-
-/// Global notifier for banner dismissal state — mirrors the SharedPreferences
-/// key so widgets can react without a Riverpod container.
-final focusSessionPlanningBannerDismissedNotifier = ValueNotifier<bool>(false);
-
-/// Initialises [focusSessionPlanningBannerDismissedNotifier] from
-/// [SharedPreferences].
-///
-/// Completion state is not persisted across restarts — [startDay] sets it
-/// in-memory when the user finishes the ritual.
-///
-/// Must be called once in [main] after [WidgetsFlutterBinding.ensureInitialized].
-Future<void> initFocusSessionPlanningCompletion() async {
-  final prefs = await SharedPreferences.getInstance();
-  final today = planningToday();
-  focusSessionPlanningBannerDismissedNotifier.value =
-      prefs.getString(_kBannerDismissedDateKey) == today;
-}
 
 // ---------------------------------------------------------------------------
 // Notification suppression helpers (top-level so both the settings provider
@@ -89,6 +74,14 @@ bool isFocusSessionPlanningNotificationSuppressed() {
   // should call [loadFocusSessionPlanningNotificationSuppression] first.
   return _notificationSkippedToday || _notificationSnoozedActive;
 }
+
+/// Returns true iff the user has chosen "Skip today" (as distinct from an
+/// active snooze). The reschedule logic uses this to suppress *today*'s
+/// recurring fire while leaving tomorrow's intact — a snooze, by contrast,
+/// is satisfied by its own one-off and does not need to touch the recurring
+/// schedule.
+bool isFocusSessionPlanningNotificationSkippedToday() =>
+    _notificationSkippedToday;
 
 bool _notificationSkippedToday = false;
 bool _notificationSnoozedActive = false;
@@ -379,13 +372,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   @override
   FocusSessionPlanningState build() {
-    // Update banner-dismissed ValueNotifier when Drift receives cross-device sync.
+    // Refresh notification-suppression flags when Drift receives cross-device
+    // sync. Banner dismiss state is now persisted by the Nudge module (see
+    // nudgeStateProvider) and no longer lives in a ValueNotifier here.
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
         final today = planningToday();
-        final dismissed = next.value.get<String>(_kBannerDismissedDateKey);
-        focusSessionPlanningBannerDismissedNotifier.value = dismissed == today;
-
         _notificationSkippedToday =
             next.value.get<String>(_kNotificationSkippedDateKey) == today;
 
@@ -811,22 +803,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Banner dismissal ------------------------------------------------------
 
-  /// Hides the planning banner for the rest of today.
-  Future<void> dismissBannerForToday() async {
-    final today = planningToday();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kBannerDismissedDateKey, today);
-    focusSessionPlanningBannerDismissedNotifier.value = true;
-    await syncedPrefs(ref).set(_kBannerDismissedDateKey, today);
-  }
-
   // ---- Notification skip / snooze --------------------------------------------
 
   /// Suppresses all planning nudges until the next calendar day and cancels
   /// any scheduled notification for today.
   Future<void> skipPlanningToday() async {
     await persistFocusSessionPlanningSkipToday(ref: ref);
-    await NotificationService.instance.cancelFocusSessionPlanningReminder();
+    // Skip today only — leave tomorrow's recurring reminder intact.
+    await NotificationService.instance
+        .skipTodayRitualReminder(RitualId.dailyPlanning);
   }
 
   /// Snoozes the planning notification by [minutes] and reschedules it as a
@@ -834,7 +819,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> snoozePlanningNotification(int minutes) async {
     final until = DateTime.now().add(Duration(minutes: minutes));
     await persistFocusSessionPlanningSnoozedUntil(until, ref: ref);
-    await NotificationService.instance.snoozeFocusSessionPlanningReminder(minutes);
+    await NotificationService.instance
+        .snoozeRitualReminder(RitualId.dailyPlanning, minutes);
   }
 
   // ---- Ritual lifecycle ------------------------------------------------------

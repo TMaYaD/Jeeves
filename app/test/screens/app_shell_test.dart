@@ -3,12 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/models/focus_session_planning_settings.dart';
+import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
+import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -21,9 +23,6 @@ import '../test_helpers.dart';
 class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
   Future<void> reEnterPlanning() async {}
-
-  @override
-  Future<void> dismissBannerForToday() async {}
 
   @override
   Future<void> skipPlanningToday() async {}
@@ -77,6 +76,11 @@ Widget _buildShellOnly({
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
       focusSessionPlanningSettingsProvider.overrideWith(
           () => _MockFocusSessionPlanningSettingsNotifier(planningSettings)),
+      // AppShell now mounts NudgeBanner; the banner reads the Nudge queue,
+      // which transitively depends on the database / synced-prefs that this
+      // test does not mock. Force the queue empty so the banner is a no-op
+      // and the test's focus on shell structure is preserved.
+      nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
     ],
     child: MaterialApp(
       home: Builder(
@@ -147,7 +151,6 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     focusSessionPlanningCompletionNotifier.value = false;
-    focusSessionPlanningBannerDismissedNotifier.value = false;
   });
 
   testWidgets('AppShell renders CustomDrawer that can be opened', (tester) async {

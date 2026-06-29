@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/ritual.dart';
 import '../models/shutdown_settings.dart';
 import '../services/notification_service.dart';
 import 'evening_shutdown_provider.dart';
@@ -61,27 +62,46 @@ class ShutdownSettingsNotifier extends Notifier<ShutdownSettings> {
 
   Future<void> _rescheduleShutdownReminder() async {
     final svc = ref.read(notificationServiceProvider);
-    if (state.notificationEnabled && !isShutdownNotificationSuppressedToday()) {
-      await svc.scheduleShutdownReminder(time: state.shutdownTime);
+    // See focus_session_planning_settings_provider for the rationale: three
+    // states, in priority order — disabled / skipped-today / otherwise. A
+    // pending snooze falls through to the schedule path so its one-off (on a
+    // separate id) is preserved while the recurring schedule is re-armed.
+    if (!state.notificationEnabled) {
+      await svc.cancelRitualReminder(RitualId.eveningShutdown);
+    } else if (isShutdownNotificationSkippedToday()) {
+      // Skip-today only suppresses today's snooze id; the recurring
+      // schedule continues to fire tomorrow via matchDateTimeComponents.
+      await svc.skipTodayRitualReminder(RitualId.eveningShutdown);
     } else {
-      await svc.cancelShutdownReminder();
+      await svc.scheduleRitualReminder(
+          RitualId.eveningShutdown, state.shutdownTime);
     }
   }
 }
 
 /// Restores the shutdown notification schedule on app startup.
 Future<void> initShutdownNotificationSchedule() async {
+  // Defensively re-load the persisted suppression flags before reading them.
+  // main.dart calls loadShutdownNotificationSuppression() before this, but
+  // a wrong call order would otherwise silently use stale process defaults.
+  await loadShutdownNotificationSuppression();
   final prefs = await SharedPreferences.getInstance();
   final svc = NotificationService.instance;
   final notificationEnabled =
       prefs.getBool(_kShutdownNotificationEnabled) ?? true;
-  if (!notificationEnabled || isShutdownNotificationSuppressedToday()) {
-    await svc.cancelShutdownReminder();
+  if (!notificationEnabled) {
+    await svc.cancelRitualReminder(RitualId.eveningShutdown);
     return;
   }
-
+  if (isShutdownNotificationSkippedToday()) {
+    // Skip-today only — cancel today's snooze id; the recurring schedule
+    // stays armed and fires tomorrow via matchDateTimeComponents.
+    await svc.skipTodayRitualReminder(RitualId.eveningShutdown);
+    return;
+  }
+  // Normal path (and snoozed-only): re-arm the recurring schedule.
   final hour = prefs.getInt(_kShutdownTimeHour) ?? 18;
   final minute = prefs.getInt(_kShutdownTimeMinute) ?? 0;
-  await svc.scheduleShutdownReminder(
-      time: TimeOfDay(hour: hour, minute: minute));
+  await svc.scheduleRitualReminder(
+      RitualId.eveningShutdown, TimeOfDay(hour: hour, minute: minute));
 }

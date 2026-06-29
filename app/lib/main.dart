@@ -4,6 +4,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'models/ritual.dart';
 import 'providers/auth_provider.dart';
 import 'providers/evening_shutdown_provider.dart';
 import 'providers/focus_session_planning_provider.dart';
@@ -21,13 +22,9 @@ Future<void> main() async {
   // Seed onboarding dismissal state before the first frame.
   await initOnboardingCompletion();
 
-  // Seed suppression flags before any notification scheduling so that a
+  // Seed notification-suppression flags before any scheduling so that a
   // previously skipped/snoozed reminder is not re-enabled on restart.
-  await initFocusSessionPlanningCompletion();
   await loadFocusSessionPlanningNotificationSuppression();
-
-  // Seed shutdown state from SharedPreferences before the first frame.
-  await initShutdownCompletion();
   await loadShutdownNotificationSuppression();
 
   // Seed periodic-review notification suppression so a previously skipped/
@@ -75,13 +72,17 @@ void _handleNotificationResponse(NotificationResponse response) async {
   switch (actionId) {
     case kNotificationActionOpen:
     case null:
-      // Null actionId means the notification body was tapped.
-      // Focus/sprint notifications carry payload 'focus' and return to the
-      // active focus screen; all others go to the planning ritual.
+      // Null actionId means the notification body was tapped. Route by
+      // payload — focus/sprint carries 'focus', Ritual notifications carry
+      // `nudge:<keyPrefix>` and resolve to the matching wizard route. A
+      // body tap on an unknown payload falls back to inbox.
       if (response.payload == 'focus') {
         appRouter.go('/focus/active');
       } else {
-        appRouter.go('/focus-session-planning');
+        final ritual = ritualIdFromNotificationPayload(response.payload);
+        appRouter.go(ritual != null
+            ? ritualNotificationRoute(ritual)
+            : '/inbox');
       }
 
     case kNotificationActionSnooze:
@@ -90,11 +91,13 @@ void _handleNotificationResponse(NotificationResponse response) async {
       final snoozeMins = await _readDefaultSnoozeDuration();
       final until = DateTime.now().add(Duration(minutes: snoozeMins));
       await persistFocusSessionPlanningSnoozedUntil(until);
-      await NotificationService.instance.snoozeFocusSessionPlanningReminder(snoozeMins);
+      await NotificationService.instance
+          .snoozeRitualReminder(RitualId.dailyPlanning, snoozeMins);
 
     case kNotificationActionSkip:
       await persistFocusSessionPlanningSkipToday();
-      await NotificationService.instance.cancelFocusSessionPlanningReminder();
+      await NotificationService.instance
+          .skipTodayRitualReminder(RitualId.dailyPlanning);
 
     case kShutdownNotificationActionOpen:
       appRouter.go('/shutdown');
@@ -102,11 +105,13 @@ void _handleNotificationResponse(NotificationResponse response) async {
     case kShutdownNotificationActionSnooze:
       final until = DateTime.now().add(const Duration(minutes: 60));
       await persistShutdownSnoozedUntil(until);
-      await NotificationService.instance.snoozeShutdownReminder(60);
+      await NotificationService.instance
+          .snoozeRitualReminder(RitualId.eveningShutdown, 60);
 
     case kShutdownNotificationActionSkip:
       await persistShutdownSkipToday();
-      await NotificationService.instance.skipTodayShutdownReminder();
+      await NotificationService.instance
+          .skipTodayRitualReminder(RitualId.eveningShutdown);
 
     case kPeriodicReviewActionOpen:
       appRouter.go('/periodic-review');
@@ -114,11 +119,13 @@ void _handleNotificationResponse(NotificationResponse response) async {
     case kPeriodicReviewActionSnooze:
       final until = DateTime.now().add(const Duration(minutes: 60));
       await persistPeriodicReviewSnoozedUntil(until);
-      await NotificationService.instance.snoozePeriodicReviewReminder(60);
+      await NotificationService.instance
+          .snoozeRitualReminder(RitualId.weeklyReview, 60);
 
     case kPeriodicReviewActionSkip:
       await persistPeriodicReviewSkipToday();
-      await NotificationService.instance.skipTodayPeriodicReviewReminder();
+      await NotificationService.instance
+          .skipTodayRitualReminder(RitualId.weeklyReview);
   }
 }
 

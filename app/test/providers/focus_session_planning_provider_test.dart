@@ -27,14 +27,6 @@ Future<void> _settleUntil(
 // Minimal stub — avoids hitting NotificationService platform channels in unit tests.
 class _StubFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
-  Future<void> dismissBannerForToday() async {
-    final today = planningToday();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('planning_banner_dismissed_date', today);
-    focusSessionPlanningBannerDismissedNotifier.value = true;
-  }
-
-  @override
   Future<void> skipPlanningToday() async {
     await persistFocusSessionPlanningSkipToday();
     // NotificationService not called in tests.
@@ -91,7 +83,6 @@ void main() {
       container.dispose();
       await db.close();
       focusSessionPlanningCompletionNotifier.value = false;
-      focusSessionPlanningBannerDismissedNotifier.value = false;
     });
 
     test('startDay preserves energyLevel and availableMinutes', () async {
@@ -147,47 +138,9 @@ void main() {
     });
   });
 
-  group('FocusSessionPlanningNotifier — banner dismissal', () {
-    late GtdDatabase db;
-    late ProviderContainer container;
-
-    setUp(() {
-      db = GtdDatabase(NativeDatabase.memory());
-      container = _container(db);
-    });
-
-    tearDown(() async {
-      container.dispose();
-      await db.close();
-      focusSessionPlanningBannerDismissedNotifier.value = false;
-      focusSessionPlanningCompletionNotifier.value = false;
-    });
-
-    test('dismissBannerForToday sets focusSessionPlanningBannerDismissedNotifier and persists',
-        () async {
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      expect(focusSessionPlanningBannerDismissedNotifier.value, isFalse);
-
-      await notifier.dismissBannerForToday();
-
-      expect(focusSessionPlanningBannerDismissedNotifier.value, isTrue);
-
-      final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('planning_banner_dismissed_date'),
-          equals(planningToday()));
-    });
-
-    test('focusSessionPlanningBannerDismissedNotifier resets to false for a different day',
-        () async {
-      // Simulate yesterday's dismissal persisted.
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('planning_banner_dismissed_date', '2000-01-01');
-      await initFocusSessionPlanningCompletion();
-
-      // Today does not match '2000-01-01'.
-      expect(focusSessionPlanningBannerDismissedNotifier.value, isFalse);
-    });
-  });
+  // Banner-dismissal tests removed: dismiss state now lives in the Nudge
+  // module's NudgeState (synced-prefs `<prefix>_nudge_dismissed_at`) and is
+  // covered by nudge_provider_test.dart's visibility-predicate tests.
 
   group('FocusSessionPlanningNotifier — inbox double-process guard', () {
     late GtdDatabase db;

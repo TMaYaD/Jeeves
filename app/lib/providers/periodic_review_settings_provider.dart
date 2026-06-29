@@ -11,14 +11,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
-import 'gtd_lists_provider.dart';
-import 'onboarding_provider.dart';
+import 'gtd_lists_provider.dart' show Todo;
 import 'synced_preferences_provider.dart';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
-const _kBannerDismissedDateKey = 'periodic_review_banner_dismissed_date';
 const _kBannerEnabledKey = 'periodic_review_banner_enabled';
 const _kNotificationEnabledKey = 'periodic_review_notification_enabled';
 const _kNotificationHourKey = 'periodic_review_notification_hour';
@@ -29,14 +28,6 @@ const _kNotificationSnoozedUntilKey =
     'periodic_review_notification_snoozed_until';
 
 const int _kCadenceDays = 7;
-
-/// Returns today's date as a yyyy-MM-dd string in local time.
-String _todayDateString() {
-  final now = DateTime.now();
-  return '${now.year.toString().padLeft(4, '0')}-'
-      '${now.month.toString().padLeft(2, '0')}-'
-      '${now.day.toString().padLeft(2, '0')}';
-}
 
 // ---------------------------------------------------------------------------
 // Notification suppression helpers
@@ -56,6 +47,13 @@ bool _parseSnoozedActive(String? snoozedUntilStr) {
 bool isPeriodicReviewNotificationSuppressedToday() =>
     _periodicReviewNotificationSkippedToday ||
     _periodicReviewNotificationSnoozedActive;
+
+/// Returns true iff the user tapped "Skip today" (as distinct from an active
+/// snooze). The reschedule logic uses this to suppress *today*'s recurring
+/// fire while leaving tomorrow's intact; the snooze is satisfied by its own
+/// one-off and does not need to touch the recurring schedule.
+bool isPeriodicReviewNotificationSkippedToday() =>
+    _periodicReviewNotificationSkippedToday;
 
 /// Reads periodic-review skip/snooze state from [SharedPreferences] into
 /// module-level flags. Call once on startup before scheduling.
@@ -120,16 +118,6 @@ final periodicReviewIsDueProvider = Provider<bool>((ref) {
   return DateTime.now().difference(last).inDays >= _kCadenceDays;
 });
 
-/// True when the user has dismissed the banner today.
-final periodicReviewBannerDismissedTodayProvider = Provider<bool>((ref) {
-  final raw = ref
-      .watch(syncedPreferencesProvider)
-      .asData
-      ?.value
-      .get<String>(_kBannerDismissedDateKey);
-  return raw == _todayDateString();
-});
-
 /// Whether the Weekly Review banner is enabled (defaults to true).
 final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
   return ref
@@ -140,16 +128,13 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
       true;
 });
 
-/// The "empty actionable" leg of the Weekly Review banner predicate:
+/// The "empty actionable" leg of the Weekly Review Content-state Trigger:
 /// true when inbox + next are both empty but waiting-for or maybe still
-/// hold items. Extracted so both `PeriodicReviewBanner` and
-/// [periodicReviewBannerVisibleProvider] share the same rule.
+/// hold items.
 ///
-/// Stays as a pure function (over `AsyncValue`s) rather than as another
-/// Provider so callers can keep the original short-circuit order — the
-/// cheap `enabled` / `dismissed` / `hasTodos` watches must run before
-/// the list watches subscribe `unfilteredInboxProvider` et al., which
-/// pull in the full `databaseProvider` chain.
+/// Stays as a pure function (over `AsyncValue`s) rather than a Provider
+/// so callers can short-circuit cheap checks before subscribing the
+/// list streams that pull in the full `databaseProvider` chain.
 bool emptyActionableBannerTrigger({
   required AsyncValue<List<Todo>> inbox,
   required AsyncValue<List<Todo>> next,
@@ -166,30 +151,6 @@ bool emptyActionableBannerTrigger({
       next.requireValue.isEmpty &&
       (waiting.requireValue.isNotEmpty || maybe.requireValue.isNotEmpty);
 }
-
-/// True when the Weekly Review banner would render. Used by the daily
-/// focus-session-planning banner so it can yield the slot whenever the
-/// weekly banner is taking it — the two never stack.
-///
-/// The cheap watches (`enabled`, `dismissed`, `hasTodos`) run before
-/// the list watches so callers gated off via `enabled=false` never pay
-/// the cost of subscribing to the database-backed list streams.
-final periodicReviewBannerVisibleProvider = Provider<bool>((ref) {
-  if (!ref.watch(periodicReviewBannerEnabledProvider)) return false;
-  if (ref.watch(periodicReviewBannerDismissedTodayProvider)) return false;
-
-  final hasTodos = ref.watch(hasTodosProvider);
-  if (!hasTodos.hasValue || !hasTodos.requireValue) return false;
-
-  if (ref.watch(periodicReviewIsDueProvider)) return true;
-
-  return emptyActionableBannerTrigger(
-    inbox: ref.watch(unfilteredInboxProvider),
-    next: ref.watch(unfilteredNextActionsProvider),
-    waiting: ref.watch(unfilteredWaitingForProvider),
-    maybe: ref.watch(unfilteredMaybeProvider),
-  );
-});
 
 // ---------------------------------------------------------------------------
 // Settings notifier
@@ -230,22 +191,40 @@ class PeriodicReviewSettingsNotifier
   PeriodicReviewSettings build() {
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
-        final today = planningToday();
-        _periodicReviewNotificationSkippedToday =
-            next.value.get<String>(_kNotificationSkippedDateKey) == today;
-        _periodicReviewNotificationSnoozedActive = _parseSnoozedActive(
-          next.value.get<String>(_kNotificationSnoozedUntilKey),
-        );
+        _refreshNotificationSuppression(next.value);
         state = _fromPrefs(next.value);
         _rescheduleNotification();
       }
     });
     final current = ref.read(syncedPreferencesProvider).asData?.value;
+    // Seed the suppression flags from the current snapshot before the
+    // initial reschedule below; the listener above only fires on later
+    // synced-prefs events, so without this the first reschedule would
+    // see stale process defaults and ignore a persisted skip-today /
+    // active snooze.
+    if (current != null) {
+      _refreshNotificationSuppression(current);
+    } else {
+      // No snapshot yet — reset suppression to defaults so the initial
+      // reschedule below doesn't act on stale module-level globals left from a
+      // prior provider lifecycle.
+      _periodicReviewNotificationSkippedToday = false;
+      _periodicReviewNotificationSnoozedActive = false;
+    }
     final initial = current != null ? _fromPrefs(current) : _defaults();
     // The listener above only fires on subsequent prefs changes, so kick off
     // an initial reschedule once the notifier is constructed.
     Future.microtask(_rescheduleNotification);
     return initial;
+  }
+
+  void _refreshNotificationSuppression(SyncedPreferences prefs) {
+    final today = planningToday();
+    _periodicReviewNotificationSkippedToday =
+        prefs.get<String>(_kNotificationSkippedDateKey) == today;
+    _periodicReviewNotificationSnoozedActive = _parseSnoozedActive(
+      prefs.get<String>(_kNotificationSnoozedUntilKey),
+    );
   }
 
   static PeriodicReviewSettings _defaults() => const PeriodicReviewSettings(
@@ -274,10 +253,6 @@ class PeriodicReviewSettingsNotifier
     );
   }
 
-  Future<void> dismissBannerForToday() async {
-    await syncedPrefs(ref).set(_kBannerDismissedDateKey, _todayDateString());
-  }
-
   Future<void> setBannerEnabled(bool enabled) async {
     await syncedPrefs(ref).set(_kBannerEnabledKey, enabled);
   }
@@ -293,28 +268,25 @@ class PeriodicReviewSettingsNotifier
 
   Future<void> _rescheduleNotification() async {
     final svc = ref.read(notificationServiceProvider);
-    // Only arm the daily reminder while the review is actually due — firing
-    // "Time for your Weekly Review" on a day the cadence has not elapsed
-    // would lie to the user. The schedule is re-evaluated on every prefs
-    // change (the listener in build()) so completion immediately disarms it
-    // and the next cadence flip (driven by writes from any device, e.g.
-    // `last_completed_at` aging out via cross-device sync, or any other
-    // pref write while the app is alive) re-arms it.
+    // Priority order:
+    //   1. Notifications disabled — kill recurring and snooze ids together.
+    //      Must come first so a still-active snooze cannot keep firing after
+    //      the user turns notifications off.
+    //   2. Skipped today — cancel today's snooze id only; the recurring
+    //      schedule keeps firing tomorrow via matchDateTimeComponents.
+    //   3. Due and not suppressed — arm the recurring reminder.
+    //   4. Not due — drop the recurring; a pending snooze (if any) stays.
     final isDue = ref.read(periodicReviewIsDueProvider);
-    if (state.notificationEnabled &&
-        isDue &&
-        !isPeriodicReviewNotificationSuppressedToday()) {
-      await svc.schedulePeriodicReviewReminder(time: state.notificationTime);
-    } else if (_periodicReviewNotificationSnoozedActive) {
-      // The user just tapped "Snooze". Don't kill their one-off snooze
-      // fire just because the recurring schedule shouldn't run today —
-      // only cancel the recurring id so the snooze can still fire on
-      // its scheduled time. Once the snooze fires (or expires) the
-      // module-level flag flips false and the next reschedule falls
-      // through to the regular cancel-both branch.
-      await svc.cancelPeriodicReviewRecurringReminder();
+    if (!state.notificationEnabled) {
+      await svc.cancelRitualReminder(RitualId.weeklyReview);
+    } else if (isPeriodicReviewNotificationSkippedToday()) {
+      await svc.skipTodayRitualReminder(RitualId.weeklyReview);
+    } else if (isDue) {
+      await svc.scheduleRitualReminder(
+          RitualId.weeklyReview, state.notificationTime);
     } else {
-      await svc.cancelPeriodicReviewReminder();
+      // Not due — drop the recurring, but leave a pending snooze alone.
+      await svc.cancelRecurringRitualReminder(RitualId.weeklyReview);
     }
   }
 }

@@ -13,6 +13,8 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/ritual.dart';
+import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/focus_session_planning_provider.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/day_checkin_energy_step.dart';
@@ -22,8 +24,17 @@ import 'steps/plan_summary_step.dart';
 import 'steps/scheduled_review_step.dart';
 import 'steps/task_review_step.dart';
 
-class FocusSessionPlanningScreen extends ConsumerWidget {
+class FocusSessionPlanningScreen extends ConsumerStatefulWidget {
   const FocusSessionPlanningScreen({super.key});
+
+  @override
+  ConsumerState<FocusSessionPlanningScreen> createState() =>
+      _FocusSessionPlanningScreenState();
+}
+
+class _FocusSessionPlanningScreenState
+    extends ConsumerState<FocusSessionPlanningScreen> {
+  late final CeremonyInProgressNotifier _ceremonyNotifier;
 
   static const _ceremonyId = 'planning';
   static const _stepTitles = [
@@ -38,7 +49,29 @@ class FocusSessionPlanningScreen extends ConsumerWidget {
   static const int _kProgressSegmentCount = 5;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void initState() {
+    super.initState();
+    // Capture the notifier now so dispose() can call exit() without
+    // touching `ref` after the widget has been unmounted (Riverpod
+    // forbids ref access in dispose).
+    _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
+    // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
+    // Defer `enter()` to the post-frame callback — Riverpod 3.x forbids
+    // notifier mutation during the build phase, which initState is part of.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _ceremonyNotifier.enter(RitualId.dailyPlanning);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ceremonyNotifier.exit(RitualId.dailyPlanning);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(focusSessionPlanningProvider);
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
     final step = state.currentStep;
