@@ -117,7 +117,7 @@ _Avoid_: Capture queue, Capture List
 The implicit List of Outcomes the user is willing to handle next. Defined by:
 
 ```text
-Intent = next ∧ Completion is null ∧ (has current Action ∨ no PersonBlocker)
+Intent = next ∧ clarified ∧ Completion is null ∧ (has current Action ∨ no PersonBlocker)
 ```
 
 The user engages with the row's *current Action* — but the List contains Outcomes, not Actions. The single excluded quadrant is **actionless AND PersonBlocked**: an Outcome with no current Action that is waiting on a Person is a pure wait and surfaces only on Waiting For, not on the daily Next List (its cadence belongs to the weekly Waiting For pass). An Outcome with a current Action belongs on Next regardless of any PersonBlocker — per the Blocker definition above, the current Action coexists with the Blocker and is doable: `"call Trixy for a follow up"` is engageable while the Outcome is waiting on Trixy, and such an Outcome appears on Next *and* under Waiting For simultaneously.
