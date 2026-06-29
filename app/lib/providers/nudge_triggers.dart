@@ -27,8 +27,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/ritual.dart';
 import 'ceremony_in_progress_provider.dart';
+import 'clock_provider.dart';
 import 'focus_session_planning_provider.dart' show activeSessionProvider;
 import 'gtd_lists_provider.dart';
+import 'nudge_clock_provider.dart';
 import 'onboarding_provider.dart';
 import 'periodic_review_settings_provider.dart'
     show
@@ -67,16 +69,27 @@ class TriggerState {
 // ---------------------------------------------------------------------------
 // Date helpers
 // ---------------------------------------------------------------------------
+//
+// These do the date math only; they take the current instant rather than
+// sampling `DateTime.now()` themselves. The instant comes from [clockProvider]
+// (overridable in tests) via [_now], and every time-based Trigger Provider also
+// watches [nudgeBoundaryTickProvider] so Riverpod re-evaluates the predicate
+// when a wall-clock boundary passes — see `nudge_clock_provider.dart`.
 
-DateTime _startOfToday() {
-  final now = DateTime.now();
-  return DateTime(now.year, now.month, now.day);
+/// The current instant, read through the overridable [clockProvider] seam.
+/// Also watches [nudgeBoundaryTickProvider], so any time-based Trigger that
+/// reads the clock through this helper re-evaluates when a wall-clock boundary
+/// passes — with no per-second polling.
+DateTime _now(Ref ref) {
+  ref.watch(nudgeBoundaryTickProvider);
+  return ref.watch(clockProvider)();
 }
 
-/// Today's local-time instant of [hour]:[minute] (or the most recent past
-/// occurrence if [hour]:[minute] is still in the future today).
-DateTime _todayAt(int hour, int minute) {
-  final today = _startOfToday();
+DateTime _startOfToday(DateTime now) => DateTime(now.year, now.month, now.day);
+
+/// Today's local-time instant of [hour]:[minute] relative to [now].
+DateTime _todayAt(DateTime now, int hour, int minute) {
+  final today = _startOfToday(now);
   return DateTime(today.year, today.month, today.day, hour, minute);
 }
 
@@ -106,6 +119,7 @@ final cadenceTriggerProvider =
 });
 
 TriggerState _dprCadenceTrigger(Ref ref) {
+  final now = _now(ref);
   // Defer until the active-session stream has emitted at least once;
   // otherwise we'd flash a DPR firing state during cold start before the
   // stream resolves to "yes, today's session exists."
@@ -127,10 +141,11 @@ TriggerState _dprCadenceTrigger(Ref ref) {
     return TriggerState.idle;
   }
 
-  return TriggerState(isFiring: true, firingSince: _startOfToday());
+  return TriggerState(isFiring: true, firingSince: _startOfToday(now));
 }
 
 TriggerState _esCadenceTrigger(Ref ref) {
+  final now = _now(ref);
   final session = ref.watch(activeSessionProvider);
   if (!session.hasValue) return TriggerState.idle;
   // World-state precondition: a FocusSession must be active. ES is the
@@ -138,14 +153,15 @@ TriggerState _esCadenceTrigger(Ref ref) {
   if (session.requireValue == null) return TriggerState.idle;
 
   final shutdownSettings = ref.watch(shutdownSettingsProvider);
-  final anchor = _todayAt(
+  final anchor = _todayAt(now,
       shutdownSettings.shutdownTime.hour, shutdownSettings.shutdownTime.minute);
-  if (DateTime.now().isBefore(anchor)) return TriggerState.idle;
+  if (now.isBefore(anchor)) return TriggerState.idle;
 
   return TriggerState(isFiring: true, firingSince: anchor);
 }
 
 TriggerState _wrCadenceTrigger(Ref ref) {
+  final now = _now(ref);
   if (!ref.watch(periodicReviewIsDueProvider)) return TriggerState.idle;
 
   // Content precondition: WR has nothing to review in the onboarding state.
@@ -158,7 +174,7 @@ TriggerState _wrCadenceTrigger(Ref ref) {
   // been true since whenever the app booted today; start-of-today is a
   // stable, surface-friendly stamp).
   final since = lastCompleted == null
-      ? _startOfToday()
+      ? _startOfToday(now)
       : lastCompleted.add(const Duration(days: 7));
   return TriggerState(isFiring: true, firingSince: since);
 }
@@ -192,6 +208,7 @@ final contentStateTriggerProvider =
 });
 
 TriggerState _wrContentStateTrigger(Ref ref) {
+  final now = _now(ref);
   final hasTodos = ref.watch(hasTodosProvider);
   if (!hasTodos.hasValue || !hasTodos.requireValue) return TriggerState.idle;
 
@@ -202,7 +219,7 @@ TriggerState _wrContentStateTrigger(Ref ref) {
     maybe: ref.watch(unfilteredMaybeProvider),
   );
   if (!firing) return TriggerState.idle;
-  return TriggerState(isFiring: true, firingSince: _startOfToday());
+  return TriggerState(isFiring: true, firingSince: _startOfToday(now));
 }
 
 // ---------------------------------------------------------------------------
