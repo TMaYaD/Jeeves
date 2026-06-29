@@ -7,12 +7,15 @@
 /// predicate gates relevance.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/ritual.dart';
 import '../services/notification_service.dart';
+import 'clock_provider.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
 import 'gtd_lists_provider.dart' show Todo;
 import 'synced_preferences_provider.dart';
@@ -113,9 +116,19 @@ final periodicReviewLastCompletedProvider = Provider<DateTime?>((ref) {
 
 /// True when the review is due (never completed, or > [_kCadenceDays] old).
 final periodicReviewIsDueProvider = Provider<bool>((ref) {
+  final now = ref.watch(clockProvider)();
   final last = ref.watch(periodicReviewLastCompletedProvider);
   if (last == null) return true;
-  return DateTime.now().difference(last).inDays >= _kCadenceDays;
+  final due = last.add(const Duration(days: _kCadenceDays));
+  if (now.isBefore(due)) {
+    // Not due yet — re-evaluate exactly when the cadence boundary passes, so a
+    // Weekly Review Nudge surfaces reactively the moment it becomes due rather
+    // than waiting for an unrelated rebuild. One timer, cancelled on dispose.
+    final timer = Timer(due.difference(now), ref.invalidateSelf);
+    ref.onDispose(timer.cancel);
+    return false;
+  }
+  return true;
 });
 
 /// Whether the Weekly Review banner is enabled (defaults to true).
