@@ -506,6 +506,7 @@ Durable state lives in `user_preferences` under the `periodic_review_*` keys; no
 | `periodic_review_notification_minute` | `int` (default `0`) | Reminder minute |
 | `periodic_review_notification_skipped_date` | `yyyy-MM-dd` | Suppresses today's reminder (dual-written to SharedPreferences) |
 | `periodic_review_notification_snoozed_until` | ISO-8601 datetime | One-off snooze fire time (dual-written to SharedPreferences) |
+| `periodic_review_nudge_content_firing_edge` | ISO-8601 datetime | Most recent content-state `false→true` firing edge; a content-state dismiss releases once `dismissed_at` precedes it |
 
 Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissedTodayProvider`, `periodicReviewBannerEnabledProvider`, `periodicReviewLastCompletedProvider`.
 
@@ -520,6 +521,12 @@ Derived providers: `periodicReviewIsDueProvider`, `periodicReviewBannerDismissed
 ### Notifications
 
 `NotificationService.schedulePeriodicReviewReminder(time:)` schedules a recurring daily reminder at the configured time using `matchDateTimeComponents: time`. `_rescheduleNotification` only arms that schedule while the review is actually due (`periodicReviewIsDueProvider == true`); on completion the reschedule is triggered by the prefs listener and the schedule is canceled, so the user is not nagged daily until the cadence has elapsed again. Re-arm happens via the same listener on the next prefs write (or via `build()` the next time the notifier is constructed at app launch).
+
+### Trigger reactivity
+
+Nudge Triggers re-evaluate when their predicate's inputs change, not only on an unrelated rebuild, so a Nudge surfaces at its boundary or content edge rather than waiting. Time-based predicates read the shared `clockProvider` (`lib/providers/clock_provider.dart`) and arm timers to their next boundary: the Nudge module's `nudgeBoundaryTickProvider` schedules one timer to the next day-rollover / Evening Shutdown anchor and re-evaluates the Triggers there, while `periodicReviewIsDueProvider` schedules its own timer to the cadence-due instant (`last + 7d`); both cancel via `ref.onDispose`.
+
+The Weekly Review's **content-state Trigger** (inbox and next-actions empty while waiting-for or someday/maybe still holds items) tracks its own firing edge, so a dismiss releases on the next genuine `false→true` content transition rather than at the day boundary. `wrContentFiringProvider` exposes the predicate as a tri-state `bool?` (`null` while the underlying lists load, then `false` / `true`); `contentFiringEdgeProvider` (a `Notifier<DateTime?>`) watches it and, on a `false→true` transition, stamps `clockProvider()` as the new edge and persists it to `periodic_review_nudge_content_firing_edge`. On startup the transition is `null→true`, so it instead restores the persisted edge — or falls back to start-of-today when nothing is persisted — and a cold start mid-firing therefore does not reset an outstanding dismiss. The Nudge dismiss predicate releases when `dismissed_at` precedes the edge (see `CONTEXT.md` → Nudge).
 
 Notification actions: Open (→ `/periodic-review`), Snooze (one-off reschedule via `snoozePeriodicReviewReminder(minutes)`), Skip today (cancels only the snooze id via `skipTodayPeriodicReviewReminder()` so tomorrow's recurring reminder still fires).
 
