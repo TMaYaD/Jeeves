@@ -486,7 +486,7 @@ There is no dedicated brain-dump step in the wizard: capture happens through the
 - `nextActionsNav: SnapshotNav<Todo>` — active next actions, excluding those that carry a person tag (those are handled by Waiting For).
 - `somedayNav: SnapshotNav<Todo>` — `intent = 'maybe'` tasks.
 
-**Disjointness invariant:** each task surfaces in at most one wizard step. The selectors are pairwise disjoint by construction — Inbox vs everything is split on `clarified`; Waiting For vs Someday and Next Actions vs Someday split on `intent`; Waiting For vs Next Actions split on whether the task carries any person-typed tag (`getNextActionsExcludingPersonTagged` enforces the exclusion in SQL). A future dedicated Projects step will need to re-establish this matrix (project-tagged ⊂ next-actions, so it would have to be ordered ahead of Next Actions or the Next Actions snapshot would have to also exclude project-tagged items).
+**Disjointness invariant:** each task surfaces in at most one wizard step. The selectors are pairwise disjoint by construction — Inbox vs everything is split on `clarified`; Waiting For vs Someday and Next Actions vs Someday split on `intent`; Waiting For vs Next Actions split on whether the task carries any person-typed tag (`getNextExcludingPersonTagged` enforces the exclusion in SQL). A future dedicated Projects step will need to re-establish this matrix (project-tagged ⊂ next-actions, so it would have to be ordered ahead of Next Actions or the Next Actions snapshot would have to also exclude project-tagged items).
 
 **Snapshot loaders** are called by `_onStepEnter` each time a step is entered. All four snapshots are also pre-loaded in `loadAllSnapshots()` which runs on ceremony mount, so items routed in an earlier step do not surface in a later one. Empty steps show an empty-state view inline; the user clicks Next to advance rather than being auto-skipped past the step.
 
@@ -619,6 +619,7 @@ A task's lifecycle decomposes along orthogonal axes — each axis is a separate 
 | Intent | `todos.intent` (`next` \| `maybe` \| `trash`) | What the user wants to do with this task |
 | Completion | `todos.done_at` (timestamp, nullable) | Non-null = done; value = when |
 | Schedule | `todos.due_date` (date, nullable) | Specific calendar date |
+| Current Action | `todos.next_action_text` (text, nullable) | The Outcome's current Action phrase; non-null/non-blank = actionable today |
 | PersonBlocker | `todo_tags` rows referencing a `Tag` with `type = 'person'` | Outcome is blocked on a Person; existence of the link is the block, removal is its resolution |
 | Active focus | `focus_sessions.current_task_id` | Which task is currently in progress |
 | Today's plan | `focus_session_tasks` rows | Membership in the open session |
@@ -630,6 +631,34 @@ clarified = true ∧ done_at IS NULL ∧ intent = 'next'
 ```
 
 PersonBlocker is the only Blocker shape modelled today; the remaining shapes from the polymorphic-blockers design (Task / Time / Location) are tracked in TMaYaD/Jeeves#181 and are not part of this model yet.
+
+### Next List
+
+The Next List rule is:
+
+```text
+Next = intent='next' ∧ clarified ∧ done_at IS NULL ∧
+       (next_action_text IS NOT NULL ∨ no PersonBlocker on the Outcome)
+```
+
+`TodoDao.watchNext(tagIds:)` enforces it. The single excluded quadrant is **actionless** (`next_action_text` null or whitespace) **AND** PersonBlocked (carries any `Tag(type='person')`) — that combination is a pure wait and surfaces only on Waiting For. An Outcome with a current Action belongs on Next regardless of any PersonBlocker: `"call Trixy for a follow up"` is doable and eligible for engagement; it also surfaces under Waiting For (the grouping by Person). The overlap between Next and Waiting For is by design — see CONTEXT.md § Next / Waiting For.
+
+The exclusion clause in SQL:
+
+```sql
+AND (
+  (todos.next_action_text IS NOT NULL AND TRIM(todos.next_action_text) != '')
+  OR NOT EXISTS (
+    SELECT 1 FROM todo_tags tt
+    JOIN tags tg ON tg.id = tt.tag_id
+    WHERE tt.todo_id = todos.id AND tg.type = 'person'
+  )
+)
+```
+
+The clause applies under context-tag filtering too — the actionable+PersonBlocked overlap stays on filtered Next, the actionless+PersonBlocked Outcome never leaks in.
+
+The Weekly Review wizard's Next-step snapshot (`TodoDao.getNextExcludingPersonTagged`) and the daily re-clarification's "actionless" branch (`TodoDao.watchNeedsReview`) apply a stricter per-step person-tag exclusion to keep their own wizard steps disjoint from Waiting For's step. Those are wizard-internal disjointness rules, not the everyday Next List membership rule.
 
 ### Waiting For list
 
@@ -649,11 +678,11 @@ WHERE todos.clarified = 1
 
 `TodoDao.watchPersonTagged()` returns the flat list and `TodoDao.watchPersonTaggedGrouped()` returns it bucketed by `Tag`. Adding or removing a PersonBlocker is a Tag-link mutation on `todo_tags` — the same junction table that backs Areas, Labels, and Contexts — and stamps `last_clarified_at` on the Outcome because PersonBlocker is conceptually Clarification (it is a Blocker on the Outcome, not a categorisation), even though the storage shape looks like a Tag link.
 
-Waiting For **overlaps with Next** when the Outcome is actionable: an Outcome with `intent='next'` carrying at least one `Tag(type='person')` appears on both. `TodoDao.watchNext` (the everyday Next List query) does **not** exclude person-tagged Outcomes — the current Action is doable (`"call Trixy for a follow up"` belongs on Next even while the Outcome is waiting on Trixy), and `TodoDao.watchPersonTagged*` surfaces the same Outcome inside the Waiting For grouping. Two wizard surfaces apply per-step person-tag exclusion to keep their own steps disjoint: the Weekly Review wizard's Next-step snapshot (`TodoDao.getNextActionsExcludingPersonTagged`) and the daily re-clarification's "actionless" branch (`TodoDao.watchNeedsReview` — delegated Outcomes' cadence belongs to the weekly Waiting For review, not daily re-clarification). The general daily Next List does not filter person-tagged.
+**Waiting For overlaps with Next when the Outcome has a current Action.** An Outcome with `intent='next'`, a non-null `next_action_text`, and at least one `Tag(type='person')` appears on both lists — Next because the Action is doable (`"call Trixy for a follow up"`), Waiting For because the PersonBlocker is real. An *actionless* PersonBlocked Outcome appears on Waiting For only — the Next predicate (above) excludes that single quadrant.
 
 ### Intent semantics
 
-- `next` — normal actionable item; appears on Next, and **also** on Waiting For (grouped by Person) when the Outcome carries any `Tag(type='person')`. The two views overlap by design when both predicates apply.
+- `next` — normal actionable item; appears on Next (subject to the actionless+PersonBlocked exclusion above) and **also** under Waiting For (grouped by Person) when the Outcome carries any `Tag(type='person')`. The two views overlap by design when both predicates apply.
 - `maybe` — deferred for later consideration; surfaces in the Maybe view; excluded from Next Actions and planning reviews.
 - `trash` — marked for deletion (UX deferred; column domain enforced at DB level).
 
