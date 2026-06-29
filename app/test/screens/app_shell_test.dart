@@ -66,7 +66,7 @@ Widget _buildShellOnly({
       authTokenProvider.overrideWith(() => _MockAuthNotifier(onLogout: onLogout)),
       isOnlineProvider.overrideWith((_) => Stream.value(true)),
       inboxItemsProvider.overrideWith((_) => Stream.value(items)),
-      nextActionsProvider.overrideWith((_) => Stream.value([])),
+      nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
       maybeProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),

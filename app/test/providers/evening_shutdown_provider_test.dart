@@ -171,13 +171,13 @@ void main() {
       expect(state.dispositions['t1'], equals('rollover'));
     });
 
-    test('returnToNextActions records "leave" disposition in memory',
+    test('returnToNext records "leave" disposition in memory',
         () async {
       await _insertTodo(db, id: 't1');
       await _openSessionWith(db, ['t1']);
 
       final notifier = container.read(eveningShutdownProvider.notifier);
-      notifier.returnToNextActions('t1');
+      notifier.returnToNext('t1');
 
       final state = container.read(eveningShutdownProvider);
       expect(state.dispositions['t1'], equals('leave'));
@@ -203,7 +203,7 @@ void main() {
 
       final notifier = container.read(eveningShutdownProvider.notifier);
       notifier.rolloverTask('t1');
-      notifier.returnToNextActions('t2');
+      notifier.returnToNext('t2');
       await notifier.closeDay();
 
       final rolloverIds =
@@ -231,7 +231,7 @@ void main() {
       await _openSessionWith(db, ['t1']);
 
       final notifier = container.read(eveningShutdownProvider.notifier);
-      notifier.returnToNextActions('t1');
+      notifier.returnToNext('t1');
       await notifier.closeDay();
 
       final after = await (db.select(db.todos)
@@ -374,7 +374,7 @@ void main() {
       expect(state.unfinishedNav.index, equals(1));
     });
 
-    test('returnToNextActions records disposition and advances index', () async {
+    test('returnToNext records disposition and advances index', () async {
       await _insertTodo(db, id: 't1');
       await _insertTodo(db, id: 't2');
       await _openSessionWith(db, ['t1', 't2']);
@@ -386,7 +386,7 @@ void main() {
           container.read(eveningShutdownProvider).unfinishedNav.items!;
       final firstId = snapshot[0].id;
 
-      notifier.returnToNextActions(firstId);
+      notifier.returnToNext(firstId);
 
       final state = container.read(eveningShutdownProvider);
       expect(state.dispositions[firstId], equals('leave'));

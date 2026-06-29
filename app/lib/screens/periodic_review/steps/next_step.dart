@@ -1,6 +1,6 @@
 /// Step 3 of the Weekly Review wizard: review each active next action one at
 /// a time. Person-tagged items are excluded at the DAO level
-/// ([TodoDao.getNextActionsExcludingPersonTagged]) because they are surfaced
+/// ([TodoDao.getNextExcludingPersonTagged]) because they are surfaced
 /// by the prior Waiting For step — the wizard's disjointness invariant
 /// guarantees each task shows up in at most one step.
 ///
@@ -15,17 +15,17 @@ import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/process_to_handlers.dart';
 import 'list_review_step.dart';
 
-class NextActionsStep extends ConsumerWidget {
-  const NextActionsStep({super.key});
+class NextStep extends ConsumerWidget {
+  const NextStep({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final nav =
-        ref.watch(periodicReviewProvider.select((s) => s.nextActionsNav));
+        ref.watch(periodicReviewProvider.select((s) => s.nextNav));
     final loadError = ref.watch(
-        periodicReviewProvider.select((s) => s.nextActionsLoadError));
+        periodicReviewProvider.select((s) => s.nextLoadError));
     final routings = ref.watch(
-        periodicReviewProvider.select((s) => s.nextActionsRoutings));
+        periodicReviewProvider.select((s) => s.nextRoutings));
     final notifier = ref.read(periodicReviewProvider.notifier);
 
     return ListReviewStep<Todo>(
@@ -52,9 +52,9 @@ class NextActionsStep extends ConsumerWidget {
       // Surface the persisted next-action text so the reviewer sees the
       // concrete commitment they made, not just the task title.
       subtextFor: (todo) => todo.nextActionText,
-      onRetry: () => notifier.loadNextActionsSnapshot(),
-      onRecordRouting: notifier.recordNextActionsRouting,
-      onAdvance: notifier.advanceNextActions,
+      onRetry: () => notifier.loadNextSnapshot(),
+      onRecordRouting: notifier.recordNextRouting,
+      onAdvance: notifier.advanceNext,
     );
   }
 }

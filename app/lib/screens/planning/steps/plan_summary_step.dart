@@ -65,8 +65,8 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     final planningState = ref.watch(focusSessionPlanningProvider);
     final availableMinutes = planningState.availableMinutes;
     final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
-    final asyncPending = ref.watch(nextActionsForFocusSessionPlanningProvider);
-    final asyncSkipped = ref.watch(skippedNextActionsForFocusSessionPlanningProvider);
+    final asyncPending = ref.watch(nextForFocusSessionPlanningProvider);
+    final asyncSkipped = ref.watch(skippedNextForFocusSessionPlanningProvider);
 
     if (asyncSelected.isLoading || asyncPending.isLoading || asyncSkipped.isLoading) {
       return const Center(child: CircularProgressIndicator());

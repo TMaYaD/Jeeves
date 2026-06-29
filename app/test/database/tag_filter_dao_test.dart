@@ -289,15 +289,15 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
 
-    test('watchNextActions with no tagIds returns all next actions', () async {
+    test('watchNext with no tagIds returns all next actions', () async {
       await _insertTodo(db, id: 't1', title: 'A');
       await _insertTodo(db, id: 't2', title: 'B');
       final results =
-          await db.todoDao.watchNextActions().first;
+          await db.todoDao.watchNext().first;
       expect(results, hasLength(2));
     });
 
-    test('watchNextActions with tagIds returns only matching todos', () async {
+    test('watchNext with tagIds returns only matching todos', () async {
       await _insertTag(db, id: 'ctx1', name: 'work');
       await _insertTag(db, id: 'ctx2', name: 'home');
       final t1 = await _insertTodo(db,
@@ -308,12 +308,12 @@ void main() {
       await _assignTag(db, t2, 'ctx2');
 
       final results = await db.todoDao
-          .watchNextActions(tagIds: {'ctx1'}).first;
+          .watchNext(tagIds: {'ctx1'}).first;
       expect(results, hasLength(1));
       expect(results.first.id, t1);
     });
 
-    test('watchNextActions with two tagIds uses AND semantics', () async {
+    test('watchNext with two tagIds uses AND semantics', () async {
       await _insertTag(db, id: 'ctx1', name: 'work');
       await _insertTag(db, id: 'ctx2', name: 'phone');
       // t1 has both tags; t2 has only one
@@ -326,7 +326,7 @@ void main() {
       await _assignTag(db, t2, 'ctx1');
 
       final results = await db.todoDao
-          .watchNextActions(tagIds: {'ctx1', 'ctx2'}).first;
+          .watchNext(tagIds: {'ctx1', 'ctx2'}).first;
       expect(results, hasLength(1));
       expect(results.first.id, t1);
     });

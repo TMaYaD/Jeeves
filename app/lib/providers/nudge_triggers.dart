@@ -121,7 +121,7 @@ TriggerState _dprCadenceTrigger(Ref ref) {
   final hasTodos = ref.watch(hasTodosProvider);
   if (!hasTodos.hasValue || !hasTodos.requireValue) return TriggerState.idle;
   final inbox = ref.watch(unfilteredInboxProvider);
-  final next = ref.watch(unfilteredNextActionsProvider);
+  final next = ref.watch(unfilteredNextProvider);
   if (!inbox.hasValue || !next.hasValue) return TriggerState.idle;
   if (inbox.requireValue.isEmpty && next.requireValue.isEmpty) {
     return TriggerState.idle;
@@ -197,7 +197,7 @@ TriggerState _wrContentStateTrigger(Ref ref) {
 
   final firing = emptyActionableBannerTrigger(
     inbox: ref.watch(unfilteredInboxProvider),
-    next: ref.watch(unfilteredNextActionsProvider),
+    next: ref.watch(unfilteredNextProvider),
     waiting: ref.watch(unfilteredWaitingForProvider),
     maybe: ref.watch(unfilteredMaybeProvider),
   );

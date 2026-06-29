@@ -38,7 +38,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   ///
   /// The tag-filter shape (`COUNT(DISTINCT tag_id) = n` over `todo_tags`) is
   /// the single source of truth for "all of these tags" semantics. Callers
-  /// like [watchNextActions] and [watchMaybe] vary only by [intent]; if the
+  /// like [watchNext] and [watchMaybe] vary only by [intent]; if the
   /// filter ever needs to change (ANY-of-tags, null-handling on the join, …)
   /// the change happens here, once.
   ///
@@ -81,7 +81,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// `intent != 'maybe'` formulation admitted `intent='trash'` rows (#278).
   /// When [tagIds] is non-empty only todos carrying **all** specified tags
   /// are returned (AND semantics).
-  Stream<List<Todo>> watchNextActions({Set<String> tagIds = const {}}) {
+  Stream<List<Todo>> watchNext({Set<String> tagIds = const {}}) {
     return _watchByIntentAndTags(intent: Intent.next, tagIds: tagIds);
   }
 
@@ -395,7 +395,7 @@ AND (
   /// typed tag. Used by the Weekly Review wizard's Next Actions step; the
   /// person-tag exclusion keeps it disjoint from Waiting For's snapshot so
   /// each task surfaces in at most one wizard step.
-  Future<List<Todo>> getNextActionsExcludingPersonTagged() {
+  Future<List<Todo>> getNextExcludingPersonTagged() {
     return customSelect(
       'SELECT todos.* FROM todos '
       'WHERE todos.clarified = 1 '

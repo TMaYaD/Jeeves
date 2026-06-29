@@ -185,7 +185,7 @@ void main() {
 
   });
 
-  group('TodoDao — getNextActionsExcludingPersonTagged', () {
+  group('TodoDao — getNextExcludingPersonTagged', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
@@ -196,7 +196,7 @@ void main() {
       await _insertTodo(db, id: 'nx1', title: 'Plain next');
 
       final items =
-          await db.todoDao.getNextActionsExcludingPersonTagged();
+          await db.todoDao.getNextExcludingPersonTagged();
       expect(items.map((t) => t.id), ['nx1']);
     });
 
@@ -206,7 +206,7 @@ void main() {
       await db.tagDao.assignTag('nx2', 'pa', _userId);
 
       final items =
-          await db.todoDao.getNextActionsExcludingPersonTagged();
+          await db.todoDao.getNextExcludingPersonTagged();
       expect(items.any((t) => t.id == 'nx2'), isFalse);
     });
 
@@ -229,7 +229,7 @@ void main() {
       await db.tagDao.assignTag('nx3', 'ctx-tag', _userId);
 
       final items =
-          await db.todoDao.getNextActionsExcludingPersonTagged();
+          await db.todoDao.getNextExcludingPersonTagged();
       expect(items.map((t) => t.id), contains('nx3'));
     });
 
@@ -247,7 +247,7 @@ void main() {
       await db.tagDao.assignTag('nx8', 'pa-mix', _userId);
 
       final items =
-          await db.todoDao.getNextActionsExcludingPersonTagged();
+          await db.todoDao.getNextExcludingPersonTagged();
       expect(items.any((t) => t.id == 'nx8'), isFalse);
     });
 
@@ -266,7 +266,7 @@ void main() {
       await db.todoDao.setIntent('nx7', Intent.trash);
 
       final items =
-          await db.todoDao.getNextActionsExcludingPersonTagged();
+          await db.todoDao.getNextExcludingPersonTagged();
       final ids = items.map((t) => t.id).toSet();
       expect(ids, isNot(contains('nx4')));
       expect(ids, isNot(contains('nx5')));
@@ -276,7 +276,7 @@ void main() {
 
     test('returns empty list when no matching todos exist', () async {
       final items =
-          await db.todoDao.getNextActionsExcludingPersonTagged();
+          await db.todoDao.getNextExcludingPersonTagged();
       expect(items, isEmpty);
     });
   });
@@ -296,11 +296,11 @@ void main() {
       expect(row?.doneAt, isNotNull);
     });
 
-    test('markDone task no longer appears in watchNextActions', () async {
+    test('markDone task no longer appears in watchNext', () async {
       await _insertTodo(db, id: 'md2', title: 'Task MD2');
       await db.todoDao.markDone('md2');
 
-      final items = await db.todoDao.watchNextActions().first;
+      final items = await db.todoDao.watchNext().first;
       expect(items.any((t) => t.id == 'md2'), isFalse);
     });
 
@@ -318,12 +318,12 @@ void main() {
       expect(items.last.id, 'wd1');
     });
 
-    test('watchNextActions excludes done tasks', () async {
+    test('watchNext excludes done tasks', () async {
       await _insertTodo(db, id: 'na1', title: 'Active next action');
       await _insertTodo(db, id: 'na2', title: 'Done next action');
       await db.todoDao.markDone('na2');
 
-      final items = await db.todoDao.watchNextActions().first;
+      final items = await db.todoDao.watchNext().first;
       expect(items.length, 1);
       expect(items.first.id, 'na1');
     });
@@ -340,16 +340,16 @@ void main() {
       expect(items.first.id, 'mm1');
     });
 
-    test('watchNextActions excludes trashed tasks (#278)', () async {
+    test('watchNext excludes trashed tasks (#278)', () async {
       await _insertTodo(db, id: 'tn1', title: 'Active');
       await _insertTodo(db, id: 'tn2', title: 'Trashed');
       await db.todoDao.setIntent('tn2', Intent.trash);
 
-      final items = await db.todoDao.watchNextActions().first;
+      final items = await db.todoDao.watchNext().first;
       expect(items.map((t) => t.id), ['tn1']);
     });
 
-    test('watchNextActions excludes trashed tasks even with tag filter (#278)',
+    test('watchNext excludes trashed tasks even with tag filter (#278)',
         () async {
       await _insertTodo(db, id: 'tnt1', title: 'Active');
       await _insertTodo(db, id: 'tnt2', title: 'Trashed');
@@ -364,7 +364,7 @@ void main() {
       await db.tagDao.assignTag('tnt2', tagId, _userId);
       await db.todoDao.setIntent('tnt2', Intent.trash);
 
-      final items = await db.todoDao.watchNextActions(tagIds: {tagId}).first;
+      final items = await db.todoDao.watchNext(tagIds: {tagId}).first;
       expect(items.map((t) => t.id), ['tnt1']);
     });
 

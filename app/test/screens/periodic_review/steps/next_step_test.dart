@@ -15,7 +15,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
-import 'package:jeeves/screens/periodic_review/steps/next_actions_step.dart';
+import 'package:jeeves/screens/periodic_review/steps/next_step.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 
 import '../../../test_helpers.dart';
@@ -25,7 +25,7 @@ const _userId = 'local';
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 /// Inserts a clarified, non-done, intent='next' todo with no person tag —
-/// the shape `getNextActionsExcludingPersonTagged` surfaces into the step.
+/// the shape `getNextExcludingPersonTagged` surfaces into the step.
 Future<String> _insertNextActionTodo(
   GtdDatabase db, {
   required String id,
@@ -64,7 +64,7 @@ Widget _harness(
         }),
     ],
     child: const MaterialApp(
-      home: Scaffold(body: NextActionsStep()),
+      home: Scaffold(body: NextStep()),
     ),
   );
 }
@@ -76,11 +76,11 @@ Future<ProviderContainer> _enterStep(
 }) async {
   await tester.pumpWidget(_harness(db, reclarifyIds: reclarifyIds));
   final container = ProviderScope.containerOf(
-    tester.element(find.byType(NextActionsStep)),
+    tester.element(find.byType(NextStep)),
   );
   await container
       .read(periodicReviewProvider.notifier)
-      .loadNextActionsSnapshot();
+      .loadNextSnapshot();
   await tester.pumpAndSettle();
   return container;
 }
@@ -88,7 +88,7 @@ Future<ProviderContainer> _enterStep(
 void main() {
   setUpAll(configureSqliteForTests);
 
-  group('NextActionsStep — Re-clarify… sub-flow (#294)', () {
+  group('NextStep — Re-clarify… sub-flow (#294)', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
@@ -140,8 +140,8 @@ void main() {
       expect(row?.intent, 'maybe');
 
       final state = container.read(periodicReviewProvider);
-      expect(state.nextActionsRoutings[0], RoutingKind.maybe);
-      expect(state.nextActionsNav.isComplete, isTrue);
+      expect(state.nextRoutings[0], RoutingKind.maybe);
+      expect(state.nextNav.isComplete, isTrue);
     });
 
     testWidgets(
@@ -158,9 +158,9 @@ void main() {
       await tester.pumpAndSettle();
 
       final state = container.read(periodicReviewProvider);
-      expect(state.nextActionsRoutings, isEmpty,
+      expect(state.nextRoutings, isEmpty,
           reason: 'a back-out of the sub-flow records no routing');
-      expect(state.nextActionsNav.isComplete, isTrue);
+      expect(state.nextNav.isComplete, isTrue);
       final row = await db.todoDao.getTodo('na1');
       expect(row?.intent, 'next');
     });
