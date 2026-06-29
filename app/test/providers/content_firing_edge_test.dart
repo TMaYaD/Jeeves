@@ -28,17 +28,22 @@ void main() {
     // null = loading, false = loaded-not-firing, true = firing.
     bool? firing;
 
+    // A container over the shared (db, now, firing) seam. `firing` and `now`
+    // are read live through the override closures, so mutating them then
+    // invalidating re-drives the providers.
+    ProviderContainer makeContainer() => ProviderContainer(overrides: [
+          databaseProvider.overrideWithValue(db),
+          notificationServiceProvider
+              .overrideWithValue(StubPeriodicReviewNotificationService()),
+          wrContentFiringProvider.overrideWith((ref) => firing),
+          clockProvider.overrideWithValue(() => now),
+        ]);
+
     Future<void> setup() async {
       db = GtdDatabase(NativeDatabase.memory());
       now = DateTime(2026, 6, 29, 9, 0);
       firing = null;
-      c = ProviderContainer(overrides: [
-        databaseProvider.overrideWithValue(db),
-        notificationServiceProvider
-            .overrideWithValue(StubPeriodicReviewNotificationService()),
-        wrContentFiringProvider.overrideWith((ref) => firing),
-        clockProvider.overrideWithValue(() => now),
-      ]);
+      c = makeContainer();
       await c.read(syncedPreferencesProvider.future);
       // Keep the Notifier alive so _prevFiring persists across transitions.
       c.listen(contentFiringEdgeProvider, (_, _) {});
@@ -75,6 +80,28 @@ void main() {
           DateTime(2026, 6, 29, 14, 30).toUtc());
     });
 
+    test('keeps the stamped edge on a rebuild while still firing, before the '
+        'persist is reflected', () async {
+      await setup();
+
+      setFiring(false);
+      expect(c.read(contentFiringEdgeProvider), isNull);
+
+      now = DateTime(2026, 6, 29, 14, 30);
+      setFiring(true); // false→true: stamps 14:30; the persist is fire-and-forget
+      expect(c.read(contentFiringEdgeProvider)?.toUtc(),
+          DateTime(2026, 6, 29, 14, 30).toUtc());
+
+      // Rebuild while still firing, synchronously — before the async persist
+      // lands in syncedPreferencesProvider (`set` awaits the DB write before
+      // updating state, so `persisted` is still null here). The in-memory stamp
+      // must hold, so firingSince stays 14:30 rather than regressing to
+      // start-of-today (00:00) and re-hiding a just-released dismiss.
+      c.invalidate(wrContentFiringProvider); // firing still true
+      expect(c.read(contentFiringEdgeProvider)?.toUtc(),
+          DateTime(2026, 6, 29, 14, 30).toUtc());
+    });
+
     test('a loading→firing edge on startup uses the start-of-today fallback, '
         'not a fresh stamp', () async {
       await setup();
@@ -90,15 +117,24 @@ void main() {
       expect(c.read(contentFiringEdgeProvider), DateTime(2026, 6, 29));
     });
 
-    test('restores the persisted edge when already firing on startup', () async {
+    test('restores the persisted edge in a fresh container (restart)', () async {
       await setup();
 
+      // A prior session stamped and persisted an edge.
       final edge = DateTime.utc(2026, 6, 29, 11, 0);
       await c
           .read(syncedPreferencesProvider.notifier)
           .set(_edgeKey, edge.toIso8601String());
 
-      setFiring(true); // firing on startup, prev=null
+      // Simulate a restart: drop the container (keeping the backing DB) and
+      // build a fresh one that is already firing on startup. A fresh notifier
+      // carries no in-memory stamp, so a correct read can only come from prefs —
+      // this proves cold-start restore, not in-memory state reuse.
+      c.dispose();
+      firing = true;
+      c = makeContainer();
+      await c.read(syncedPreferencesProvider.future);
+
       expect(c.read(contentFiringEdgeProvider)?.toUtc(), edge);
     });
   });

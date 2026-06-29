@@ -259,6 +259,13 @@ class ContentFiringEdgeNotifier extends Notifier<DateTime?> {
 
   bool? _prevFiring;
 
+  /// This session's freshly stamped edge. Held in memory because
+  /// `syncedPrefs(ref).set(...)` is async: until that write is reflected in
+  /// `syncedPreferencesProvider`, a rebuild while still firing would otherwise
+  /// read `persisted == null` and regress `firingSince` to start-of-today,
+  /// transiently re-hiding a just-released dismiss.
+  DateTime? _stampedEdge;
+
   @override
   DateTime? build() {
     final firing = ref.watch(wrContentFiringProvider);
@@ -274,19 +281,27 @@ class ContentFiringEdgeNotifier extends Notifier<DateTime?> {
 
     if (prev == false) {
       // A genuine false→true re-fire (not a startup loading→firing edge, which
-      // would have prev == null): stamp a fresh edge and persist it.
+      // would have prev == null): stamp a fresh edge, cache it, and persist it.
       final edge = ref.read(clockProvider)();
+      _stampedEdge = edge;
       unawaited(syncedPrefs(ref).set(
         _contentFiringEdgeKey(_ritual),
         edge.toUtc().toIso8601String(),
       ));
       return edge;
     }
-    // Already firing (startup, or a re-build while still firing): keep the
-    // persisted edge; on a fresh restart with none, fall back to start-of-today.
-    return persisted ?? _startOfToday(ref.read(clockProvider)());
+    // Already firing (startup, or a rebuild while still firing). Prefer the
+    // freshest edge: this session's in-memory stamp bridges the window before
+    // the async persist lands; the persisted value covers a cold restart and a
+    // newer cross-device edge. Fall back to start-of-today when neither exists.
+    return _latest(_stampedEdge, persisted) ??
+        _startOfToday(ref.read(clockProvider)());
   }
 }
+
+/// The later of two nullable instants (a `null` argument counts as absent).
+DateTime? _latest(DateTime? a, DateTime? b) =>
+    a == null || b == null ? (a ?? b) : (a.isAfter(b) ? a : b);
 
 final contentFiringEdgeProvider =
     NotifierProvider<ContentFiringEdgeNotifier, DateTime?>(
