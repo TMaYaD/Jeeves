@@ -43,8 +43,11 @@ const int _kWeeklyReviewCadenceDays = 7;
 DateTime _startOfDay(DateTime now) => DateTime(now.year, now.month, now.day);
 
 /// The next local day boundary strictly after [now].
+// Uses the local-time constructor (`day + 1`) rather than `add(Duration(days:
+// 1))` so the boundary lands on the next calendar midnight even across a DST
+// transition, where a "day" is not a fixed 24 hours.
 DateTime _nextDayBoundary(DateTime now) =>
-    _startOfDay(now).add(const Duration(days: 1));
+    DateTime(now.year, now.month, now.day + 1);
 
 /// Today's local instant of [hour]:[minute].
 DateTime _todayAt(DateTime now, int hour, int minute) {

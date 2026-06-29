@@ -1,3 +1,4 @@
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/providers/clock_provider.dart';
@@ -42,23 +43,31 @@ void main() {
   });
 
   group('periodicReviewIsDueProvider — reactive to the cadence boundary', () {
-    test('flips false→true when the clock crosses last + 7d', () {
-      var now = DateTime(2026, 6, 29, 10, 0);
-      final last = DateTime(2026, 6, 23, 10, 0); // due at 2026-06-30 10:00
+    test('its scheduled boundary Timer fires at last + 7d and flips to due', () {
+      fakeAsync((async) {
+        final last = DateTime(2026, 6, 23, 10, 0); // due exactly at 6/30 10:00
+        var now = DateTime(2026, 6, 29, 10, 0); // one day before the boundary
 
-      final container = ProviderContainer(overrides: [
-        clockProvider.overrideWithValue(() => now),
-        periodicReviewLastCompletedProvider.overrideWithValue(last),
-      ]);
-      addTearDown(container.dispose);
+        final container = ProviderContainer(overrides: [
+          clockProvider.overrideWithValue(() => now),
+          periodicReviewLastCompletedProvider.overrideWithValue(last),
+        ]);
+        addTearDown(container.dispose);
 
-      // One day before the cadence boundary: not yet due.
-      expect(container.read(periodicReviewIsDueProvider), isFalse);
+        // Building the provider schedules a Timer for the exact due instant.
+        expect(container.read(periodicReviewIsDueProvider), isFalse);
 
-      // Advance the clock past the boundary; the predicate re-evaluates to due.
-      now = DateTime(2026, 6, 30, 10, 1);
-      container.invalidate(periodicReviewIsDueProvider);
-      expect(container.read(periodicReviewIsDueProvider), isTrue);
+        // One second short of the cutoff: the timer has not fired, still not due.
+        now = DateTime(2026, 6, 30, 9, 59, 59);
+        async.elapse(const Duration(days: 1) - const Duration(seconds: 1));
+        expect(container.read(periodicReviewIsDueProvider), isFalse);
+
+        // Cross the exact cutoff: the scheduled Timer fires invalidateSelf and
+        // the predicate re-evaluates to due — no manual invalidation.
+        now = DateTime(2026, 6, 30, 10, 0);
+        async.elapse(const Duration(seconds: 1));
+        expect(container.read(periodicReviewIsDueProvider), isTrue);
+      });
     });
 
     test('is due immediately when never completed', () {
