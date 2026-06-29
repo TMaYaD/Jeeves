@@ -23,6 +23,8 @@
 /// false→true edge.
 library;
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/ritual.dart';
@@ -38,6 +40,7 @@ import 'periodic_review_settings_provider.dart'
         periodicReviewIsDueProvider,
         periodicReviewLastCompletedProvider;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
+import 'synced_preferences_provider.dart';
 
 // ---------------------------------------------------------------------------
 // TriggerState
@@ -207,19 +210,113 @@ final contentStateTriggerProvider =
   }
 });
 
-TriggerState _wrContentStateTrigger(Ref ref) {
-  final now = _now(ref);
+/// The Weekly Review **content-state** predicate as a standalone, watchable
+/// tri-state: `true` when there are todos AND the inbox + Next List are both
+/// empty while Waiting For or Someday/Maybe still hold items; `false` when
+/// loaded but not firing; `null` while any of the underlying lists are still
+/// loading. Extracted from [_wrContentStateTrigger] so [contentFiringEdgeProvider]
+/// can observe genuine `false→true` transitions (and not mistake a
+/// loading→firing edge on startup for a re-fire).
+final wrContentFiringProvider = Provider<bool?>((ref) {
   final hasTodos = ref.watch(hasTodosProvider);
-  if (!hasTodos.hasValue || !hasTodos.requireValue) return TriggerState.idle;
-
-  final firing = emptyActionableBannerTrigger(
-    inbox: ref.watch(unfilteredInboxProvider),
-    next: ref.watch(unfilteredNextProvider),
-    waiting: ref.watch(unfilteredWaitingForProvider),
-    maybe: ref.watch(unfilteredMaybeProvider),
+  final inbox = ref.watch(unfilteredInboxProvider);
+  final next = ref.watch(unfilteredNextProvider);
+  final waiting = ref.watch(unfilteredWaitingForProvider);
+  final maybe = ref.watch(unfilteredMaybeProvider);
+  if (!hasTodos.hasValue ||
+      !inbox.hasValue ||
+      !next.hasValue ||
+      !waiting.hasValue ||
+      !maybe.hasValue) {
+    return null; // still loading — truth value unknown
+  }
+  if (!hasTodos.requireValue) return false;
+  return emptyActionableBannerTrigger(
+    inbox: inbox,
+    next: next,
+    waiting: waiting,
+    maybe: maybe,
   );
-  if (!firing) return TriggerState.idle;
-  return TriggerState(isFiring: true, firingSince: _startOfToday(now));
+});
+
+String _contentFiringEdgeKey(RitualId ritual) =>
+    '${ritual.keyPrefix}_nudge_content_firing_edge';
+
+/// The persisted `false→true` firing edge of [ritual]'s content-state Trigger,
+/// reported as that Trigger's `firingSince`.
+///
+/// A content-state dismiss releases when the most-recent firing edge advances
+/// past `dismissed_at` (see `nudge_provider.dart`). Stamping this edge on each
+/// genuine re-fire — rather than the old per-day `_startOfToday` approximation —
+/// releases the dismiss the moment the predicate re-fires, not at the day
+/// boundary. The edge is persisted to synced-prefs so it survives an app
+/// restart; on a restart where the predicate is already firing but nothing was
+/// persisted, it falls back to start-of-today (the prior behaviour), so a
+/// same-day dismiss is not spuriously released. Idle/loading ⇒ `null`.
+class ContentFiringEdgeNotifier extends Notifier<DateTime?> {
+  // Weekly Review is the only Ritual with a content-state Trigger today.
+  static const _ritual = RitualId.weeklyReview;
+
+  bool? _prevFiring;
+
+  /// This session's freshly stamped edge. Held in memory because
+  /// `syncedPrefs(ref).set(...)` is async: until that write is reflected in
+  /// `syncedPreferencesProvider`, a rebuild while still firing would otherwise
+  /// read `persisted == null` and regress `firingSince` to start-of-today,
+  /// transiently re-hiding a just-released dismiss.
+  DateTime? _stampedEdge;
+
+  @override
+  DateTime? build() {
+    final firing = ref.watch(wrContentFiringProvider);
+    final prefs = ref.watch(syncedPreferencesProvider).asData?.value;
+    final persisted = DateTime.tryParse(
+      prefs?.get<String>(_contentFiringEdgeKey(_ritual)) ?? '',
+    );
+
+    final prev = _prevFiring;
+    _prevFiring = firing;
+
+    if (firing != true) return null; // loading or not firing ⇒ no edge
+
+    if (prev == false) {
+      // A genuine false→true re-fire (not a startup loading→firing edge, which
+      // would have prev == null): stamp a fresh edge, cache it, and persist it.
+      final edge = ref.read(clockProvider)();
+      _stampedEdge = edge;
+      unawaited(syncedPrefs(ref).set(
+        _contentFiringEdgeKey(_ritual),
+        edge.toUtc().toIso8601String(),
+      ));
+      return edge;
+    }
+    // Already firing (startup, or a rebuild while still firing). Prefer the
+    // freshest edge: this session's in-memory stamp bridges the window before
+    // the async persist lands; the persisted value covers a cold restart and a
+    // newer cross-device edge. Fall back to start-of-today when neither exists.
+    return _latest(_stampedEdge, persisted) ??
+        _startOfToday(ref.read(clockProvider)());
+  }
+}
+
+/// The later of two nullable instants (a `null` argument counts as absent).
+DateTime? _latest(DateTime? a, DateTime? b) =>
+    a == null || b == null ? (a ?? b) : (a.isAfter(b) ? a : b);
+
+final contentFiringEdgeProvider =
+    NotifierProvider<ContentFiringEdgeNotifier, DateTime?>(
+  ContentFiringEdgeNotifier.new,
+);
+
+TriggerState _wrContentStateTrigger(Ref ref) {
+  if (ref.watch(wrContentFiringProvider) != true) return TriggerState.idle;
+  final edge = ref.watch(contentFiringEdgeProvider);
+  // While firing the tracker has stamped an edge; fall back defensively to
+  // start-of-today (kept boundary-reactive via _now) if it has not yet.
+  return TriggerState(
+    isFiring: true,
+    firingSince: edge ?? _startOfToday(_now(ref)),
+  );
 }
 
 // ---------------------------------------------------------------------------
