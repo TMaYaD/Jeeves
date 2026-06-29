@@ -204,6 +204,12 @@ class PeriodicReviewSettingsNotifier
     // active snooze.
     if (current != null) {
       _refreshNotificationSuppression(current);
+    } else {
+      // No snapshot yet — reset suppression to defaults so the initial
+      // reschedule below doesn't act on stale module-level globals left from a
+      // prior provider lifecycle.
+      _periodicReviewNotificationSkippedToday = false;
+      _periodicReviewNotificationSnoozedActive = false;
     }
     final initial = current != null ? _fromPrefs(current) : _defaults();
     // The listener above only fires on subsequent prefs changes, so kick off
