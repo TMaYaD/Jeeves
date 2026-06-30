@@ -59,7 +59,7 @@ dependencies:
   # Held at 14.0.2: geolocator 14.0.3 pulls package_info_plus 10 -> win32 ^6,
   # which conflicts with file_picker 11.x (win32 ^5.9). Unblocks once we move
   # to file_picker 12 stable. See .github/dependabot.yml.
-  geolocator: ^14.0.3
+  geolocator: ^14.0.2
   geocoding: ^4.0.0
 
   # Voice / Speech
@@ -82,7 +82,7 @@ dependencies:
   # deprecates `withData`/`bytes` (used in screens/import_screen.dart), which
   # `flutter analyze` treats as fatal infos. See the Dependabot ignore rule in
   # .github/dependabot.yml — it lets 12.0.0 through once it ships stable.
-  file_picker: ^12.0.0-beta.7
+  file_picker: ^11.0.0
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^10.3.1
