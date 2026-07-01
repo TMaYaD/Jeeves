@@ -88,6 +88,20 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
             'JevesBackendConnector: fatal error on $entry '
             '(status ${e.response?.statusCode}); skipping entry',
           );
+          // Silently dropping a user_preferences write is the read-side
+          // data-loss footgun from #306: the local row stays, the server never
+          // hears of it, and the next pull can wipe the local value. Fail loudly
+          // in debug so a systematic 4xx on this table surfaces during
+          // development; release builds still `continue` so one poisoned row
+          // can't block the whole queue. Keep the backend routes idempotent /
+          // permissive (see docs/SYNC.md) so a legitimate write never 4xx here.
+          assert(
+            !isSilentDataLossDrop(entry),
+            'JevesBackendConnector: dropped a user_preferences upload '
+            '(status ${e.response?.statusCode}) for $entry — risks silent data '
+            'loss (#306). Make the backend route accept this write instead of '
+            'returning 4xx.',
+          );
           // Drop only this entry — continue with the rest of the batch.
           continue;
         }
@@ -150,6 +164,15 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
         await _api.delete('/user_preferences/${entry.id}');
     }
   }
+
+  /// Whether dropping [entry] from the CRUD queue on a fatal error risks the
+  /// #306 read-side wipe: a non-delete `user_preferences` write whose local row
+  /// survives while the server never hears of it, so the next pull can delete
+  /// it. Deletes are exempt — a 404 on DELETE means the row is already gone,
+  /// which is idempotent and cannot cause the wipe. Guards a debug assert in
+  /// [uploadData].
+  static bool isSilentDataLossDrop(ps.CrudEntry entry) =>
+      entry.table == 'user_preferences' && entry.op != ps.UpdateType.delete;
 
   /// 4xx responses indicate a client-side problem (bad payload, stale
   /// row, RLS violation).  Retrying will keep failing, so we treat them
