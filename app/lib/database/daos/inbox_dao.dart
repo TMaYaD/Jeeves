@@ -57,12 +57,19 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
   ///
   /// Only removes rows where clarified = false so clarified items are
   /// not accidentally deleted via this path.
-  Future<int> deleteTodo(String id) {
-    return (delete(todos)
+  Future<int> deleteTodo(String id) async {
+    final rows = await (delete(todos)
           ..where(
             (t) => t.id.equals(id) & t.clarified.equals(false),
           ))
         .go();
+    // `todos` is a PowerSync view in production: the INSTEAD OF trigger makes
+    // the delete report changes()==0, so Drift skips its own stream
+    // invalidation (gated on rows > 0). Notify explicitly so the Inbox list and
+    // badge drop the removed item without relying solely on the async bridge
+    // (#342).
+    attachedDatabase.notifyTodosViewWrite();
+    return rows;
   }
 
   /// Sets clarified = true on the given inbox item, optionally updating
@@ -78,9 +85,9 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
     String id, {
     String? intent,
     DateTime? dueDate,
-  }) {
+  }) async {
     final ts = DateTime.now();
-    return (update(todos)
+    final rows = await (update(todos)
           ..where(
             (t) => t.id.equals(id) & t.clarified.equals(false),
           ))
@@ -91,5 +98,11 @@ class InboxDao extends DatabaseAccessor<GtdDatabase> with _$InboxDaoMixin {
       lastClarifiedAt: Value(ts.toUtc()),
       updatedAt: Value(ts),
     ));
+    // `todos` is a PowerSync view in production: the INSTEAD OF trigger makes
+    // the write report changes()==0, so Drift skips its own stream
+    // invalidation. Notify explicitly so the Inbox list / badge and the Next
+    // Actions list refresh without relying solely on the async bridge (#342).
+    attachedDatabase.notifyTodosViewWrite();
+    return rows;
   }
 }

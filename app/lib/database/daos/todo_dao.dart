@@ -342,6 +342,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       lastClarifiedAt: Value(ts.toUtc()),
       updatedAt: Value(ts),
     ));
+    attachedDatabase.notifyTodosViewWrite();
   }
 
   // ---------------------------------------------------------------------------
@@ -390,6 +391,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       lastClarifiedAt: Value(ts),
       updatedAt: Value(ts),
     ));
+    attachedDatabase.notifyTodosViewWrite();
   }
 
   /// Sets [next_action_text] and stamps [last_clarified_at] atomically.
@@ -406,6 +408,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       lastClarifiedAt: Value(ts),
       updatedAt: Value(ts),
     ));
+    // View write reports changes()==0 in production; notify Drift explicitly so
+    // watchers refresh without relying solely on the async bridge (#342).
+    attachedDatabase.notifyTodosViewWrite();
   }
 
   // ---------------------------------------------------------------------------
@@ -500,6 +505,7 @@ AND (
       lastClarifiedAt: Value(ts),
       updatedAt: Value(ts),
     ));
+    attachedDatabase.notifyTodosViewWrite();
   }
 
   /// Restores a done or trashed todo to active next-action status.
@@ -711,6 +717,13 @@ AND (
         await setPersonTagsForTodo(todoId, personTagIds, userId);
       }
     });
+
+    // `todos` is a PowerSync view in production, so the INSTEAD OF trigger makes
+    // the write above report `changes() == 0` and Drift skips its own stream
+    // invalidation. Notify explicitly so the Inbox / Next Actions lists refresh
+    // without depending solely on the async update bridge (#342). Person-tag
+    // edits also touch the `todo_tags` view, so refresh those watchers too.
+    attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
   }
 
   static String? _normaliseText(String text) {
@@ -781,5 +794,6 @@ AND (
               : const Value.absent(),
     );
     await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
+    attachedDatabase.notifyTodosViewWrite();
   }
 }
