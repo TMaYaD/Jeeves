@@ -209,9 +209,17 @@ ResolvedPreference _setMerge(PreferenceRow local, PreferenceRow server) {
   // survive. Assumes scalar (comparable) elements — Set dedup and the string
   // sort below don't handle nested collections reliably, so any future setMerge
   // key must hold scalars.
+  final localList = _decodeList(local.value);
+  final serverList = _decodeList(server.value);
+  // A malformed live value (non-list or invalid JSON) can't be merged without
+  // silently dropping that side, so fall back to LWW — same posture as
+  // [_maxTimestampValue] with unparseable timestamps.
+  if (localList == null || serverList == null) {
+    return _lww(local, server);
+  }
   final merged = <dynamic>{}
-    ..addAll(_decodeList(local.value))
-    ..addAll(_decodeList(server.value));
+    ..addAll(localList)
+    ..addAll(serverList);
   // Sort for a canonical, order-independent encoding so both devices converge
   // on identical bytes rather than ping-ponging on member order.
   final ordered = merged.toList()
@@ -249,14 +257,15 @@ DateTime? _parseTimestampValue(String? jsonValue) {
   }
 }
 
-/// Decodes a JSON-encoded list value, or returns an empty list if the value is
-/// absent or not a JSON array.
-List<dynamic> _decodeList(String? jsonValue) {
-  if (jsonValue == null) return const [];
+/// Decodes a JSON-encoded list value, or returns `null` if the value is absent,
+/// not a JSON array, or not valid JSON. Callers treat `null` as "not mergeable"
+/// and fall back to LWW rather than silently dropping the value.
+List<dynamic>? _decodeList(String? jsonValue) {
+  if (jsonValue == null) return null;
   try {
     final decoded = jsonDecode(jsonValue);
-    return decoded is List ? decoded : const [];
+    return decoded is List ? decoded : null;
   } catch (_) {
-    return const [];
+    return null;
   }
 }

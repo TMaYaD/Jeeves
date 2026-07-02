@@ -266,5 +266,21 @@ void main() {
       expect(r.value, isNull);
       expect(r.updatedAt, DateTime.parse('2026-01-02T00:00:00Z'));
     });
+
+    test('a malformed live value falls back to LWW instead of dropping a side',
+        () {
+      // `_row('oops', ...)` encodes to the non-list JSON value "oops". Merging
+      // it as an empty set would silently discard that side; LWW keeps the
+      // newer value verbatim.
+      final r = resolveWithStrategy(
+        ConflictStrategy.setMerge,
+        local: _row(['a', 'b'], '2026-01-01T00:00:00Z'),
+        server: _row('oops', '2026-01-02T00:00:00Z'),
+      );
+      expect(r.value, jsonEncode('oops'),
+          reason: 'the newer (malformed) value wins under LWW, not an empty '
+              'merge that drops it');
+      expect(r.updatedAt, DateTime.parse('2026-01-02T00:00:00Z'));
+    });
   });
 }
