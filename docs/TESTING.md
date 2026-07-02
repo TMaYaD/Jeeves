@@ -47,6 +47,17 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 - **Coverage**: `pytest-cov` to ensure critical business logic is tested.
 - **Local DB**: Provide a test database (e.g., using `aiosqlite` or a testing PostgreSQL container) to run real integration tests rather than mocking the database layer.
 
+## Sync conflict resolution (manual)
+
+The per-key conflict logic in `services/user_preferences_conflict.dart` is a pure function and is fully covered by `app/test/services/user_preferences_conflict_test.dart`. What that layer **cannot** cover is the PowerSync engine's delete-on-server-absent behaviour: the entire Dart test harness runs on `NativeDatabase.memory()` — a real SQLite table with no PowerSync engine — so the download-reconciliation windows in [SYNC.md](./SYNC.md#powersync-reconciliation-behaviour-write-checkpoint) are structurally unreproducible in unit tests. A standing PowerSync-client + docker-compose integration harness is deferred to its own infra issue.
+
+Until that harness exists, verify these acceptance criteria manually against a real backend (two emulators/devices, or one device plus a direct DB edit):
+
+- **Server-absent row survives (offline write).** On device A, toggle a preference (e.g. change the daily-planning time) while the backend is unreachable, then reconnect against a server that has **no** row for that key. Confirm the local value persists — including across a cold restart of the app (which rebuilds `syncedPreferencesProvider` from the DB, bypassing the in-memory merge performed after `dao.watchAll(userId)` emits). Assert on `dao.getAll(userId)` / the DB row, not on notifier state, because the in-memory merge can mask a wiped DB row.
+- **Both present, LWW keys: newer `updated_at` wins.** Write the same scalar key on two devices; confirm the later write is the value both devices settle on.
+- **Snooze floors never regress (`maxTimestampValue`).** Snooze a notification further into the future on device A, then let an older write carrying a nearer snooze value sync from device B; confirm the later "until" survives and the notification stays silenced. Confirm an explicit un-snooze (tombstone) clears the floor even against a live value.
+- **Set/list keys merge (`setMerge`).** No production key uses this today; when one is added, add two concurrent additions on two devices and confirm both survive.
+
 ## Manual testing on the Android emulator (for agents)
 
 For flows that are impractical to cover with `flutter_test` / integration tests — in particular the Sign-In With Solana round-trip, which requires a real MWA-compatible wallet — drive the running emulator via `adb`. This section captures the stable coordinates and navigation paths so successive sessions don't have to re-discover them.

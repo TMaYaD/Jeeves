@@ -63,7 +63,7 @@ PowerSync provides bidirectional offline-first sync between the Flutter SQLite s
 - The backend issues short-lived JWTs from `GET /powersync/credentials`; PowerSync validates them using the shared `SECRET_KEY`.
 - Local writes made through the PowerSync client are queued and uploaded to the backend REST API via `JevesBackendConnector.uploadData()`.
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.
-- Conflict resolution: last-write-wins (acceptable for v1).
+- Conflict resolution: last-write-wins by default, with a per-key strategy registry for `user_preferences` (snooze floors use a non-regressing `maxTimestampValue` rule; list/set keys are provisioned for merge). See [SYNC.md](./SYNC.md) for the full conflict matrix, the tombstone invariant, and the PowerSync write-checkpoint behaviour.
 
 ## Platform I/O Adapters
 
@@ -323,6 +323,10 @@ The search screen lives at `/search` outside the `ShellRoute` (full-screen, no d
 ### Storage model
 
 All preference values are stored as JSON-encoded TEXT. A NULL value is a tombstone (treated as absent by `get`/`watch`). The `SyncedPreferences` value class provides a typed `get<T>(key)` accessor.
+
+### Conflict resolution
+
+Per-key conflict strategy is defined in `services/user_preferences_conflict.dart` — a `ConflictStrategy` registry (`lww` default, `maxTimestampValue` for snooze floors, `setMerge` provisioned for future list keys) with a pure `resolvePreferenceConflict` function. Deletion is a tombstone (present row, NULL value), never a physical removal. During normal reconciliation a server-absent row keeps the local value; the one residual wipe path is a backend-rejected upload (SYNC.md window 3), prevented by backend idempotency and surfaced in debug by the connector. The full matrix and the PowerSync reconciliation behaviour live in [SYNC.md](./SYNC.md).
 
 ### One-time migration
 
