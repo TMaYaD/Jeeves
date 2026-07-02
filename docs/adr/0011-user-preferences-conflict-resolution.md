@@ -1,4 +1,4 @@
-# ADR-0010: Per-key conflict resolution for `user_preferences`, with snooze floors departing from blanket LWW
+# ADR-0011: Per-key conflict resolution for `user_preferences`, with snooze floors departing from blanket LWW
 
 ## Status
 

@@ -83,7 +83,7 @@ Every current key, grouped by family:
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
-**Snooze arbitration departs deliberately from the blanket LWW default** — see [ADR-0010](./adr/0010-user-preferences-conflict-resolution.md).
+**Snooze arbitration departs deliberately from the blanket LWW default** — see [ADR-0011](./adr/0011-user-preferences-conflict-resolution.md).
 
 ## Sign-in migration
 

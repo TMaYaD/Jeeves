@@ -377,6 +377,43 @@ class GtdDatabase extends _$GtdDatabase {
         },
       );
 
+  /// Invalidates Drift stream queries reading the `todos` view (and, when
+  /// [includeTodoTags] is set, the `todo_tags` view) after a direct write to
+  /// that view, independent of the SQLite `changes()` row count of the write.
+  ///
+  /// In production `todos` / `tags` / `todo_tags` are PowerSync **views** with
+  /// INSTEAD OF triggers (see [powersyncSchema]). A Drift `UpdateStatement.write`
+  /// or `DeleteStatement.go` against a view reports `changes() == 0` — the
+  /// trigger body, not the view, is what actually mutates rows — so Drift's
+  /// built-in stream invalidation, which is gated on `rows > 0`, never fires.
+  /// That leaves the async `SqliteAsyncDriftConnection` bridge
+  /// (`PowerSyncDatabase.updates` → `handleTableUpdates`) as the *only* path
+  /// that refreshes view-backed watchers. When that bridge is momentarily
+  /// silent — observed on the first cold start of a new planning day, during
+  /// the initial-sync window (#342) — the Inbox / Next Actions lists and their
+  /// badges freeze until the app is restarted.
+  ///
+  /// Every `TodoDao` / `InboxDao` method that writes the `todos` view directly
+  /// (via `update(todos)…write(…)` / `delete(todos)…go()`) must call this right
+  /// after the write, giving Drift a second, in-process invalidation path so the
+  /// live lists never depend solely on the bridge. It is a harmless idempotent
+  /// re-run under `NativeDatabase` (tests), where the underlying write already
+  /// reported `rows > 0` and notified. Methods built on `customUpdate` /
+  /// `customInsert` (e.g. `markDone`, `setIntent`, `restore`) notify
+  /// unconditionally and need no extra call. Callers that also edit person tags
+  /// pass [includeTodoTags] so the `todo_tags`-backed watchers refresh too.
+  ///
+  /// The emitted [TableUpdate]s carry no [UpdateKind]: a null kind matches every
+  /// registered stream query regardless of insert/update/delete, so the same
+  /// call correctly serves update callers (`applyRouting`) and delete callers
+  /// (`InboxDao.deleteTodo`) without the caller having to thread the kind
+  /// through. Over-notifying a kind-filtered watcher would at worst cause a
+  /// redundant re-query; under-notifying is the bug we are fixing.
+  void notifyTodosViewWrite({bool includeTodoTags = false}) => notifyUpdates({
+        const TableUpdate('todos'),
+        if (includeTodoTags) const TableUpdate('todo_tags'),
+      });
+
   /// Runs [Migrator.addColumn] only when [table] is a real SQLite table.
   ///
   /// On production `todos` / `tags` / `todo_tags` are PowerSync-managed views
