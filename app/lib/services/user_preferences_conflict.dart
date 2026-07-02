@@ -167,18 +167,7 @@ ResolvedPreference _maxTimestampValue(
   // clear (and vice versa). Among two clears, keep the newer. The non-regress
   // rule below applies only between two *live* floors.
   if (local.isTombstone || server.isTombstone) {
-    if (local.isTombstone && server.isTombstone) {
-      return ResolvedPreference(value: null, updatedAt: _newer(local, server).updatedAt);
-    }
-    final live = local.isTombstone ? server : local;
-    final tombstone = local.isTombstone ? local : server;
-    // The clear wins only when it is at least as recent as the live write;
-    // otherwise the fresher re-snooze survives.
-    final tombstoneAt = tombstone.updatedAt ?? _epoch;
-    final liveAt = live.updatedAt ?? _epoch;
-    return tombstoneAt.isBefore(liveAt)
-        ? ResolvedPreference(value: live.value, updatedAt: live.updatedAt)
-        : ResolvedPreference(value: null, updatedAt: tombstone.updatedAt);
+    return _lww(local, server);
   }
   // Both live: the later "until" value wins so an active snooze floor never
   // regresses. Fall back to LWW if either value isn't a parseable timestamp.
