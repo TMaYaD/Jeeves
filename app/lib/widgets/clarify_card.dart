@@ -21,7 +21,9 @@ import '../database/gtd_database.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'clarify_shared_widgets.dart';
+import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
+import 'project_picker.dart';
 
 /// Distinguishes the inbox-clarify caller (always mirror title into
 /// `next_action_text` on Next/WaitingFor) from the re-clarify sub-flow on a
@@ -173,6 +175,27 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     );
   }
 
+  // Tag edits route through [TaskDetailNotifier], which owns the
+  // single-project invariant and user-scoped writes. None of these methods
+  // touches `todos.intent` or person-tag join rows, so the intent ⊥ delegate
+  // orthogonality invariant (ARCHITECTURE.md) is preserved structurally.
+  // Unlike the person-tag methods, context/project edits deliberately do NOT
+  // stamp `last_clarified_at` — the categorisation axes are not the clarified
+  // moment (matches task_detail_screen behaviour).
+  TaskDetailNotifier get _tagNotifier =>
+      ref.read(taskDetailNotifierProvider(widget.todoId));
+
+  Future<void> _saveAssignProject(String tagId) =>
+      _tagNotifier.assignProject(tagId);
+
+  Future<void> _saveClearProject() => _tagNotifier.clearProject();
+
+  Future<void> _saveAssignContext(String tagId) =>
+      _tagNotifier.assignContextTag(tagId);
+
+  Future<void> _saveRemoveContext(String tagId) =>
+      _tagNotifier.removeContextTag(tagId);
+
   Future<DateTime?> _pickDate(BuildContext context) {
     final now = DateTime.now();
     final candidate = _dueDate ?? now.add(const Duration(days: 1));
@@ -194,6 +217,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       return const Center(child: CircularProgressIndicator());
     }
     _initialiseFrom(todo);
+
+    // Tags are watched live so the pickers re-render on DB change; keeping a
+    // local mirror would go stale across the async write. Person tags are
+    // intentionally excluded here — they are edited via the Waiting For
+    // routing button (which opens PersonTagPickerSheet), never on this card.
+    final tagsAsync = ref.watch(taskTagsProvider(widget.todoId));
+    final allTags = tagsAsync.asData?.value ?? const <Tag>[];
+    final projectTags = allTags.where((t) => t.type == 'project').toList();
+    final projectTag = projectTags.isEmpty ? null : projectTags.first;
+    final contextTags = allTags.where((t) => t.type == 'context').toList();
 
     // Title is required to route to anything except Trash. Disable the
     // four committed routes; Trash stays enabled so the user can throw away
@@ -267,6 +300,26 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           textCapitalization: TextCapitalization.sentences,
           maxLines: 4,
           minLines: 2,
+        ),
+        const SizedBox(height: 20),
+
+        const ClarifyFieldLabel('TAGS'),
+        const SizedBox(height: 8),
+        // Project row — single-select; reuse ProjectPickerWidget so styling
+        // matches task_detail_screen.dart. Its "No project" state doubles as
+        // the optional-tag hint.
+        ProjectPickerWidget(
+          currentProjectTag: projectTag,
+          onAssign: (t) => unawaited(_saveAssignProject(t.id)),
+          onClear: () => unawaited(_saveClearProject()),
+        ),
+        const SizedBox(height: 12),
+        // Context row — multi-select; reuse ContextTagPickerWidget. Its
+        // "+ context" trailing affordance doubles as the optional-tag hint.
+        ContextTagPickerWidget(
+          assignedTags: contextTags,
+          onAssign: (t) => unawaited(_saveAssignContext(t.id)),
+          onRemove: (t) => unawaited(_saveRemoveContext(t.id)),
         ),
         const SizedBox(height: 20),
 

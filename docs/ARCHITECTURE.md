@@ -156,13 +156,15 @@ The router has a `redirect` callback only for SWS mode (redirect `/register` to 
 Tapping an inbox row navigates to `/inbox/:id/clarify` (`InboxClarifyScreen`), a focused, full-screen clarification flow that:
 
 1. Loads the todo from the local DB via `TodoDao.getTodo`.
-2. Shows the same editing UI as the planning wizard's `_ClarifyCard`: title, notes, energy level, time estimate, due date, and GTD routing buttons.
+2. Shows the same editing UI as the planning wizard's `_ClarifyCard`: title, notes, context/project tags, energy level, time estimate, due date, and GTD routing buttons.
 3. On any routing action (Next Action / Waiting For / Maybe / Done), calls the appropriate DAO method and then pops.
 4. "Skip" pops without touching the DB — the item remains in the inbox.
 
 The shared UI primitives (`ClarifyFieldLabel`, `ClarifyEnergyPicker`, `ClarifyEstimateChip`, `ClarifyDestinationButton`) live in `app/lib/widgets/clarify_shared_widgets.dart`. `InboxClarifyScreen` (the standalone full-screen flow) uses these primitives directly. The planning wizard's `InboxClarificationStep` and the periodic-review wizard's `ZeroInboxStep` both delegate to the shared `ClarifyStep` widget (`app/lib/widgets/ceremony/clarify_step.dart`) — literally the same class in both ceremonies. `ClarifyStep` wraps `ClarifyCard` (`app/lib/widgets/clarify_card.dart`) with inline loading/empty/completion branching, accepting ceremony-specific state (nav cursor, routings, callbacks) as constructor arguments with no hard-coded provider dependency. The completion view is the canonical `_InboxCleared` widget hard-coded inside `ClarifyStep` — the "Inbox is clear" frame is identical across ceremonies and is not parameterised. `ClarifyCard` also drives the periodic-review `Re-clarify…` sub-flow surfaced from the Waiting For / Next Actions / Someday-Maybe steps.
 
 `ClarifyCard` carries a `ClarifyMode` flag (`inbox` or `reclarify`). In `inbox` mode the card unconditionally mirrors the live title into `next_action_text` when the user routes to Next or Waiting For — fresh inbox items have no deliberate phrase to lose. In `reclarify` mode the mirror is guarded: the title is written only when `next_action_text` is null/empty, so a previously-written phrase is not clobbered by a re-clarification touch.
+
+The card's Tags section (above Energy) edits the **categorisation axes** only: a single project tag via `ProjectPickerWidget` and multiple context tags via `ContextTagPickerWidget` — the same pickers the task-detail screen uses. Both autosave through `TaskDetailNotifier` (`assignProject`/`clearProject`/`assignContextTag`/`removeContextTag`), which mutate only the `todo_tags` join table. Person tags are deliberately absent from the card: delegation is assigned exclusively through the Waiting For routing button's `PersonTagPickerSheet`, which writes intent + person tags atomically. Because context/project edits never touch `todos.intent` or person-tag join rows, the intent ⊥ delegate orthogonality invariant holds structurally — attaching a project tag to a `maybe` task leaves it `maybe`. Unlike the person-tag methods, these edits do not stamp `last_clarified_at`; the clarified moment is bound to the delegate axis, not categorisation.
 
 ### FocusModeNotifier (`providers/focus_session_provider.dart`)
 
