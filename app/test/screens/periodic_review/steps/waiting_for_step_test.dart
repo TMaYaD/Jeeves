@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
+import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/periodic_review/steps/waiting_for_step.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
@@ -66,21 +67,26 @@ Future<String> _insertWaitingForTodo(
 
 Widget _harness(
   GtdDatabase db, {
-  /// Todo IDs whose `taskDetailTodoProvider` should be overridden with a
-  /// static stream so the inner [ClarifyCard] (rendered by the `reclarify`
-  /// sub-flow) does not subscribe to drift's `watchTodo` — that
-  /// subscription installs a recurring timer that never settles in
-  /// `pumpAndSettle` and trips the post-test "Timer is still pending"
-  /// invariant.
+  /// Todo IDs whose todo/tag providers should be overridden with static
+  /// streams so the inner [ClarifyCard] (rendered by the `reclarify` sub-flow)
+  /// does not subscribe to drift's `watchTodo` / tag `watch()` queries — those
+  /// subscriptions install a timer that never settles in `pumpAndSettle` and
+  /// trips the post-test "Timer is still pending" invariant.
   List<String> reclarifyIds = const [],
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
-      for (final id in reclarifyIds)
+      for (final id in reclarifyIds) ...[
         taskDetailTodoProvider(id).overrideWith((ref) async* {
           yield await db.todoDao.getTodo(id);
         }),
+        taskTagsProvider(id).overrideWith((_) => Stream.value(const <Tag>[])),
+      ],
+      if (reclarifyIds.isNotEmpty) ...[
+        contextTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+        projectTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+      ],
     ],
     child: const MaterialApp(
       home: Scaffold(body: WaitingForStep()),

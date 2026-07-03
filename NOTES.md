@@ -348,3 +348,7 @@
 ## 2026-06-10
 - Reverting `ListItemReviewStep` (inlining the 3-way switch) left CONTEXT.md and ARCHITECTURE.md still describing it as a shipped primitive — caught only by grepping doc references against the code at squash time. Doc sync has to ride the reverting commit, not the extracting one.
 - The alpha→dev flavor rename (5f0024a) missed the Makefile: `make android` / `make seeker` still pass `--flavor alpha` and fail on main. Spun off as a standalone fix.
+
+## 2026-07-02
+- Wiring context/project tag editing into `ClarifyCard` (#304): a live drift `watch()` stream in a widget test leaves a pending `StreamQueryStore.markAsClosed` timer that flutter_test rejects with "A Timer is still pending after the widget tree was disposed" — even with `db.close()` in tearDown. Fix: feed `taskTagsProvider` from a `StreamController` the test owns (seed before pump, re-emit real DB state after each mutation, close in tearDown). Also, re-emitting mid-test needs `pumpAndSettle` (not a single `pump`) for the async stream event to reach the provider before asserting.
+- The added Tags section pushed the PROCESS TO bar below the ListView's initial viewport; a lazy ListView doesn't build off-screen children, so `find.text('Next Action')` returned nothing until the routing tests scrolled it into view first.

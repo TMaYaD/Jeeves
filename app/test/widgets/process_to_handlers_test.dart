@@ -80,9 +80,14 @@ Widget _harness(
       // Use a single-value stream so drift's StreamQueryStore (which leaves
       // a pending timer behind on dispose) is not subscribed to in tests.
       personTagsProvider.overrideWith((ref) => Stream.value(personTags)),
-      // The reclarify sub-flow renders a [ClarifyCard] which watches this
-      // provider; static stream avoids drift's StreamQuery timer.
+      // The reclarify sub-flow renders a [ClarifyCard] which watches these
+      // providers (todo + tag list + the pickers' own tag catalogues);
+      // static streams avoid drift's StreamQuery timer.
       taskDetailTodoProvider(todo.id).overrideWith((_) => Stream.value(todo)),
+      taskTagsProvider(todo.id)
+          .overrideWith((_) => Stream.value(const <Tag>[])),
+      contextTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+      projectTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
     ],
     child: MaterialApp(
       home: Scaffold(

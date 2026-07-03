@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
+import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/periodic_review/steps/next_step.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
@@ -49,19 +50,25 @@ Future<String> _insertNextActionTodo(
 
 Widget _harness(
   GtdDatabase db, {
-  /// Override `taskDetailTodoProvider` for the listed IDs so the inner
-  /// ClarifyCard rendered by the `reclarify` sub-flow does not subscribe
-  /// to drift's `watchTodo` (whose recurring timer never settles in
-  /// `pumpAndSettle`).
+  /// Override the todo/tag providers for the listed IDs so the inner
+  /// ClarifyCard rendered by the `reclarify` sub-flow does not subscribe to
+  /// drift's `watchTodo` or tag `watch()` queries (whose timers never settle
+  /// in `pumpAndSettle`).
   List<String> reclarifyIds = const [],
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
-      for (final id in reclarifyIds)
+      for (final id in reclarifyIds) ...[
         taskDetailTodoProvider(id).overrideWith((ref) async* {
           yield await db.todoDao.getTodo(id);
         }),
+        taskTagsProvider(id).overrideWith((_) => Stream.value(const <Tag>[])),
+      ],
+      if (reclarifyIds.isNotEmpty) ...[
+        contextTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+        projectTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+      ],
     ],
     child: const MaterialApp(
       home: Scaffold(body: NextStep()),
