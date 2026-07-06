@@ -60,7 +60,7 @@ dependencies:
   # which conflicts with file_picker 11.x (win32 ^5.9). Unblocks once we move
   # to file_picker 12 stable. See .github/dependabot.yml.
   geolocator: ^14.0.2
-  geocoding: ^4.0.0
+  geocoding: ^5.0.0
 
   # Voice / Speech
   speech_to_text: ^7.4.0
