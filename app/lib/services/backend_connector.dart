@@ -118,10 +118,13 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
           case UploadErrorAction.retry:
             rethrow; // Transient — let PowerSync retry the whole batch.
           case UploadErrorAction.discard:
+            // Safe metadata only: CrudEntry.toString() interpolates the full
+            // opData payload, and debugPrint emits in profile/release builds.
             debugPrint(
-              'JevesBackendConnector: discarding $entry '
-              '(status ${e.response?.statusCode}) — the remote row is already '
-              'gone; the next pull converges local state',
+              'JevesBackendConnector: discarding ${entry.table}/${entry.id} '
+              '${entry.op.toJson()} (status ${e.response?.statusCode}) — the '
+              'remote row is already gone; the next pull converges local '
+              'state',
             );
             continue;
           case UploadErrorAction.deadLetter:
@@ -144,9 +147,14 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   Future<void> _recordDeadLetter(ps.CrudEntry entry, DioException e) async {
     final status = e.response?.statusCode;
     final body = _encodeResponseBody(e.response?.data);
+    // Safe metadata only: CrudEntry.toString() interpolates the full opData
+    // payload, response bodies can echo it back (e.g. Pydantic 422 details),
+    // and debugPrint emits in profile/release builds. Payload and body are
+    // persisted in sync_dead_letters instead — that row is the diagnostic log.
     debugPrint(
-      'JevesBackendConnector: dead-lettering $entry (status $status)'
-      '${body == null ? '' : ' — response body: $body'}',
+      'JevesBackendConnector: dead-lettering ${entry.table}/${entry.id} '
+      '${entry.op.toJson()} (status $status); payload and response body '
+      'recorded in sync_dead_letters',
     );
     // Dead-lettering a user_preferences write still leaves the #306 read-side
     // wipe window: the payload is preserved and the failure surfaced, but the
