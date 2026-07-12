@@ -365,3 +365,7 @@
 ## 2026-07-02
 - Wiring context/project tag editing into `ClarifyCard` (#304): a live drift `watch()` stream in a widget test leaves a pending `StreamQueryStore.markAsClosed` timer that flutter_test rejects with "A Timer is still pending after the widget tree was disposed" — even with `db.close()` in tearDown. Fix: feed `taskTagsProvider` from a `StreamController` the test owns (seed before pump, re-emit real DB state after each mutation, close in tearDown). Also, re-emitting mid-test needs `pumpAndSettle` (not a single `pump`) for the async stream event to reach the provider before asserting.
 - The added Tags section pushed the PROCESS TO bar below the ListView's initial viewport; a lazy ListView doesn't build off-screen children, so `find.text('Next Action')` returned nothing until the routing tests scrolled it into view first.
+
+## 2026-07-12 (issue #387)
+- Audited every `*Update` schema for the explicit-null-on-NOT-NULL 500 (#385's `clarified` shape): fixed `TodoUpdate.title/intent/time_spent_minutes`, `TagUpdate.name/type`, `UserPreferenceUpdate.updated_at` with one shared `_reject_explicit_null` before-validator (Pydantic skips before-validators for unset fields, so omission still means "no update"). Nullable columns (`notes`, `color`, `value` tombstone, …) deliberately keep null = "clear this value".
+- Audit leftover, not fixed here: `PATCH /todos/{id}` with `{"tags": null}` doesn't 500 — `resolve_tags(None)` returns `[]`, so null silently means "remove all tags", same as `[]`. Semantic wart; needs its own issue if we want it to be a 422.
