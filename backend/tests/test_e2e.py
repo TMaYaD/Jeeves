@@ -118,10 +118,18 @@ async def test_gtd_inbox_capture_and_process(client: AsyncClient) -> None:
     reg = await client.post("/user", json={"email": "gtd-inbox@example.com", "password": "secret"})
     headers = auth_header(reg.json()["access_token"])
 
-    # 1. Capture as next_action (inbox is Flutter-only via clarified column)
+    # 1. Capture into the Inbox — the connector uploads the local row with
+    #    clarified=false; the server must persist it as-is (#380), otherwise
+    #    the next checkpoint download flips the local row and the capture
+    #    vanishes from the Inbox.
     create = await client.post(
         "/todos/",
-        json={"title": "Buy paint", "state": "next_action", "capture_source": "manual"},
+        json={
+            "title": "Buy paint",
+            "state": "next_action",
+            "capture_source": "manual",
+            "clarified": False,
+        },
         headers=headers,
     )
     assert create.status_code == 201
@@ -129,16 +137,24 @@ async def test_gtd_inbox_capture_and_process(client: AsyncClient) -> None:
     todo_id = todo["id"]
     assert todo["state"] == "next_action"
     assert todo["capture_source"] == "manual"
+    assert todo["clarified"] is False
     assert todo["energy_level"] is None
     assert todo["time_estimate"] is None
 
-    # 2. Enrich with GTD fields
+    # 1b. The capture stays unclarified on re-read — the value the next
+    #     checkpoint would replicate back to the client.
+    reread = await client.get(f"/todos/{todo_id}", headers=headers)
+    assert reread.status_code == 200
+    assert reread.json()["clarified"] is False
+
+    # 2. Clarify and enrich with GTD fields (processes it out of the Inbox)
     patch = await client.patch(
         f"/todos/{todo_id}",
         json={
             "energy_level": "medium",
             "time_estimate": 30,
             "state": "next_action",
+            "clarified": True,
             "tags": [{"name": "HomeReno", "type": "project"}],
         },
         headers=headers,
@@ -148,6 +164,7 @@ async def test_gtd_inbox_capture_and_process(client: AsyncClient) -> None:
     assert enriched["state"] == "next_action"
     assert enriched["energy_level"] == "medium"
     assert enriched["time_estimate"] == 30
+    assert enriched["clarified"] is True
 
     project_tags = [t for t in enriched["tags"] if t["type"] == "project"]
     assert len(project_tags) == 1
@@ -159,6 +176,7 @@ async def test_gtd_inbox_capture_and_process(client: AsyncClient) -> None:
     fetched = get.json()
     assert fetched["capture_source"] == "manual"
     assert fetched["state"] == "next_action"
+    assert fetched["clarified"] is True
     assert any(t["name"] == "HomeReno" and t["type"] == "project" for t in fetched["tags"])
 
 

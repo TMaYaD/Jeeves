@@ -1,3 +1,6 @@
+from datetime import datetime
+from uuid import uuid4
+
 import jwt
 import pytest
 from httpx import AsyncClient
@@ -5,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.todos.models import TodoTag
+from app.todos.models import Todo, TodoTag
 from tests.conftest import auth_header, register
 
 
@@ -268,3 +271,229 @@ async def test_todo_tags_user_id_populated_on_all_write_paths(
     assert len(rows) >= 1  # PATCH replaced the original set; at least the new tag + the 2 patched
     for row in rows:
         assert row.user_id == user_id, f"junction row {row.todo_id},{row.tag_id} has wrong user_id"
+
+
+# ── Sync fidelity: client-state columns round-trip (issue #380) ────────────────
+
+
+def _assert_instant(value: str, expected_iso: str) -> None:
+    """Assert a returned timestamp matches the expected instant.
+
+    Production Postgres (TIMESTAMPTZ) returns timezone-aware values that
+    compare as instants.  The SQLite test harness strips the offset on a
+    DB re-read and hands back the naive wall-clock exactly as sent, so a
+    naive value is compared against the expectation's wall-clock instead."""
+    returned = datetime.fromisoformat(value)
+    expected = datetime.fromisoformat(expected_iso)
+    if returned.tzinfo is None:
+        assert returned == expected.replace(tzinfo=None), (value, expected_iso)
+    else:
+        assert returned == expected, (value, expected_iso)
+
+
+@pytest.mark.asyncio
+async def test_create_persists_clarified_false(client: AsyncClient) -> None:
+    """POST /todos/ must persist a client-supplied clarified=false.  Before
+    #380 the field was silently dropped, the model default (true) won, and
+    the next sync checkpoint flipped the local row — the capture vanished
+    from the Inbox while staying searchable."""
+    token = await register(client, "clarified-false@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/todos/",
+        json={"title": "Inbox capture", "clarified": False},
+        headers=headers,
+    )
+    assert create.status_code == 201, create.text
+    assert create.json()["clarified"] is False
+
+    get = await client.get(f"/todos/{create.json()['id']}", headers=headers)
+    assert get.status_code == 200
+    assert get.json()["clarified"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_accepts_sqlite_integer_clarified(client: AsyncClient) -> None:
+    """PowerSync opData carries booleans as SQLite integers (0/1) — the exact
+    shape a connector PUT uploads.  The schema must coerce them, not 422 (a
+    422 would poison the CRUD queue via the #305 fatal-drop path)."""
+    token = await register(client, "clarified-int@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/todos/",
+        json={"title": "Integer-boolean capture", "clarified": 0},
+        headers=headers,
+    )
+    assert create.status_code == 201, create.text
+    assert create.json()["clarified"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_defaults_clarified_true(client: AsyncClient) -> None:
+    """Omitting clarified keeps REST semantics: an API-created todo is born
+    clarified (Inbox membership is an explicit client decision)."""
+    token = await register(client, "clarified-default@example.com")
+    headers = auth_header(token)
+
+    create = await client.post("/todos/", json={"title": "Plain REST"}, headers=headers)
+    assert create.status_code == 201
+    assert create.json()["clarified"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_idempotent_retry_keeps_clarified(client: AsyncClient) -> None:
+    """A retried POST with the same client id returns the existing row with
+    its original clarified value.  The retry omits clarified entirely — if
+    the server created a fresh row instead of deduplicating, the schema
+    default (true) would leak through and fail the assertion."""
+    token = await register(client, "clarified-retry@example.com")
+    headers = auth_header(token)
+    todo_id = str(uuid4())
+
+    first = await client.post(
+        "/todos/",
+        json={"id": todo_id, "title": "Inbox capture", "clarified": False},
+        headers=headers,
+    )
+    assert first.status_code == 201
+
+    retry = await client.post(
+        "/todos/", json={"id": todo_id, "title": "Inbox capture"}, headers=headers
+    )
+    assert retry.status_code == 201
+    assert retry.json()["id"] == todo_id
+    assert retry.json()["clarified"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_clarified_roundtrip(client: AsyncClient) -> None:
+    """PATCH must persist clarified in both directions: false→true is the
+    clarify flow; true→false is move-back-to-Inbox.  Dropping it on PATCH
+    would be the inverse of #380 — a clarified task bouncing back into the
+    Inbox on the next checkpoint."""
+    token = await register(client, "clarified-patch@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/todos/",
+        json={"title": "Inbox capture", "clarified": False},
+        headers=headers,
+    )
+    todo_id = create.json()["id"]
+
+    clarify = await client.patch(f"/todos/{todo_id}", json={"clarified": True}, headers=headers)
+    assert clarify.status_code == 200
+    assert clarify.json()["clarified"] is True
+
+    back_to_inbox = await client.patch(
+        f"/todos/{todo_id}", json={"clarified": False}, headers=headers
+    )
+    assert back_to_inbox.status_code == 200
+    assert back_to_inbox.json()["clarified"] is False
+
+    get = await client.get(f"/todos/{todo_id}", headers=headers)
+    assert get.json()["clarified"] is False
+
+
+@pytest.mark.asyncio
+async def test_patch_explicit_null_clarified_is_422(client: AsyncClient) -> None:
+    """clarified is NOT NULL in the DB: PATCH {"clarified": null} must be
+    rejected at validation (422), not surface as a commit-time
+    IntegrityError.  Omitting the field entirely remains "no update"."""
+    token = await register(client, "clarified-null@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/todos/",
+        json={"title": "Inbox capture", "clarified": False},
+        headers=headers,
+    )
+    todo_id = create.json()["id"]
+
+    null_patch = await client.patch(f"/todos/{todo_id}", json={"clarified": None}, headers=headers)
+    assert null_patch.status_code == 422
+
+    get = await client.get(f"/todos/{todo_id}", headers=headers)
+    assert get.json()["clarified"] is False
+
+
+@pytest.mark.asyncio
+async def test_connector_shaped_payload_roundtrips_client_state(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Standing tripwire for the #380 audit: a POST shaped exactly like a
+    PowerSync connector PUT — every client-state column, SQLite integer
+    booleans, Drift space-before-offset timestamps — must persist verbatim.
+    Any column silently dropped here defaults on the server and gets
+    replicated back over the local value on the next checkpoint download.
+    When adding a column to the Drift Todos table, add it to TodoCreate,
+    TodoUpdate, and this payload (see docs/SYNC.md § todos upload contract)."""
+    token = await register(client, "connector-put@example.com")
+    headers = auth_header(token)
+    todo_id = str(uuid4())
+
+    payload = {
+        "id": todo_id,
+        "title": "Connector-shaped capture",
+        "notes": "raw note",
+        "priority": 2,
+        "due_date": "2026-07-20T00:00:00.000 +05:30",
+        "created_at": "2026-07-10T09:15:00.000 +05:30",
+        "updated_at": "2026-07-11T18:30:00.000Z",
+        "done_at": None,
+        "clarified": 0,
+        "intent": "maybe",
+        "time_estimate": 15,
+        "energy_level": "low",
+        "capture_source": "share_sheet",
+        "location_id": None,
+        "user_id": "spoofed-user-id",  # server-owned: must be ignored
+        "last_clarified_at": "2026-07-11T18:30:00.000Z",
+        "time_spent_minutes": 5,
+        "next_action_text": "Sort into a project",
+        "last_next_action_completion_at": "2026-07-09T12:00:00.000 +05:30",
+    }
+    create = await client.post("/todos/", json=payload, headers=headers)
+    assert create.status_code == 201, create.text
+    created = create.json()
+
+    # A field silently dropped by the schema surfaces on the create response
+    # as the server default.
+    _assert_instant(created["due_date"], "2026-07-20T00:00:00+05:30")
+    _assert_instant(created["created_at"], "2026-07-10T09:15:00+05:30")
+    _assert_instant(created["updated_at"], "2026-07-11T18:30:00+00:00")
+    _assert_instant(created["last_clarified_at"], "2026-07-11T18:30:00+00:00")
+    _assert_instant(created["last_next_action_completion_at"], "2026-07-09T12:00:00+05:30")
+
+    # Re-read via GET: all client state must survive a real DB round-trip.
+    get = await client.get(f"/todos/{todo_id}", headers=headers)
+    assert get.status_code == 200
+    fetched = get.json()
+
+    assert fetched["title"] == "Connector-shaped capture"
+    assert fetched["notes"] == "raw note"
+    assert fetched["priority"] == 2
+    assert fetched["done_at"] is None
+    assert fetched["clarified"] is False
+    assert fetched["intent"] == "maybe"
+    assert fetched["time_estimate"] == 15
+    assert fetched["energy_level"] == "low"
+    assert fetched["capture_source"] == "share_sheet"
+    assert fetched["time_spent_minutes"] == 5
+    assert fetched["next_action_text"] == "Sort into a project"
+    _assert_instant(fetched["due_date"], "2026-07-20T00:00:00+05:30")
+    _assert_instant(fetched["created_at"], "2026-07-10T09:15:00+05:30")
+    _assert_instant(fetched["updated_at"], "2026-07-11T18:30:00+00:00")
+    _assert_instant(fetched["last_clarified_at"], "2026-07-11T18:30:00+00:00")
+    _assert_instant(fetched["last_next_action_completion_at"], "2026-07-09T12:00:00+05:30")
+
+    # Ownership comes from the JWT, not the payload's spoofed user_id; the
+    # unused location_id stays NULL.  Asserted straight off the DB row since
+    # TodoOut exposes neither column.
+    claims = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    row = (await db.execute(select(Todo).where(Todo.id == todo_id))).scalar_one()
+    assert row.user_id == claims["sub"]
+    assert row.user_id != "spoofed-user-id"
+    assert row.location_id is None

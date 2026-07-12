@@ -65,15 +65,24 @@ async def create_todo(
             return existing
     todo = Todo(
         **({"id": body.id} if body.id is not None else {}),
+        # Only pass created_at when the client supplied it (offline captures
+        # keep their true capture time); otherwise the server default stamps it.
+        **({"created_at": body.created_at} if body.created_at is not None else {}),
         title=body.title,
         notes=body.notes,
         done_at=body.done_at,
+        clarified=body.clarified,
+        intent=body.intent,
         priority=body.priority,
         due_date=body.due_date,
         time_estimate=body.time_estimate,
         energy_level=body.energy_level,
         capture_source=body.capture_source,
         time_spent_minutes=body.time_spent_minutes,
+        last_clarified_at=body.last_clarified_at,
+        next_action_text=body.next_action_text,
+        last_next_action_completion_at=body.last_next_action_completion_at,
+        updated_at=body.updated_at,
         user_id=current_user.id,
     )
     db.add(todo)
@@ -135,6 +144,12 @@ async def update_todo(
         old_person_ids = {t.id for t in old_person_tags}
         new_person_ids = {t.id for t in new_person_tags}
         if old_person_ids != new_person_ids:
+            # The person-tag change is itself a clarifying micro-act; the
+            # server-computed stamp wins over any client-sent value, which
+            # would otherwise overwrite it in the setattr loop below.  (The
+            # sync connector never sends `tags` in a PATCH, so this branch
+            # only affects direct REST callers.)
+            update_data.pop("last_clarified_at", None)
             await db.execute(
                 sa.text("UPDATE todos SET last_clarified_at = now() WHERE id = :id"),
                 {"id": todo.id},
