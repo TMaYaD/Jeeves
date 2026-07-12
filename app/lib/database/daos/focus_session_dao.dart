@@ -61,6 +61,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           focusSessionId: Value(newId),
           taskId: Value(taskIds[i]),
           position: Value(i),
+          userId: Value(userId),
         ));
       }
     });

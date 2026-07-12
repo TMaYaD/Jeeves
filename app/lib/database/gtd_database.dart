@@ -374,9 +374,38 @@ class GtdDatabase extends _$GtdDatabase {
             await _addColumnIfTable(m, todos, todos.nextActionText);
             await _addColumnIfTable(m, todos, todos.lastNextActionCompletionAt);
           }
-          // Version 22 is reserved by #381 (focus_session_tasks user_id);
-          // this branch must land after it. If #381 is dropped, renumber the
-          // step below (and schemaVersion) down to 22.
+          if (from < 22) {
+            // Add denormalized user_id to focus_session_tasks (issue #381) so
+            // PowerSync can bucket junction rows per user without a JOIN.
+            // In production this table is a PowerSync-managed view (the column
+            // arrives via powersyncSchema); this block only runs on real tables
+            // (NativeDatabase path: tests and fresh local DBs).
+            // userId is declared non-nullable, so _addColumnIfTable would emit
+            // ALTER TABLE ... ADD COLUMN user_id TEXT NOT NULL, which SQLite
+            // rejects on populated tables (no DEFAULT clause) — add as nullable
+            // via raw SQL and backfill from the parent session instead (same
+            // approach as the v17 id column).
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'focus_session_tasks'",
+            ).get();
+            if (rows.isNotEmpty &&
+                rows.first.read<String>('type') == 'table') {
+              final cols = await customSelect(
+                'PRAGMA table_info(focus_session_tasks)',
+              ).get();
+              if (!cols.any((r) => r.read<String>('name') == 'user_id')) {
+                await customStatement(
+                  'ALTER TABLE focus_session_tasks ADD COLUMN user_id TEXT',
+                );
+                await customStatement(
+                  'UPDATE focus_session_tasks SET user_id = ('
+                  '  SELECT fs.user_id FROM focus_sessions fs '
+                  '  WHERE fs.id = focus_session_tasks.focus_session_id'
+                  ') WHERE user_id IS NULL',
+                );
+              }
+            }
+          }
           if (from < 23) {
             // Local-only dead-letter table for non-retryable upload failures
             // (issue #305). Not a PowerSync view — plain CREATE TABLE is safe

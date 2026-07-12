@@ -160,10 +160,20 @@ class FocusSessionTask(Base):
         ),
     )
 
+    # PowerSync-assigned UUID identifying the synced row.  NULL for server-side
+    # inserts; PostgreSQL fills this via the server default added in migration
+    # 0025 (gen_random_uuid()).  SQLite test rows stay NULL.
+    id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     focus_session_id: Mapped[str] = mapped_column(ForeignKey("focus_sessions.id"), primary_key=True)
     task_id: Mapped[str] = mapped_column(ForeignKey("todos.id"), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     disposition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Denormalized from focus_sessions.user_id so PowerSync can filter junction
+    # rows by bucket parameter (see migration 0025 and sync-config.yaml).  Set
+    # explicitly at every write call site.
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
 
 class TimeLog(Base):

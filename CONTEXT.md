@@ -420,7 +420,7 @@ The replication engine used by Jeeves — a self-hosted `journeyapps/powersync-s
 _Avoid_: (none — PowerSync is the canonical name for the current engine)
 
 **Sync Shape** *(one of the seven replicated data subsets)*:
-The schema definition of a subset of model data that replicates per user — specifies which rows belong in the user's replication stream and how they are filtered. The current seven Sync Shapes: `todos`, `tags`, `todo_tags`, `time_logs`, `focus_sessions`, `focus_session_tasks`, `user_preferences`. Six are filtered by `user_id` directly; `focus_session_tasks` joins through `focus_sessions` since it carries no `user_id` of its own.
+The schema definition of a subset of model data that replicates per user — specifies which rows belong in the user's replication stream and how they are filtered. The current seven Sync Shapes: `todos`, `tags`, `todo_tags`, `time_logs`, `focus_sessions`, `focus_session_tasks`, `user_preferences`. All seven are filtered by `user_id` directly; the junction tables (`todo_tags`, `focus_session_tasks`) carry a denormalized `user_id` for this purpose, since PowerSync forbids JOINs in bucket data queries.
 _Avoid_: Sync rule (PowerSync's internal term), Replication shape, Sync schema
 
 **Bucket** *(the runtime replication unit)*:
