@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-07-12 (issue #381 — focus_session_tasks bucket JOIN fatally broke the replicator)
+- The server `focus_session_tasks` table lacked not only `user_id` but also the PowerSync-required `id` column (the client added it in Drift v17; the server never did) — Alembic 0025 adds both, mirroring 0006+0008 for `todo_tags`. Also: `infra/dokku/deploy-powersync.sh`'s embedded sync-rules heredoc was stale at 3 buckets vs sync-config.yaml's 7, despite its "must stay in lock-step" contract — brought in line; the duplication goes away with #201.
+- Fixing the red cloud unmasks a pre-existing upload gap: `JevesBackendConnector.uploadData()` has no case for `focus_sessions`/`focus_session_tasks`/`time_logs`, so a synced user running a focus session will jam the CRUD upload queue. Needs a follow-up issue for the upload path (endpoints + connector cases).
+
 ## 2026-07-01 (issue #306 — user_preferences conflict resolution)
 - PowerSync's write-checkpoint holds pending/uploaded CRUD mutations over the synced view (windows 1–2 in docs/SYNC.md), so plain LWW `user_preferences` keys don't need a bespoke download-arbitration pass; the residual wipe risk is window 3 (a fatal `4xx` drops the entry, then the pull deletes the local row). Production prevention of window 3 depends on backend idempotency/permissiveness so a legitimate write never `4xx`s; the loud-in-debug assert in `backend_connector.dart` only *detects* such a drop during development, it does not prevent the wipe in release.
 - Snooze `*_snoozed_until` keys use `maxTimestampValue` (between two live values the later *value* wins; a clear-tombstone vs a live value is plain LWW on `updated_at` so a later re-snooze survives a stale clear), deliberately departing from blanket LWW so a stale write can't regress an active snooze floor — ADR-0011.

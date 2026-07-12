@@ -86,18 +86,21 @@ replication:
       slot_name: powersync_slot
 
 # --- Sync rules ---------------------------------------------------------------
-# Three user-scoped buckets — todos, tags, and todo_tags.
+# Seven user-scoped buckets — todos, tags, todo_tags, time_logs,
+# focus_sessions, focus_session_tasks, and user_preferences.
 #
 # The parameter query below relies on the JWT carrying a `user_id` claim —
 # `token_parameters.user_id` is read directly and no users-table lookup is
 # required.
 #
-# todo_tags carries a denormalized `user_id` column (migration 0008) following
-# PowerSync's "Denormalize Foreign Key onto Child Table" pattern for many-to-
-# many join tables [1], so the junction can be filtered per-user without the
-# JOINs that PowerSync rejects in parameter buckets.  The SELECT lists columns
-# explicitly because PowerSync manages `id` itself for the junction table and
-# declaring it on the client would duplicate the column.
+# Both junction tables (todo_tags, focus_session_tasks) carry a denormalized
+# `user_id` column (migrations 0008 and 0025) following PowerSync's
+# "Denormalize Foreign Key onto Child Table" pattern for many-to-many join
+# tables [1] — PowerSync rejects JOINs in bucket data queries as a fatal
+# sync-rules error ("Must SELECT from a single table"), which aborts the
+# whole config.  Their SELECTs list columns explicitly because PowerSync
+# manages `id` itself for junction tables and declaring it on the client
+# would duplicate the column.
 #
 # [1] https://docs.powersync.com/sync/rules/many-to-many-join-tables
 sync_config:
@@ -120,6 +123,31 @@ sync_config:
           - SELECT token_parameters.user_id AS user_id
         data:
           - SELECT id, todo_id, tag_id, user_id FROM todo_tags WHERE user_id = bucket.user_id
+
+      by_user_time_logs:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM time_logs WHERE user_id = bucket.user_id
+
+      by_user_focus_sessions:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM focus_sessions WHERE user_id = bucket.user_id
+
+      by_user_focus_session_tasks:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT id, focus_session_id, task_id, position, disposition, user_id
+            FROM focus_session_tasks WHERE user_id = bucket.user_id
+
+      by_user_preferences:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM user_preferences WHERE user_id = bucket.user_id
 
 # --- Client auth --------------------------------------------------------------
 # Validate JWTs signed by the backend using the shared secret.

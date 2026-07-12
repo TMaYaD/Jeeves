@@ -539,6 +539,55 @@ void main() {
       expect(colNames, containsAll(['next_action_text', 'last_next_action_completion_at']));
     });
 
+    test(
+        'v21→v22 migration: user_id added to focus_session_tasks and '
+        'backfilled from the parent focus_sessions row', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a v21 database: focus_session_tasks without a user_id column.
+      await db.customStatement('DROP TABLE IF EXISTS focus_session_tasks');
+      await db.customStatement(
+        'CREATE TABLE focus_session_tasks ('
+        '  id TEXT,'
+        '  focus_session_id TEXT NOT NULL,'
+        '  task_id TEXT NOT NULL,'
+        '  position INTEGER NOT NULL,'
+        '  disposition TEXT,'
+        '  PRIMARY KEY (focus_session_id, task_id)'
+        ')',
+      );
+
+      // Seed a parent session and a pre-migration junction row.
+      await db.customStatement(
+        "INSERT INTO focus_sessions (id, user_id, started_at) "
+        "VALUES ('session1', '$_userId', '2026-07-12T00:00:00.000Z')",
+      );
+      await db.customStatement(
+        "INSERT INTO focus_session_tasks (id, focus_session_id, task_id, position) "
+        "VALUES ('fst1', 'session1', 'task1', 0)",
+      );
+
+      // Drive the v22 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 21, 22);
+
+      // The user_id column must now exist.
+      final cols = await db
+          .customSelect('PRAGMA table_info(focus_session_tasks)')
+          .get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames, contains('user_id'));
+
+      // Existing rows must be backfilled from the parent session.
+      final rows = await db.customSelect(
+        'SELECT user_id FROM focus_session_tasks WHERE id = ?',
+        variables: [Variable.withString('fst1')],
+      ).get();
+      expect(rows.length, 1);
+      expect(rows.first.read<String?>('user_id'), _userId);
+    });
+
     test('v19→v20 migration: user_preferences table created with UNIQUE(user_id, key)',
         () async {
       final db = _openInMemory();
