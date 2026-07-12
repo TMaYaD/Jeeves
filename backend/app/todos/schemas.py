@@ -178,6 +178,18 @@ class TodoUpdate(BaseModel):
         _normalise_drift_iso
     )
 
+    @field_validator("clarified", mode="before")
+    @classmethod
+    def reject_null_clarified(cls, v: object) -> object:
+        # clarified is NOT NULL in the DB, so an explicit null in the PATCH
+        # body would surface as a commit-time IntegrityError (500) instead of
+        # a 422.  Omission never reaches this validator — Pydantic skips
+        # before-validators for defaulted fields — so exclude_unset semantics
+        # ("field absent = no update") are preserved.
+        if v is None:
+            raise ValueError("clarified cannot be null; omit the field to leave it unchanged")
+        return v
+
     @field_validator("intent")
     @classmethod
     def validate_intent(cls, v: str | None) -> str | None:

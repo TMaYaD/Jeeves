@@ -398,6 +398,28 @@ async def test_patch_clarified_roundtrip(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_patch_explicit_null_clarified_is_422(client: AsyncClient) -> None:
+    """clarified is NOT NULL in the DB: PATCH {"clarified": null} must be
+    rejected at validation (422), not surface as a commit-time
+    IntegrityError.  Omitting the field entirely remains "no update"."""
+    token = await register(client, "clarified-null@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/todos/",
+        json={"title": "Inbox capture", "clarified": False},
+        headers=headers,
+    )
+    todo_id = create.json()["id"]
+
+    null_patch = await client.patch(f"/todos/{todo_id}", json={"clarified": None}, headers=headers)
+    assert null_patch.status_code == 422
+
+    get = await client.get(f"/todos/{todo_id}", headers=headers)
+    assert get.json()["clarified"] is False
+
+
+@pytest.mark.asyncio
 async def test_connector_shaped_payload_roundtrips_client_state(
     client: AsyncClient, db: AsyncSession
 ) -> None:
