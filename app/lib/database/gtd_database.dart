@@ -416,13 +416,17 @@ class GtdDatabase extends _$GtdDatabase {
       );
 
   /// Maximum retained rows in `sync_dead_letters`; [recordSyncDeadLetter]
-  /// prunes oldest-first beyond this so the table cannot grow unbounded.
+  /// prunes least-recently-occurred-first beyond this so the table cannot
+  /// grow unbounded.
   // not configurable: bounded diagnostic buffer, not user-facing behaviour.
   static const int syncDeadLetterCap = 200;
 
   /// Record a non-retryable upload failure (see
-  /// `JevesBackendConnector.classifyUploadError`) and prune the oldest rows
-  /// beyond [syncDeadLetterCap].
+  /// `JevesBackendConnector.classifyUploadError`) and prune the rows with the
+  /// stalest last occurrence (`createdAt`, id as tie-breaker) beyond
+  /// [syncDeadLetterCap] — a failure that keeps repeating is refreshed by the
+  /// upsert below and must outlive older one-off failures, so pruning cannot
+  /// go by insertion order.
   ///
   /// Idempotent per failure: a repeat of the same (table, row, op, status) —
   /// e.g. a batch retried after a partial failure re-uploading an entry that
@@ -463,7 +467,10 @@ class GtdDatabase extends _$GtdDatabase {
       );
       final keepNewest = selectOnly(syncDeadLetters)
         ..addColumns([syncDeadLetters.id])
-        ..orderBy([OrderingTerm.desc(syncDeadLetters.id)])
+        ..orderBy([
+          OrderingTerm.desc(syncDeadLetters.createdAt),
+          OrderingTerm.desc(syncDeadLetters.id),
+        ])
         ..limit(syncDeadLetterCap);
       await (delete(syncDeadLetters)
             ..where((t) => t.id.isNotInQuery(keepNewest)))

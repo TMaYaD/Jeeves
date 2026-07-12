@@ -234,7 +234,9 @@ class UserPreferences extends Table with Synced {
 /// combinations fail in the wild), not a user-facing retry queue; the goal
 /// is for it to trend toward empty as root causes are fixed.
 class SyncDeadLetters extends Table {
-  /// Auto-incrementing insertion order — drives oldest-first pruning.
+  /// Auto-incrementing insertion order — pruning tie-breaker. Pruning itself
+  /// orders by [createdAt] (last occurrence), so a repeatedly-refreshed
+  /// failure outlives newer one-offs regardless of its original insertion.
   IntColumn get id => integer().autoIncrement()();
 
   /// The synced table the failed entry targeted (e.g. 'todos').

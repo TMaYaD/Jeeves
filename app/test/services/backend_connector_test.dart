@@ -456,6 +456,51 @@ void main() {
     });
 
     test(
+        'pruning goes by last occurrence, not insertion order: a refreshed '
+        'repeat outlives newer one-off failures', () async {
+      // Fill exactly to the cap; row-0 is the oldest insertion.
+      for (var i = 0; i < GtdDatabase.syncDeadLetterCap; i++) {
+        await db.recordSyncDeadLetter(
+          tableName: 'todos',
+          op: 'PUT',
+          rowId: 'row-$i',
+          opData: null,
+          statusCode: 422,
+          responseBody: null,
+        );
+      }
+
+      // row-0's failure repeats — the upsert refreshes its last occurrence.
+      await db.recordSyncDeadLetter(
+        tableName: 'todos',
+        op: 'PUT',
+        rowId: 'row-0',
+        opData: null,
+        statusCode: 422,
+        responseBody: null,
+      );
+
+      // Overflow with a brand-new failure to force one prune.
+      await db.recordSyncDeadLetter(
+        tableName: 'todos',
+        op: 'PUT',
+        rowId: 'row-overflow',
+        opData: null,
+        statusCode: 422,
+        responseBody: null,
+      );
+
+      final rowIds =
+          (await db.select(db.syncDeadLetters).get()).map((r) => r.rowId);
+      expect(rowIds, hasLength(GtdDatabase.syncDeadLetterCap));
+      expect(rowIds, contains('row-0'),
+          reason: 'the just-refreshed repeat must survive pruning even '
+              'though it has the smallest insertion id');
+      expect(rowIds, isNot(contains('row-1')),
+          reason: 'the stalest last occurrence is the one pruned');
+    });
+
+    test(
         'recordSyncDeadLetter de-duplicates repeats of the same failure but '
         'keeps distinct statuses apart', () async {
       await db.recordSyncDeadLetter(
