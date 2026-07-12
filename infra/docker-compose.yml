@@ -86,7 +86,9 @@ services:
       - "8000:8000"
     volumes:
       - ../backend:/app
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    # app.migrate wraps `alembic upgrade head` with schema/version drift
+    # detection — see infra/README.md "Recovering from schema/version drift".
+    command: sh -c "python -m app.migrate && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   redis:
     image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
