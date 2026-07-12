@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.todos.models import Todo, TodoTag
+from app.todos.models import Tag, Todo, TodoTag
 from tests.conftest import auth_header, register
 
 
@@ -479,8 +479,12 @@ async def test_patch_omitting_not_null_columns_leaves_them_unchanged(client: Asy
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["name", "type"])
-async def test_patch_tag_explicit_null_is_422(client: AsyncClient, field: str) -> None:
-    """tags.name and tags.type are NOT NULL: explicit null on PATCH is a 422."""
+async def test_patch_tag_explicit_null_is_422(
+    client: AsyncClient, db: AsyncSession, field: str
+) -> None:
+    """tags.name and tags.type are NOT NULL: explicit null on PATCH is a 422
+    and leaves the row unchanged.  There is no GET /tags/{id} endpoint, so the
+    row is checked directly via the session."""
     token = await register(client, f"tag-null-{field}@example.com")
     headers = auth_header(token)
 
@@ -494,6 +498,11 @@ async def test_patch_tag_explicit_null_is_422(client: AsyncClient, field: str) -
 
     null_patch = await client.patch(f"/tags/{tag_id}", json={field: None}, headers=headers)
     assert null_patch.status_code == 422
+
+    tag = await db.get(Tag, tag_id)
+    assert tag is not None
+    assert tag.name == "errands"
+    assert tag.type == "context"
 
 
 @pytest.mark.asyncio
