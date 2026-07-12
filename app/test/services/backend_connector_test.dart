@@ -580,7 +580,14 @@ void main() {
     });
 
     test('other tables never trip the guard', () {
-      for (final table in ['todos', 'tags', 'todo_tags']) {
+      for (final table in [
+        'todos',
+        'tags',
+        'todo_tags',
+        'focus_sessions',
+        'focus_session_tasks',
+        'time_logs',
+      ]) {
         for (final op in UpdateType.values) {
           expect(
             JevesBackendConnector.isSilentDataLossDrop(_entry(table, op)),

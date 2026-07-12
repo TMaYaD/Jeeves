@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import engine
 from app.health.routes import router as health_router
 from app.powersync.routes import router as powersync_router
+from app.todos.focus_session_routes import router as focus_session_router
 from app.todos.routes import router as todo_router
 from app.todos.tag_routes import router as tag_router
 from app.todos.user_preference_routes import router as user_preference_router
@@ -44,6 +45,7 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(todo_router)
 app.include_router(tag_router, tags=["tags"])
+app.include_router(focus_session_router, tags=["focus_sessions"])
 app.include_router(user_preference_router, tags=["user_preferences"])
 app.include_router(ai_router)
 app.include_router(powersync_router, prefix="/powersync", tags=["powersync"])

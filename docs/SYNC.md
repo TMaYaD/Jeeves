@@ -2,7 +2,7 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately and are replicated to PostgreSQL by PowerSync when connectivity is available. This document describes how conflicts between a local row and the server's copy are resolved — with the focus on the `user_preferences` synced key-value store — and the [`todos` upload contract](#the-todos-upload-contract): which columns must round-trip verbatim through the REST schemas.
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately and are replicated to PostgreSQL by PowerSync when connectivity is available. This document describes how conflicts between a local row and the server's copy are resolved — with the focus on the `user_preferences` synced key-value store — and the [`todos`](#the-todos-upload-contract) and [focus-session](#the-focus-session-upload-contract) upload contracts: which columns must round-trip verbatim through the REST schemas.
 
 For the transport architecture (buckets, sync shapes, the BackendConnector, credentials), see [ARCHITECTURE.md § Sync Engine](./ARCHITECTURE.md#sync-engine). For the vocabulary (Sync Shape, Bucket, LWW, Tombstone), see [CONTEXT.md § Sync](../CONTEXT.md#sync).
 
@@ -112,3 +112,15 @@ The contract: **every client-owned column must round-trip verbatim** through the
 The payloads arrive shaped by PowerSync/Drift: booleans as SQLite integers (`0`/`1`), timestamps possibly in Drift's space-before-offset format (`2026-04-30T00:00:00.000 +05:30`). The schemas must accept both — a `422` dead-letters the entry (window 3 above): the payload survives for diagnosis, but the write still never reaches the server.
 
 The standing regression tripwire is `backend/tests/test_todos.py::test_connector_shaped_payload_roundtrips_client_state`, which POSTs a payload shaped exactly like a connector PUT and asserts every client-owned value persists. When adding a column to the Drift `Todos` table, add it to both schemas and to that test — or record it here as server-owned.
+
+## The focus-session upload contract
+
+`focus_sessions`, `focus_session_tasks`, and `time_logs` replicate like every other bucket, so their local writes go through the same upload path: `uploadData()` routes them to `POST`/`PATCH`/`DELETE` routes in `backend/app/todos/focus_session_routes.py`. The contract mirrors the `todos` one:
+
+- **Every column is client-owned except `user_id`**, which is server-derived from the JWT on all three tables. The denormalized `user_id` the client sends (it exists locally for PowerSync bucket filtering, Alembic 0025) is deliberately absent from the Pydantic schemas and therefore ignored, never trusted.
+- **Create dedupes on the client `id`** so an offline replay is idempotent: a matching row returns `2xx`; the same id claimed for a different row is a `409`. For `focus_session_tasks` the `(focus_session_id, task_id)` relation is a second dedupe key.
+- **Parent/ownership checks are route-level `404`s** (session and task must belong to the JWT user) — a Postgres FK violation would be a `500`, which PowerSync retries forever.
+- **`disposition` is validated to `rollover | leave | maybe` at the schema**, so garbage `422`s (fatal-skip) instead of tripping the DB CHECK constraint (`500` → infinite retry). Explicit `null` on NOT NULL columns (`position`, `started_at`, `task_id`) is likewise a `422`.
+- **`DELETE /focus_sessions/{id}` clears its children itself** — child `focus_session_tasks` rows are deleted and `time_logs.focus_session_id` is detached (SET NULL semantics; time logs are the user's time data and are never deleted) — because neither FK has `ON DELETE CASCADE`.
+
+The regression suite is `backend/tests/test_focus_sessions.py`; `test_full_session_upload_replays_in_queue_order` replays the exact CRUD sequence a synced client queues for plan → focus → review and asserts no step `4xx`s (the true queue semantics are engine behaviour with no automated harness, per the note above).

@@ -31,6 +31,7 @@ from app.database import Base
 INTENT_VALUES = ("next", "maybe", "trash")
 TAG_TYPES = ("context", "project", "area", "label", "person")
 ENERGY_LEVELS = ("low", "medium", "high")
+DISPOSITION_VALUES = ("rollover", "leave", "maybe")
 
 
 def _uuid() -> str:
