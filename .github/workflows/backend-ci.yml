@@ -62,5 +62,5 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: alembic upgrade head
+      - run: python -m app.migrate
       - run: pytest --cov=app --cov-report=term-missing
