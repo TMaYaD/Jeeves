@@ -18,23 +18,21 @@ replication:
       slot_name: powersync_slot
 
 # --- Sync rules ---------------------------------------------------------------
-# Six user-scoped buckets — todos, tags, todo_tags, time_logs, focus_sessions,
-# and focus_session_tasks.
+# Seven user-scoped buckets — todos, tags, todo_tags, time_logs,
+# focus_sessions, focus_session_tasks, and user_preferences.
 #
 # The parameter query below relies on the JWT carrying a `user_id` claim —
 # `token_parameters.user_id` is read directly and no users-table lookup is
 # required.
 #
-# todo_tags carries a denormalized `user_id` column (migration 0008) following
-# PowerSync's "Denormalize Foreign Key onto Child Table" pattern for many-to-
-# many join tables [1], so the junction can be filtered per-user without the
-# JOINs that PowerSync rejects in parameter buckets.  The SELECT lists columns
-# explicitly because PowerSync manages `id` itself for the junction table and
-# declaring it on the client would duplicate the column.
-#
-# focus_session_tasks has no user_id column; its bucket JOINs through
-# focus_sessions to apply the per-user filter (JOIN-scoped, distinct from
-# the denormalized-FK pattern used by todo_tags).
+# Both junction tables (todo_tags, focus_session_tasks) carry a denormalized
+# `user_id` column (migrations 0008 and 0025) following PowerSync's
+# "Denormalize Foreign Key onto Child Table" pattern for many-to-many join
+# tables [1] — PowerSync rejects JOINs in bucket data queries as a fatal
+# sync-rules error ("Must SELECT from a single table"), which aborts the
+# whole config.  Their SELECTs list columns explicitly because PowerSync
+# manages `id` itself for junction tables and declaring it on the client
+# would duplicate the column.
 #
 # [1] https://docs.powersync.com/sync/rules/many-to-many-join-tables
 sync_config:
@@ -74,9 +72,8 @@ sync_config:
         parameters:
           - SELECT token_parameters.user_id AS user_id
         data:
-          - SELECT fst.* FROM focus_session_tasks fst
-            JOIN focus_sessions fs ON fs.id = fst.focus_session_id
-            WHERE fs.user_id = bucket.user_id
+          - SELECT id, focus_session_id, task_id, position, disposition, user_id
+            FROM focus_session_tasks WHERE user_id = bucket.user_id
 
       by_user_preferences:
         parameters:

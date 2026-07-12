@@ -1,5 +1,9 @@
 # Notes
 
+## 2026-07-12 (issue #381 — focus_session_tasks bucket JOIN fatally broke the replicator)
+- The server `focus_session_tasks` table lacked not only `user_id` but also the PowerSync-required `id` column (the client added it in Drift v17; the server never did) — Alembic 0025 adds both, mirroring 0006+0008 for `todo_tags`. Also: `infra/dokku/deploy-powersync.sh`'s embedded sync-rules heredoc was stale at 3 buckets vs sync-config.yaml's 7, despite its "must stay in lock-step" contract — brought in line; the duplication goes away with #201.
+- Fixing the red cloud unmasks a pre-existing upload gap: `JevesBackendConnector.uploadData()` has no case for `focus_sessions`/`focus_session_tasks`/`time_logs`, so a synced user running a focus session will jam the CRUD upload queue. Needs a follow-up issue for the upload path (endpoints + connector cases).
+
 ## 2026-07-12 (#380 — POST /todos dropped `clarified`; synced Inbox captures vanished)
 - Root cause was **schema drop on upload**: `TodoCreate`/`TodoUpdate` lacked `clarified` (plus `last_clarified_at`, `next_action_text`, `last_next_action_completion_at`, `updated_at`, `created_at`); Pydantic's default `extra='ignore'` made the drop silent — a 422 would at least have surfaced via the #305 fatal-drop path — so the model default `clarified=True` won and the next checkpoint replicated the flip back over the local row. Fixing only the create path would have shipped the inverse bug (clarify PATCH dropped → task bounces back into the Inbox), so both schemas changed together.
 - Two more latent drops found by the audit: the ORM model lagged migration 0024 (`next_action_text` / `last_next_action_completion_at` existed only in Postgres), and `create_todo` never passed `intent` through, so POST always stored `intent='next'` regardless of the payload.

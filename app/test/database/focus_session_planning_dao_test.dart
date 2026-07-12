@@ -78,6 +78,27 @@ void main() {
       }
     });
 
+    test('inserts task rows carrying the session user_id (denormalized for '
+        'PowerSync per-user bucketing)', () async {
+      await _insertTodo(db, id: 'tA', title: 'Task A');
+      await _insertTodo(db, id: 'tB', title: 'Task B');
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['tA', 'tB'],
+      );
+
+      final rows = await db.customSelect(
+        'SELECT user_id FROM focus_session_tasks WHERE focus_session_id = ?',
+        variables: [Variable(sessionId)],
+      ).get();
+
+      expect(rows.length, 2);
+      for (final row in rows) {
+        expect(row.read<String?>('user_id'), _userId);
+      }
+    });
+
     test('creates task rows in position order', () async {
       await _insertTodo(db, id: 't1', title: 'Task 1');
       await _insertTodo(db, id: 't2', title: 'Task 2');

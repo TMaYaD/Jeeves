@@ -153,6 +153,11 @@ class FocusSessionTasks extends Table with Synced {
   /// 'maybe' = defer; FocusSessionReviewNotifier writes intent='maybe' to todos.
   TextColumn get disposition => text().nullable()();
 
+  /// Denormalized from `focus_sessions.user_id` so PowerSync can filter
+  /// junction rows with a per-user parameter bucket (see Alembic 0025 and
+  /// sync-config.yaml).
+  TextColumn get userId => text()();
+
   @override
   Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
 }
