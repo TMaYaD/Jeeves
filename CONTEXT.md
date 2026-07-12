@@ -431,6 +431,10 @@ _Avoid_: Sync stream (vaguer), Channel (overloaded), Shard
 The interface (currently `JevesBackendConnector` in code) that PowerSync uses to upload local writes to the Jeeves backend's REST API. Local writes are queued by PowerSync and replayed through this connector when connectivity is available. The Sync engine reads from the backend's PostgreSQL directly; only writes flow through the connector.
 _Avoid_: Sync connector (acceptable but BackendConnector is the canonical class name), Upload pipe
 
+**Dead Letter** *(a recorded non-retryable upload failure)*:
+A diagnostic record of a queued local write the BackendConnector could not upload for a non-retryable reason (per-status policy in `docs/ARCHITECTURE.md § Upload-error policy`), persisted in the local-only `sync_dead_letters` table with the operation, table, payload, status, and response body. Developer telemetry, not a user-facing retry queue: the failure surfaces through the sync indicator, and resolution means fixing the root cause so the table trends toward empty.
+_Avoid_: Failed upload queue (implies replay), Sync error log (vaguer)
+
 **Sync Token**:
 The short-lived JWT issued by the backend's `GET /powersync/credentials` endpoint and consumed by PowerSync for authentication. The backend signs it with `SECRET_KEY`; PowerSync validates with the same key. Distinct from the user's auth tokens (access / refresh JWTs from the auth provider), though the v1 implementation shares the signing key.
 _Avoid_: PowerSync token (acceptable colloquially but Sync Token is the canonical name), Sync credential, JWT (too generic)
