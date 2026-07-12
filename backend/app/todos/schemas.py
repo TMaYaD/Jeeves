@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from app.todos.models import ENERGY_LEVELS, INTENT_VALUES, TAG_TYPES
 
@@ -19,6 +19,22 @@ _CLIENT_STATE_DATETIME_FIELDS = (
     "last_next_action_completion_at",
     "updated_at",
 )
+
+
+def _reject_explicit_null(v: object, info: ValidationInfo) -> object:
+    """Reject an explicit null for a field backed by a NOT NULL column.
+
+    On the *Update schemas these fields are declared ``X | None = None`` so
+    that "optional on PATCH" is representable, but an explicit null in the
+    body would flow through ``model_dump(exclude_unset=True)`` into the
+    column and surface as a commit-time IntegrityError (500) instead of a
+    422.  Omission never reaches this validator — Pydantic skips
+    before-validators for defaulted fields — so exclude_unset semantics
+    ("field absent = no update") are preserved.
+    """
+    if v is None:
+        raise ValueError(f"{info.field_name} cannot be null; omit the field to leave it unchanged")
+    return v
 
 
 def _normalise_drift_iso(value: object) -> object:
@@ -76,6 +92,9 @@ class TagUpdate(BaseModel):
     name: str | None = None
     type: str | None = None
     color: str | None = None
+
+    # NOT NULL columns on tags (#387); color is nullable — null clears it.
+    _reject_nulls = field_validator("name", "type", mode="before")(_reject_explicit_null)
 
     @field_validator("type")
     @classmethod
@@ -178,17 +197,10 @@ class TodoUpdate(BaseModel):
         _normalise_drift_iso
     )
 
-    @field_validator("clarified", mode="before")
-    @classmethod
-    def reject_null_clarified(cls, v: object) -> object:
-        # clarified is NOT NULL in the DB, so an explicit null in the PATCH
-        # body would surface as a commit-time IntegrityError (500) instead of
-        # a 422.  Omission never reaches this validator — Pydantic skips
-        # before-validators for defaulted fields — so exclude_unset semantics
-        # ("field absent = no update") are preserved.
-        if v is None:
-            raise ValueError("clarified cannot be null; omit the field to leave it unchanged")
-        return v
+    # NOT NULL columns on todos (#380, #387).
+    _reject_nulls = field_validator(
+        "title", "clarified", "intent", "time_spent_minutes", mode="before"
+    )(_reject_explicit_null)
 
     @field_validator("intent")
     @classmethod
@@ -238,6 +250,10 @@ class UserPreferenceUpdate(BaseModel):
     updated_at: datetime | None = None
 
     _normalise_updated_at = field_validator("updated_at", mode="before")(_normalise_drift_iso)
+
+    # updated_at is NOT NULL (#387); value stays nullable — null is the
+    # tombstone the DAO uses for deletes.
+    _reject_nulls = field_validator("updated_at", mode="before")(_reject_explicit_null)
 
 
 class UserPreferenceOut(BaseModel):

@@ -420,6 +420,106 @@ async def test_patch_explicit_null_clarified_is_422(client: AsyncClient) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["title", "intent", "time_spent_minutes"])
+async def test_patch_explicit_null_not_null_columns_is_422(client: AsyncClient, field: str) -> None:
+    """title, intent, and time_spent_minutes are NOT NULL in the DB: an
+    explicit null in the PATCH body must be rejected at validation (422),
+    not surface as a commit-time IntegrityError (500).  Same shape as the
+    clarified fix from #380; survey-and-fix tracked in #387."""
+    token = await register(client, f"not-null-{field}@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/todos/",
+        json={"title": "Known title", "intent": "maybe", "time_spent_minutes": 5},
+        headers=headers,
+    )
+    assert create.status_code == 201
+    todo_id = create.json()["id"]
+
+    null_patch = await client.patch(f"/todos/{todo_id}", json={field: None}, headers=headers)
+    assert null_patch.status_code == 422
+
+    fetched = (await client.get(f"/todos/{todo_id}", headers=headers)).json()
+    assert fetched["title"] == "Known title"
+    assert fetched["intent"] == "maybe"
+    assert fetched["time_spent_minutes"] == 5
+
+
+@pytest.mark.asyncio
+async def test_patch_omitting_not_null_columns_leaves_them_unchanged(client: AsyncClient) -> None:
+    """Omission must keep meaning "no update": the null-rejecting validators
+    are mode="before", which Pydantic skips for unset fields, so a PATCH
+    touching an unrelated field leaves every NOT NULL column intact."""
+    token = await register(client, "not-null-omit@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/todos/",
+        json={
+            "title": "Known title",
+            "intent": "maybe",
+            "time_spent_minutes": 5,
+            "clarified": False,
+        },
+        headers=headers,
+    )
+    todo_id = create.json()["id"]
+
+    patch = await client.patch(f"/todos/{todo_id}", json={"notes": "unrelated"}, headers=headers)
+    assert patch.status_code == 200
+
+    fetched = (await client.get(f"/todos/{todo_id}", headers=headers)).json()
+    assert fetched["notes"] == "unrelated"
+    assert fetched["title"] == "Known title"
+    assert fetched["intent"] == "maybe"
+    assert fetched["time_spent_minutes"] == 5
+    assert fetched["clarified"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["name", "type"])
+async def test_patch_tag_explicit_null_is_422(client: AsyncClient, field: str) -> None:
+    """tags.name and tags.type are NOT NULL: explicit null on PATCH is a 422."""
+    token = await register(client, f"tag-null-{field}@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/tags/",
+        json={"name": "errands", "type": "context", "color": "#ff0000"},
+        headers=headers,
+    )
+    assert create.status_code == 201
+    tag_id = create.json()["id"]
+
+    null_patch = await client.patch(f"/tags/{tag_id}", json={field: None}, headers=headers)
+    assert null_patch.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_tag_null_color_clears_it(client: AsyncClient) -> None:
+    """tags.color is nullable: null on PATCH stays a legitimate "clear this
+    value" and leaves the NOT NULL columns untouched."""
+    token = await register(client, "tag-null-color@example.com")
+    headers = auth_header(token)
+
+    create = await client.post(
+        "/tags/",
+        json={"name": "errands", "type": "context", "color": "#ff0000"},
+        headers=headers,
+    )
+    assert create.status_code == 201
+    tag_id = create.json()["id"]
+
+    clear_color = await client.patch(f"/tags/{tag_id}", json={"color": None}, headers=headers)
+    assert clear_color.status_code == 200
+    cleared = clear_color.json()
+    assert cleared["color"] is None
+    assert cleared["name"] == "errands"
+    assert cleared["type"] == "context"
+
+
+@pytest.mark.asyncio
 async def test_connector_shaped_payload_roundtrips_client_state(
     client: AsyncClient, db: AsyncSession
 ) -> None:
