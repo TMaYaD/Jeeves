@@ -222,6 +222,57 @@ class UserPreferences extends Table with Synced {
 }
 
 // ---------------------------------------------------------------------------
+// sync_dead_letters  (local-only diagnostics)
+// ---------------------------------------------------------------------------
+
+/// Dead Letter: a durable record of a CRUD-queue upload that failed with a
+/// non-retryable status (see `JevesBackendConnector.classifyUploadError`).
+///
+/// Deliberately **not** `with Synced` — this is a plain local SQLite table,
+/// excluded from the PowerSync schema, never replicated. It is developer
+/// telemetry for root-cause diagnosis (which operation × table × status
+/// combinations fail in the wild), not a user-facing retry queue; the goal
+/// is for it to trend toward empty as root causes are fixed.
+class SyncDeadLetters extends Table {
+  /// Auto-incrementing insertion order — pruning tie-breaker. Pruning itself
+  /// orders by [createdAt] (last occurrence), so a repeatedly-refreshed
+  /// failure outlives newer one-offs regardless of its original insertion.
+  IntColumn get id => integer().autoIncrement()();
+
+  /// The synced table the failed entry targeted (e.g. 'todos').
+  /// Named explicitly: `tableName` collides with Drift's `Table.tableName`.
+  TextColumn get targetTable => text().named('table_name')();
+
+  /// The CRUD operation: PUT | PATCH | DELETE.
+  TextColumn get op => text()();
+
+  /// The id of the row the entry targeted.
+  TextColumn get rowId => text()();
+
+  /// JSON-encoded `opData` of the failed entry; null for deletes.
+  TextColumn get opData => text().nullable()();
+
+  /// HTTP status the backend returned.
+  IntColumn get statusCode => integer()();
+
+  /// Error response body, truncated by the connector before recording.
+  TextColumn get responseBody => text().nullable()();
+
+  /// When this failure was last recorded — refreshed when the same failure
+  /// repeats (see [uniqueKeys]).
+  DateTimeColumn get createdAt => dateTime().clientDefault(DateTime.now)();
+
+  /// One row per distinct failure: a batch retried after a partial failure
+  /// re-uploads entries that were already dead-lettered, and the repeat
+  /// occurrence must refresh the existing row, not accumulate duplicates.
+  /// `GtdDatabase.recordSyncDeadLetter` upserts against this key.
+  @override
+  List<Set<Column<Object>>> get uniqueKeys => [
+        {targetTable, rowId, op, statusCode},
+      ];
+}
+
+// ---------------------------------------------------------------------------
 // todo_tags  (junction)
 // ---------------------------------------------------------------------------
 

@@ -59,9 +59,16 @@ class TestTodoIntentValidator:
         t = TodoUpdate(intent="maybe")
         assert t.intent == "maybe"
 
-    def test_update_none_intent_allowed(self) -> None:
-        t = TodoUpdate(intent=None)
+    def test_update_explicit_none_intent_rejected(self) -> None:
+        # intent is NOT NULL in the DB (#387); omission, not null, means
+        # "no update".
+        with pytest.raises(ValidationError, match="intent cannot be null"):
+            TodoUpdate(intent=None)
+
+    def test_update_omitted_intent_stays_unset(self) -> None:
+        t = TodoUpdate()
         assert t.intent is None
+        assert "intent" not in t.model_dump(exclude_unset=True)
 
     def test_update_invalid_intent_raises(self) -> None:
         with pytest.raises(ValidationError, match="intent must be one of"):

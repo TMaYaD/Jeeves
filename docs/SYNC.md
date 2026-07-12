@@ -10,7 +10,7 @@ For the transport architecture (buckets, sync shapes, the BackendConnector, cred
 
 A `user_preferences` write can be lost in two mirror-image ways:
 
-- **Upload side** — the local write never reaches the server. Guarded by `JevesBackendConnector.uploadData()`, which routes every table to a REST endpoint and throws for any unmapped table so the CRUD queue is never silently drained. A fatal `4xx` on a `user_preferences` row additionally trips a debug assert (`backend_connector.dart`) so a systematic drop surfaces in development rather than silently losing data.
+- **Upload side** — the local write never reaches the server. Guarded by `JevesBackendConnector.uploadData()`, which routes every table to a REST endpoint and throws for any unmapped table so the CRUD queue is never silently drained. A non-retryable `4xx` is classified per status ([ARCHITECTURE.md § Upload-error policy](./ARCHITECTURE.md#upload-error-policy)) and dead-lettered — recorded in the local `sync_dead_letters` table with its payload and surfaced through the sync indicator — never silently dropped. On a `user_preferences` row a dead-letter additionally trips a debug assert (`backend_connector.dart`) so a systematic rejection surfaces in development.
 - **Download / reconciliation side** — the local row exists, the server snapshot omits it, and the next pull deletes the local row. This is the case this document's conflict rules govern.
 
 ## The tombstone invariant
@@ -29,9 +29,9 @@ PowerSync keeps CRUD-queue mutations applied on top of synced data and holds the
 |---|---|---|
 | 1. Pending upload | Local write queued, not yet uploaded; pull omits the row | Held — the CRUD-queue mutation stays applied until its write checkpoint is reached. No local wipe. |
 | 2. Replication lag | REST returned 201, row in Postgres, not yet in the publication snapshot | Held — the write checkpoint is not reached until replication catches up. |
-| 3. Fatal drop | Connector hits a non-retryable `4xx`, skips the entry, the write checkpoint advances | **Not covered by the engine.** The next pull deletes the local row. This is the residual risk, and it is a connector/backend concern, not a reconciliation-rule concern. |
+| 3. Dead-lettered upload | Connector hits a non-retryable `4xx`, dead-letters the entry, the write checkpoint advances | **Not covered by the engine.** The next pull can still delete the local row — but the entry's payload is preserved in `sync_dead_letters` and the failure is surfaced via the sync indicator, so the write is diagnosable rather than silently lost. |
 
-Windows 1–2 are the engine's built-in "hold pending mutations" guarantee; plain last-write-wins keys ride on it and need no bespoke download-arbitration code. Window 3 is prevented by keeping the backend routes idempotent/permissive so a legitimate write never `4xx`s; the connector's loud-in-debug assert only *detects* such a drop during development (it does not prevent the wipe in release).
+Windows 1–2 are the engine's built-in "hold pending mutations" guarantee; plain last-write-wins keys ride on it and need no bespoke download-arbitration code. Window 3 is prevented by keeping the backend routes idempotent/permissive so a legitimate write never `4xx`s; if one does, the connector records a dead letter (payload + response body), the sync indicator shows the error, and debug builds additionally assert on `user_preferences` rows. Recording preserves the evidence and surfaces the failure — it does not stop the read-side wipe of the local row in release.
 
 > **No automated coverage of the engine path.** The delete-on-absent behaviour is a PowerSync view/engine effect. The entire Dart test harness runs on `NativeDatabase.memory()` — a real SQLite table with no PowerSync engine — so windows 1–3 cannot be reproduced in unit tests. They are verified manually/on emulator (see [TESTING.md § Sync conflict resolution](./TESTING.md#sync-conflict-resolution-manual)). A standing PowerSync-client + docker-compose integration harness is deferred to its own infra issue.
 
@@ -109,7 +109,7 @@ The contract: **every client-owned column must round-trip verbatim** through the
 | `user_id` | **server** | derived from the JWT; any client-sent value is ignored by design |
 | `location_id` | unused | no DAO writes it today |
 
-The payloads arrive shaped by PowerSync/Drift: booleans as SQLite integers (`0`/`1`), timestamps possibly in Drift's space-before-offset format (`2026-04-30T00:00:00.000 +05:30`). The schemas must accept both — a `422` would drop the entry via the fatal-`4xx` path (window 3 above).
+The payloads arrive shaped by PowerSync/Drift: booleans as SQLite integers (`0`/`1`), timestamps possibly in Drift's space-before-offset format (`2026-04-30T00:00:00.000 +05:30`). The schemas must accept both — a `422` dead-letters the entry (window 3 above): the payload survives for diagnosis, but the write still never reaches the server.
 
 The standing regression tripwire is `backend/tests/test_todos.py::test_connector_shaped_payload_roundtrips_client_state`, which POSTs a payload shaped exactly like a connector PUT and asserts every client-owned value persists. When adding a column to the Drift `Todos` table, add it to both schemas and to that test — or record it here as server-owned.
 

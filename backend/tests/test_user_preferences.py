@@ -126,6 +126,37 @@ async def test_patch_can_tombstone_with_null_value(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_patch_explicit_null_updated_at_is_422(client: AsyncClient, db: AsyncSession) -> None:
+    """updated_at is NOT NULL: an explicit null on PATCH must be rejected at
+    validation (422), not surface as a commit-time IntegrityError (#387).
+    value=null stays valid — that is the tombstone path above."""
+    token = await register(client, "pref-null-updated-at@example.com")
+    pref_id = "88888888-8888-8888-8888-888888888888"
+    await client.post(
+        "/user_preferences/",
+        json={
+            "id": pref_id,
+            "key": "last_completed",
+            "value": '"v1"',
+            "updated_at": "2026-05-17T10:00:00Z",
+        },
+        headers=auth_header(token),
+    )
+
+    resp = await client.patch(
+        f"/user_preferences/{pref_id}",
+        json={"value": '"v2"', "updated_at": None},
+        headers=auth_header(token),
+    )
+    assert resp.status_code == 422
+
+    row = (
+        await db.execute(select(UserPreference).where(UserPreference.id == pref_id))
+    ).scalar_one()
+    assert row.value == '"v1"'
+
+
+@pytest.mark.asyncio
 async def test_delete_removes_row(client: AsyncClient, db: AsyncSession) -> None:
     token = await register(client, "pref-delete@example.com")
     pref_id = "55555555-5555-5555-5555-555555555555"

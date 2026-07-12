@@ -11,9 +11,14 @@ import 'platform_helper.dart'
     if (dart.library.io) 'platform_helper_io.dart';
 
 class ApiService {
-  ApiService({required String baseUrl})
+  /// [adapter] is a test-only injection point at Dio's own boundary: tests
+  /// script HTTP responses through a fake [HttpClientAdapter] while the real
+  /// interceptor chain (401 refresh-and-retry) still runs. Production callers
+  /// omit it and get Dio's platform default.
+  ApiService({required String baseUrl, HttpClientAdapter? adapter})
       : _baseUrl = baseUrl,
         _dio = Dio(BaseOptions(baseUrl: baseUrl)) {
+    if (adapter != null) _dio.httpClientAdapter = adapter;
     _dio.interceptors.add(_AuthRetryInterceptor(this));
   }
 

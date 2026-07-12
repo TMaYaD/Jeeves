@@ -24,6 +24,7 @@ import '../database/powersync_storage.dart';
 import '../services/api_service.dart';
 import '../services/backend_connector.dart';
 import 'auth_provider.dart';
+import 'database_provider.dart';
 
 /// Process-wide [PowerSyncDatabase] handle.
 ///
@@ -32,7 +33,10 @@ import 'auth_provider.dart';
 /// through [currentUserIdProvider] and translated into
 /// `PowerSyncDatabase.connect()` / `.disconnect()` calls on the same
 /// instance — the database is never re-opened.
-final powerSyncInstanceProvider =
+// Explicit variable type: this provider and [databaseProvider] reference each
+// other from their initializers, and without the annotation the analyzer
+// reports a top-level type-inference cycle.
+final FutureProvider<ps.PowerSyncDatabase> powerSyncInstanceProvider =
     FutureProvider<ps.PowerSyncDatabase>((ref) async {
   ref.keepAlive();
 
@@ -56,7 +60,13 @@ final powerSyncInstanceProvider =
       if (userId == 'local') {
         await db.disconnect();
       } else {
-        final connector = JevesBackendConnector(ref.read(apiServiceProvider));
+        // databaseProvider is a synchronous Provider over a delayed Drift
+        // connection, so reading it here cannot deadlock — queries the
+        // connector issues before the connection resolves are queued.
+        final connector = JevesBackendConnector(
+          ref.read(apiServiceProvider),
+          ref.read(databaseProvider),
+        );
         await db.connect(connector: connector);
       }
     }).catchError((Object e, StackTrace st) {

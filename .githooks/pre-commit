@@ -65,6 +65,14 @@ if git diff --cached --name-only | grep -q "^app/"; then
         fi
     done
 
+    # Self-heal the Flutter version file before invoking dart. pub locates the
+    # SDK via bin/cache/flutter.version.json, but the SDK wrapper deletes that
+    # file on a stale tool-cache check and only a `flutter` invocation rewrites
+    # it — a bare `dart run` does not. On machines where several workers share
+    # one SDK, a sibling's run can knock the file out mid-commit. Touch it here
+    # so build_runner always finds the SDK.
+    flutter --version >/dev/null 2>&1
+
     echo ">> Running build_runner..."
     dart run build_runner build --delete-conflicting-outputs
     if [ $? -ne 0 ]; then
