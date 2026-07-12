@@ -1,5 +1,8 @@
 # Notes
 
+## 2026-07-12 (issue #383 — focus_session_tasks upload path)
+- The issue named only `focus_session_tasks`, but a strictly-scoped fix couldn't meet its own acceptance criteria: `FocusSessionDao.openSession` queues the parent `focus_sessions` PUT *ahead of* the task rows (it would jam the queue first, and the task POST would then hit the session FK), and `focusOn()` writes `time_logs` in the same flow — so the connector cases + REST routes cover all three tables. `user_id` is server-derived from the JWT on all three (the client's denormalized copy is ignored), matching the todos contract. `DELETE /focus_sessions/{id}` deletes child task rows and detaches `time_logs.focus_session_id` (SET NULL) itself since neither FK cascades — a Postgres FK 500 would wedge the queue permanently. #305 (uploadData error-handling rewrite) now has three more cases to restructure.
+
 ## 2026-07-12 (issue #381 — focus_session_tasks bucket JOIN fatally broke the replicator)
 - The server `focus_session_tasks` table lacked not only `user_id` but also the PowerSync-required `id` column (the client added it in Drift v17; the server never did) — Alembic 0025 adds both, mirroring 0006+0008 for `todo_tags`. Also: `infra/dokku/deploy-powersync.sh`'s embedded sync-rules heredoc was stale at 3 buckets vs sync-config.yaml's 7, despite its "must stay in lock-step" contract — brought in line; the duplication goes away with #201.
 - Fixing the red cloud unmasks a pre-existing upload gap: `JevesBackendConnector.uploadData()` has no case for `focus_sessions`/`focus_session_tasks`/`time_logs`, so a synced user running a focus session will jam the CRUD upload queue. Needs a follow-up issue for the upload path (endpoints + connector cases).

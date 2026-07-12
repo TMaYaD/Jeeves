@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.todos.models import ENERGY_LEVELS, INTENT_VALUES, TAG_TYPES
+from app.todos.models import DISPOSITION_VALUES, ENERGY_LEVELS, INTENT_VALUES, TAG_TYPES
 
 STATE_VALUES = ("next_action",)
 
@@ -249,6 +249,116 @@ class UserPreferenceOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Focus-session upload schemas ─────────────────────────────────────────────
+# Consumed by the connector upload routes (focus_session_routes.py).  Every
+# client-owned column round-trips through create *and* update — a silently
+# dropped field would default on the server and be replicated back over the
+# local value on the next checkpoint (docs/SYNC.md § upload contract).
+# `user_id` is deliberately absent everywhere: it is server-owned (derived
+# from the JWT), so the denormalized value in the connector payload is
+# ignored rather than trusted.
+
+
+class FocusSessionCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    started_at: datetime
+    ended_at: datetime | None = None
+    current_task_id: str | None = None
+
+    _normalise_datetimes = field_validator("started_at", "ended_at", mode="before")(
+        _normalise_drift_iso
+    )
+
+
+class FocusSessionUpdate(BaseModel):
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    current_task_id: str | None = None
+
+    _normalise_datetimes = field_validator("started_at", "ended_at", mode="before")(
+        _normalise_drift_iso
+    )
+
+    @field_validator("started_at", mode="before")
+    @classmethod
+    def reject_null_started_at(cls, v: object) -> object:
+        # started_at is NOT NULL in the DB; explicit null must 422 instead of
+        # surfacing as a commit-time IntegrityError (500 → infinite retry).
+        # Omission never reaches this validator, so exclude_unset semantics
+        # ("field absent = no update") are preserved.
+        if v is None:
+            raise ValueError("started_at cannot be null; omit the field to leave it unchanged")
+        return v
+
+
+class FocusSessionTaskCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    focus_session_id: str
+    task_id: str
+    position: int
+    disposition: str | None = None
+
+    @field_validator("disposition")
+    @classmethod
+    def validate_disposition(cls, v: str | None) -> str | None:
+        if v is not None and v not in DISPOSITION_VALUES:
+            raise ValueError(f"disposition must be one of {sorted(DISPOSITION_VALUES)}")
+        return v
+
+
+class FocusSessionTaskUpdate(BaseModel):
+    position: int | None = None
+    # Explicit null is legal here — disposition is nullable (un-reviewed).
+    disposition: str | None = None
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def reject_null_position(cls, v: object) -> object:
+        # position is NOT NULL in the DB (see FocusSessionUpdate.reject_null_started_at).
+        if v is None:
+            raise ValueError("position cannot be null; omit the field to leave it unchanged")
+        return v
+
+    @field_validator("disposition")
+    @classmethod
+    def validate_disposition(cls, v: str | None) -> str | None:
+        if v is not None and v not in DISPOSITION_VALUES:
+            raise ValueError(f"disposition must be one of {sorted(DISPOSITION_VALUES)}")
+        return v
+
+
+class TimeLogCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    task_id: str
+    started_at: datetime
+    ended_at: datetime | None = None
+    focus_session_id: str | None = None
+
+    _normalise_datetimes = field_validator("started_at", "ended_at", mode="before")(
+        _normalise_drift_iso
+    )
+
+
+class TimeLogUpdate(BaseModel):
+    task_id: str | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    focus_session_id: str | None = None
+
+    _normalise_datetimes = field_validator("started_at", "ended_at", mode="before")(
+        _normalise_drift_iso
+    )
+
+    @field_validator("task_id", "started_at", mode="before")
+    @classmethod
+    def reject_null_not_nullable(cls, v: object) -> object:
+        # task_id/started_at are NOT NULL in the DB (see
+        # FocusSessionUpdate.reject_null_started_at).
+        if v is None:
+            raise ValueError("field cannot be null; omit it to leave it unchanged")
+        return v
+
+
 class TimeLogOut(BaseModel):
     id: str
     user_id: str
@@ -271,6 +381,9 @@ class FocusSessionOut(BaseModel):
 
 
 class FocusSessionTaskOut(BaseModel):
+    # PowerSync row identifier; None only for legacy server-side rows created
+    # before migration 0025 in the SQLite test harness (Postgres backfills).
+    id: str | None
     focus_session_id: str
     task_id: str
     position: int

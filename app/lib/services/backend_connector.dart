@@ -44,10 +44,13 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   /// Upload locally-queued writes to the backend REST API.
   ///
   /// Each CRUD entry maps to the corresponding REST endpoint:
-  ///   - todos:             POST /todos/,             PATCH /todos/{id},             DELETE /todos/{id}
-  ///   - tags:              POST /tags/,              PATCH /tags/{id},              DELETE /tags/{id}
-  ///   - todo_tags:         POST /todo_tags/,                                        DELETE /todo_tags/{id}
-  ///   - user_preferences:  POST /user_preferences/,  PATCH /user_preferences/{id},  DELETE /user_preferences/{id}
+  ///   - todos:               POST /todos/,               PATCH /todos/{id},               DELETE /todos/{id}
+  ///   - tags:                POST /tags/,                PATCH /tags/{id},                DELETE /tags/{id}
+  ///   - todo_tags:           POST /todo_tags/,                                            DELETE /todo_tags/{id}
+  ///   - user_preferences:    POST /user_preferences/,    PATCH /user_preferences/{id},    DELETE /user_preferences/{id}
+  ///   - focus_sessions:      POST /focus_sessions/,      PATCH /focus_sessions/{id},      DELETE /focus_sessions/{id}
+  ///   - focus_session_tasks: POST /focus_session_tasks/, PATCH /focus_session_tasks/{id}, DELETE /focus_session_tasks/{id}
+  ///   - time_logs:           POST /time_logs/,           PATCH /time_logs/{id},           DELETE /time_logs/{id}
   ///
   /// Unknown tables must throw — otherwise `batch.complete()` would clear
   /// the local CRUD queue without ever talking to the server, silently
@@ -75,6 +78,12 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
             await _uploadTodoTag(entry);
           case 'user_preferences':
             await _uploadUserPreference(entry);
+          case 'focus_sessions':
+            await _uploadFocusSession(entry);
+          case 'focus_session_tasks':
+            await _uploadFocusSessionTask(entry);
+          case 'time_logs':
+            await _uploadTimeLog(entry);
           default:
             throw StateError(
               'JevesBackendConnector: no upload handler for table '
@@ -162,6 +171,47 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
         await _api.patch('/user_preferences/${entry.id}', entry.opData ?? {});
       case ps.UpdateType.delete:
         await _api.delete('/user_preferences/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadFocusSession(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/focus_sessions/', body);
+      case ps.UpdateType.patch:
+        await _api.patch('/focus_sessions/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/focus_sessions/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadFocusSessionTask(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/focus_session_tasks/', body);
+      case ps.UpdateType.patch:
+        // Unlike todo_tags, this junction has mutable fields (position,
+        // disposition — the review flow PATCHes disposition).
+        await _api.patch('/focus_session_tasks/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/focus_session_tasks/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadTimeLog(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/time_logs/', body);
+      case ps.UpdateType.patch:
+        await _api.patch('/time_logs/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/time_logs/${entry.id}');
     }
   }
 
