@@ -2,7 +2,7 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately and are replicated to PostgreSQL by PowerSync when connectivity is available. This document describes how conflicts between a local row and the server's copy are resolved, with the focus on the `user_preferences` synced key-value store.
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately and are replicated to PostgreSQL by PowerSync when connectivity is available. This document describes how conflicts between a local row and the server's copy are resolved — with the focus on the `user_preferences` synced key-value store — and the [`todos` upload contract](#the-todos-upload-contract): which columns must round-trip verbatim through the REST schemas.
 
 For the transport architecture (buckets, sync shapes, the BackendConnector, credentials), see [ARCHITECTURE.md § Sync Engine](./ARCHITECTURE.md#sync-engine). For the vocabulary (Sync Shape, Bucket, LWW, Tombstone), see [CONTEXT.md § Sync](../CONTEXT.md#sync).
 
@@ -88,3 +88,27 @@ Every current key, grouped by family:
 ## Sign-in migration
 
 A separate LWW pass runs once at sign-in, when local-only rows (`user_id = 'local'`) are reassigned to the authenticated user (`LocalDataMigrationService.migrate`, `migration_service.dart`). It applies the `lww` strategy in SQL — reassigning non-conflicting keys and, for conflicting keys, keeping the row with the newer `updated_at`. This is the account-merge path, distinct from the ongoing PowerSync download reconciliation above.
+
+## The `todos` upload contract
+
+A local write can also be lost by **schema drop on upload** — distinct from the two preference directions above. The connector uploads the full local row, but the backend's create/update schema silently ignores an unknown field (Pydantic's default `extra='ignore'`), the server stores its own default, and the next checkpoint download replicates that default back over the local value. The symptom is a field that "reverts" shortly after a write — issue #380's vanishing Inbox capture, where `clarified = false` was dropped by `TodoCreate` and flipped to the server default `true`.
+
+The contract: **every client-owned column must round-trip verbatim** through the applicable create/update route and schema (`backend/app/todos/schemas.py`) — create-only fields like `id` (POST dedupe key) and `created_at` (server default when omitted) follow the behaviour noted per column below. Column ownership for `todos`:
+
+| Column | Owner | Notes |
+|---|---|---|
+| `id` | client | UUID generated at capture; `POST /todos/` dedupes on it for idempotent retry |
+| `title`, `notes`, `done_at`, `intent`, `priority`, `due_date`, `time_estimate`, `energy_level`, `capture_source` | client | round-trip via both schemas |
+| `clarified` | client | `false` = still in the Inbox; REST default `true` when omitted |
+| `last_clarified_at` | client | stamped per clarifying micro-act; drives the Stale predicate |
+| `next_action_text` | client | the next-action cursor; NULL = Actionless |
+| `last_next_action_completion_at` | client | stamped when a focus session closes with the task non-done |
+| `time_spent_minutes` | client | cumulative focus-stint minutes |
+| `created_at` | client, server default when omitted | offline captures keep their true capture time |
+| `updated_at` | client | the server never stamps it |
+| `user_id` | **server** | derived from the JWT; any client-sent value is ignored by design |
+| `location_id` | unused | no DAO writes it today |
+
+The payloads arrive shaped by PowerSync/Drift: booleans as SQLite integers (`0`/`1`), timestamps possibly in Drift's space-before-offset format (`2026-04-30T00:00:00.000 +05:30`). The schemas must accept both — a `422` would drop the entry via the fatal-`4xx` path (window 3 above).
+
+The standing regression tripwire is `backend/tests/test_todos.py::test_connector_shaped_payload_roundtrips_client_state`, which POSTs a payload shaped exactly like a connector PUT and asserts every client-owned value persists. When adding a column to the Drift `Todos` table, add it to both schemas and to that test — or record it here as server-owned.

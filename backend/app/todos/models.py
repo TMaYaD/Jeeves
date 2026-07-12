@@ -120,11 +120,17 @@ class Todo(Base):
     location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
 
-    # Client-state columns replicated via PowerSync (migration 0007/0022).
+    # Client-state columns replicated via PowerSync (migrations 0007/0022/0024).
     last_clarified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     time_spent_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # The current next-action cursor; NULL = Actionless (migration 0024).
+    next_action_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When a focus session last closed with this task non-done (migration 0024).
+    last_next_action_completion_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     tags: Mapped[list["Tag"]] = relationship("Tag", secondary="todo_tags", back_populates="todos")
     time_logs: Mapped[list["TimeLog"]] = relationship("TimeLog", back_populates="todo")

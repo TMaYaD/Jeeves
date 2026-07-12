@@ -9,6 +9,17 @@ from app.todos.models import ENERGY_LEVELS, INTENT_VALUES, TAG_TYPES
 
 STATE_VALUES = ("next_action",)
 
+# Datetime fields shared by TodoCreate and TodoUpdate that may arrive in
+# Drift's space-before-offset format and need normalisation before parsing.
+# TodoCreate additionally normalises created_at (create-only field).
+_CLIENT_STATE_DATETIME_FIELDS = (
+    "due_date",
+    "done_at",
+    "last_clarified_at",
+    "last_next_action_completion_at",
+    "updated_at",
+)
+
 
 def _normalise_drift_iso(value: object) -> object:
     """Strip the leading space Drift inserts before the timezone offset.
@@ -85,6 +96,9 @@ class TodoCreate(BaseModel):
     title: str
     notes: str | None = None
     done_at: datetime | None = None
+    # false = still in the Inbox.  Defaults to true so plain REST creates are
+    # born clarified; connector PUTs always send the client's value (#380).
+    clarified: bool = True
     intent: str = "next"
     # Each item is either a plain string ("@office") or a TagInput dict.
     # Plain strings: "@" prefix → context; bare word → label.
@@ -94,13 +108,24 @@ class TodoCreate(BaseModel):
     time_estimate: int | None = None  # minutes
     energy_level: str | None = None  # 'low' | 'medium' | 'high'
     capture_source: str | None = None  # 'manual' | 'share_sheet' | 'voice' | 'ai_parse'
-    # Client-state columns (migration 0007/0022)
+    # Client-state columns (migrations 0007/0022/0024) — must round-trip
+    # verbatim or the next checkpoint download wipes the local value
+    # (docs/SYNC.md § The todos upload contract).
     time_spent_minutes: int = Field(default=0, ge=0)
+    last_clarified_at: datetime | None = None
+    next_action_text: str | None = None
+    last_next_action_completion_at: datetime | None = None
+    # Client-stamped write timestamps.  The server never writes updated_at;
+    # created_at falls back to the server default only when omitted, so
+    # offline captures keep their true capture time.
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     # Legacy compatibility field — only "next_action" is accepted; ignored by the DB layer.
     state: str | None = None
 
-    _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
-    _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
+    _normalise_datetimes = field_validator(
+        *_CLIENT_STATE_DATETIME_FIELDS, "created_at", mode="before"
+    )(_normalise_drift_iso)
 
     @field_validator("intent")
     @classmethod
@@ -128,6 +153,10 @@ class TodoUpdate(BaseModel):
     title: str | None = None
     notes: str | None = None
     done_at: datetime | None = None
+    # false→true is the clarify flow; true→false is move-back-to-Inbox.
+    # Dropping it here would be the inverse of #380: a locally-clarified task
+    # bouncing back into the Inbox on the next checkpoint.
+    clarified: bool | None = None
     intent: str | None = None
     tags: list[str | TagInput] | None = None  # Full replacement of tag set when provided
     due_date: datetime | None = None
@@ -135,13 +164,19 @@ class TodoUpdate(BaseModel):
     time_estimate: int | None = None
     energy_level: str | None = None
     capture_source: str | None = None
-    # Client-state columns (migration 0007/0022)
+    # Client-state columns (migrations 0007/0022/0024) — must round-trip
+    # verbatim (docs/SYNC.md § The todos upload contract).
     time_spent_minutes: int | None = Field(default=None, ge=0)
+    last_clarified_at: datetime | None = None
+    next_action_text: str | None = None
+    last_next_action_completion_at: datetime | None = None
+    updated_at: datetime | None = None
     # Legacy compatibility field — only "next_action" is accepted; ignored by the DB layer.
     state: str | None = None
 
-    _normalise_due_date = field_validator("due_date", mode="before")(_normalise_drift_iso)
-    _normalise_done_at = field_validator("done_at", mode="before")(_normalise_drift_iso)
+    _normalise_datetimes = field_validator(*_CLIENT_STATE_DATETIME_FIELDS, mode="before")(
+        _normalise_drift_iso
+    )
 
     @field_validator("intent")
     @classmethod
@@ -238,16 +273,20 @@ class TodoOut(BaseModel):
     notes: str | None
     done_at: datetime | None
     priority: int | None
+    clarified: bool
     intent: str
     tags: list[TagOut]
     due_date: datetime | None
     created_at: datetime
+    updated_at: datetime | None
     time_estimate: int | None
     energy_level: str | None
     capture_source: str | None
-    # Client-state columns (migration 0007/0022)
+    # Client-state columns (migrations 0007/0022/0024)
     last_clarified_at: datetime | None
     time_spent_minutes: int
+    next_action_text: str | None
+    last_next_action_completion_at: datetime | None
     # Legacy compatibility: state column was dropped in migration 0020; always "next_action".
     state: str = "next_action"
 
