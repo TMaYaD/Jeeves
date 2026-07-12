@@ -14,7 +14,8 @@ import 'powersync_provider.dart';
 /// [DatabaseConnection.delayed]: any query issued before the underlying
 /// future resolves is queued and flushed once it does.  Tests construct
 /// [GtdDatabase] directly with an in-memory executor.
-final databaseProvider = Provider<GtdDatabase>((ref) {
+// Explicit variable type: see the matching note on [powerSyncInstanceProvider].
+final Provider<GtdDatabase> databaseProvider = Provider<GtdDatabase>((ref) {
   final connection = DatabaseConnection.delayed(Future(() async {
     final psDb = await ref.read(powerSyncInstanceProvider.future);
     return SqliteAsyncDriftConnection(psDb);

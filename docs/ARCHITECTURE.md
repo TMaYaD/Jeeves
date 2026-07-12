@@ -65,6 +65,27 @@ PowerSync provides bidirectional offline-first sync between the Flutter SQLite s
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.
 - Conflict resolution: last-write-wins by default, with a per-key strategy registry for `user_preferences` (snooze floors use a non-regressing `maxTimestampValue` rule; list/set keys are provisioned for merge). See [SYNC.md](./SYNC.md) for the full conflict matrix, the tombstone invariant, and the PowerSync write-checkpoint behaviour.
 
+#### Upload-error policy
+
+A CRUD entry whose REST upload fails is classified per status code by the pure function `JevesBackendConnector.classifyUploadError` — never by a blanket "4xx is fatal" rule. PowerSync queue mechanics force a three-way choice: rethrowing keeps the entry queued but blocks every later upload behind it (head-of-line), so only genuinely transient errors retry; everything else must leave the queue loudly and losslessly.
+
+| Status | Action | Rationale |
+|---|---|---|
+| no status (network / timeout) | retry | transient transport failure; entry stays queued |
+| 401 | retry | `_AuthRetryInterceptor` (api_service.dart) already refreshed the token and retried once; a 401 reaching the connector means the refresh itself failed, so the entry stays queued for the next backoff cycle. Never dropped. |
+| 408, 429 | retry | timeout / back-pressure; PowerSync's retry backoff resolves it |
+| 5xx | retry | server fault, presumed transient |
+| 404 on PATCH / DELETE | discard | the only auto-drop: the remote row is already gone; server deletion wins and the next pull converges local state. Logged. |
+| 404 on PUT | dead-letter | e.g. a `todo_tags` link whose parent was deleted remotely — recorded, never silent |
+| 403 | dead-letter | not user-actionable; recorded so the permission / RLS bug is fixed at the root |
+| 409 | dead-letter | genuine client-unresolvable id conflict; per-table meaning below |
+| 400, 422 | dead-letter | client bug — payload and response body persisted and logged for diagnosis |
+| any other 4xx | dead-letter | safe default: nothing is ever silently dropped |
+
+**409 per table.** Every backend POST route is idempotent by client-generated id (a replay returns the existing row), so a 409 is never a retry artifact: for `tags` and `user_preferences` it means the id belongs to another user; for `todo_tags` it means the id is already bound to a different (todo, tag) relation; `todos` routes never return 409. No current 409 is a merge-able both-sides-edited conflict, so entries are classified and recorded losslessly; a genuine two-sided conflict-reconciliation interface is deliberately out of scope here and tracked as follow-up work coordinated with the `user_preferences` per-key strategy registry.
+
+**Dead letters are instrumentation, not a product surface.** A dead-lettered entry is written to the local-only `sync_dead_letters` Drift table (never replicated; capped at `GtdDatabase.syncDeadLetterCap` rows, oldest pruned) with the operation, table, row id, payload, status, and truncated response body. Recording is idempotent per failure — one row per distinct (table, row, operation, status), refreshed on repeats — because a batch retried after a partial failure re-uploads entries that were already dead-lettered. A non-zero count forces the existing sync indicator into its error state via `syncStatusProvider`, and every dead-letter / discard is also `debugPrint`-logged. There is no user-facing retry/drop surface, by design — by the time an entry fails classification it is a deterministic failure, so resolution means fixing the root cause: a 422 is a client payload bug, a 403 is a permission bug, and 404/409 churn means a route needs idempotency work. The north star is that the dead-letter table trends toward empty.
+
 ## Platform I/O Adapters
 
 Any code that opens a file, spawns a process, or calls a native OS API must be isolated behind a platform adapter using Dart's conditional import mechanism. This keeps `dart:io` out of shared provider and service code so the app compiles cleanly on web without `if (kIsWeb)` branches scattered through business logic.
@@ -328,7 +349,7 @@ All preference values are stored as JSON-encoded TEXT. A NULL value is a tombsto
 
 ### Conflict resolution
 
-Per-key conflict strategy is defined in `services/user_preferences_conflict.dart` — a `ConflictStrategy` registry (`lww` default, `maxTimestampValue` for snooze floors, `setMerge` provisioned for future list keys) with a pure `resolvePreferenceConflict` function. Deletion is a tombstone (present row, NULL value), never a physical removal. During normal reconciliation a server-absent row keeps the local value; the one residual wipe path is a backend-rejected upload (SYNC.md window 3), prevented by backend idempotency and surfaced in debug by the connector. The full matrix and the PowerSync reconciliation behaviour live in [SYNC.md](./SYNC.md).
+Per-key conflict strategy is defined in `services/user_preferences_conflict.dart` — a `ConflictStrategy` registry (`lww` default, `maxTimestampValue` for snooze floors, `setMerge` provisioned for future list keys) with a pure `resolvePreferenceConflict` function. Deletion is a tombstone (present row, NULL value), never a physical removal. During normal reconciliation a server-absent row keeps the local value; the one residual wipe path is a backend-rejected upload (SYNC.md window 3), prevented by backend idempotency — and if it does happen, the connector dead-letters the entry (payload preserved, sync indicator flags the error, debug builds assert) instead of dropping it silently. The full matrix and the PowerSync reconciliation behaviour live in [SYNC.md](./SYNC.md).
 
 ### One-time migration
 

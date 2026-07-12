@@ -31,7 +31,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, UserPreferences],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, UserPreferences, SyncDeadLetters],
   daos: [InboxDao, TagDao, TodoDao, TimeLogDao, FocusSessionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -44,7 +44,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 21;
+  int get schemaVersion => 23;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -374,8 +374,81 @@ class GtdDatabase extends _$GtdDatabase {
             await _addColumnIfTable(m, todos, todos.nextActionText);
             await _addColumnIfTable(m, todos, todos.lastNextActionCompletionAt);
           }
+          // Version 22 is reserved by #381 (focus_session_tasks user_id);
+          // this branch must land after it. If #381 is dropped, renumber the
+          // step below (and schemaVersion) down to 22.
+          if (from < 23) {
+            // Local-only dead-letter table for non-retryable upload failures
+            // (issue #305). Not a PowerSync view — plain CREATE TABLE is safe
+            // on both the production and NativeDatabase paths.
+            await m.createTable(syncDeadLetters);
+          }
         },
       );
+
+  /// Maximum retained rows in `sync_dead_letters`; [recordSyncDeadLetter]
+  /// prunes oldest-first beyond this so the table cannot grow unbounded.
+  // not configurable: bounded diagnostic buffer, not user-facing behaviour.
+  static const int syncDeadLetterCap = 200;
+
+  /// Record a non-retryable upload failure (see
+  /// `JevesBackendConnector.classifyUploadError`) and prune the oldest rows
+  /// beyond [syncDeadLetterCap].
+  ///
+  /// Idempotent per failure: a repeat of the same (table, row, op, status) —
+  /// e.g. a batch retried after a partial failure re-uploading an entry that
+  /// was already dead-lettered — refreshes the existing row's payload, body,
+  /// and timestamp instead of accumulating duplicates. Insert and prune run
+  /// in one transaction so the cap holds at every observable point.
+  Future<void> recordSyncDeadLetter({
+    required String tableName,
+    required String op,
+    required String rowId,
+    required String? opData,
+    required int statusCode,
+    required String? responseBody,
+  }) async {
+    await transaction(() async {
+      await into(syncDeadLetters).insert(
+        SyncDeadLettersCompanion.insert(
+          targetTable: tableName,
+          op: op,
+          rowId: rowId,
+          opData: Value(opData),
+          statusCode: statusCode,
+          responseBody: Value(responseBody),
+        ),
+        onConflict: DoUpdate(
+          (old) => SyncDeadLettersCompanion(
+            opData: Value(opData),
+            responseBody: Value(responseBody),
+            createdAt: Value(DateTime.now()),
+          ),
+          target: [
+            syncDeadLetters.targetTable,
+            syncDeadLetters.rowId,
+            syncDeadLetters.op,
+            syncDeadLetters.statusCode,
+          ],
+        ),
+      );
+      final keepNewest = selectOnly(syncDeadLetters)
+        ..addColumns([syncDeadLetters.id])
+        ..orderBy([OrderingTerm.desc(syncDeadLetters.id)])
+        ..limit(syncDeadLetterCap);
+      await (delete(syncDeadLetters)
+            ..where((t) => t.id.isNotInQuery(keepNewest)))
+          .go();
+    });
+  }
+
+  /// Live count of recorded dead letters — folded into the sync status
+  /// surface so a non-empty table shows as a sync error.
+  Stream<int> watchSyncDeadLetterCount() {
+    final count = countAll();
+    final query = selectOnly(syncDeadLetters)..addColumns([count]);
+    return query.watchSingle().map((row) => row.read(count) ?? 0);
+  }
 
   /// Invalidates Drift stream queries reading the `todos` view (and, when
   /// [includeTodoTags] is set, the `todo_tags` view) after a direct write to
