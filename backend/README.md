@@ -50,6 +50,12 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
+Containerized startup (`infra/docker-compose.yml`) and the dokku release phase
+(`Procfile`) run migrations via `python -m app.migrate` — a wrapper around
+`alembic upgrade head` that detects schema/version drift and exits with
+recovery guidance instead of an opaque `DuplicateColumnError` traceback. See
+[Recovering from schema/version drift](../infra/README.md#recovering-from-schemaversion-drift).
+
 ## Project layout
 
 ```

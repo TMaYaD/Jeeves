@@ -41,6 +41,53 @@ docker compose down
 docker compose down -v
 ```
 
+## Recovering from schema/version drift
+
+**Symptom:** the backend container crash-loops and `podman compose logs backend`
+shows a "Schema/version drift detected" message (from `python -m app.migrate`,
+the startup migration runner) or a raw `DuplicateColumnError` /
+`DuplicateTableError`.
+
+This happens when the persisted `postgres_data` volume's schema no longer
+matches the revision recorded in its `alembic_version` table — e.g. after
+switching branches or worktrees with divergent migration histories. The runner
+deliberately never auto-stamps the version table (see
+`docs/adr/0012-no-auto-stamp-on-migration-drift.md`): a schema that merely
+looks migrated may genuinely be behind, and stamping it would silently skip
+migrations.
+
+Inspect the recorded revision:
+
+```bash
+podman compose exec postgres psql -U jeeves -c "SELECT version_num FROM alembic_version"
+```
+
+Recovery options, in order of preference:
+
+1. **Stamp the revision the database actually matches.** Take a backup first:
+
+   ```bash
+   podman compose exec postgres pg_dump -U jeeves jeeves > jeeves-backup.sql
+   ```
+
+   Then verify — for every migration up to and including the revision you
+   intend to stamp — that both its schema changes *and* its data effects
+   (backfills, data moves) are already present in the database; comparing
+   schema alone can stamp past an unapplied data migration. Only after that
+   review, record the revision without re-running migrations:
+
+   ```bash
+   cd backend && alembic stamp <revision>
+   ```
+
+   Restarting the backend then applies only the genuinely pending migrations.
+
+2. **Reset the volume** (dev only — **destroys all data**):
+
+   ```bash
+   podman compose down -v
+   ```
+
 ## PowerSync configuration
 
 The sync rules and auth config live in `powersync/sync-config.yaml`.
