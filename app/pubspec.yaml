@@ -24,10 +24,10 @@ dependencies:
 
   # Builder interface used by the in-tree powersync_schema_builder (lib/tool/builders/).
   # Must be in dependencies (not dev) because the builder file lives under lib/.
-  build: ^4.0.6
+  build: ^4.0.7
 
   # Local storage (offline-first)
-  drift: ^2.34.0
+  drift: ^2.34.1
   # Bridges Drift to the sqlite_async connection that PowerSync owns, so one
   # shared SQLite file backs both.  Without this, Drift and PowerSync would
   # each open their own connection and their watchers would never see each
@@ -59,7 +59,7 @@ dependencies:
   # Held at 14.0.2: geolocator 14.0.3 pulls package_info_plus 10 -> win32 ^6,
   # which conflicts with file_picker 11.x (win32 ^5.9). Unblocks once we move
   # to file_picker 12 stable. See .github/dependabot.yml.
-  geolocator: ^14.0.2
+  geolocator: ^14.0.3
   geocoding: ^5.0.0
 
   # Voice / Speech
@@ -82,7 +82,7 @@ dependencies:
   # deprecates `withData`/`bytes` (used in screens/import_screen.dart), which
   # `flutter analyze` treats as fatal infos. See the Dependabot ignore rule in
   # .github/dependabot.yml — it lets 12.0.0 through once it ships stable.
-  file_picker: ^11.0.0
+  file_picker: ^12.0.0-beta.7
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^10.3.1
@@ -95,7 +95,7 @@ dependencies:
   freezed_annotation: ^3.1.0
   json_annotation: ^4.12.0
   intl: ^0.20.3
-  flutter_markdown_plus: ^1.0.7
+  flutter_markdown_plus: ^1.0.12
   url_launcher: ^6.3.0
 
 dev_dependencies:
@@ -103,10 +103,10 @@ dev_dependencies:
     sdk: flutter
   integration_test:
     sdk: flutter
-  sqlite3: ^3.3.3
+  sqlite3: ^3.4.0
   fake_async: ^1.3.3
   flutter_lints: ^6.0.0
-  build_runner: ^2.15.0
+  build_runner: ^2.15.1
   freezed: ^3.2.5
   json_serializable: ^6.13.1
   riverpod_generator: ^4.0.4
