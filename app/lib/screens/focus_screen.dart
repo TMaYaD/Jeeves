@@ -38,8 +38,11 @@ class FocusScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  // User-facing title is "Now" (epic #35 design review);
+                  // internal identifiers stay Focus — see CONTEXT.md's
+                  // term-unification divergence list.
                   const Text(
-                    'Focus',
+                    'Now',
                     style: TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
@@ -230,7 +233,14 @@ class FocusScreen extends ConsumerWidget {
   }
 
   Future<void> _replanDay(BuildContext context, WidgetRef ref) async {
-    await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
+    // Reset only after a completed performance (post-completion Re-plan).
+    // An abandoned performance's working state persists as an in-memory
+    // draft that seeds the next performance — entering must not clear it
+    // (issue #180; the draft silently degrades to a fresh start after
+    // process death, which is accepted behaviour).
+    if (focusSessionPlanningCompletionNotifier.value) {
+      await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
+    }
     if (!context.mounted) return;
     context.go('/focus-session-planning');
   }

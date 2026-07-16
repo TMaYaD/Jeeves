@@ -197,6 +197,43 @@ void main() {
       await _dispose(tester);
     });
 
+    testWidgets(
+        'Next after Clarify always lands on Review Tasks — an empty '
+        'needs-review snapshot renders its empty state instead of '
+        'auto-skipping (issue #180, Gap 3)', (tester) async {
+      await _insertInbox(db, 'only');
+
+      await tester.pumpWidget(_screen(db));
+      await _settle(tester);
+
+      await tester.tap(find.byKey(_skipKey));
+      await tester.pumpAndSettle();
+
+      // Cross from Clarify Inbox into Review Tasks. Nothing needs review,
+      // but the step still renders (CONTEXT.md § Wizard: no auto-skip).
+      await tester.tap(find.byKey(_nextKey));
+      await _settle(tester);
+
+      expect(_stateOf(tester).currentStep, 1,
+          reason: 'the wizard never lands beyond Review Tasks off one tap');
+      expect(find.text('Review Tasks'), findsOneWidget);
+      expect(find.text('All tasks reviewed!'), findsOneWidget,
+          reason: 'the empty snapshot shows the empty-state view');
+      expect(
+        tester.widget<FilledButton>(find.byKey(_nextKey)).onPressed,
+        isNotNull,
+        reason: 'the user advances by clicking Next',
+      );
+
+      // Clicking Next from the empty state reaches the Energy Check-in.
+      await tester.tap(find.byKey(_nextKey));
+      await _settle(tester);
+      expect(_stateOf(tester).currentStep, 2);
+      expect(find.text('Energy Check-in'), findsOneWidget);
+
+      await _dispose(tester);
+    });
+
     testWidgets('the footer slot keeps a fixed footprint across the swap',
         (tester) async {
       await _insertInbox(db, 'only');

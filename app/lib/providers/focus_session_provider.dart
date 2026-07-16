@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'auth_provider.dart';
 import 'database_provider.dart';
 
 class FocusModeState {
@@ -36,11 +37,16 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   @override
   FocusModeState build() => const FocusModeState();
 
-  /// Sets [todoId] as the focused task on the active session and starts the
-  /// focus timer.
+  /// Starts engaging with [todoId]: opens a TimeLog and starts the focus
+  /// timer.
   ///
-  /// Throws [StateError] if a different task is already active, or if no open
-  /// session exists (planning must be completed before focusing).
+  /// Engagement is independent of FocusSession (ADR-0005): with an open
+  /// session, the engagement routes through the session — the Focus pointer
+  /// (`current_task_id`) is set and the TimeLog attributes to the session,
+  /// whether or not the task is on the Plan. With no session, the TimeLog
+  /// is ad hoc (null session FK).
+  ///
+  /// Throws [StateError] if a different task is already active.
   Future<void> startFocus(String todoId) async {
     if (state.activeTodoId != null && state.activeTodoId != todoId) {
       throw StateError(
@@ -52,17 +58,19 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     final now = DateTime.now();
 
     final session = await db.focusSessionDao.getActiveSession();
-    if (session == null) {
-      throw StateError(
-        'No active focus session — complete the daily planning ritual first.',
+    if (session != null) {
+      await db.focusSessionDao.setCurrentTask(
+        sessionId: session.id,
+        taskId: todoId,
+        now: now,
+      );
+    } else {
+      await db.timeLogDao.openLog(
+        taskId: todoId,
+        userId: ref.read(currentUserIdProvider),
+        now: now,
       );
     }
-
-    await db.focusSessionDao.setCurrentTask(
-      sessionId: session.id,
-      taskId: todoId,
-      now: now,
-    );
     state = FocusModeState(
       activeTodoId: todoId,
       sessionStart: now,
@@ -81,7 +89,8 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     );
   }
 
-  /// Clears the focused task on the active session and resets the timer.
+  /// Clears the focused task and resets the timer, closing the open TimeLog
+  /// (through the session when one is open; directly for ad-hoc engagement).
   ///
   /// The caller is responsible for any prior DB side-effects (e.g. marking
   /// the task done) before calling this.
@@ -93,6 +102,9 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
         sessionId: session.id,
         taskId: null,
       );
+    } else if (state.activeTodoId != null) {
+      // Ad-hoc engagement (ADR-0005): no session to close the log through.
+      await db.timeLogDao.closeLog(taskId: state.activeTodoId!);
     }
     state = const FocusModeState();
   }

@@ -131,13 +131,57 @@ void main() {
       );
     });
 
-    test('throws StateError when no open focus session exists', () async {
+    test(
+        'opens an ad-hoc TimeLog when no open focus session exists '
+        '(ADR-0005: engagement is independent of FocusSession)', () async {
       final todo = await _insertTask(db);
-      // No session opened — startFocus should reject immediately.
-      expect(
-        () => container.read(focusModeProvider.notifier).startFocus(todo.id),
-        throwsA(isA<StateError>()),
-      );
+      // No session opened — engagement must not be gated on one.
+      await container.read(focusModeProvider.notifier).startFocus(todo.id);
+
+      final s = container.read(focusModeProvider);
+      expect(s.activeTodoId, todo.id);
+      expect(s.isActive, isTrue);
+
+      final log = await db.timeLogDao.watchActiveLog().first;
+      expect(log, isNotNull);
+      expect(log!.taskId, todo.id);
+      expect(log.focusSessionId, isNull,
+          reason: 'ad-hoc engagement carries a null session FK');
+    });
+
+    test('endFocus closes the ad-hoc TimeLog when no session exists',
+        () async {
+      final todo = await _insertTask(db);
+      await container.read(focusModeProvider.notifier).startFocus(todo.id);
+
+      await container.read(focusModeProvider.notifier).endFocus();
+
+      final s = container.read(focusModeProvider);
+      expect(s.isActive, isFalse);
+      final log = await db.timeLogDao.watchActiveLog().first;
+      expect(log, isNull);
+    });
+
+    test(
+        'attributes the TimeLog to the open session when engaging an '
+        'off-Plan task (Focus may point off-Plan, CONTEXT.md § Engagement)',
+        () async {
+      final planned = await _insertTask(db);
+      final offPlan = await _insertTask(db);
+      await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: [planned.id]);
+
+      await container.read(focusModeProvider.notifier).startFocus(offPlan.id);
+
+      final log = await db.timeLogDao.watchActiveLog().first;
+      expect(log, isNotNull);
+      expect(log!.taskId, offPlan.id);
+
+      final session = await db.focusSessionDao.getActiveSession();
+      expect(log.focusSessionId, session?.id,
+          reason: 'a session open at engagement time attributes the TimeLog');
+      expect(session?.currentTaskId, offPlan.id,
+          reason: 'the Focus pointer may reference an off-Plan Outcome');
     });
 
     test('endFocus clears provider state and closes time log', () async {

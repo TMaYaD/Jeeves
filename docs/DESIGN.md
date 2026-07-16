@@ -156,7 +156,26 @@ slot, so the button's shape, size, and position never shift across the swap.
 Skip is the de-emphasised escape hatch; Next step is the emphasised path of
 progress.
 
+While the wizard's page transition is animating, the footer slot absorbs taps.
+The footer swaps to the incoming step's widget the moment the step index
+changes, which would otherwise put an identically-positioned forward button
+under the user's finger mid-transition — a double-tap must advance exactly
+one step. This absorption is part of the Wizard contract, owned by the
+`Wizard` widget itself.
+
 ## Interaction Patterns
+
+### Ceremony back navigation
+System back inside a ceremony mirrors the footer Back affordance — it invokes
+the exact callback the active step's footer renders, retreating the per-item
+cursor first, then the step. While inside the wizard the performance stays
+in-progress. When footer Back is unavailable (first step, first item — or a
+completion screen), system back exits the ceremony to the execution home
+screen (`/focus`, user-titled "Now") — never to the launcher — and abandons
+the performance. The contract is uniform across all three ceremonies and
+every launch path (button, nudge banner, notification deep-link). Implemented
+by `CeremonyPopScope` (`app/lib/widgets/ceremony/ceremony_pop_scope.dart`),
+which wraps each ceremony screen.
 
 ### Long-press multi-select
 Lists that surface batchable actions enter a multi-select mode on **long-press**, mirroring the long-press affordance the tag cloud uses for tag management. Once selection mode is active, a **contextual bar** appears immediately above the list (not in the screen-level app bar — that slot is reserved for step progress and titles) showing the selected count, a per-batch preview where relevant (e.g. total planned time), a "Select all" shortcut, a Clear (×) button, and a primary commit button. Cards in selection mode replace per-row trailing actions with a leading checkbox; tapping a card toggles its membership. Deselecting the last item auto-exits the mode. Each selection toggle fires a light haptic.

@@ -399,6 +399,46 @@ void main() {
       expect(find.byKey(_skipKey), findsNothing);
     });
 
+    testWidgets(
+        'absorbs footer taps while the page transition is animating '
+        '(issue #180, Gap 3)', (tester) async {
+      // Three steps whose footers all advance. A second tap landing on the
+      // next step's identically-positioned Next button during the 300 ms
+      // transition must be absorbed — exactly one step advances per tap.
+      await tester.pumpWidget(_Harness(
+        buildSteps: (currentStep, setStep) => List.generate(
+          3,
+          (i) => WizardStep(
+            title: 'Step $i',
+            body: const SizedBox.shrink(),
+            footer: WizardFooter(
+              ceremonyId: _ceremonyId,
+              accentColor: _accent,
+              onBack: null,
+              onNext: () => setStep(i + 1),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(_nextKey));
+      // Mid-transition (~150 ms of the 300 ms animation): the footer slot is
+      // already showing step 1's Next button at the same screen position.
+      await tester.pump(const Duration(milliseconds: 150));
+      await tester.tap(find.byKey(_nextKey), warnIfMissed: false);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Step 1'), findsOneWidget,
+          reason: 'the mid-transition tap is absorbed');
+      expect(find.text('Step 2'), findsNothing);
+
+      // Once the transition settles, the footer accepts taps again.
+      await tester.tap(find.byKey(_nextKey));
+      await tester.pumpAndSettle();
+      expect(find.text('Step 2'), findsOneWidget);
+    });
+
     testWidgets('updates the header title when currentStep changes externally',
         (tester) async {
       await tester.pumpWidget(_Harness(

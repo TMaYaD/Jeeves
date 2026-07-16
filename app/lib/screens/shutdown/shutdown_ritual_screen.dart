@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
+import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/close_day_step.dart';
 import 'steps/completed_review_step.dart';
@@ -57,7 +58,12 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
 
   @override
   void dispose() {
-    _ceremonyNotifier.exit(RitualId.eveningShutdown);
+    // Defer `exit()` to a microtask — unmount runs while the widget tree is
+    // locked, and Riverpod forbids notifier mutation during that phase (the
+    // mirror of the deferred `enter()` above). The notifier guards against
+    // the container being torn down before the microtask fires.
+    final notifier = _ceremonyNotifier;
+    Future.microtask(() => notifier.exit(RitualId.eveningShutdown));
     super.dispose();
   }
 
@@ -77,7 +83,12 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
         }
       });
     }
-    if (_showCloseDay || step == 2) return const CloseDayStep();
+    // Close Day is the terminal confirmation — footer Back is unavailable,
+    // so system back exits to the execution home like other completion
+    // screens (the ritual itself exits the app once Close Day is tapped).
+    if (_showCloseDay || step == 2) {
+      return const CeremonyPopScope(onBack: null, child: CloseDayStep());
+    }
 
     // Latch the initial unfinished count once so the resolve progress fills
     // correctly. Auto-advance off step 1 whenever the list is empty — covers
@@ -127,7 +138,7 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
         footer: WizardFooter(
           ceremonyId: _ceremonyId,
           accentColor: _accent,
-          onBack: null,
+          onBack: _backForStep(0, shutdownState, notifier),
           onNext: notifier.advanceStep,
         ),
       ),
@@ -141,19 +152,38 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
         // unfinished snapshot cursor before crossing to Step 0.
         footer: BackOnlyFooter(
           ceremonyId: _ceremonyId,
-          onBack: shutdownState.unfinishedNav.canGoBack
-              ? notifier.previousUnfinishedTask
-              : () => notifier.goToStep(0),
+          onBack: _backForStep(1, shutdownState, notifier),
         ),
       ),
     ];
 
-    return Wizard(
-      ceremonyLabel: 'Evening Shutdown',
-      ceremonyIcon: Icons.nightlight_outlined,
-      accentColor: _accent,
-      currentStep: step,
-      steps: steps,
+    return CeremonyPopScope(
+      // System back mirrors the active step's footer Back; on the first
+      // step (no Back) it exits to the execution home.
+      onBack: _backForStep(step, shutdownState, notifier),
+      child: Wizard(
+        ceremonyLabel: 'Evening Shutdown',
+        ceremonyIcon: Icons.nightlight_outlined,
+        accentColor: _accent,
+        currentStep: step,
+        steps: steps,
+      ),
     );
   }
+
+  /// The Back callback for [stepIndex] — the same callback its footer
+  /// renders. Null when Back is unavailable, which [CeremonyPopScope]
+  /// translates into a ceremony exit.
+  VoidCallback? _backForStep(
+    int stepIndex,
+    EveningShutdownState shutdownState,
+    EveningShutdownNotifier notifier,
+  ) =>
+      switch (stepIndex) {
+        0 => null,
+        1 => shutdownState.unfinishedNav.canGoBack
+            ? notifier.previousUnfinishedTask
+            : () => notifier.goToStep(0),
+        _ => null,
+      };
 }

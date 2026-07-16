@@ -41,6 +41,7 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 - **E2E/Integration**: Flutter Integration Tests for on-device testing.
 - **Unit/Widget**: Widget tests and standard Dart unit tests for Riverpod providers and logic.
 - **Never assert on affected-row counts** (`changes()`, the value Drift returns from `update`/`delete`) for writes to `todos` / `tags` / `todo_tags`. In production these are PowerSync views with `INSTEAD OF` triggers, so the count is always 0 — such an assert passes under the `NativeDatabase.memory()` test harness (real tables) and throws only in production. Rely on the WHERE-clause optimistic lock instead. See the live-refresh invariant in [ARCHITECTURE.md](./ARCHITECTURE.md) for the same mechanism's effect on stream invalidation.
+- **Pre-commit hook fails with "Flutter SDK version is 0.0.0-unknown"**: git exports `GIT_DIR`/`GIT_INDEX_FILE` into hooks, which poisons the shared `/opt/flutter` SDK's version computation — its staleness check runs git against the *project* repo and rewrites `bin/cache/flutter.version.json` as `0.0.0-unknown`, after which `dart pub` fails version solving. Retrying can never work while the hook re-poisons the file. Fix per worktree: create untracked `app/.fvm/flutter_sdk/bin/flutter` and `.../dart` shims (gitignored via `.fvm/`) that `unset` all `GIT_*` variables and `exec` the `/opt/flutter/bin` binary — the hook prefers `.fvm/flutter_sdk/bin` over the system SDK. Heal an already-poisoned SDK by running `flutter --version` outside a hook.
 
 ### Backend (FastAPI)
 

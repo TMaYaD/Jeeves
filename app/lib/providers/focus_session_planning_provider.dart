@@ -370,6 +370,12 @@ final focusSessionPlanningProvider =
 class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   bool _loadingInboxSnapshot = false;
 
+  /// Re-entrancy guard for [advanceStep]. Held until the end of the current
+  /// event-loop turn (mirroring PeriodicReviewNotifier's `_isTransitioning`
+  /// discipline) so a rapid double-tap advances exactly one step, whether
+  /// the branch awaits a snapshot load or is otherwise synchronous.
+  bool _advancing = false;
+
   @override
   FocusSessionPlanningState build() {
     // Refresh notification-suppression flags when Drift receives cross-device
@@ -416,14 +422,16 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   // ---- Step navigation -------------------------------------------------------
 
   Future<void> advanceStep() async {
-    int next = state.currentStep + 1;
-    if (next == 1) {
-      // Load the review snapshot. Skip step 1 entirely if nothing needs review.
-      final items = await _db.todoDao.getNeedsReview();
-      if (!ref.mounted) return;
-      if (items.isEmpty) {
-        next = 2;
-      } else {
+    if (_advancing) return;
+    _advancing = true;
+    try {
+      final next = state.currentStep + 1;
+      if (next == 1) {
+        // Load the review snapshot. The step always renders — an empty
+        // snapshot shows the empty-state view and the user clicks Next to
+        // advance (CONTEXT.md § Wizard: steps do not auto-skip).
+        final items = await _db.todoDao.getNeedsReview();
+        if (!ref.mounted) return;
         // Batched person-tag lookup so the stale waiting-for card variant
         // can render delegate names without a per-frame DAO call.
         final personTags = await _db.todoDao.getPersonTagsForTodos(
@@ -436,8 +444,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           reviewPersonTags: personTags,
         );
       }
+      state = state.copyWith(currentStep: next.clamp(0, _maxStepIndex));
+      // Hold the guard through the rest of the current event-loop turn so a
+      // second call from the same tap burst is dropped even on the branch
+      // with no snapshot load to await.
+      await Future<void>.microtask(() {});
+    } finally {
+      _advancing = false;
     }
-    state = state.copyWith(currentStep: next.clamp(0, _maxStepIndex));
   }
 
   /// Steps back within the review step to the previous item.

@@ -253,6 +253,29 @@ void main() {
       expect(session?.currentTaskId, 'task1');
     });
 
+    test(
+        'accepts an off-Plan task: Focus may point to any Outcome being '
+        'engaged, whether or not on the Plan (CONTEXT.md § Engagement)',
+        () async {
+      await _insertTodo(db, id: 'planned', title: 'Planned');
+      await _insertTodo(db, id: 'offplan', title: 'Off-plan');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['planned'],
+      );
+
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'offplan');
+
+      final session = await db.focusSessionDao.getActiveSession();
+      expect(session?.currentTaskId, 'offplan');
+
+      final log = await db.timeLogDao.watchActiveLog().first;
+      expect(log?.taskId, 'offplan');
+      expect(log?.focusSessionId, sessionId,
+          reason: 'off-Plan engagement still attributes to the session');
+    });
+
     test('null taskId clears current_task_id and closes open time log',
         () async {
       await _insertTodo(db, id: 'task1', title: 'Task 1');

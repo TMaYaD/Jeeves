@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/focus_session_planning_provider.dart';
+import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/day_checkin_energy_step.dart';
 import 'steps/day_checkin_time_step.dart';
@@ -66,7 +67,12 @@ class _FocusSessionPlanningScreenState
 
   @override
   void dispose() {
-    _ceremonyNotifier.exit(RitualId.dailyPlanning);
+    // Defer `exit()` to a microtask — unmount runs while the widget tree is
+    // locked, and Riverpod forbids notifier mutation during that phase (the
+    // mirror of the deferred `enter()` above). The notifier guards against
+    // the container being torn down before the microtask fires.
+    final notifier = _ceremonyNotifier;
+    Future.microtask(() => notifier.exit(RitualId.dailyPlanning));
     super.dispose();
   }
 
@@ -80,9 +86,12 @@ class _FocusSessionPlanningScreenState
     // confirmation, not a step the user walks through. The notifier still
     // owns currentStep so resuming mid-ritual returns to the same place.
     if (step >= _kProgressSegmentCount) {
-      return const Scaffold(
-        backgroundColor: Colors.white,
-        body: SafeArea(child: ScheduledReviewStep()),
+      return const CeremonyPopScope(
+        onBack: null,
+        child: Scaffold(
+          backgroundColor: Colors.white,
+          body: SafeArea(child: ScheduledReviewStep()),
+        ),
       );
     }
 
@@ -94,13 +103,18 @@ class _FocusSessionPlanningScreenState
       _buildPlanSummaryStep(state, notifier),
     ];
 
-    return Wizard(
-      ceremonyLabel: 'Daily Planning',
-      ceremonyIcon: Icons.wb_sunny_outlined,
-      accentColor: _accent,
-      currentStep: step,
-      steps: steps,
-      progressSegmentCount: _kProgressSegmentCount,
+    return CeremonyPopScope(
+      // System back mirrors the active step's footer Back; when that is
+      // unavailable (step 0, first item) it exits to the execution home.
+      onBack: _backForStep(step, state, notifier),
+      child: Wizard(
+        ceremonyLabel: 'Daily Planning',
+        ceremonyIcon: Icons.wb_sunny_outlined,
+        accentColor: _accent,
+        currentStep: step,
+        steps: steps,
+        progressSegmentCount: _kProgressSegmentCount,
+      ),
     );
   }
 
@@ -116,6 +130,23 @@ class _FocusSessionPlanningScreenState
     final previous = state.currentStep - 1;
     return () => notifier.goToStep(previous);
   }
+
+  /// The Back callback for [stepIndex] — the same callback its footer
+  /// renders. Null when Back is unavailable (step 0, first item), which
+  /// [CeremonyPopScope] translates into a ceremony exit.
+  VoidCallback? _backForStep(
+    int stepIndex,
+    FocusSessionPlanningState state,
+    FocusSessionPlanningNotifier notifier,
+  ) =>
+      switch (stepIndex) {
+        0 => state.inboxNav.canGoBack ? notifier.previousInboxItem : null,
+        // At item 0 of the review snapshot Back crosses to Step 0.
+        1 => state.reviewNav.canGoBack
+            ? notifier.reviewBack
+            : _backToPrevStep(state, notifier),
+        _ => _backToPrevStep(state, notifier),
+      };
 
   WizardStep _buildInboxStep(
     FocusSessionPlanningState state,
@@ -134,7 +165,7 @@ class _FocusSessionPlanningScreenState
       footer: ListItemFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
-        onBack: nav.canGoBack ? notifier.previousInboxItem : null,
+        onBack: _backForStep(0, state, notifier),
         onSkip: notifier.skipInboxItem,
         // Next step is disabled until the inbox snapshot has loaded.
         onNext: nav.isLoaded ? notifier.advanceStep : null,
@@ -161,10 +192,7 @@ class _FocusSessionPlanningScreenState
       footer: ListItemFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
-        // At item 0 of the review snapshot Back should cross to Step 0.
-        onBack: nav.canGoBack
-            ? notifier.reviewBack
-            : _backToPrevStep(state, notifier),
+        onBack: _backForStep(1, state, notifier),
         onSkip: notifier.skipReviewItem,
         onNext: notifier.advanceStep,
         hasMoreItems: hasMore,
