@@ -152,6 +152,7 @@ Update after completing each goal. Keep goals small (< 30 min each).
 |------|---------|-------|
 | `AGENTS.md` | Agent instructions | Generic (copy to new projects) |
 | `SCRATCHPAD.md` | Current goals, working memory | Session-specific |
+| `NOTES.md` | Corrections to agent instincts | Project-specific |
 | `README.md` | Project overview | Project-specific |
 | `CONTEXT.md` | Domain glossary across bounded contexts | Project-specific |
 | `docs/` | Detailed documentation | Project-specific |
@@ -172,8 +173,19 @@ If you're unsure whether a doc needs updating, read the doc first and check. Don
 
 Git history and GitHub issues are the source of truth for how and why the system got here. The source code is the source of truth for what it is now. /docs is a summary of both.
 
-## Keep Notes
+## Keep Notes (`NOTES.md`)
 
-When you make a non-obvious decision, encounter a surprise about this codebase, or learn something by failing an approach first, append a one-line entry to NOTES.md under today's date before moving on. Don't ask permission.
+NOTES.md records corrections to agent instincts: cases where the default, reasonable-looking approach was wrong in this project, and a fresh agent would likely make the same mistake even after reading the code and docs. It is not a changelog, not documentation, and not a work journal.
+
+Before appending, apply two tests:
+
+1. **Fresh-agent test.** Would a capable agent still get this wrong on a first attempt? If the fact is discoverable by reading the code or docs, it belongs there, not here.
+2. **Routing test.** A decision with real trade-offs → ADR. A fact about how the system works or is tested → docs/. What a change did and why → the PR description and commit message. Only the wrong instinct itself goes here.
+
+Write the entry as the correction, in one or two lines:
+
+`- <date>: Instinct: X. Here: Y — because Z.`
+
+If an entry can't be phrased that way, it belongs somewhere else. Codebase traps that keep biting (test-harness quirks, framework gotchas) go in the relevant doc — the doc update is mandatory, a NOTES pointer is optional. Don't ask permission; do apply the tests.
 
 
