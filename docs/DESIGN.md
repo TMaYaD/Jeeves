@@ -4,6 +4,21 @@
 
 This document outlines the core aesthetic and functional principles of our design system.
 
+## Reference design prototypes
+
+Two claude.ai/design projects are the canonical UX references for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
+
+| Project | Covers |
+|---|---|
+| [Jeeves — Focus Mode](https://claude.ai/design/p/e324ad40-21d8-4572-b90c-5356cc0839ce?file=Focus+Mode.html) | Mobile execution surfaces: Today's Plan list, Focus Mode sprint ring (Monastic / Paced / Instrument variants), sprint-resolution bottom sheet (Complete / Extend / Defer), Break, Task-complete — in light and dark themes, with tag-density options. |
+| [Jeeves — Daily Execution Layer](https://claude.ai/design/p/6a1ed3d8-1b97-4abd-8f45-0315ca69bc07?file=Jeeves+Daily+Execution+Layer.html) | The full desktop day loop (1440px sidebar shell): Morning planning (clarify → energy → selection → estimates) → Agenda → Timebox timeline → Focus → Shutdown (dispositions + journal), plus a mobile companion panel. Also the desktop-layout reference for cross-platform work. |
+
+Both are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`).
+
+### Epic-level design precedes stories
+
+Every epic carries a **Design** section in its GitHub issue: one epic-level UX design pass, produced with the design skill in claude.ai/design, covering all surfaces the epic's stories touch. Child stories do not begin UI implementation until that pass is published and reviewed. This keeps the experience coherent across stories instead of accreting per-story patches.
+
 ## Brand
 
 ### Logo marks
