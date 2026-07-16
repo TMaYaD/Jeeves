@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show Intent;
+import '../models/todo.dart' show Intent, RoutingKind;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -169,7 +169,12 @@ class TaskDetailNotifier {
   Future<void> setIntent(Intent intent) =>
       _db.todoDao.setIntent(_todoId, intent);
 
-  Future<void> restore() => _db.todoDao.restore(_todoId);
+  /// Restores a done or trashed Outcome to the Intent named by [to]
+  /// (`nextAction` or `maybe`) via [TodoDao.applyRouting]: sets the intent,
+  /// clears `done_at` (cleanup invariant), and stamps `last_clarified_at`.
+  /// Person tags survive (orthogonality invariant).
+  Future<void> restoreTo(RoutingKind to) =>
+      _db.todoDao.applyRouting(_todoId, to: to);
 
   /// Watch all tag associations for this todo (returns Drift [Tag] rows),
   /// scoped to the current user.

@@ -513,6 +513,74 @@ void main() {
     });
   });
 
+  group('TodoDao — watchTrash', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('returns only intent=trash rows, including completed ones', () async {
+      await _insertTodo(db, id: 'tr1', title: 'Trashed');
+      await db.todoDao.setIntent('tr1', Intent.trash);
+      await _insertTodo(db, id: 'tr2', title: 'Done then trashed');
+      await db.todoDao.markDone('tr2');
+      await db.todoDao.setIntent('tr2', Intent.trash);
+      await _insertTodo(db, id: 'tr3', title: 'Active');
+      await _insertTodo(db, id: 'tr4', title: 'Done, not trashed');
+      await db.todoDao.markDone('tr4');
+
+      final items = await db.todoDao.watchTrash().first;
+      expect(items.map((t) => t.id).toSet(), {'tr1', 'tr2'});
+    });
+
+    test(
+        'completed-then-trashed surfaces in watchTrash, not watchDone '
+        '(#278 mirror — Done and Trash are disjoint)', () async {
+      await _insertTodo(db, id: 'tr5', title: 'Done then trashed');
+      await db.todoDao.markDone('tr5');
+      await db.todoDao.setIntent('tr5', Intent.trash);
+
+      final trash = await db.todoDao.watchTrash().first;
+      final done = await db.todoDao.watchDone().first;
+      expect(trash.map((t) => t.id), contains('tr5'));
+      expect(done.map((t) => t.id), isNot(contains('tr5')));
+    });
+
+    test('orders newest-trashed first (last_clarified_at DESC)', () async {
+      await _insertTodo(db, id: 'tr6', title: 'Trashed first');
+      await _insertTodo(db, id: 'tr7', title: 'Trashed second');
+      await db.todoDao
+          .setIntent('tr6', Intent.trash, now: DateTime.utc(2026, 6, 1));
+      await db.todoDao
+          .setIntent('tr7', Intent.trash, now: DateTime.utc(2026, 6, 2));
+
+      final items = await db.todoDao.watchTrash().first;
+      expect(items.map((t) => t.id).toList(), ['tr7', 'tr6']);
+    });
+
+    test('NULL last_clarified_at falls back to updated_at / created_at',
+        () async {
+      // Legacy row predating the stamp: trashed via a direct write, no
+      // last_clarified_at. Must still sort (by updated_at) instead of
+      // clumping at one end.
+      await db.into(db.todos).insert(TodosCompanion(
+        id: const Value('tr8'),
+        title: const Value('Legacy trashed'),
+        clarified: const Value(true),
+        intent: const Value('trash'),
+        userId: const Value(_userId),
+        createdAt: Value(DateTime.utc(2026, 5, 1)),
+        updatedAt: Value(DateTime.utc(2026, 5, 2)),
+      ));
+      await _insertTodo(db, id: 'tr9', title: 'Freshly trashed');
+      await db.todoDao
+          .setIntent('tr9', Intent.trash, now: DateTime.utc(2026, 6, 1));
+
+      final items = await db.todoDao.watchTrash().first;
+      expect(items.map((t) => t.id).toList(), ['tr9', 'tr8']);
+    });
+  });
+
   group('TodoDao — setIntent / deferTaskToMaybe', () {
     late GtdDatabase db;
 
@@ -640,13 +708,17 @@ void main() {
     });
   });
 
-  group('TodoDao — restore stamps lastClarifiedAt', () {
+  group('TodoDao — restore via applyRouting', () {
+    // Restore has no bespoke DAO method: the task-detail surface routes
+    // through applyRouting(nextAction | maybe), whose forward matrix already
+    // sets the intent, clears done_at, and stamps last_clarified_at.
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('restore stamps lastClarifiedAt', () async {
+    test('done → applyRouting(nextAction) restores and stamps lastClarifiedAt',
+        () async {
       // Restoring a done/trashed Outcome is an Intent edit (sets
       // intent='next', clears done_at) — a clarifying micro-act.
       await _insertTodo(db, id: 'res1', title: 'Task');
@@ -655,10 +727,27 @@ void main() {
       await (db.update(db.todos)..where((t) => t.id.equals('res1')))
           .write(const TodosCompanion(lastClarifiedAt: Value(null)));
 
-      await db.todoDao.restore('res1');
+      await db.todoDao.applyRouting('res1', to: RoutingKind.nextAction);
 
       final row = await db.todoDao.getTodo('res1');
       expect(row?.lastClarifiedAt, isNotNull);
+      expect(row?.intent, 'next');
+      expect(row?.doneAt, isNull);
+    });
+
+    test('trash → applyRouting(maybe) restores and stamps lastClarifiedAt',
+        () async {
+      await _insertTodo(db, id: 'res2', title: 'Task');
+      await db.todoDao.applyRouting('res2', to: RoutingKind.trash);
+      await (db.update(db.todos)..where((t) => t.id.equals('res2')))
+          .write(const TodosCompanion(lastClarifiedAt: Value(null)));
+
+      await db.todoDao.applyRouting('res2', to: RoutingKind.maybe);
+
+      final row = await db.todoDao.getTodo('res2');
+      expect(row?.lastClarifiedAt, isNotNull);
+      expect(row?.intent, 'maybe');
+      expect(row?.doneAt, isNull);
     });
   });
 
@@ -905,6 +994,60 @@ void main() {
       final row = await db.todoDao.getTodo('t2');
       expect(row?.intent, 'next');
       expect(row?.doneAt, isNull);
+    });
+
+    test('trash → maybe sets intent, clears done_at, stamps last_clarified_at',
+        () async {
+      // Restore-to-Someday/Maybe of a completed-then-trashed Outcome: the
+      // cleanup invariant clears done_at so the row projects onto the Maybe
+      // List (whose predicate requires done_at IS NULL), not onto Done.
+      await _insertTodo(db, id: 't2m', title: 'Task');
+      await db.todoDao.markDone('t2m');
+      await db.todoDao.applyRouting('t2m', to: RoutingKind.trash);
+      expect((await db.todoDao.getTodo('t2m'))?.doneAt, isNotNull,
+          reason: 'trash preserves the completion record');
+
+      await db.todoDao.applyRouting('t2m', to: RoutingKind.maybe);
+
+      final row = await db.todoDao.getTodo('t2m');
+      expect(row?.intent, 'maybe');
+      expect(row?.doneAt, isNull);
+      expect(row?.lastClarifiedAt, isNotNull);
+      final maybe = await db.todoDao.watchMaybe().first;
+      expect(maybe.map((t) => t.id), contains('t2m'));
+    });
+
+    test('trash → nextAction preserves person tags (orthogonality)',
+        () async {
+      // A delegated Outcome restored out of Trash keeps its PersonBlocker,
+      // so it correctly resurfaces on Waiting For too.
+      await _insertTodo(db, id: 't2p', title: 'Delegated, trashed');
+      await _insertPersonTag(db, id: 't2p-trixy', name: 'Trixy');
+      await db.tagDao.assignTag('t2p', 't2p-trixy', _userId);
+      await db.todoDao.applyRouting('t2p', to: RoutingKind.trash);
+
+      await db.todoDao.applyRouting('t2p', to: RoutingKind.nextAction);
+
+      expect(await db.todoDao.getPersonTagIdsForTodo('t2p'),
+          contains('t2p-trixy'));
+    });
+
+    test(
+        'restored actionless PersonBlocked Outcome lands on Waiting For, '
+        'not Next (excluded quadrant — intended, not a restore bug)',
+        () async {
+      await _insertTodo(db, id: 't2w', title: 'Hear back from Dave');
+      await _insertPersonTag(db, id: 't2w-dave', name: 'Dave');
+      await db.tagDao.assignTag('t2w', 't2w-dave', _userId);
+      await db.todoDao.applyRouting('t2w', to: RoutingKind.trash);
+
+      await db.todoDao.applyRouting('t2w', to: RoutingKind.nextAction);
+
+      final next = await db.todoDao.watchNext().first;
+      final waiting = await db.todoDao.watchPersonTagged().first;
+      expect(next.any((t) => t.id == 't2w'), isFalse,
+          reason: 'actionless+PersonBlocked stays off Next after restore');
+      expect(waiting.map((t) => t.id), contains('t2w'));
     });
 
     test('maybe → nextAction resets intent to next', () async {

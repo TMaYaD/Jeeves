@@ -7,6 +7,7 @@ import 'auth/auth_mode.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
+import 'screens/done/done_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next/next_screen.dart';
 import 'screens/periodic_review/periodic_review_screen.dart';
@@ -14,6 +15,7 @@ import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
+import 'screens/trash/trash_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/active_focus_screen.dart';
 import 'screens/focus_screen.dart';
@@ -106,6 +108,14 @@ final appRouter = GoRouter(
         GoRoute(
           path: '/focus',
           builder: (context, state) => const FocusScreen(),
+        ),
+        GoRoute(
+          path: '/done',
+          builder: (context, state) => const DoneScreen(),
+        ),
+        GoRoute(
+          path: '/trash',
+          builder: (context, state) => const TrashScreen(),
         ),
       ],
     ),

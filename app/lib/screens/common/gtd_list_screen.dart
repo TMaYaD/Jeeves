@@ -18,6 +18,7 @@ class GtdListScreen extends ConsumerWidget {
     this.emptyIcon = Icons.inbox_outlined,
     this.emptyTitle = 'Nothing here yet',
     this.emptySubtitle,
+    this.showFilterBar = true,
   });
 
   final String title;
@@ -25,6 +26,11 @@ class GtdListScreen extends ConsumerWidget {
   final IconData? emptyIcon;
   final String emptyTitle;
   final String? emptySubtitle;
+
+  /// Whether to render the [ActiveFilterBar]. Screens whose stream ignores
+  /// the context-tag filter (Done, Trash) pass false — showing a filter bar
+  /// the list doesn't apply would lie to the user.
+  final bool showFilterBar;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -59,7 +65,7 @@ class GtdListScreen extends ConsumerWidget {
                 ],
               ),
             ),
-            const ActiveFilterBar(),
+            if (showFilterBar) const ActiveFilterBar(),
             Expanded(
               child: AsyncList<Todo>(
                 asyncValue: asyncItems,

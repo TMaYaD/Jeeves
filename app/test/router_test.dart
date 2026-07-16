@@ -10,7 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
-import 'package:jeeves/router.dart' show appRouterRedirect, buildAppRouterRedirect;
+import 'package:jeeves/router.dart'
+    show appRouter, appRouterRedirect, buildAppRouterRedirect;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'test_helpers.dart';
@@ -120,5 +121,16 @@ void main() {
 
     expect(find.text('login'), findsOneWidget);
     expect(find.text('register'), findsNothing);
+  });
+
+  test('/done and /trash are registered inside the ShellRoute (issue #408)',
+      () {
+    // Inspects the production route table directly: the record surfaces must
+    // render inside the AppShell (drawer navigation), not as top-level
+    // full-screen routes.
+    final shell =
+        appRouter.configuration.routes.whereType<ShellRoute>().single;
+    final paths = shell.routes.whereType<GoRoute>().map((r) => r.path).toSet();
+    expect(paths, containsAll({'/done', '/trash'}));
   });
 }

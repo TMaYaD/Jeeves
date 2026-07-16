@@ -1,11 +1,12 @@
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Intent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/todo.dart' show Intent;
 import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
@@ -198,5 +199,137 @@ void main() {
       expect(find.descendant(of: find.byType(ListTile), matching: find.text('Next Actions')), findsNothing);
     });
 
+  });
+
+  group('TaskDetailScreen — restore (issue #408)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    Future<void> openStatusSheet(
+      WidgetTester tester,
+      String todoId,
+      Todo todo,
+    ) async {
+      final (widget, router) = _buildScreen(db, todoId, initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, todoId);
+      await tester.tap(find.byKey(const Key('status_pill')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets(
+        'trashed Outcome: sheet offers Restore to Next and Restore to '
+        'Someday/Maybe, no single Restore', (tester) async {
+      final todo =
+          await _insertAt(db, id: 'rt1', title: 'Trashed', intent: 'trash');
+      await openStatusSheet(tester, 'rt1', todo);
+
+      expect(find.widgetWithText(ListTile, 'Restore to Next'), findsOneWidget);
+      expect(find.widgetWithText(ListTile, 'Restore to Someday/Maybe'),
+          findsOneWidget);
+      expect(find.widgetWithText(ListTile, 'Restore'), findsNothing);
+    });
+
+    testWidgets(
+        'Restore to Next: intent=next, done_at cleared, last_clarified_at '
+        'stamped; reappears on Next, gone from Trash; row persists',
+        (tester) async {
+      // Completed-then-trashed via the production transitions, in that order.
+      await _insertAt(db, id: 'rt2', title: 'Trashed');
+      await db.todoDao.markDone('rt2');
+      await db.todoDao.setIntent('rt2', Intent.trash);
+      // Wipe the stamp so the restore's own stamp is observable.
+      await (db.update(db.todos)..where((t) => t.id.equals('rt2')))
+          .write(const TodosCompanion(lastClarifiedAt: Value(null)));
+      final todo = (await db.todoDao.getTodo('rt2'))!;
+
+      await openStatusSheet(tester, 'rt2', todo);
+      await tester.tap(find.widgetWithText(ListTile, 'Restore to Next'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('rt2');
+      expect(row, isNotNull, reason: 'restore never deletes the row (AC 4)');
+      expect(row!.intent, 'next');
+      expect(row.doneAt, isNull,
+          reason: 'cleanup invariant: restore clears done_at');
+      expect(row.lastClarifiedAt, isNotNull,
+          reason: 'restore stamps last_clarified_at (AC 3)');
+      // Drift watch-streams only emit inside the real async zone, so take
+      // their snapshots under runAsync (see periodic_review_footer_test).
+      final next =
+          (await tester.runAsync(() => db.todoDao.watchNext().first))!;
+      expect(next.map((t) => t.id), contains('rt2'),
+          reason: 'restored Outcome reappears on the Next List (AC 2)');
+      final trash =
+          (await tester.runAsync(() => db.todoDao.watchTrash().first))!;
+      expect(trash.any((t) => t.id == 'rt2'), isFalse);
+    });
+
+    testWidgets(
+        'Restore to Someday/Maybe on a completed-then-trashed Outcome '
+        'reappears on the Maybe List', (tester) async {
+      // Completed-then-trashed via the production transitions, in that order.
+      await _insertAt(db, id: 'rt3', title: 'Trashed');
+      await db.todoDao.markDone('rt3');
+      await db.todoDao.setIntent('rt3', Intent.trash);
+      final todo = (await db.todoDao.getTodo('rt3'))!;
+
+      await openStatusSheet(tester, 'rt3', todo);
+      await tester
+          .tap(find.widgetWithText(ListTile, 'Restore to Someday/Maybe'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('rt3');
+      expect(row, isNotNull, reason: 'restore never deletes the row (AC 4)');
+      expect(row!.intent, 'maybe');
+      expect(row.doneAt, isNull);
+      final maybe =
+          (await tester.runAsync(() => db.todoDao.watchMaybe().first))!;
+      expect(maybe.map((t) => t.id), contains('rt3'),
+          reason: 'restored Outcome reappears on the Maybe List (AC 2)');
+    });
+
+    testWidgets(
+        'done-only Outcome keeps the single Restore tile and restores to '
+        'Next (regression guard for the applyRouting rewire)',
+        (tester) async {
+      await _insertAt(db, id: 'rt4', title: 'Completed');
+      await db.todoDao.markDone('rt4');
+      await (db.update(db.todos)..where((t) => t.id.equals('rt4')))
+          .write(const TodosCompanion(lastClarifiedAt: Value(null)));
+      final todo = (await db.todoDao.getTodo('rt4'))!;
+
+      await openStatusSheet(tester, 'rt4', todo);
+
+      expect(find.widgetWithText(ListTile, 'Restore'), findsOneWidget);
+      expect(find.widgetWithText(ListTile, 'Restore to Next'), findsNothing);
+      expect(find.widgetWithText(ListTile, 'Restore to Someday/Maybe'),
+          findsNothing);
+
+      await tester.tap(find.widgetWithText(ListTile, 'Restore'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('rt4');
+      expect(row!.intent, 'next');
+      expect(row.doneAt, isNull);
+      expect(row.lastClarifiedAt, isNotNull);
+    });
+
+    testWidgets(
+        'status pill shows Trashed for a completed-then-trashed Outcome '
+        '(Trash stance wins over the Completion fact)', (tester) async {
+      // Completed-then-trashed via the production transitions, in that order.
+      await _insertAt(db, id: 'rt5', title: 'Discarded idea');
+      await db.todoDao.markDone('rt5');
+      await db.todoDao.setIntent('rt5', Intent.trash);
+      final todo = (await db.todoDao.getTodo('rt5'))!;
+
+      final (widget, router) = _buildScreen(db, 'rt5', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'rt5');
+
+      expect(find.text('Trashed'), findsOneWidget);
+      expect(find.text('Done'), findsNothing);
+    });
   });
 }
