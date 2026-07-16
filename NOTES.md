@@ -1,7 +1,7 @@
 # Notes
 
 Corrections to agent instincts — see AGENTS.md § Keep Notes for the criteria.
-Format: `- <date>: Instinct: X. Here: Y — because Z.`
+Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 - 2026-04-21: Instinct: assert on affected-row counts (`changes() == 1`) after an UPDATE/DELETE to catch silent no-ops. Here: `todos`/`tags`/`todo_tags` are PowerSync views with INSTEAD OF triggers in production, so `changes()` reports 0 and the assert throws only in prod — never in `NativeDatabase` tests (details: docs/TESTING.md § Frontend, docs/ARCHITECTURE.md live-refresh invariant).
 - 2026-04-25: Instinct: sweep a terminology rename across every matching identifier for consistency. Here: date-encoded SharedPreferences flags were deliberately left un-renamed — they were slated for deletion, and renaming would entrench the bug class under a new label.
