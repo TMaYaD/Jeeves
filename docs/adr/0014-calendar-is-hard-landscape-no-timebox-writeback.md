@@ -1,0 +1,7 @@
+# External calendar is hard landscape — no Timebox write-back
+
+Sunsama-class planners write the day's timeboxes into the user's external calendar, and #84 originally proposed the same. During the #35 design pass we rejected it: external calendar integration is **read-only by default, and Timeboxes are never written back**. The only legitimate write case is a hard-landscape commitment — something genuinely time-bound with real consequences if missed — re-scoped as #410.
+
+Two reasons compound. GTD canon treats the calendar as sacred territory: it holds time-specific and day-specific commitments only, because soft entries that slide erode the calendar's trustworthiness — writing a daily plan into it is method-breaking clutter. And under ADR-0013 a Timebox dies with its FocusSession, so projecting one into a durable external calendar forces a bad choice: mutate the user's calendar at session close (write-scope churn, sync hazards, surprise) or leave stale residue accumulating. Read-only integration delivers the actual value of #40 — deriving available time from calendar whitespace and scheduling so events don't interrupt mid-task — without either cost.
+
+If external visibility of the day plan is ever demanded by real usage, design it fresh (e.g. a free/busy projection), rather than reopening event-CRUD write-back.

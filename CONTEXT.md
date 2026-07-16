@@ -34,7 +34,7 @@ Prospective renames considered and **deferred**, pending legacy cleanup:
 #### Language
 
 **Capture**:
-A raw, unprocessed fragment the user has put into the system because it has their attention. Pending clarification; not yet an Outcome or Action.
+A raw, unprocessed fragment the user has put into the system because it has their attention. Pending clarification; not yet an Outcome or Action. A Capture's clarification is its terminal act, recorded once as `clarified_at` — stamped when the user completes the clarify act for that Capture, whether it produced new Outcomes, merged into existing ones, or was discarded (a zero-Outcome clarification is a legitimate verdict, not a special case). An unstamped Capture sits in the Inbox; a stamped one persists as provenance for the Outcomes it clarified into — Captures are never deleted and merge never consumes them.
 _Avoid_: Todo, Task, Item, Inbox item, Thought, Stuff, Note
 
 **Outcome**:
@@ -88,6 +88,10 @@ _Avoid_: WaitingFor (as an entity name), Wait, PendingPerson
 A predicate over current world state ("is *now* a moment when this action is doable?") that attaches to an Action and gates its visibility. Distinct from a Blocker: a Blocker describes outside-the-user state relevant to the *outcome*; a Context gates *whether you can act*. Examples: "@phone" (action is doable when phone is available), "after Nov 30" (action is doable from that date).
 _Avoid_: Constraint, Filter, Gate
 
+**Hard landscape** *(deferred — not yet modelled)*:
+GTD's "sacred territory": the commitments that are genuinely time-bound with real consequences if missed — the only things that belong on a calendar (time-specific and day-specific commitments). Distinct from a due date (which may be aspirational) and from a **Timebox** (a session-scoped intention — see Engagement). What marks an Outcome as hard-landscape is an open modelling question owned by #410; the term is reserved now so timeboxes and soft due dates are never described as calendar-worthy.
+_Avoid_: Deadline (may be aspirational), Appointment (narrower), Event (reserved for external-calendar entries)
+
 **Clarification**:
 The act of thinking about an Outcome (or a Capture in its first such act) and committing the result to the system. Manifests as a *stream of micro-acts* — each individual write that constitutes structural thinking-about-the-Outcome stamps `Outcome.last_clarified_at`. There is no "clarification session" entity; the UI may wrap micro-acts in a session-shaped flow but the domain commits each write independently. Distinct from **Engagement** (doing the current Action — does not stamp) and from **Organising** (sorting into structure via organising-type tags — does not stamp).
 _Avoid_: Review, Refresh, Process (Process is the GTD verb but overloaded with UI / queue / batch meanings)
@@ -110,7 +114,7 @@ A named collection of items. A List may be **explicit** — its membership is st
 _Avoid_: Collection, View, Bucket, Queue (Queue implies FIFO, which Lists do not require)
 
 **Inbox**:
-The implicit List of Captures pending clarification. The user's trusted bucket for unprocessed stuff.
+The implicit List of Captures pending clarification (`clarified_at` is null). The user's trusted bucket for unprocessed stuff.
 _Avoid_: Capture queue, Capture List
 
 **Next**:
@@ -142,6 +146,7 @@ _Avoid_: Deleted, Removed (the row persists; Intent expresses the user's stance)
 #### Relationships
 
 - A **Capture** is many-to-many with **Outcome**: one Capture may clarify to zero, one, or several Outcomes; one Outcome may trace back to several Captures (duplicate or complementary fragments merged during clarification).
+- The clarify UX runs in one of two user-selectable modes — a preference over the same many-to-many model, never a storage change. In **1-1 mode** each Capture clarifies to exactly one Outcome and `clarified_at` stamps automatically at the first Outcome link; in **n-m mode** (split/merge) the user explicitly completes each Capture, and only that completion stamps `clarified_at` — a Capture stays in the Inbox while Outcomes are incrementally carved out of it.
 - An **Outcome** has at most one *current* **Action** at any time, may have any number of *planned* Actions (the user's externalised "what's next" thinking), and has 0..N *terminated* Actions (done or superseded) over its lifetime.
 - An **Outcome** that ends up needing multiple Actions is colloquially a *project* — no separate type is required.
 - An **Outcome** carries an **Intent** (the user's willingness) and may carry a **Completion** timestamp (the fact of achievement); the two axes are independent.
@@ -245,6 +250,10 @@ Invariants:
 Switching Actions closes the current TimeLog and opens a new one against the new Action.
 _Avoid_: Activity, Interval, WorkLog, Session (overloaded), Pause / Resume (these vocabulary items were removed in #246 / PR #252 — see ambiguities)
 
+**Timebox**:
+A scheduled interval — a start time and a duration — attached to a Plan entry of a FocusSession, expressing *when within the session* the user intends to engage that Outcome. A property of the (FocusSession, Outcome) Plan membership, not a stand-alone entity: at most one Timebox per Plan entry, and it shares the Plan's lifecycle — it has no existence outside its session and always dies with it. Review's `rollover` Disposition carries the *commitment* (the Outcome arrives pre-selected in the next session's Planning) but never the Timebox; scheduling is redone fresh each Planning phase, against that day's calendar. A Timebox is an *intention*, not a record: actual engagement is captured by TimeLogs, and the Timebox-vs-TimeLog gap is preserved as information, like the Plan-vs-engaged gap. Scheduling is not a state axis — an Outcome with a Timebox keeps its Intent and its List memberships unchanged (the retired `state: scheduled` framing is a conceptual error).
+_Avoid_: ScheduledTask, CalendarBlock, Slot, Event (Event is reserved for external-calendar entries), "scheduled" as a state
+
 **Sprint** / **Break**:
 Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a timed work block; a **Break** is the rest block between Sprints. The clock keeps running through both — Sprints and Breaks subdivide the TimeLog's rhythm without breaking its continuity. Purely a UI overlay and discipline aid — **not persisted as entities, not tracked in the model**. The only structural contact Pomodoro has with the rest of the system is the UI's pre-computed Sprint count for an Action, derived from `Action.time_estimate / Sprint duration` — and even that is presentational rather than required.
 _Avoid_: PomodoroPhase, FocusBlock, WorkBlock
@@ -265,6 +274,7 @@ _Avoid_: Resolution, Decision, Handling, Action (overloaded)
 - **Focus** may point to any Outcome the user is engaging with, whether or not that Outcome is on the Plan.
 - A **TimeLog** writes attribute to the open FocusSession (if one exists at engagement time) regardless of whether the engaged Outcome is on the Plan. If no FocusSession is open, the TimeLog is ad hoc — no session attribution.
 - The **Review** phase surfaces every Outcome that was either on the Plan or engaged with during the session (the union), so neither off-Plan work nor planned-but-untouched Outcomes slip past disposition.
+- A **Timebox** belongs to exactly one Plan entry (at most one per entry) and shares the Plan's lifecycle — created or edited during Planning (and adjustable during Execution), never surviving the session. Off-Plan engagement is by definition un-timeboxed. TimeLogs record what actually happened; Timeboxes record what was intended — the two are never reconciled destructively.
 - **An Action may have many TimeLogs** over its lifetime — different engagement intervals on the same Action, possibly across multiple FocusSessions, possibly interspersed with engagement on other Actions within the same FocusSession. An Outcome's TimeLogs are the union of its Actions' TimeLogs.
 - **The hierarchy is FocusSession → TimeLog → (Sprint+Break cycles).** A FocusSession is "from when the user sits down at the table to when they get up" and contains multiple TimeLogs (one per engagement interval). Each TimeLog is subdivided into Pomodoro Sprint+Break cycles at the user's chosen cadence as a UI rhythm; the cycles do not persist or break the TimeLog's continuity.
 

@@ -378,3 +378,8 @@
 
 ## 2026-07-12 (issue #305 — per-status upload-error policy)
 - Drift table classes cannot declare a column getter named `tableName` — it collides with drift's own `Table.tableName` (String?). `SyncDeadLetters` uses `targetTable => text().named('table_name')` to keep the SQL column name. Also: schemaVersion 23 deliberately skips 22, which is reserved by #381 (PR #386, open) — this branch must land after it, or renumber down to 22 if #381 is dropped. Follow-up issue for genuine 409 two-sided conflict reconciliation (coordinated with #306's per-key strategy) still needs filing at landing. (Merge note: #381 landed on main as schemaVersion 22 while this branch was open; the merge keeps this branch's v23 step ordered after main's v22 step.)
+
+## 2026-07-16 (grill: epics #34/#35)
+- Grilling #35 killed my "split calendar-read out of #40" recommendation: the Day Check-in time question is already the manual stand-in for calendar whitespace, so a timeline without events duplicates shipped value — the integration IS the increment. Lesson: check what an existing ritual step already delivers before proposing to sever a dependency.
+- Timebox landed as a Plan-entry property (ADR-0013), which made two "open questions" fall out derived, not asked: chunking must be presentational (one-Timebox-per-entry + Sprints-never-persist), and #84's write-back died on lifecycle mismatch (session-scoped intention vs durable calendar event) before even reaching the GTD sacred-territory argument (ADR-0014; hard-landscape write case re-filed as #410).
+- gh CLI gotcha: unescaped backticks inside a double-quoted `--body` get command-substituted by zsh (#410's body shipped with a hole where `due_date` should have been). Use `--body-file` for any body containing code spans.
