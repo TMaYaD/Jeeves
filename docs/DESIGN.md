@@ -126,14 +126,13 @@ Our brand font is **Manrope**, used consistently across every surface of the app
 ## Visual Language
 
 ### Roundedness
-Surfaces use a **moderate radii scale**, matching the shipped widgets (dominant values from `BorderRadius.circular` usage across `app/lib`):
+The canonical radii scale is the reference design system's tokens (`jeeves.css` in the Daily Execution Layer project — see Reference design prototypes above):
 
-*   **12px** — cards and primary containers (the dominant radius)
-*   **8–10px** — buttons, inputs, and inner elements
-*   **~20px** — bottom-sheet top corners
-*   **Full pill (999)** — reserved for small chips only (tag chips, count badges)
+*   **2px** (`--radius-xxs`) — buttons: primary, soft, outline, text, icon
+*   **4px** (`--radius-xs`) — chips, tags, small meta, inputs (the default small radius)
+*   **6px** (`--radius-sm`) — cards, rows, sheets, and most surfaces (the default surface radius)
 
-Buttons, cards, sheets, and list rows are **not** pill-shaped. New designs and mockups must follow this scale; when in doubt, sample the shipped widget rather than rounding up.
+**Pill radii are out** — including on chips. Only genuine circles (status dots, the sprint ring) stay circular. The 8/12/16/20px values found across the shipped widgets are **migration-era legacy, deprecated for new work**; new surfaces use the 2/4/6 scale, and touched screens migrate toward it. Ruled 2026-07-16 during the epic #34/#35 design pass.
 
 ### Spacing
 We maintain a **normal (2)** level of spacing, balancing information density with visual comfort and ease of use.
