@@ -40,6 +40,7 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 - **Framework**: `flutter_test`.
 - **E2E/Integration**: Flutter Integration Tests for on-device testing.
 - **Unit/Widget**: Widget tests and standard Dart unit tests for Riverpod providers and logic.
+- **Never assert on affected-row counts** (`changes()`, the value Drift returns from `update`/`delete`) for writes to `todos` / `tags` / `todo_tags`. In production these are PowerSync views with `INSTEAD OF` triggers, so the count is always 0 — such an assert passes under the `NativeDatabase.memory()` test harness (real tables) and throws only in production. Rely on the WHERE-clause optimistic lock instead. See the live-refresh invariant in [ARCHITECTURE.md](./ARCHITECTURE.md) for the same mechanism's effect on stream invalidation.
 
 ### Backend (FastAPI)
 
@@ -91,6 +92,19 @@ For flows that are impractical to cover with `flutter_test` / integration tests 
   ```
 - Use `adb shell monkey -p loonyb.in.jeeves.dev -c android.intent.category.LAUNCHER 1` to cold-launch; prefix with `adb shell am force-stop loonyb.in.jeeves.dev` for a clean start.
 - Stream Flutter errors: `adb logcat > /tmp/jeeves.log &` then grep for `flutter:` and `AndroidRuntime`. MWA failures surface as `com.solana.mobilewalletadapter.clientlib.*` stacks.
+
+### Inspecting the on-device database
+
+When the UI and the user's intent disagree, query the on-device database directly before reading provider/widget code — it splits persistence bugs from watcher/stream bugs in one step. Works on debug builds via `run-as`:
+
+```
+adb exec-out run-as loonyb.in.jeeves.dev cat app_flutter/jeeves.sqlite     > /tmp/jeeves.sqlite
+adb exec-out run-as loonyb.in.jeeves.dev cat app_flutter/jeeves.sqlite-wal > /tmp/jeeves.sqlite-wal
+adb exec-out run-as loonyb.in.jeeves.dev cat app_flutter/jeeves.sqlite-shm > /tmp/jeeves.sqlite-shm
+sqlite3 /tmp/jeeves.sqlite "SELECT id, title, clarified, intent FROM ps_data__todos LIMIT 20"
+```
+
+Pull all three files — the WAL usually holds the most recent writes. Query the PowerSync backing tables (`ps_data__todos` etc.), not the `todos` view, which only exists while the app's PowerSync schema is attached. If the row is correct in SQLite, the bug is in watcher invalidation (see the live-refresh invariant in [ARCHITECTURE.md](./ARCHITECTURE.md)); if it's wrong, the bug is in the write path.
 
 ### Navigation tree with tap coordinates
 

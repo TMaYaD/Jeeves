@@ -111,7 +111,18 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 ### Epic 11: Data Portability & Migration
 **Goal:** Reduce switching costs and prevent vendor lock-in.
-* **Import from Nirvana:** One-time migration of tasks, projects, contexts, and metadata from Nirvana GTD export, preserving GTD state and hierarchy.
+* **Import from Nirvana:** One-time migration of tasks, projects, contexts, and metadata from Nirvana GTD export (CSV or JSON), preserving GTD state and hierarchy. Bucketing in Jeeves is driven by four fields set per source state — `clarified`, `intent`, `doneAt`, and person tags (`app/lib/import/nirvana_parser.dart` implements the table; `app/test/import/nirvana_parser_test.dart` pins it):
+
+| Nirvana state | Import outcome |
+| :--- | :--- |
+| Inbox — and any unrecognised state (e.g. CSV `active`, JSON 11 for active projects) | `clarified=false`; surfaces in the Inbox for review. Recognised states form a positive whitelist so unknowns can't slip silently into active lists. |
+| Next, Waiting | `clarified=true`, `intent='next'`. A non-empty `WAITINGFOR` value becomes a person tag on the imported task. |
+| Someday, Inactive-Later | `clarified=true`, `intent='maybe'`. |
+| Scheduled, Scheduled-Repeating, Reference | `clarified=true`, `intent='maybe'`, plus an `@scheduled` / `@repeating` / `@reference` context tag — Jeeves has no Scheduled/Repeating/Reference primitive, so the original category stays recoverable after import. |
+| Trash | `clarified=true`, `intent='trash'`. |
+| Completed — Logbook, non-empty `COMPLETED` (CSV), or non-zero `completed` (JSON), regardless of state | `doneAt` set (the completion date, or import time when unparseable), `intent='next'`. Completed wins: no `@scheduled`/`@repeating`/`@reference` auto-tag is injected. |
+
+  JSON exports carry state ints rather than literals: the recognised (clarified) set is `{1–7, 9, 10}`, of which `{3, 4, 5, 9, 10}` map to Maybe and `{6}` to Trash, with auto-tags 3 → `@scheduled`, 9 → `@repeating`, 10 → `@reference`; 0 and unrecognised ints fall to the Inbox row above.
 
 ---
 
