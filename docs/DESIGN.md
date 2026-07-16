@@ -126,7 +126,13 @@ Our brand font is **Manrope**, used consistently across every surface of the app
 ## Visual Language
 
 ### Roundedness
-Our UI elements feature **maximum, pill-shaped (3)** roundedness, contributing to a soft and approachable aesthetic.
+The canonical radii scale is the reference design system's tokens (`jeeves.css` in the Daily Execution Layer project — see Reference design prototypes above):
+
+*   **2px** (`--radius-xxs`) — buttons: primary, soft, outline, text, icon
+*   **4px** (`--radius-xs`) — chips, tags, small meta, inputs (the default small radius)
+*   **6px** (`--radius-sm`) — cards, rows, sheets, and most surfaces (the default surface radius)
+
+**Pill radii are out** — including on chips. Only genuine circles (status dots, the sprint ring) stay circular. The 8/12/16/20px values found across the shipped widgets are **migration-era legacy, deprecated for new work**; new surfaces use the 2/4/6 scale, and touched screens migrate toward it. Ruled 2026-07-16 during the epic #34/#35 design pass.
 
 ### Spacing
 We maintain a **normal (2)** level of spacing, balancing information density with visual comfort and ease of use.
