@@ -2,7 +2,8 @@
 ///
 /// Bucketing in Jeeves is driven by `clarified` + `intent` + `doneAt` +
 /// person-tags; this parser sets those four fields directly per the per-state
-/// table in issue #279 / `NOTES.md`. States with no direct equivalent
+/// table in `docs/REQUIREMENTS.md` (Epic 11: Data Portability & Migration).
+/// States with no direct equivalent
 /// (Scheduled / Repeating / Reference) are coerced to `intent='maybe'` plus an
 /// `@scheduled` / `@repeating` / `@reference` context tag so the original
 /// Nirvana category remains identifiable after import.
