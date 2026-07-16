@@ -126,7 +126,14 @@ Our brand font is **Manrope**, used consistently across every surface of the app
 ## Visual Language
 
 ### Roundedness
-Our UI elements feature **maximum, pill-shaped (3)** roundedness, contributing to a soft and approachable aesthetic.
+Surfaces use a **moderate radii scale**, matching the shipped widgets (dominant values from `BorderRadius.circular` usage across `app/lib`):
+
+*   **12px** — cards and primary containers (the dominant radius)
+*   **8–10px** — buttons, inputs, and inner elements
+*   **~20px** — bottom-sheet top corners
+*   **Full pill (999)** — reserved for small chips only (tag chips, count badges)
+
+Buttons, cards, sheets, and list rows are **not** pill-shaped. New designs and mockups must follow this scale; when in doubt, sample the shipped widget rather than rounding up.
 
 ### Spacing
 We maintain a **normal (2)** level of spacing, balancing information density with visual comfort and ease of use.
