@@ -184,7 +184,7 @@ Before appending, apply two tests:
 
 Write the entry as the correction, in one or two lines:
 
-`- <date>: Instinct: X. Here: Y — because Z.`
+`- <date>: Instinct: X. Here: Y — <why>.`
 
 If an entry can't be phrased that way, it belongs somewhere else. Codebase traps that keep biting (test-harness quirks, framework gotchas) go in the relevant doc — the doc update is mandatory, a NOTES pointer is optional. Don't ask permission; do apply the tests.
 
