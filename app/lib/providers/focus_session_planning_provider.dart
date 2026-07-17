@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../database/gtd_database.dart';
 import '../models/ritual.dart';
 import '../models/todo.dart' show RoutingKind;
+import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
@@ -393,6 +394,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   }
 
   GtdDatabase get _db => ref.read(databaseProvider);
+  ClarificationService get _clarification =>
+      ref.read(clarificationServiceProvider);
   String get _userId => ref.read(currentUserIdProvider);
 
   /// Pre-populates [pendingSelectedTaskIds] with rollover tasks from the most
@@ -522,8 +525,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   }
 
   /// Applies a routing transition to the snapshot row at [idx], delegating
-  /// the DB matrix to [TodoDao.applyRouting]. Records [kind] in
-  /// [inboxRoutings] and advances the cursor.
+  /// the DB matrix to [ClarificationService.clarifyToOutcome]. Records
+  /// [kind] in [inboxRoutings] and advances the cursor.
   ///
   /// Bails out without mutating state if the snapshot row no longer exists
   /// in the DB (deleted between snapshot load and apply). Idempotent under
@@ -533,17 +536,16 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Note: PowerSync exposes [todos] as a SQLite VIEW backed by an
   /// INSTEAD OF trigger, so Drift's "affected rows" return value is always
   /// 0 even on a successful update. We pre-check for row existence via
-  /// [TodoDao.getTodo] and otherwise trust the snapshot's claim that the
-  /// row exists.
+  /// [ClarificationService.exists] and otherwise trust the snapshot's claim
+  /// that the row exists.
   Future<void> _routeInboxItem(
     String id, {
     required RoutingKind to,
     String? nextActionText,
   }) async {
     final idx = state.inboxNav.index;
-    final exists = await _db.todoDao.getTodo(id);
-    if (exists == null) return;
-    await _db.todoDao.applyRouting(
+    if (!await _clarification.exists(id)) return;
+    await _clarification.clarifyToOutcome(
       id,
       to: to,
       nextActionText: nextActionText,
@@ -574,7 +576,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     bool clearTimeEstimate = false,
     bool clearDueDate = false,
   }) =>
-      _db.todoDao.updateFields(
+      _clarification.updateFields(
         id,
         title: title,
         notes: notes,
@@ -616,7 +618,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Returns the IDs of person-typed tags currently assigned to [todoId].
   /// Used to pre-seed the Waiting For person picker on revisit.
   Future<Set<String>> getPersonTagIds(String todoId) =>
-      _db.todoDao.getPersonTagIdsForTodo(todoId);
+      _clarification.getPersonTagIds(todoId);
 
   // ---- Task mutations (Step 2 — Next Actions review) -------------------------
 
@@ -668,12 +670,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   // ---- Task Review (Step 1) --------------------------------------------------
 
   /// "Still relevant" — only available for Stale tasks. Routes through
-  /// [TodoDao.applyRouting] so a prior in-session resolution (markDone /
-  /// sendToSomeday / trash) is undone in the same write that stamps
-  /// `last_clarified_at`.
+  /// [ClarificationService.clarifyToOutcome] so a prior in-session
+  /// resolution (markDone / sendToSomeday / trash) is undone in the same
+  /// write that stamps `last_clarified_at`.
   Future<void> confirmReviewItemRelevant(String id) async {
     final idx = state.reviewNav.index;
-    await _db.todoDao.applyRouting(
+    await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.nextAction,
       userId: _userId,
@@ -692,7 +694,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// path for setting the phrase.
   Future<void> markReviewItemWaitingFor(String id) async {
     final idx = state.reviewNav.index;
-    await _db.todoDao.applyRouting(
+    await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.waitingFor,
       userId: _userId,
@@ -712,7 +714,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> updateReviewItemNextAction(String id, String text) async {
     final idx = state.reviewNav.index;
     final trimmed = text.trim();
-    await _db.todoDao.applyRouting(
+    await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.nextAction,
       nextActionText: text,
@@ -739,7 +741,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Mark done" — sets done_at and stamps last_clarified_at.
   Future<void> markReviewItemDone(String id) async {
     final idx = state.reviewNav.index;
-    await _db.todoDao.applyRouting(
+    await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.done,
       userId: _userId,
@@ -751,7 +753,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Send to Someday" — sets intent='maybe' and stamps last_clarified_at.
   Future<void> deferReviewItemToSomeday(String id) async {
     final idx = state.reviewNav.index;
-    await _db.todoDao.applyRouting(
+    await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.maybe,
       userId: _userId,
@@ -765,7 +767,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Trash" — sets intent='trash' and stamps last_clarified_at.
   Future<void> trashReviewItem(String id) async {
     final idx = state.reviewNav.index;
-    await _db.todoDao.applyRouting(
+    await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.trash,
       userId: _userId,
