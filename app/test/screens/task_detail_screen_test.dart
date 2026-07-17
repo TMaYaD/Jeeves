@@ -341,6 +341,88 @@ void main() {
       expect(log, isNull,
           reason: 'no TimeLog may open while a sprint is attached elsewhere');
     });
+
+    testWidgets(
+        'Start focus with a matching sprint does not mask a Focus owned by '
+        'a different task — the conflict is surfaced', (tester) async {
+      // Sprint belongs to the tapped task; the in-memory Focus belongs to
+      // another. A match on one tracker must not short-circuit past the
+      // conflict on the other.
+      SharedPreferences.setMockInitialValues({
+        'sprint_active_task_id': 'engage5',
+        'sprint_active_task_title': 'Engageable',
+        'sprint_phase': 'focus_overtime',
+        'sprint_end_time': DateTime.now().toUtc().toIso8601String(),
+      });
+
+      await _insertAt(db, id: 'other', title: 'Other task');
+      final todo = await _insertAt(db, id: 'engage5', title: 'Engageable');
+      final (widget, router) = _buildScreen(db, 'engage5', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'engage5');
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(TaskDetailScreen)),
+      );
+      container.read(sprintTimerProvider);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.runAsync(
+        () => container.read(focusModeProvider.notifier).startFocus('other'),
+      );
+
+      await tester.tap(find.byKey(const Key('task_detail_start_focus')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Active focus'), findsNothing,
+          reason: 'a matching sprint must not mask the conflicting Focus');
+      expect(
+        find.text(
+            'Another task is already in focus — finish or stop it first.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets(
+        'Start focus with a matching Focus does not mask a sprint owned by '
+        'a different task — the conflict is surfaced', (tester) async {
+      // The inverse divergence: Focus belongs to the tapped task; a
+      // persisted sprint belongs to another.
+      SharedPreferences.setMockInitialValues({
+        'sprint_active_task_id': 'other',
+        'sprint_active_task_title': 'Other task',
+        'sprint_phase': 'focus_overtime',
+        'sprint_end_time': DateTime.now().toUtc().toIso8601String(),
+      });
+
+      await _insertAt(db, id: 'other', title: 'Other task');
+      final todo = await _insertAt(db, id: 'engage6', title: 'Engageable');
+      final (widget, router) = _buildScreen(db, 'engage6', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'engage6');
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(TaskDetailScreen)),
+      );
+      container.read(sprintTimerProvider);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.runAsync(
+        () =>
+            container.read(focusModeProvider.notifier).startFocus('engage6'),
+      );
+
+      await tester.tap(find.byKey(const Key('task_detail_start_focus')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Active focus'), findsNothing,
+          reason: 'a matching Focus must not mask the conflicting sprint');
+      expect(
+        find.text(
+            'Another task is already in focus — finish or stop it first.'),
+        findsOneWidget,
+      );
+    });
   });
 
   group('TaskDetailScreen — restore (issue #408)', () {

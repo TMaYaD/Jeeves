@@ -455,12 +455,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Future<void> _startFocus(Todo todo) async {
     final sprint = ref.read(sprintTimerProvider);
     final activeFocusId = ref.read(focusModeProvider).activeTodoId;
-    if ((sprint.isActive && sprint.activeTaskId == todo.id) ||
-        activeFocusId == todo.id) {
-      context.push('/focus/active');
-      return;
-    }
-    if (activeFocusId != null || sprint.isActive) {
+    // Conflicts come first: a tracker (sprint or Focus) owned by a
+    // different task must never be masked by the other tracker matching
+    // this one — navigating would leave the conflicting engagement
+    // undisclosed.
+    if ((sprint.isActive && sprint.activeTaskId != todo.id) ||
+        (activeFocusId != null && activeFocusId != todo.id)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content:
@@ -468,6 +468,13 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                   'first.'),
         ),
       );
+      return;
+    }
+    // Past the conflict check, every live tracker belongs to [todo]:
+    // resume the existing engagement rather than starting a new one
+    // (mirrors the execution home's Start button short-circuits).
+    if (sprint.isActive || activeFocusId != null) {
+      context.push('/focus/active');
       return;
     }
     await ref.read(focusModeProvider.notifier).startFocus(todo.id);
