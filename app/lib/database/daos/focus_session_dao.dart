@@ -100,6 +100,12 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// Atomically closes any open time log for the session, optionally opens a
   /// new one for [taskId], and updates [current_task_id] on the session row.
   ///
+  /// [taskId] need not be a Plan member: the Focus may point to any Outcome
+  /// being engaged, whether or not it is on the Plan (CONTEXT.md
+  /// § Engagement; ADR-0005). Off-Plan engagement still attributes the
+  /// TimeLog to the session and surfaces in Review via the TimeLog union —
+  /// the Plan itself never auto-grows (ADR-0002).
+  ///
   /// Pass [taskId] = null to clear the focused task without starting a new log.
   ///
   /// [now] is injectable for deterministic testing.
@@ -115,17 +121,6 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
       if (session == null) return;
-
-      if (taskId != null) {
-        final membership = await (select(focusSessionTasks)
-              ..where((fst) =>
-                  fst.focusSessionId.equals(sessionId) &
-                  fst.taskId.equals(taskId)))
-            .getSingleOrNull();
-        if (membership == null) {
-          throw StateError('Task is not part of this focus session');
-        }
-      }
 
       // Close any open time log. The single-open-log invariant is global,
       // so we close defensively rather than scoping to this session — a stray

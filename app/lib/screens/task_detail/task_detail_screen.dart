@@ -5,6 +5,8 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../database/gtd_database.dart';
+import '../../providers/focus_session_provider.dart';
+import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
@@ -417,8 +419,66 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: Colors.black),
         onPressed: () => context.pop(),
       ),
-      actions: const [],
+      actions: [
+        // Ad-hoc engagement entry point (issue #180): works with or without
+        // an open FocusSession — engagement is independent of the session
+        // (ADR-0005). Visual treatment follows the epic #35 design pass.
+        if (todo.doneAt == null)
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: FilledButton.icon(
+              key: const Key('task_detail_start_focus'),
+              onPressed: () => _startFocus(todo),
+              icon: const Icon(Icons.play_arrow_rounded, size: 18),
+              label: const Text('Start focus'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF2667B7),
+                visualDensity: VisualDensity.compact,
+                textStyle: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+      ],
     );
+  }
+
+  /// Engages [todo]: navigates straight to the active-focus screen when this
+  /// task is already the one in focus (mirrors the execution home's Start
+  /// button short-circuits), otherwise starts a new engagement via
+  /// [FocusModeNotifier.startFocus].
+  ///
+  /// Engagement is sequential (CONTEXT.md § TimeLog): while another task's
+  /// engagement is live — in-memory focus state, or a persisted sprint that
+  /// survived a restart — starting here would strand the open TimeLog or
+  /// sprint, so the conflict is surfaced instead.
+  Future<void> _startFocus(Todo todo) async {
+    final sprint = ref.read(sprintTimerProvider);
+    final activeFocusId = ref.read(focusModeProvider).activeTodoId;
+    // Conflicts come first: a tracker (sprint or Focus) owned by a
+    // different task must never be masked by the other tracker matching
+    // this one — navigating would leave the conflicting engagement
+    // undisclosed.
+    if ((sprint.isActive && sprint.activeTaskId != todo.id) ||
+        (activeFocusId != null && activeFocusId != todo.id)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Another task is already in focus — finish or stop it '
+                  'first.'),
+        ),
+      );
+      return;
+    }
+    // Past the conflict check, every live tracker belongs to [todo]:
+    // resume the existing engagement rather than starting a new one
+    // (mirrors the execution home's Start button short-circuits).
+    if (sprint.isActive || activeFocusId != null) {
+      context.push('/focus/active');
+      return;
+    }
+    await ref.read(focusModeProvider.notifier).startFocus(todo.id);
+    if (mounted) context.push('/focus/active');
   }
 
   Widget _buildAttributeItem({required IconData icon, required String text, required VoidCallback onTap}) {

@@ -137,9 +137,12 @@ class CustomDrawer extends ConsumerWidget {
                       path: '/inbox',
                       location: location,
                       count: inboxCount),
+                  // User-facing title is "Now" (epic #35 design review);
+                  // the route and internal identifiers stay Focus — see
+                  // CONTEXT.md's term-unification divergence list.
                   _buildNavItem(context,
                       icon: Icons.center_focus_strong_outlined,
-                      title: 'Focus',
+                      title: 'Now',
                       path: '/focus',
                       location: location),
                   _buildNavItem(context,

@@ -33,7 +33,12 @@ class CeremonyInProgressNotifier extends Notifier<Set<RitualId>> {
   /// hygiene purposes — a completed performance also satisfies the Cadence
   /// Trigger's "not completed in this period" predicate via the Ritual's
   /// own completion stamp, which is written separately.
+  ///
+  /// Wizard screens defer this call to a microtask from `dispose` (the tree
+  /// is locked during unmount), so it may arrive after the container has
+  /// been torn down — hence the mounted guard.
   void exit(RitualId ritual) {
+    if (!ref.mounted) return;
     if (!state.contains(ritual)) return;
     state = state.where((r) => r != ritual).toSet();
   }

@@ -86,6 +86,11 @@ class WizardStep {
 /// drives step transitions from its own logic — Ceremony screens compose
 /// [WizardStep] instances; the step's footer widget (e.g. [WizardFooter],
 /// [ListItemFooter]) holds the step-transition callbacks.
+///
+/// While the page transition is animating, footer taps are absorbed: the
+/// footer swaps to the new step's widget the moment [currentStep] changes,
+/// so without absorption a second tap would land on the next step's
+/// identically-positioned forward button mid-transition (issue #180).
 class Wizard extends StatefulWidget {
   const Wizard({
     super.key,
@@ -130,6 +135,16 @@ class Wizard extends StatefulWidget {
 class _WizardState extends State<Wizard> {
   late final PageController _pageController;
 
+  /// True while the page transition is animating. The footer swaps to the
+  /// new step's widget the moment [Wizard.currentStep] changes, putting an
+  /// identically-positioned forward button under the user's finger — so the
+  /// wizard absorbs footer taps until the transition settles (issue #180).
+  bool _transitioning = false;
+
+  /// Monotonic token so an interrupted transition's completion callback
+  /// cannot clear [_transitioning] while a newer transition is animating.
+  int _transitionToken = 0;
+
   @override
   void initState() {
     super.initState();
@@ -141,11 +156,19 @@ class _WizardState extends State<Wizard> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.currentStep != widget.currentStep &&
         _pageController.hasClients) {
-      _pageController.animateToPage(
-        widget.currentStep,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
+      final token = ++_transitionToken;
+      setState(() => _transitioning = true);
+      _pageController
+          .animateToPage(
+            widget.currentStep,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+          )
+          .whenComplete(() {
+        if (mounted && token == _transitionToken) {
+          setState(() => _transitioning = false);
+        }
+      });
     }
   }
 
@@ -181,7 +204,17 @@ class _WizardState extends State<Wizard> {
               segmentCount: segmentCount,
             ),
             Expanded(child: pageView),
-            if (step.footer != null) step.footer!,
+            if (step.footer != null)
+              // ExcludeFocus keeps keyboard/assistive-tech activation out of
+              // the swapped-in footer for the same window IgnorePointer
+              // covers for taps.
+              ExcludeFocus(
+                excluding: _transitioning,
+                child: IgnorePointer(
+                  ignoring: _transitioning,
+                  child: step.footer!,
+                ),
+              ),
           ],
         ),
       ),

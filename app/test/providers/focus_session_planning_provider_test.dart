@@ -641,10 +641,10 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Step-skip behaviour
+  // Step advancement — no auto-skip, no double-advance (issue #180, Gap 3)
   // ---------------------------------------------------------------------------
 
-  group('FocusSessionPlanningNotifier — step-skip (review step)', () {
+  group('FocusSessionPlanningNotifier — step advancement (review step)', () {
     late GtdDatabase db;
     late ProviderContainer container;
 
@@ -659,14 +659,60 @@ void main() {
       focusSessionPlanningCompletionNotifier.value = false;
     });
 
-    test('advanceStep skips step 1 when no review items', () async {
+    test(
+        'advanceStep lands on step 1 with an empty snapshot when no items '
+        'need review (steps do not auto-skip, CONTEXT.md § Wizard)', () async {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       await notifier.advanceStep(); // from step 0
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.currentStep, 2,
-          reason: 'step 1 (review) should be skipped when no items need review');
+      expect(state.currentStep, 1,
+          reason: 'the step always renders; an empty snapshot shows the '
+              'empty-state view and the user clicks Next to advance');
+      expect(state.reviewNav.isLoaded, isTrue);
+      expect(state.reviewNav.isEmpty, isTrue);
+    });
+
+    test('concurrent double-invocation of advanceStep from step 0 advances '
+        'exactly one step', () async {
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+
+      final first = notifier.advanceStep();
+      final second = notifier.advanceStep();
+      await Future.wait([first, second]);
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.currentStep, 1,
+          reason: 'the re-entrant guard drops the overlapping call');
+    });
+
+    test('rapid double-invocation on the synchronous branch advances exactly '
+        'one step', () async {
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      notifier.goToStep(2);
+
+      // Two calls in the same synchronous burst — a double-tap.
+      final first = notifier.advanceStep();
+      final second = notifier.advanceStep();
+      await Future.wait([first, second]);
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.currentStep, 3,
+          reason: 'the re-entrant guard drops the second call of the burst');
+    });
+
+    test('sequential awaited advanceStep calls each advance one step',
+        () async {
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      notifier.goToStep(2);
+
+      await notifier.advanceStep();
+      await notifier.advanceStep();
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.currentStep, 4,
+          reason: 'intentional sequential advances are not debounced');
     });
 
     test('advanceStep lands on step 1 when review items exist', () async {

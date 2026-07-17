@@ -21,6 +21,10 @@ import '../test_helpers.dart';
 // Mock notifiers
 // ---------------------------------------------------------------------------
 
+/// Counts [FocusSessionPlanningNotifier.reEnterPlanning] calls so tests can
+/// pin when the "Plan the Day" entry resets planning state. Reset in setUp.
+int _reEnterPlanningCalls = 0;
+
 class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
   FocusSessionPlanningState build() {
@@ -30,6 +34,7 @@ class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
 
   @override
   Future<void> reEnterPlanning() async {
+    _reEnterPlanningCalls++;
     state = const FocusSessionPlanningState();
   }
 }
@@ -88,6 +93,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     focusSessionPlanningCompletionNotifier.value = false;
+    _reEnterPlanningCalls = 0;
   });
 
   testWidgets('FocusScreen renders without auto-navigating when planning is incomplete',
@@ -98,6 +104,17 @@ void main() {
     // Must stay on /focus — no automatic redirect to /focus-session-planning.
     expect(find.text('planning'), findsNothing);
     expect(find.byType(FocusScreen), findsOneWidget);
+  });
+
+  testWidgets('FocusScreen header reads "Now" (design review: Focus ↔ Now)',
+      (tester) async {
+    await tester.pumpWidget(_buildScreen());
+    await tester.pump();
+
+    // The execution home screen's user-facing title is "Now"; the internal
+    // name stays Focus (route /focus, FocusScreen).
+    expect(find.text('Now'), findsOneWidget);
+    expect(find.text('Focus'), findsNothing);
   });
 
   testWidgets('FocusScreen shows Plan the Day button when no active session',
@@ -128,6 +145,37 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('planning'), findsOneWidget);
+  });
+
+  testWidgets(
+      'Plan the Day does not reset an abandoned draft — the next performance '
+      'is seeded from it (issue #180, D3)', (tester) async {
+    focusSessionPlanningCompletionNotifier.value = false;
+    await tester.pumpWidget(_buildScreen());
+    await tester.pump();
+
+    await tester.tap(find.text('Plan the Day'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('planning'), findsOneWidget);
+    expect(_reEnterPlanningCalls, 0,
+        reason: 'an incomplete (abandoned or virgin) performance must not '
+            'be reset on entry — the retained state is the seed draft');
+  });
+
+  testWidgets(
+      'Plan the Day after a completed performance resets via reEnterPlanning',
+      (tester) async {
+    focusSessionPlanningCompletionNotifier.value = true;
+    await tester.pumpWidget(_buildScreen());
+    await tester.pump();
+
+    await tester.tap(find.text('Plan the Day'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('planning'), findsOneWidget);
+    expect(_reEnterPlanningCalls, 1,
+        reason: 'post-completion Re-plan keeps the reset behaviour');
   });
 
   testWidgets(

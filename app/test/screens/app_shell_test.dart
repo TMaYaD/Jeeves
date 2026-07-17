@@ -198,7 +198,10 @@ void main() {
     expect(find.text('Next Actions'), findsOneWidget);
     expect(find.text('Waiting For'), findsOneWidget);
     expect(find.text('Maybe'), findsOneWidget);
-    expect(find.text('Focus'), findsOneWidget);
+    // The execution home's user-facing title is "Now" (design review:
+    // Focus ↔ Now); the route stays /focus.
+    expect(find.text('Now'), findsOneWidget);
+    expect(find.text('Focus'), findsNothing);
     await tester.pump(const Duration(milliseconds: 100));
   });
 
@@ -244,14 +247,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
-  testWidgets('AppShell Focus navigates to /focus on tap', (tester) async {
+  testWidgets('AppShell "Now" entry navigates to /focus on tap', (tester) async {
     await tester.pumpWidget(_buildShellOnly());
     await tester.pump();
 
     await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Focus'));
+    await tester.tap(find.text('Now'));
     await tester.pumpAndSettle();
 
     expect(find.text('Focus body'), findsOneWidget);

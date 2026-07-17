@@ -57,10 +57,9 @@ Future<void> _insertTodo(
 
 /// Inserts a TimeLog row directly against [sessionId] for [taskId], emulating
 /// off-Plan engagement as the conceptual model (CONTEXT.md + ADR-0005)
-/// permits.  The production UI does not currently expose an off-Plan
-/// engagement path (FocusSessionDao.setCurrentTask rejects non-members) —
-/// we exercise the storage surface directly so the Review-side contract is
-/// covered against the day a path is added.
+/// permits.  The production path is the task detail screen's "Start focus"
+/// affordance (issue #180); we exercise the storage surface directly so the
+/// Review-side contract stays covered independently of the UI.
 Future<void> _insertOffPlanTimeLog(
   GtdDatabase db, {
   required String sessionId,

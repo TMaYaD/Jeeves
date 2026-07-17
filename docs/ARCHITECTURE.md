@@ -157,7 +157,7 @@ Focus Mode is the task execution layer activated after daily planning. Its archi
 
 `/focus/active` is a top-level `GoRoute` registered **outside** the `ShellRoute`, so `AppShell` (drawer, navigation) is not rendered. The user sees only the active task. `/focus` (the daily plan list) remains inside the `ShellRoute`.
 
-The router has a `redirect` callback only for SWS mode (redirect `/register` to `/login`). `/focus` is unconditionally accessible from the drawer; daily planning is entered explicitly via the "Plan the Day" button on the Focus screen or the amber `FocusSessionPlanningBanner` in `AppShell`.
+The router has a `redirect` callback only for SWS mode (redirect `/register` to `/login`). `/focus` is unconditionally accessible from the drawer (entry labelled "Now" — the execution home's user-facing title; internal identifiers stay Focus, see CONTEXT.md); daily planning is entered explicitly via the "Plan the Day" button on the Focus screen or the amber `FocusSessionPlanningBanner` in `AppShell`. `/focus/active` is reached from the execution home's Start buttons and from the task detail screen's "Start focus" affordance, which engages the task with or without an open session (see `FocusModeNotifier`).
 
 ### Top-level routes outside the ShellRoute
 
@@ -171,6 +171,8 @@ The router has a `redirect` callback only for SWS mode (redirect `/register` to 
 | `/settings` | `SettingsScreen` | App settings |
 | `/search` | `SearchScreen` | Universal search |
 | `/import` | `ImportScreen` | Data import |
+
+Ceremony routes (`/focus-session-planning`, `/shutdown`, `/periodic-review`) are entered via stackless navigation (`context.go`, notification deep-links, the nudge banners), so there is no in-app back stack to pop into. Each ceremony screen wraps its wizard in `CeremonyPopScope` (`app/lib/widgets/ceremony/ceremony_pop_scope.dart`), which gives system back well-defined semantics: it invokes the exact Back callback the active step's footer renders (retreating the per-item cursor first, then the step); when that callback is unavailable (first step, first item — or a completion screen) it exits to the execution home (`context.go('/focus')`), never to the launcher. Exiting mid-ceremony abandons the performance — the screen's dispose fires `CeremonyInProgressNotifier.exit()` (deferred to a microtask, since unmount runs while the tree is locked).
 
 ### Inbox row tap flow
 
@@ -192,19 +194,16 @@ The card's Tags section (above Energy) edits the **categorisation axes** only: a
 A `NotifierProvider<FocusModeNotifier, FocusModeState>` that holds ephemeral focus session state:
 
 - `activeTodoId` — the task currently being focused on.
-- `sessionStart` — wall-clock start of the active (unpaused) segment.
-- `accumulated` — total paused duration to subtract from elapsed.
-- `isPaused` / `pauseStart` — pause tracking.
+- `sessionStart` — wall-clock time when the focus segment started.
 
-`elapsed` is derived: `now − sessionStart − accumulated`, frozen while paused.
+`elapsed` is derived: `now − sessionStart`. There is no pause state here — the sprint/break rhythm (including its persistence across restarts) is owned entirely by `SprintTimerProvider`.
 
-State is **ephemeral** (in-memory only). The durable source of truth for the active task is `FocusSession.currentTaskId` in the DB.
+State is **ephemeral** (in-memory only). The durable record of the active engagement is the open `TimeLog`; for session-backed focus, `FocusSession.currentTaskId` mirrors it. Restoration after a restart re-attaches by reading the active `TimeLog` (`resumeFrom`), which covers session-backed and ad-hoc engagement alike.
 
 Key methods:
-- `startFocus(todoId)` — requires an open `FocusSession`; calls `FocusSessionDao.setCurrentTask` (which opens a `TimeLog`), then sets `sessionStart`.
-- `resumeFrom(todoId, startedAt)` — restores session after restart; does not touch DB state.
-- `pauseFocus()` / `resumeFocus()` — UI-only timer pause; no DB write.
-- `endFocus()` — calls `FocusSessionDao.setCurrentTask(null)` to close the open `TimeLog`, then clears in-memory state.
+- `startFocus(todoId)` — starts an engagement. With an open `FocusSession`, calls `FocusSessionDao.setCurrentTask` (which opens a session-attributed `TimeLog` and sets the Focus pointer — the task need not be on the Plan); with no session, opens an ad-hoc `TimeLog` directly via `TimeLogDao.openLog` (null session FK — engagement is independent of FocusSession, ADR-0005). Then sets `sessionStart`.
+- `resumeFrom(todoId, startedAt)` — restores the in-memory state after a restart from the active `TimeLog`'s `started_at`; does not touch DB state.
+- `endFocus()` — closes the open `TimeLog` (via `FocusSessionDao.setCurrentTask(null)` when a session is open, `TimeLogDao.closeLog` otherwise), then clears in-memory state.
 
 ### FocusSession model (`database/tables.dart`)
 
@@ -218,7 +217,7 @@ Key methods:
 Accessed via `FocusSessionDao` (in `database/daos/focus_session_dao.dart`):
 - `openSession(userId, taskIds)` — atomically closes any prior open session and opens a new one with the given task list.
 - `closeSession(sessionId)` — closes the session and any open `TimeLog`.
-- `setCurrentTask(sessionId, taskId?)` — atomically closes prior `TimeLog`, opens a new one for `taskId` (if non-null), updates `current_task_id`.
+- `setCurrentTask(sessionId, taskId?)` — atomically closes prior `TimeLog`, opens a new one for `taskId` (if non-null), updates `current_task_id`. The task need not be a Plan member — the Focus may point at any Outcome being engaged (off-Plan engagement, ADR-0005); the TimeLog still attributes to the session and the Plan never auto-grows.
 - `watchActiveSession(userId)` / `getActiveSession(userId)` — stream/one-shot for the open session.
 - `watchSessionTasks(sessionId)` / `watchSessionTasksForUser(userId)` — ordered task list.
 - `setTaskDisposition(sessionId, taskId, disposition)` — writes a single `disposition` value; throws `StateError` if the task is not in the session.
@@ -253,10 +252,8 @@ The session review screen is shown when the user taps "End Session" on `FocusScr
 
 A `ConsumerStatefulWidget` with `WidgetsBindingObserver` for lifecycle events:
 
-- **Complete**: `markDone` → `endFocus()` → snackbar with next task → `context.go('/focus')`.
-- **Abandon**: `endFocus()` → `context.go('/focus')`. Task returns to Next Actions.
-- **Pause/Resume**: toggled on `FocusModeNotifier` only; no DB write.
-- **Exit (×)**: confirmation dialog → `pauseFocus()` → `context.go('/focus')`.
+- **Done**: cancels the sprint, `markDone` → `endFocus()` → snackbar with next task → `context.go('/focus')`.
+- **Stop**: cancels the sprint, `endFocus()` → `context.go('/focus')` without completing the task; it returns to the focus list.
 
 ### Background Notification
 
@@ -397,6 +394,8 @@ The focus session planning feature uses a mix of global `ValueNotifier` objects 
 | `FocusSessionPlanningSettingsNotifier` | Riverpod `NotifierProvider` | User preferences: planning time, notification/banner toggles, snooze duration |
 
 `focusSessionPlanningCompletionNotifier` is set to `true` in-memory by `FocusSessionPlanningNotifier.startDay()` when the ritual ends; it is not persisted across restarts. `focusSessionPlanningBannerDismissedNotifier` is initialised from `SharedPreferences` in `initFocusSessionPlanningCompletion()`, which is called in `main()` before `runApp`.
+
+`FocusSessionPlanningNotifier` is not auto-disposed, so exiting the ceremony mid-ritual abandons the performance but retains the working state (step, cursors, routings) in memory as a draft that seeds the next performance — "Plan the Day" (`FocusScreen._replanDay`) calls `reEnterPlanning()` to reset only when the prior performance completed (`focusSessionPlanningCompletionNotifier == true`). The draft is in-memory only and silently degrades to a fresh start after process death — accepted behaviour (CONTEXT.md § Ceremony); tests must not assert draft survival across restarts.
 
 ### Inbox clarification step — snapshot+index navigation
 

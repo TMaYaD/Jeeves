@@ -29,6 +29,7 @@ import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
+import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/next_step.dart';
 import 'steps/someday_maybe_step.dart';
@@ -89,7 +90,12 @@ class _PeriodicReviewScreenState
 
   @override
   void dispose() {
-    _ceremonyNotifier.exit(RitualId.weeklyReview);
+    // Defer `exit()` to a microtask — unmount runs while the widget tree is
+    // locked, and Riverpod forbids notifier mutation during that phase (the
+    // mirror of the deferred `enter()` above). The notifier guards against
+    // the container being torn down before the microtask fires.
+    final notifier = _ceremonyNotifier;
+    Future.microtask(() => notifier.exit(RitualId.weeklyReview));
     super.dispose();
   }
 
@@ -102,9 +108,12 @@ class _PeriodicReviewScreenState
     // Completion screen lives outside the wizard — it is a post-ritual
     // confirmation, not a step the user walks through.
     if (step >= _kSummaryStepIndex) {
-      return const Scaffold(
-        backgroundColor: Colors.white,
-        body: SafeArea(child: SummaryStep()),
+      return const CeremonyPopScope(
+        onBack: null,
+        child: Scaffold(
+          backgroundColor: Colors.white,
+          body: SafeArea(child: SummaryStep()),
+        ),
       );
     }
 
@@ -155,14 +164,64 @@ class _PeriodicReviewScreenState
       ),
     ];
 
-    return Wizard(
-      ceremonyLabel: 'Weekly Review',
-      ceremonyIcon: Icons.refresh,
-      accentColor: _accent,
-      currentStep: step,
-      steps: steps,
-      progressSegmentCount: _kProgressSegmentCount,
+    return CeremonyPopScope(
+      // System back mirrors the active step's footer Back; when that is
+      // unavailable (step 0, first item) it exits to the execution home.
+      onBack: _backForCurrentStep(state, notifier),
+      child: Wizard(
+        ceremonyLabel: 'Weekly Review',
+        ceremonyIcon: Icons.refresh,
+        accentColor: _accent,
+        currentStep: step,
+        steps: steps,
+        progressSegmentCount: _kProgressSegmentCount,
+      ),
     );
+  }
+
+  /// The Back callback for the active step — the same callback its footer
+  /// renders (see [_listStep]). Null when Back is unavailable (step 0,
+  /// first item), which [CeremonyPopScope] translates into a ceremony exit.
+  VoidCallback? _backForCurrentStep(
+    PeriodicReviewState state,
+    PeriodicReviewNotifier notifier,
+  ) {
+    final step = state.currentStep;
+    final nav = switch (step) {
+      0 => state.inboxNav,
+      1 => state.waitingForNav,
+      2 => state.nextNav,
+      _ => state.somedayNav,
+    };
+    final VoidCallback previous = switch (step) {
+      0 => notifier.previousInbox,
+      1 => notifier.previousWaitingFor,
+      2 => notifier.previousNext,
+      _ => notifier.previousSomeday,
+    };
+    return _backFor(
+      nav: nav,
+      previous: previous,
+      stepIndex: step,
+      currentStep: step,
+      notifier: notifier,
+    );
+  }
+
+  /// Back routing shared by the footers and the system-back handler:
+  /// retreat the per-item cursor while past item 0; from item 0 of any
+  /// non-first step, cross to the previous step. Step 0's first item has
+  /// no Back.
+  VoidCallback? _backFor({
+    required SnapshotNav<dynamic> nav,
+    required VoidCallback previous,
+    required int stepIndex,
+    required int currentStep,
+    required PeriodicReviewNotifier notifier,
+  }) {
+    if (nav.canGoBack) return previous;
+    if (stepIndex == 0) return null;
+    return () => unawaited(notifier.goToStep(currentStep - 1));
   }
 
   /// Builds a list-driven step (Inbox / Waiting For / Next Actions /
@@ -196,11 +255,13 @@ class _PeriodicReviewScreenState
       footer: ListItemFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
-        onBack: nav.canGoBack
-            ? previous
-            : (stepIndex == 0
-                ? null
-                : () => unawaited(notifier.goToStep(currentStep - 1))),
+        onBack: _backFor(
+          nav: nav,
+          previous: previous,
+          stepIndex: stepIndex,
+          currentStep: currentStep,
+          notifier: notifier,
+        ),
         onSkip: skip,
         // Next step is disabled while the snapshot is still loading;
         // notifier methods are Future-returning so the discard is
