@@ -8,7 +8,8 @@ part 'todo.g.dart';
 /// Orthogonal intent enum — independent of GTD state.
 ///
 /// next: normal actionable item; maybe: deferred for later consideration;
-/// trash: marked for deletion (UX deferred to a future PR).
+/// trash: discarded — surfaces on the Trash screen, restorable to next or
+/// maybe from task detail; the row is never physically deleted.
 enum Intent {
   next,
   maybe,

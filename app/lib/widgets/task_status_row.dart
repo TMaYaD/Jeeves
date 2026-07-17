@@ -2,7 +2,7 @@ import 'package:flutter/material.dart' hide Intent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show Intent;
+import '../models/todo.dart' show Intent, RoutingKind;
 import '../providers/task_detail_provider.dart';
 import 'person_tag_picker.dart';
 
@@ -68,9 +68,12 @@ class TaskStatusRow extends ConsumerWidget {
     );
   }
 
+  // Trash is checked before Completion: a completed-then-trashed Outcome
+  // surfaces in Trash only — the discard stance wins over the historical
+  // Completion fact (CONTEXT.md § Done / Trash).
   String _label(List<Tag> personTags) {
-    if (todo.doneAt != null) return 'Done';
     if (todo.intent == 'trash') return 'Trashed';
+    if (todo.doneAt != null) return 'Done';
     if (todo.intent == 'maybe') return 'Someday';
     if (personTags.isNotEmpty) {
       final names = personTags.map((t) => t.name).join(' & ');
@@ -80,8 +83,8 @@ class TaskStatusRow extends ConsumerWidget {
   }
 
   Color _dotColor(List<Tag> personTags) {
-    if (todo.doneAt != null) return const Color(0xFF6B7280);
     if (todo.intent == 'trash') return const Color(0xFFEF4444);
+    if (todo.doneAt != null) return const Color(0xFF6B7280);
     if (todo.intent == 'maybe') return const Color(0xFFF59E0B);
     if (personTags.isNotEmpty) return const Color(0xFFF59E0B);
     return const Color(0xFF10B981);
@@ -204,14 +207,34 @@ class _StatusMenuSheet extends ConsumerWidget {
                   await notifier.setIntent(Intent.trash);
                 },
               ),
-            // Restore — shown when done or trashed
-            if (isDone || isTrashed)
+            // Restore — a trashed Outcome chooses the Intent to return to
+            // (issue #408); a done-only Outcome keeps single-tap restore to
+            // Next. Both paths route through applyRouting, which clears
+            // done_at and stamps last_clarified_at.
+            if (isTrashed) ...[
+              ListTile(
+                leading: const Icon(Icons.restore, color: Color(0xFF2563EB)),
+                title: const Text('Restore to Next'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await notifier.restoreTo(RoutingKind.nextAction);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.restore, color: Color(0xFF2563EB)),
+                title: const Text('Restore to Someday/Maybe'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await notifier.restoreTo(RoutingKind.maybe);
+                },
+              ),
+            ] else if (isDone)
               ListTile(
                 leading: const Icon(Icons.restore, color: Color(0xFF2563EB)),
                 title: const Text('Restore'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.restore();
+                  await notifier.restoreTo(RoutingKind.nextAction);
                 },
               ),
           ],
