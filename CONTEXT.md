@@ -143,7 +143,7 @@ The implicit List of completed Outcomes the user still considers part of their r
 _Avoid_: Completed, Finished, Archive (Archive implies removal from active concerns; Done is just the achieved set)
 
 **Trash**:
-The implicit List of Outcomes the user has discarded. Defined by: `Intent = trash` (regardless of Completion). User-facing surface deferred.
+The implicit List of Outcomes the user has discarded. Defined by: `Intent = trash` (regardless of Completion).
 _Avoid_: Deleted, Removed (the row persists; Intent expresses the user's stance)
 
 #### Relationships

@@ -181,6 +181,24 @@ class CustomDrawer extends ConsumerWidget {
                                 fontSize: 14, color: Color(0xFF374151))),
                       )),
                   const SizedBox(height: 8),
+                  const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                  const SizedBox(height: 8),
+                  // Record group — Done and Trash are records, not working
+                  // lists: de-emphasised, no count badges (record size is
+                  // not actionable signal), scrolls with the nav column.
+                  _buildNavItem(context,
+                      icon: Icons.task_alt,
+                      title: 'Done',
+                      path: '/done',
+                      location: location,
+                      muted: true),
+                  _buildNavItem(context,
+                      icon: Icons.delete_outline,
+                      title: 'Trash',
+                      path: '/trash',
+                      location: location,
+                      muted: true),
+                  const SizedBox(height: 8),
                 ],
               ),
               ),
@@ -247,6 +265,9 @@ class CustomDrawer extends ConsumerWidget {
     );
   }
 
+  /// Builds one drawer nav tile. [muted] renders the de-emphasised record
+  /// idiom (grey icon, smaller label — matching the PROJECTS tiles) used by
+  /// the Done / Trash group; the selected-state highlight still applies.
   Widget _buildNavItem(
     BuildContext context, {
     required IconData icon,
@@ -254,6 +275,7 @@ class CustomDrawer extends ConsumerWidget {
     required String path,
     required String location,
     int count = 0,
+    bool muted = false,
   }) {
     final isSelected = location.startsWith(path);
     return ListTile(
@@ -261,11 +283,13 @@ class CustomDrawer extends ConsumerWidget {
       leading: Icon(icon,
           color: isSelected
               ? const Color(0xFF2563EB)
-              : const Color(0xFF6B7280)),
+              : muted
+                  ? const Color(0xFF9CA3AF)
+                  : const Color(0xFF6B7280)),
       title: Text(
         title,
         style: TextStyle(
-          fontSize: 16,
+          fontSize: muted ? 14 : 16,
           fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
           color:
               isSelected ? const Color(0xFF2563EB) : const Color(0xFF374151),

@@ -60,6 +60,15 @@ final doneProvider = StreamProvider<List<Todo>>((ref) {
   return db.todoDao.watchDone();
 });
 
+/// Stream of trashed Outcomes (intent = 'trash'), newest-trashed first.
+///
+/// Deliberately ignores [tagFilterProvider], like [doneProvider]: the Trash
+/// surface is a record of discarded Outcomes, not a working list.
+final trashProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.todoDao.watchTrash();
+});
+
 /// Stream of inbox todos (clarified = false), newest first — no context tag filter.
 ///
 /// Unlike [inboxProvider], this ignores [tagFilterProvider] so it covers the

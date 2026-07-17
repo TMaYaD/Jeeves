@@ -508,7 +508,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// live lists never depend solely on the bridge. It is a harmless idempotent
   /// re-run under `NativeDatabase` (tests), where the underlying write already
   /// reported `rows > 0` and notified. Methods built on `customUpdate` /
-  /// `customInsert` (e.g. `markDone`, `setIntent`, `restore`) notify
+  /// `customInsert` (e.g. `markDone`, `setIntent`) notify
   /// unconditionally and need no extra call. Callers that also edit person tags
   /// pass [includeTodoTags] so the `todo_tags`-backed watchers refresh too.
   ///

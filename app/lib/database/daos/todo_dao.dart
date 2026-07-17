@@ -306,6 +306,34 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   }
 
   // ---------------------------------------------------------------------------
+  // Trash
+  // ---------------------------------------------------------------------------
+
+  /// Stream of trashed todos — the Trash List surface.
+  ///
+  /// Membership per CONTEXT.md § GTD Core: `Intent = trash`, regardless of
+  /// Completion. A completed-then-trashed Outcome surfaces here and only
+  /// here — [watchDone] excludes trashed rows, keeping Done and Trash
+  /// disjoint (#278).
+  ///
+  /// Ordering approximates "newest-trashed first" without a dedicated
+  /// `trashed_at` column: every write path into trash stamps
+  /// `last_clarified_at` ([setIntent], [applyRouting]), and any later
+  /// clarifying act on a trashed row either restores it out of Trash or is
+  /// a rare direct edit, so the stamp is a faithful proxy for the trashing
+  /// act. `updated_at` / `created_at` are fallbacks for legacy rows that
+  /// predate the stamp. All three columns store ISO-8601 text, so
+  /// lexicographic DESC is chronological.
+  Stream<List<Todo>> watchTrash() {
+    return customSelect(
+      "SELECT * FROM todos WHERE intent = 'trash' "
+      'ORDER BY COALESCE(last_clarified_at, updated_at, created_at) DESC',
+      variables: [],
+      readsFrom: {todos},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
+  // ---------------------------------------------------------------------------
   // Bulk id lookup
   // ---------------------------------------------------------------------------
 
@@ -506,26 +534,6 @@ AND (
       updatedAt: Value(ts),
     ));
     attachedDatabase.notifyTodosViewWrite();
-  }
-
-  /// Restores a done or trashed todo to active next-action status.
-  ///
-  /// Stamps [last_clarified_at]: restoring is an Intent edit (sets
-  /// intent='next', clears done_at) — a clarifying micro-act per CONTEXT.md.
-  Future<void> restore(String todoId) async {
-    final ts = DateTime.now().toUtc().toIso8601String();
-    await customUpdate(
-      'UPDATE todos SET done_at = NULL, intent = ?, updated_at = ?, '
-      'last_clarified_at = ? WHERE id = ?',
-      variables: [
-        Variable('next'),
-        Variable(ts),
-        Variable(ts),
-        Variable(todoId),
-      ],
-      updates: {todos},
-      updateKind: UpdateKind.update,
-    );
   }
 
   /// Returns the IDs of person-typed tags assigned to [todoId].

@@ -130,6 +130,14 @@ Widget _buildShellOnly({
                     path: '/focus',
                     builder: (_, _) => const Scaffold(body: Text('Focus body')),
                   ),
+                  GoRoute(
+                    path: '/done',
+                    builder: (_, _) => const Scaffold(body: Text('Done body')),
+                  ),
+                  GoRoute(
+                    path: '/trash',
+                    builder: (_, _) => const Scaffold(body: Text('Trash body')),
+                  ),
                 ],
               ),
             ],
@@ -265,5 +273,67 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('settings_tile')), findsOneWidget);
+  });
+
+  testWidgets(
+      'AppShell drawer shows the record group (Done, Trash) at the bottom '
+      'of the scrollable nav column, above Settings, without count badges',
+      (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+
+    // Scroll the nav column so the record group at its end is visible.
+    await tester.drag(find.byType(Drawer), const Offset(0, -600));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Done'), findsOneWidget);
+    expect(find.text('Trash'), findsOneWidget);
+    // Record group sits above the fixed Settings tile.
+    expect(
+      tester.getTopLeft(find.text('Trash')).dy <
+          tester.getTopLeft(find.byKey(const Key('settings_tile'))).dy,
+      isTrue,
+    );
+    // Record size is not actionable signal — no count badges.
+    expect(tester.widget<ListTile>(find.widgetWithText(ListTile, 'Done')).trailing,
+        isNull);
+    expect(
+        tester.widget<ListTile>(find.widgetWithText(ListTile, 'Trash')).trailing,
+        isNull);
+  });
+
+  testWidgets('AppShell navigates to Done on drawer tap', (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Drawer), const Offset(0, -600));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Done body'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('AppShell navigates to Trash on drawer tap', (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Drawer), const Offset(0, -600));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Trash'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Trash body'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 100));
   });
 }
