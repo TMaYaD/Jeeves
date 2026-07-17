@@ -86,21 +86,22 @@ replication:
       slot_name: powersync_slot
 
 # --- Sync rules ---------------------------------------------------------------
-# Seven user-scoped buckets — todos, tags, todo_tags, time_logs,
-# focus_sessions, focus_session_tasks, and user_preferences.
+# Ten user-scoped buckets — todos, tags, todo_tags, time_logs,
+# focus_sessions, focus_session_tasks, user_preferences, and the Capture
+# split (issue #184): captures, capture_outcomes, capture_tags.
 #
 # The parameter query below relies on the JWT carrying a `user_id` claim —
 # `token_parameters.user_id` is read directly and no users-table lookup is
 # required.
 #
-# Both junction tables (todo_tags, focus_session_tasks) carry a denormalized
-# `user_id` column (migrations 0008 and 0025) following PowerSync's
-# "Denormalize Foreign Key onto Child Table" pattern for many-to-many join
-# tables [1] — PowerSync rejects JOINs in bucket data queries as a fatal
-# sync-rules error ("Must SELECT from a single table"), which aborts the
-# whole config.  Their SELECTs list columns explicitly because PowerSync
-# manages `id` itself for junction tables and declaring it on the client
-# would duplicate the column.
+# The junction tables (todo_tags, focus_session_tasks, capture_outcomes,
+# capture_tags) carry a denormalized `user_id` column (migrations 0008, 0025,
+# 0026) following PowerSync's "Denormalize Foreign Key onto Child Table"
+# pattern for many-to-many join tables [1] — PowerSync rejects JOINs in bucket
+# data queries as a fatal sync-rules error ("Must SELECT from a single
+# table"), which aborts the whole config.  Their SELECTs list columns
+# explicitly because PowerSync manages `id` itself for junction tables and
+# declaring it on the client would duplicate the column.
 #
 # [1] https://docs.powersync.com/sync/rules/many-to-many-join-tables
 sync_config:
@@ -148,6 +149,26 @@ sync_config:
           - SELECT token_parameters.user_id AS user_id
         data:
           - SELECT * FROM user_preferences WHERE user_id = bucket.user_id
+
+      by_user_captures:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT * FROM captures WHERE user_id = bucket.user_id
+
+      by_user_capture_outcomes:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT id, capture_id, outcome_id, created_at, user_id
+            FROM capture_outcomes WHERE user_id = bucket.user_id
+
+      by_user_capture_tags:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT id, capture_id, tag_id, user_id
+            FROM capture_tags WHERE user_id = bucket.user_id
 
 # --- Client auth --------------------------------------------------------------
 # Validate JWTs signed by the backend using the shared secret.
