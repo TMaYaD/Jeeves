@@ -121,12 +121,24 @@ async def test_create_focus_session_replay_is_idempotent(
     assert retry.status_code == 201
     assert retry.json()["id"] == session_id
 
+    # Upsert-on-replay (ADR-0015): a consolidated replay carrying a newer
+    # client-owned field (the session's ended_at) converges the stored row.
+    converge = await client.post(
+        "/focus_sessions/",
+        json={**payload, "ended_at": "2026-07-12T10:00:00.000Z"},
+        headers=auth_header(token),
+    )
+    assert converge.status_code == 201
+    _assert_instant(converge.json()["ended_at"], "2026-07-12T10:00:00Z")
+
     rows = (
         (await db.execute(select(FocusSession).where(FocusSession.id == session_id)))
         .scalars()
         .all()
     )
     assert len(rows) == 1
+    assert rows[0].ended_at is not None
+    _assert_instant(rows[0].ended_at.isoformat(), "2026-07-12T10:00:00Z")
 
 
 @pytest.mark.asyncio
@@ -622,8 +634,20 @@ async def test_create_time_log_replay_is_idempotent(client: AsyncClient, db: Asy
     retry = await client.post("/time_logs/", json=payload, headers=auth_header(token))
     assert retry.status_code == 201
 
+    # Upsert-on-replay (ADR-0015): a consolidated replay carrying a newer
+    # client-owned field (ended_at) converges the stored row.
+    converge = await client.post(
+        "/time_logs/",
+        json={**payload, "ended_at": "2026-07-12T09:30:00.000Z"},
+        headers=auth_header(token),
+    )
+    assert converge.status_code == 201
+    _assert_instant(converge.json()["ended_at"], "2026-07-12T09:30:00Z")
+
     rows = (await db.execute(select(TimeLog).where(TimeLog.id == payload["id"]))).scalars().all()
     assert len(rows) == 1
+    assert rows[0].ended_at is not None
+    _assert_instant(rows[0].ended_at.isoformat(), "2026-07-12T09:30:00Z")
 
 
 @pytest.mark.asyncio
@@ -659,6 +683,32 @@ async def test_create_time_log_unowned_parents_are_404(client: AsyncClient) -> N
         headers=auth_header(token),
     )
     assert foreign_session.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_time_log_id_conflict_across_users_is_409(client: AsyncClient) -> None:
+    # A cross-user id collision must return 409 (a genuine anomaly), even when
+    # the replay also carries the other user's foreign parent id — the id check
+    # runs before parent validation, so it wins over a would-be 404.
+    token_a = await register(client, "tl-conflict-a@example.com")
+    token_b = await register(client, "tl-conflict-b@example.com")
+    a_todo = await _make_todo(client, token_a)
+    log_id = str(uuid4())
+
+    first = await client.post(
+        "/time_logs/",
+        json={"id": log_id, "task_id": a_todo, "started_at": "2026-07-12T09:05:00.000Z"},
+        headers=auth_header(token_a),
+    )
+    assert first.status_code == 201
+
+    # User B replays the same id carrying A's foreign task_id.
+    conflict = await client.post(
+        "/time_logs/",
+        json={"id": log_id, "task_id": a_todo, "started_at": "2026-07-12T09:05:00.000Z"},
+        headers=auth_header(token_b),
+    )
+    assert conflict.status_code == 409
 
 
 @pytest.mark.asyncio

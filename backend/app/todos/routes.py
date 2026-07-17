@@ -57,12 +57,33 @@ async def create_todo(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Todo:
-    tags = await resolve_tags(body.tags, current_user.id, db)
-    # Check for existing todo by client-provided id (idempotent retry support).
+    # Upsert-on-replay (ADR-0015): a same-user id match applies the submitted
+    # client-owned scalar fields to the stored row and returns it, so a
+    # consolidated replay carrying newer offline edits converges the server row
+    # instead of reverting them one checkpoint later.  Tag-set convergence flows
+    # through the todo_tags junction route, not here, so `tags` (and the legacy
+    # `state` field) are dropped; with exclude_unset an omitted field is left
+    # untouched, so the #380 omitted-clarified-preserved path is preserved.  A
+    # cross-user id collision is a genuine anomaly (409), matching the other
+    # create routes.  resolve_tags runs only on the create path below — never on
+    # the replay path, so a replay that carries tags creates no orphan Tag rows.
     if body.id is not None:
         existing = await _get_todo_with_tags(body.id, db)
-        if existing and existing.user_id == current_user.id:
-            return existing
+        if existing:
+            if existing.user_id != current_user.id:
+                raise HTTPException(status_code=409, detail="Todo id already exists")
+            data = body.model_dump(exclude_unset=True)
+            for reserved in ("id", "tags", "state"):
+                data.pop(reserved, None)
+            for field, value in data.items():
+                setattr(existing, field, value)
+            await db.commit()
+            # Expire the in-memory tags collection; see below for rationale.
+            db.expire(existing, ["tags"])
+            loaded = await _get_todo_with_tags(existing.id, db)
+            assert loaded is not None
+            return loaded
+    tags = await resolve_tags(body.tags, current_user.id, db)
     todo = Todo(
         **({"id": body.id} if body.id is not None else {}),
         # Only pass created_at when the client supplied it (offline captures
