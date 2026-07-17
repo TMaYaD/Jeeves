@@ -132,6 +132,47 @@ void main() {
     });
 
     test(
+        'concurrent startFocus for a different task throws StateError '
+        'without opening a second engagement', () async {
+      final todo1 = await _insertTask(db);
+      final todo2 = await _insertTask(db);
+
+      // Fire both before awaiting either: the second must be rejected by
+      // the in-flight guard even though state is still inactive while the
+      // first call's DB writes are in progress.
+      final first =
+          container.read(focusModeProvider.notifier).startFocus(todo1.id);
+      await expectLater(
+        () => container.read(focusModeProvider.notifier).startFocus(todo2.id),
+        throwsA(isA<StateError>()),
+      );
+      await first;
+
+      final s = container.read(focusModeProvider);
+      expect(s.activeTodoId, todo1.id,
+          reason: 'the first start wins; the second must not overwrite it');
+      final log = await db.timeLogDao.watchActiveLog().first;
+      expect(log!.taskId, todo1.id,
+          reason: 'exactly one engagement TimeLog may be open');
+    });
+
+    test('concurrent startFocus for the same task defers to the first call',
+        () async {
+      final todo = await _insertTask(db);
+
+      final first =
+          container.read(focusModeProvider.notifier).startFocus(todo.id);
+      final second =
+          container.read(focusModeProvider.notifier).startFocus(todo.id);
+      await Future.wait([first, second]);
+
+      final s = container.read(focusModeProvider);
+      expect(s.activeTodoId, todo.id);
+      final log = await db.timeLogDao.watchActiveLog().first;
+      expect(log!.taskId, todo.id);
+    });
+
+    test(
         'opens an ad-hoc TimeLog when no open focus session exists '
         '(ADR-0005: engagement is independent of FocusSession)', () async {
       final todo = await _insertTask(db);

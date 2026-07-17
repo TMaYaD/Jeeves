@@ -48,34 +48,53 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   ///
   /// Throws [StateError] if a different task is already active.
   Future<void> startFocus(String todoId) async {
+    // The activeTodoId guard alone leaves a window: state stays inactive
+    // until the DB writes below complete, so two concurrent starts could
+    // both pass it and both open TimeLogs. The in-flight id closes that
+    // window — a duplicate start for the same task defers to the first
+    // call; a start for a different task keeps the StateError contract.
+    if (_startingTodoId != null) {
+      if (_startingTodoId == todoId) return;
+      throw StateError(
+        'Cannot start a new focus session while another task is still active.',
+      );
+    }
     if (state.activeTodoId != null && state.activeTodoId != todoId) {
       throw StateError(
         'Cannot start a new focus session while another task is still active.',
       );
     }
 
-    final db = ref.read(databaseProvider);
-    final now = DateTime.now();
+    _startingTodoId = todoId;
+    try {
+      final db = ref.read(databaseProvider);
+      final now = DateTime.now();
 
-    final session = await db.focusSessionDao.getActiveSession();
-    if (session != null) {
-      await db.focusSessionDao.setCurrentTask(
-        sessionId: session.id,
-        taskId: todoId,
-        now: now,
+      final session = await db.focusSessionDao.getActiveSession();
+      if (session != null) {
+        await db.focusSessionDao.setCurrentTask(
+          sessionId: session.id,
+          taskId: todoId,
+          now: now,
+        );
+      } else {
+        await db.timeLogDao.openLog(
+          taskId: todoId,
+          userId: ref.read(currentUserIdProvider),
+          now: now,
+        );
+      }
+      state = FocusModeState(
+        activeTodoId: todoId,
+        sessionStart: now,
       );
-    } else {
-      await db.timeLogDao.openLog(
-        taskId: todoId,
-        userId: ref.read(currentUserIdProvider),
-        now: now,
-      );
+    } finally {
+      _startingTodoId = null;
     }
-    state = FocusModeState(
-      activeTodoId: todoId,
-      sessionStart: now,
-    );
   }
+
+  /// Task id of the [startFocus] call currently in flight, or null.
+  String? _startingTodoId;
 
   /// Restores a focus session for a task that was already focused before the
   /// app restarted. Does not change DB state.
