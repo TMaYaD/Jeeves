@@ -2,8 +2,9 @@
 ///
 /// Replaces the four near-parallel button strips that used to live inline in
 /// [ClarifyCard], the planning ritual's task-review card, and three
-/// periodic-review steps (Waiting For, Projects, Someday/Maybe). Owns its DAO
-/// writes; callsites configure presentation only and never see [RoutingKind].
+/// periodic-review steps (Waiting For, Projects, Someday/Maybe). Owns its
+/// writes, delegated to [ClarificationService]; callsites configure
+/// presentation only and never see [RoutingKind].
 ///
 /// API surface lives on [ProcessAction]. Callsites that already hold a
 /// [RoutingKind] (e.g. from a session record) translate via the co-located
@@ -17,7 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../providers/auth_provider.dart';
-import '../providers/database_provider.dart';
+import '../services/clarification_service.dart';
 import 'clarify_card.dart';
 import 'next_action_dialog.dart';
 import 'person_tag_picker.dart';
@@ -27,7 +28,8 @@ export '../models/todo.dart' show RoutingKind;
 /// User-visible "process to" actions.
 ///
 /// Five real routes (`next`, `waitingFor`, `someday`, `done`, `trash`) map to
-/// [TodoDao.applyRouting] internally; `keep` stamps `last_clarified_at` only;
+/// [ClarificationService.clarifyToOutcome] internally; `keep` stamps
+/// `last_clarified_at` only;
 /// `nextActionDialog` is a modifier on the `next` button (not a standalone
 /// button) — it is on by default, so tapping Next opens [NextActionDialog]
 /// before invoking the `next` mapping unless a callsite removes it via
@@ -283,6 +285,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     }
   }
 
+  ClarificationService get _clarification =>
+      ref.read(clarificationServiceProvider);
+
   /// Snapshot-based callsites (inbox-clarify, periodic review) can lose a
   /// row between render and tap — sync or another device may hard-delete it.
   /// PowerSync exposes `todos` as a SQLite VIEW with INSTEAD OF triggers, so
@@ -290,15 +295,11 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   /// the write whether anything happened. Pre-check existence here so we
   /// don't fire [onAfterRoute] (which advances the snapshot cursor and
   /// records a phantom routing record) for a row that no longer exists.
-  Future<bool> _todoExists() async {
-    final db = ref.read(databaseProvider);
-    return await db.todoDao.getTodo(widget.todo.id) != null;
-  }
+  Future<bool> _todoExists() => _clarification.exists(widget.todo.id);
 
   Future<void> _keep() async {
     if (!await _todoExists()) return;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.stampLastClarifiedAt(widget.todo.id);
+    await _clarification.stampClarified(widget.todo.id);
     await widget.onAfterRoute?.call(ProcessAction.keep);
   }
 
@@ -338,8 +339,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
 
   Future<void> _next() async {
     if (!await _todoExists()) return;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.applyRouting(
+    await _clarification.clarifyToOutcome(
       widget.todo.id,
       to: RoutingKind.nextAction,
     );
@@ -365,8 +365,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       // still notify the callsite so it can react (e.g. clear a stale
       // action record); its handler re-reads the row and sees the
       // unchanged value.
-      final db = ref.read(databaseProvider);
-      await db.todoDao.applyRouting(
+      await _clarification.clarifyToOutcome(
         widget.todo.id,
         to: RoutingKind.nextAction,
         nextActionText: result,
@@ -376,10 +375,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   }
 
   Future<void> _waitingFor() async {
-    final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
     final currentTagIds =
-        await db.todoDao.getPersonTagIdsForTodo(widget.todo.id);
+        await _clarification.getPersonTagIds(widget.todo.id);
     if (!mounted) return;
     var confirmed = false;
     await showPersonTagPicker(
@@ -391,13 +389,13 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         if (!await _todoExists()) return;
         confirmed = true;
         final selected =
-            await db.todoDao.getPersonTagIdsForTodo(widget.todo.id);
+            await _clarification.getPersonTagIds(widget.todo.id);
         // Routing to waitingFor is intent-only — `next_action_text` is on
         // the orthogonal "what's the action?" axis and is not touched here.
         // Callsites that want to couple a phrase write own it via
         // `onAfterRoute` (or the `nextActionDialog` modifier when editing
         // an existing phrase).
-        await db.todoDao.applyRouting(
+        await _clarification.clarifyToOutcome(
           widget.todo.id,
           to: RoutingKind.waitingFor,
           personTagIds: selected,
@@ -411,7 +409,6 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
 
   Future<void> _route(ProcessAction action) async {
     if (!await _todoExists()) return;
-    final db = ref.read(databaseProvider);
     final to = switch (action) {
       ProcessAction.someday => RoutingKind.maybe,
       ProcessAction.done => RoutingKind.done,
@@ -421,7 +418,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // Person tags are orthogonal to intent: a delegated task can become
     // `someday` / `done` / `trash` without losing its delegate. The picker
     // is the only path that mutates person tags.
-    await db.todoDao.applyRouting(widget.todo.id, to: to);
+    await _clarification.clarifyToOutcome(widget.todo.id, to: to);
     await widget.onAfterRoute?.call(action);
   }
 

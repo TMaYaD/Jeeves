@@ -4,7 +4,8 @@
 /// Provides the same clarification UI (title, notes, energy level, time
 /// estimate, due date, GTD routing buttons) as the planning wizard's
 /// _ClarifyCard, but operates independently — it loads its own todo,
-/// writes directly to the DAOs, and pops when the user routes the item.
+/// delegates its writes to [ClarificationService], and pops when the user
+/// routes the item.
 library;
 
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
 import '../../providers/database_provider.dart';
+import '../../services/clarification_service.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/person_tag_picker.dart';
 
@@ -110,46 +112,49 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       return false;
     }
     final notes = _notesCtrl.text.trim();
-    final db = ref.read(databaseProvider);
     final todo = _todo;
     if (todo == null) return false;
-    await db.todoDao.updateFields(
-      widget.todoId,
-      title: title,
-      notes: notes.isNotEmpty ? notes : null,
-      energyLevel: _energyLevel,
-      timeEstimate: _timeEstimate,
-      dueDate: _dueDate != null
-          ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
-          : null,
-      clearDueDate: _dueDate == null && todo.dueDate != null,
-    );
+    await ref.read(clarificationServiceProvider).updateFields(
+          widget.todoId,
+          title: title,
+          notes: notes.isNotEmpty ? notes : null,
+          energyLevel: _energyLevel,
+          timeEstimate: _timeEstimate,
+          dueDate: _dueDate != null
+              ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
+              : null,
+          clearDueDate: _dueDate == null && todo.dueDate != null,
+        );
     return true;
   }
 
-  Future<void> _process() async {
+  /// Shared flow for the one-tap routing handlers: persist field edits,
+  /// bail if saving failed (empty title) or the screen unmounted, run the
+  /// routing [action] against [ClarificationService], then pop.
+  Future<void> _saveAndRoute(Future<void> Function() action) async {
     final saved = await _saveFields();
     if (!saved || !mounted) return;
-    final db = ref.read(databaseProvider);
-    await db.inboxDao.processInboxItem(widget.todoId);
+    await action();
     if (mounted) context.pop();
   }
 
-  Future<void> _processToMaybe() async {
-    final saved = await _saveFields();
-    if (!saved || !mounted) return;
-    final db = ref.read(databaseProvider);
-    await db.inboxDao.processInboxItem(widget.todoId, intent: 'maybe');
-    if (mounted) context.pop();
-  }
+  Future<void> _process() => _saveAndRoute(
+        () => ref
+            .read(clarificationServiceProvider)
+            .promoteCaptureToOutcome(widget.todoId),
+      );
 
-  Future<void> _processToDone() async {
-    final saved = await _saveFields();
-    if (!saved || !mounted) return;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.markDone(widget.todoId);
-    if (mounted) context.pop();
-  }
+  Future<void> _processToMaybe() => _saveAndRoute(
+        () => ref
+            .read(clarificationServiceProvider)
+            .promoteCaptureToOutcome(widget.todoId, intent: 'maybe'),
+      );
+
+  Future<void> _processToDone() => _saveAndRoute(
+        () => ref
+            .read(clarificationServiceProvider)
+            .completeOutcome(widget.todoId),
+      );
 
   Future<void> _processToWaitingFor() async {
     final saved = await _saveFields();
@@ -162,8 +167,9 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       onAfterConfirm: () async {
         if (!mounted) return;
         try {
-          final db = ref.read(databaseProvider);
-          await db.inboxDao.processInboxItem(widget.todoId);
+          await ref
+              .read(clarificationServiceProvider)
+              .promoteCaptureToOutcome(widget.todoId);
           if (mounted) context.pop();
         } catch (e) {
           if (mounted) {
