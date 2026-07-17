@@ -145,6 +145,30 @@ async def test_capture_patch_null_title_rejected(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_capture_create_same_id_idempotent_and_conflict(
+    client: AsyncClient,
+) -> None:
+    # Replaying the identical create is idempotent (returns the stored row);
+    # replaying the same id with different data is a 409 rather than silently
+    # discarding the conflicting offline upload.
+    token = await register(client, "capture-same-id@example.com")
+    headers = auth_header(token)
+    capture_id = str(uuid4())
+    body = {"id": capture_id, "title": "t", "notes": "n"}
+    first = await client.post("/captures/", json=body, headers=headers)
+    assert first.status_code == 201
+    replay = await client.post("/captures/", json=body, headers=headers)
+    assert replay.status_code == 201
+    assert replay.json()["id"] == first.json()["id"]
+    conflict = await client.post(
+        "/captures/",
+        json={"id": capture_id, "title": "different"},
+        headers=headers,
+    )
+    assert conflict.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_capture_create_explicit_null_created_at_rejected(client: AsyncClient) -> None:
     # created_at is NOT NULL; an explicit null must 422, not null the column
     # (omission is fine — the server default applies).

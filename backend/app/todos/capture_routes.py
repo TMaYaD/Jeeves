@@ -68,15 +68,21 @@ async def create_capture(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Capture:
-    # Idempotency: return the existing capture if the client id already exists.
+    data = body.model_dump(exclude_unset=True)
+    data.pop("id", None)
+    # Idempotency: replaying the same id with identical data returns the stored
+    # row; a same-id replay whose fields differ is a conflict, not a silent
+    # discard of the diverging offline upload.
     if body.id is not None:
         existing = await db.get(Capture, body.id)
         if existing:
-            if existing.user_id == current_user.id:
-                return existing
-            raise HTTPException(status_code=409, detail="Capture id already exists")
-    data = body.model_dump(exclude_unset=True)
-    data.pop("id", None)
+            if existing.user_id != current_user.id or any(
+                getattr(existing, field) != value for field, value in data.items()
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Capture id already used for different data"
+                )
+            return existing
     capture = Capture(
         **({"id": body.id} if body.id is not None else {}),
         user_id=current_user.id,
