@@ -124,3 +124,24 @@ The standing regression tripwire is `backend/tests/test_todos.py::test_connector
 - **`DELETE /focus_sessions/{id}` clears its children itself** — child `focus_session_tasks` rows are deleted and `time_logs.focus_session_id` is detached (SET NULL semantics; time logs are the user's time data and are never deleted) — because neither FK has `ON DELETE CASCADE`.
 
 The regression suite is `backend/tests/test_focus_sessions.py`; `test_full_session_upload_replays_in_queue_order` replays the exact CRUD sequence a synced client queues for plan → focus → review and asserts no step `4xx`s (the true queue semantics are engine behaviour with no automated harness, per the note above).
+
+## The Capture-split upload contract
+
+`captures`, `capture_outcomes`, and `capture_tags` (issue #184, ADR-0006) replicate like every other bucket and upload through `POST`/`PATCH`/`DELETE` routes in `backend/app/todos/capture_routes.py`. The contract mirrors the `todos` and focus-session ones:
+
+- **Every column is client-owned except `user_id`**, which is server-derived from the JWT on all three tables. The denormalized `user_id` the client sends (it exists locally for PowerSync bucket filtering, Alembic 0026) is deliberately absent from the Pydantic schemas and therefore ignored, never trusted.
+- **`captures` is the Inbox surface:** `clarified_at IS NULL` = still in the Inbox. `clarified_at` is client-owned and nullable — an explicit `null` on PATCH is legal (it un-stamps, returning the Capture to the Inbox), so it is *not* rejected the way NOT NULL columns are; `title` (NOT NULL) is rejected on explicit null (`422`). `capture_source`, `notes`, `created_at`, `updated_at` round-trip like their `todos` counterparts.
+- **The junctions carry a client-owned `id` (PowerSync row id, `gen_random_uuid()` server default) plus their domain key.** `capture_outcomes` is keyed `(capture_id, outcome_id)` and carries a client-owned `created_at` provenance timestamp; `capture_tags` is keyed `(capture_id, tag_id)` and has no mutable fields (its connector PATCH is a no-op, like `todo_tags`).
+- **Create dedupes on the client `id`** (2xx match / 409 mismatch); the junctions add their domain pair as a second dedupe key.
+- **Parent/ownership checks are route-level `404`s** — a `capture_outcomes` link requires both the Capture and the Outcome (todo) to belong to the JWT user; a `capture_tags` link requires the Capture and the Tag. A Postgres FK violation would be a `500`, which PowerSync retries forever.
+- **`DELETE /captures/{id}` clears its children itself** — `capture_outcomes` and `capture_tags` rows for that capture are deleted first, because the connector delete path must not depend on `ON DELETE CASCADE` firing on Postgres (an FK violation would `500` and wedge the queue).
+
+Column ownership — every column is client-owned except `user_id` (server-derived from the JWT), on all three tables:
+
+| Table | Client-owned columns | Server-owned |
+|---|---|---|
+| `captures` | `id`, `title`, `notes`, `capture_source`, `created_at`, `clarified_at`, `updated_at` | `user_id` |
+| `capture_outcomes` | `id`, `capture_id`, `outcome_id`, `created_at` | `user_id` |
+| `capture_tags` | `id`, `capture_id`, `tag_id` | `user_id` |
+
+The standing tripwires are in `backend/tests/test_captures.py` — connector-shaped roundtrip tests per table (alongside `test_connector_shaped_payload_roundtrips_client_state` for `todos`) plus junction `user_id`-denormalization and ownership-`404` tests. On the client, `app/test/services/backend_connector_test.dart` pins the upload routing, and `app/test/database/capture_view_notify_test.dart` pins the ADR-0010 view-notify invariant for the Capture views. When adding a column to a Drift Capture table, add it to the matching Create/Update/Out schemas and to the roundtrip test — or record it here as server-owned.

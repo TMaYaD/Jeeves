@@ -22,7 +22,15 @@ class LocalDataMigrationService {
   /// false lets callers short-circuit before prompting for conflict resolution.
   Future<bool> hasLocalData() async {
     final db = await _ref.read(powerSyncInstanceProvider.future);
-    const tables = ['todos', 'tags', 'todo_tags', 'user_preferences'];
+    const tables = [
+      'todos',
+      'tags',
+      'todo_tags',
+      'user_preferences',
+      'captures',
+      'capture_outcomes',
+      'capture_tags',
+    ];
     for (final table in tables) {
       final rows = await db.getAll(
         'SELECT COUNT(*) AS c FROM $table WHERE user_id = ?',
@@ -71,6 +79,22 @@ class LocalDataMigrationService {
       );
       await tx.execute(
         'UPDATE todo_tags SET user_id = ? WHERE user_id = ?',
+        [toUserId, fromUserId],
+      );
+
+      // Capture/Outcome tables (issue #184). Plain reassignment, like
+      // todos/tags/todo_tags — no LWW arbitration (only user_preferences is
+      // keyed by a cross-device unique (user_id, key) that can collide).
+      await tx.execute(
+        'UPDATE captures SET user_id = ? WHERE user_id = ?',
+        [toUserId, fromUserId],
+      );
+      await tx.execute(
+        'UPDATE capture_outcomes SET user_id = ? WHERE user_id = ?',
+        [toUserId, fromUserId],
+      );
+      await tx.execute(
+        'UPDATE capture_tags SET user_id = ? WHERE user_id = ?',
         [toUserId, fromUserId],
       );
 
@@ -133,6 +157,10 @@ class LocalDataMigrationService {
   Future<void> deleteLocalData(String userId) async {
     final db = await _ref.read(powerSyncInstanceProvider.future);
     await db.writeTransaction((tx) async {
+      // Child/junction rows first so FK-enforced deletes never fail.
+      await tx.execute('DELETE FROM capture_tags WHERE user_id = ?', [userId]);
+      await tx.execute('DELETE FROM capture_outcomes WHERE user_id = ?', [userId]);
+      await tx.execute('DELETE FROM captures WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM todo_tags WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM tags WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM todos WHERE user_id = ?', [userId]);

@@ -84,6 +84,9 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   ///   - focus_sessions:      POST /focus_sessions/,      PATCH /focus_sessions/{id},      DELETE /focus_sessions/{id}
   ///   - focus_session_tasks: POST /focus_session_tasks/, PATCH /focus_session_tasks/{id}, DELETE /focus_session_tasks/{id}
   ///   - time_logs:           POST /time_logs/,           PATCH /time_logs/{id},           DELETE /time_logs/{id}
+  ///   - captures:            POST /captures/,            PATCH /captures/{id},            DELETE /captures/{id}
+  ///   - capture_outcomes:    POST /capture_outcomes/,    PATCH /capture_outcomes/{id},    DELETE /capture_outcomes/{id}
+  ///   - capture_tags:        POST /capture_tags/,                                         DELETE /capture_tags/{id}  (no mutable fields)
   ///
   /// Unknown tables must throw — otherwise `batch.complete()` would clear
   /// the local CRUD queue without ever talking to the server, silently
@@ -115,6 +118,12 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
             await _uploadFocusSessionTask(entry);
           case 'time_logs':
             await _uploadTimeLog(entry);
+          case 'captures':
+            await _uploadCapture(entry);
+          case 'capture_outcomes':
+            await _uploadCaptureOutcome(entry);
+          case 'capture_tags':
+            await _uploadCaptureTag(entry);
           default:
             throw StateError(
               'JevesBackendConnector: no upload handler for table '
@@ -300,6 +309,50 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
         await _api.patch('/time_logs/${entry.id}', entry.opData ?? {});
       case ps.UpdateType.delete:
         await _api.delete('/time_logs/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadCapture(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/captures/', body);
+      case ps.UpdateType.patch:
+        await _api.patch('/captures/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/captures/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadCaptureOutcome(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/capture_outcomes/', body);
+      case ps.UpdateType.patch:
+        // Unlike todo_tags, this junction carries a client-owned column
+        // (created_at), so a PATCH must reach the backend rather than be
+        // dropped — a silently-dropped field reverts on the next checkpoint
+        // download (docs/SYNC.md § The Capture-split upload contract).
+        await _api.patch('/capture_outcomes/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/capture_outcomes/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadCaptureTag(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/capture_tags/', body);
+      case ps.UpdateType.patch:
+        // capture_tags has no updatable fields; treat as no-op.
+        break;
+      case ps.UpdateType.delete:
+        await _api.delete('/capture_tags/${entry.id}');
     }
   }
 

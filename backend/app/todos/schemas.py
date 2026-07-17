@@ -408,6 +408,119 @@ class FocusSessionTaskOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Capture upload schemas ───────────────────────────────────────────────────
+# Consumed by the connector upload routes (capture_routes.py).  Same contract
+# as the focus-session schemas: every client-owned column round-trips through
+# create *and* update, and `user_id` is server-owned (derived from the JWT) so
+# it is deliberately absent from every Create/Update schema.
+
+
+class CaptureCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    # Lengths mirror the DB columns (title String(500), capture_source
+    # String(50)) so an over-long value 422s at the schema instead of tripping
+    # a commit-time error (500 → infinite connector retry).
+    title: str = Field(max_length=500)
+    notes: str | None = None
+    capture_source: str | None = Field(default=None, max_length=50)
+    # clarified_at IS NULL = still in the Inbox.  Client-stamped write
+    # timestamps: the server never writes updated_at; created_at falls back to
+    # the server default only when omitted, so offline captures keep their true
+    # capture time.
+    created_at: datetime | None = None
+    clarified_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    _normalise_datetimes = field_validator(
+        "created_at", "clarified_at", "updated_at", mode="before"
+    )(_normalise_drift_iso)
+
+    # created_at is NOT NULL; an explicit null must 422 rather than null the
+    # column.  Omission is preserved (falls back to the server default).
+    _reject_nulls = field_validator("created_at", mode="before")(_reject_explicit_null)
+
+
+class CaptureUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=500)
+    notes: str | None = None
+    capture_source: str | None = Field(default=None, max_length=50)
+    # clarified_at is nullable — explicit null is legal and means "un-clarify"
+    # (move back to the Inbox).
+    clarified_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    _normalise_datetimes = field_validator("clarified_at", "updated_at", mode="before")(
+        _normalise_drift_iso
+    )
+
+    # title is NOT NULL; explicit null must 422 instead of a commit-time 500.
+    _reject_nulls = field_validator("title", mode="before")(_reject_explicit_null)
+
+
+class CaptureOut(BaseModel):
+    id: str
+    title: str
+    notes: str | None
+    capture_source: str | None
+    created_at: datetime
+    clarified_at: datetime | None
+    updated_at: datetime | None
+    user_id: str
+
+    model_config = {"from_attributes": True}
+
+
+class CaptureOutcomeCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    capture_id: str
+    outcome_id: str
+    created_at: datetime | None = None
+
+    _normalise_created_at = field_validator("created_at", mode="before")(_normalise_drift_iso)
+
+    # created_at is NOT NULL; an explicit null must 422 rather than null the
+    # column.  Omission is preserved (falls back to the server default).
+    _reject_nulls = field_validator("created_at", mode="before")(_reject_explicit_null)
+
+
+class CaptureOutcomeUpdate(BaseModel):
+    created_at: datetime | None = None
+
+    _normalise_created_at = field_validator("created_at", mode="before")(_normalise_drift_iso)
+
+    # created_at is NOT NULL; explicit null must 422, not surface as a 500.
+    _reject_nulls = field_validator("created_at", mode="before")(_reject_explicit_null)
+
+
+class CaptureOutcomeOut(BaseModel):
+    # PowerSync row identifier; None only for legacy server-side rows created
+    # before migration 0026 in the SQLite test harness (Postgres backfills).
+    id: str | None
+    capture_id: str
+    outcome_id: str
+    created_at: datetime
+    user_id: str
+
+    model_config = {"from_attributes": True}
+
+
+class CaptureTagCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    capture_id: str
+    tag_id: str
+
+
+class CaptureTagOut(BaseModel):
+    # PowerSync row identifier; None only for legacy server-side rows created
+    # before migration 0026 in the SQLite test harness (Postgres backfills).
+    id: str | None
+    capture_id: str
+    tag_id: str
+    user_id: str
+
+    model_config = {"from_attributes": True}
+
+
 class TodoOut(BaseModel):
     id: str
     title: str

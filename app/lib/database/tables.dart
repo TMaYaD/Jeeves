@@ -296,3 +296,98 @@ class TodoTags extends Table with Synced {
   @override
   Set<Column<Object>> get primaryKey => {todoId, tagId};
 }
+
+// ---------------------------------------------------------------------------
+// captures
+// ---------------------------------------------------------------------------
+
+/// A raw, unprocessed fragment the user put into the system because it has
+/// their attention (ADR-0006). Distinct from an Outcome (`todos`): a Capture
+/// is pending clarification and is many-to-many with Outcome via
+/// [CaptureOutcomes].
+///
+/// Inbox membership is `clarified_at IS NULL`. Clarifying a Capture stamps
+/// `clarified_at` exactly once — whether it produced new Outcomes, merged into
+/// existing ones, or was discarded (a zero-Outcome clarification is a
+/// legitimate verdict). A stamped Capture is never deleted; it persists as
+/// provenance for the Outcomes it clarified into. `last_clarified_at` on the
+/// Outcome is a distinct concept (staleness of the *current* clarification)
+/// and lives on `todos`, not here.
+class Captures extends Table with Synced {
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get title => text().withLength(max: 500)();
+  TextColumn get notes => text().nullable()();
+
+  /// How this Capture entered the system:
+  /// manual | share_sheet | voice | ai_parse | nirvana_import (nullable).
+  TextColumn get captureSource => text().nullable()();
+
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// NULL = still in the Inbox. Stamped once when the clarify act completes.
+  DateTimeColumn get clarifiedAt => dateTime().nullable()();
+
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
+// capture_outcomes  (provenance join: which Outcomes a Capture clarified into)
+// ---------------------------------------------------------------------------
+
+/// Many-to-many provenance link between a [Captures] row and an Outcome
+/// (`todos`). The join *is* the provenance — "this Outcome was captured from
+/// these N Captures" — there is no separate audit table (ADR-0006). Merge
+/// links, never consumes: a Capture keeps its rows here after it is stamped.
+class CaptureOutcomes extends Table with Synced {
+  /// PowerSync sync row identifier — not the domain key. Derive it
+  /// deterministically via `captureOutcomeIdFor(captureId, outcomeId)`
+  /// (see capture_dao.dart) so a repeat link is a stable no-op under INSERT OR
+  /// IGNORE (preserving the original `created_at`) instead of accumulating
+  /// duplicate rows.
+  TextColumn get id => text().unique()();
+  TextColumn get captureId =>
+      text().references(Captures, #id, onDelete: KeyAction.cascade)();
+  TextColumn get outcomeId =>
+      text().references(Todos, #id, onDelete: KeyAction.cascade)();
+
+  /// When the link was made — the clarifying micro-act that carved (or merged
+  /// into) this Outcome.
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// Denormalized from the parent's `user_id` so PowerSync can filter junction
+  /// rows with a per-user parameter bucket (see Alembic 0026 and
+  /// sync-config.yaml).
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {captureId, outcomeId};
+}
+
+// ---------------------------------------------------------------------------
+// capture_tags  (tag hints carried from capture time)
+// ---------------------------------------------------------------------------
+
+/// Tag *hints* a Capture carried from capture time. Distinct from Organising:
+/// tag hints never stamp anything and are not List membership — they surface
+/// only as removable chips on the Outcome draft at clarify time and as prefill
+/// when merging into an existing Outcome (issue #184). Mirrors `todo_tags`
+/// conventions.
+class CaptureTags extends Table with Synced {
+  /// PowerSync sync row identifier — derive it deterministically via
+  /// `captureTagIdFor(captureId, tagId)` (see capture_dao.dart).
+  TextColumn get id => text().unique()();
+  TextColumn get captureId =>
+      text().references(Captures, #id, onDelete: KeyAction.cascade)();
+  TextColumn get tagId =>
+      text().references(Tags, #id, onDelete: KeyAction.cascade)();
+
+  /// Denormalized from the parent's `user_id` for the per-user bucket.
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {captureId, tagId};
+}

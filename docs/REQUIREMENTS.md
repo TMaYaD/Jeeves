@@ -113,12 +113,12 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 ### Epic 11: Data Portability & Migration
 **Goal:** Reduce switching costs and prevent vendor lock-in.
-* **Import from Nirvana:** One-time migration of tasks, projects, contexts, and metadata from Nirvana GTD export (CSV or JSON), preserving GTD state and hierarchy. Bucketing in Jeeves is driven by four fields set per source state — `clarified`, `intent`, `doneAt`, and person tags (`app/lib/import/nirvana_parser.dart` implements the table; `app/test/import/nirvana_parser_test.dart` pins it):
+* **Import from Nirvana:** One-time migration of tasks, projects, contexts, and metadata from Nirvana GTD export (CSV or JSON), preserving GTD state and hierarchy. The parser classifies each source state (`app/lib/import/nirvana_parser.dart` implements the table; `app/test/import/nirvana_parser_test.dart` pins it); the local importer then routes an unclarified item to a **Capture** and a clarified one to an **Outcome** (`app/lib/import/nirvana_local_import.dart`). Clarified rows are bucketed by three fields — `intent`, `doneAt`, and person tags:
 
 | Nirvana state | Import outcome |
 | :--- | :--- |
-| Inbox — and any unrecognised state (e.g. CSV `active`, JSON 11 for active projects) | `clarified=false`; surfaces in the Inbox for review. Recognised states form a positive whitelist so unknowns can't slip silently into active lists. |
-| Next, Waiting | `clarified=true`, `intent='next'`. A non-empty `WAITINGFOR` value becomes a person tag on the imported task. |
+| Inbox — and any unrecognised state (e.g. CSV `active`, JSON 11 for active projects) | Becomes a **Capture** in the Inbox (`clarified_at IS NULL`); its Nirvana tags (project / context / `WAITINGFOR` person) become Capture **tag hints** (`capture_tags`). Recognised states form a positive whitelist so unknowns can't slip silently into active lists. |
+| Next, Waiting | Becomes an Outcome (`intent='next'`). A non-empty `WAITINGFOR` value becomes a person tag on the imported Outcome. |
 | Someday, Inactive-Later | `clarified=true`, `intent='maybe'`. |
 | Scheduled, Scheduled-Repeating, Reference | `clarified=true`, `intent='maybe'`, plus an `@scheduled` / `@repeating` / `@reference` context tag — Jeeves has no Scheduled/Repeating/Reference primitive, so the original category stays recoverable after import. |
 | Trash | `clarified=true`, `intent='trash'`. |

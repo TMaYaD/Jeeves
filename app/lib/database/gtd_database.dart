@@ -17,6 +17,7 @@ library;
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
+import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
 import 'daos/inbox_dao.dart';
 import 'daos/search_dao.dart';
@@ -31,8 +32,8 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, UserPreferences, SyncDeadLetters],
-  daos: [InboxDao, TagDao, TodoDao, TimeLogDao, FocusSessionDao],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, UserPreferences, SyncDeadLetters, Captures, CaptureOutcomes, CaptureTags],
+  daos: [InboxDao, TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor);
@@ -44,7 +45,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 23;
+  int get schemaVersion => 24;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -412,6 +413,29 @@ class GtdDatabase extends _$GtdDatabase {
             // on both the production and NativeDatabase paths.
             await m.createTable(syncDeadLetters);
           }
+          if (from < 24) {
+            // Capture/Outcome schema split (issue #184, ADR-0006). In
+            // production PowerSync creates `captures` / `capture_outcomes` /
+            // `capture_tags` as views from powersyncSchema, and the row-move
+            // out of `todos` runs in the backend (Alembic 0026) and replicates
+            // down — so only create the real tables on the NativeDatabase test
+            // path, guarding on sqlite_master exactly like `time_logs`
+            // (from < 9) and `user_preferences` (from < 20).
+            final captureTables = <TableInfo<Table, dynamic>>[
+              captures,
+              captureOutcomes,
+              captureTags,
+            ];
+            for (final table in captureTables) {
+              final rows = await customSelect(
+                "SELECT type FROM sqlite_master WHERE name = ?",
+                variables: [Variable<String>(table.actualTableName)],
+              ).get();
+              if (rows.isEmpty) {
+                await m.createTable(table);
+              }
+            }
+          }
         },
       );
 
@@ -521,6 +545,21 @@ class GtdDatabase extends _$GtdDatabase {
   void notifyTodosViewWrite({bool includeTodoTags = false}) => notifyUpdates({
         const TableUpdate('todos'),
         if (includeTodoTags) const TableUpdate('todo_tags'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for the Capture views (issue #184).
+  ///
+  /// `captures` / `capture_outcomes` / `capture_tags` are PowerSync views with
+  /// INSTEAD OF triggers in production, so a direct Drift write reports
+  /// `changes() == 0` and Drift's stream invalidation never fires (ADR-0010).
+  /// Every [CaptureDao] write calls this right after the write. All three
+  /// table updates are emitted with a null [UpdateKind] so Inbox, provenance,
+  /// and tag-hint watchers all refresh regardless of which view was touched;
+  /// over-notifying at worst causes a redundant re-query.
+  void notifyCapturesViewWrite() => notifyUpdates({
+        const TableUpdate('captures'),
+        const TableUpdate('capture_outcomes'),
+        const TableUpdate('capture_tags'),
       });
 
   /// Runs [Migrator.addColumn] only when [table] is a real SQLite table.

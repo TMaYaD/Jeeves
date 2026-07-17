@@ -132,6 +132,26 @@ Future<ImportResult> importNirvanaLocally({
         final todoId = _deterministicTodoId(item);
         final now = DateTime.now();
 
+        // Unclarified Nirvana rows (Inbox and any unrecognised state) become
+        // Captures, not `clarified = false` todos (issue #184, ADR-0006). Their
+        // tag links become Capture tag hints — mirroring Alembic 0026 step 3,
+        // which copies `todo_tags` of migrated rows into `capture_tags`.
+        if (!item.clarified) {
+          await _importInboxCapture(
+            db,
+            item,
+            userId: userId,
+            now: now,
+            idToProject: idToProject,
+            nameToProject: nameToProject,
+            projectTagIds: projectTagIds,
+            contextTagIds: contextTagIds,
+            personTagIds: personTagIds,
+          );
+          importedCount++;
+          continue;
+        }
+
         final dueDate = item.dueDate != null
             ? DateTime.tryParse(item.dueDate!)?.toUtc()
             : null;
@@ -261,6 +281,90 @@ Future<ImportResult> importNirvanaLocally({
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// Import one unclarified Nirvana row as an Inbox [Captures] row plus its tag
+/// hints. Uses the same deterministic id as [_deterministicTodoId] so a
+/// re-import lands on the exact row Alembic 0026 migrated (which preserved
+/// `todos.id` as `captures.id`); a re-import updates that row in place to
+/// stay idempotent.
+Future<void> _importInboxCapture(
+  GtdDatabase db,
+  NirvanaItem item, {
+  required String userId,
+  required DateTime now,
+  required Map<String, String> idToProject,
+  required Map<String, String> nameToProject,
+  required Map<String, String> projectTagIds,
+  required Map<String, String> contextTagIds,
+  required Map<String, String> personTagIds,
+}) async {
+  final captureId = _deterministicTodoId(item);
+
+  // Preserve clarification across a re-import: if this Capture was already
+  // imported and the user has since clarified it (clarified_at stamped, and
+  // possibly capture_outcomes carved out), a fresh import must not reset it
+  // to the Inbox. Update in place rather than INSERT OR REPLACE: REPLACE is
+  // delete-then-insert in SQLite, which would fire the ON DELETE CASCADE on
+  // capture_outcomes / capture_tags wherever foreign_keys enforcement is on
+  // and silently drop the user's provenance links. Updating leaves
+  // created_at, clarified_at, and the child rows untouched; a brand-new
+  // Capture keeps the NULL clarified_at default (unclarified — in the Inbox).
+  final existing = await db.captureDao.getCapture(captureId);
+
+  if (existing == null) {
+    await db.into(db.captures).insert(
+          CapturesCompanion(
+            id: Value(captureId),
+            title: Value(item.name),
+            notes: Value(item.notes),
+            captureSource: const Value('nirvana_import'),
+            userId: Value(userId),
+            createdAt: Value(now),
+            updatedAt: Value(now),
+          ),
+        );
+  } else {
+    await (db.update(db.captures)..where((c) => c.id.equals(captureId))).write(
+      CapturesCompanion(
+        title: Value(item.name),
+        notes: Value(item.notes),
+        captureSource: const Value('nirvana_import'),
+        userId: Value(userId),
+        updatedAt: Value(now),
+      ),
+    );
+  }
+  db.notifyCapturesViewWrite();
+
+  // Project tag hint.
+  String? projectTagId;
+  if (item.parentId != null && idToProject.containsKey(item.parentId)) {
+    projectTagId = projectTagIds[idToProject[item.parentId]!];
+  } else if (item.parentName != null &&
+      nameToProject.containsKey(item.parentName)) {
+    projectTagId = projectTagIds[nameToProject[item.parentName]!];
+  }
+  if (projectTagId != null) {
+    await db.captureDao.assignTagHint(captureId, projectTagId, userId);
+  }
+
+  // Context (generic) tag hints.
+  for (final tagName in item.tags) {
+    final tagId = contextTagIds[tagName] ??
+        await db.tagDao.findOrCreateTag(tagName, 'context', userId);
+    contextTagIds[tagName] = tagId;
+    await db.captureDao.assignTagHint(captureId, tagId, userId);
+  }
+
+  // Person (Waiting For) tag hint.
+  final trimmedWaitingFor = item.waitingFor?.trim();
+  if (trimmedWaitingFor != null && trimmedWaitingFor.isNotEmpty) {
+    final personTagId = personTagIds[trimmedWaitingFor] ??
+        await db.tagDao.createPersonTag(trimmedWaitingFor, userId);
+    personTagIds[trimmedWaitingFor] = personTagId;
+    await db.captureDao.assignTagHint(captureId, personTagId, userId);
+  }
+}
 
 /// A deterministic todo ID derived from the Nirvana item's id (UUID v5 under a
 /// Jeeves namespace).  Makes re-importing the same export idempotent.
