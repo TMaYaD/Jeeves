@@ -437,7 +437,7 @@ class GtdDatabase extends _$GtdDatabase {
             }
           }
           if (from < 25) {
-            // Off-Plan disposition store (issue #418, ADR-0015). In production
+            // Off-Plan disposition store (issue #418, ADR-0016). In production
             // PowerSync creates `focus_session_dispositions` as a view from
             // powersyncSchema, and the row is filled by the client's local
             // write replicating up — so only create the real table on the

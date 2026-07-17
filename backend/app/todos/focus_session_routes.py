@@ -250,7 +250,7 @@ async def delete_focus_session_task(
 
 # ── FocusSessionDispositions ──────────────────────────────────────────────────
 # Durable home for Review-phase Dispositions on off-Plan engaged Outcomes
-# (ADR-0015).  Mirrors the focus_session_tasks routes exactly; the composite
+# (ADR-0016).  Mirrors the focus_session_tasks routes exactly; the composite
 # (focus_session_id, task_id) is the domain key and a second dedupe key.
 
 

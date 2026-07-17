@@ -10,7 +10,7 @@ persist a Disposition for an Outcome that was engaged but never on the Plan:
 dispositions lived only on ``focus_session_tasks`` rows, which off-Plan
 Outcomes do not have (the Plan never auto-grows — ADR-0002).
 
-ADR-0015 gives off-Plan Dispositions their own table rather than a
+ADR-0016 gives off-Plan Dispositions their own table rather than a
 discriminator column on ``focus_session_tasks`` (which would force every Plan
 reader to filter, and any miss would silently auto-grow the Plan).  This
 migration creates that table, mirroring ``focus_session_tasks``' PowerSync

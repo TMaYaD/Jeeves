@@ -455,7 +455,7 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // (g) Off-Plan Dispositions have a durable home (issue #418, ADR-0015)
+  // (g) Off-Plan Dispositions have a durable home (issue #418, ADR-0016)
   //
   // An off-Plan engaged Outcome has no focus_session_tasks row (the Plan never
   // auto-grows — ADR-0002), so its Disposition lands in
@@ -463,7 +463,7 @@ void main() {
   // membership; the query helpers UNION the two homes.
   // ---------------------------------------------------------------------------
 
-  group('Off-Plan Dispositions persist durably (issue #418, ADR-0015)', () {
+  group('Off-Plan Dispositions persist durably (issue #418, ADR-0016)', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());

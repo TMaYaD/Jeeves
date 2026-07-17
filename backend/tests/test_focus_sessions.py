@@ -859,7 +859,7 @@ async def test_full_session_upload_replays_in_queue_order(client: AsyncClient) -
         assert response.status_code in (200, 201), (method, path, response.text)
 
 
-# ── focus_session_dispositions (issue #418, ADR-0015) ─────────────────────────
+# ── focus_session_dispositions (issue #418, ADR-0016) ─────────────────────────
 
 
 async def _make_disposition(

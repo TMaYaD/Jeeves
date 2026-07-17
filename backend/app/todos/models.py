@@ -254,7 +254,7 @@ class FocusSessionTask(Base):
 class FocusSessionDisposition(Base):
     """Durable home for Review-phase Dispositions on off-Plan engaged Outcomes.
 
-    Dispositions partition by membership class (ADR-0015): a Plan member's
+    Dispositions partition by membership class (ADR-0016): a Plan member's
     Disposition lives on ``focus_session_tasks.disposition``; an off-Plan
     engaged Outcome has no ``focus_session_tasks`` row (the Plan never
     auto-grows — ADR-0002), so its Disposition is recorded here, keyed by the

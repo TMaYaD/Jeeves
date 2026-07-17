@@ -149,7 +149,7 @@ class FocusSessionTasks extends Table with Synced {
   /// Per-task disposition chosen during session review, for **Plan members**.
   /// Off-Plan engaged Outcomes have no row here (the Plan never auto-grows —
   /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead
-  /// (ADR-0015).
+  /// (ADR-0016).
   /// NULL = not yet reviewed (active session) or done task.
   /// 'rollover' = carry forward to next session's pre-selected list.
   /// 'leave' = return to Next Actions (no mutation on todos).
@@ -170,7 +170,7 @@ class FocusSessionTasks extends Table with Synced {
 // ---------------------------------------------------------------------------
 
 /// Durable home for Review-phase Dispositions on **off-Plan engaged** Outcomes
-/// (ADR-0015).
+/// (ADR-0016).
 ///
 /// Dispositions partition by membership class:
 ///   - A Plan member's Disposition lives on [FocusSessionTasks.disposition]
