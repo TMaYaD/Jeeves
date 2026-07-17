@@ -252,6 +252,30 @@ async def test_capture_outcome_roundtrips_client_created_at(
     assert row.outcome_id == todo_id
     assert row.user_id == _user_id(token)
 
+    # PATCH by client id: created_at is client-owned and must persist.
+    patch = await client.patch(
+        f"/capture_outcomes/{row_id}",
+        json={"created_at": "2026-07-13T09:30:00.000 +05:30"},
+        headers=headers,
+    )
+    assert patch.status_code == 200, patch.text
+    _assert_instant(patch.json()["created_at"], "2026-07-13T09:30:00+05:30")
+    db.expire_all()
+    row = (await db.execute(select(CaptureOutcome).where(CaptureOutcome.id == row_id))).scalar_one()
+    _assert_instant(row.created_at.isoformat(), "2026-07-13T09:30:00+05:30")
+
+    # DELETE by client id: 204, row gone; idempotent replay is a 404 the
+    # connector's fatal-4xx path skips harmlessly (docs/SYNC.md).
+    delete = await client.delete(f"/capture_outcomes/{row_id}", headers=headers)
+    assert delete.status_code == 204
+    db.expire_all()
+    gone = (
+        await db.execute(select(CaptureOutcome).where(CaptureOutcome.id == row_id))
+    ).scalar_one_or_none()
+    assert gone is None
+    again = await client.delete(f"/capture_outcomes/{row_id}", headers=headers)
+    assert again.status_code == 404
+
 
 @pytest.mark.asyncio
 async def test_capture_outcome_user_id_populated(client: AsyncClient, db: AsyncSession) -> None:

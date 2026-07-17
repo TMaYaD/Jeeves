@@ -285,7 +285,8 @@ Future<ImportResult> importNirvanaLocally({
 /// Import one unclarified Nirvana row as an Inbox [Captures] row plus its tag
 /// hints. Uses the same deterministic id as [_deterministicTodoId] so a
 /// re-import lands on the exact row Alembic 0026 migrated (which preserved
-/// `todos.id` as `captures.id`), and `INSERT OR REPLACE` keeps it idempotent.
+/// `todos.id` as `captures.id`); a re-import updates that row in place to
+/// stay idempotent.
 Future<void> _importInboxCapture(
   GtdDatabase db,
   NirvanaItem item, {
@@ -301,25 +302,38 @@ Future<void> _importInboxCapture(
 
   // Preserve clarification across a re-import: if this Capture was already
   // imported and the user has since clarified it (clarified_at stamped, and
-  // possibly capture_outcomes carved out), a fresh import must not reset it to
-  // the Inbox. The links live in a separate table and are untouched by this
-  // upsert; only clarified_at needs carrying over. A brand-new Capture keeps
-  // the NULL default (unclarified — in the Inbox).
+  // possibly capture_outcomes carved out), a fresh import must not reset it
+  // to the Inbox. Update in place rather than INSERT OR REPLACE: REPLACE is
+  // delete-then-insert in SQLite, which would fire the ON DELETE CASCADE on
+  // capture_outcomes / capture_tags wherever foreign_keys enforcement is on
+  // and silently drop the user's provenance links. Updating leaves
+  // created_at, clarified_at, and the child rows untouched; a brand-new
+  // Capture keeps the NULL clarified_at default (unclarified — in the Inbox).
   final existing = await db.captureDao.getCapture(captureId);
 
-  await db.into(db.captures).insert(
-        CapturesCompanion(
-          id: Value(captureId),
-          title: Value(item.name),
-          notes: Value(item.notes),
-          captureSource: const Value('nirvana_import'),
-          userId: Value(userId),
-          createdAt: Value(existing?.createdAt ?? now),
-          updatedAt: Value(now),
-          clarifiedAt: Value(existing?.clarifiedAt),
-        ),
-        mode: InsertMode.insertOrReplace,
-      );
+  if (existing == null) {
+    await db.into(db.captures).insert(
+          CapturesCompanion(
+            id: Value(captureId),
+            title: Value(item.name),
+            notes: Value(item.notes),
+            captureSource: const Value('nirvana_import'),
+            userId: Value(userId),
+            createdAt: Value(now),
+            updatedAt: Value(now),
+          ),
+        );
+  } else {
+    await (db.update(db.captures)..where((c) => c.id.equals(captureId))).write(
+      CapturesCompanion(
+        title: Value(item.name),
+        notes: Value(item.notes),
+        captureSource: const Value('nirvana_import'),
+        userId: Value(userId),
+        updatedAt: Value(now),
+      ),
+    );
+  }
   db.notifyCapturesViewWrite();
 
   // Project tag hint.

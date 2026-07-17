@@ -441,11 +441,12 @@ void main() {
     });
 
     test(
-        'capture_outcomes patch is sent (client-owned created_at), '
+        'captures and capture_outcomes patches are sent, '
         'capture_tags patch is a no-op like todo_tags', () async {
       final adapter = _ScriptedAdapter((options, i) async => _jsonResponse(200));
       final conn = connector(adapter);
       final (batch, completed) = batchOf([
+        _entry('captures', UpdateType.patch, rowId: 'cap-1'),
         _entry('capture_outcomes', UpdateType.patch, rowId: 'co-1'),
         _entry('capture_tags', UpdateType.patch, rowId: 'ct-1'),
       ]);
@@ -455,7 +456,7 @@ void main() {
       expect(completed(), isTrue);
       expect(
         adapter.requests.map((r) => '${r.method} ${r.path}').toList(),
-        ['PATCH /capture_outcomes/co-1'],
+        ['PATCH /captures/cap-1', 'PATCH /capture_outcomes/co-1'],
       );
     });
 

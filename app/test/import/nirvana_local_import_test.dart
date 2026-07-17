@@ -259,6 +259,11 @@ void main() {
 
     test('re-import preserves a Capture already clarified by the user (#184)',
         () async {
+      // Enforce FKs so this test pins the real hazard: with cascade active,
+      // an INSERT OR REPLACE upsert (delete-then-insert) would wipe the
+      // capture_outcomes provenance link asserted at the bottom. The importer
+      // must update the existing row in place instead.
+      await db.customStatement('PRAGMA foreign_keys = ON');
       const csv =
           'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
           'Task,Unprocessed idea,Inbox,,,,,,,,\n';

@@ -651,6 +651,21 @@ void main() {
       ));
       final inbox = await db.captureDao.watchInbox().first;
       expect(inbox.map((c) => c.id), ['c1']);
+
+      // Both junction tables round-trip too, so a missing column or
+      // constraint in capture_outcomes / capture_tags fails here rather
+      // than passing unnoticed behind the captures-only check above.
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('o1'),
+            title: const Value('carved outcome'),
+            userId: Value(_userId),
+            createdAt: Value(DateTime.now()),
+          ));
+      final tagId = await db.tagDao.findOrCreateTag('work', 'context', _userId);
+      await db.captureDao.linkOutcome('c1', 'o1', _userId);
+      await db.captureDao.assignTagHint('c1', tagId, _userId);
+      expect(await db.captureDao.outcomeIdsForCapture('c1'), ['o1']);
+      expect(await db.captureDao.tagHintIdsForCapture('c1'), {tagId});
     });
   });
 
