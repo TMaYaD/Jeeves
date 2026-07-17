@@ -964,6 +964,50 @@ async def test_create_focus_session_disposition_replay_is_idempotent(
 
 
 @pytest.mark.asyncio
+async def test_create_focus_session_disposition_replay_converges_changed_value(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A re-recorded disposition arrives as a PUT (the client's deterministic
+    id + INSERT OR REPLACE), so a create replay of the same relation with a
+    changed value must upsert it (ADR-0015) — not keep the stale server value,
+    which a later sync pull would otherwise restore on the client."""
+    token = await register(client, "fsd-converge@example.com")
+    session_id = await _make_session(client, token)
+    todo_id = await _make_todo(client, token)
+    base = {"id": str(uuid4()), "focus_session_id": session_id, "task_id": todo_id}
+
+    first = await client.post(
+        "/focus_session_dispositions/",
+        json={**base, "disposition": "rollover"},
+        headers=auth_header(token),
+    )
+    assert first.status_code == 201
+
+    converge = await client.post(
+        "/focus_session_dispositions/",
+        json={**base, "disposition": "maybe"},
+        headers=auth_header(token),
+    )
+    assert converge.status_code == 201
+    assert converge.json()["disposition"] == "maybe"
+
+    rows = (
+        (
+            await db.execute(
+                select(FocusSessionDisposition).where(
+                    FocusSessionDisposition.focus_session_id == session_id,
+                    FocusSessionDisposition.task_id == todo_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].disposition == "maybe"
+
+
+@pytest.mark.asyncio
 async def test_create_focus_session_disposition_id_reuse_for_different_relation_is_409(
     client: AsyncClient,
 ) -> None:
@@ -975,14 +1019,24 @@ async def test_create_focus_session_disposition_id_reuse_for_different_relation_
 
     first = await client.post(
         "/focus_session_dispositions/",
-        json={"id": fsd_id, "focus_session_id": session_id, "task_id": todo_a},
+        json={
+            "id": fsd_id,
+            "focus_session_id": session_id,
+            "task_id": todo_a,
+            "disposition": "rollover",
+        },
         headers=auth_header(token),
     )
     assert first.status_code == 201
 
     conflict = await client.post(
         "/focus_session_dispositions/",
-        json={"id": fsd_id, "focus_session_id": session_id, "task_id": todo_b},
+        json={
+            "id": fsd_id,
+            "focus_session_id": session_id,
+            "task_id": todo_b,
+            "disposition": "rollover",
+        },
         headers=auth_header(token),
     )
     assert conflict.status_code == 409
@@ -1029,6 +1083,7 @@ async def test_create_focus_session_disposition_unowned_parents_are_404(
                 "id": str(uuid4()),
                 "focus_session_id": session_id,
                 "task_id": task_id,
+                "disposition": "rollover",
             },
             headers=auth_header(token),
         )

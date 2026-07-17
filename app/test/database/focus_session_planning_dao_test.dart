@@ -664,6 +664,39 @@ void main() {
       final active = await db.focusSessionDao.getActiveSession();
       expect(active, isNull);
     });
+
+    test(
+        'skips a disposition for an Outcome neither on the Plan nor engaged '
+        '(off the Review surface — no phantom row, no Intent flip)', () async {
+      await _insertTodo(db, id: 'tP', title: 'Plan member');
+      await _insertTodo(db, id: 'tGhost', title: 'Neither planned nor engaged');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['tP'],
+      );
+
+      // tGhost has no focus_session_tasks row and no TimeLog for the session,
+      // so it is not on the Review surface (Plan ∪ engaged) — a stale caller
+      // key. It must be dropped rather than persisted or mutated.
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sessionId,
+        dispositions: {'tP': 'leave', 'tGhost': 'maybe'},
+      );
+
+      final dispRows = await db.customSelect(
+        'SELECT task_id FROM focus_session_dispositions '
+        'WHERE focus_session_id = ?',
+        variables: [Variable(sessionId)],
+      ).get();
+      expect(dispRows, isEmpty,
+          reason: 'No disposition row for an off-surface Outcome.');
+
+      final ghost = await (db.select(db.todos)
+            ..where((t) => t.id.equals('tGhost')))
+          .getSingle();
+      expect(ghost.intent, isNot('maybe'),
+          reason: "A 'maybe' for an off-surface Outcome must not flip Intent.");
+    });
   });
 
   // ---------------------------------------------------------------------------

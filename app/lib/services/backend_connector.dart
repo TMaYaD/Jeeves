@@ -309,8 +309,10 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
         body['id'] = entry.id;
         await _api.post('/focus_session_dispositions/', body);
       case ps.UpdateType.patch:
-        // The off-Plan disposition store's only mutable field is disposition
-        // (the review flow re-records it); a PATCH must reach the backend.
+        // The off-Plan disposition store's only mutable field is disposition.
+        // The review flow re-records it via INSERT OR REPLACE (a PUT, handled
+        // above and upserted server-side); this PATCH branch covers any direct
+        // field update and converges the same way.
         await _api.patch(
             '/focus_session_dispositions/${entry.id}', entry.opData ?? {});
       case ps.UpdateType.delete:

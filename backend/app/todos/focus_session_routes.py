@@ -250,8 +250,11 @@ async def delete_focus_session_task(
 
 # ── FocusSessionDispositions ──────────────────────────────────────────────────
 # Durable home for Review-phase Dispositions on off-Plan engaged Outcomes
-# (ADR-0016).  Mirrors the focus_session_tasks routes exactly; the composite
-# (focus_session_id, task_id) is the domain key and a second dedupe key.
+# (ADR-0016).  Like the focus_session_tasks routes, the composite
+# (focus_session_id, task_id) is the domain key and a second dedupe key — but
+# unlike them the create route upserts the mutable `disposition` on replay
+# (the client re-records via INSERT OR REPLACE → a PUT, not a PATCH), so a
+# changed disposition converges instead of being dropped.
 
 
 @router.post(
@@ -267,8 +270,12 @@ async def create_focus_session_disposition(
     await _require_owned_session(db, body.focus_session_id, current_user)
     await _require_owned_todo(db, body.task_id, current_user)
 
-    # Idempotency: return if already exists by id, but only when the stored
-    # relation matches exactly; a mismatched relation is a conflict.
+    # Upsert-on-replay (ADR-0015): the client re-records a disposition with a
+    # deterministic id under INSERT OR REPLACE, which reaches this route as a
+    # PUT.  So a replay of the same relation must *apply* the submitted
+    # disposition and return the converged row — not just acknowledge it — or a
+    # later sync pull would restore the stale server value.  A cross-relation id
+    # collision stays a 409.
     if body.id is not None:
         result = await db.execute(
             select(FocusSessionDisposition).where(FocusSessionDisposition.id == body.id)
@@ -279,13 +286,17 @@ async def create_focus_session_disposition(
                 existing_by_id.focus_session_id == body.focus_session_id
                 and existing_by_id.task_id == body.task_id
             ):
+                existing_by_id.disposition = body.disposition
+                await db.commit()
+                await db.refresh(existing_by_id)
                 return existing_by_id
             raise HTTPException(
                 status_code=409,
                 detail="FocusSessionDisposition id already used for a different relation",
             )
 
-    # Idempotency: return if the (focus_session_id, task_id) pair already exists.
+    # Converge if the (focus_session_id, task_id) pair already exists (the
+    # composite PK is the domain key, independent of the sync id).
     result = await db.execute(
         select(FocusSessionDisposition).where(
             FocusSessionDisposition.focus_session_id == body.focus_session_id,
@@ -294,6 +305,9 @@ async def create_focus_session_disposition(
     )
     existing_pair = result.scalar_one_or_none()
     if existing_pair is not None:
+        existing_pair.disposition = body.disposition
+        await db.commit()
+        await db.refresh(existing_pair)
         return existing_pair
 
     row = FocusSessionDisposition(

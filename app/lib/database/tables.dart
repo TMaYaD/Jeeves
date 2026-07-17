@@ -187,11 +187,12 @@ class FocusSessionTasks extends Table with Synced {
 /// load-bearing invariant "the Plan *is* the set of `focus_session_tasks`
 /// rows" — no Plan reader has to remember to filter a discriminator column.
 class FocusSessionDispositions extends Table with Synced {
-  /// PowerSync sync row identifier — not the domain key. Derive it
-  /// deterministically via `focusSessionDispositionIdFor(sessionId, taskId)`
-  /// (see focus_session_dao.dart) so re-recording the same pair collapses under
-  /// INSERT OR REPLACE instead of accumulating duplicate rows.
-  TextColumn get id => text().unique().clientDefault(() => uuid.v4())();
+  /// PowerSync sync row identifier — not the domain key. Required (no random
+  /// client default): callers must derive it deterministically via
+  /// `focusSessionDispositionIdFor(sessionId, taskId)` (see focus_session_dao.dart)
+  /// so re-recording the same pair collapses under INSERT OR REPLACE onto one
+  /// stable sync identity instead of accumulating duplicate rows.
+  TextColumn get id => text().unique()();
   TextColumn get focusSessionId => text().references(FocusSessions, #id)();
   TextColumn get taskId => text().references(Todos, #id)();
 

@@ -246,8 +246,23 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           .get();
       final planTaskIds = planRows.map((r) => r.taskId).toSet();
 
-      // Persist dispositions to the correct home.
+      // Off-Plan engaged Outcomes are those with a TimeLog for this session.
+      // The Review surface is Plan ∪ engaged (CONTEXT.md § Engagement); a
+      // disposition key outside that union is stale caller state — skip it
+      // rather than mint a phantom disposition row (or flip an unrelated
+      // Outcome's Intent) for an Outcome that was neither planned nor worked on.
+      final engagedRows = await customSelect(
+        'SELECT DISTINCT task_id FROM time_logs WHERE focus_session_id = ?',
+        variables: [Variable<String>(sessionId)],
+        readsFrom: {timeLogs},
+      ).get();
+      final engagedTaskIds =
+          engagedRows.map((r) => r.read<String>('task_id')).toSet();
+      final surfaceTaskIds = {...planTaskIds, ...engagedTaskIds};
+
+      // Persist dispositions to the correct home (Review-surface members only).
       for (final entry in dispositions.entries) {
+        if (!surfaceTaskIds.contains(entry.key)) continue;
         if (planTaskIds.contains(entry.key)) {
           await (update(focusSessionTasks)
                 ..where((fst) =>
@@ -278,7 +293,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // Sending an Outcome to Someday/Maybe is an Intent edit — a clarifying
       // micro-act per CONTEXT.md — so last_clarified_at is stamped alongside.
       for (final entry in dispositions.entries) {
-        if (entry.value == 'maybe') {
+        if (entry.value == 'maybe' && surfaceTaskIds.contains(entry.key)) {
           await customUpdate(
             'UPDATE todos SET intent = ?, updated_at = ?, '
             'last_clarified_at = ? WHERE id = ?',

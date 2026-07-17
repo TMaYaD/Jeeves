@@ -347,24 +347,31 @@ class FocusSessionDispositionCreate(BaseModel):
     id: str | None = None  # Client-side UUID for idempotency
     focus_session_id: str
     task_id: str
-    disposition: str | None = None
+    # Required: a disposition row exists only once the user has chosen
+    # rollover/leave/maybe for the off-Plan Outcome — NULL is never a valid
+    # create payload (see FocusSessionDispositions table docstring).
+    disposition: str
 
     @field_validator("disposition")
     @classmethod
-    def validate_disposition(cls, v: str | None) -> str | None:
-        if v is not None and v not in DISPOSITION_VALUES:
+    def validate_disposition(cls, v: str) -> str:
+        if v not in DISPOSITION_VALUES:
             raise ValueError(f"disposition must be one of {sorted(DISPOSITION_VALUES)}")
         return v
 
 
 class FocusSessionDispositionUpdate(BaseModel):
-    # Explicit null is legal here — disposition is nullable (un-reviewed).
     disposition: str | None = None
 
     @field_validator("disposition")
     @classmethod
     def validate_disposition(cls, v: str | None) -> str | None:
-        if v is not None and v not in DISPOSITION_VALUES:
+        # Reject an explicit null: this table's rows are never un-reviewed, so a
+        # PATCH clearing the disposition is meaningless — omit the field to leave
+        # it unchanged.
+        if v is None:
+            raise ValueError("disposition cannot be null; omit the field to leave it unchanged")
+        if v not in DISPOSITION_VALUES:
             raise ValueError(f"disposition must be one of {sorted(DISPOSITION_VALUES)}")
         return v
 
