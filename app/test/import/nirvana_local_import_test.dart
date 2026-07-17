@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
@@ -175,6 +176,121 @@ void main() {
 
       expect(result.importedCount, 0);
       expect(result.projectTagsCreated, 0);
+    });
+
+    test('Inbox state → a Capture (not a clarified=false todo), issue #184',
+        () async {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Unprocessed idea,Inbox,,a note,work,,,,,\n';
+      final result = await importNirvanaLocally(
+        bytes: _bytes(csv),
+        filename: 'test.csv',
+        format: 'csv',
+        userId: _userId,
+        db: db,
+      );
+
+      expect(result.importedCount, 1);
+
+      // No todo row is written for an unclarified item.
+      final todos = await (db.select(db.todos)
+            ..where((t) => t.userId.equals(_userId)))
+          .get();
+      expect(todos, isEmpty);
+
+      // It lands in the Inbox as a Capture (clarified_at IS NULL).
+      final inbox = await db.captureDao.watchInbox().first;
+      expect(inbox.map((c) => c.title), ['Unprocessed idea']);
+      expect(inbox.first.notes, 'a note');
+      expect(inbox.first.clarifiedAt, isNull);
+      expect(inbox.first.captureSource, 'nirvana_import');
+
+      // Its TAGS become Capture tag hints (capture_tags), not todo_tags.
+      final hints =
+          await db.captureDao.tagHintIdsForCapture(inbox.first.id);
+      final workTag = (await db.tagDao.watchByType('context').first)
+          .firstWhere((t) => t.name == 'work');
+      expect(hints, {workTag.id});
+    });
+
+    test('unrecognised state also lands as a Capture, issue #184', () async {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Mystery row,SomeUnknownState,,,,,,,,\n';
+      await importNirvanaLocally(
+        bytes: _bytes(csv),
+        filename: 'test.csv',
+        format: 'csv',
+        userId: _userId,
+        db: db,
+      );
+
+      expect(
+        await (db.select(db.todos)..where((t) => t.userId.equals(_userId)))
+            .get(),
+        isEmpty,
+      );
+      final inbox = await db.captureDao.watchInbox().first;
+      expect(inbox.map((c) => c.title), ['Mystery row']);
+    });
+
+    test('re-importing the same Inbox item is idempotent (issue #184)',
+        () async {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Unprocessed idea,Inbox,,,work,,,,,\n';
+      Future<void> run() => importNirvanaLocally(
+            bytes: _bytes(csv),
+            filename: 'test.csv',
+            format: 'csv',
+            userId: _userId,
+            db: db,
+          );
+      await run();
+      await run();
+
+      final captureRows = await db.select(db.captures).get();
+      expect(captureRows, hasLength(1));
+      final hints =
+          await db.captureDao.tagHintIdsForCapture(captureRows.first.id);
+      expect(hints, hasLength(1));
+    });
+
+    test('re-import preserves a Capture already clarified by the user (#184)',
+        () async {
+      const csv =
+          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+          'Task,Unprocessed idea,Inbox,,,,,,,,\n';
+      Future<void> run() => importNirvanaLocally(
+            bytes: _bytes(csv),
+            filename: 'test.csv',
+            format: 'csv',
+            userId: _userId,
+            db: db,
+          );
+
+      await run();
+      final capture = (await db.select(db.captures).get()).single;
+
+      // The user clarifies it: stamp + carve an Outcome.
+      await db.captureDao.stampClarified(capture.id);
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('outcome-1'),
+            title: const Value('Draft outline'),
+            userId: const Value(_userId),
+            createdAt: Value(DateTime.now()),
+          ));
+      await db.captureDao.linkOutcome(capture.id, 'outcome-1', _userId);
+
+      // Re-importing the same export must NOT reset clarification.
+      await run();
+
+      final after = (await db.captureDao.getCapture(capture.id))!;
+      expect(after.clarifiedAt, isNotNull);
+      expect(await db.captureDao.watchInbox().first, isEmpty);
+      expect(await db.captureDao.outcomeIdsForCapture(capture.id),
+          ['outcome-1']);
     });
 
     test('CSV task with scheduled state is imported successfully', () async {

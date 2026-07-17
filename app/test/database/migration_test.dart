@@ -619,6 +619,39 @@ void main() {
       await db.userPreferencesDao.set(_userId, 'k', '"v2"');
       expect(await db.userPreferencesDao.get(_userId, 'k'), '"v2"');
     });
+
+    test(
+        'v23→v24 migration: captures, capture_outcomes and capture_tags tables '
+        'created (issue #184)', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a v23 database by dropping the tables onCreate builds.
+      for (final t in ['capture_tags', 'capture_outcomes', 'captures']) {
+        await db.customStatement('DROP TABLE IF EXISTS $t');
+      }
+
+      // Drive the real v24 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 23, 24);
+
+      final tables = await db.customSelect(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name IN ('captures', 'capture_outcomes', 'capture_tags')",
+      ).get();
+      expect(tables.map((r) => r.read<String>('name')).toSet(),
+          {'captures', 'capture_outcomes', 'capture_tags'});
+
+      // The DAO round-trips against the freshly-created tables.
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('c1'),
+        title: const Value('after migration'),
+        userId: Value(_userId),
+        createdAt: Value(DateTime.now()),
+      ));
+      final inbox = await db.captureDao.watchInbox().first;
+      expect(inbox.map((c) => c.id), ['c1']);
+    });
   });
 
   group('MigrationService — user_preferences LWW reassignment', () {

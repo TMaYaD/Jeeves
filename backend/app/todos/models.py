@@ -142,6 +142,80 @@ class Todo(Base):
     location: Mapped["Location | None"] = relationship("Location", back_populates="todos")
 
 
+class Capture(Base):
+    """A raw Inbox capture, split out of the conflated todos table (ADR-0006).
+
+    A Capture is an unclarified thought: ``clarified_at IS NULL`` means it is
+    still in the Inbox.  Clarifying a capture stamps ``clarified_at`` and links
+    it to one or more Outcomes (todos) via capture_outcomes.
+    """
+
+    __tablename__ = "captures"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    capture_source: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    # NULL = still in the Inbox (the whole point of the split).
+    clarified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+
+
+class CaptureOutcome(Base):
+    """Junction linking a Capture to an Outcome (todo) produced while clarifying.
+
+    Mirrors the todo_tags junction pattern but carries a client-owned
+    ``created_at`` provenance timestamp (when the link was made) that must
+    round-trip through the connector.
+    """
+
+    __tablename__ = "capture_outcomes"
+
+    # PowerSync-assigned UUID identifying the synced row.  NULL for server-side
+    # inserts; PostgreSQL fills this via the server default added in migration
+    # 0026 (gen_random_uuid()).  SQLite test rows stay NULL.
+    id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    capture_id: Mapped[str] = mapped_column(
+        ForeignKey("captures.id", ondelete="CASCADE"), primary_key=True
+    )
+    outcome_id: Mapped[str] = mapped_column(
+        ForeignKey("todos.id", ondelete="CASCADE"), primary_key=True
+    )
+    # Provenance: when the link was made.  Client-owned, must round-trip.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    # Denormalized from captures.user_id so PowerSync can filter junction rows
+    # by bucket parameter.  Set explicitly at every write call site.
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+
+class CaptureTag(Base):
+    """Junction linking a Capture to a Tag — mirrors todo_tags exactly."""
+
+    __tablename__ = "capture_tags"
+
+    # PowerSync-assigned UUID identifying the synced row.  NULL for server-side
+    # inserts; PostgreSQL fills this via the server default added in migration
+    # 0026 (gen_random_uuid()).  SQLite test rows stay NULL.
+    id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    capture_id: Mapped[str] = mapped_column(
+        ForeignKey("captures.id", ondelete="CASCADE"), primary_key=True
+    )
+    tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+    # Denormalized from captures.user_id so PowerSync can filter junction rows
+    # by bucket parameter.  Set explicitly at every write call site.
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+
 class FocusSession(Base):
     __tablename__ = "focus_sessions"
 
