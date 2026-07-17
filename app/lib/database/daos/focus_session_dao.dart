@@ -4,12 +4,27 @@ library;
 
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
+import 'package:uuid/enums.dart' show Namespace;
 
 import '../gtd_database.dart';
 
 part 'focus_session_dao.g.dart';
 
-@DriftAccessor(tables: [FocusSessions, FocusSessionTasks, TimeLogs, Todos])
+/// Deterministic `focus_session_dispositions.id` for the (sessionId, taskId)
+/// pair.
+///
+/// PowerSync exposes `focus_session_dispositions` as a view whose INSTEAD OF
+/// INSERT trigger writes `NEW.id` into the backing table, so the row needs an
+/// explicit id; deriving it from the pair makes re-recording a disposition
+/// collapse under INSERT OR REPLACE onto the same row instead of accumulating
+/// duplicates (todo_tags / capture_outcomes precedent).
+String focusSessionDispositionIdFor(String sessionId, String taskId) => uuid.v5(
+      Namespace.url.value,
+      'jeeves://focus_session_disposition/$sessionId/$taskId',
+    );
+
+@DriftAccessor(
+    tables: [FocusSessions, FocusSessionTasks, FocusSessionDispositions, TimeLogs, Todos])
 class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     with _$FocusSessionDaoMixin {
   FocusSessionDao(super.db);
@@ -202,7 +217,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   ///
   /// Side effects:
   /// - Each 'maybe' task has its intent updated to 'maybe' on [todos].
-  /// - All disposition values are persisted to [focus_session_tasks].
+  /// - Disposition values are persisted by membership class: Plan members to
+  ///   [focus_session_tasks], off-Plan engaged Outcomes to
+  ///   [focus_session_dispositions] (ADR-0016). The Plan never auto-grows from
+  ///   an off-Plan disposition (ADR-0002).
   /// - The session is closed (ended_at set, current_task_id cleared).
   /// - Any open time log for the session is closed.
   ///
@@ -220,15 +238,54 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           .getSingleOrNull();
       if (session == null) return;
 
-      // Persist dispositions on focus_session_tasks rows.
+      // Partition dispositions by Plan membership: a Plan member has a
+      // focus_session_tasks row for this session, an off-Plan engaged Outcome
+      // does not (ADR-0002).
+      final planRows = await (select(focusSessionTasks)
+            ..where((fst) => fst.focusSessionId.equals(sessionId)))
+          .get();
+      final planTaskIds = planRows.map((r) => r.taskId).toSet();
+
+      // Off-Plan engaged Outcomes are those with a TimeLog for this session.
+      // The Review surface is Plan ∪ engaged (CONTEXT.md § Engagement); a
+      // disposition key outside that union is stale caller state — skip it
+      // rather than mint a phantom disposition row (or flip an unrelated
+      // Outcome's Intent) for an Outcome that was neither planned nor worked on.
+      final engagedRows = await customSelect(
+        'SELECT DISTINCT task_id FROM time_logs WHERE focus_session_id = ?',
+        variables: [Variable<String>(sessionId)],
+        readsFrom: {timeLogs},
+      ).get();
+      final engagedTaskIds =
+          engagedRows.map((r) => r.read<String>('task_id')).toSet();
+      final surfaceTaskIds = {...planTaskIds, ...engagedTaskIds};
+
+      // Persist dispositions to the correct home (Review-surface members only).
       for (final entry in dispositions.entries) {
-        await (update(focusSessionTasks)
-              ..where((fst) =>
-                  fst.focusSessionId.equals(sessionId) &
-                  fst.taskId.equals(entry.key)))
-            .write(FocusSessionTasksCompanion(
-          disposition: Value(entry.value),
-        ));
+        if (!surfaceTaskIds.contains(entry.key)) continue;
+        if (planTaskIds.contains(entry.key)) {
+          await (update(focusSessionTasks)
+                ..where((fst) =>
+                    fst.focusSessionId.equals(sessionId) &
+                    fst.taskId.equals(entry.key)))
+              .write(FocusSessionTasksCompanion(
+            disposition: Value(entry.value),
+          ));
+        } else {
+          // Off-Plan engaged Outcome — no Plan row exists, so its Disposition
+          // goes to the separate store. Deterministic id + INSERT OR REPLACE so
+          // a re-recorded disposition collapses onto the same row.
+          await into(focusSessionDispositions).insert(
+            FocusSessionDispositionsCompanion(
+              id: Value(focusSessionDispositionIdFor(sessionId, entry.key)),
+              focusSessionId: Value(sessionId),
+              taskId: Value(entry.key),
+              disposition: Value(entry.value),
+              userId: Value(session.userId),
+            ),
+            mode: InsertMode.insertOrReplace,
+          );
+        }
       }
 
       // Update intent to 'maybe' for each 'maybe' disposition task.
@@ -236,7 +293,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // Sending an Outcome to Someday/Maybe is an Intent edit — a clarifying
       // micro-act per CONTEXT.md — so last_clarified_at is stamped alongside.
       for (final entry in dispositions.entries) {
-        if (entry.value == 'maybe') {
+        if (entry.value == 'maybe' && surfaceTaskIds.contains(entry.key)) {
           await customUpdate(
             'UPDATE todos SET intent = ?, updated_at = ?, '
             'last_clarified_at = ? WHERE id = ?',
@@ -252,16 +309,23 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         }
       }
 
-      // Stamp last_next_action_completion_at on non-done tasks in this session.
-      // This marks them as "worked on in a session" for the re-clarification predicate.
+      // Stamp last_next_action_completion_at on non-done Outcomes across the
+      // Review surface — Plan members ∪ off-Plan engaged (Outcomes with a
+      // TimeLog for this session). This marks them as "worked on in a session"
+      // for the re-clarification predicate; off-Plan engaged Outcomes were
+      // worked on too, so they earn the stamp.
       await customUpdate(
         'UPDATE todos SET last_next_action_completion_at = ? '
         'WHERE id IN ('
         '  SELECT task_id FROM focus_session_tasks '
         '  WHERE focus_session_id = ?'
+        '  UNION '
+        '  SELECT task_id FROM time_logs '
+        '  WHERE focus_session_id = ?'
         ') AND done_at IS NULL AND user_id = ?',
         variables: [
           Variable(ts),
+          Variable(sessionId),
           Variable(sessionId),
           Variable(session.userId),
         ],
@@ -286,7 +350,9 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }
 
   /// Returns the task IDs with [disposition] = 'rollover' from the most
-  /// recently closed session.
+  /// recently closed session, across both Disposition homes: Plan members in
+  /// [focus_session_tasks] and off-Plan engaged Outcomes in
+  /// [focus_session_dispositions] (ADR-0016). The UNION de-duplicates.
   ///
   /// Returns an empty list when no closed session exists or none has rollover
   /// tasks.
@@ -299,11 +365,21 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       'AND fs.ended_at = ('
       '  SELECT MAX(ended_at) FROM focus_sessions '
       '  WHERE ended_at IS NOT NULL'
+      ') '
+      'UNION '
+      'SELECT fsd.task_id FROM focus_session_dispositions fsd '
+      'JOIN focus_sessions fs ON fs.id = fsd.focus_session_id '
+      'WHERE fs.ended_at IS NOT NULL '
+      'AND fsd.disposition = ? '
+      'AND fs.ended_at = ('
+      '  SELECT MAX(ended_at) FROM focus_sessions '
+      '  WHERE ended_at IS NOT NULL'
       ')',
       variables: [
         Variable('rollover'),
+        Variable('rollover'),
       ],
-      readsFrom: {focusSessions, focusSessionTasks},
+      readsFrom: {focusSessions, focusSessionTasks, focusSessionDispositions},
     ).get();
     return rows.map((r) => r.read<String>('task_id')).toList();
   }
@@ -322,6 +398,49 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       'ORDER BY fst.position',
       variables: [],
       readsFrom: {focusSessionTasks, focusSessions, todos},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
+  /// Reactive Review surface for the currently open session — the union of
+  ///
+  /// 1. Outcomes on the session's Plan (rows in [focus_session_tasks]), and
+  /// 2. Outcomes engaged with during the session (rows in [time_logs] whose
+  ///    [focus_session_id] = the open session).
+  ///
+  /// The reactive counterpart of [getReviewSurface], scoped to the active
+  /// session (`ended_at IS NULL`) so no session-ID plumbing is needed at call
+  /// sites — this is what the Evening Shutdown providers watch so off-Plan
+  /// engaged Outcomes surface for disposition (CONTEXT.md § Engagement).
+  ///
+  /// Plan members are ordered by their [focus_session_tasks.position]; off-Plan
+  /// engaged Outcomes follow, ordered by the start time of their earliest
+  /// TimeLog for the session. Returns an empty list when no session is open.
+  Stream<List<Todo>> watchActiveSessionReviewSurface() {
+    return customSelect(
+      'SELECT t.*, 0 AS surface_order, fst.position AS sort_key '
+      'FROM todos t '
+      'JOIN focus_session_tasks fst ON fst.task_id = t.id '
+      'WHERE fst.focus_session_id = ('
+      '  SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
+      ') '
+      'UNION ALL '
+      'SELECT t.*, 1 AS surface_order, '
+      '       CAST(strftime(\'%s\', MIN(tl.started_at)) AS INTEGER) AS sort_key '
+      'FROM todos t '
+      'JOIN time_logs tl ON tl.task_id = t.id '
+      'WHERE tl.focus_session_id = ('
+      '  SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
+      ') '
+      '  AND NOT EXISTS ('
+      '    SELECT 1 FROM focus_session_tasks fst2 '
+      '    WHERE fst2.focus_session_id = ('
+      '      SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
+      '    ) AND fst2.task_id = t.id'
+      '  ) '
+      'GROUP BY t.id '
+      'ORDER BY surface_order, sort_key',
+      variables: [],
+      readsFrom: {focusSessionTasks, timeLogs, focusSessions, todos},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 

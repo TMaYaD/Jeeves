@@ -461,6 +461,32 @@ void main() {
     });
 
     test(
+        'focus_session_dispositions routes to its REST endpoint '
+        '(not the unknown-table StateError) — issue #418', () async {
+      final adapter = _ScriptedAdapter((options, i) async => _jsonResponse(201));
+      final conn = connector(adapter);
+      final (batch, completed) = batchOf([
+        _entry('focus_session_dispositions', UpdateType.put, rowId: 'fsd-1'),
+        _entry('focus_session_dispositions', UpdateType.patch, rowId: 'fsd-1'),
+        _entry('focus_session_dispositions', UpdateType.delete, rowId: 'fsd-1'),
+      ]);
+
+      await conn.uploadCrudBatch(batch);
+
+      expect(completed(), isTrue);
+      expect(
+        adapter.requests.map((r) => '${r.method} ${r.path}').toList(),
+        [
+          'POST /focus_session_dispositions/',
+          'PATCH /focus_session_dispositions/fsd-1',
+          'DELETE /focus_session_dispositions/fsd-1',
+        ],
+      );
+      expect(await deadLetters(), isEmpty,
+          reason: 'a routed table must not dead-letter on the default path');
+    });
+
+    test(
         'dead-lettering a non-delete user_preferences entry trips the #306 '
         'debug assert', () async {
       final adapter = _ScriptedAdapter((options, i) async =>

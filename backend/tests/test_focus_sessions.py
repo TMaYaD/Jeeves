@@ -1,7 +1,8 @@
 """Upload-path CRUD for the focus-session sync shapes (#383).
 
 The PowerSync connector uploads local writes for `focus_sessions`,
-`focus_session_tasks`, and `time_logs` to these routes.  Payloads are shaped
+`focus_session_tasks`, `focus_session_dispositions`, and `time_logs` to these
+routes.  Payloads are shaped
 exactly like connector PUTs/PATCHes: client-generated `id`, a denormalized
 (server-owned, ignored) `user_id`, and Drift-format timestamps.  A 4xx on a
 legitimate write would drop the entry via the connector's fatal path; an
@@ -20,7 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.todos.models import FocusSession, FocusSessionTask, TimeLog
+from app.todos.models import (
+    FocusSession,
+    FocusSessionDisposition,
+    FocusSessionTask,
+    TimeLog,
+)
 from tests.conftest import auth_header, register
 
 
@@ -68,7 +74,12 @@ async def _make_session(client: AsyncClient, token: str) -> str:
 
 @pytest.mark.asyncio
 async def test_focus_session_routes_require_auth(client: AsyncClient) -> None:
-    for path in ("/focus_sessions/", "/focus_session_tasks/", "/time_logs/"):
+    for path in (
+        "/focus_sessions/",
+        "/focus_session_tasks/",
+        "/focus_session_dispositions/",
+        "/time_logs/",
+    ):
         response = await client.post(path, json={})
         assert response.status_code == 401, path
 
@@ -846,3 +857,321 @@ async def test_full_session_upload_replays_in_queue_order(client: AsyncClient) -
     for method, path, payload in steps:
         response = await getattr(client, method)(path, json=payload, headers=headers)
         assert response.status_code in (200, 201), (method, path, response.text)
+
+
+# ── focus_session_dispositions (issue #418, ADR-0016) ─────────────────────────
+
+
+async def _make_disposition(
+    client: AsyncClient,
+    token: str,
+    session_id: str,
+    task_id: str,
+    fsd_id: str | None = None,
+    disposition: str | None = "rollover",
+) -> str:
+    fsd_id = fsd_id or str(uuid4())
+    resp = await client.post(
+        "/focus_session_dispositions/",
+        json={
+            "id": fsd_id,
+            "focus_session_id": session_id,
+            "task_id": task_id,
+            "disposition": disposition,
+            "user_id": "spoofed-user-id",  # server-owned: must be ignored
+        },
+        headers=auth_header(token),
+    )
+    assert resp.status_code == 201, resp.text
+    return fsd_id
+
+
+@pytest.mark.asyncio
+async def test_create_focus_session_disposition_connector_shaped_payload(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The exact shape reviewAndCloseSession queues for an off-Plan Outcome:
+    client id, composite (session, task) key, disposition, denormalized user_id
+    (server-owned, ignored)."""
+    token = await register(client, "fsd-create@example.com")
+    session_id = await _make_session(client, token)
+    todo_id = await _make_todo(client, token)
+    fsd_id = str(uuid4())
+
+    create = await client.post(
+        "/focus_session_dispositions/",
+        json={
+            "id": fsd_id,
+            "focus_session_id": session_id,
+            "task_id": todo_id,
+            "disposition": "rollover",
+            "user_id": "spoofed-user-id",
+        },
+        headers=auth_header(token),
+    )
+    assert create.status_code == 201, create.text
+    created = create.json()
+    assert created["id"] == fsd_id
+    assert created["focus_session_id"] == session_id
+    assert created["task_id"] == todo_id
+    assert created["disposition"] == "rollover"
+
+    row = (
+        await db.execute(
+            select(FocusSessionDisposition).where(FocusSessionDisposition.id == fsd_id)
+        )
+    ).scalar_one()
+    assert row.user_id == await _user_id_from(token)
+    assert row.user_id != "spoofed-user-id"
+
+
+@pytest.mark.asyncio
+async def test_create_focus_session_disposition_replay_is_idempotent(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    token = await register(client, "fsd-replay@example.com")
+    session_id = await _make_session(client, token)
+    todo_id = await _make_todo(client, token)
+    payload = {
+        "id": str(uuid4()),
+        "focus_session_id": session_id,
+        "task_id": todo_id,
+        "disposition": "maybe",
+    }
+
+    first = await client.post(
+        "/focus_session_dispositions/", json=payload, headers=auth_header(token)
+    )
+    assert first.status_code == 201
+    retry = await client.post(
+        "/focus_session_dispositions/", json=payload, headers=auth_header(token)
+    )
+    assert retry.status_code == 201
+
+    rows = (
+        (
+            await db.execute(
+                select(FocusSessionDisposition).where(
+                    FocusSessionDisposition.focus_session_id == session_id,
+                    FocusSessionDisposition.task_id == todo_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_focus_session_disposition_replay_converges_changed_value(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A re-recorded disposition arrives as a PUT (the client's deterministic
+    id + INSERT OR REPLACE), so a create replay of the same relation with a
+    changed value must upsert it (ADR-0015) — not keep the stale server value,
+    which a later sync pull would otherwise restore on the client."""
+    token = await register(client, "fsd-converge@example.com")
+    session_id = await _make_session(client, token)
+    todo_id = await _make_todo(client, token)
+    base = {"id": str(uuid4()), "focus_session_id": session_id, "task_id": todo_id}
+
+    first = await client.post(
+        "/focus_session_dispositions/",
+        json={**base, "disposition": "rollover"},
+        headers=auth_header(token),
+    )
+    assert first.status_code == 201
+
+    converge = await client.post(
+        "/focus_session_dispositions/",
+        json={**base, "disposition": "maybe"},
+        headers=auth_header(token),
+    )
+    assert converge.status_code == 201
+    assert converge.json()["disposition"] == "maybe"
+
+    rows = (
+        (
+            await db.execute(
+                select(FocusSessionDisposition).where(
+                    FocusSessionDisposition.focus_session_id == session_id,
+                    FocusSessionDisposition.task_id == todo_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].disposition == "maybe"
+
+
+@pytest.mark.asyncio
+async def test_create_focus_session_disposition_id_reuse_for_different_relation_is_409(
+    client: AsyncClient,
+) -> None:
+    token = await register(client, "fsd-conflict@example.com")
+    session_id = await _make_session(client, token)
+    todo_a = await _make_todo(client, token, "A")
+    todo_b = await _make_todo(client, token, "B")
+    fsd_id = str(uuid4())
+
+    first = await client.post(
+        "/focus_session_dispositions/",
+        json={
+            "id": fsd_id,
+            "focus_session_id": session_id,
+            "task_id": todo_a,
+            "disposition": "rollover",
+        },
+        headers=auth_header(token),
+    )
+    assert first.status_code == 201
+
+    conflict = await client.post(
+        "/focus_session_dispositions/",
+        json={
+            "id": fsd_id,
+            "focus_session_id": session_id,
+            "task_id": todo_b,
+            "disposition": "rollover",
+        },
+        headers=auth_header(token),
+    )
+    assert conflict.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_focus_session_disposition_invalid_value_is_422(
+    client: AsyncClient,
+) -> None:
+    """Garbage disposition must 422 at the schema, not trip the DB CHECK
+    constraint (a 500 → infinite retry)."""
+    token = await register(client, "fsd-check@example.com")
+    session_id = await _make_session(client, token)
+    todo_id = await _make_todo(client, token)
+
+    resp = await client.post(
+        "/focus_session_dispositions/",
+        json={
+            "id": str(uuid4()),
+            "focus_session_id": session_id,
+            "task_id": todo_id,
+            "disposition": "shred",
+        },
+        headers=auth_header(token),
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_focus_session_disposition_unowned_parents_are_404(
+    client: AsyncClient,
+) -> None:
+    token = await register(client, "fsd-owner@example.com")
+    other = await register(client, "fsd-other@example.com")
+    my_session = await _make_session(client, token)
+    my_todo = await _make_todo(client, token)
+    other_session = await _make_session(client, other)
+    other_todo = await _make_todo(client, other)
+
+    for session_id, task_id in ((other_session, my_todo), (my_session, other_todo)):
+        resp = await client.post(
+            "/focus_session_dispositions/",
+            json={
+                "id": str(uuid4()),
+                "focus_session_id": session_id,
+                "task_id": task_id,
+                "disposition": "rollover",
+            },
+            headers=auth_header(token),
+        )
+        assert resp.status_code == 404, (session_id, task_id)
+
+
+@pytest.mark.asyncio
+async def test_patch_focus_session_disposition_values(client: AsyncClient) -> None:
+    token = await register(client, "fsd-patch@example.com")
+    headers = auth_header(token)
+    session_id = await _make_session(client, token)
+    todo_id = await _make_todo(client, token)
+    fsd_id = await _make_disposition(client, token, session_id, todo_id)
+
+    for disposition in ("rollover", "leave", "maybe"):
+        patch = await client.patch(
+            f"/focus_session_dispositions/{fsd_id}",
+            json={"disposition": disposition},
+            headers=headers,
+        )
+        assert patch.status_code == 200, patch.text
+        assert patch.json()["disposition"] == disposition
+
+    garbage = await client.patch(
+        f"/focus_session_dispositions/{fsd_id}",
+        json={"disposition": "shred"},
+        headers=headers,
+    )
+    assert garbage.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_focus_session_disposition_other_user_is_404(
+    client: AsyncClient,
+) -> None:
+    token_a = await register(client, "fsd-priv-a@example.com")
+    token_b = await register(client, "fsd-priv-b@example.com")
+    session_id = await _make_session(client, token_a)
+    todo_id = await _make_todo(client, token_a)
+    fsd_id = await _make_disposition(client, token_a, session_id, todo_id)
+
+    resp = await client.patch(
+        f"/focus_session_dispositions/{fsd_id}",
+        json={"disposition": "leave"},
+        headers=auth_header(token_b),
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_focus_session_disposition(client: AsyncClient) -> None:
+    token = await register(client, "fsd-delete@example.com")
+    headers = auth_header(token)
+    session_id = await _make_session(client, token)
+    todo_id = await _make_todo(client, token)
+    fsd_id = await _make_disposition(client, token, session_id, todo_id)
+
+    first = await client.delete(f"/focus_session_dispositions/{fsd_id}", headers=headers)
+    assert first.status_code == 204
+    # Idempotent delete: the row is already gone.
+    second = await client.delete(f"/focus_session_dispositions/{fsd_id}", headers=headers)
+    assert second.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_focus_session_clears_disposition_children(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """DELETE /focus_sessions/{id} must clear focus_session_dispositions rows
+    itself — the FK has no ON DELETE CASCADE, so a Postgres FK violation would
+    500 and wedge the CRUD queue."""
+    token = await register(client, "fsd-cascade@example.com")
+    session_id = await _make_session(client, token)
+    todo_id = await _make_todo(client, token)
+    await _make_disposition(client, token, session_id, todo_id)
+
+    resp = await client.delete(f"/focus_sessions/{session_id}", headers=auth_header(token))
+    assert resp.status_code == 204
+
+    rows = (
+        (
+            await db.execute(
+                select(FocusSessionDisposition).where(
+                    FocusSessionDisposition.focus_session_id == session_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []

@@ -18,17 +18,19 @@ replication:
       slot_name: powersync_slot
 
 # --- Sync rules ---------------------------------------------------------------
-# Ten user-scoped buckets — todos, tags, todo_tags, time_logs,
-# focus_sessions, focus_session_tasks, user_preferences, and the Capture
-# split (issue #184): captures, capture_outcomes, capture_tags.
+# Eleven user-scoped buckets — todos, tags, todo_tags, time_logs,
+# focus_sessions, focus_session_tasks, focus_session_dispositions,
+# user_preferences, and the Capture split (issue #184): captures,
+# capture_outcomes, capture_tags.
 #
 # The parameter query below relies on the JWT carrying a `user_id` claim —
 # `token_parameters.user_id` is read directly and no users-table lookup is
 # required.
 #
-# The junction tables (todo_tags, focus_session_tasks, capture_outcomes,
-# capture_tags) carry a denormalized `user_id` column (migrations 0008, 0025,
-# 0026) following PowerSync's "Denormalize Foreign Key onto Child Table"
+# The junction tables (todo_tags, focus_session_tasks,
+# focus_session_dispositions, capture_outcomes, capture_tags) carry a
+# denormalized `user_id` column (migrations 0008, 0025, 0027, 0026) following
+# PowerSync's "Denormalize Foreign Key onto Child Table"
 # pattern for many-to-many join tables [1] — PowerSync rejects JOINs in bucket
 # data queries as a fatal sync-rules error ("Must SELECT from a single
 # table"), which aborts the whole config.  Their SELECTs list columns
@@ -75,6 +77,13 @@ sync_config:
         data:
           - SELECT id, focus_session_id, task_id, position, disposition, user_id
             FROM focus_session_tasks WHERE user_id = bucket.user_id
+
+      by_user_focus_session_dispositions:
+        parameters:
+          - SELECT token_parameters.user_id AS user_id
+        data:
+          - SELECT id, focus_session_id, task_id, disposition, user_id
+            FROM focus_session_dispositions WHERE user_id = bucket.user_id
 
       by_user_preferences:
         parameters:

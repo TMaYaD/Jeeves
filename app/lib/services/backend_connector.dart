@@ -83,6 +83,7 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
   ///   - user_preferences:    POST /user_preferences/,    PATCH /user_preferences/{id},    DELETE /user_preferences/{id}
   ///   - focus_sessions:      POST /focus_sessions/,      PATCH /focus_sessions/{id},      DELETE /focus_sessions/{id}
   ///   - focus_session_tasks: POST /focus_session_tasks/, PATCH /focus_session_tasks/{id}, DELETE /focus_session_tasks/{id}
+  ///   - focus_session_dispositions: POST /focus_session_dispositions/, PATCH /focus_session_dispositions/{id}, DELETE /focus_session_dispositions/{id}
   ///   - time_logs:           POST /time_logs/,           PATCH /time_logs/{id},           DELETE /time_logs/{id}
   ///   - captures:            POST /captures/,            PATCH /captures/{id},            DELETE /captures/{id}
   ///   - capture_outcomes:    POST /capture_outcomes/,    PATCH /capture_outcomes/{id},    DELETE /capture_outcomes/{id}
@@ -116,6 +117,8 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
             await _uploadFocusSession(entry);
           case 'focus_session_tasks':
             await _uploadFocusSessionTask(entry);
+          case 'focus_session_dispositions':
+            await _uploadFocusSessionDisposition(entry);
           case 'time_logs':
             await _uploadTimeLog(entry);
           case 'captures':
@@ -296,6 +299,24 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
         await _api.patch('/focus_session_tasks/${entry.id}', entry.opData ?? {});
       case ps.UpdateType.delete:
         await _api.delete('/focus_session_tasks/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadFocusSessionDisposition(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/focus_session_dispositions/', body);
+      case ps.UpdateType.patch:
+        // The off-Plan disposition store's only mutable field is disposition.
+        // The review flow re-records it via INSERT OR REPLACE (a PUT, handled
+        // above and upserted server-side); this PATCH branch covers any direct
+        // field update and converges the same way.
+        await _api.patch(
+            '/focus_session_dispositions/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/focus_session_dispositions/${entry.id}');
     }
   }
 

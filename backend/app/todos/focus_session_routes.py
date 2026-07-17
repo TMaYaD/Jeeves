@@ -1,4 +1,5 @@
-"""Standalone CRUD for focus_sessions, focus_session_tasks, and time_logs.
+"""Standalone CRUD for focus_sessions, focus_session_tasks,
+focus_session_dispositions, and time_logs.
 
 These endpoints are called by the PowerSync BackendConnector to upload
 offline mutations for the focus-session sync shapes (#383).  They follow the
@@ -25,9 +26,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.database import get_db
-from app.todos.models import FocusSession, FocusSessionTask, TimeLog, Todo
+from app.todos.models import (
+    FocusSession,
+    FocusSessionDisposition,
+    FocusSessionTask,
+    TimeLog,
+    Todo,
+)
 from app.todos.schemas import (
     FocusSessionCreate,
+    FocusSessionDispositionCreate,
+    FocusSessionDispositionOut,
+    FocusSessionDispositionUpdate,
     FocusSessionOut,
     FocusSessionTaskCreate,
     FocusSessionTaskOut,
@@ -134,6 +144,11 @@ async def delete_focus_session(
         sa.delete(FocusSessionTask).where(FocusSessionTask.focus_session_id == session_id)
     )
     await db.execute(
+        sa.delete(FocusSessionDisposition).where(
+            FocusSessionDisposition.focus_session_id == session_id
+        )
+    )
+    await db.execute(
         sa.update(TimeLog)
         .where(TimeLog.focus_session_id == session_id)
         .values(focus_session_id=None)
@@ -229,6 +244,119 @@ async def delete_focus_session_task(
     row = result.scalar_one_or_none()
     if row is None or row.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="FocusSessionTask not found")
+    await db.delete(row)
+    await db.commit()
+
+
+# ── FocusSessionDispositions ──────────────────────────────────────────────────
+# Durable home for Review-phase Dispositions on off-Plan engaged Outcomes
+# (ADR-0016).  Like the focus_session_tasks routes, the composite
+# (focus_session_id, task_id) is the domain key and a second dedupe key — but
+# unlike them the create route upserts the mutable `disposition` on replay
+# (the client re-records via INSERT OR REPLACE → a PUT, not a PATCH), so a
+# changed disposition converges instead of being dropped.
+
+
+@router.post(
+    "/focus_session_dispositions/",
+    response_model=FocusSessionDispositionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_focus_session_disposition(
+    body: FocusSessionDispositionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> FocusSessionDisposition:
+    await _require_owned_session(db, body.focus_session_id, current_user)
+    await _require_owned_todo(db, body.task_id, current_user)
+
+    # Upsert-on-replay (ADR-0015): the client re-records a disposition with a
+    # deterministic id under INSERT OR REPLACE, which reaches this route as a
+    # PUT.  So a replay of the same relation must *apply* the submitted
+    # disposition and return the converged row — not just acknowledge it — or a
+    # later sync pull would restore the stale server value.  A cross-relation id
+    # collision stays a 409.
+    if body.id is not None:
+        result = await db.execute(
+            select(FocusSessionDisposition).where(FocusSessionDisposition.id == body.id)
+        )
+        existing_by_id = result.scalar_one_or_none()
+        if existing_by_id is not None:
+            if (
+                existing_by_id.focus_session_id == body.focus_session_id
+                and existing_by_id.task_id == body.task_id
+            ):
+                existing_by_id.disposition = body.disposition
+                await db.commit()
+                await db.refresh(existing_by_id)
+                return existing_by_id
+            raise HTTPException(
+                status_code=409,
+                detail="FocusSessionDisposition id already used for a different relation",
+            )
+
+    # Converge if the (focus_session_id, task_id) pair already exists (the
+    # composite PK is the domain key, independent of the sync id).
+    result = await db.execute(
+        select(FocusSessionDisposition).where(
+            FocusSessionDisposition.focus_session_id == body.focus_session_id,
+            FocusSessionDisposition.task_id == body.task_id,
+        )
+    )
+    existing_pair = result.scalar_one_or_none()
+    if existing_pair is not None:
+        existing_pair.disposition = body.disposition
+        await db.commit()
+        await db.refresh(existing_pair)
+        return existing_pair
+
+    row = FocusSessionDisposition(
+        **({"id": body.id} if body.id is not None else {}),
+        focus_session_id=body.focus_session_id,
+        task_id=body.task_id,
+        disposition=body.disposition,
+        user_id=current_user.id,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@router.patch("/focus_session_dispositions/{fsd_id}", response_model=FocusSessionDispositionOut)
+async def update_focus_session_disposition(
+    fsd_id: str,
+    body: FocusSessionDispositionUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> FocusSessionDisposition:
+    # Lookup by the client-assigned id column — the row PowerSync PATCHes by;
+    # the composite (focus_session_id, task_id) PK is the domain key.
+    result = await db.execute(
+        select(FocusSessionDisposition).where(FocusSessionDisposition.id == fsd_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None or row.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="FocusSessionDisposition not found")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@router.delete("/focus_session_dispositions/{fsd_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_focus_session_disposition(
+    fsd_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    result = await db.execute(
+        select(FocusSessionDisposition).where(FocusSessionDisposition.id == fsd_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None or row.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="FocusSessionDisposition not found")
     await db.delete(row)
     await db.commit()
 

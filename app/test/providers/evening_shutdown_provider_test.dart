@@ -294,6 +294,41 @@ void main() {
       sub.close();
       expect(after.map((t) => t.id), equals(['t2']));
     });
+
+    test(
+        'unfinishedSelectedTodayProvider surfaces an off-Plan engaged Outcome '
+        'and closeDay persists its disposition (issue #418)', () async {
+      await _insertTodo(db, id: 'plan1'); // Plan member
+      await _insertTodo(db, id: 'off1'); // off-Plan engaged
+      final sessionId = await _openSessionWith(db, ['plan1']);
+      // Off-Plan engagement: a TimeLog against the session, no Plan row.
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('tl-off1'),
+            userId: const Value(_uid),
+            taskId: const Value('off1'),
+            startedAt: Value(DateTime.now().toUtc().toIso8601String()),
+            focusSessionId: Value(sessionId),
+          ));
+
+      final sub = container.listen<AsyncValue<List<Todo>>>(
+          unfinishedSelectedTodayProvider, (_, _) {});
+      final surfaced = await container
+          .read(unfinishedSelectedTodayProvider.future)
+          .timeout(const Duration(seconds: 5));
+      expect(surfaced.map((t) => t.id), containsAll(['plan1', 'off1']),
+          reason: 'the off-Plan engaged Outcome must appear in Review.');
+
+      // Disposition the off-Plan Outcome and close the ritual.
+      container.read(eveningShutdownProvider.notifier).rolloverTask('off1');
+      container.read(eveningShutdownProvider.notifier).returnToNext('plan1');
+      sub.close();
+      await container.read(eveningShutdownProvider.notifier).closeDay();
+
+      // The off-Plan rollover is durably stored and pre-selects next time.
+      final rollover =
+          await db.focusSessionDao.getLastClosedSessionRolloverTaskIds();
+      expect(rollover, contains('off1'));
+    });
   });
 
   // ---------------------------------------------------------------------------
