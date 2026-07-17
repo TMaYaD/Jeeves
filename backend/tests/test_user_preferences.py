@@ -5,6 +5,8 @@ persist offline writes to the `user_preferences` table. Reconciliation /
 conflict semantics are covered separately (see issue #306).
 """
 
+from datetime import datetime
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -54,11 +56,16 @@ async def test_create_persists_row(client: AsyncClient, db: AsyncSession) -> Non
 
 
 @pytest.mark.asyncio
-async def test_create_is_idempotent_on_same_id(client: AsyncClient) -> None:
-    """PowerSync may re-upload the same CRUD entry; second POST must not error."""
+async def test_create_is_idempotent_and_converges_on_replay(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """PowerSync may re-upload the same CRUD entry; the second POST must not
+    error.  Upsert-on-replay (ADR-0015): a replay carrying a newer value/
+    updated_at converges the stored row instead of returning it stale."""
     token = await register(client, "pref-idem@example.com")
+    pref_id = "22222222-2222-2222-2222-222222222222"
     payload = {
-        "id": "22222222-2222-2222-2222-222222222222",
+        "id": pref_id,
         "key": "last_completed",
         "value": '"v1"',
         "updated_at": "2026-05-17T10:00:00Z",
@@ -68,7 +75,49 @@ async def test_create_is_idempotent_on_same_id(client: AsyncClient) -> None:
 
     second = await client.post("/user_preferences/", json=payload, headers=auth_header(token))
     assert second.status_code == 201
-    assert second.json()["id"] == payload["id"]
+    assert second.json()["id"] == pref_id
+
+    converge = await client.post(
+        "/user_preferences/",
+        json={**payload, "value": '"v2"', "updated_at": "2026-05-17T11:00:00Z"},
+        headers=auth_header(token),
+    )
+    assert converge.status_code == 201
+    assert converge.json()["value"] == '"v2"'
+    # The newer updated_at converges too — not just the value.  Compare absolute
+    # instants when the value is tz-aware (Postgres TIMESTAMPTZ); the SQLite test
+    # harness hands back a naive wall-clock, so normalise the expectation then.
+    expected_updated = datetime.fromisoformat("2026-05-17T11:00:00+00:00")
+
+    def _assert_instant(value: datetime) -> None:
+        if value.tzinfo is None:
+            assert value == expected_updated.replace(tzinfo=None)
+        else:
+            assert value == expected_updated
+
+    _assert_instant(datetime.fromisoformat(converge.json()["updated_at"]))
+    row = (
+        await db.execute(select(UserPreference).where(UserPreference.id == pref_id))
+    ).scalar_one()
+    assert row.value == '"v2"'
+    _assert_instant(row.updated_at)
+
+
+@pytest.mark.asyncio
+async def test_create_same_id_across_users_is_409(client: AsyncClient) -> None:
+    """A same-id collision across users is a genuine anomaly, not a replay."""
+    token_a = await register(client, "pref-xuser-a@example.com")
+    token_b = await register(client, "pref-xuser-b@example.com")
+    payload = {
+        "id": "44444444-4444-4444-4444-444444444444",
+        "key": "last_completed",
+        "value": '"v1"',
+        "updated_at": "2026-05-17T10:00:00Z",
+    }
+    first = await client.post("/user_preferences/", json=payload, headers=auth_header(token_a))
+    assert first.status_code == 201
+    conflict = await client.post("/user_preferences/", json=payload, headers=auth_header(token_b))
+    assert conflict.status_code == 409
 
 
 @pytest.mark.asyncio

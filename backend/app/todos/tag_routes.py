@@ -36,13 +36,22 @@ async def create_tag(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Tag:
-    # Idempotency: return existing tag if the client-side id already exists.
+    # Upsert-on-replay (ADR-0015): a same-user id match applies the submitted
+    # client-owned fields to the stored row and returns it, so a consolidated
+    # replay carrying newer offline edits converges the server row.  A
+    # cross-user id collision stays a 409.
     if body.id is not None:
         existing = await db.get(Tag, body.id)
         if existing:
-            if existing.user_id == current_user.id:
-                return existing
-            raise HTTPException(status_code=409, detail="Tag id already exists")
+            if existing.user_id != current_user.id:
+                raise HTTPException(status_code=409, detail="Tag id already exists")
+            data = body.model_dump(exclude_unset=True)
+            data.pop("id", None)
+            for field, value in data.items():
+                setattr(existing, field, value)
+            await db.commit()
+            await db.refresh(existing)
+            return existing
     tag = Tag(
         **({"id": body.id} if body.id is not None else {}),
         name=body.name,

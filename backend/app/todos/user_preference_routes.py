@@ -32,15 +32,23 @@ async def create_user_preference(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> UserPreference:
-    # Idempotency: if the client-generated id already exists for this user,
-    # return it. PowerSync re-uploads the same CRUD entry on retry; we must
-    # not 409 the second attempt.
+    # Upsert-on-replay (ADR-0015): a same-user id match applies the submitted
+    # client-owned fields to the stored row and returns it, so a consolidated
+    # replay carrying newer offline edits converges the server row instead of
+    # 409ing (PowerSync re-uploads the same CRUD entry on retry) or silently
+    # discarding the newer values.  A cross-user id collision stays a 409.
     if body.id is not None:
         existing = await db.get(UserPreference, body.id)
         if existing is not None:
-            if existing.user_id == current_user.id:
-                return existing
-            raise HTTPException(status_code=409, detail="Preference id already exists")
+            if existing.user_id != current_user.id:
+                raise HTTPException(status_code=409, detail="Preference id already exists")
+            data = body.model_dump(exclude_unset=True)
+            data.pop("id", None)
+            for field, value in data.items():
+                setattr(existing, field, value)
+            await db.commit()
+            await db.refresh(existing)
+            return existing
 
     pref = UserPreference(
         **({"id": body.id} if body.id is not None else {}),

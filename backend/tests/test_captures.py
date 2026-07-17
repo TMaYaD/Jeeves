@@ -145,12 +145,13 @@ async def test_capture_patch_null_title_rejected(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_capture_create_same_id_idempotent_and_conflict(
-    client: AsyncClient,
+async def test_capture_create_replay_converges_client_state(
+    client: AsyncClient, db: AsyncSession
 ) -> None:
-    # Replaying the identical create is idempotent (returns the stored row);
-    # replaying the same id with different data is a 409 rather than silently
-    # discarding the conflicting offline upload.
+    # Upsert-on-replay (ADR-0015): replaying the identical create is idempotent
+    # (returns the stored row); a same-id replay carrying newer client-owned
+    # values converges the server row (2xx) instead of reverting the offline
+    # edit one checkpoint later.
     token = await register(client, "capture-same-id@example.com")
     headers = auth_header(token)
     capture_id = str(uuid4())
@@ -160,11 +161,31 @@ async def test_capture_create_same_id_idempotent_and_conflict(
     replay = await client.post("/captures/", json=body, headers=headers)
     assert replay.status_code == 201
     assert replay.json()["id"] == first.json()["id"]
-    conflict = await client.post(
+    # A consolidated replay carries the newer offline edit — it must converge.
+    converge = await client.post(
         "/captures/",
         json={"id": capture_id, "title": "different"},
         headers=headers,
     )
+    assert converge.status_code == 201
+    assert converge.json()["title"] == "different"
+    # The omitted notes field is left untouched (exclude_unset), not defaulted.
+    assert converge.json()["notes"] == "n"
+    row = (await db.execute(select(Capture).where(Capture.id == capture_id))).scalar_one()
+    assert row.title == "different"
+    assert row.notes == "n"
+
+
+@pytest.mark.asyncio
+async def test_capture_create_same_id_across_users_is_409(client: AsyncClient) -> None:
+    # A same-id collision across users is a genuine anomaly, not a replay — 409.
+    token_a = await register(client, "capture-xuser-a@example.com")
+    token_b = await register(client, "capture-xuser-b@example.com")
+    capture_id = str(uuid4())
+    body = {"id": capture_id, "title": "t"}
+    first = await client.post("/captures/", json=body, headers=auth_header(token_a))
+    assert first.status_code == 201
+    conflict = await client.post("/captures/", json=body, headers=auth_header(token_b))
     assert conflict.status_code == 409
 
 

@@ -5,9 +5,10 @@ offline mutations for the capture sync shapes (ADR-0006 — the split of the
 Inbox out of the conflated todos table).  They follow the same contract as
 focus_session_routes.py:
 
-- POST dedupes on the client-generated ``id`` so an offline replay is
-  idempotent: a matching row returns 2xx; the same id claimed for a
-  different row is a 409.
+- POST dedupes on the client-generated ``id``: a same-user id match upserts
+  the submitted client-owned fields onto the stored row and returns it (2xx),
+  so a consolidated replay carrying newer offline edits converges the server
+  row (upsert-on-replay, ADR-0015).  A cross-user id collision is a 409.
 - ``user_id`` is server-owned — always derived from the JWT; the
   denormalized value in the connector payload is ignored by the schemas.
 - Parent/ownership checks happen at route level (404): the SQLite test
@@ -70,18 +71,20 @@ async def create_capture(
 ) -> Capture:
     data = body.model_dump(exclude_unset=True)
     data.pop("id", None)
-    # Idempotency: replaying the same id with identical data returns the stored
-    # row; a same-id replay whose fields differ is a conflict, not a silent
-    # discard of the diverging offline upload.
+    # Upsert-on-replay (ADR-0015): a same-user id match applies the submitted
+    # client-owned fields to the stored row and returns it, so a consolidated
+    # replay that carries newer offline edits converges the server row instead
+    # of reverting them one checkpoint later.  A cross-user id collision is a
+    # real anomaly and stays a 409.
     if body.id is not None:
         existing = await db.get(Capture, body.id)
         if existing:
-            if existing.user_id != current_user.id or any(
-                getattr(existing, field) != value for field, value in data.items()
-            ):
-                raise HTTPException(
-                    status_code=409, detail="Capture id already used for different data"
-                )
+            if existing.user_id != current_user.id:
+                raise HTTPException(status_code=409, detail="Capture id already exists")
+            for field, value in data.items():
+                setattr(existing, field, value)
+            await db.commit()
+            await db.refresh(existing)
             return existing
     capture = Capture(
         **({"id": body.id} if body.id is not None else {}),

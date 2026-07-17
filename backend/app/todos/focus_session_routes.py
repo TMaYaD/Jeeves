@@ -5,9 +5,10 @@ These endpoints are called by the PowerSync BackendConnector to upload
 offline mutations for the focus-session sync shapes (#383).  They follow the
 same contract as tag_routes.py:
 
-- POST dedupes on the client-generated ``id`` so an offline replay is
-  idempotent: a matching row returns 2xx; the same id claimed for a
-  different row is a 409.
+- POST dedupes on the client-generated ``id``: a same-user id match upserts
+  the submitted client-owned fields onto the stored row and returns it (2xx),
+  so a consolidated replay carrying newer offline edits converges the server
+  row (upsert-on-replay, ADR-0015).  A cross-user id collision is a 409.
 - ``user_id`` is server-owned — always derived from the JWT; the
   denormalized value in the connector payload is ignored by the schemas.
 - Parent/ownership checks happen at route level (404): the SQLite test
@@ -76,13 +77,24 @@ async def create_focus_session(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> FocusSession:
-    # Idempotency: return the existing session if the client id already exists.
+    # Upsert-on-replay (ADR-0015): a same-user id match applies the submitted
+    # client-owned fields to the stored row and returns it, so a consolidated
+    # replay carrying newer offline edits converges the server row.  A
+    # cross-user id collision stays a 409.
     if body.id is not None:
         existing = await db.get(FocusSession, body.id)
         if existing:
-            if existing.user_id == current_user.id:
-                return existing
-            raise HTTPException(status_code=409, detail="FocusSession id already exists")
+            if existing.user_id != current_user.id:
+                raise HTTPException(status_code=409, detail="FocusSession id already exists")
+            data = body.model_dump(exclude_unset=True)
+            data.pop("id", None)
+            if data.get("current_task_id") is not None:
+                await _require_owned_todo(db, data["current_task_id"], current_user)
+            for field, value in data.items():
+                setattr(existing, field, value)
+            await db.commit()
+            await db.refresh(existing)
+            return existing
     if body.current_task_id is not None:
         await _require_owned_todo(db, body.current_task_id, current_user)
     session = FocusSession(
@@ -344,17 +356,33 @@ async def create_time_log(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> TimeLog:
-    await _require_owned_todo(db, body.task_id, current_user)
-    if body.focus_session_id is not None:
-        await _require_owned_session(db, body.focus_session_id, current_user)
-
-    # Idempotency: return the existing log if the client id already exists.
+    # Upsert-on-replay (ADR-0015): resolve the id collision before validating
+    # parents so a cross-user id collision returns 409 (a genuine anomaly),
+    # consistent with the other create routes — not a parent-ownership 404 when
+    # the replay also carries the other user's foreign parent ids.  A same-user
+    # id match applies the submitted client-owned fields to the stored row and
+    # returns it, so a consolidated replay carrying newer offline edits
+    # converges the server row.
     if body.id is not None:
         existing = await db.get(TimeLog, body.id)
         if existing:
-            if existing.user_id == current_user.id:
-                return existing
-            raise HTTPException(status_code=409, detail="TimeLog id already exists")
+            if existing.user_id != current_user.id:
+                raise HTTPException(status_code=409, detail="TimeLog id already exists")
+            # Validate the submitted (replayed) parents before applying them.
+            await _require_owned_todo(db, body.task_id, current_user)
+            if body.focus_session_id is not None:
+                await _require_owned_session(db, body.focus_session_id, current_user)
+            data = body.model_dump(exclude_unset=True)
+            data.pop("id", None)
+            for field, value in data.items():
+                setattr(existing, field, value)
+            await db.commit()
+            await db.refresh(existing)
+            return existing
+
+    await _require_owned_todo(db, body.task_id, current_user)
+    if body.focus_session_id is not None:
+        await _require_owned_session(db, body.focus_session_id, current_user)
 
     log = TimeLog(
         **({"id": body.id} if body.id is not None else {}),
