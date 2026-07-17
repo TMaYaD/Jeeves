@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' hide isNotNull;
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +8,8 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
+import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/services/clarification_service.dart';
 import '../../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -19,12 +21,18 @@ TodosCompanion _companion({
   required String id,
   required String title,
   String? notes,
+  String? energyLevel,
+  int? timeEstimate,
 }) {
   final now = DateTime.now();
   return TodosCompanion(
     id: Value(id),
     title: Value(title),
     notes: notes != null ? Value(notes) : const Value.absent(),
+    energyLevel:
+        energyLevel != null ? Value(energyLevel) : const Value.absent(),
+    timeEstimate:
+        timeEstimate != null ? Value(timeEstimate) : const Value.absent(),
     captureSource: const Value('manual'),
     userId: const Value(_userId),
     createdAt: Value(now),
@@ -32,9 +40,100 @@ TodosCompanion _companion({
   );
 }
 
-Widget _buildApp(GtdDatabase db, String todoId) {
+/// Delegates every [ClarificationService] call to a real
+/// [DaoClarificationService] while recording the clear flags the last
+/// [updateFields] call carried, so tests can assert the screen never sends a
+/// spurious clear for a field that had no value.
+class _RecordingClarificationService implements ClarificationService {
+  _RecordingClarificationService(this._inner);
+
+  final ClarificationService _inner;
+
+  bool? lastClearNotes;
+  bool? lastClearEnergyLevel;
+  bool? lastClearTimeEstimate;
+  bool? lastClearDueDate;
+
+  @override
+  Future<void> updateFields(
+    String id, {
+    String? title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    bool clearNotes = false,
+    bool clearEnergyLevel = false,
+    bool clearTimeEstimate = false,
+    bool clearDueDate = false,
+  }) {
+    lastClearNotes = clearNotes;
+    lastClearEnergyLevel = clearEnergyLevel;
+    lastClearTimeEstimate = clearTimeEstimate;
+    lastClearDueDate = clearDueDate;
+    return _inner.updateFields(
+      id,
+      title: title,
+      notes: notes,
+      energyLevel: energyLevel,
+      timeEstimate: timeEstimate,
+      dueDate: dueDate,
+      clearNotes: clearNotes,
+      clearEnergyLevel: clearEnergyLevel,
+      clearTimeEstimate: clearTimeEstimate,
+      clearDueDate: clearDueDate,
+    );
+  }
+
+  @override
+  Future<bool> exists(String id) => _inner.exists(id);
+
+  @override
+  Future<Set<String>> getPersonTagIds(String id) =>
+      _inner.getPersonTagIds(id);
+
+  @override
+  Future<void> clarifyToOutcome(
+    String id, {
+    required RoutingKind to,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    String? userId,
+  }) =>
+      _inner.clarifyToOutcome(
+        id,
+        to: to,
+        nextActionText: nextActionText,
+        personTagIds: personTagIds,
+        userId: userId,
+      );
+
+  @override
+  Future<int> promoteCaptureToOutcome(
+    String id, {
+    String? intent,
+    DateTime? dueDate,
+  }) =>
+      _inner.promoteCaptureToOutcome(id, intent: intent, dueDate: dueDate);
+
+  @override
+  Future<int> completeOutcome(String id) => _inner.completeOutcome(id);
+
+  @override
+  Future<void> stampClarified(String id) => _inner.stampClarified(id);
+}
+
+Widget _buildApp(
+  GtdDatabase db,
+  String todoId, {
+  ClarificationService? clarificationService,
+}) {
   return ProviderScope(
-    overrides: [databaseProvider.overrideWithValue(db)],
+    overrides: [
+      databaseProvider.overrideWithValue(db),
+      if (clarificationService != null)
+        clarificationServiceProvider.overrideWithValue(clarificationService),
+    ],
     child: MaterialApp.router(
       routerConfig: GoRouter(
         // Nest the clarify route under /inbox so pop() has a page to return to.
@@ -228,6 +327,147 @@ void main() {
               .getSingle();
       expect(row.title, 'New title');
       expect(row.clarified, isTrue);
+    });
+
+    testWidgets('deselecting energy level clears it on routing',
+        (tester) async {
+      await db.inboxDao.insertTodo(
+        _companion(id: 'x', title: 'Buy milk', energyLevel: 'high'),
+      );
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      // Tapping the selected chip deselects it (onSelect(null)).
+      await tester.ensureVisible(find.text('High'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('High'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.energyLevel, isNull);
+      expect(row.clarified, isTrue);
+    });
+
+    testWidgets('deselecting time estimate clears it on routing',
+        (tester) async {
+      await db.inboxDao.insertTodo(
+        _companion(id: 'x', title: 'Buy milk', timeEstimate: 30),
+      );
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      // Tapping the selected chip deselects it (_timeEstimate = null).
+      await tester.ensureVisible(find.text('30m'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('30m'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.timeEstimate, isNull);
+      expect(row.clarified, isTrue);
+    });
+
+    testWidgets('deleting notes clears them on routing', (tester) async {
+      await db.inboxDao.insertTodo(
+        _companion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+      );
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
+      await tester.pump();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.notes, isNull);
+      expect(row.clarified, isTrue);
+    });
+
+    testWidgets('routing an untouched item makes no spurious clearing writes',
+        (tester) async {
+      // Row carries no energy / time estimate / notes / due date.
+      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Buy milk'));
+
+      final recorder =
+          _RecordingClarificationService(DaoClarificationService(db));
+      await tester.pumpWidget(
+        _buildApp(db, 'x', clarificationService: recorder),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      // No field had a value, so the screen must not raise any clear flag —
+      // this is what preserves the null = no-change contract.
+      expect(recorder.lastClearNotes, isFalse);
+      expect(recorder.lastClearEnergyLevel, isFalse);
+      expect(recorder.lastClearTimeEstimate, isFalse);
+      expect(recorder.lastClearDueDate, isFalse);
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.energyLevel, isNull);
+      expect(row.timeEstimate, isNull);
+      expect(row.notes, isNull);
+      expect(row.dueDate, isNull);
+      expect(row.clarified, isTrue);
+    });
+  });
+
+  // The null = no-change contract: updateFields with no fields and no clear
+  // flags must not stamp last_clarified_at. The widget "untouched" test can't
+  // observe this because routing stamps the column afterwards, so assert it
+  // directly against the service.
+  group('DaoClarificationService.updateFields no-spurious-write contract', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() => db.close());
+
+    test('a no-op updateFields does not stamp last_clarified_at', () async {
+      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Buy milk'));
+      final service = DaoClarificationService(db);
+
+      await service.updateFields('x');
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.lastClarifiedAt, isNull);
+    });
+
+    test('clearNotes nulls the column and stamps', () async {
+      await db.inboxDao.insertTodo(
+        _companion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+      );
+      final service = DaoClarificationService(db);
+
+      await service.updateFields('x', clearNotes: true);
+
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals('x')))
+              .getSingle();
+      expect(row.notes, isNull);
+      expect(row.lastClarifiedAt, isNotNull);
     });
   });
 }
