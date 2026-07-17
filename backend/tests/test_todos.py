@@ -368,6 +368,118 @@ async def test_create_idempotent_retry_keeps_clarified(client: AsyncClient) -> N
 
 
 @pytest.mark.asyncio
+async def test_create_replay_converges_client_state(client: AsyncClient, db: AsyncSession) -> None:
+    """Upsert-on-replay (ADR-0015): a consolidated replay carrying newer
+    client-owned values converges the server row instead of reverting the
+    offline edit one checkpoint later.  Omitted fields stay untouched (the
+    #380 guard), and tag-set convergence flows through todo_tags, not here."""
+    token = await register(client, "replay-converge@example.com")
+    headers = auth_header(token)
+    todo_id = str(uuid4())
+
+    first = await client.post(
+        "/todos/",
+        json={
+            "id": todo_id,
+            "title": "Inbox capture",
+            "clarified": False,
+            "notes": "original",
+            "tags": ["@office"],
+        },
+        headers=headers,
+    )
+    assert first.status_code == 201
+    assert {t["name"] for t in first.json()["tags"]} == {"@office"}
+
+    # Replay carries newer client-owned scalars (title/clarified/energy_level)
+    # but omits notes and tags — the omitted values must survive.
+    replay = await client.post(
+        "/todos/",
+        json={
+            "id": todo_id,
+            "title": "Clarified capture",
+            "clarified": True,
+            "energy_level": "high",
+        },
+        headers=headers,
+    )
+    assert replay.status_code == 201
+    body = replay.json()
+    assert body["id"] == todo_id
+    assert body["title"] == "Clarified capture"
+    assert body["clarified"] is True
+    assert body["energy_level"] == "high"
+    # Omitted fields are left untouched.
+    assert body["notes"] == "original"
+    assert {t["name"] for t in body["tags"]} == {"@office"}
+
+    # Assert the persisted row and junction rows converged — not just the
+    # response payload.
+    row = (await db.execute(select(Todo).where(Todo.id == todo_id))).scalar_one()
+    assert row.title == "Clarified capture"
+    assert row.clarified is True
+    assert row.energy_level == "high"
+    assert row.notes == "original"
+    tag_ids = (
+        (await db.execute(select(TodoTag.tag_id).where(TodoTag.todo_id == todo_id))).scalars().all()
+    )
+    assert set(tag_ids) == {tag["id"] for tag in first.json()["tags"]}
+
+
+@pytest.mark.asyncio
+async def test_create_tag_replay_converges_and_cross_user_conflicts(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Upsert-on-replay (ADR-0015) for tags: a same-user id replay carrying a
+    newer name/color converges the stored row; a cross-user id collision 409s."""
+    token = await register(client, "tag-replay@example.com")
+    headers = auth_header(token)
+    tag_id = str(uuid4())
+
+    first = await client.post(
+        "/tags/",
+        json={"id": tag_id, "name": "office", "type": "context", "color": "#111"},
+        headers=headers,
+    )
+    assert first.status_code == 201
+
+    replay = await client.post(
+        "/tags/",
+        json={"id": tag_id, "name": "workspace", "type": "context", "color": "#222"},
+        headers=headers,
+    )
+    assert replay.status_code == 201
+    assert replay.json()["name"] == "workspace"
+    assert replay.json()["color"] == "#222"
+    row = (await db.execute(select(Tag).where(Tag.id == tag_id))).scalar_one()
+    assert row.name == "workspace"
+    assert row.color == "#222"
+
+    other = await register(client, "tag-replay-other@example.com")
+    conflict = await client.post(
+        "/tags/",
+        json={"id": tag_id, "name": "theirs", "type": "context"},
+        headers=auth_header(other),
+    )
+    assert conflict.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_todo_same_id_across_users_is_409(client: AsyncClient) -> None:
+    """A same-id collision across users is a genuine anomaly, not a replay — the
+    todo route 409s like the other create routes rather than falling through to
+    a duplicate-PK insert (500 → infinite connector retry)."""
+    token_a = await register(client, "todo-xuser-a@example.com")
+    token_b = await register(client, "todo-xuser-b@example.com")
+    todo_id = str(uuid4())
+    body = {"id": todo_id, "title": "Mine"}
+    first = await client.post("/todos/", json=body, headers=auth_header(token_a))
+    assert first.status_code == 201
+    conflict = await client.post("/todos/", json=body, headers=auth_header(token_b))
+    assert conflict.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_patch_clarified_roundtrip(client: AsyncClient) -> None:
     """PATCH must persist clarified in both directions: false→true is the
     clarify flow; true→false is move-back-to-Inbox.  Dropping it on PATCH
