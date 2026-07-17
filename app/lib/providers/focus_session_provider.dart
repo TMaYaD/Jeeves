@@ -50,11 +50,13 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
   Future<void> startFocus(String todoId) async {
     // The activeTodoId guard alone leaves a window: state stays inactive
     // until the DB writes below complete, so two concurrent starts could
-    // both pass it and both open TimeLogs. The in-flight id closes that
-    // window — a duplicate start for the same task defers to the first
-    // call; a start for a different task keeps the StateError contract.
-    if (_startingTodoId != null) {
-      if (_startingTodoId == todoId) return;
+    // both pass it and both open TimeLogs. The in-flight transition closes
+    // that window — a duplicate start for the same task awaits the first
+    // call's transition (observing its completion or error); a start for a
+    // different task keeps the StateError contract.
+    final inFlight = _startFocusInFlight;
+    if (inFlight != null) {
+      if (_startingTodoId == todoId) return inFlight;
       throw StateError(
         'Cannot start a new focus session while another task is still active.',
       );
@@ -66,35 +68,46 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     }
 
     _startingTodoId = todoId;
+    final transition = _startFocusTransition(todoId);
+    _startFocusInFlight = transition;
     try {
-      final db = ref.read(databaseProvider);
-      final now = DateTime.now();
-
-      final session = await db.focusSessionDao.getActiveSession();
-      if (session != null) {
-        await db.focusSessionDao.setCurrentTask(
-          sessionId: session.id,
-          taskId: todoId,
-          now: now,
-        );
-      } else {
-        await db.timeLogDao.openLog(
-          taskId: todoId,
-          userId: ref.read(currentUserIdProvider),
-          now: now,
-        );
-      }
-      state = FocusModeState(
-        activeTodoId: todoId,
-        sessionStart: now,
-      );
+      await transition;
     } finally {
       _startingTodoId = null;
+      _startFocusInFlight = null;
     }
   }
 
-  /// Task id of the [startFocus] call currently in flight, or null.
+  /// The DB transition of [startFocus]. Runs unguarded — [startFocus] owns
+  /// the in-flight bookkeeping around it.
+  Future<void> _startFocusTransition(String todoId) async {
+    final db = ref.read(databaseProvider);
+    final now = DateTime.now();
+
+    final session = await db.focusSessionDao.getActiveSession();
+    if (session != null) {
+      await db.focusSessionDao.setCurrentTask(
+        sessionId: session.id,
+        taskId: todoId,
+        now: now,
+      );
+    } else {
+      await db.timeLogDao.openLog(
+        taskId: todoId,
+        userId: ref.read(currentUserIdProvider),
+        now: now,
+      );
+    }
+    state = FocusModeState(
+      activeTodoId: todoId,
+      sessionStart: now,
+    );
+  }
+
+  /// Task id and transition future of the [startFocus] call currently in
+  /// flight, or null.
   String? _startingTodoId;
+  Future<void>? _startFocusInFlight;
 
   /// Restores a focus session for a task that was already focused before the
   /// app restarted. Does not change DB state.

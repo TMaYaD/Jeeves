@@ -159,12 +159,24 @@ void main() {
     test('concurrent startFocus for the same task defers to the first call',
         () async {
       final todo = await _insertTask(db);
+      final notifier = container.read(focusModeProvider.notifier);
 
-      final first =
-          container.read(focusModeProvider.notifier).startFocus(todo.id);
-      final second =
-          container.read(focusModeProvider.notifier).startFocus(todo.id);
+      // The duplicate must await the first call's in-flight transition, not
+      // return immediately: an immediate return would complete `second`
+      // before `first` (whose DB writes are still pending), letting callers
+      // proceed before the engagement exists — and hiding the first call's
+      // error if the transition fails.
+      final order = <String>[];
+      final first = notifier.startFocus(todo.id).then((_) {
+        order.add('first');
+      });
+      final second = notifier.startFocus(todo.id).then((_) {
+        order.add('second');
+      });
       await Future.wait([first, second]);
+
+      expect(order, ['first', 'second'],
+          reason: 'the duplicate completes with (not before) the original');
 
       final s = container.read(focusModeProvider);
       expect(s.activeTodoId, todo.id);
