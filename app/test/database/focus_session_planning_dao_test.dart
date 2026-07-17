@@ -385,6 +385,83 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // watchActiveSessionReviewSurface (issue #418)
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — watchActiveSessionReviewSurface', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    Future<void> insertOffPlanTimeLog(
+      String sessionId,
+      String taskId,
+      DateTime startedAt,
+    ) async {
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: Value('tl-$taskId'),
+            userId: const Value(_userId),
+            taskId: Value(taskId),
+            startedAt: Value(startedAt.toUtc().toIso8601String()),
+            focusSessionId: Value(sessionId),
+          ));
+    }
+
+    test('returns empty list when no session is open', () async {
+      final surface =
+          await db.focusSessionDao.watchActiveSessionReviewSurface().first;
+      expect(surface, isEmpty);
+    });
+
+    test('unions Plan members and off-Plan engaged, Plan first, no duplicates',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      await _insertTodo(db, id: 'Y', title: 'Y');
+      await _insertTodo(db, id: 'Z', title: 'Z'); // off-Plan
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['X', 'Y'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      // Engage X (a Plan member) and off-Plan-engage Z.
+      await insertOffPlanTimeLog(sessionId, 'X', DateTime(2026, 5, 1, 9, 30));
+      await insertOffPlanTimeLog(sessionId, 'Z', DateTime(2026, 5, 1, 10, 0));
+
+      final surface =
+          await db.focusSessionDao.watchActiveSessionReviewSurface().first;
+      expect(surface.map((t) => t.id), orderedEquals(['X', 'Y', 'Z']));
+      expect(surface.length, 3, reason: 'X must not appear twice.');
+    });
+
+    test('does not leak off-Plan engagement from a different (closed) session',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      await _insertTodo(db, id: 'Q', title: 'Q');
+
+      final priorId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: [],
+        now: DateTime(2026, 4, 30, 9, 0),
+      );
+      await insertOffPlanTimeLog(priorId, 'Q', DateTime(2026, 4, 30, 10, 0));
+      await db.focusSessionDao
+          .closeSession(sessionId: priorId, now: DateTime(2026, 4, 30, 17, 0));
+
+      await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['X'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+
+      final surface =
+          await db.focusSessionDao.watchActiveSessionReviewSurface().first;
+      expect(surface.map((t) => t.id), unorderedEquals(['X']));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // setTaskDisposition
   // ---------------------------------------------------------------------------
 

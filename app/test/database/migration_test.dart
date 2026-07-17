@@ -667,6 +667,67 @@ void main() {
       expect(await db.captureDao.outcomeIdsForCapture('c1'), ['o1']);
       expect(await db.captureDao.tagHintIdsForCapture('c1'), {tagId});
     });
+
+    test(
+        'v24→v25 migration: focus_session_dispositions table created '
+        '(issue #418), existing data preserved', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Seed a pre-existing todo so we can assert the migration is
+      // non-destructive to unrelated data.
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('pre'),
+            title: const Value('before migration'),
+            userId: Value(_userId),
+            createdAt: Value(DateTime.now()),
+          ));
+
+      // Simulate a v24 database by dropping the table onCreate builds.
+      await db.customStatement('DROP TABLE IF EXISTS focus_session_dispositions');
+
+      // Drive the real v25 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 24, 25);
+
+      final tables = await db.customSelect(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'focus_session_dispositions'",
+      ).get();
+      expect(tables.length, 1);
+
+      final cols = await db
+          .customSelect('PRAGMA table_info(focus_session_dispositions)')
+          .get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames,
+          containsAll(['id', 'focus_session_id', 'task_id', 'disposition', 'user_id']));
+
+      // Unrelated data survived the migration.
+      final pre =
+          await (db.select(db.todos)..where((t) => t.id.equals('pre'))).getSingle();
+      expect(pre.title, 'before migration');
+
+      // The freshly-created table round-trips a write.
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: [],
+      );
+      await db.into(db.focusSessionDispositions).insert(
+            FocusSessionDispositionsCompanion(
+              id: const Value('d1'),
+              focusSessionId: Value(sessionId),
+              taskId: const Value('pre'),
+              disposition: const Value('rollover'),
+              userId: Value(_userId),
+            ),
+          );
+      final rows = await db.customSelect(
+        'SELECT task_id, disposition FROM focus_session_dispositions',
+      ).get();
+      expect(rows.length, 1);
+      expect(rows.first.read<String>('disposition'), 'rollover');
+    });
   });
 
   group('MigrationService — user_preferences LWW reassignment', () {

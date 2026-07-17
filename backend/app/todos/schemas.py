@@ -343,6 +343,43 @@ class FocusSessionTaskUpdate(BaseModel):
         return v
 
 
+class FocusSessionDispositionCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    focus_session_id: str
+    task_id: str
+    disposition: str | None = None
+
+    @field_validator("disposition")
+    @classmethod
+    def validate_disposition(cls, v: str | None) -> str | None:
+        if v is not None and v not in DISPOSITION_VALUES:
+            raise ValueError(f"disposition must be one of {sorted(DISPOSITION_VALUES)}")
+        return v
+
+
+class FocusSessionDispositionUpdate(BaseModel):
+    # Explicit null is legal here — disposition is nullable (un-reviewed).
+    disposition: str | None = None
+
+    @field_validator("disposition")
+    @classmethod
+    def validate_disposition(cls, v: str | None) -> str | None:
+        if v is not None and v not in DISPOSITION_VALUES:
+            raise ValueError(f"disposition must be one of {sorted(DISPOSITION_VALUES)}")
+        return v
+
+
+class FocusSessionDispositionOut(BaseModel):
+    # PowerSync row identifier; None only for legacy server-side rows created
+    # in the SQLite test harness (Postgres backfills via gen_random_uuid()).
+    id: str | None
+    focus_session_id: str
+    task_id: str
+    disposition: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class TimeLogCreate(BaseModel):
     id: str | None = None  # Client-side UUID for idempotency
     task_id: str

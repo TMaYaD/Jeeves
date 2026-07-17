@@ -146,7 +146,10 @@ class FocusSessionTasks extends Table with Synced {
   TextColumn get taskId => text().references(Todos, #id)();
   IntColumn get position => integer()();
 
-  /// Per-task disposition chosen during session review.
+  /// Per-task disposition chosen during session review, for **Plan members**.
+  /// Off-Plan engaged Outcomes have no row here (the Plan never auto-grows —
+  /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead
+  /// (ADR-0015).
   /// NULL = not yet reviewed (active session) or done task.
   /// 'rollover' = carry forward to next session's pre-selected list.
   /// 'leave' = return to Next Actions (no mutation on todos).
@@ -155,6 +158,50 @@ class FocusSessionTasks extends Table with Synced {
 
   /// Denormalized from `focus_sessions.user_id` so PowerSync can filter
   /// junction rows with a per-user parameter bucket (see Alembic 0025 and
+  /// sync-config.yaml).
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
+}
+
+// ---------------------------------------------------------------------------
+// focus_session_dispositions
+// ---------------------------------------------------------------------------
+
+/// Durable home for Review-phase Dispositions on **off-Plan engaged** Outcomes
+/// (ADR-0015).
+///
+/// Dispositions partition by membership class:
+///   - A Plan member's Disposition lives on [FocusSessionTasks.disposition]
+///     (it already has a junction row from Planning).
+///   - An off-Plan engaged Outcome has **no** `focus_session_tasks` row — the
+///     Plan is fixed at Planning and never auto-grows from engagement
+///     (ADR-0002) — so its Disposition is recorded here, keyed by the
+///     (FocusSession, Outcome) pair per CONTEXT.md § Engagement (Disposition is
+///     a property of that relationship, independent of Plan membership).
+///
+/// Query helpers UNION the two homes so callers see one logical Disposition set
+/// (`FocusSessionDao.getLastClosedSessionRolloverTaskIds`, the review-surface
+/// stamp). Keeping this separate from `focus_session_tasks` preserves the
+/// load-bearing invariant "the Plan *is* the set of `focus_session_tasks`
+/// rows" — no Plan reader has to remember to filter a discriminator column.
+class FocusSessionDispositions extends Table with Synced {
+  /// PowerSync sync row identifier — not the domain key. Derive it
+  /// deterministically via `focusSessionDispositionIdFor(sessionId, taskId)`
+  /// (see focus_session_dao.dart) so re-recording the same pair collapses under
+  /// INSERT OR REPLACE instead of accumulating duplicate rows.
+  TextColumn get id => text().unique().clientDefault(() => uuid.v4())();
+  TextColumn get focusSessionId => text().references(FocusSessions, #id)();
+  TextColumn get taskId => text().references(Todos, #id)();
+
+  /// Per-(FocusSession, Outcome) disposition: 'rollover' | 'leave' | 'maybe'.
+  /// Same vocabulary as [FocusSessionTasks.disposition]. NULL is unused here —
+  /// a row exists only once the user has dispositioned the off-Plan Outcome.
+  TextColumn get disposition => text().nullable()();
+
+  /// Denormalized from `focus_sessions.user_id` so PowerSync can filter
+  /// junction rows with a per-user parameter bucket (see Alembic 0027 and
   /// sync-config.yaml).
   TextColumn get userId => text()();
 

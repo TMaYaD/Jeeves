@@ -251,6 +251,41 @@ class FocusSessionTask(Base):
     )
 
 
+class FocusSessionDisposition(Base):
+    """Durable home for Review-phase Dispositions on off-Plan engaged Outcomes.
+
+    Dispositions partition by membership class (ADR-0015): a Plan member's
+    Disposition lives on ``focus_session_tasks.disposition``; an off-Plan
+    engaged Outcome has no ``focus_session_tasks`` row (the Plan never
+    auto-grows — ADR-0002), so its Disposition is recorded here, keyed by the
+    (FocusSession, Outcome) pair.  Mirrors ``focus_session_tasks`` conventions:
+    a PowerSync-managed ``id`` column, denormalized ``user_id`` for per-user
+    bucketing, and the disposition CHECK constraint.
+    """
+
+    __tablename__ = "focus_session_dispositions"
+    __table_args__ = (
+        CheckConstraint(
+            "disposition IS NULL OR disposition IN ('rollover', 'leave', 'maybe')",
+            name="ck_focus_session_dispositions_disposition",
+        ),
+    )
+
+    # PowerSync-assigned UUID identifying the synced row.  NULL for server-side
+    # inserts; PostgreSQL fills this via the server default added in migration
+    # 0027 (gen_random_uuid()).  SQLite test rows stay NULL.
+    id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    focus_session_id: Mapped[str] = mapped_column(ForeignKey("focus_sessions.id"), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("todos.id"), primary_key=True)
+    disposition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Denormalized from focus_sessions.user_id so PowerSync can filter junction
+    # rows by bucket parameter (see migration 0027 and sync-config.yaml).  Set
+    # explicitly at every write call site.
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+
 class TimeLog(Base):
     __tablename__ = "time_logs"
     __table_args__ = (

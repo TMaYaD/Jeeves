@@ -32,7 +32,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, UserPreferences, SyncDeadLetters, Captures, CaptureOutcomes, CaptureTags],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, SyncDeadLetters, Captures, CaptureOutcomes, CaptureTags],
   daos: [InboxDao, TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -45,7 +45,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 24;
+  int get schemaVersion => 25;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -434,6 +434,22 @@ class GtdDatabase extends _$GtdDatabase {
               if (rows.isEmpty) {
                 await m.createTable(table);
               }
+            }
+          }
+          if (from < 25) {
+            // Off-Plan disposition store (issue #418, ADR-0015). In production
+            // PowerSync creates `focus_session_dispositions` as a view from
+            // powersyncSchema, and the row is filled by the client's local
+            // write replicating up — so only create the real table on the
+            // NativeDatabase test path, guarding on sqlite_master exactly like
+            // `time_logs` (from < 9), `user_preferences` (from < 20), and the
+            // Capture tables (from < 24).
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master "
+              "WHERE name = 'focus_session_dispositions'",
+            ).get();
+            if (rows.isEmpty) {
+              await m.createTable(focusSessionDispositions);
             }
           }
         },

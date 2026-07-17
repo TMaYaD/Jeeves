@@ -125,29 +125,34 @@ class ShutdownSessionDateNotifier extends Notifier<String> {
 // Stream providers — backed by the active focus session
 // ---------------------------------------------------------------------------
 
-/// Tasks from the active focus session that have been completed
-/// (i.e. [Todo.doneAt] is not null).
+/// Outcomes on the active session's Review surface (Plan ∪ off-Plan engaged)
+/// that have been completed (i.e. [Todo.doneAt] is not null).
+///
+/// Reads the union surface, not Plan members only, so an off-Plan Outcome the
+/// user completed during the session still appears in the completed review
+/// (CONTEXT.md § Engagement).
 final completedTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.focusSessionDao.watchActiveSessionTasks().map(
+  return db.focusSessionDao.watchActiveSessionReviewSurface().map(
         (tasks) => tasks.where((t) => t.doneAt != null).toList(),
       );
 });
 
-/// Tasks from the active focus session that are still unfinished
-/// (no [doneAt]) **and** have not yet been assigned a shutdown disposition
-/// in the current ritual.
+/// Outcomes on the active session's Review surface (Plan ∪ off-Plan engaged)
+/// that are still unfinished (no [doneAt]) **and** have not yet been assigned a
+/// shutdown disposition in the current ritual.
 ///
 /// The disposition map is the in-memory state on [eveningShutdownProvider]; it
 /// only persists to the DB when [EveningShutdownNotifier.closeDay] is called.
 /// Filtering here gives the live "remaining tasks" count used by the banner
-/// and other consumers outside the ritual step itself.
+/// and other consumers outside the ritual step itself. Reading the union
+/// surface ensures off-Plan engaged Outcomes are surfaced for disposition too.
 final unfinishedSelectedTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final dispositions = ref.watch(
     eveningShutdownProvider.select((s) => s.dispositions),
   );
-  return db.focusSessionDao.watchActiveSessionTasks().map(
+  return db.focusSessionDao.watchActiveSessionReviewSurface().map(
         (tasks) => tasks
             .where((t) =>
                 t.doneAt == null && !dispositions.containsKey(t.id))
@@ -245,7 +250,7 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     _loadingUnfinishedSnapshot = true;
     try {
       final allTasks =
-          await _db.focusSessionDao.watchActiveSessionTasks().first;
+          await _db.focusSessionDao.watchActiveSessionReviewSurface().first;
       final unfinished = allTasks.where((t) => t.doneAt == null).toList();
       state = state.copyWith(
         unfinishedNav: state.unfinishedNav.withItems(unfinished),
