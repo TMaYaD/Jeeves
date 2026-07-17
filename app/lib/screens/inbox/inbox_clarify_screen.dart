@@ -114,12 +114,16 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     final notes = _notesCtrl.text.trim();
     final todo = _todo;
     if (todo == null) return false;
+    final hadNotes = (todo.notes ?? '').isNotEmpty;
     await ref.read(clarificationServiceProvider).updateFields(
           widget.todoId,
           title: title,
           notes: notes.isNotEmpty ? notes : null,
+          clearNotes: notes.isEmpty && hadNotes,
           energyLevel: _energyLevel,
+          clearEnergyLevel: _energyLevel == null && todo.energyLevel != null,
           timeEstimate: _timeEstimate,
+          clearTimeEstimate: _timeEstimate == null && todo.timeEstimate != null,
           dueDate: _dueDate != null
               ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
               : null,
