@@ -489,6 +489,24 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
                 Navigator.of(routeContext).pop(action);
               }
             },
+            // The pushed sub-flow is the one clarify host with no footer, so
+            // the card's own CTA is the only escape when the Outcome is
+            // deleted underneath it.
+            //
+            // Pops `keep` *explicitly* rather than popping with no result.
+            // A null result routes through [_keep], which opens with an
+            // existence pre-check — and the Outcome is precisely what no
+            // longer exists, so `_keep` would return early and never call
+            // `onAfterRoute`. The cursor would not advance and the user would
+            // land back on the outer review card for the deleted item: the
+            // dead end this escape exists to prevent. Passing the action
+            // instead bubbles it straight to `onAfterRoute`, advancing the
+            // cursor without recording a routing or writing to the dead row.
+            onSubjectMissing: () {
+              if (Navigator.of(routeContext).canPop()) {
+                Navigator.of(routeContext).pop(ProcessAction.keep);
+              }
+            },
           ),
         ),
       ),

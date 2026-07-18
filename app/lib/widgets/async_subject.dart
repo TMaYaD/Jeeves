@@ -1,0 +1,122 @@
+/// Builder that renders the standard loading / error / missing / data surfaces
+/// for an [AsyncValue] holding a **single subject** — the one row a surface is
+/// bound to, watched by id.
+///
+/// The single-row counterpart of [AsyncList], and the answer to one specific
+/// bug: every subject-bound surface used to collapse `AsyncValue<T?>` into a
+/// null check and render a spinner, so *loading*, *errored* and *gone* were
+/// indistinguishable on screen.
+///
+/// **`AsyncData(null)` means the row is gone, not that it is still loading.**
+/// The subject watches (`CaptureDao.watchCapture`, `TodoDao.watchTodo`) use
+/// drift's `watchSingleOrNull()`, which emits `null` for zero rows and keeps
+/// the stream open. The app has no soft-delete — Trash is an `intent` value, so
+/// a trashed row still emits non-null — which leaves exactly one way for a
+/// subject to become null: it was hard-deleted, typically by sync applying a
+/// remote delete under an open screen. Collapsing the three states into
+/// `value == null -> spinner` is the anti-pattern this widget exists to
+/// prevent; a user whose item was deleted on another device would otherwise
+/// stare at a spinner that never resolves.
+///
+/// Branch order: error → loading → missing → data.
+///
+/// Every missing state must offer a way out ([missingCta]) — a surface bound to
+/// a row that no longer exists is a dead end otherwise. Error copy never leaks
+/// the exception: the detail is logged, the user sees [ErrorSurface]'s fixed
+/// text.
+library;
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'state_surfaces.dart';
+
+/// Renders the four states of a subject-bound watch. See the library doc.
+class AsyncSubject<T extends Object> extends StatelessWidget {
+  const AsyncSubject({
+    super.key,
+    required this.asyncValue,
+    required this.dataBuilder,
+    required this.missingTitle,
+    this.missingIcon,
+    this.missingSubtitle,
+    this.missingCta,
+    this.missingBuilder,
+    this.chrome,
+  });
+
+  /// The watched subject. `null` inside [AsyncData] means *gone*.
+  final AsyncValue<T?> asyncValue;
+
+  /// Renders the surface once the subject is present. Never called with null.
+  final Widget Function(BuildContext context, T subject) dataBuilder;
+
+  /// Missing-state headline. Required: every surface owns its own copy
+  /// (e.g. "This item is no longer in your Inbox").
+  final String missingTitle;
+
+  /// Optional icon above [missingTitle].
+  final IconData? missingIcon;
+
+  /// Optional secondary line below [missingTitle] — usually the *why*
+  /// ("It may have been deleted on another device").
+  final String? missingSubtitle;
+
+  /// The way out of the missing state: a button that gets the user somewhere
+  /// sensible (back to the Inbox, on to the next ceremony item). Omit only
+  /// when the host already renders an escape outside this widget.
+  final Widget? missingCta;
+
+  /// Escape hatch for a host that wants something other than the standard
+  /// missing panel — e.g. `ActiveFocusScreen`, which redirects rather than
+  /// asking the user to acknowledge a task that vanished mid-sprint. Replaces
+  /// the missing surface entirely (including [chrome]).
+  final WidgetBuilder? missingBuilder;
+
+  /// Wraps the loading / error / missing surfaces in the host's page chrome
+  /// (app bar, background) so the three non-data states are not bare against
+  /// a screen whose data state is a full [Scaffold].
+  final Widget Function(BuildContext context, Widget surface)? chrome;
+
+  @override
+  Widget build(BuildContext context) {
+    final async = asyncValue;
+
+    // Error before loading, and deliberately not via `AsyncValue.when`.
+    // Riverpod 3 auto-retries a failed provider, so a stream error does not
+    // arrive as `AsyncError` — it arrives as `AsyncLoading` *carrying* an
+    // error, and `when` dispatches that to its loading branch. Routing on
+    // `isLoading` first would therefore turn every errored watch into another
+    // indefinite spinner: the same defect as the null collapse, one state
+    // over. A subject that already has a value is exempt — showing the last
+    // known row beats replacing it with an error panel mid-retry.
+    if (async.hasError && !async.hasValue) {
+      debugPrint('AsyncSubject error: ${async.error}\n${async.stackTrace}');
+      return _chromed(context, const ErrorSurface());
+    }
+    if (!async.hasValue) {
+      return _chromed(
+        context,
+        const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final subject = async.value;
+    if (subject == null) {
+      if (missingBuilder != null) return missingBuilder!(context);
+      return _chromed(
+        context,
+        EmptySurface(
+          icon: missingIcon,
+          title: missingTitle,
+          subtitle: missingSubtitle,
+          cta: missingCta,
+        ),
+      );
+    }
+    return dataBuilder(context, subject);
+  }
+
+  Widget _chromed(BuildContext context, Widget surface) =>
+      chrome != null ? chrome!(context, surface) : surface;
+}

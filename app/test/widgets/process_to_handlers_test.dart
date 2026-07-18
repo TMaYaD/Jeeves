@@ -4,6 +4,8 @@
 /// DAO writes can be asserted directly on the resulting Todo state.
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -73,6 +75,9 @@ Widget _harness(
   ProcessAction? lastAction,
   Future<void> Function(ProcessAction)? onAfterRoute,
   List<Tag> personTags = const [],
+  // Subject watch behind the sub-flow's ClarifyCard. Emitting `null` is what a
+  // synced hard-delete looks like to a card that is already open.
+  Stream<Todo?>? todoStream,
 }) {
   return ProviderScope(
     overrides: [
@@ -83,7 +88,8 @@ Widget _harness(
       // The reclarify sub-flow renders a [ClarifyCard] which watches these
       // providers (todo + tag list + the pickers' own tag catalogues);
       // static streams avoid drift's StreamQuery timer.
-      taskDetailTodoProvider(todo.id).overrideWith((_) => Stream.value(todo)),
+      taskDetailTodoProvider(todo.id)
+          .overrideWith((_) => todoStream ?? Stream.value(todo)),
       taskTagsProvider(todo.id)
           .overrideWith((_) => Stream.value(const <Tag>[])),
       contextTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
@@ -818,6 +824,75 @@ void main() {
       // review step advances past it on the next pass instead of resurfacing.
       expect(row?.lastClarifiedAt, isNotNull,
           reason: 'back-out must stamp lastClarifiedAt like a Keep tap');
+    });
+
+    testWidgets(
+        'an Outcome deleted inside the sub-flow still advances the outer '
+        'cursor (#428)', (tester) async {
+      // The escape must reach `onAfterRoute`, which is what advances the
+      // review cursor. Popping with no result would route through `_keep()`,
+      // whose opening existence check fails on exactly the row that was just
+      // deleted — so it would return early, never bubble, and drop the user
+      // back on the outer card for a dead item. Hence the explicit
+      // `pop(ProcessAction.keep)`.
+      await useTallViewport(tester);
+      final todo = await _insertTodo(db, id: 'rc4', title: 'Live outcome');
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+      final fired = <ProcessAction>[];
+
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        include: const {ProcessAction.reclarify},
+        onAfterRoute: (action) async => fired.add(action),
+        todoStream: subject.stream,
+      ));
+
+      // Only the *sub-flow* card watches this provider, so nothing is
+      // subscribed until the route is pushed. Emitting before the tap would
+      // drop the event on the floor (broadcast stream, no listener) and leave
+      // the card in its loading branch — the test would then exercise
+      // loading→missing and still pass, never touching the present→missing
+      // transition it exists to cover.
+      await tester.tap(find.text('Re-clarify…'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      subject.add(todo);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.byType(ClarifyCard), findsOneWidget);
+      // Pins the premise: the card is showing the live Outcome, not a spinner.
+      expect(find.widgetWithText(TextField, 'Live outcome'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      // Sync deletes the Outcome while the sub-flow is open. The row must go
+      // from the *database* as well as the watch: `_keep()` gates on
+      // `ClarificationService.exists`, which reads the table directly. Emitting
+      // null alone would leave that check passing and the test would hold
+      // whether or not the escape bubbles correctly.
+      await (db.delete(db.todos)..where((t) => t.id.equals('rc4'))).go();
+      subject.add(null);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('This outcome no longer exists'), findsOneWidget);
+
+      await tester.tap(find.text('Continue'));
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(find.byType(ClarifyCard), findsNothing,
+          reason: 'the escape closes the sub-flow');
+      expect(fired, [ProcessAction.keep],
+          reason: 'the cursor must advance rather than dead-ending the user');
+      // Nothing was resurrected: the escape bubbles the action without writing
+      // to the row that is gone.
+      final row = await db.todoDao.getTodo('rc4');
+      expect(row, isNull);
     });
   });
 }

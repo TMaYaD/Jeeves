@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'state_surfaces.dart';
+
 /// Builder that renders the standard loading / error / empty / data surfaces
 /// for an [AsyncValue] holding a list.
 ///
@@ -57,95 +59,39 @@ class AsyncList<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return asyncValue.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (err, stack) {
-        debugPrint('AsyncList error: $err\n$stack');
-        return const _ErrorSurface();
-      },
-      data: (items) {
-        if (items.isEmpty) {
-          return emptyBuilder != null
-              ? emptyBuilder!(context)
-              : _EmptySurface(
-                  icon: emptyIcon,
-                  title: emptyTitle,
-                  subtitle: emptySubtitle,
-                  cta: emptyCta,
-                );
-        }
-        return dataBuilder(context, items);
-      },
-    );
-  }
-}
-
-class _ErrorSurface extends StatelessWidget {
-  const _ErrorSurface();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24),
-        child: Text(
-          'Something went wrong. Please try again.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Color(0xFF9CA3AF)),
-        ),
-      ),
-    );
-  }
-}
-
-class _EmptySurface extends StatelessWidget {
-  const _EmptySurface({
-    required this.icon,
-    required this.title,
-    this.subtitle,
-    this.cta,
-  });
-
-  final IconData? icon;
-  final String title;
-  final String? subtitle;
-  final Widget? cta;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: 48, color: const Color(0xFFD1D5DB)),
-              const SizedBox(height: 12),
-            ],
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xFF6B7280)),
-            ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                subtitle!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF9CA3AF),
-                  fontSize: 13,
-                ),
-              ),
-            ],
-            if (cta != null) ...[
-              const SizedBox(height: 16),
-              cta!,
-            ],
-          ],
-        ),
-      ),
-    );
+    // Branched explicitly rather than through `AsyncValue.when`, which cannot
+    // express this order. Riverpod 3 auto-retries a failed provider, so a
+    // stream error does not arrive as `AsyncError` — it arrives as
+    // `AsyncLoading` *carrying* an error, and `when` returns its loading
+    // branch for any loading state that is not a refresh/reload. Delegating
+    // would therefore render an indefinite spinner for an errored list, and
+    // would *also* replace a list the user is already reading with a spinner
+    // the moment its watch errors or reloads.
+    //
+    // Order is error → loading → empty → data, keyed on `hasValue`, which is
+    // exactly what [AsyncSubject] does; see *Async surfaces* in
+    // ARCHITECTURE.md. A watch that still holds rows is exempt from both the
+    // error and the loading surface: showing the last known rows beats
+    // blanking them mid-retry.
+    if (asyncValue.hasError && !asyncValue.hasValue) {
+      debugPrint(
+          'AsyncList error: ${asyncValue.error}\n${asyncValue.stackTrace}');
+      return const ErrorSurface();
+    }
+    if (!asyncValue.hasValue) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final items = asyncValue.value!;
+    if (items.isEmpty) {
+      return emptyBuilder != null
+          ? emptyBuilder!(context)
+          : EmptySurface(
+              icon: emptyIcon,
+              title: emptyTitle,
+              subtitle: emptySubtitle,
+              cta: emptyCta,
+            );
+    }
+    return dataBuilder(context, items);
   }
 }

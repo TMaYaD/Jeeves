@@ -15,6 +15,9 @@
 ///   (used to restore the "previously selected" affordance on Back).
 /// - Provide [onAfterRoute] — called once the user commits a routing decision.
 ///   The callee records the routing in ceremony state and advances the cursor.
+/// - Provide [onSubjectMissing] — called when the user escapes a card whose
+///   Capture was hard-deleted underneath them; the callee advances the cursor
+///   without recording a routing.
 /// - Provide [onLoad] — called on the first frame when the snapshot is not
 ///   yet loaded; the callee kicks the load from the relevant notifier.
 ///
@@ -45,6 +48,7 @@ class ClarifyStep extends StatefulWidget {
     required this.nav,
     required this.routings,
     required this.onAfterRoute,
+    required this.onSubjectMissing,
     this.onLoad,
   });
 
@@ -59,6 +63,12 @@ class ClarifyStep extends StatefulWidget {
   /// Called after the user commits a routing decision. The caller records the
   /// routing in ceremony state and advances the cursor.
   final Future<void> Function(ProcessAction action) onAfterRoute;
+
+  /// Called when the user taps the escape on a card whose Capture was
+  /// hard-deleted underneath them. The caller advances the cursor *without*
+  /// recording a routing — there is no verdict to record for a row that no
+  /// longer exists.
+  final VoidCallback onSubjectMissing;
 
   /// Called once on the first frame when [nav] is not yet loaded, so the
   /// caller can kick the snapshot load.
@@ -125,6 +135,7 @@ class _ClarifyStepState extends State<ClarifyStep> {
       // clarify_card.dart → process_to_handlers.dart.
       lastAction: widget.routings[index]?.toProcessAction(),
       onAfterRoute: widget.onAfterRoute,
+      onSubjectMissing: widget.onSubjectMissing,
     );
   }
 }

@@ -202,7 +202,7 @@ void main() {
       final row = await db.todoDao.getTodo('na1');
       expect(row?.title, 'Updated title');
       // Mirror guard: existing next_action_text was non-empty, so the
-      // ClarifyMode.reclarify back-out (no route) leaves it untouched.
+      // `forOutcome` back-out (no route) leaves it untouched.
       expect(row?.nextActionText, 'Email Bob');
     });
   });

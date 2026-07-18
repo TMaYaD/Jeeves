@@ -63,6 +63,10 @@ class ZeroInboxStep extends ConsumerWidget {
         notifier.recordInboxRouting(index, kind);
         notifier.advanceInbox();
       },
+      // The Capture vanished under the card — advance past it without
+      // recording a routing there was no verdict for.
+      onSubjectMissing: () =>
+          ref.read(periodicReviewProvider.notifier).advanceInbox(),
       onLoad: () =>
           ref.read(periodicReviewProvider.notifier).loadInboxSnapshot(),
     );

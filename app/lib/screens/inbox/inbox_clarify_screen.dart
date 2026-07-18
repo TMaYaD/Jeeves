@@ -3,9 +3,13 @@
 /// Opened when the user taps an inbox row outside of a planning session.
 /// Provides the same clarification UI (title, notes, energy level, time
 /// estimate, due date, GTD routing buttons) as the planning wizard's
-/// _ClarifyCard, but operates independently — it loads its own Capture,
+/// [ClarifyCard], but operates independently — it watches its own Capture,
 /// delegates its writes to [ClarificationService], and pops when the user
 /// clarifies the item.
+///
+/// The Capture is watched live and rendered through [AsyncSubject], so
+/// loading, an error and a Capture hard-deleted on another device are three
+/// distinguishable states rather than one indefinite spinner.
 ///
 /// Title and notes autosave onto the Capture. Energy, time estimate and due
 /// date have no column on a Capture (ADR-0006) — they are held as draft state
@@ -21,7 +25,9 @@ import '../../database/gtd_database.dart';
 import '../../models/todo.dart' show RoutingKind;
 import '../../providers/auth_provider.dart';
 import '../../providers/database_provider.dart';
+import '../../providers/task_detail_provider.dart';
 import '../../services/clarification_service.dart';
+import '../../widgets/async_subject.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/person_tag_picker.dart';
 
@@ -41,8 +47,16 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   int? _timeEstimate;
   DateTime? _dueDate;
   bool _processing = false;
-  bool _loading = true;
-  Capture? _capture;
+
+  /// Whether the missing-state escape has already been taken — see the CTA in
+  /// [build].
+  bool _missingEscapeFired = false;
+
+  /// Whether the text controllers have been seeded from a loaded Capture.
+  /// The screen watches the Capture live, so `build` sees every re-emission;
+  /// seeding is still one-shot, because adopting a synced edit mid-typing
+  /// would clobber the user's in-progress text (the merge rule is #427's).
+  bool _seeded = false;
 
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
@@ -51,33 +65,15 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     super.initState();
     _titleCtrl = TextEditingController();
     _notesCtrl = TextEditingController();
-    _loadCapture();
   }
 
-  Future<void> _loadCapture() async {
-    final db = ref.read(databaseProvider);
-    try {
-      final capture = await db.captureDao.getCapture(widget.captureId);
-      if (!mounted) return;
-      if (capture == null) {
-        context.pop();
-        return;
-      }
-      setState(() {
-        _capture = capture;
-        _titleCtrl.text = capture.title;
-        _notesCtrl.text = capture.notes ?? '';
-        // Energy / estimate / due start empty: a Capture carries none of them.
-        _loading = false;
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to load item. Please try again.')),
-        );
-        context.pop();
-      }
-    }
+  /// Seeds the editors on the first *present* emission. Energy / estimate /
+  /// due start empty: a Capture carries none of them.
+  void _seedFrom(Capture capture) {
+    if (_seeded) return;
+    _seeded = true;
+    _titleCtrl.text = capture.title;
+    _notesCtrl.text = capture.notes ?? '';
   }
 
   @override
@@ -116,7 +112,16 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       return false;
     }
     final notes = _notesCtrl.text.trim();
-    final capture = _capture;
+    // Read the live Capture rather than a load-time snapshot: it may have been
+    // deleted underneath us, in which case there is nothing to write.
+    //
+    // `.value`, not `asData?.value`, to match the accessor [AsyncSubject]
+    // branches on. The widget renders this editable card whenever `hasValue` —
+    // including a refresh still carrying its previous row — and `asData` is
+    // null in exactly that state, which would leave the routing buttons live
+    // but their save a silent no-op. Null here therefore means what it means
+    // on the render side: no row, so nothing to write.
+    final capture = ref.read(captureProvider(widget.captureId)).value;
     if (capture == null) return false;
     final hadNotes = (capture.notes ?? '').isNotEmpty;
     await ref.read(databaseProvider).captureDao.updateFields(
@@ -237,9 +242,29 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
           onPressed: () => context.pop(),
         ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
+      body: AsyncSubject<Capture>(
+        asyncValue: ref.watch(captureProvider(widget.captureId)),
+        missingIcon: Icons.inbox_outlined,
+        missingTitle: 'This item is no longer in your Inbox',
+        missingSubtitle: 'It may have been deleted on another device.',
+        // Latched to match [ClarifyCard]'s escape, though the exposure here is
+        // milder: Navigator already absorbs a second `pop` against a route
+        // that is mid-transition, so today a double tap pops once either way
+        // (the test below pins that). The latch guards the invariant rather
+        // than an observed bug — it stops mattering only for as long as this
+        // CTA does nothing but pop, and `ClarifyCard`'s equivalent, which
+        // calls an arbitrary host callback, *does* double-fire without one.
+        missingCta: FilledButton(
+          onPressed: () {
+            if (_missingEscapeFired) return;
+            _missingEscapeFired = true;
+            context.pop();
+          },
+          child: const Text('Back to Inbox'),
+        ),
+        dataBuilder: (context, capture) {
+          _seedFrom(capture);
+          return ListView(
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
               children: [
@@ -428,7 +453,9 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                   ),
                 ),
               ],
-            ),
+            );
+        },
+      ),
     );
   }
 }

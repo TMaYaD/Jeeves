@@ -169,19 +169,25 @@ Widget _harness(
   GtdDatabase db, {
   required Todo todo,
   Future<void> Function(ProcessAction)? onAfterRoute,
+  VoidCallback? onSubjectMissing,
   List<Tag> contextTags = const <Tag>[],
   List<Tag> projectTags = const <Tag>[],
   // Stream feeding `taskTagsProvider`. Tag-editing tests pass a StreamController
   // they own (and close in tearDown) so the card re-renders on demand without a
   // real drift `watch()` leaving a pending timer behind on dispose.
   Stream<List<Tag>>? taskTagsStream,
+  // Stream feeding `taskDetailTodoProvider` — the subject watch itself. The
+  // real provider is `watchSingleOrNull()`-backed, so emitting `null` here is
+  // exactly what a synced hard-delete looks like to the card.
+  Stream<Todo?>? todoStream,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
       // Static streams so drift's StreamQueryStore doesn't leave a pending
       // timer behind on dispose.
-      taskDetailTodoProvider(todo.id).overrideWith((_) => Stream.value(todo)),
+      taskDetailTodoProvider(todo.id)
+          .overrideWith((_) => todoStream ?? Stream.value(todo)),
       personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
@@ -194,6 +200,7 @@ Widget _harness(
         body: ClarifyCard.forOutcome(
           todoId: todo.id,
           onAfterRoute: onAfterRoute,
+          onSubjectMissing: onSubjectMissing,
         ),
       ),
     ),
@@ -206,14 +213,19 @@ Widget _captureHarness(
   GtdDatabase db, {
   required Capture capture,
   Future<void> Function(ProcessAction)? onAfterRoute,
+  VoidCallback? onSubjectMissing,
   List<Tag> contextTags = const <Tag>[],
   List<Tag> projectTags = const <Tag>[],
   Stream<List<Tag>>? tagHintsStream,
+  // Subject watch. Emitting `null` reproduces a Capture hard-deleted on
+  // another device while the card is open.
+  Stream<Capture?>? captureStream,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
-      captureProvider(capture.id).overrideWith((_) => Stream.value(capture)),
+      captureProvider(capture.id)
+          .overrideWith((_) => captureStream ?? Stream.value(capture)),
       captureTagHintsProvider(capture.id).overrideWith(
         (_) => tagHintsStream ?? Stream.value(const <Tag>[]),
       ),
@@ -226,6 +238,7 @@ Widget _captureHarness(
         body: ClarifyCard.forCapture(
           captureId: capture.id,
           onAfterRoute: onAfterRoute,
+          onSubjectMissing: onSubjectMissing,
         ),
       ),
     ),
@@ -358,6 +371,59 @@ void main() {
       expect(await _joinedTagIds(db, outcomeId), contains('c1'),
           reason: 'a tag hint is a hint *for* clarification — it carries onto '
               'the Outcome the Capture becomes');
+    });
+
+    testWidgets(
+        'a person hint dropped from the live list after seeding still never '
+        'reaches the Outcome', (tester) async {
+      // Person hints are real: the Nirvana migration copies a delegated inbox
+      // todo's `todo_tags` wholesale into `capture_tags`, and `watchTagHints`
+      // does not filter by type. They must never ride the draft, because
+      // delegation is assigned exclusively through the Waiting For picker —
+      // an Outcome routed to Next carrying a person tag would look delegated
+      // without ever having been routed there (intent ⊥ delegate).
+      //
+      // The seeded draft set is the hole: `_draft` screens person ids against
+      // the *current* hints, so a person hint that disappears from the live
+      // list after seeding is no longer recognised as one. Excluding it at the
+      // seed makes the guarantee structural rather than positional.
+      final capture = await _insertCapture(db, id: 'delegated', title: 'Ship');
+      final ctx = await _insertTag(db, id: 'c9', name: 'work', type: 'context');
+      final person = await _insertTag(db, id: 'p9', name: 'Bob', type: 'person');
+      await db.captureDao.assignTagHint('delegated', 'c9', _userId);
+
+      final hints = StreamController<List<Tag>>.broadcast();
+      addTearDown(hints.close);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        contextTags: [ctx],
+        tagHintsStream: hints.stream,
+      ));
+      // Let the Capture resolve first. Until it does the card sits in
+      // AsyncSubject's loading branch and never reaches the hint watch, so an
+      // emission onto this broadcast stream would land with no subscriber and
+      // be dropped — seeding from the *second* list and quietly not testing
+      // the path at all.
+      await _pumpFrames(tester, frames: 5);
+      // Seed the draft while the person hint is present...
+      hints.add([ctx, person]);
+      await _pumpFrames(tester, frames: 5);
+      // ...then it vanishes from the live list (sync removed the hint row).
+      hints.add([ctx]);
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      final outcomeId =
+          (await db.captureDao.outcomeIdsForCapture('delegated')).single;
+      final tagIds = await _joinedTagIds(db, outcomeId);
+      expect(tagIds, contains('c9'), reason: 'the context hint still carries');
+      expect(tagIds, isNot(contains('p9')),
+          reason: 'a person hint must never travel on the draft — delegation '
+              'is the Waiting For picker\'s axis alone');
     });
   });
 
@@ -678,6 +744,240 @@ void main() {
       expect(find.text('@Alice'), findsNothing);
       expect(find.text('✓ @Alice'), findsNothing);
       expect(find.byType(PersonTagPickerSheet), findsNothing);
+    });
+  });
+
+  group('ClarifyCard — subject deleted while the card is open (#428)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'Capture hard-deleted mid-edit reaches the missing state, not a spinner',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'gone-cap');
+      final subject = StreamController<Capture?>.broadcast();
+      addTearDown(subject.close);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        captureStream: subject.stream,
+        onSubjectMissing: () {},
+      ));
+
+      // Nothing emitted yet: still loading.
+      await _pumpFrames(tester, frames: 3);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.text('This item is no longer in your Inbox'), findsNothing);
+
+      subject.add(capture);
+      await _pumpFrames(tester, frames: 5);
+      expect(find.text('Buy milk'), findsOneWidget);
+
+      // Sync applies a remote delete underneath the open card.
+      subject.add(null);
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.text('This item is no longer in your Inbox'), findsOneWidget);
+      // The regression: absent used to render as an indefinite spinner.
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('an errored subject watch renders neither spinner nor missing',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'err-cap');
+      final subject = StreamController<Capture?>.broadcast();
+      addTearDown(subject.close);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        captureStream: subject.stream,
+      ));
+      await _pumpFrames(tester, frames: 3);
+
+      subject.addError(Exception('SecretInternalDetail'));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.textContaining('Something went wrong'), findsOneWidget);
+      expect(find.textContaining('SecretInternalDetail'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('This item is no longer in your Inbox'), findsNothing);
+    });
+
+    testWidgets('the missing state offers a way out that fires onSubjectMissing',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'escape-cap');
+      final subject = StreamController<Capture?>.broadcast();
+      addTearDown(subject.close);
+      var escaped = 0;
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        captureStream: subject.stream,
+        onSubjectMissing: () => escaped++,
+      ));
+      subject.add(capture);
+      await _pumpFrames(tester, frames: 5);
+      subject.add(null);
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.tap(find.text('Continue'));
+      await tester.pump();
+
+      expect(escaped, 1);
+    });
+
+    testWidgets('a double-tapped escape still fires exactly once',
+        (tester) async {
+      // None of the hosts are idempotent: a ceremony advances its cursor and
+      // the re-clarify sub-flow pops its route, so a second activation would
+      // skip an extra inbox item or pop the outer review route.
+      final capture = await _insertCapture(db, id: 'double-cap');
+      final subject = StreamController<Capture?>.broadcast();
+      addTearDown(subject.close);
+      var escaped = 0;
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        captureStream: subject.stream,
+        onSubjectMissing: () => escaped++,
+      ));
+      subject.add(capture);
+      await _pumpFrames(tester, frames: 5);
+      subject.add(null);
+      await _pumpFrames(tester, frames: 5);
+
+      // Both taps land before any rebuild can tear the card down — the window
+      // an impatient user actually hits.
+      await tester.tap(find.text('Continue'));
+      await tester.tap(find.text('Continue'));
+      await tester.pump();
+
+      expect(escaped, 1);
+    });
+
+    testWidgets(
+        'a pending text edit is NOT written back to a Capture that is gone',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'suppress-cap');
+      final subject = StreamController<Capture?>.broadcast();
+      addTearDown(subject.close);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        captureStream: subject.stream,
+      ));
+      subject.add(capture);
+      await _pumpFrames(tester, frames: 5);
+
+      // Type without letting the debounce elapse, so the write is still
+      // pending when the row disappears.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Buy milk'),
+        'Buy oat milk',
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      subject.add(null);
+      await _pumpFrames(tester, frames: 10);
+
+      // Unmount the card: the dispose-time flush must stay suppressed too.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 600));
+
+      // Plain select, never `watch().first` — awaiting a live drift watch
+      // inside testWidgets never completes under the test binding's clock.
+      final row = await (db.select(db.captures)
+            ..where((c) => c.id.equals('suppress-cap')))
+          .getSingleOrNull();
+      expect(row?.title, 'Buy milk',
+          reason: 'no write may land on a subject known to be deleted');
+    });
+
+    testWidgets(
+        'Outcome hard-deleted mid-reclarify reaches the missing state',
+        (tester) async {
+      final todo = await _insertInboxTodo(db, id: 'gone-todo');
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+      var escaped = 0;
+
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        todoStream: subject.stream,
+        onSubjectMissing: () => escaped++,
+      ));
+
+      await _pumpFrames(tester, frames: 3);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      subject.add(todo);
+      await _pumpFrames(tester, frames: 5);
+      expect(find.text('Buy milk'), findsOneWidget);
+
+      subject.add(null);
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.text('This outcome no longer exists'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      await tester.tap(find.text('Continue'));
+      await tester.pump();
+      expect(escaped, 1);
+    });
+
+    testWidgets(
+        'confirming a date picker opened before the delete writes nothing',
+        (tester) async {
+      // The one write path that outlives the missing-state rebuild. Losing the
+      // subject swaps the body for the missing panel, so every inline control
+      // leaves the tree — but a modal pushed beforehand sits above it and can
+      // still complete. `context.mounted` does not catch this: the context the
+      // callback closes over is AsyncSubject's own, and that element stays
+      // mounted across the branch switch. Only `_subjectGone` stops the write.
+      final todo = await _insertInboxTodo(db, id: 'picker-todo');
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        todoStream: subject.stream,
+        onSubjectMissing: () {},
+      ));
+      subject.add(todo);
+      await _pumpFrames(tester, frames: 5);
+
+      // Open the due-date picker while the Outcome is still alive.
+      await tester.ensureVisible(find.text('Set date'));
+      await tester.tap(find.text('Set date'));
+      await _pumpFrames(tester, frames: 5);
+      expect(find.text('Set due date'), findsOneWidget,
+          reason: 'precondition: the modal picker is open');
+
+      // Sync deletes the row underneath the open picker.
+      subject.add(null);
+      await _pumpFrames(tester, frames: 5);
+
+      // The user confirms the date they were already choosing. `initialDate`
+      // is tomorrow, so OK alone commits a real value.
+      await tester.tap(find.text('OK'));
+      await _pumpFrames(tester, frames: 10);
+
+      // Plain select, never `watch().first` (NOTES.md:25).
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('picker-todo')))
+          .getSingleOrNull();
+      expect(row?.dueDate, isNull,
+          reason: 'no write may land on a subject known to be deleted');
+      expect(find.text('This outcome no longer exists'), findsOneWidget);
     });
   });
 }

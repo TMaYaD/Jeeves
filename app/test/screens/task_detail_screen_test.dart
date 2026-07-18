@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide Intent;
@@ -51,6 +53,10 @@ Future<Todo> _insertAt(
   Todo? initialTodo,
   List<Tag> initialTags = const [],
   List<Capture> capturedFrom = const [],
+  // Drives the subject watch itself. The real provider is
+  // `watchSingleOrNull()`-backed, so emitting `null` here is exactly what a
+  // synced hard-delete looks like to the screen (#428).
+  Stream<Todo?>? todoStream,
 }) {
   final router = GoRouter(
     initialLocation: '/inbox',
@@ -78,7 +84,7 @@ Future<Todo> _insertAt(
       inboxItemsProvider.overrideWith((_) => Stream.value([])),
       databaseProvider.overrideWithValue(db),
       taskDetailTodoProvider(todoId)
-          .overrideWith((_) => Stream.value(initialTodo)),
+          .overrideWith((_) => todoStream ?? Stream.value(initialTodo)),
       taskTagsProvider(todoId)
           .overrideWith((_) => Stream.value(initialTags)),
       // Stubbed like the other row streams above: a live Drift query stream
@@ -603,6 +609,80 @@ void main() {
 
       expect(find.text('Trashed'), findsOneWidget);
       expect(find.text('Done'), findsNothing);
+    });
+  });
+
+  group('TaskDetailScreen — subject deleted while open (#428)', () {
+    late GtdDatabase db;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      db = _openInMemory();
+    });
+    tearDown(() async => db.close());
+
+    testWidgets('an Outcome hard-deleted under the screen reaches the missing '
+        'state, not an indefinite spinner', (tester) async {
+      final todo = await _insertAt(db, id: 'del1', title: 'Vanishing task');
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+
+      final (widget, router) =
+          _buildScreen(db, 'del1', todoStream: subject.stream);
+      await _showTaskDetail(tester, widget, router, 'del1');
+
+      // Nothing emitted yet: genuinely loading.
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      subject.add(todo);
+      await tester.pumpAndSettle();
+      expect(find.text('Vanishing task'), findsOneWidget);
+
+      // Sync applies a remote delete underneath the open screen.
+      subject.add(null);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Task not found'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('the missing state offers a way out rather than dead-ending',
+        (tester) async {
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+
+      final (widget, router) =
+          _buildScreen(db, 'del2', todoStream: subject.stream);
+      await _showTaskDetail(tester, widget, router, 'del2');
+      subject.add(null);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Go back'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Inbox'), findsOneWidget);
+    });
+
+    testWidgets('an errored watch shows friendly copy, never the exception',
+        (tester) async {
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+
+      final (widget, router) =
+          _buildScreen(db, 'del3', todoStream: subject.stream);
+      await _showTaskDetail(tester, widget, router, 'del3');
+      subject.addError(Exception('SecretInternalDetail'));
+      // Bounded pumping: the error branch logs through `debugPrint`, whose
+      // throttle timer keeps the binding from reaching a quiet frame.
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(find.textContaining('Something went wrong'), findsOneWidget);
+      // The leak this migration killed: the screen used to render `Error: $err`.
+      expect(find.textContaining('SecretInternalDetail'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('Task not found'), findsNothing);
     });
   });
 }

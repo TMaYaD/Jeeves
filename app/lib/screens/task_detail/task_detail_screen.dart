@@ -8,6 +8,7 @@ import '../../database/gtd_database.dart';
 import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
+import '../../widgets/async_subject.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
@@ -82,25 +83,24 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
-      child: todoAsync.when(
-        loading: () => const Scaffold(
-          backgroundColor: Colors.white,
-          body: Center(child: CircularProgressIndicator()),
-        ),
-        error: (err, _) => Scaffold(
+      child: AsyncSubject<Todo>(
+        asyncValue: todoAsync,
+        // Loading, error and missing all render inside the screen's own bare
+        // chrome, so the user keeps a back button whichever one they land on.
+        chrome: (context, surface) => Scaffold(
           backgroundColor: Colors.white,
           appBar: AppBar(backgroundColor: Colors.white, elevation: 0),
-          body: Center(child: Text('Error: $err')),
+          body: surface,
         ),
-        data: (todo) {
-          if (todo == null) {
-            return Scaffold(
-              backgroundColor: Colors.white,
-              appBar: AppBar(backgroundColor: Colors.white, elevation: 0),
-              body: const Center(child: Text('Task not found')),
-            );
-          }
-
+        missingIcon: Icons.search_off,
+        missingTitle: 'Task not found',
+        missingSubtitle: 'It may have been deleted on another device.',
+        missingCta: FilledButton(
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go('/inbox'),
+          child: const Text('Go back'),
+        ),
+        dataBuilder: (context, todo) {
           if (!_titleInitialized) {
             _titleController.text = todo.title;
             _titleInitialized = true;

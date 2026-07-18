@@ -15,6 +15,7 @@ import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../services/notification_service.dart';
+import '../widgets/async_subject.dart';
 import '../widgets/elapsed_timer_widget.dart';
 
 class ActiveFocusScreen extends ConsumerStatefulWidget {
@@ -27,6 +28,7 @@ class ActiveFocusScreen extends ConsumerStatefulWidget {
 class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     with WidgetsBindingObserver {
   Timer? _notificationTimer;
+  bool _missingBounceScheduled = false;
 
   @override
   void initState() {
@@ -70,7 +72,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       elapsed: focusState.elapsed,
       activeTodoId: todoId,
     );
-    NotificationService.instance.showFocusNotification(
+    ref.read(notificationServiceProvider).showFocusNotification(
       title: 'In Focus: $title',
       body: phrase,
     );
@@ -78,7 +80,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
   Future<void> _onComplete(String todoId) async {
     _notificationTimer?.cancel();
-    NotificationService.instance.cancelFocusNotification();
+    ref.read(notificationServiceProvider).cancelFocusNotification();
     ref.read(sprintTimerProvider.notifier).stopSprint().ignore();
     final db = ref.read(databaseProvider);
     await db.todoDao.markDone(todoId);
@@ -118,11 +120,95 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
   /// Stops the sprint and returns to the focus list without completing the task.
   Future<void> _onStop(String todoId) async {
     _notificationTimer?.cancel();
-    NotificationService.instance.cancelFocusNotification();
+    ref.read(notificationServiceProvider).cancelFocusNotification();
     await ref.read(sprintTimerProvider.notifier).stopSprint();
     await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
     context.go('/focus');
+  }
+
+  /// Runs one best-effort teardown step, reporting whether it succeeded.
+  ///
+  /// Only the missing-task bounce uses this. [_onStop] deliberately does not:
+  /// it is user-initiated and leaves the user on the screen, so a failure
+  /// there is visible and retryable by tapping Stop again. Swallowing it would
+  /// hide a real problem on a path that can recover on its own.
+  Future<bool> _tryTeardownStep(
+    String label,
+    Future<void> Function() run,
+  ) async {
+    try {
+      await run();
+      return true;
+    } catch (e, stack) {
+      debugPrint('Focus teardown step "$label" failed: $e\n$stack');
+      return false;
+    }
+  }
+
+  /// Ends the sprint when its task has been hard-deleted underneath us and
+  /// leaves, telling the user why. Guarded because [build] can run many times
+  /// while the post-frame callback is still queued.
+  ///
+  /// This tears the sprint down as thoroughly as [_onStop] does, rather than
+  /// only navigating: the SnackBar claims focus ended, and without the teardown
+  /// it would be lying. A bare redirect would leave the sprint timer ticking
+  /// toward an end-notification for a task that no longer exists, leave the
+  /// persistent focus notification in the status bar deep-linking back into the
+  /// dead sprint, and leave the TimeLog open against the deleted row.
+  void _scheduleMissingBounce() {
+    if (_missingBounceScheduled) return;
+    _missingBounceScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      // The messenger is MaterialApp's, not this Scaffold's, so it is resolved
+      // up front and survives the redirect — that is what lets the SnackBar
+      // still be showing once `/focus` has taken over.
+      final messenger = ScaffoldMessenger.of(context);
+      _notificationTimer?.cancel();
+      // Awaited *before* navigating, exactly as [_onStop] does. Firing these
+      // off after `context.go` would let `/focus` build against a container
+      // that still reports an active sprint on the deleted task.
+      //
+      // The teardown is nonetheless best-effort: leaving is not conditional on
+      // it succeeding. This bounce is one-shot (`_missingBounceScheduled`), so
+      // an escaping exception would strand the user on a blank surface bound
+      // to a task that no longer exists, with no second attempt coming — a
+      // worse outcome than an incompletely closed sprint.
+      //
+      // Each step is attempted independently. Chaining them under one `try`
+      // lets the *least* important failure suppress the two that matter:
+      // a notification cancel that throws would skip `stopSprint` and
+      // `endFocus`, leaving focus mode active on a deleted row — precisely the
+      // state this teardown exists to clear.
+      final cancelled = await _tryTeardownStep(
+        'cancel focus notification',
+        () => ref.read(notificationServiceProvider).cancelFocusNotification(),
+      );
+      final stopped = await _tryTeardownStep(
+        'stop sprint',
+        () => ref.read(sprintTimerProvider.notifier).stopSprint(),
+      );
+      final ended = await _tryTeardownStep(
+        'end focus',
+        () => ref.read(focusModeProvider.notifier).endFocus(),
+      );
+      final endedCleanly = cancelled && stopped && ended;
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          // On failure the sprint may still be running, so the copy must not
+          // claim otherwise — it points at the control that can finish the job.
+          content: Text(
+            endedCleanly
+                ? 'That task no longer exists — focus ended.'
+                : 'That task no longer exists. Ending focus failed — try Stop '
+                    'on the focus screen.',
+          ),
+        ),
+      );
+      context.go('/focus');
+    });
   }
 
   @override
@@ -142,22 +228,22 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
-        child: todoAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('Error: $e')),
-          data: (todo) {
-            if (todo == null) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) context.go('/focus');
-              });
-              return const SizedBox.shrink();
-            }
-            return _FocusBody(
-              todo: todo,
-              onComplete: () => _onComplete(todo.id),
-              onStop: () => _onStop(todo.id),
-            );
+        child: AsyncSubject<Todo>(
+          asyncValue: todoAsync,
+          // Focus is a sprint on one task: if that task is gone there is
+          // nothing left to focus on, so bouncing back to the focus home beats
+          // asking the user to acknowledge a panel. The SnackBar explains the
+          // bounce, which the silent redirect never did.
+          missingTitle: 'This task no longer exists',
+          missingBuilder: (context) {
+            _scheduleMissingBounce();
+            return const SizedBox.shrink();
           },
+          dataBuilder: (context, todo) => _FocusBody(
+            todo: todo,
+            onComplete: () => _onComplete(todo.id),
+            onStop: () => _onStop(todo.id),
+          ),
         ),
       ),
     );

@@ -51,6 +51,10 @@ class InboxClarificationStep extends ConsumerWidget {
             .read(focusSessionPlanningProvider.notifier)
             .recordInboxRoutingAndAdvance(kind);
       },
+      // The Capture vanished under the card — advance past it without
+      // recording a routing there was no verdict for.
+      onSubjectMissing: () =>
+          ref.read(focusSessionPlanningProvider.notifier).skipInboxItem(),
       onLoad: () =>
           ref.read(focusSessionPlanningProvider.notifier).loadInboxSnapshot(),
     );

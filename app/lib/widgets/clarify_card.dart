@@ -18,6 +18,11 @@
 /// whichever subject it is given. Per-flow nav side-effects (recording routing
 /// history, advancing the cursor) are wired through [onAfterRoute].
 ///
+/// Both shapes bind to a live watch on their subject and render it through
+/// [AsyncSubject], so a subject hard-deleted underneath the open card (sync
+/// applying a remote delete) reaches a missing-item state with a way out
+/// ([onSubjectMissing]) rather than an indefinite spinner.
+///
 /// Used by the daily-planning ritual's inbox-clarify step and by the
 /// Weekly Review wizard (zero-inbox step + the `reclarify` sub-flow opened
 /// from the Waiting For / Next Actions / Someday-Maybe steps).
@@ -32,6 +37,7 @@ import '../database/gtd_database.dart';
 import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
+import 'async_subject.dart';
 import 'clarify_shared_widgets.dart';
 import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
@@ -45,6 +51,7 @@ class ClarifyCard extends ConsumerStatefulWidget {
     required this.captureId,
     this.lastAction,
     this.onAfterRoute,
+    this.onSubjectMissing,
   }) : todoId = null;
 
   /// Re-clarify an Outcome that has already been through the flow once.
@@ -53,6 +60,7 @@ class ClarifyCard extends ConsumerStatefulWidget {
     required this.todoId,
     this.lastAction,
     this.onAfterRoute,
+    this.onSubjectMissing,
   }) : captureId = null;
 
   /// The Capture being clarified, or null when re-clarifying an Outcome.
@@ -68,6 +76,18 @@ class ClarifyCard extends ConsumerStatefulWidget {
   /// Called once after a successful route. Used for callsite-specific
   /// concerns like advancing the inbox cursor and recording routing history.
   final Future<void> Function(ProcessAction action)? onAfterRoute;
+
+  /// The way out of the missing-subject state — invoked when the user taps the
+  /// CTA on the card the subject vanished from under. Hosts wire this to
+  /// whatever "move on" means for them: advancing the ceremony cursor, popping
+  /// a pushed sub-flow route. When null the card renders the missing copy
+  /// without a CTA, for hosts that already draw an escape outside the card.
+  ///
+  /// Deliberately *not* routed through [onAfterRoute]: that takes a
+  /// [ProcessAction], and the only action meaning "no verdict" is
+  /// `ProcessAction.keep`, whose `toRoutingKind()` is null — both ceremony
+  /// callers early-return on null, so the cursor would silently never advance.
+  final VoidCallback? onSubjectMissing;
 
   @override
   ConsumerState<ClarifyCard> createState() => _ClarifyCardState();
@@ -104,6 +124,22 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   Timer? _textDebouncer;
   String? _lastSavedTitle;
   String? _lastSavedNotes;
+
+  /// True once the watched subject has emitted `AsyncData(null)` — the row was
+  /// hard-deleted while this card was open (see [AsyncSubject]).
+  ///
+  /// Gates every text write. Without it a debounced autosave (or the
+  /// `dispose()` flush) fires `updateFields` against a row that is gone: a
+  /// harmless no-op under `NativeDatabase` in tests, but in production
+  /// PowerSync queues the UPDATE, the backend 404s it, and it lands in
+  /// `sync_dead_letters`.
+  bool _subjectGone = false;
+
+  /// Whether the missing-state escape has already been taken — see
+  /// [_missingCta]. Safe to hold per-State: ceremonies key the card by subject
+  /// id (`ClarifyStep`), so moving to the next item builds a fresh State and
+  /// the latch resets with it.
+  bool _missingEscapeFired = false;
 
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
@@ -145,7 +181,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // when updating `_lastSavedTitle` / `_lastSavedNotes` after its await).
     final trimmedTitle = (_titleCtrl?.text ?? '').trim();
     final trimmedNotes = (_notesCtrl?.text ?? '').trim();
-    final hasPendingWrite = trimmedTitle.isNotEmpty &&
+    final hasPendingWrite = !_subjectGone &&
+        trimmedTitle.isNotEmpty &&
         (trimmedTitle != _lastSavedTitle || trimmedNotes != _lastSavedNotes);
     if (hasPendingWrite) {
       final db = ref.read(databaseProvider);
@@ -178,6 +215,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   Future<void> _flushTextSave() async {
     _textDebouncer?.cancel();
     _textDebouncer = null;
+    if (_subjectGone) return;
     final trimmedTitle = (_titleCtrl?.text ?? '').trim();
     final trimmedNotes = (_notesCtrl?.text ?? '').trim();
     if (trimmedTitle.isEmpty) return;
@@ -201,15 +239,24 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   // a Capture. On a Capture card the setState in the callsite *is* the save:
   // the value rides the draft into clarifyCaptureToOutcome. On an Outcome card
   // they autosave as before.
+  //
+  // Every autosave below opens with the [_subjectGone] guard, for the same
+  // reason the text saves do. Losing the subject swaps the body for the
+  // missing panel, so these controls leave the tree — but a *modal* opened
+  // before the delete landed outlives that rebuild. Confirming a date in an
+  // already-open `showDatePicker`, or a tag in an open picker sheet, would
+  // otherwise write to a row that is gone: a no-op under `NativeDatabase`,
+  // but in production a queued PowerSync UPDATE the backend 404s into
+  // `sync_dead_letters`.
 
   Future<void> _saveEnergy(String? level) async {
-    if (_isCapture || level == null) return;
+    if (_isCapture || level == null || _subjectGone) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.updateFields(_subjectId, energyLevel: level);
   }
 
   Future<void> _saveTimeEstimate(int? minutes) async {
-    if (_isCapture) return;
+    if (_isCapture || _subjectGone) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.updateFields(
       _subjectId,
@@ -219,7 +266,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   Future<void> _saveDueDate(DateTime? date, {required bool clear}) async {
-    if (_isCapture) return;
+    if (_isCapture || _subjectGone) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.updateFields(
       _subjectId,
@@ -244,6 +291,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       ref.read(taskDetailNotifierProvider(_subjectId));
 
   Future<void> _saveAssignProject(String tagId) async {
+    if (_subjectGone) return;
     if (!_isCapture) return _tagNotifier.assignProject(tagId);
     final db = ref.read(databaseProvider);
     await db.captureDao.assignProjectHint(
@@ -254,11 +302,13 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   Future<void> _saveClearProject() async {
+    if (_subjectGone) return;
     if (!_isCapture) return _tagNotifier.clearProject();
     await ref.read(databaseProvider).captureDao.clearProjectHint(_subjectId);
   }
 
   Future<void> _saveAssignContext(String tagId) async {
+    if (_subjectGone) return;
     if (!_isCapture) return _tagNotifier.assignContextTag(tagId);
     final db = ref.read(databaseProvider);
     await db.captureDao.assignTagHint(
@@ -269,6 +319,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   Future<void> _saveRemoveContext(String tagId) async {
+    if (_subjectGone) return;
     if (!_isCapture) return _tagNotifier.removeContextTag(tagId);
     await ref.read(databaseProvider).captureDao.removeTagHint(_subjectId, tagId);
   }
@@ -322,46 +373,111 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         : _buildForOutcome(context, widget.todoId!);
   }
 
-  Widget _buildForCapture(BuildContext context, String captureId) {
-    final capture = ref.watch(captureProvider(captureId)).value;
-    if (capture == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    // A Capture stores only title and notes; the rest of the card starts empty
-    // and rides the draft into the Outcome.
-    _initialiseFrom(title: capture.title, notes: capture.notes);
+  /// Latches [_subjectGone] off the watched subject and stops any pending
+  /// autosave the moment the row disappears. Computed during build rather than
+  /// via `setState` — it changes no rendering of its own, it only gates writes.
+  ///
+  /// The latch is **one-way**: a hard delete is terminal, since the row's id
+  /// can never be reissued. Clearing the flag again on a later state that
+  /// merely lacks a value (a disposed-and-recreated provider re-entering
+  /// `AsyncLoading`) would reopen every write path against the dead row.
+  void _trackSubjectPresence(AsyncValue<Object?> subject) {
+    if (_subjectGone) return;
+    if (!(subject.hasValue && subject.value == null)) return;
+    _subjectGone = true;
+    _textDebouncer?.cancel();
+    _textDebouncer = null;
+  }
 
-    final hintsAsync = ref.watch(captureTagHintsProvider(captureId));
-    final hints = hintsAsync.asData?.value ?? const <Tag>[];
-    if (hintsAsync.hasValue && !_draftTagsSeeded) {
-      _draftTagsSeeded = true;
-      _draftTagIds = {for (final t in hints) t.id};
-    }
-    return _buildBody(
-      context,
-      tags: hints,
-      subject: CaptureSubject(
-        capture: capture,
-        draft: () => _draft(hints),
-      ),
+  /// The card's escape from the missing-subject state, or null when the host
+  /// draws its own (see [ClarifyCard.onSubjectMissing]).
+  ///
+  /// Fires at most once. The escape is not idempotent at any host — a ceremony
+  /// advances its cursor, the re-clarify sub-flow pops its route — so a second
+  /// activation before the first has torn the card down would skip an extra
+  /// inbox item, or pop the *outer* review route out from under the user. The
+  /// button stays enabled rather than greying out: the card is on its way out,
+  /// and a disabled flash would be noise.
+  Widget? get _missingCta {
+    final onMissing = widget.onSubjectMissing;
+    if (onMissing == null) return null;
+    return FilledButton(
+      onPressed: () {
+        if (_missingEscapeFired) return;
+        _missingEscapeFired = true;
+        onMissing();
+      },
+      child: const Text('Continue'),
+    );
+  }
+
+  Widget _buildForCapture(BuildContext context, String captureId) {
+    final captureAsync = ref.watch(captureProvider(captureId));
+    _trackSubjectPresence(captureAsync);
+    return AsyncSubject<Capture>(
+      asyncValue: captureAsync,
+      missingIcon: Icons.inbox_outlined,
+      missingTitle: 'This item is no longer in your Inbox',
+      missingSubtitle: 'It may have been deleted on another device.',
+      missingCta: _missingCta,
+      dataBuilder: (context, capture) {
+        // A Capture stores only title and notes; the rest of the card starts
+        // empty and rides the draft into the Outcome.
+        _initialiseFrom(title: capture.title, notes: capture.notes);
+
+        final hintsAsync = ref.watch(captureTagHintsProvider(captureId));
+        final hints = hintsAsync.asData?.value ?? const <Tag>[];
+        if (hintsAsync.hasValue && !_draftTagsSeeded) {
+          _draftTagsSeeded = true;
+          // Person hints are excluded here, not merely screened later in
+          // [_draft]. That screen compares against the *current* hint list, so
+          // a person hint present at seed time but gone by routing time is no
+          // longer recognised as one and rides the draft onto the Outcome —
+          // which would leave a row routed to Next carrying a delegate it was
+          // never delegated to (intent ⊥ delegate). Person hints are real:
+          // the Nirvana migration copies a delegated todo's `todo_tags`
+          // wholesale into `capture_tags`, and `watchTagHints` does not filter
+          // by type. Keeping them out of the draft set makes the guarantee
+          // structural rather than dependent on what the stream last emitted.
+          _draftTagIds = {
+            for (final t in hints)
+              if (t.type != 'person') t.id,
+          };
+        }
+        return _buildBody(
+          context,
+          tags: hints,
+          subject: CaptureSubject(
+            capture: capture,
+            draft: () => _draft(hints),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildForOutcome(BuildContext context, String todoId) {
-    final todo = ref.watch(taskDetailTodoProvider(todoId)).value;
-    if (todo == null) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    _initialiseFrom(
-      title: todo.title,
-      notes: todo.notes,
-      energyLevel: todo.energyLevel,
-      timeEstimate: todo.timeEstimate,
-      dueDate: todo.dueDate,
+    final todoAsync = ref.watch(taskDetailTodoProvider(todoId));
+    _trackSubjectPresence(todoAsync);
+    return AsyncSubject<Todo>(
+      asyncValue: todoAsync,
+      missingIcon: Icons.search_off,
+      missingTitle: 'This outcome no longer exists',
+      missingSubtitle: 'It may have been deleted on another device.',
+      missingCta: _missingCta,
+      dataBuilder: (context, todo) {
+        _initialiseFrom(
+          title: todo.title,
+          notes: todo.notes,
+          energyLevel: todo.energyLevel,
+          timeEstimate: todo.timeEstimate,
+          dueDate: todo.dueDate,
+        );
+        final tags =
+            ref.watch(taskTagsProvider(todoId)).asData?.value ?? const <Tag>[];
+        return _buildBody(context, tags: tags, subject: OutcomeSubject(todo));
+      },
     );
-    final tags =
-        ref.watch(taskTagsProvider(todoId)).asData?.value ?? const <Tag>[];
-    return _buildBody(context, tags: tags, subject: OutcomeSubject(todo));
   }
 
   /// Snapshot of the card's current state, read at tap time by

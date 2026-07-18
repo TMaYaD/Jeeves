@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +9,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/services/clarification_service.dart';
@@ -214,19 +217,40 @@ class _RecordingClarificationService implements ClarificationService {
       _inner.discardCapture(captureId, now: now);
 }
 
+class _PopCounter extends NavigatorObserver {
+  int pops = 0;
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pops++;
+    super.didPop(route, previousRoute);
+  }
+}
+
 Widget _buildApp(
   GtdDatabase db,
   String captureId, {
   ClarificationService? clarificationService,
+  // Feeds the screen's subject watch. Defaults to a one-shot read of the row
+  // rather than the real `watchCapture()`: a live drift `watch()` keeps
+  // `StreamQueryStore` emitting on every `notifyCapturesViewWrite`, so
+  // `pumpAndSettle` never reaches a quiet frame and hangs the isolate hard
+  // enough that the per-test timeout can't fire. Tests that need to *drive*
+  // the watch (a delete under the open screen) pass their own controller.
+  Stream<Capture?>? captureStream,
+  NavigatorObserver? popObserver,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      captureProvider(captureId).overrideWith(
+        (_) => captureStream ?? db.captureDao.getCapture(captureId).asStream(),
+      ),
       if (clarificationService != null)
         clarificationServiceProvider.overrideWithValue(clarificationService),
     ],
     child: MaterialApp.router(
       routerConfig: GoRouter(
+        observers: [?popObserver],
         // Nest the clarify route under /inbox so pop() has a page to return to.
         initialLocation: '/inbox/$captureId/clarify',
         routes: [
@@ -486,6 +510,129 @@ void main() {
       expect(outcome.notes, isNull);
       expect(outcome.dueDate, isNull);
       expect(outcome.clarified, isTrue);
+    });
+  });
+
+  group('InboxClarifyScreen — Capture deleted while open (#428)', () {
+    late GtdDatabase db;
+    late StreamController<Capture?> subject;
+
+    setUp(() {
+      db = _openInMemory();
+      // Broadcast: the screen's provider is autoDispose, so a pop can drop
+      // and re-create it — a single-subscription stream would throw
+      // "already been listened to" on the re-listen.
+      subject = StreamController<Capture?>.broadcast();
+    });
+    tearDown(() async {
+      await subject.close();
+      await db.close();
+    });
+
+    testWidgets('no emission yet renders a spinner', (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(
+        _buildApp(db, 'x', captureStream: subject.stream),
+      );
+      await tester.pump();
+
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.text('This item is no longer in your Inbox'), findsNothing);
+    });
+
+    testWidgets(
+        'a hard-delete under the open screen reaches the missing state, '
+        'not an indefinite spinner', (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+      final capture = (await db.captureDao.getCapture('x'))!;
+
+      await tester.pumpWidget(
+        _buildApp(db, 'x', captureStream: subject.stream),
+      );
+      subject.add(capture);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('clarify_title')), findsOneWidget);
+
+      // Another device deletes the Capture; PowerSync applies it locally and
+      // `watchSingleOrNull()` emits null.
+      await db.captureDao.deleteCapture('x');
+      subject.add(null);
+      await tester.pumpAndSettle();
+
+      expect(find.text('This item is no longer in your Inbox'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byKey(const Key('clarify_title')), findsNothing);
+    });
+
+    testWidgets('the missing state offers a way back to the Inbox',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(
+        _buildApp(db, 'x', captureStream: subject.stream),
+      );
+      subject.add(null);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Back to Inbox'));
+      await tester.pumpAndSettle();
+
+      // Popped back onto the Inbox route rather than dead-ending.
+      expect(find.text('Inbox'), findsOneWidget);
+    });
+
+    testWidgets('a double-tapped escape pops once, not past the Inbox',
+        (tester) async {
+      // An invariant guard, not a reproduction: Navigator already absorbs the
+      // second pop against a route that is mid-transition, so this holds with
+      // or without the CTA's latch today. It pins "the escape pops exactly
+      // once" so that stops being accidental — the moment this CTA does
+      // anything beyond popping, the latch is what keeps it true.
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      final popCounter = _PopCounter();
+      await tester.pumpWidget(
+        _buildApp(db, 'x',
+            captureStream: subject.stream, popObserver: popCounter),
+      );
+      subject.add(null);
+      await tester.pumpAndSettle();
+
+      // Both taps land before any rebuild can tear the route down.
+      await tester.tap(find.text('Back to Inbox'));
+      await tester.tap(find.text('Back to Inbox'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(popCounter.pops, 1, reason: 'the escape must pop exactly once');
+      expect(find.text('Inbox'), findsOneWidget);
+    });
+
+    testWidgets('an errored watch renders friendly copy, not the exception',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(
+        _buildApp(db, 'x', captureStream: subject.stream),
+      );
+      subject.addError(Exception('SecretInternalDetail'));
+      // Bounded pumping, not pumpAndSettle: the error branch logs the detail
+      // through `debugPrint`, whose throttle timer keeps the binding from ever
+      // reaching a quiet frame.
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(find.textContaining('Something went wrong'), findsOneWidget);
+      expect(find.textContaining('SecretInternalDetail'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('This item is no longer in your Inbox'), findsNothing);
     });
   });
 
