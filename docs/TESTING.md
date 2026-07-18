@@ -52,7 +52,7 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
   Fix per worktree, with a full private copy rather than a shim:
 
   1. Heal the shared SDK: `env -u GIT_DIR -u GIT_INDEX_FILE /opt/flutter/bin/flutter --version` (must be outside a hook).
-  2. `cp -a /opt/flutter app/.fvm/flutter_sdk` (~1.5 GB; gitignored via `.fvm/`).
+  2. `rm -rf app/.fvm/flutter_sdk && cp -a /opt/flutter app/.fvm/flutter_sdk` (~1.5 GB; gitignored via `.fvm/`). The `rm -rf` is not optional: `cp -a src dst` copies *into* `dst` when it already exists, so re-running without it buries a second SDK at `app/.fvm/flutter_sdk/flutter` and leaves the outer path looking correct but broken.
   3. Insert `unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_COMMON_DIR` after the shebang in both `app/.fvm/flutter_sdk/bin/flutter` and `.../bin/dart`.
 
   The hook's resolution loop prefers `.fvm/flutter_sdk/bin` over the system SDK, so it picks the copy up with no further wiring. Verify by exporting `GIT_DIR`/`GIT_INDEX_FILE` by hand and running the hook's own steps (`dart run build_runner build`, `flutter analyze`, `flutter test`) — that reproduces the hook environment without needing a commit to fail.
