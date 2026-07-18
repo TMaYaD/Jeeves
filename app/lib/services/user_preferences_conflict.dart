@@ -23,6 +23,13 @@
 /// future key that is not explicitly registered otherwise. New list/set keys
 /// **must** be registered as [ConflictStrategy.setMerge] before use.
 ///
+/// A key may also register [ConflictStrategy.lww] *explicitly* in
+/// [preferenceConflictRegistry]. That is redundant at runtime — it is what the
+/// key would fall through to anyway — but it records that the strategy was
+/// chosen and reviewed rather than inherited by default, which is the bar
+/// ADR-0011 sets for keys whose arbitration a reader would otherwise have to
+/// reason about from scratch.
+///
 /// ## Tombstone invariant (why "server-absent → keep local" is always safe)
 ///
 /// Deletion in this store is modelled as a *tombstone* — a present row with
@@ -34,6 +41,8 @@
 library;
 
 import 'dart:convert';
+
+import '../models/clarify_mode.dart' show kClarifyModePrefKey;
 
 /// How two conflicting rows for the same `user_preferences` key are reconciled.
 enum ConflictStrategy {
@@ -85,13 +94,29 @@ class ResolvedPreference {
 // Registry
 // ---------------------------------------------------------------------------
 
+/// Keys whose strategy is registered explicitly, by exact match.
+///
+/// Consulted before the suffix rule and before the default, so an entry here
+/// always wins. An explicit [ConflictStrategy.lww] entry is a deliberate
+/// record that the strategy was considered for that key — see the library doc
+/// comment.
+const preferenceConflictRegistry = <String, ConflictStrategy>{
+  // Scalar mode selection. The latest intent on any device is the right winner:
+  // both modes read the same many-to-many storage, so an arbitration that lands
+  // on either value leaves every Capture and link valid (issue #433).
+  kClarifyModePrefKey: ConflictStrategy.lww,
+};
+
 /// Returns the [ConflictStrategy] for [key].
 ///
-/// Any key ending in `snoozed_until` is a snooze floor and arbitrates by
-/// [ConflictStrategy.maxTimestampValue]; this deliberately covers future snooze
-/// keys (e.g. the Nudge `snoozed_until` migrated onto this contract in #323)
-/// without a code change. Every other key defaults to [ConflictStrategy.lww].
+/// Resolution order: an exact entry in [preferenceConflictRegistry] wins; then
+/// any key ending in `snoozed_until` is a snooze floor and arbitrates by
+/// [ConflictStrategy.maxTimestampValue] (this deliberately covers future snooze
+/// keys — e.g. the Nudge `snoozed_until` migrated onto this contract in #323 —
+/// without a code change); every other key defaults to [ConflictStrategy.lww].
 ConflictStrategy strategyForKey(String key) {
+  final registered = preferenceConflictRegistry[key];
+  if (registered != null) return registered;
   if (key.endsWith('snoozed_until')) return ConflictStrategy.maxTimestampValue;
   return ConflictStrategy.lww;
 }

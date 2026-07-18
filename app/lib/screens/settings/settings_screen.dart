@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../models/clarify_mode.dart';
 import '../../models/focus_session_planning_settings.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/clarify_mode_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
 import '../../providers/focus_settings_provider.dart';
@@ -102,6 +104,9 @@ class SettingsScreen extends ConsumerWidget {
             ),
             onTap: () => context.push('/import'),
           ),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+          _sectionHeader('CLARIFY'),
+          const _ClarifySettings(),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('DAILY PLANNING'),
           _FocusSessionPlanningSettings(),
@@ -337,6 +342,77 @@ class _FocusSessionPlanningSettings extends ConsumerWidget {
       await ref
           .read(focusSessionPlanningSettingsProvider.notifier)
           .setDefaultSnoozeDuration(picked);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Clarify settings
+// ---------------------------------------------------------------------------
+
+class _ClarifySettings extends ConsumerWidget {
+  const _ClarifySettings();
+
+  static String _label(ClarifyMode mode) => switch (mode) {
+        ClarifyMode.oneToOne => '1-1 mode',
+        ClarifyMode.nToM => 'n-m mode',
+      };
+
+  static String _description(ClarifyMode mode) => switch (mode) {
+        ClarifyMode.oneToOne => 'Each Capture becomes one Outcome.',
+        // The n-m clarify surfaces have not shipped yet, so the copy promises
+        // only what selecting the mode actually does today: persist and sync.
+        ClarifyMode.nToM => 'Split and merge. Not available yet — your choice '
+            'is saved and syncs across devices.',
+      };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(clarifyModeProvider);
+
+    return ListTile(
+      key: const Key('clarify_mode_tile'),
+      leading: const Icon(Icons.call_split_outlined, color: Color(0xFF9CA3AF)),
+      title: const Text(
+        'Clarify mode',
+        style:
+            TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+      ),
+      subtitle: Text(
+        '${_label(mode)} — ${_description(mode)}',
+        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+      ),
+      onTap: () => _pickMode(context, ref, current: mode),
+    );
+  }
+
+  Future<void> _pickMode(
+    BuildContext context,
+    WidgetRef ref, {
+    required ClarifyMode current,
+  }) async {
+    final picked = await showDialog<ClarifyMode>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Clarify mode'),
+        children: ClarifyMode.values
+            .map((mode) => SimpleDialogOption(
+                  key: Key('clarify_mode_option_${mode.name}'),
+                  onPressed: () => Navigator.pop(ctx, mode),
+                  child: Text(
+                    '${_label(mode)} — ${_description(mode)}',
+                    style: TextStyle(
+                      fontWeight: mode == current
+                          ? FontWeight.w700
+                          : FontWeight.normal,
+                    ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked != null) {
+      await ref.read(clarifyModeProvider.notifier).setMode(picked);
     }
   }
 }

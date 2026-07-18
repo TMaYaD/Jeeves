@@ -42,7 +42,8 @@ Per-key conflict strategy lives in code, not just prose: `app/lib/services/user_
 ```dart
 enum ConflictStrategy { lww, maxTimestampValue, setMerge }
 
-ConflictStrategy strategyForKey(String key);          // registry lookup; default lww
+const preferenceConflictRegistry = <String, ConflictStrategy>{...};  // exact-match entries
+ConflictStrategy strategyForKey(String key);          // registry → suffix rule → default lww
 ResolvedPreference resolvePreferenceConflict(...);    // (key, local, server) → resolved value
 ResolvedPreference resolveWithStrategy(...);          // strategy-explicit variant
 ```
@@ -58,6 +59,10 @@ ResolvedPreference resolveWithStrategy(...);          // strategy-explicit varia
 ### The default is safe for any future key
 
 An unregistered key resolves as `lww`, which is non-destructive: it never deletes a value, it only prefers the newer of two present values, and server-absent always keeps local. A key only needs explicit registration when blanket LWW would be *wrong* (snooze floors, sets), not merely to be safe.
+
+### Explicit registration
+
+`preferenceConflictRegistry` is an exact-match `key → strategy` map consulted **before** the `snoozed_until` suffix rule and before the default, so an entry there always wins. Registering `lww` explicitly is redundant at runtime — the key would fall through to it anyway — but it records that the strategy was chosen and reviewed rather than inherited, which is the bar ADR-0011 sets for a key whose arbitration a reader would otherwise have to re-derive. Keys registered explicitly are marked in the matrix below.
 
 ## Conflict matrix — every current `user_preferences` key
 
@@ -80,6 +85,7 @@ Every current key, grouped by family:
 | `periodic_review_last_completed_at` | datetime | `lww` | Monotonic in normal use ⇒ coincides with max |
 | `periodic_review_banner_dismissed_date`, `periodic_review_banner_enabled`, `periodic_review_notification_enabled`, `periodic_review_notification_hour`, `periodic_review_notification_minute`, `periodic_review_notification_skipped_date` | date / bool / int | `lww` | Scalar settings / suppression |
 | `periodic_review_nudge_content_firing_edge` | datetime | `lww` | Latest firing edge wins |
+| `clarify_mode` | string enum (`oneToOne` / `nToM`) | `lww` *(registered explicitly)* | Scalar mode selection; both modes read the same many-to-many storage, so either winner leaves every Capture and link valid |
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
