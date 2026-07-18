@@ -28,16 +28,11 @@ CapturesCompanion _capture({
 }
 
 /// A minimal clarified Outcome row so provenance links have a valid FK target.
-Future<void> _insertOutcome(GtdDatabase db, String id, String title) async {
-  final now = DateTime.now();
-  await db.into(db.todos).insert(TodosCompanion(
-        id: Value(id),
-        title: Value(title),
-        userId: const Value(_userId),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
-}
+/// Goes through the production write path ([TodoDao.insertOutcome]) so these
+/// tests exercise the same insert — and the same view-notify — the clarify flow
+/// uses, rather than a raw `todos` insert that skips it.
+Future<void> _insertOutcome(GtdDatabase db, String id, String title) =>
+    db.todoDao.insertOutcome(id: id, title: title, userId: _userId);
 
 Future<String> _insertTag(GtdDatabase db, String name) =>
     db.tagDao.findOrCreateTag(name, 'context', _userId);
@@ -206,6 +201,52 @@ void main() {
 
       final prov = await db.captureDao.watchCapturesForOutcome('o1').first;
       expect(prov.map((c) => c.id).toSet(), {'c1', 'c2'});
+    });
+
+    test('watchHasAnyItem is true for a capture, an outcome, or both',
+        () async {
+      // Empty DB → false.
+      expect(await db.captureDao.watchHasAnyItem().first, isFalse);
+
+      // Capture-only → true.
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+      expect(await db.captureDao.watchHasAnyItem().first, isTrue);
+
+      // Removing the only capture → false again.
+      await db.captureDao.deleteCapture('c1');
+      expect(await db.captureDao.watchHasAnyItem().first, isFalse);
+
+      // Outcome-only (no captures) → true.
+      await _insertOutcome(db, 'o1', 'Outcome');
+      expect(await db.captureDao.watchHasAnyItem().first, isTrue);
+
+      // Both populated → true.
+      await db.captureDao.insertCapture(_capture(id: 'c2', title: 'Another'));
+      expect(await db.captureDao.watchHasAnyItem().first, isTrue);
+    });
+
+    test('watchHasAnyItem re-emits on inserts and deletes in either table',
+        () async {
+      final emissions = <bool>[];
+      final sub = db.captureDao.watchHasAnyItem().listen(emissions.add);
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
+
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+      await pumpEventQueue();
+      await _insertOutcome(db, 'o1', 'Outcome');
+      await pumpEventQueue();
+      // Delete the capture — the outcome still keeps it true.
+      await db.captureDao.deleteCapture('c1');
+      await pumpEventQueue();
+      // Delete the last outcome via the production path — now nothing remains.
+      await db.todoDao.deleteOutcome('o1');
+      await pumpEventQueue();
+
+      expect(emissions.first, isFalse, reason: 'starts empty');
+      expect(emissions.last, isFalse, reason: 'ends empty after both deleted');
+      expect(emissions.contains(true), isTrue,
+          reason: 'reacted to inserts in either table');
     });
 
     test('deterministic junction ids are stable for a pair', () {

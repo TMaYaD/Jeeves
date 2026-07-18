@@ -1,2 +1,6 @@
 SCRATCHPAD.md
 .claude/worktrees/
+# Per-worktree FVM-managed Flutter SDK copy (large, local-only). Isolates this
+# worktree's git hooks from the shared /opt/flutter SDK, whose version check is
+# corrupted when a hook runs with GIT_* set (and by concurrent-worker races).
+app/.fvm/

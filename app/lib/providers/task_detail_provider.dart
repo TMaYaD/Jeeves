@@ -14,6 +14,18 @@ final taskDetailTodoProvider =
   return db.todoDao.watchTodo(todoId);
 });
 
+/// Watches the Captures an Outcome was clarified from — its provenance
+/// (`capture_outcomes`), newest link first (ADR-0006, issue #184 Phase 4).
+///
+/// Empty for Outcomes that predate the Capture split or were created outside
+/// the clarify flow (they carry no links); the detail screen hides the
+/// "Captured from…" section entirely in that case.
+final capturesForOutcomeProvider =
+    StreamProvider.autoDispose.family<List<Capture>, String>((ref, outcomeId) {
+  final db = ref.watch(databaseProvider);
+  return db.captureDao.watchCapturesForOutcome(outcomeId);
+});
+
 /// Watches the Drift Tag rows associated with [todoId], scoped to the current user.
 final taskTagsProvider =
     StreamProvider.autoDispose.family<List<Tag>, String>((ref, todoId) {

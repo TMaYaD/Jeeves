@@ -121,6 +121,46 @@ class _RecordingClarificationService implements ClarificationService {
 
   @override
   Future<void> stampClarified(String id) => _inner.stampClarified(id);
+
+  @override
+  Future<bool> captureExists(String captureId) =>
+      _inner.captureExists(captureId);
+
+  @override
+  Future<String> clarifyCaptureToOutcome(
+    String captureId, {
+    required RoutingKind to,
+    required String userId,
+    required String title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  }) =>
+      _inner.clarifyCaptureToOutcome(
+        captureId,
+        to: to,
+        userId: userId,
+        title: title,
+        notes: notes,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+        dueDate: dueDate,
+        nextActionText: nextActionText,
+        personTagIds: personTagIds,
+        tagIds: tagIds,
+        outcomeId: outcomeId,
+        now: now,
+      );
+
+  @override
+  Future<void> discardCapture(String captureId, {DateTime? now}) =>
+      _inner.discardCapture(captureId, now: now);
 }
 
 Widget _buildApp(

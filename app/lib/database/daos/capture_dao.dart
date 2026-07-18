@@ -72,6 +72,17 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   Stream<bool> watchHasCaptures() =>
       (select(captures)..limit(1)).watch().map((rows) => rows.isNotEmpty);
 
+  /// Emits true as soon as **any** item exists — a Capture (Inbox or clarified)
+  /// or an Outcome (`todos`). Drives the first-launch onboarding collapse:
+  /// once the split lands, a brand-new user's first quick-add is a Capture, but
+  /// a Nirvana import (clarified Outcomes) or a fully-cleared Inbox must also
+  /// keep the card dismissed, so both tables are watched (issue #184 Phase 2).
+  Stream<bool> watchHasAnyItem() => customSelect(
+        'SELECT (EXISTS(SELECT 1 FROM captures) '
+        'OR EXISTS(SELECT 1 FROM todos)) AS has_any',
+        readsFrom: {captures, todos},
+      ).watch().map((rows) => rows.first.read<int>('has_any') != 0);
+
   /// Count of Inbox captures — the Inbox badge.
   Stream<int> watchInboxCount() {
     final query = selectOnly(captures)
@@ -174,6 +185,18 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
           ..where((l) => l.captureId.equals(captureId)))
         .get();
     return [for (final r in rows) r.outcomeId];
+  }
+
+  /// The Capture ids still claiming [outcomeId] — the inverse of
+  /// [outcomeIdsForCapture]. Because Capture↔Outcome is many-to-many (merge
+  /// links several Captures to one Outcome), a caller cleaning up after one
+  /// Capture must check this before hard-deleting the Outcome: a non-empty
+  /// result means another Capture still owns it and it must survive.
+  Future<List<String>> captureIdsForOutcome(String outcomeId) async {
+    final rows = await (select(captureOutcomes)
+          ..where((l) => l.outcomeId.equals(outcomeId)))
+        .get();
+    return [for (final r in rows) r.captureId];
   }
 
   /// Provenance for an Outcome: the Captures it was clarified from, newest link

@@ -1,22 +1,29 @@
-/// Single write path for the clarification flow (issue #184, Phase 0).
+/// Single write path for the clarification flow (issue #184).
 ///
 /// Consolidates the clarify-flow DB writes previously spread across
 /// [ProcessToHandlers], [InboxClarifyScreen], and
 /// [FocusSessionPlanningNotifier] behind one interface, per the issue #184
 /// reversibility directive: nothing outside this service may bake "Inbox is
 /// just a Todo with `clarified = false`" into a load-bearing assumption.
-/// When the Capture/Outcome schema split lands (`captures` +
-/// `capture_outcomes` tables, ADR-0006), only [DaoClarificationService]
-/// changes — callsites keep speaking this interface.
 ///
-/// Vocabulary is CONTEXT.md's: methods speak Capture and Outcome even
-/// though the current implementation still writes the conflated `todos`
-/// row. In the conflated model, clarifying a Capture and re-clarifying an
-/// existing Outcome are the same UPDATE; the split makes them distinct
-/// (Capture clarify creates + links an Outcome and stamps `clarified_at`).
+/// Vocabulary is CONTEXT.md's: methods speak Capture and Outcome. The
+/// interface carries two write families:
+///
+/// - **Outcome routing** — [clarifyToOutcome], [promoteCaptureToOutcome],
+///   [completeOutcome], [stampClarified], [updateFields] (+ the [exists] /
+///   [getPersonTagIds] guards). These operate on the conflated `todos` row and
+///   back today's review + Inbox surfaces.
+/// - **Capture clarification** (ADR-0006, the split model) —
+///   [clarifyCaptureToOutcome], [discardCapture], [captureExists]. Clarifying a
+///   Capture creates a *new* Outcome, links it (`capture_outcomes` provenance),
+///   and stamps `captures.clarified_at`; discard is the zero-Outcome verdict.
+///   This is the write path the Capture-split Inbox/clarify UI cutover will
+///   use — a staged follow-up (see ARCHITECTURE.md); the methods are pinned by
+///   tests ahead of their callsites.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:powersync/powersync.dart' show uuid;
 
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show RoutingKind;
@@ -26,6 +33,61 @@ import '../providers/database_provider.dart';
 /// reads those flows need to guard their writes (row-existence pre-checks,
 /// person-tag pre-seeding for the Waiting For picker).
 abstract class ClarificationService {
+  /// Whether the Capture [captureId] still exists. Capture clarify surfaces
+  /// (standalone inbox-clarify, both ceremonies) load a snapshot of Inbox
+  /// Captures and can lose a row between render and tap — sync or another
+  /// device may hard-delete it. `captures` is a PowerSync VIEW, so a write's
+  /// affected-rows count can't signal a missing row; callers pre-check here so
+  /// they don't advance cursors or record phantom routings for a vanished
+  /// Capture.
+  Future<bool> captureExists(String captureId);
+
+  /// Clarifies the Capture [captureId] into a **new** Outcome (ADR-0006:
+  /// promotion is Outcome creation, not an in-place flip). In one transaction:
+  ///
+  /// 1. Creates a clarified `todos` Outcome from the clarify-card draft
+  ///    (title / notes / energy / estimate / due), routed to [to].
+  /// 2. Attaches the non-person [tagIds] the card carried into the draft (its
+  ///    seeded tag hints plus any context/project edits) and, when [to] is
+  ///    Waiting For, the [personTagIds] delegate set.
+  /// 3. Links the Capture to the new Outcome (`capture_outcomes` provenance).
+  /// 4. Stamps `captures.clarified_at` (1-1 mode: the first link completes the
+  ///    clarify act).
+  ///
+  /// **Overwrite semantics.** A Capture re-routed after Ceremony Back → re-tap
+  /// still carries the session Outcome carved by the earlier tap; that Outcome
+  /// (and its link) is dropped and a fresh one created, so re-tapping a
+  /// different destination never accumulates a second Outcome. Because
+  /// Capture↔Outcome is many-to-many, the drop retracts only *this* Capture's
+  /// claim: an Outcome another Capture still links to (a merge) is unlinked but
+  /// never deleted.
+  ///
+  /// [userId] denormalises onto the Outcome, the provenance link, and any tag
+  /// rows. [outcomeId] / [now] are injectable for deterministic testing.
+  /// Returns the new Outcome id.
+  Future<String> clarifyCaptureToOutcome(
+    String captureId, {
+    required RoutingKind to,
+    required String userId,
+    required String title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  });
+
+  /// Discards the Capture [captureId]: a zero-Outcome clarification (ADR-0006).
+  /// Stamps `captures.clarified_at` and creates nothing. Any session Outcome a
+  /// prior route of this Capture carved (Ceremony Back → Discard) is dropped
+  /// with its link. The Capture persists as provenance of the discard; it does
+  /// **not** surface on the Trash List, which remains about Outcomes.
+  Future<void> discardCapture(String captureId, {DateTime? now});
+
   /// Whether the clarify subject still exists. Snapshot-based callsites
   /// (inbox-clarify, periodic review) can lose a row between render and
   /// tap — sync or another device may hard-delete it. PowerSync exposes
@@ -109,6 +171,103 @@ class DaoClarificationService implements ClarificationService {
   DaoClarificationService(this._db);
 
   final GtdDatabase _db;
+
+  @override
+  Future<bool> captureExists(String captureId) async =>
+      await _db.captureDao.getCapture(captureId) != null;
+
+  @override
+  Future<String> clarifyCaptureToOutcome(
+    String captureId, {
+    required RoutingKind to,
+    required String userId,
+    required String title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  }) async {
+    final id = outcomeId ?? uuid.v4();
+    return _db.transaction(() async {
+      // Require the Capture at commit time, inside the transaction: the
+      // [captureExists] pre-check callers run can go stale (sync/another device
+      // hard-deletes the row between snapshot and tap). Guarding here — not just
+      // at the callsite — stops a vanished Capture from minting an orphan
+      // Outcome and a dangling `capture_outcomes` link (a fatal FK violation on
+      // Postgres). The throw rolls the whole transaction back.
+      if (await _db.captureDao.getCapture(captureId) == null) {
+        throw StateError('Capture $captureId not found');
+      }
+      // Overwrite: drop any Outcome a prior route of this Capture carved
+      // (Ceremony Back → re-tap).
+      await _dropOwnOutcomes(captureId);
+
+      await _db.todoDao.insertOutcome(
+        id: id,
+        title: title,
+        userId: userId,
+        notes: notes,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+        dueDate: dueDate,
+        now: now,
+      );
+      for (final tagId in tagIds) {
+        await _db.tagDao.assignTag(id, tagId, userId);
+      }
+      await _db.todoDao.applyRouting(
+        id,
+        to: to,
+        nextActionText: nextActionText,
+        personTagIds: personTagIds,
+        userId: personTagIds != null ? userId : null,
+        now: now,
+      );
+      await _db.captureDao.linkOutcome(captureId, id, userId, at: now);
+      await _db.captureDao.stampClarified(captureId, at: now);
+      return id;
+    });
+  }
+
+  @override
+  Future<void> discardCapture(String captureId, {DateTime? now}) async {
+    await _db.transaction(() async {
+      // Require the Capture at commit time (see clarifyCaptureToOutcome): a
+      // discard must not silently "succeed" against a row that already vanished.
+      if (await _db.captureDao.getCapture(captureId) == null) {
+        throw StateError('Capture $captureId not found');
+      }
+      await _dropOwnOutcomes(captureId);
+      await _db.captureDao.stampClarified(captureId, at: now);
+    });
+  }
+
+  /// Unlinks every Outcome [captureId] currently claims and deletes the ones
+  /// left with **no other Capture** pointing at them.
+  ///
+  /// Capture↔Outcome is many-to-many: a merge (issue #184 Phase 3) links
+  /// several Captures to one shared Outcome. Re-routing or discarding one of
+  /// those Captures must retract only *its own* claim — hard-deleting a shared
+  /// Outcome would destroy another Capture's clarified work (and cascade its
+  /// provenance links away). So the delete is gated on the post-unlink link
+  /// count: an Outcome nobody else claims was carved by this Capture alone and
+  /// is safe to drop; a still-claimed one survives, merely unlinked.
+  ///
+  /// Callers must already be inside the write transaction.
+  Future<void> _dropOwnOutcomes(String captureId) async {
+    for (final oid in await _db.captureDao.outcomeIdsForCapture(captureId)) {
+      await _db.captureDao.unlinkOutcome(captureId, oid);
+      final stillClaimed = await _db.captureDao.captureIdsForOutcome(oid);
+      if (stillClaimed.isEmpty) {
+        await _db.todoDao.deleteOutcome(oid);
+      }
+    }
+  }
 
   @override
   Future<bool> exists(String id) async => await _db.todoDao.getTodo(id) != null;

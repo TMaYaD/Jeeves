@@ -50,6 +50,7 @@ Future<Todo> _insertAt(
   String todoId, {
   Todo? initialTodo,
   List<Tag> initialTags = const [],
+  List<Capture> capturedFrom = const [],
 }) {
   final router = GoRouter(
     initialLocation: '/inbox',
@@ -80,6 +81,12 @@ Future<Todo> _insertAt(
           .overrideWith((_) => Stream.value(initialTodo)),
       taskTagsProvider(todoId)
           .overrideWith((_) => Stream.value(initialTags)),
+      // Stubbed like the other row streams above: a live Drift query stream
+      // here would schedule a zero-duration close timer on dispose that
+      // outlives the test ("A Timer is still pending…"). The DAO query itself
+      // is covered by capture_dao_test; this file covers the rendering.
+      capturesForOutcomeProvider(todoId)
+          .overrideWith((_) => Stream.value(capturedFrom)),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
     ],
@@ -133,6 +140,48 @@ void main() {
       expect(find.byIcon(Icons.add), findsOneWidget);
       expect(find.text('NOTES'), findsOneWidget);
       expect(find.text('DUE DATE'), findsOneWidget);
+    });
+
+    testWidgets('hides the Captured from section when there are no links',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'prov0', title: 'Lone outcome');
+      final (widget, router) = _buildScreen(db, 'prov0', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'prov0');
+
+      expect(find.byKey(const Key('captured_from_section')), findsNothing);
+      expect(find.textContaining('Captured from'), findsNothing);
+    });
+
+    testWidgets('shows Captured from with the source Capture when linked',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'prov1', title: 'Draft outline');
+      final (widget, router) = _buildScreen(
+        db,
+        'prov1',
+        initialTodo: todo,
+        capturedFrom: [
+          Capture(
+            id: 'cap1',
+            title: 'Project X',
+            createdAt: DateTime.utc(2026, 7, 1),
+            userId: _userId,
+          ),
+        ],
+      );
+      await _showTaskDetail(tester, widget, router, 'prov1');
+      // Let the provenance stream emit.
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('Captured from 1 capture'), findsOneWidget);
+
+      // Expanding reveals the raw captured fragment as provenance. The section
+      // sits below the fold, so scroll it into view before tapping.
+      final tile = find.byKey(const Key('captured_from_section'));
+      await tester.ensureVisible(tile);
+      await tester.pumpAndSettle();
+      await tester.tap(tile);
+      await tester.pumpAndSettle();
+      expect(find.text('Project X'), findsOneWidget);
     });
 
     testWidgets('shows status pill', (tester) async {
