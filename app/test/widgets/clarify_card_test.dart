@@ -275,7 +275,7 @@ void main() {
       expect(await _inboxIds(db), isEmpty);
     });
 
-    testWidgets('Trash discards the Capture without creating an Outcome',
+    testWidgets('Discard stamps the Capture without creating an Outcome',
         (tester) async {
       final capture = await _insertCapture(db, id: 'junk', title: 'Noise');
       final fired = <ProcessAction>[];
@@ -286,12 +286,14 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
-      await _scrollAndTap(tester, 'Trash');
+      // On a Capture the action is labelled "Discard", not "Trash": it creates
+      // no Outcome, so it never reaches the Trash List.
+      await _scrollAndTap(tester, 'Discard');
       await _pumpFrames(tester);
 
-      // The behaviour change this phase ships: routing a Capture to Trash is a
-      // stamp-only discard, not a created-then-trashed Outcome. Nothing lands
-      // on the Trash List, which stays a record of Outcomes.
+      // Discarding a Capture is a stamp-only verdict, not a created-then-
+      // trashed Outcome. Nothing lands on the Trash List, which stays a
+      // record of Outcomes.
       expect(await db.select(db.todos).get(), isEmpty);
       expect(await db.captureDao.outcomeIdsForCapture('junk'), isEmpty);
       // The Capture itself survives as the record of the discard.

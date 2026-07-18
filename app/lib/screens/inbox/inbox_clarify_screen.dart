@@ -1,16 +1,15 @@
 /// Standalone clarify screen for a single Inbox Capture.
 ///
-/// Opened when the user taps an inbox row outside of a planning session.
-/// Provides the same clarification UI (title, notes, energy level, time
-/// estimate, due date, GTD routing buttons) as the planning wizard's
-/// _ClarifyCard, but operates independently — it loads its own Capture,
-/// delegates its writes to [ClarificationService], and pops when the user
-/// clarifies the item.
+/// Opened when the user taps an inbox row outside of a planning session. It
+/// loads its own Capture and pops once the item is clarified, but the routing
+/// verdict itself is not its own: the action bar is [ProcessToHandlers], the
+/// same widget every ceremony clarify surface renders, so the destinations,
+/// their copy and the writes behind them cannot drift from those surfaces.
 ///
-/// Title and notes autosave onto the Capture. Energy, time estimate and due
-/// date have no column on a Capture (ADR-0006) — they are held as draft state
-/// here and written onto the Outcome that
-/// [ClarificationService.clarifyCaptureToOutcome] creates.
+/// Title and notes are saved onto the Capture after a successful route.
+/// Energy, time estimate and due date have no column on a Capture (ADR-0006) —
+/// they are held as draft state here and ride the [ClarifyDraft] into the
+/// Outcome that [ClarificationService.clarifyCaptureToOutcome] creates.
 library;
 
 import 'package:flutter/material.dart';
@@ -18,12 +17,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
-import '../../models/todo.dart' show RoutingKind;
-import '../../providers/auth_provider.dart';
 import '../../providers/database_provider.dart';
 import '../../services/clarification_service.dart';
 import '../../widgets/clarify_shared_widgets.dart';
-import '../../widgets/person_tag_picker.dart';
+import '../../widgets/process_to_handlers.dart';
 
 class InboxClarifyScreen extends ConsumerStatefulWidget {
   const InboxClarifyScreen({super.key, required this.captureId});
@@ -40,9 +37,27 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   String? _energyLevel;
   int? _timeEstimate;
   DateTime? _dueDate;
-  bool _processing = false;
   bool _loading = true;
   Capture? _capture;
+
+  /// Mirrors `_titleCtrl.text.trim().isEmpty` so the routing buttons and the
+  /// title's error state react as the user types. An Outcome must be
+  /// nameable, so a blank title disables every route that creates one.
+  bool _titleIsBlank = false;
+
+  /// Mirrors [ProcessToHandlers]' in-flight state, so Skip — which sits
+  /// outside the bar and navigates away — disables alongside the bar's own
+  /// buttons instead of letting the user pop mid-write.
+  bool _routing = false;
+
+  /// Non-person tag hints on this Capture, read once alongside it.
+  ///
+  /// They seed the new Outcome's tags via the draft. A one-shot read (not a
+  /// watch) because this screen renders no tag pickers — there is nothing on
+  /// screen for a live stream to keep in step, and subscribing to a live drift
+  /// query from a widget leaves a pending timer that hangs `pumpAndSettle`
+  /// (docs/TESTING.md).
+  Set<String> _hintTagIds = const <String>{};
 
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
@@ -63,10 +78,19 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
         context.pop();
         return;
       }
+      final hints = await db.captureDao.tagHintsForCapture(widget.captureId);
+      if (!mounted) return;
       setState(() {
+        // Person hints are excluded: delegation is the orthogonal axis and the
+        // Waiting For picker is the only thing that writes it.
+        _hintTagIds = {
+          for (final t in hints)
+            if (t.type != 'person') t.id,
+        };
         _capture = capture;
         _titleCtrl.text = capture.title;
         _notesCtrl.text = capture.notes ?? '';
+        _titleIsBlank = capture.title.trim().isEmpty;
         // Energy / estimate / due start empty: a Capture carries none of them.
         _loading = false;
       });
@@ -87,37 +111,45 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     super.dispose();
   }
 
-  Future<void> _runAction(Future<void> Function() action) async {
-    if (_processing) return;
-    setState(() => _processing = true);
-    try {
-      await action();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Operation failed. Please try again.')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _processing = false);
-    }
+  /// Snapshot of the card's state, read at tap time by [CaptureSubject.draft]
+  /// and applied by [ClarificationService.clarifyCaptureToOutcome] to the
+  /// Outcome it mints. Reading it at tap time (rather than at build time) is
+  /// what lets the live controller text win over the last-saved Capture row.
+  ClarifyDraft _draft() {
+    final title = _titleCtrl.text.trim();
+    final notes = _notesCtrl.text.trim();
+    return ClarifyDraft(
+      title: title,
+      notes: notes.isEmpty ? null : notes,
+      energyLevel: _energyLevel,
+      timeEstimate: _timeEstimate,
+      // Strip the time component: the picker collects a calendar day.
+      dueDate: _dueDate != null
+          ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
+          : null,
+      tagIds: _hintTagIds,
+      // Title-as-action: a Capture is always a first clarification, so there
+      // is no deliberate phrase to clobber. Consumed only for Next and
+      // Waiting For.
+      nextActionText: title.isEmpty ? null : title,
+    );
   }
 
-  /// Persists the Capture's text edits. Returns false (blocking the route)
-  /// when the title is empty — an Outcome must be nameable.
-  Future<bool> _saveFields() async {
+  /// Persists the Capture's text edits, keeping the provenance record in step
+  /// with what the user actually wrote.
+  ///
+  /// Skipped entirely for a blank title. The only route that survives a blank
+  /// title is Discard (every other button is disabled), and writing `title:
+  /// ''` onto a Capture whose `clarified_at` was just stamped would destroy
+  /// the record of *what* was discarded — the original fragment is the
+  /// correct history. Notes are skipped with it: a blank-titled discard has no
+  /// edit worth keeping.
+  Future<void> _saveCaptureText() async {
     final title = _titleCtrl.text.trim();
-    if (title.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter a title')),
-        );
-      }
-      return false;
-    }
-    final notes = _notesCtrl.text.trim();
+    if (title.isEmpty) return;
     final capture = _capture;
-    if (capture == null) return false;
+    if (capture == null) return;
+    final notes = _notesCtrl.text.trim();
     final hadNotes = (capture.notes ?? '').isNotEmpty;
     await ref.read(databaseProvider).captureDao.updateFields(
           widget.captureId,
@@ -125,91 +157,6 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
           notes: notes.isNotEmpty ? notes : null,
           clearNotes: notes.isEmpty && hadNotes,
         );
-    return true;
-  }
-
-  /// The Outcome-shaped attributes this card has collected. Applied by
-  /// [ClarificationService.clarifyCaptureToOutcome] to the Outcome it mints.
-  ({String title, String? notes, DateTime? dueDate}) get _draft => (
-        title: _titleCtrl.text.trim(),
-        notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-        // Strip the time component: the picker collects a calendar day.
-        dueDate: _dueDate != null
-            ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
-            : null,
-      );
-
-  /// Clarifies the Capture into a new Outcome routed to [to], carrying the
-  /// draft attributes and any delegates.
-  Future<void> _clarifyTo(
-    RoutingKind to, {
-    Set<String>? personTagIds,
-  }) async {
-    final draft = _draft;
-    await ref.read(clarificationServiceProvider).clarifyCaptureToOutcome(
-          widget.captureId,
-          to: to,
-          userId: ref.read(currentUserIdProvider),
-          title: draft.title,
-          notes: draft.notes,
-          energyLevel: _energyLevel,
-          timeEstimate: _timeEstimate,
-          dueDate: draft.dueDate,
-          // Title-as-action: a Capture is always a first clarification, so
-          // there is no deliberate phrase to clobber. Consumed only for Next
-          // and Waiting For.
-          nextActionText: draft.title,
-          personTagIds: personTagIds,
-          tagIds: await ref
-              .read(databaseProvider)
-              .captureDao
-              .tagHintIdsForCapture(widget.captureId),
-        );
-  }
-
-  /// Shared flow for the one-tap routing handlers: persist field edits,
-  /// bail if saving failed (empty title) or the screen unmounted, run the
-  /// routing [action] against [ClarificationService], then pop.
-  Future<void> _saveAndRoute(Future<void> Function() action) async {
-    final saved = await _saveFields();
-    if (!saved || !mounted) return;
-    await action();
-    if (mounted) context.pop();
-  }
-
-  Future<void> _process() =>
-      _saveAndRoute(() => _clarifyTo(RoutingKind.nextAction));
-
-  Future<void> _processToMaybe() =>
-      _saveAndRoute(() => _clarifyTo(RoutingKind.maybe));
-
-  Future<void> _processToDone() =>
-      _saveAndRoute(() => _clarifyTo(RoutingKind.done));
-
-  Future<void> _processToWaitingFor() async {
-    final saved = await _saveFields();
-    if (!saved || !mounted) return;
-    await showPersonTagPicker(
-      context,
-      // Selection-only: the Outcome does not exist yet, so the picker has
-      // nothing to write to. clarifyCaptureToOutcome attaches the delegates to
-      // the Outcome it creates, in the same transaction.
-      assignedPersonTagIds: const {},
-      requireSelection: true,
-      onConfirmSelection: (selected) async {
-        if (!mounted) return;
-        try {
-          await _clarifyTo(RoutingKind.waitingFor, personTagIds: selected);
-          if (mounted) context.pop();
-        } catch (e) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Operation failed. Please try again.')),
-            );
-          }
-        }
-      },
-    );
   }
 
   Future<DateTime?> _pickDate() {
@@ -275,8 +222,16 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                 TextField(
                   key: const Key('clarify_title'),
                   controller: _titleCtrl,
+                  onChanged: (value) {
+                    final blank = value.trim().isEmpty;
+                    if (blank != _titleIsBlank) {
+                      setState(() => _titleIsBlank = blank);
+                    }
+                  },
                   decoration: InputDecoration(
                     labelText: 'Title',
+                    errorText:
+                        _titleIsBlank ? 'Title is required to process' : null,
                     border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8)),
                     contentPadding: const EdgeInsets.symmetric(
@@ -376,56 +331,66 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                 ),
                 const SizedBox(height: 28),
 
-                // Destination buttons — dimmed while a write is in flight.
-                AnimatedOpacity(
-                  opacity: _processing ? 0.4 : 1.0,
-                  duration: const Duration(milliseconds: 150),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const ClarifyFieldLabel('PROCESS TO'),
-                      const SizedBox(height: 12),
-                      ClarifyDestinationButton(
-                        label: 'Next Action',
-                        icon: Icons.check_circle_outline,
-                        color: const Color(0xFF16A34A),
-                        enabled: !_processing,
-                        onTap: () => _runAction(_process),
-                      ),
-                      const SizedBox(height: 8),
-                      ClarifyDestinationButton(
-                        label: 'Waiting For',
-                        icon: Icons.hourglass_empty,
-                        color: const Color(0xFFF59E0B),
-                        enabled: !_processing,
-                        onTap: () => _runAction(_processToWaitingFor),
-                      ),
-                      const SizedBox(height: 8),
-                      ClarifyDestinationButton(
-                        label: 'Maybe',
-                        icon: Icons.star_border,
-                        color: const Color(0xFF6B7280),
-                        enabled: !_processing,
-                        onTap: () => _runAction(_processToMaybe),
-                      ),
-                      const SizedBox(height: 8),
-                      ClarifyDestinationButton(
-                        label: 'Done (discard)',
-                        icon: Icons.delete_outline,
-                        color: const Color(0xFFDC2626),
-                        enabled: !_processing,
-                        onTap: () => _runAction(_processToDone),
-                      ),
-                      const SizedBox(height: 20),
-                      ClarifyDestinationButton(
-                        label: 'Skip',
-                        icon: Icons.next_plan_outlined,
-                        color: const Color(0xFF6B7280),
-                        enabled: !_processing,
-                        onTap: () => context.pop(),
-                      ),
-                    ],
+                // Destinations. The canonical action bar owns every routing
+                // write — including the zero-Outcome Discard — so this screen
+                // cannot drift from the ceremony clarify surfaces.
+                const ClarifyFieldLabel('PROCESS TO'),
+                const SizedBox(height: 12),
+                ProcessToHandlers(
+                  subject: CaptureSubject(
+                    capture: _capture!,
+                    draft: _draft,
                   ),
+                  // Title is required to name an Outcome, so the four routes
+                  // that create one are gated on it. Discard stays enabled:
+                  // an unnamed fragment is exactly the kind of thing a user
+                  // wants to throw away.
+                  disabled: _titleIsBlank
+                      ? const <ProcessAction>{
+                          ProcessAction.next,
+                          ProcessAction.waitingFor,
+                          ProcessAction.someday,
+                          ProcessAction.done,
+                        }
+                      : const <ProcessAction>{},
+                  // Opt out of the default-on `nextActionDialog` modifier:
+                  // this screen supplies the phrase via the title-as-action
+                  // coupling in [_draft], so Next routes immediately.
+                  except: const {ProcessAction.nextActionDialog},
+                  // Skip lives outside the bar, so it does not get the bar's
+                  // own in-flight disabling for free — mirror the state out.
+                  onProcessingChanged: (busy) {
+                    if (mounted) setState(() => _routing = busy);
+                  },
+                  onAfterRoute: (_) async {
+                    if (!mounted) return;
+                    // The routing verdict is already committed. Persisting the
+                    // text is best-effort bookkeeping on top of it, so a
+                    // failure must not strand the user on a screen whose
+                    // buttons would re-route an item that is already clarified
+                    // — leave regardless, and let ProcessToHandlers report it.
+                    try {
+                      await _saveCaptureText();
+                    } finally {
+                      // `this.context` (not the build parameter) so the guard
+                      // is the matching State.mounted check.
+                      if (mounted) this.context.pop();
+                    }
+                  },
+                ),
+                const SizedBox(height: 20),
+                // Skip is a nav escape hatch, not a verdict — it leaves
+                // `clarified_at` NULL and the Capture in the Inbox — so it
+                // stays outside the routing bar. Disabled while a route is in
+                // flight: popping mid-write would skip the text flush in
+                // `onAfterRoute` and leave the Capture's title behind the
+                // Outcome's.
+                ClarifyDestinationButton(
+                  label: 'Skip',
+                  icon: Icons.next_plan_outlined,
+                  color: const Color(0xFF6B7280),
+                  enabled: !_routing,
+                  onTap: () => context.pop(),
                 ),
               ],
             ),

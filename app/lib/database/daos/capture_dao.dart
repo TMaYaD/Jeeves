@@ -302,6 +302,25 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
         .map((rows) => rows.map((r) => r.readTable(tags)).toList());
   }
 
+  /// One-shot read of the same tag hints [watchTagHints] streams.
+  ///
+  /// For surfaces that consume hints as *draft input* rather than rendering
+  /// them — the standalone clarify screen collects them once at load and lets
+  /// them ride into the new Outcome, but shows no tag pickers, so there is
+  /// nothing for a live stream to keep in step. Unlike
+  /// [tagHintIdsForCapture] this returns whole [Tag] rows, so the caller can
+  /// filter by type (person hints travel on the delegate axis, not `tagIds`).
+  Future<List<Tag>> tagHintsForCapture(String captureId) {
+    final query = select(tags).join([
+      innerJoin(captureTags, captureTags.tagId.equalsExp(tags.id)),
+    ])
+      ..where(captureTags.captureId.equals(captureId))
+      ..orderBy([OrderingTerm.asc(tags.name)]);
+    return query
+        .map((row) => row.readTable(tags))
+        .get();
+  }
+
   /// Attach a project-typed tag hint, replacing any existing one.
   ///
   /// A Capture carries at most one project hint, mirroring the single-project

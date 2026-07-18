@@ -14,6 +14,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
@@ -63,6 +64,21 @@ Future<String> _insertPersonTag(
   return id;
 }
 
+/// A [ClarificationService] whose in-place routing write always fails.
+class _FailingClarificationService extends DaoClarificationService {
+  _FailingClarificationService(super.db);
+
+  @override
+  Future<void> clarifyToOutcome(
+    String id, {
+    required RoutingKind to,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    String? userId,
+  }) =>
+      Future<void>.error(StateError('write failed'));
+}
+
 Widget _harness(
   GtdDatabase db, {
   required Todo todo,
@@ -73,10 +89,13 @@ Widget _harness(
   ProcessAction? lastAction,
   Future<void> Function(ProcessAction)? onAfterRoute,
   List<Tag> personTags = const [],
+  ClarificationService? clarificationService,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      if (clarificationService != null)
+        clarificationServiceProvider.overrideWithValue(clarificationService),
       // Use a single-value stream so drift's StreamQueryStore (which leaves
       // a pending timer behind on dispose) is not subscribed to in tests.
       personTagsProvider.overrideWith((ref) => Stream.value(personTags)),
@@ -107,6 +126,54 @@ Widget _harness(
       ),
     ),
   );
+}
+
+/// Same harness, over a [CaptureSubject] — the shape whose `trash` action is
+/// the zero-Outcome discard rather than a move to the Trash List.
+Widget _captureHarness(
+  GtdDatabase db, {
+  required Capture capture,
+  Future<void> Function(ProcessAction)? onAfterRoute,
+}) {
+  return ProviderScope(
+    overrides: [
+      databaseProvider.overrideWithValue(db),
+      personTagsProvider.overrideWith((ref) => Stream.value(const <Tag>[])),
+    ],
+    child: MaterialApp(
+      home: Scaffold(
+        body: ListView(
+          children: [
+            ProcessToHandlers(
+              subject: CaptureSubject(
+                capture: capture,
+                draft: () => ClarifyDraft(title: capture.title),
+              ),
+              except: const {ProcessAction.nextActionDialog},
+              onAfterRoute: onAfterRoute,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+Future<Capture> _insertCapture(
+  GtdDatabase db, {
+  required String id,
+  String title = 'Fragment',
+}) async {
+  final now = DateTime.now();
+  await db.captureDao.insertCapture(CapturesCompanion(
+    id: Value(id),
+    title: Value(title),
+    captureSource: const Value('manual'),
+    userId: const Value(_userId),
+    createdAt: Value(now),
+    updatedAt: Value(now),
+  ));
+  return (await db.captureDao.getCapture(id))!;
 }
 
 Tag _personTag(String id, String name) => Tag(
@@ -253,6 +320,26 @@ void main() {
         matching: find.byIcon(Icons.check_circle),
       );
       expect(iconsInside, findsOneWidget);
+    });
+
+    testWidgets('trash is labelled "Trash" on an Outcome', (tester) async {
+      final todo = await _insertTodo(db, id: 't7');
+      await tester.pumpWidget(_harness(db, todo: todo));
+
+      // An Outcome routed to trash lands on the Trash List (`Intent = trash`),
+      // so "Trash" names a real destination.
+      expect(find.text('Trash'), findsOneWidget);
+      expect(find.text('Discard'), findsNothing);
+    });
+
+    testWidgets('trash is labelled "Discard" on a Capture', (tester) async {
+      final capture = await _insertCapture(db, id: 'c7');
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+
+      // A discarded Capture creates no Outcome, so it never reaches that List.
+      // Naming it "Trash" would promise a destination it never arrives at.
+      expect(find.text('Discard'), findsOneWidget);
+      expect(find.text('Trash'), findsNothing);
     });
   });
 
@@ -696,6 +783,51 @@ void main() {
 
       expect(fired, isEmpty,
           reason: 'must not advance the cursor on a deleted snapshot row');
+    });
+
+    testWidgets('a failed write reports the error and does NOT fire',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'boom1');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        clarificationService: _FailingClarificationService(db),
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+
+      await tester.tap(find.text('Trash'));
+      await tester.pumpAndSettle();
+
+      // This widget owns the tap handler, so no callsite can catch the
+      // failure — without this the write escapes as an unhandled async error
+      // and every clarify surface silently does nothing.
+      expect(find.text('Operation failed. Please try again.'), findsOneWidget);
+      expect(fired, isEmpty,
+          reason: 'the write did not land, so nothing may be recorded');
+    });
+
+    testWidgets('a failing onAfterRoute does not report the write as failed',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'boom2');
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (_) async => throw StateError('bookkeeping failed'),
+      ));
+
+      await tester.tap(find.text('Trash'));
+      await tester.pumpAndSettle();
+
+      // The write landed — only the callsite's post-route bookkeeping blew up.
+      expect((await db.todoDao.getTodo('boom2'))!.intent, 'trash');
+      // So "please try again" would be wrong advice: it invites the user to
+      // redo a route that already succeeded.
+      expect(find.text('Operation failed. Please try again.'), findsNothing);
+      expect(
+        find.textContaining('Saved, but finishing up failed'),
+        findsOneWidget,
+      );
     });
 
     testWidgets(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -67,6 +69,27 @@ Future<Todo?> _outcomeOf(GtdDatabase db, String captureId) async {
   return db.todoDao.getTodo(ids.single);
 }
 
+/// Scrolls [label] into view and taps it.
+///
+/// The destination buttons sit below the fold on the 800x600 test surface, and
+/// Skip sits below *them* as its own ListView child — far enough down that it
+/// is not built at all until scrolled toward. Being built still isn't enough
+/// to be tappable: a ListView builds children within its cacheExtent while
+/// they remain below the viewport, and a tap at such a widget's centre
+/// hit-tests empty space instead. Hence drag-until-built, then ensureVisible.
+Future<void> _scrollAndTap(WidgetTester tester, String label) async {
+  for (var i = 0; i < 15 && find.text(label).evaluate().isEmpty; i++) {
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -200));
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(find.text(label), findsOneWidget,
+      reason: 'the $label button never came into view');
+  await tester.ensureVisible(find.text(label));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label));
+  await tester.pumpAndSettle();
+}
+
 /// Ids still in the Inbox, read with a plain select — awaiting a live drift
 /// `watch()` inside `testWidgets` never completes under the test binding's
 /// clock.
@@ -82,9 +105,9 @@ Future<List<String>> _inboxIds(GtdDatabase db) async {
 /// [updateFields] call carried, so tests can assert the screen never sends a
 /// spurious clear for a field that had no value.
 class _RecordingClarificationService implements ClarificationService {
-  _RecordingClarificationService(this._inner);
+  _RecordingClarificationService(this.inner);
 
-  final ClarificationService _inner;
+  final ClarificationService inner;
 
   bool? lastClearNotes;
   bool? lastClearEnergyLevel;
@@ -117,7 +140,7 @@ class _RecordingClarificationService implements ClarificationService {
     lastClearEnergyLevel = clearEnergyLevel;
     lastClearTimeEstimate = clearTimeEstimate;
     lastClearDueDate = clearDueDate;
-    return _inner.updateFields(
+    return inner.updateFields(
       id,
       title: title,
       notes: notes,
@@ -132,11 +155,11 @@ class _RecordingClarificationService implements ClarificationService {
   }
 
   @override
-  Future<bool> exists(String id) => _inner.exists(id);
+  Future<bool> exists(String id) => inner.exists(id);
 
   @override
   Future<Set<String>> getPersonTagIds(String id) =>
-      _inner.getPersonTagIds(id);
+      inner.getPersonTagIds(id);
 
   @override
   Future<void> clarifyToOutcome(
@@ -146,7 +169,7 @@ class _RecordingClarificationService implements ClarificationService {
     Set<String>? personTagIds,
     String? userId,
   }) =>
-      _inner.clarifyToOutcome(
+      inner.clarifyToOutcome(
         id,
         to: to,
         nextActionText: nextActionText,
@@ -160,17 +183,17 @@ class _RecordingClarificationService implements ClarificationService {
     String? intent,
     DateTime? dueDate,
   }) =>
-      _inner.promoteCaptureToOutcome(id, intent: intent, dueDate: dueDate);
+      inner.promoteCaptureToOutcome(id, intent: intent, dueDate: dueDate);
 
   @override
-  Future<int> completeOutcome(String id) => _inner.completeOutcome(id);
+  Future<int> completeOutcome(String id) => inner.completeOutcome(id);
 
   @override
-  Future<void> stampClarified(String id) => _inner.stampClarified(id);
+  Future<void> stampClarified(String id) => inner.stampClarified(id);
 
   @override
   Future<bool> captureExists(String captureId) =>
-      _inner.captureExists(captureId);
+      inner.captureExists(captureId);
 
   @override
   Future<String> clarifyCaptureToOutcome(
@@ -192,7 +215,7 @@ class _RecordingClarificationService implements ClarificationService {
     lastEnergyLevel = energyLevel;
     lastTimeEstimate = timeEstimate;
     lastDueDate = dueDate;
-    return _inner.clarifyCaptureToOutcome(
+    return inner.clarifyCaptureToOutcome(
         captureId,
         to: to,
         userId: userId,
@@ -211,8 +234,82 @@ class _RecordingClarificationService implements ClarificationService {
 
   @override
   Future<void> discardCapture(String captureId, {DateTime? now}) =>
-      _inner.discardCapture(captureId, now: now);
+      inner.discardCapture(captureId, now: now);
 }
+
+/// A [ClarificationService] whose Capture-clarify write always fails, so the
+/// screen's error path can be exercised against a real failure rather than a
+/// simulated one.
+class _FailingClarificationService extends _RecordingClarificationService {
+  _FailingClarificationService(super.inner);
+
+  @override
+  Future<String> clarifyCaptureToOutcome(
+    String captureId, {
+    required RoutingKind to,
+    required String userId,
+    required String title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  }) =>
+      Future<String>.error(StateError('write failed'));
+}
+
+/// A [ClarificationService] whose Capture-clarify write parks on [gate], so a
+/// test can observe the UI mid-write.
+class _BlockingClarificationService extends _RecordingClarificationService {
+  _BlockingClarificationService(super.inner, this.gate);
+
+  final Future<void> gate;
+
+  @override
+  Future<String> clarifyCaptureToOutcome(
+    String captureId, {
+    required RoutingKind to,
+    required String userId,
+    required String title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  }) async {
+    await gate;
+    return super.clarifyCaptureToOutcome(
+      captureId,
+      to: to,
+      userId: userId,
+      title: title,
+      notes: notes,
+      energyLevel: energyLevel,
+      timeEstimate: timeEstimate,
+      dueDate: dueDate,
+      nextActionText: nextActionText,
+      personTagIds: personTagIds,
+      tagIds: tagIds,
+      outcomeId: outcomeId,
+      now: now,
+    );
+  }
+}
+
+/// Whether the Skip affordance is currently tappable.
+bool _skipEnabled(WidgetTester tester) =>
+    tester
+        .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, 'Skip'))
+        .onPressed !=
+    null;
 
 Widget _buildApp(
   GtdDatabase db,
@@ -316,30 +413,83 @@ void main() {
 
       // The destination buttons are below the fold on the 800x600 test surface;
       // scroll them into view before tapping.
-      await tester.ensureVisible(find.text('Maybe'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Maybe'));
-      await tester.pumpAndSettle();
+      await _scrollAndTap(tester, 'Someday');
 
       final outcome = await _outcomeOf(db, 'x');
       expect(outcome!.clarified, isTrue);
       expect(outcome.intent, 'maybe');
     });
 
-    testWidgets('Done (discard) carves an already-achieved Outcome',
-        (tester) async {
+    testWidgets('Done carves an already-achieved Outcome', (tester) async {
       await db.captureDao
           .insertCapture(_captureCompanion(id: 'x', title: 'Old idea'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      await tester.ensureVisible(find.text('Done (discard)'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Done (discard)'));
+      await _scrollAndTap(tester, 'Done');
+
+      // Done records a Completion — the user finished the thing. It is not a
+      // discard, so the Outcome must not land on the Trash List either.
+      final outcome = (await _outcomeOf(db, 'x'))!;
+      expect(outcome.doneAt, isNotNull);
+      expect(outcome.intent, isNot('trash'));
+    });
+
+    testWidgets('Discard stamps the Capture and carves no Outcome',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Never worth it'));
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      expect((await _outcomeOf(db, 'x'))!.doneAt, isNotNull);
+      await _scrollAndTap(tester, 'Discard');
+
+      // A discard is the zero-Outcome verdict: the clarify act completed, so
+      // `clarified_at` is stamped and the item leaves the Inbox, but nothing
+      // was ever worth creating.
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
+      expect(await _outcomeOf(db, 'x'), isNull);
+      expect(await _inboxIds(db), isEmpty);
+    });
+
+    testWidgets('no discard-labelled action creates an Outcome',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Noise'));
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      await _scrollAndTap(tester, 'Discard');
+
+      // The bug this screen shipped with: a button that said "discard" wrote a
+      // completed Outcome. Nothing may land in `todos` on this path — not even
+      // a trashed row, because Trash is a List of Outcomes and a discarded
+      // Capture never becomes one.
+      expect(await db.select(db.todos).get(), isEmpty);
+    });
+
+    testWidgets('discarding an untitled Capture keeps its original title',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Half a thought'));
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(const Key('clarify_title')), '');
+      await tester.pump();
+
+      await _scrollAndTap(tester, 'Discard');
+
+      // Discard stays enabled with a blank title so an unnamed fragment can be
+      // thrown away — but the Capture is the provenance record of *what* was
+      // discarded, so the blank must not be written over it.
+      final capture = (await db.captureDao.getCapture('x'))!;
+      expect(capture.clarifiedAt, isNotNull);
+      expect(capture.title, 'Half a thought');
     });
 
     testWidgets('Skip leaves the Capture in the Inbox and carves nothing',
@@ -350,14 +500,49 @@ void main() {
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      await tester.ensureVisible(find.text('Skip'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Skip'));
-      await tester.pumpAndSettle();
+      await _scrollAndTap(tester, 'Skip');
 
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
       expect(await _outcomeOf(db, 'x'), isNull);
       expect(await _inboxIds(db), ['x']);
+    });
+
+    testWidgets('Skip is disabled while a routing write is in flight',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      final gate = Completer<void>();
+      await tester.pumpWidget(_buildApp(
+        db,
+        'x',
+        clarificationService: _BlockingClarificationService(
+          DaoClarificationService(db),
+          gate.future,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Skip is the last ListView child — drag until it is built.
+      for (var i = 0; i < 15 && find.text('Skip').evaluate().isEmpty; i++) {
+        await tester.drag(find.byType(Scrollable).first, const Offset(0, -200));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(_skipEnabled(tester), isTrue);
+
+      await tester.ensureVisible(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next Action'));
+      await tester.pump();
+
+      // Skip sits outside the action bar, so it does not inherit the bar's
+      // in-flight disabling. Left live, it would pop the screen mid-write and
+      // skip the post-route text flush.
+      expect(_skipEnabled(tester), isFalse);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(await _outcomeOf(db, 'x'), isNotNull);
     });
 
     testWidgets('empty title does not clarify the Capture', (tester) async {
@@ -370,13 +555,14 @@ void main() {
       await tester.enterText(find.byKey(const Key('clarify_title')), '');
       await tester.pump();
 
-      await tester.tap(find.text('Next Action'));
+      await tester.tap(find.text('Next Action'), warnIfMissed: false);
       await tester.pumpAndSettle();
 
-      // An Outcome must be nameable, so the route is blocked and the Capture
-      // stays in the Inbox.
+      // An Outcome must be nameable, so the button is disabled and the tap is
+      // a no-op: the Capture stays in the Inbox.
       expect(await _outcomeOf(db, 'x'), isNull);
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
+      expect(find.text('Title is required to process'), findsOneWidget);
     });
 
     testWidgets('edited title lands on both the Capture and the Outcome',
@@ -486,6 +672,33 @@ void main() {
       expect(outcome.notes, isNull);
       expect(outcome.dueDate, isNull);
       expect(outcome.clarified, isTrue);
+    });
+
+    testWidgets('a failed write surfaces an error and does not pop',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(
+        _buildApp(
+          db,
+          'x',
+          clarificationService:
+              _FailingClarificationService(DaoClarificationService(db)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      // The action bar owns the tap handler, so it must report the failure
+      // itself — otherwise the write escapes as an unhandled async error and
+      // the tap looks like it did nothing.
+      expect(find.text('Operation failed. Please try again.'), findsOneWidget);
+      // And the screen stays put, so the user's edits are not lost.
+      expect(find.byKey(const Key('clarify_title')), findsOneWidget);
+      expect(await _outcomeOf(db, 'x'), isNull);
     });
   });
 
