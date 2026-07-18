@@ -496,10 +496,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     if (state.inboxNav.isLoaded || _loadingInboxSnapshot) return;
     _loadingInboxSnapshot = true;
     try {
-      final items = await _db.inboxDao.watchInbox().first;
+      // Captures with `clarified_at IS NULL` (ADR-0006) — the snapshot holds
+      // Capture ids, and each one is clarified *into* a new Outcome.
+      final items = await _db.captureDao.watchInbox().first;
       state = state.copyWith(
         inboxNav: state.inboxNav
-            .withItems(items.reversed.map((t) => t.id).toList()),
+            .withItems(items.reversed.map((c) => c.id).toList()),
       );
     } finally {
       _loadingInboxSnapshot = false;
@@ -538,33 +540,47 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     nextInboxItem();
   }
 
-  /// Applies a routing transition to the snapshot row at [idx], delegating
-  /// the DB matrix to [ClarificationService.clarifyToOutcome]. Records
+  /// Clarifies the snapshot Capture at [idx] with the verdict [to]. Records
   /// [kind] in [inboxRoutings] and advances the cursor.
+  ///
+  /// Every destination except Trash creates a **new** Outcome, links it back
+  /// to the Capture as provenance and stamps `clarified_at` (ADR-0006). Trash
+  /// is the zero-Outcome discard: it stamps and creates nothing, so a
+  /// discarded Capture never appears on the Trash List. [title] defaults to the
+  /// Capture's own title; its tag hints seed the new Outcome's tags.
   ///
   /// Bails out without mutating state if the snapshot row no longer exists
   /// in the DB (deleted between snapshot load and apply). Idempotent under
   /// rapid re-taps: the cursor advance check at the end discards a second
   /// call's state mutation when the first call has already advanced.
   ///
-  /// Note: PowerSync exposes [todos] as a SQLite VIEW backed by an
+  /// Note: PowerSync exposes [captures] as a SQLite VIEW backed by an
   /// INSTEAD OF trigger, so Drift's "affected rows" return value is always
   /// 0 even on a successful update. We pre-check for row existence via
-  /// [ClarificationService.exists] and otherwise trust the snapshot's claim
-  /// that the row exists.
+  /// [ClarificationService.captureExists] and otherwise trust the snapshot's
+  /// claim that the row exists.
   Future<void> _routeInboxItem(
-    String id, {
+    String captureId, {
     required RoutingKind to,
+    String? title,
     String? nextActionText,
   }) async {
     final idx = state.inboxNav.index;
-    if (!await _clarification.exists(id)) return;
-    await _clarification.clarifyToOutcome(
-      id,
-      to: to,
-      nextActionText: nextActionText,
-      userId: _userId,
-    );
+    final capture = await _db.captureDao.getCapture(captureId);
+    if (capture == null) return;
+    if (to == RoutingKind.trash) {
+      await _clarification.discardCapture(captureId);
+    } else {
+      await _clarification.clarifyCaptureToOutcome(
+        captureId,
+        to: to,
+        userId: _userId,
+        title: title ?? capture.title,
+        notes: capture.notes,
+        nextActionText: nextActionText,
+        tagIds: await _db.captureDao.tagHintIdsForCapture(captureId),
+      );
+    }
     if (state.inboxNav.index != idx) return;
     state = state.copyWith(
       inboxRoutings: {
@@ -575,57 +591,58 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     nextInboxItem();
   }
 
-  /// Persists attribute edits on a todo. Used by the inbox clarify card to
-  /// autosave Title/Notes/Energy/Time/Due as the user types or taps —
-  /// attribute persistence is decoupled from any Process-to routing
-  /// decision, so edits survive Skip / Back even without a routing call.
+  /// Persists text edits on the Capture at [id]. Attribute persistence is
+  /// decoupled from any Process-to routing decision, so edits survive Skip /
+  /// Back even without a routing call.
+  ///
+  /// Only title and notes: energy, time estimate and due date are Outcome
+  /// attributes with no column on a Capture (ADR-0006). The clarify card holds
+  /// those as draft state and they are written onto the Outcome at
+  /// clarification.
   Future<void> updateInboxItemFields(
     String id, {
     String? title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
-    DateTime? dueDate,
-    bool clearEnergyLevel = false,
-    bool clearTimeEstimate = false,
-    bool clearDueDate = false,
+    bool clearNotes = false,
   }) =>
-      _clarification.updateFields(
-        id,
-        title: title,
-        notes: notes,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
-        dueDate: dueDate,
-        clearEnergyLevel: clearEnergyLevel,
-        clearTimeEstimate: clearTimeEstimate,
-        clearDueDate: clearDueDate,
-      );
+      _db.captureDao
+          .updateFields(id, title: title, notes: notes, clearNotes: clearNotes);
 
-  /// Routes the current inbox item to Next Actions and records [title] as
-  /// the task's next-action text.
+  /// Clarifies the current Capture into a Next Action, recording [title] as
+  /// the new Outcome's next-action text.
   ///
   /// Setting `next_action_text` prevents the task from immediately surfacing
   /// as Actionless in the re-clarification surface after inbox-clarify.
   Future<void> processInboxItem(String id, {required String title}) =>
-      _routeInboxItem(id, to: RoutingKind.nextAction, nextActionText: title);
+      _routeInboxItem(
+        id,
+        to: RoutingKind.nextAction,
+        title: title,
+        nextActionText: title,
+      );
 
-  /// Routes the current inbox item to Waiting For. Person-tag assignment is
-  /// performed externally (by the picker) before this is invoked.
+  /// Clarifies the current Capture into a delegated Outcome. Person-tag
+  /// assignment is performed externally (by the picker) before this is invoked.
   Future<void> processInboxItemToWaitingFor(String id,
           {required String title}) =>
-      _routeInboxItem(id, to: RoutingKind.waitingFor, nextActionText: title);
+      _routeInboxItem(
+        id,
+        to: RoutingKind.waitingFor,
+        title: title,
+        nextActionText: title,
+      );
 
-  /// Routes the current inbox item to Someday/Maybe.
+  /// Clarifies the current Capture into a Someday/Maybe Outcome.
   Future<void> processInboxItemToMaybe(String id) =>
       _routeInboxItem(id, to: RoutingKind.maybe);
 
-  /// Routes the current inbox item to Trash. Soft-delete: the row remains in
-  /// the DB so the user can re-route on Back.
+  /// Discards the current Capture — a zero-Outcome clarification (ADR-0006).
+  /// Stamps `clarified_at` and creates nothing; the Capture itself is never
+  /// deleted, so Back can still revisit it.
   Future<void> processInboxItemToTrash(String id) =>
       _routeInboxItem(id, to: RoutingKind.trash);
 
-  /// Routes the current inbox item to Done.
+  /// Clarifies the current Capture into an already-achieved Outcome.
   Future<void> processInboxItemToDone(String id) =>
       _routeInboxItem(id, to: RoutingKind.done);
 

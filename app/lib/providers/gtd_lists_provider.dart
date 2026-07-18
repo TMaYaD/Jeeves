@@ -4,17 +4,7 @@ import '../database/gtd_database.dart';
 import 'database_provider.dart';
 import 'tag_filter_provider.dart';
 
-export '../database/gtd_database.dart' show Todo;
-
-/// Stream of inbox todos (clarified = false), newest first.
-///
-/// Automatically filtered by the active context tag set from
-/// [tagFilterProvider] (AND semantics when multiple tags are selected).
-final inboxProvider = StreamProvider<List<Todo>>((ref) {
-  final db = ref.watch(databaseProvider);
-  final tagIds = ref.watch(tagFilterProvider);
-  return db.inboxDao.watchInbox(tagIds: tagIds);
-});
+export '../database/gtd_database.dart' show Capture, Todo;
 
 /// Stream of next-action todos.
 ///
@@ -69,14 +59,15 @@ final trashProvider = StreamProvider<List<Todo>>((ref) {
   return db.todoDao.watchTrash();
 });
 
-/// Stream of inbox todos (clarified = false), newest first — no context tag filter.
+/// Stream of the whole Inbox — Captures with `clarified_at IS NULL` — newest
+/// first, with no context tag filter.
 ///
-/// Unlike [inboxProvider], this ignores [tagFilterProvider] so it covers the
-/// user's entire inbox. Used by the Daily Planning Cadence Trigger to decide whether
-/// there is anything to plan.
-final unfilteredInboxProvider = StreamProvider<List<Todo>>((ref) {
+/// Unlike [inboxItemsProvider], this ignores [tagFilterProvider] so it covers
+/// the user's entire Inbox. Used by the Daily Planning Cadence Trigger to
+/// decide whether there is anything to plan.
+final unfilteredInboxProvider = StreamProvider<List<Capture>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.inboxDao.watchInbox();
+  return db.captureDao.watchInbox();
 });
 
 /// Stream of next-action todos — no context tag filter.

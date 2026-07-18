@@ -1,11 +1,16 @@
-/// Standalone clarify screen for a single inbox item.
+/// Standalone clarify screen for a single Inbox Capture.
 ///
 /// Opened when the user taps an inbox row outside of a planning session.
 /// Provides the same clarification UI (title, notes, energy level, time
 /// estimate, due date, GTD routing buttons) as the planning wizard's
-/// _ClarifyCard, but operates independently — it loads its own todo,
+/// _ClarifyCard, but operates independently — it loads its own Capture,
 /// delegates its writes to [ClarificationService], and pops when the user
-/// routes the item.
+/// clarifies the item.
+///
+/// Title and notes autosave onto the Capture. Energy, time estimate and due
+/// date have no column on a Capture (ADR-0006) — they are held as draft state
+/// here and written onto the Outcome that
+/// [ClarificationService.clarifyCaptureToOutcome] creates.
 library;
 
 import 'package:flutter/material.dart';
@@ -13,15 +18,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
+import '../../models/todo.dart' show RoutingKind;
+import '../../providers/auth_provider.dart';
 import '../../providers/database_provider.dart';
 import '../../services/clarification_service.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/person_tag_picker.dart';
 
 class InboxClarifyScreen extends ConsumerStatefulWidget {
-  const InboxClarifyScreen({super.key, required this.todoId});
+  const InboxClarifyScreen({super.key, required this.captureId});
 
-  final String todoId;
+  final String captureId;
 
   @override
   ConsumerState<InboxClarifyScreen> createState() => _InboxClarifyScreenState();
@@ -35,7 +42,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   DateTime? _dueDate;
   bool _processing = false;
   bool _loading = true;
-  Todo? _todo;
+  Capture? _capture;
 
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
@@ -44,26 +51,23 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     super.initState();
     _titleCtrl = TextEditingController();
     _notesCtrl = TextEditingController();
-    _loadTodo();
+    _loadCapture();
   }
 
-  Future<void> _loadTodo() async {
+  Future<void> _loadCapture() async {
     final db = ref.read(databaseProvider);
     try {
-      final todo = await db.todoDao.getTodo(widget.todoId);
+      final capture = await db.captureDao.getCapture(widget.captureId);
       if (!mounted) return;
-      if (todo == null) {
+      if (capture == null) {
         context.pop();
         return;
       }
       setState(() {
-        _todo = todo;
-        _titleCtrl.text = todo.title;
-        _notesCtrl.text = todo.notes ?? '';
-        _energyLevel = todo.energyLevel;
-        _timeEstimate = todo.timeEstimate;
-        // Storage is UTC; show calendar day in local timezone.
-        _dueDate = todo.dueDate?.toLocal();
+        _capture = capture;
+        _titleCtrl.text = capture.title;
+        _notesCtrl.text = capture.notes ?? '';
+        // Energy / estimate / due start empty: a Capture carries none of them.
         _loading = false;
       });
     } catch (e) {
@@ -99,8 +103,8 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     }
   }
 
-  /// Writes editable fields to the DB. Returns false (blocking routing) when
-  /// the title is empty.
+  /// Persists the Capture's text edits. Returns false (blocking the route)
+  /// when the title is empty — an Outcome must be nameable.
   Future<bool> _saveFields() async {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) {
@@ -112,24 +116,55 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       return false;
     }
     final notes = _notesCtrl.text.trim();
-    final todo = _todo;
-    if (todo == null) return false;
-    final hadNotes = (todo.notes ?? '').isNotEmpty;
-    await ref.read(clarificationServiceProvider).updateFields(
-          widget.todoId,
+    final capture = _capture;
+    if (capture == null) return false;
+    final hadNotes = (capture.notes ?? '').isNotEmpty;
+    await ref.read(databaseProvider).captureDao.updateFields(
+          widget.captureId,
           title: title,
           notes: notes.isNotEmpty ? notes : null,
           clearNotes: notes.isEmpty && hadNotes,
-          energyLevel: _energyLevel,
-          clearEnergyLevel: _energyLevel == null && todo.energyLevel != null,
-          timeEstimate: _timeEstimate,
-          clearTimeEstimate: _timeEstimate == null && todo.timeEstimate != null,
-          dueDate: _dueDate != null
-              ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
-              : null,
-          clearDueDate: _dueDate == null && todo.dueDate != null,
         );
     return true;
+  }
+
+  /// The Outcome-shaped attributes this card has collected. Applied by
+  /// [ClarificationService.clarifyCaptureToOutcome] to the Outcome it mints.
+  ({String title, String? notes, DateTime? dueDate}) get _draft => (
+        title: _titleCtrl.text.trim(),
+        notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        // Strip the time component: the picker collects a calendar day.
+        dueDate: _dueDate != null
+            ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
+            : null,
+      );
+
+  /// Clarifies the Capture into a new Outcome routed to [to], carrying the
+  /// draft attributes and any delegates.
+  Future<void> _clarifyTo(
+    RoutingKind to, {
+    Set<String>? personTagIds,
+  }) async {
+    final draft = _draft;
+    await ref.read(clarificationServiceProvider).clarifyCaptureToOutcome(
+          widget.captureId,
+          to: to,
+          userId: ref.read(currentUserIdProvider),
+          title: draft.title,
+          notes: draft.notes,
+          energyLevel: _energyLevel,
+          timeEstimate: _timeEstimate,
+          dueDate: draft.dueDate,
+          // Title-as-action: a Capture is always a first clarification, so
+          // there is no deliberate phrase to clobber. Consumed only for Next
+          // and Waiting For.
+          nextActionText: draft.title,
+          personTagIds: personTagIds,
+          tagIds: await ref
+              .read(databaseProvider)
+              .captureDao
+              .tagHintIdsForCapture(widget.captureId),
+        );
   }
 
   /// Shared flow for the one-tap routing handlers: persist field edits,
@@ -142,38 +177,29 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     if (mounted) context.pop();
   }
 
-  Future<void> _process() => _saveAndRoute(
-        () => ref
-            .read(clarificationServiceProvider)
-            .promoteCaptureToOutcome(widget.todoId),
-      );
+  Future<void> _process() =>
+      _saveAndRoute(() => _clarifyTo(RoutingKind.nextAction));
 
-  Future<void> _processToMaybe() => _saveAndRoute(
-        () => ref
-            .read(clarificationServiceProvider)
-            .promoteCaptureToOutcome(widget.todoId, intent: 'maybe'),
-      );
+  Future<void> _processToMaybe() =>
+      _saveAndRoute(() => _clarifyTo(RoutingKind.maybe));
 
-  Future<void> _processToDone() => _saveAndRoute(
-        () => ref
-            .read(clarificationServiceProvider)
-            .completeOutcome(widget.todoId),
-      );
+  Future<void> _processToDone() =>
+      _saveAndRoute(() => _clarifyTo(RoutingKind.done));
 
   Future<void> _processToWaitingFor() async {
     final saved = await _saveFields();
     if (!saved || !mounted) return;
     await showPersonTagPicker(
       context,
-      todoId: widget.todoId,
+      // Selection-only: the Outcome does not exist yet, so the picker has
+      // nothing to write to. clarifyCaptureToOutcome attaches the delegates to
+      // the Outcome it creates, in the same transaction.
       assignedPersonTagIds: const {},
       requireSelection: true,
-      onAfterConfirm: () async {
+      onConfirmSelection: (selected) async {
         if (!mounted) return;
         try {
-          await ref
-              .read(clarificationServiceProvider)
-              .promoteCaptureToOutcome(widget.todoId);
+          await _clarifyTo(RoutingKind.waitingFor, personTagIds: selected);
           if (mounted) context.pop();
         } catch (e) {
           if (mounted) {

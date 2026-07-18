@@ -53,6 +53,25 @@ Future<String> _insertTag(
   return tags.firstWhere((t) => t.name == name).id;
 }
 
+Future<void> _insertCapture(
+  GtdDatabase db, {
+  required String id,
+  required String title,
+  String? notes,
+  bool clarified = false,
+}) async {
+  final now = DateTime.now();
+  await db.captureDao.insertCapture(CapturesCompanion(
+    id: Value(id),
+    title: Value(title),
+    notes: Value(notes),
+    clarifiedAt: clarified ? Value(now) : const Value.absent(),
+    userId: const Value(_user),
+    createdAt: Value(now),
+    updatedAt: Value(now),
+  ));
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -70,7 +89,7 @@ void main() {
           .first;
 
       expect(results.length, 1);
-      expect(results.first.todo.id, 'a');
+      expect(results.first.todo!.id, 'a');
       expect(results.first.matchedFields, contains(SearchMatchField.title));
     });
 
@@ -83,7 +102,7 @@ void main() {
           .first;
 
       expect(results.length, 1);
-      expect(results.first.todo.id, 'a');
+      expect(results.first.todo!.id, 'a');
     });
 
     test('uppercase query matches lowercase title', () async {
@@ -110,7 +129,7 @@ void main() {
           .first;
 
       expect(results.length, 1);
-      expect(results.first.todo.id, 'a');
+      expect(results.first.todo!.id, 'a');
       expect(results.first.matchedFields, contains(SearchMatchField.notes));
       expect(results.first.matchSnippet, isNotNull);
       expect(results.first.matchSnippet, contains('plumber'));
@@ -126,7 +145,7 @@ void main() {
           .first;
 
       expect(results.length, 1);
-      expect(results.first.todo.id, 'a');
+      expect(results.first.todo!.id, 'a');
       expect(results.first.matchedFields, contains(SearchMatchField.contextTag));
     });
 
@@ -209,7 +228,7 @@ void main() {
           .first;
 
       expect(results.length, 1);
-      expect(results.first.todo.id, 'b');
+      expect(results.first.todo!.id, 'b');
     });
 
     test('includeDone shows done tasks', () async {
@@ -239,7 +258,7 @@ void main() {
           .first;
 
       expect(results.length, 1);
-      expect(results.first.todo.id, 'a');
+      expect(results.first.todo!.id, 'a');
     });
 
     test('time estimate filter excludes over-estimate and includes null', () async {
@@ -252,8 +271,8 @@ void main() {
           .search(const SearchQuery(timeEstimateMaxMinutes: 30))
           .first;
 
-      expect(results.map((r) => r.todo.id), containsAll(['a', 'c']));
-      expect(results.map((r) => r.todo.id), isNot(contains('b')));
+      expect(results.map((r) => r.todo!.id), containsAll(['a', 'c']));
+      expect(results.map((r) => r.todo!.id), isNot(contains('b')));
     });
 
     test('tag-scope filter (tagIds)', () async {
@@ -267,7 +286,7 @@ void main() {
           .first;
 
       expect(results.length, 1);
-      expect(results.first.todo.id, 'a');
+      expect(results.first.todo!.id, 'a');
     });
   });
 
@@ -411,6 +430,95 @@ void main() {
       expect(it.current, 1);
 
       await it.cancel();
+    });
+  });
+
+  group('SearchDao — Inbox Captures (issue #184)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() => db.close());
+
+    test('an unclarified Capture is findable by title', () async {
+      await _insertCapture(db, id: 'c1', title: 'Call the plumber');
+
+      final results =
+          await db.searchDao.search(const SearchQuery(text: 'plumber')).first;
+
+      expect(results, hasLength(1));
+      expect(results.single.isCapture, isTrue);
+      expect(results.single.id, 'c1');
+      expect(results.single.title, 'Call the plumber');
+      expect(results.single.matchedFields, contains(SearchMatchField.title));
+    });
+
+    test('a Capture is findable by its notes, with a snippet', () async {
+      await _insertCapture(
+        db,
+        id: 'c1',
+        title: 'Errand',
+        notes: 'remember the plumber quote',
+      );
+
+      final results =
+          await db.searchDao.search(const SearchQuery(text: 'plumber')).first;
+
+      expect(results.single.id, 'c1');
+      expect(results.single.matchedFields, contains(SearchMatchField.notes));
+      expect(results.single.matchSnippet, contains('plumber'));
+    });
+
+    test('a clarified Capture is not returned', () async {
+      // It is already represented by the Outcome it produced; returning both
+      // would show the user the same thing twice.
+      await _insertCapture(
+        db,
+        id: 'c1',
+        title: 'Call the plumber',
+        clarified: true,
+      );
+
+      final results =
+          await db.searchDao.search(const SearchQuery(text: 'plumber')).first;
+
+      expect(results, isEmpty);
+    });
+
+    test('Outcomes and Captures both come back for one term', () async {
+      await _insertTodo(db, id: 't1', title: 'plumber invoice');
+      await _insertCapture(db, id: 'c1', title: 'call plumber');
+
+      final results =
+          await db.searchDao.search(const SearchQuery(text: 'plumber')).first;
+
+      expect(results.map((r) => r.id), containsAll(['t1', 'c1']));
+      expect(results.where((r) => r.isCapture).map((r) => r.id), ['c1']);
+    });
+
+    test('a tag hint makes its Capture findable by tag name', () async {
+      final tagId = await _insertTag(db, name: 'errands', type: 'context');
+      await _insertCapture(db, id: 'c1', title: 'Something vague');
+      await db.captureDao.assignTagHint('c1', tagId, _user);
+
+      final results =
+          await db.searchDao.search(const SearchQuery(text: 'errands')).first;
+
+      expect(results.map((r) => r.id), contains('c1'));
+    });
+
+    test('a structured attribute filter excludes Captures', () async {
+      await _insertTodo(db, id: 't1', title: 'plumber invoice',
+          energyLevel: 'high');
+      await _insertCapture(db, id: 'c1', title: 'call plumber');
+
+      final results = await db.searchDao
+          .search(const SearchQuery(text: 'plumber', energyLevels: {'high'}))
+          .first;
+
+      // Energy, estimate and due date are Outcome attributes a Capture has no
+      // column for (ADR-0006), so filtering on one is a question a Capture
+      // cannot answer — it drops out rather than matching vacuously.
+      expect(results.map((r) => r.id), ['t1']);
     });
   });
 }

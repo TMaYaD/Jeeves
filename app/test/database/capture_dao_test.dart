@@ -115,6 +115,61 @@ void main() {
       );
     });
 
+    test('updateFields edits text and leaves the Capture in the Inbox',
+        () async {
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'buy milk'));
+
+      await db.captureDao
+          .updateFields('c1', title: 'Buy oat milk', notes: 'the barista one');
+
+      final edited = (await db.captureDao.getCapture('c1'))!;
+      expect(edited.title, 'Buy oat milk');
+      expect(edited.notes, 'the barista one');
+      // Refining the wording of a Capture is not the clarify act (ADR-0006):
+      // the row must still be in the Inbox afterwards.
+      expect(edited.clarifiedAt, isNull);
+      expect(await db.captureDao.watchInbox().first, hasLength(1));
+    });
+
+    test('updateFields clears notes only via the clear flag', () async {
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+      await db.captureDao.updateFields('c1', notes: 'keep me');
+
+      // A null `notes` means "no change", not "erase".
+      await db.captureDao.updateFields('c1', title: 'Idea, refined');
+      expect((await db.captureDao.getCapture('c1'))!.notes, 'keep me');
+
+      await db.captureDao.updateFields('c1', clearNotes: true);
+      expect((await db.captureDao.getCapture('c1'))!.notes, isNull);
+    });
+
+    test('updateFields with nothing to write is a no-op', () async {
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+      final before = (await db.captureDao.getCapture('c1'))!;
+
+      await db.captureDao.updateFields('c1');
+
+      // No mutation means no updated_at churn — an empty autosave flush must
+      // not manufacture a sync upload.
+      expect((await db.captureDao.getCapture('c1'))!.updatedAt, before.updatedAt);
+    });
+
+    test('watchCapture emits edits and then null once the row is gone',
+        () async {
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+
+      expect((await db.captureDao.watchCapture('c1').first)!.title, 'Idea');
+
+      await db.captureDao.updateFields('c1', title: 'Sharper idea');
+      expect(
+        (await db.captureDao.watchCapture('c1').first)!.title,
+        'Sharper idea',
+      );
+
+      await db.captureDao.deleteCapture('c1');
+      expect(await db.captureDao.watchCapture('c1').first, isNull);
+    });
+
     test('linkOutcome preserves the first link\'s createdAt on a repeat',
         () async {
       await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Project X'));

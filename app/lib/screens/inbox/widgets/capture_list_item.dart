@@ -3,11 +3,11 @@ import 'package:intl/intl.dart';
 
 import '../../../database/gtd_database.dart';
 
-/// A single row in the inbox list.
-class TodoListItem extends StatelessWidget {
-  const TodoListItem({super.key, required this.todo, this.onTap});
+/// A single row in the inbox list — one unclarified [Capture].
+class CaptureListItem extends StatelessWidget {
+  const CaptureListItem({super.key, required this.capture, this.onTap});
 
-  final Todo todo;
+  final Capture capture;
   final VoidCallback? onTap;
 
   @override
@@ -32,7 +32,7 @@ class TodoListItem extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    todo.title,
+                    capture.title,
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
@@ -41,7 +41,7 @@ class TodoListItem extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '– ${_formatTime(todo.createdAt)}',
+                    '– ${_formatTime(capture.createdAt)}',
                     style: const TextStyle(
                       fontSize: 14,
                       color: Color(0xFF6B7280),

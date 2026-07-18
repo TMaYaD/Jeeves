@@ -169,7 +169,7 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
       subtext: subtextFor?.call(todo),
       personTags: personTagsFor?.call(todo) ?? const [],
       process: ProcessToHandlers(
-        todo: todo,
+        subject: OutcomeSubject(todo),
         include: processInclude,
         except: processExcept,
         labels: processLabels,

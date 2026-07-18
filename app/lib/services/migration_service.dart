@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:powersync/powersync.dart' as ps;
 
 import '../providers/powersync_provider.dart';
+import '../providers/user_constants.dart' show kLocalUserId;
 
 enum ConflictResolution { keepLocal, keepServer, merge }
 
@@ -152,6 +154,14 @@ class LocalDataMigrationService {
     );
   }
 
+  /// See [migrateLocalInboxToCaptures]. Convenience wrapper for callers that
+  /// already hold a [Ref] rather than the database.
+  Future<int> migrateLocalInbox({String userId = kLocalUserId}) async =>
+      migrateLocalInboxToCaptures(
+        await _ref.read(powerSyncInstanceProvider.future),
+        userId: userId,
+      );
+
   /// Delete all records owned by [userId] — used when the user chooses to
   /// discard local data in favour of their existing synced data.
   Future<void> deleteLocalData(String userId) async {
@@ -167,6 +177,113 @@ class LocalDataMigrationService {
       await tx.execute('DELETE FROM user_preferences WHERE user_id = ?', [userId]);
     });
   }
+}
+
+/// Move local unclarified `todos` into `captures`, mirroring server-side
+/// Alembic migration 0026 for users who have never signed in.
+///
+/// A signed-in user's Inbox is carved out server-side by 0026 and arrives via
+/// sync. A local-only user has no server, so without this their Inbox — every
+/// `todos` row with `clarified = false` — would simply vanish the moment the
+/// UI started reading `captures` (issue #184 Phase 2).
+///
+/// Non-destructive and insert-before-delete, per AGENTS.md:
+///
+/// 1. Insert a Capture for each unclarified todo, reusing its id so any
+///    reference to it stays valid.
+/// 2. Copy that todo's `todo_tags` into `capture_tags` as tag *hints* —
+///    **before** anything is removed, so a failure between steps leaves the
+///    originals intact rather than orphaning the links.
+/// 3. Only then delete the migrated `todos` / `todo_tags` rows.
+///
+/// Idempotent: rows already carved out are skipped by the NOT EXISTS guard,
+/// so a retry after a partial run completes it instead of duplicating.
+/// Returns the number of Captures created.
+///
+/// Takes the database directly rather than a [Ref] so it can run from inside
+/// [powerSyncInstanceProvider], before anything reads the Inbox.
+Future<int> migrateLocalInboxToCaptures(
+  ps.PowerSyncDatabase db, {
+  String userId = kLocalUserId,
+}) async {
+  var migrated = 0;
+  await db.writeTransaction((tx) async {
+    migrated = await carveOutLocalInbox(
+      query: (sql, args) => tx.getAll(sql, args),
+      exec: (sql, args) => tx.execute(sql, args).then((_) {}),
+      userId: userId,
+    );
+  });
+  return migrated;
+}
+
+/// The carve-out itself, expressed over a transaction's read/write pair.
+///
+/// Split out from [migrateLocalInboxToCaptures] so the exact SQL that runs in
+/// production can also be driven against a real SQLite database in tests
+/// (see `migrate_local_inbox_test.dart`) rather than a stand-in — PowerSync
+/// only supplies the transaction, and the statements are what matter.
+///
+/// Callers must already be inside a write transaction: the steps below are
+/// only safe together.
+Future<int> carveOutLocalInbox({
+  required Future<List<Map<String, Object?>>> Function(String, List<Object?>)
+      query,
+  required Future<void> Function(String, List<Object?>) exec,
+  String userId = kLocalUserId,
+}) async {
+  final pending = await query(
+    '''
+    SELECT id, title, notes, capture_source, created_at, updated_at
+    FROM todos
+    WHERE user_id = ? AND clarified = 0
+      AND NOT EXISTS (SELECT 1 FROM captures WHERE captures.id = todos.id)
+    ''',
+    [userId],
+  );
+  if (pending.isEmpty) return 0;
+
+  for (final row in pending) {
+    // Step 1: the Capture. `clarified_at` stays NULL — these rows were in the
+    // Inbox and must still be after the move.
+    await exec(
+      '''
+      INSERT INTO captures
+        (id, title, notes, capture_source, created_at, clarified_at,
+         updated_at, user_id)
+      VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
+      ''',
+      [
+        row['id'],
+        row['title'],
+        row['notes'],
+        row['capture_source'],
+        row['created_at'],
+        row['updated_at'],
+        userId,
+      ],
+    );
+
+    // Step 2: its tags become tag hints. Done before any delete so a failure
+    // here cannot strand a Capture without its links.
+    await exec(
+      '''
+      INSERT OR IGNORE INTO capture_tags (id, capture_id, tag_id, user_id)
+      SELECT id, todo_id, tag_id, user_id
+      FROM todo_tags WHERE todo_id = ?
+      ''',
+      [row['id']],
+    );
+  }
+
+  // Step 3: the originals, now fully copied. Junction rows first so the delete
+  // never trips foreign-key enforcement.
+  final ids = [for (final r in pending) r['id']];
+  final placeholders = List.filled(ids.length, '?').join(', ');
+  await exec('DELETE FROM todo_tags WHERE todo_id IN ($placeholders)', ids);
+  await exec('DELETE FROM todos WHERE id IN ($placeholders)', ids);
+
+  return pending.length;
 }
 
 final migrationServiceProvider = Provider<LocalDataMigrationService>(

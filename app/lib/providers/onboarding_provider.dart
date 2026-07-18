@@ -34,11 +34,15 @@ Future<void> markOnboardingSeen() async {
   await prefs.setBool(_kOnboardingSeenKey, true);
 }
 
-/// True if the user's database contains at least one todo of any kind.
+/// True once the user's database holds at least one item of any kind — a
+/// Capture (Inbox or already clarified) or an Outcome.
 ///
-/// Watches all todos, not just inbox items, so that Nirvana imports
-/// (which produce clarified todos) also hide the onboarding card.
-final hasTodosProvider = StreamProvider<bool>((ref) {
+/// Both tables must be watched since the Capture/Outcome split (ADR-0006): a
+/// brand-new user's first quick-add is a Capture, a Nirvana import can produce
+/// Inbox Captures, clarified Outcomes, or both, and a fully-cleared Inbox must
+/// still keep the card dismissed. Watching only `todos` would leave the
+/// onboarding CTA wrongly visible over an inbox-only import.
+final hasAnyItemProvider = StreamProvider<bool>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.inboxDao.watchHasTodos();
+  return db.captureDao.watchHasAnyItem();
 });

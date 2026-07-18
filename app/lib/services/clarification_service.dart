@@ -62,6 +62,13 @@ abstract class ClarificationService {
   /// claim: an Outcome another Capture still links to (a merge) is unlinked but
   /// never deleted.
   ///
+  /// **[to] must not be [RoutingKind.trash].** Routing a Capture to Trash is a
+  /// zero-Outcome discard (ADR-0006): it stamps `clarified_at` and creates
+  /// nothing, which is [discardCapture]'s job. Minting an Outcome only to mark
+  /// it trashed would put a phantom row on the Trash List (a surface about
+  /// Outcomes the user once cared about) and record a provenance link to work
+  /// that was never done. Passing `trash` throws [ArgumentError].
+  ///
   /// [userId] denormalises onto the Outcome, the provenance link, and any tag
   /// rows. [outcomeId] / [now] are injectable for deterministic testing.
   /// Returns the new Outcome id.
@@ -192,6 +199,17 @@ class DaoClarificationService implements ClarificationService {
     String? outcomeId,
     DateTime? now,
   }) async {
+    // Trash is not a destination an Outcome can be created into: it is the
+    // zero-Outcome verdict (ADR-0006), handled by [discardCapture]. Reject
+    // before anything is allocated so a miswired callsite fails loudly instead
+    // of leaving a phantom trashed Outcome behind a real provenance link.
+    if (to == RoutingKind.trash) {
+      throw ArgumentError.value(
+        to,
+        'to',
+        'Discarding a Capture creates no Outcome — call discardCapture instead',
+      );
+    }
     final id = outcomeId ?? uuid.v4();
     return _db.transaction(() async {
       // Require the Capture at commit time, inside the transaction: the

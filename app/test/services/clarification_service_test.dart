@@ -365,6 +365,33 @@ void main() {
       expect(await db.select(db.captureOutcomes).get(), isEmpty);
     });
 
+    test('rejects trash — discard is zero-Outcome, not a trashed Outcome',
+        () async {
+      await db.captureDao.insertCapture(_captureRow(id: 'c1', title: 'Noise'));
+
+      await expectLater(
+        service.clarifyCaptureToOutcome(
+          'c1',
+          to: RoutingKind.trash,
+          userId: _userId,
+          title: 'Noise',
+          outcomeId: 'o-trash',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // Nothing was minted and the Capture stayed in the Inbox. Routing a
+      // Capture to Trash is [discardCapture]'s job (stamp only, zero
+      // Outcomes); creating an Outcome just to mark it trashed would put a
+      // phantom row on the Trash List and record a provenance link to work
+      // that was never done. A caller that gets this wrong fails loudly
+      // rather than half-clarifying the Capture.
+      expect(await _rowOrNull(db, 'o-trash'), isNull);
+      expect(await db.select(db.todos).get(), isEmpty);
+      expect(await db.captureDao.outcomeIdsForCapture('c1'), isEmpty);
+      expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNull);
+    });
+
     test('re-route overwrites the session Outcome (Ceremony Back → re-tap)',
         () async {
       await db.captureDao.insertCapture(_captureRow(id: 'c1', title: 'Item'));

@@ -26,6 +26,26 @@ final capturesForOutcomeProvider =
   return db.captureDao.watchCapturesForOutcome(outcomeId);
 });
 
+/// Watches a single Capture by ID — the clarify surfaces bind to this so an
+/// edit (or hard-delete) synced from another device re-renders the open card.
+final captureProvider =
+    StreamProvider.autoDispose.family<Capture?, String>((ref, captureId) {
+  final db = ref.watch(databaseProvider);
+  return db.captureDao.watchCapture(captureId);
+});
+
+/// Watches a Capture's tag *hints* (`capture_tags`) — the Capture-side
+/// counterpart of [taskTagsProvider], feeding the clarify card's pickers.
+///
+/// Hints are not Organising (CONTEXT.md): they narrow the Inbox while the user
+/// clears it and seed the Outcome's tags at clarification, but on their own
+/// they place the Capture on no list.
+final captureTagHintsProvider =
+    StreamProvider.autoDispose.family<List<Tag>, String>((ref, captureId) {
+  final db = ref.watch(databaseProvider);
+  return db.captureDao.watchTagHints(captureId);
+});
+
 /// Watches the Drift Tag rows associated with [todoId], scoped to the current user.
 final taskTagsProvider =
     StreamProvider.autoDispose.family<List<Tag>, String>((ref, todoId) {

@@ -40,6 +40,43 @@ TodosCompanion _companion({
   );
 }
 
+/// An Inbox Capture: `clarified_at` NULL. Captures carry only title and
+/// notes — energy, time estimate and due date are Outcome attributes the
+/// clarify card collects as draft state (ADR-0006).
+CapturesCompanion _captureCompanion({
+  required String id,
+  required String title,
+  String? notes,
+}) {
+  final now = DateTime.now();
+  return CapturesCompanion(
+    id: Value(id),
+    title: Value(title),
+    notes: notes != null ? Value(notes) : const Value.absent(),
+    captureSource: const Value('manual'),
+    userId: const Value(_userId),
+    createdAt: Value(now),
+    updatedAt: Value(now),
+  );
+}
+
+/// The Outcome a Capture was clarified into, via the provenance link.
+Future<Todo?> _outcomeOf(GtdDatabase db, String captureId) async {
+  final ids = await db.captureDao.outcomeIdsForCapture(captureId);
+  if (ids.isEmpty) return null;
+  return db.todoDao.getTodo(ids.single);
+}
+
+/// Ids still in the Inbox, read with a plain select — awaiting a live drift
+/// `watch()` inside `testWidgets` never completes under the test binding's
+/// clock.
+Future<List<String>> _inboxIds(GtdDatabase db) async {
+  final rows = await (db.select(db.captures)
+        ..where((c) => c.clarifiedAt.isNull()))
+      .get();
+  return [for (final r in rows) r.id];
+}
+
 /// Delegates every [ClarificationService] call to a real
 /// [DaoClarificationService] while recording the clear flags the last
 /// [updateFields] call carried, so tests can assert the screen never sends a
@@ -53,6 +90,15 @@ class _RecordingClarificationService implements ClarificationService {
   bool? lastClearEnergyLevel;
   bool? lastClearTimeEstimate;
   bool? lastClearDueDate;
+
+  /// Draft attributes the screen passed into [clarifyCaptureToOutcome]. The
+  /// screen no longer routes text edits through [updateFields] — a Capture's
+  /// title/notes go to CaptureDao — so this is where the "no spurious values"
+  /// contract is now observable.
+  String? lastNotes;
+  String? lastEnergyLevel;
+  int? lastTimeEstimate;
+  DateTime? lastDueDate;
 
   @override
   Future<void> updateFields(
@@ -141,8 +187,12 @@ class _RecordingClarificationService implements ClarificationService {
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
-  }) =>
-      _inner.clarifyCaptureToOutcome(
+  }) {
+    lastNotes = notes;
+    lastEnergyLevel = energyLevel;
+    lastTimeEstimate = timeEstimate;
+    lastDueDate = dueDate;
+    return _inner.clarifyCaptureToOutcome(
         captureId,
         to: to,
         userId: userId,
@@ -157,6 +207,7 @@ class _RecordingClarificationService implements ClarificationService {
         outcomeId: outcomeId,
         now: now,
       );
+  }
 
   @override
   Future<void> discardCapture(String captureId, {DateTime? now}) =>
@@ -165,7 +216,7 @@ class _RecordingClarificationService implements ClarificationService {
 
 Widget _buildApp(
   GtdDatabase db,
-  String todoId, {
+  String captureId, {
   ClarificationService? clarificationService,
 }) {
   return ProviderScope(
@@ -177,7 +228,7 @@ Widget _buildApp(
     child: MaterialApp.router(
       routerConfig: GoRouter(
         // Nest the clarify route under /inbox so pop() has a page to return to.
-        initialLocation: '/inbox/$todoId/clarify',
+        initialLocation: '/inbox/$captureId/clarify',
         routes: [
           GoRoute(
             path: '/inbox',
@@ -186,7 +237,7 @@ Widget _buildApp(
               GoRoute(
                 path: ':id/clarify',
                 builder: (context, state) => InboxClarifyScreen(
-                  todoId: state.pathParameters['id']!,
+                  captureId: state.pathParameters['id']!,
                 ),
               ),
             ],
@@ -206,15 +257,15 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
 
-    testWidgets('displays todo title and notes pre-populated', (tester) async {
-      await db.inboxDao.insertTodo(
-        _companion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+    testWidgets('displays Capture title and notes pre-populated',
+        (tester) async {
+      await db.captureDao.insertCapture(
+        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
       );
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      // Title and notes controllers are pre-filled from the DB row.
       final titleField =
           tester.widget<TextField>(find.byKey(const Key('clarify_title')));
       final notesField =
@@ -223,8 +274,10 @@ void main() {
       expect(notesField.controller?.text, 'Full fat');
     });
 
-    testWidgets('Next Action sets clarified = true', (tester) async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Buy milk'));
+    testWidgets('Next Action carves a linked Outcome and stamps the Capture',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
@@ -232,15 +285,18 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.clarified, isTrue);
+      // Clarifying creates an Outcome rather than flipping a column, and the
+      // link back to the Capture is the provenance record (ADR-0006).
+      final outcome = await _outcomeOf(db, 'x');
+      expect(outcome, isNotNull);
+      expect(outcome!.clarified, isTrue);
+      expect(outcome.title, 'Buy milk');
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
     });
 
-    testWidgets('Next Action leaves no clarified=false rows for the user',
-        (tester) async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Buy milk'));
+    testWidgets('Next Action leaves the Inbox empty', (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
@@ -248,38 +304,32 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      // Use a one-shot query (not a watch stream) inside testWidgets to avoid
-      // FakeAsync / stream-emission ordering issues.
-      final unclarified = await (db.select(db.todos)
-            ..where((t) =>
-                t.userId.equals(_userId) & t.clarified.equals(false)))
-          .get();
-      expect(unclarified, isEmpty);
+      expect(await _inboxIds(db), isEmpty);
     });
 
-    testWidgets('Maybe sets clarified = true with intent = maybe',
-        (tester) async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Learn guitar'));
+    testWidgets('Maybe carves an Outcome with intent = maybe', (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Learn guitar'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      // The destination buttons are below the fold on the 800×600 test surface;
+      // The destination buttons are below the fold on the 800x600 test surface;
       // scroll them into view before tapping.
       await tester.ensureVisible(find.text('Maybe'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Maybe'));
       await tester.pumpAndSettle();
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.clarified, isTrue);
-      expect(row.intent, 'maybe');
+      final outcome = await _outcomeOf(db, 'x');
+      expect(outcome!.clarified, isTrue);
+      expect(outcome.intent, 'maybe');
     });
 
-    testWidgets('Done (discard) sets done_at', (tester) async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Old idea'));
+    testWidgets('Done (discard) carves an already-achieved Outcome',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Old idea'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
@@ -289,14 +339,13 @@ void main() {
       await tester.tap(find.text('Done (discard)'));
       await tester.pumpAndSettle();
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.doneAt, isNotNull);
+      expect((await _outcomeOf(db, 'x'))!.doneAt, isNotNull);
     });
 
-    testWidgets('Skip leaves clarified = false', (tester) async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Deferred'));
+    testWidgets('Skip leaves the Capture in the Inbox and carves nothing',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Deferred'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
@@ -306,79 +355,61 @@ void main() {
       await tester.tap(find.text('Skip'));
       await tester.pumpAndSettle();
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.clarified, isFalse);
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
+      expect(await _outcomeOf(db, 'x'), isNull);
+      expect(await _inboxIds(db), ['x']);
     });
 
-    testWidgets('Skip leaves item in inbox (clarified=false)', (tester) async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Deferred'));
+    testWidgets('empty title does not clarify the Capture', (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Has title'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      await tester.ensureVisible(find.text('Skip'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Skip'));
-      await tester.pumpAndSettle();
-
-      final unclarified = await (db.select(db.todos)
-            ..where((t) =>
-                t.userId.equals(_userId) & t.clarified.equals(false)))
-          .get();
-      expect(unclarified.length, 1);
-    });
-
-    testWidgets('empty title does not process the item', (tester) async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Has title'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      // Clear the title field.
       await tester.enterText(find.byKey(const Key('clarify_title')), '');
       await tester.pump();
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      // Item must still be unclarified — empty title blocks processing.
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.clarified, isFalse);
+      // An Outcome must be nameable, so the route is blocked and the Capture
+      // stays in the Inbox.
+      expect(await _outcomeOf(db, 'x'), isNull);
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
     });
 
-    testWidgets('edited title is persisted when processing', (tester) async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Old title'));
+    testWidgets('edited title lands on both the Capture and the Outcome',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Old title'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('clarify_title')), 'New title');
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'New title');
       await tester.pump();
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.title, 'New title');
-      expect(row.clarified, isTrue);
+      expect((await _outcomeOf(db, 'x'))!.title, 'New title');
+      // The edit is also kept on the Capture, so the provenance trail shows
+      // what the user actually wrote rather than the original fragment.
+      expect((await db.captureDao.getCapture('x'))!.title, 'New title');
     });
 
-    testWidgets('deselecting energy level clears it on routing',
+    testWidgets('energy chosen on the card lands on the new Outcome',
         (tester) async {
-      await db.inboxDao.insertTodo(
-        _companion(id: 'x', title: 'Buy milk', energyLevel: 'high'),
-      );
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      // Tapping the selected chip deselects it (onSelect(null)).
+      // A Capture has no energy column — the card collects it as draft state
+      // and clarifyCaptureToOutcome writes it onto the Outcome it creates.
       await tester.ensureVisible(find.text('High'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('High'));
@@ -387,23 +418,17 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.energyLevel, isNull);
-      expect(row.clarified, isTrue);
+      expect((await _outcomeOf(db, 'x'))!.energyLevel, 'high');
     });
 
-    testWidgets('deselecting time estimate clears it on routing',
+    testWidgets('time estimate chosen on the card lands on the new Outcome',
         (tester) async {
-      await db.inboxDao.insertTodo(
-        _companion(id: 'x', title: 'Buy milk', timeEstimate: 30),
-      );
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      // Tapping the selected chip deselects it (_timeEstimate = null).
       await tester.ensureVisible(find.text('30m'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('30m'));
@@ -412,16 +437,13 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.timeEstimate, isNull);
-      expect(row.clarified, isTrue);
+      expect((await _outcomeOf(db, 'x'))!.timeEstimate, 30);
     });
 
-    testWidgets('deleting notes clears them on routing', (tester) async {
-      await db.inboxDao.insertTodo(
-        _companion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+    testWidgets('deleting notes clears them on the Capture and the Outcome',
+        (tester) async {
+      await db.captureDao.insertCapture(
+        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
       );
 
       await tester.pumpWidget(_buildApp(db, 'x'));
@@ -433,17 +455,14 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.notes, isNull);
-      expect(row.clarified, isTrue);
+      expect((await db.captureDao.getCapture('x'))!.notes, isNull);
+      expect((await _outcomeOf(db, 'x'))!.notes, isNull);
     });
 
-    testWidgets('routing an untouched item makes no spurious clearing writes',
+    testWidgets('clarifying an untouched Capture invents no attributes',
         (tester) async {
-      // Row carries no energy / time estimate / notes / due date.
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Buy milk'));
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
       final recorder =
           _RecordingClarificationService(DaoClarificationService(db));
@@ -455,21 +474,18 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      // No field had a value, so the screen must not raise any clear flag —
-      // this is what preserves the null = no-change contract.
-      expect(recorder.lastClearNotes, isFalse);
-      expect(recorder.lastClearEnergyLevel, isFalse);
-      expect(recorder.lastClearTimeEstimate, isFalse);
-      expect(recorder.lastClearDueDate, isFalse);
+      // Nothing was entered, so nothing may be fabricated into the Outcome.
+      expect(recorder.lastNotes, isNull);
+      expect(recorder.lastEnergyLevel, isNull);
+      expect(recorder.lastTimeEstimate, isNull);
+      expect(recorder.lastDueDate, isNull);
 
-      final row =
-          await (db.select(db.todos)..where((t) => t.id.equals('x')))
-              .getSingle();
-      expect(row.energyLevel, isNull);
-      expect(row.timeEstimate, isNull);
-      expect(row.notes, isNull);
-      expect(row.dueDate, isNull);
-      expect(row.clarified, isTrue);
+      final outcome = (await _outcomeOf(db, 'x'))!;
+      expect(outcome.energyLevel, isNull);
+      expect(outcome.timeEstimate, isNull);
+      expect(outcome.notes, isNull);
+      expect(outcome.dueDate, isNull);
+      expect(outcome.clarified, isTrue);
     });
   });
 

@@ -1,9 +1,17 @@
-/// DAO for universal search across todos and tags.
+/// DAO for universal search across Outcomes, Captures and tags.
 ///
 /// Implemented as a plain class (no @DriftAccessor) so no code-generation
 /// step is required.  All queries run against the local SQLite store and are
 /// fully offline-capable.
+///
+/// Search spans both halves of the ADR-0006 split: clarified Outcomes
+/// (`todos`, tagged via `todo_tags`) and Inbox Captures (`captures`, tagged via
+/// `capture_tags` hints). Only *unclarified* Captures are searched — a
+/// clarified one is already represented by the Outcome it produced, so
+/// including it would return the same thing twice.
 library;
+
+import 'dart:async';
 
 import 'package:drift/drift.dart';
 
@@ -18,13 +26,62 @@ class SearchDao {
 
   /// Returns a reactive stream of search results matching [query].
   ///
-  /// The stream re-emits whenever the todos, todo_tags, or tags tables change,
-  /// so results stay up-to-date with offline writes and sync'd data.
+  /// The stream re-emits whenever the todos, captures, their junctions, or the
+  /// tags table changes, so results stay up-to-date with offline writes and
+  /// sync'd data. Outcome hits come first, then Inbox Captures.
   ///
   /// When [query.isEmpty] is true, an empty list is returned immediately.
   Stream<List<SearchResult>> search(SearchQuery query) {
     if (query.isEmpty) return Stream.value([]);
 
+    return _combineLatest(
+      _outcomeRows(query).map((rows) => _processRows(rows, query)),
+      _captureRows(query).map((rows) => _processCaptureRows(rows, query)),
+      (outcomes, captures) => [...outcomes, ...captures],
+    );
+  }
+
+  /// The Inbox-Capture leg of [search].
+  ///
+  /// Captures carry no energy level, time estimate or due date — those are
+  /// Outcome attributes (ADR-0006) — so any structured attribute filter
+  /// excludes them entirely rather than matching them vacuously. Text and
+  /// tag-hint search is unaffected, which is what keeps an unclarified thought
+  /// findable. `includeDone` is irrelevant: a Capture is never done.
+  Stream<List<TypedResult>> _captureRows(SearchQuery query) {
+    final filtersOutcomeAttributes = query.energyLevels.isNotEmpty ||
+        query.dueDateAfter != null ||
+        query.dueDateBefore != null ||
+        query.timeEstimateMaxMinutes != null;
+    if (filtersOutcomeAttributes) return Stream.value(const []);
+
+    final q = _db.select(_db.captures).join([
+      leftOuterJoin(
+        _db.captureTags,
+        _db.captureTags.captureId.equalsExp(_db.captures.id),
+      ),
+      leftOuterJoin(
+        _db.tags,
+        _db.tags.id.equalsExp(_db.captureTags.tagId),
+      ),
+    ]);
+
+    // Only the Inbox: a clarified Capture is already represented by its
+    // Outcome, so including it would return the same thing twice.
+    q.where(_db.captures.clarifiedAt.isNull());
+
+    q.orderBy([
+      OrderingTerm(
+        expression: _db.captures.createdAt,
+        mode: OrderingMode.desc,
+      ),
+      OrderingTerm(expression: _db.captures.id),
+    ]);
+
+    return q.watch();
+  }
+
+  Stream<List<TypedResult>> _outcomeRows(SearchQuery query) {
     // Build a LEFT OUTER JOIN across all three tables so we get:
     //   • todos without tags (tag columns are null)
     //   • todos with one or more tags (one row per tag)
@@ -84,7 +141,7 @@ class SearchDao {
       OrderingTerm(expression: _db.todos.id),
     ]);
 
-    return q.watch().map((rows) => _processRows(rows, query));
+    return q.watch();
   }
 
   /// Returns a reactive count of completed tasks that match [query] (ignoring
@@ -214,6 +271,7 @@ class SearchDao {
 
       return SearchResult(
         todo: todo,
+        capture: null,
         tags: tags,
         matchedFields: matchedFields,
         matchSnippet: snippet,
@@ -221,17 +279,138 @@ class SearchDao {
     }).toList();
   }
 
+  /// Capture-side counterpart of [_processRows]. Groups the join rows by
+  /// Capture id and applies the same Dart-side text + tag-scope filter, so a
+  /// Capture matches on its title, its notes, or the name of a tag hint.
+  List<SearchResult> _processCaptureRows(
+    List<TypedResult> rows,
+    SearchQuery query,
+  ) {
+    final grouped = <String, (Capture, List<Tag>)>{};
+    final orderedIds = <String>[];
+
+    for (final row in rows) {
+      final capture = row.readTable(_db.captures);
+      final tag = row.readTableOrNull(_db.tags);
+
+      if (!grouped.containsKey(capture.id)) {
+        grouped[capture.id] = (capture, <Tag>[]);
+        orderedIds.add(capture.id);
+      }
+      if (tag != null) grouped[capture.id]!.$2.add(tag);
+    }
+
+    final term = query.text.toLowerCase().trim();
+    final results = <SearchResult>[];
+
+    for (final id in orderedIds) {
+      final (capture, tags) = grouped[id]!;
+
+      if (query.tagIds.isNotEmpty) {
+        final hintIds = tags.map((t) => t.id).toSet();
+        if (!query.tagIds.any(hintIds.contains)) continue;
+      }
+
+      final notesHit = capture.notes?.toLowerCase().contains(term) ?? false;
+      if (term.isNotEmpty) {
+        final titleHit = capture.title.toLowerCase().contains(term);
+        final tagHit = tags.any((t) => t.name.toLowerCase().contains(term));
+        if (!titleHit && !notesHit && !tagHit) continue;
+      }
+
+      results.add(SearchResult(
+        capture: capture,
+        tags: tags,
+        matchedFields: term.isEmpty
+            ? const {}
+            : _matchedFieldsFor(
+                title: capture.title,
+                notes: capture.notes,
+                tags: tags,
+                term: term,
+              ),
+        matchSnippet:
+            term.isNotEmpty && notesHit ? _extractSnippet(capture.notes, term) : null,
+      ));
+    }
+
+    return results;
+  }
+
+  /// Emits whenever either source emits, combining the latest value of each.
+  ///
+  /// Hand-rolled rather than pulling in rxdart for a single call site: the two
+  /// legs of [search] are independent Drift streams that must both stay live,
+  /// and neither emits on a fixed schedule.
+  Stream<R> _combineLatest<A, B, R>(
+    Stream<A> a,
+    Stream<B> b,
+    R Function(A, B) combine,
+  ) {
+    late StreamController<R> controller;
+    StreamSubscription<A>? subA;
+    StreamSubscription<B>? subB;
+    late A latestA;
+    late B latestB;
+    var hasA = false;
+    var hasB = false;
+
+    void emit() {
+      if (hasA && hasB) controller.add(combine(latestA, latestB));
+    }
+
+    controller = StreamController<R>(
+      onListen: () {
+        subA = a.listen(
+          (v) {
+            latestA = v;
+            hasA = true;
+            emit();
+          },
+          onError: controller.addError,
+        );
+        subB = b.listen(
+          (v) {
+            latestB = v;
+            hasB = true;
+            emit();
+          },
+          onError: controller.addError,
+        );
+      },
+      onCancel: () async {
+        await subA?.cancel();
+        await subB?.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
+
   Set<SearchMatchField> _computeMatchedFields(
     Todo todo,
     List<Tag> tags,
     String term,
-  ) {
+  ) =>
+      _matchedFieldsFor(
+        title: todo.title,
+        notes: todo.notes,
+        tags: tags,
+        term: term,
+      );
+
+  Set<SearchMatchField> _matchedFieldsFor({
+    required String title,
+    required String? notes,
+    required List<Tag> tags,
+    required String term,
+  }) {
     final fields = <SearchMatchField>{};
 
-    if (todo.title.toLowerCase().contains(term)) {
+    if (title.toLowerCase().contains(term)) {
       fields.add(SearchMatchField.title);
     }
-    if (todo.notes?.toLowerCase().contains(term) ?? false) {
+    if (notes?.toLowerCase().contains(term) ?? false) {
       fields.add(SearchMatchField.notes);
     }
 

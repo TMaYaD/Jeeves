@@ -29,9 +29,10 @@ import '../../test_helpers.dart';
 
 const _skipKey = Key('planning_skip');
 
+/// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
 Future<void> _insertInbox(GtdDatabase db, String id) async {
   final now = DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.captureDao.insertCapture(CapturesCompanion(
     id: Value(id),
     title: Value('Inbox item $id'),
     userId: const Value('local'),

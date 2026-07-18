@@ -11,9 +11,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../helpers/periodic_review_test_helpers.dart';
 import '../test_helpers.dart';
 
+/// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
 Future<void> _insertInbox(GtdDatabase db, String id) async {
   final now = DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.captureDao.insertCapture(CapturesCompanion(
     id: Value(id),
     title: Value('Item $id'),
     userId: const Value('local'),

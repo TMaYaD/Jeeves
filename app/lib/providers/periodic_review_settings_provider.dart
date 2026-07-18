@@ -17,7 +17,7 @@ import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import 'clock_provider.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
-import 'gtd_lists_provider.dart' show Todo;
+import 'gtd_lists_provider.dart' show Capture, Todo;
 import 'synced_preferences_provider.dart';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
@@ -145,11 +145,15 @@ final periodicReviewBannerEnabledProvider = Provider<bool>((ref) {
 /// true when inbox + next are both empty but waiting-for or maybe still
 /// hold items.
 ///
+/// [inbox] holds Captures, not Outcomes — the Inbox is `captures` with
+/// `clarified_at IS NULL` since the split (ADR-0006). Only emptiness is read,
+/// so the two shapes are interchangeable here.
+///
 /// Stays as a pure function (over `AsyncValue`s) rather than a Provider
 /// so callers can short-circuit cheap checks before subscribing the
 /// list streams that pull in the full `databaseProvider` chain.
 bool emptyActionableBannerTrigger({
-  required AsyncValue<List<Todo>> inbox,
+  required AsyncValue<List<Capture>> inbox,
   required AsyncValue<List<Todo>> next,
   required AsyncValue<List<Todo>> waiting,
   required AsyncValue<List<Todo>> maybe,

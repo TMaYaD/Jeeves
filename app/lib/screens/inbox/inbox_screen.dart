@@ -20,9 +20,9 @@ class InboxScreen extends ConsumerStatefulWidget {
 class _InboxScreenState extends ConsumerState<InboxScreen> {
   final _controller = TextEditingController();
 
-  Future<void> _addTodo(String title) async {
+  Future<void> _addCapture(String title) async {
     try {
-      await ref.read(inboxNotifierProvider).addTodo(title);
+      await ref.read(inboxNotifierProvider).addCapture(title);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -102,7 +102,7 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: QuickAddBar(
                 controller: _controller,
-                onAdd: _addTodo,
+                onAdd: _addCapture,
               ),
             ),
             // Inbox list

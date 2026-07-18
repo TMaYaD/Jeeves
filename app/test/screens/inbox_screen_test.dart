@@ -16,24 +16,17 @@ import '../test_helpers.dart';
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// A minimal [Todo] row for widget tests.
-Todo _todo(String id, String title) => Todo(
+/// A minimal Inbox [Capture] row for widget tests — `clarifiedAt` null, so it
+/// is in the Inbox (ADR-0006).
+Capture _capture(String id, String title) => Capture(
       id: id,
       title: title,
       notes: null,
-      doneAt: null,
-      priority: null,
-      dueDate: null,
-      createdAt: DateTime(2024, 1, 1),
-      updatedAt: null,
-      clarified: false,
-      intent: 'next',
-      timeEstimate: null,
-      energyLevel: null,
       captureSource: 'manual',
-      locationId: null,
+      createdAt: DateTime(2024, 1, 1),
+      clarifiedAt: null,
+      updatedAt: null,
       userId: 'local',
-      timeSpentMinutes: 0,
     );
 
 /// Build the app with fully controlled provider overrides so no platform
@@ -41,9 +34,9 @@ Todo _todo(String id, String title) => Todo(
 ///
 /// [inboxStream] is what [inboxItemsProvider] emits.
 /// [isOnlineStream] is what [isOnlineProvider] emits.
-/// [db] is needed only when [InboxNotifier.addTodo] must actually write.
+/// [db] is needed only when [InboxNotifier.addCapture] must actually write.
 Widget _buildApp({
-  Stream<List<Todo>>? inboxStream,
+  Stream<List<Capture>>? inboxStream,
   Stream<bool>? isOnlineStream,
   GtdDatabase? db,
 }) {
@@ -55,8 +48,8 @@ Widget _buildApp({
       inboxItemsProvider.overrideWith(
         (ref) => inboxStream ?? Stream.value([]),
       ),
-      // Stub out hasTodosProvider so OnboardingCard never hits the real DB.
-      hasTodosProvider.overrideWith((ref) => Stream.value(true)),
+      // Stub out hasAnyItemProvider so OnboardingCard never hits the real DB.
+      hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
       if (db != null) databaseProvider.overrideWithValue(db),
     ],
     child: const MaterialApp(home: InboxScreen()),
@@ -82,7 +75,7 @@ void main() {
     });
 
     testWidgets('items are rendered in the list', (tester) async {
-      final items = [_todo('a', 'Buy milk'), _todo('b', 'Call dentist')];
+      final items = [_capture('a', 'Buy milk'), _capture('b', 'Call dentist')];
       await tester.pumpWidget(_buildApp(inboxStream: Stream.value(items)));
       await tester.pump();
 
