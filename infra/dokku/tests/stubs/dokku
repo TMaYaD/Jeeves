@@ -13,6 +13,9 @@
 # Behaviour knobs (all optional):
 #   DOKKU_STUB_DEPLOYED       `ps:report --deployed` answer (default false)
 #   DOKKU_STUB_PS_REPORT_RC   make ps:report fail with this code
+#   DOKKU_STUB_CONFIG_KEYS_RC make config:keys fail with this code
+#   DOKKU_STUB_CONFIG_SET_FAIL_KEY
+#                             make config:set fail when it writes this key
 #   DOKKU_STUB_VHOSTS         `domains:report` answer (default empty)
 #   DOKKU_STUB_PG_LINKS       apps listed in `postgres:info` Links
 #   DOKKU_STUB_WAL_LEVEL      `SHOW wal_level;` answer (default logical)
@@ -32,6 +35,18 @@ case "${CMD}" in
     printf '%s\n' "${line#*=}"
     ;;
 
+  config:keys)
+    app="$1"
+    log "config:keys ${app}"
+    [ "${DOKKU_STUB_CONFIG_KEYS_RC:-0}" -eq 0 ] || exit "${DOKKU_STUB_CONFIG_KEYS_RC}"
+    f=$(state_file "${app}")
+    # An app with nothing set is not an error: real dokku prints nothing and
+    # exits 0.  That difference from config:get — which exits 1 for an absent
+    # key — is the whole reason the publish script reads keys first.
+    [ -f "${f}" ] || exit 0
+    sed -n 's/^\([^=]*\)=.*/\1/p' "${f}"
+    ;;
+
   config:set|config:unset)
     # --no-restart is logged, not swallowed: whether a config change restarts
     # the app is load-bearing (a rollback that doesn't restart doesn't roll
@@ -46,6 +61,14 @@ case "${CMD}" in
     keys=""
     for arg in "$@"; do keys="${keys}${keys:+ }${arg%%=*}"; done
     log "${CMD}${norestart} ${app} ${keys}"
+    # Logged before failing, so a test can assert the attempt was made.  Keyed
+    # on the variable name so a test can fail one write while leaving the
+    # compensating write that follows it working.
+    if [ "${CMD}" = "config:set" ] && [ -n "${DOKKU_STUB_CONFIG_SET_FAIL_KEY:-}" ]; then
+      case " ${keys} " in
+        *" ${DOKKU_STUB_CONFIG_SET_FAIL_KEY} "*) exit 1 ;;
+      esac
+    fi
     f=$(state_file "${app}")
     touch "${f}"
     for arg in "$@"; do

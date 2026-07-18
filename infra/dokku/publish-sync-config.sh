@@ -57,7 +57,39 @@ PS_CONFIG_FILE="${PS_CONFIG_FILE:-${SCRIPT_DIR}/../powersync/sync-config.yaml}"
 read -r -a DOKKU_CMD <<<"${DOKKU:-dokku}"
 dokku_cmd() { "${DOKKU_CMD[@]}" "$@"; }
 
-config_value() { dokku_cmd config:get "${PS_APP}" "$1" 2>/dev/null || true; }
+# "Is this key set?" and "what is it set to?" are different questions, and
+# `config:get` cannot separate them: dokku exits 1 both for a key that is not
+# set and for a lookup that failed (`SubGet` calls os.Exit(1) on an absent
+# key).  Swallowing that with `|| true` makes a transient SSH error look
+# identical to "no such key" — which would leave a masking override in place,
+# or lose the value a rollback needs to put back.
+#
+# `config:keys` separates them: it lists key *names* (no values, so no secrets
+# pulled into the runner), exits 0 on an app with nothing set at all, and fails
+# only when dokku genuinely could not be reached.  It is read once, before
+# anything is mutated, so every presence question below is answered against the
+# app's pre-run state — which is exactly what the rollback paths want to know.
+PS_CONFIG_KEYS=""
+load_ps_config_keys() {
+  local keys
+  if ! keys=$(dokku_cmd config:keys "${PS_APP}" 2>/dev/null); then
+    echo "ERROR: could not list the config keys of ${PS_APP}." >&2
+    echo "       Refusing to read an unreachable app as one with nothing set." >&2
+    return 1
+  fi
+  PS_CONFIG_KEYS=$'\n'"${keys}"$'\n'
+}
+
+ps_has_key() {
+  case "${PS_CONFIG_KEYS}" in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Only ever called for a key ps_has_key has confirmed, so a non-zero exit is a
+# real failure rather than an absent key — deliberately no `|| true`.
+ps_config_value() { dokku_cmd config:get "${PS_APP}" "$1"; }
 
 # Two kinds of leftover key, and the difference decides *when* each is cleared.
 #
@@ -84,11 +116,10 @@ clear_content_overrides() {
   local restart_mode="$1" key value
   local keys=()
   for key in "${CONTENT_OVERRIDE_KEYS[@]}"; do
-    value=$(config_value "${key}")
-    if [ -n "${value}" ]; then
-      keys+=("${key}")
-      CLEARED_OVERRIDES+=("${key}=${value}")
-    fi
+    ps_has_key "${key}" || continue
+    value=$(ps_config_value "${key}")
+    keys+=("${key}")
+    CLEARED_OVERRIDES+=("${key}=${value}")
   done
   if [ "${#keys[@]}" -eq 0 ]; then
     return 0
@@ -117,9 +148,7 @@ restore_content_overrides() {
 # Safe to do with --no-restart: the key is already inert at this point, so
 # removing it changes nothing the running container is using.
 drop_legacy_fallback() {
-  if [ -z "$(config_value "${LEGACY_FALLBACK_KEY}")" ]; then
-    return 0
-  fi
+  ps_has_key "${LEGACY_FALLBACK_KEY}" || return 0
   echo "    dropping superseded ${LEGACY_FALLBACK_KEY}"
   dokku_cmd config:unset --no-restart "${PS_APP}" "${LEGACY_FALLBACK_KEY}" >/dev/null
 }
@@ -138,13 +167,23 @@ app_deployed_state() {
 }
 
 resolve_readiness_url() {
-  local url=""
+  local url="" backend_keys="" backend_haystack=""
   if [ -n "${PS_READINESS_URL:-}" ]; then
     printf '%s' "${PS_READINESS_URL%/}"
     return 0
   fi
+  # Same presence-vs-value split as above, for the other app.
   if [ -n "${BACKEND_APP}" ]; then
-    url=$(dokku_cmd config:get "${BACKEND_APP}" POWERSYNC_URL 2>/dev/null || true)
+    if ! backend_keys=$(dokku_cmd config:keys "${BACKEND_APP}" 2>/dev/null); then
+      echo "ERROR: could not list the config keys of ${BACKEND_APP}." >&2
+      return 1
+    fi
+    backend_haystack=$'\n'"${backend_keys}"$'\n'
+    case "${backend_haystack}" in
+      *$'\n'POWERSYNC_URL$'\n'*)
+        url=$(dokku_cmd config:get "${BACKEND_APP}" POWERSYNC_URL)
+        ;;
+    esac
   fi
   if [ -z "${url}" ]; then
     url=$(dokku_cmd domains:report "${PS_APP}" --domains-app-vhosts 2>/dev/null \
@@ -193,7 +232,18 @@ fi
 
 # `tr -d '\n'` rather than `base64 -w0`: BSD base64 has no -w.
 NEW_B64=$(base64 < "${PS_CONFIG_FILE}" | tr -d '\n')
-CUR_B64=$(dokku_cmd config:get "${PS_APP}" POWERSYNC_CONFIG_B64 2>/dev/null || true)
+
+# The first remote call, and deliberately so: everything below reads the app's
+# config, and a publish that cannot see the current state cannot know whether
+# it is changing anything or what it would roll back to.
+if ! load_ps_config_keys; then
+  exit 1
+fi
+
+CUR_B64=""
+if ps_has_key POWERSYNC_CONFIG_B64; then
+  CUR_B64=$(ps_config_value POWERSYNC_CONFIG_B64)
+fi
 
 CONFIG_CHANGED=false
 [ "${NEW_B64}" != "${CUR_B64}" ] && CONFIG_CHANGED=true
@@ -211,7 +261,10 @@ fi
 
 READINESS_URL=""
 if [ "${DEPLOYED}" = "true" ]; then
-  READINESS_URL=$(resolve_readiness_url)
+  if ! READINESS_URL=$(resolve_readiness_url); then
+    echo "ERROR: could not resolve a readiness URL for ${PS_APP}." >&2
+    exit 1
+  fi
   if [ -z "${READINESS_URL}" ]; then
     echo "ERROR: no readiness URL for ${PS_APP} — no POWERSYNC_URL on" >&2
     echo "       '${BACKEND_APP:-<unset>}' and no vhost on the app." >&2
@@ -239,7 +292,14 @@ fi
 
 if [ "${CONFIG_CHANGED}" = true ]; then
   echo "==> Publishing ${PS_CONFIG_FILE} → ${PS_APP} (POWERSYNC_CONFIG_B64)"
-  dokku_cmd config:set "${PS_APP}" "POWERSYNC_CONFIG_B64=${NEW_B64}" >/dev/null
+  # This write lands between two others: the overrides above are already gone.
+  # Letting `set -e` exit here would leave the app in a third state — neither
+  # the one it started in nor the one we meant to publish — so put them back.
+  if ! dokku_cmd config:set "${PS_APP}" "POWERSYNC_CONFIG_B64=${NEW_B64}" >/dev/null; then
+    echo "ERROR: publishing POWERSYNC_CONFIG_B64 to ${PS_APP} failed." >&2
+    restore_content_overrides restart
+    exit 1
+  fi
 else
   echo "==> ${PS_APP}: published config was already current but masked by an override"
   echo "    the override is gone, so the published rules are now the effective ones"
@@ -277,7 +337,7 @@ if [ "${CONFIG_CHANGED}" = true ] && [ -n "${CUR_B64}" ]; then
   restore_content_overrides --no-restart
   echo "==> Rolling back to the previous sync config" >&2
   dokku_cmd config:set "${PS_APP}" "POWERSYNC_CONFIG_B64=${CUR_B64}" >/dev/null
-elif [ "${CONFIG_CHANGED}" = true ] && [ -n "$(config_value "${LEGACY_FALLBACK_KEY}")" ]; then
+elif [ "${CONFIG_CHANGED}" = true ] && ps_has_key "${LEGACY_FALLBACK_KEY}"; then
   # First publish into an environment bootstrapped before ADR-0017: there is no
   # previous base64 value, but the mounted file this one supersedes is still
   # configured and is a genuine known-good state.  Dropping our value (with the

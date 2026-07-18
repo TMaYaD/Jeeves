@@ -186,6 +186,44 @@ assert_rc 1 "${rc}" "unreachable ps:report fails the publish"
 assert_not_logged "config:set" "nothing is published when the state is unknown"
 export DOKKU_STUB_PS_REPORT_RC=0
 
+# 7b. `config:get` exits 1 both for an unset key and for a lookup that failed,
+#     so the current config is read via `config:keys`, which fails only when
+#     dokku could not be reached.  An unreadable app must abort: treating it as
+#     one with nothing set would publish over an unknown state and leave the
+#     rollback with nothing to restore.
+start_case "fail-closed: cannot list config keys"
+reset_state
+seed_backend_url
+export DOKKU_STUB_CONFIG_KEYS_RC=1
+rc=0; publish "${CONFIG}" || rc=$?
+assert_rc 1 "${rc}" "unreadable config fails the publish"
+assert_not_logged "config:set" "nothing is published when the current config is unknown"
+assert_not_logged "config:unset" "nothing is cleared when the current config is unknown"
+unset DOKKU_STUB_CONFIG_KEYS_RC
+
+# 7c. The override is cleared in one call and the config published in the next.
+#     If the second fails, exiting there would leave the app in a third state —
+#     neither what it started on nor what we meant to publish — so the cleared
+#     override goes back.
+start_case "failed config:set restores the cleared override"
+reset_state
+seed_backend_url
+export DOKKU_STUB_DEPLOYED=true
+export CURL_STUB_RC=0
+seed_ps_config "POWERSYNC_SYNC_CONFIG_B64=c3RhbGUtcnVsZXM="
+export DOKKU_STUB_CONFIG_SET_FAIL_KEY=POWERSYNC_CONFIG_B64
+rc=0; publish "${CONFIG}" || rc=$?
+assert_rc 1 "${rc}" "a failed config:set fails the publish"
+assert_logged "config:set ${PS_APP} POWERSYNC_SYNC_CONFIG_B64" \
+  "the cleared override is restored, with a restart"
+if grep -q '^POWERSYNC_SYNC_CONFIG_B64=c3RhbGUtcnVsZXM=$' "${DOKKU_STUB_STATE}/${PS_APP}.env"; then
+  ok "the override is back at its original value"
+else
+  bad "the override was not restored after the failed publish"
+fi
+unset DOKKU_STUB_CONFIG_SET_FAIL_KEY
+export DOKKU_STUB_DEPLOYED=false
+
 # 8. Same for an unresolvable probe target on a deployed app: refuse rather
 #    than publish blind and report success.
 start_case "fail-closed: no readiness URL"

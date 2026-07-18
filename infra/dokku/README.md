@@ -48,12 +48,22 @@ The script compares the file against the published value and writes nothing
 when they match, so a no-change deploy never restarts PowerSync.
 
 Before it changes anything it resolves everything it needs to *verify* the
-change: if it can't tell whether the app is deployed, or can't work out a
-readiness URL for one that is, it aborts while there is still nothing to roll
-back. Then it sets the var — which restarts the app — waits for a 2xx from
-`/probes/readiness`, and puts the previous state back if readiness never comes.
-A redirect is not a 2xx: a vhost that has lost its routing answers with one,
-and `curl -f` reports that as success.
+change: if it can't read the app's current config, can't tell whether the app
+is deployed, or can't work out a readiness URL for one that is, it aborts while
+there is still nothing to roll back. Then it sets the var — which restarts the
+app — waits for a 2xx from `/probes/readiness`, and puts the previous state
+back if readiness never comes. A redirect is not a 2xx: a vhost that has lost
+its routing answers with one, and `curl -f` reports that as success.
+
+Reading the current config goes through `config:keys`, not `config:get`, and
+the reason is that `config:get` exits 1 both for a key that is not set and for
+a lookup that failed. Treating the second as the first would let a transient
+SSH error read as "nothing is set" — leaving a masking override in place, or
+losing the value the rollback needs to restore. `config:keys` lists key names
+(no values, so no secrets are pulled into the CI runner) and fails only when
+dokku genuinely could not be reached. It is read once, before any write, so
+every later presence question is answered against the app's pre-run state —
+which is what the rollback paths want to know anyway.
 
 PowerSync reads several config-delivery variables, and the script treats two
 groups differently because they fail differently:
@@ -79,10 +89,15 @@ of persisting invisibly, and only keys that are actually set are touched.
 `.github/workflows/backend-cd.yml` runs on every successful Backend CI on
 `main`, in this order:
 
-1. `git push` to the Dokku remote — only when the commit touched `backend/`.
+1. A freshness check — skip everything below when `workflow_run.head_sha` is
+   no longer `main`'s tip. Two Backend CI runs finish in whatever order their
+   test jobs take, so a *successful* run need not be the *latest*; deploying a
+   superseded one would force-push older code and republish older rules over
+   migrations that have already run. The run for the newer commit deploys it.
+2. `git push` to the Dokku remote — only when the commit touched `backend/`.
    Dokku's release phase runs `python -m app.migrate` (Alembic) before the new
    container takes traffic, and the push blocks until that finishes.
-2. `publish-sync-config.sh` — always, regardless of what changed.
+3. `publish-sync-config.sh` — always, regardless of what changed.
 
 Migrations land before buckets, which is the order PowerSync's own
 schema-change guidance prescribes. Both steps share one checkout pinned to
@@ -245,7 +260,9 @@ dokku storage:unmount jeeves-powersync \
 Dokku host:
 
 - `test-publish-sync-config.sh` — the unchanged-config no-op, stale-override
-  healing, the fail-closed pre-flight, and the readiness rollback.
+  healing, the fail-closed pre-flight (unreadable config, unknown deployment
+  state, unresolvable probe target), the readiness rollback, and the
+  compensating restore when a write fails mid-sequence.
 - `test-deploy-powersync.sh` — the bootstrap ordering invariant: env vars, then
   publish, then `git:from-image`. A fresh environment whose image starts before
   its config is published comes up with nothing to read.
