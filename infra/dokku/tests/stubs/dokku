@@ -16,6 +16,10 @@
 #   DOKKU_STUB_CONFIG_KEYS_RC make config:keys fail with this code
 #   DOKKU_STUB_CONFIG_SET_FAIL_KEY
 #                             make config:set fail when it writes this key
+#   DOKKU_STUB_CONFIG_UNSET_FAIL_KEY
+#                             make config:unset fail when it clears this key
+#   DOKKU_STUB_WRITE_FAIL_SKIP
+#                             let this many matching writes through first
 #   DOKKU_STUB_VHOSTS         `domains:report` answer (default empty)
 #   DOKKU_STUB_PG_LINKS       apps listed in `postgres:info` Links
 #   DOKKU_STUB_WAL_LEVEL      `SHOW wal_level;` answer (default logical)
@@ -63,10 +67,23 @@ case "${CMD}" in
     log "${CMD}${norestart} ${app} ${keys}"
     # Logged before failing, so a test can assert the attempt was made.  Keyed
     # on the variable name so a test can fail one write while leaving the
-    # compensating write that follows it working.
-    if [ "${CMD}" = "config:set" ] && [ -n "${DOKKU_STUB_CONFIG_SET_FAIL_KEY:-}" ]; then
+    # compensating write that follows it working — and counted, so _SKIP can
+    # let the first N matching writes through and fail a later one (the publish
+    # succeeds, the rollback that follows it does not).
+    fail_key=""
+    case "${CMD}" in
+      config:set)   fail_key="${DOKKU_STUB_CONFIG_SET_FAIL_KEY:-}" ;;
+      config:unset) fail_key="${DOKKU_STUB_CONFIG_UNSET_FAIL_KEY:-}" ;;
+    esac
+    if [ -n "${fail_key}" ]; then
       case " ${keys} " in
-        *" ${DOKKU_STUB_CONFIG_SET_FAIL_KEY} "*) exit 1 ;;
+        *" ${fail_key} "*)
+          counter="${DOKKU_STUB_STATE}/.write-fail-count"
+          seen=$(cat "${counter}" 2>/dev/null || echo 0)
+          seen=$((seen + 1))
+          printf '%s\n' "${seen}" > "${counter}"
+          [ "${seen}" -gt "${DOKKU_STUB_WRITE_FAIL_SKIP:-0}" ] && exit 1
+          ;;
       esac
     fi
     f=$(state_file "${app}")

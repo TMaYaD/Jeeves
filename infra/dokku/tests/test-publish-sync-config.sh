@@ -44,7 +44,9 @@ EDITED="${WORK}/sync-config-edited.yaml"
 EMPTY="${WORK}/empty.yaml"
 : > "${EMPTY}"
 
-reset_state() { rm -f "${DOKKU_STUB_STATE}"/*.env; }
+reset_state() {
+  rm -f "${DOKKU_STUB_STATE}"/*.env "${DOKKU_STUB_STATE}/.write-fail-count"
+}
 seed_backend_url() {
   printf 'POWERSYNC_URL=https://powersync.example.test\n' \
     > "${DOKKU_STUB_STATE}/${BACKEND_APP}.env"
@@ -320,5 +322,66 @@ rc=0; publish "${CONFIG}" || rc=$?
 assert_rc 1 "${rc}" "failed readiness with no prior value fails the publish"
 assert_published "${PS_APP}" "${CONFIG}" "new value is left in place, not unset"
 assert_not_logged "config:unset" "no keys are dropped when readiness fails"
+
+# 13. The rollback is itself a remote write, and it can fail.  When it does the
+#     store keeps the config that failed readiness — and because the file has
+#     not moved, every later run matches it and would take the unchanged path.
+#     Without a probe there, a durable outage reports green forever and no run
+#     ever sees a change to publish.  Both rollback mutations have this shape.
+start_case "failed rollback write, then a run that must not call it green"
+reset_state
+seed_backend_url
+export DOKKU_STUB_DEPLOYED=true
+printf 'POWERSYNC_CONFIG_B64=%s\n' "$(base64 < "${CONFIG}" | tr -d '\n')" \
+  >> "${DOKKU_STUB_STATE}/${PS_APP}.env"
+# The publish write succeeds; the rollback write that follows it fails.
+export DOKKU_STUB_CONFIG_SET_FAIL_KEY=POWERSYNC_CONFIG_B64
+export DOKKU_STUB_WRITE_FAIL_SKIP=1
+export CURL_STUB_RC=22
+rc=0; publish "${EDITED}" || rc=$?
+assert_rc 1 "${rc}" "a failed rollback write fails the run"
+assert_published "${PS_APP}" "${EDITED}" "the store is left on the config that failed readiness"
+
+unset DOKKU_STUB_CONFIG_SET_FAIL_KEY DOKKU_STUB_WRITE_FAIL_SKIP
+: > "${DOKKU_STUB_LOG}"; : > "${CURL_STUB_LOG}"
+rc=0; publish "${EDITED}" || rc=$?
+assert_rc 1 "${rc}" "the next run fails rather than reporting an unchanged no-op"
+assert_not_logged "config:set" "the next run still writes nothing"
+if [ "$(grep -c '' "${CURL_STUB_LOG}")" -gt 0 ]; then
+  ok "the unchanged path verified readiness instead of assuming it"
+else
+  bad "the unchanged path exited without probing"
+fi
+
+# 13b. Same for the other rollback mutation — the first-publish path that hands
+#      the app back to the mounted config by unsetting ours.
+start_case "failed rollback unset, then a run that must not call it green"
+reset_state
+seed_backend_url
+seed_ps_config "POWERSYNC_CONFIG_PATH=/config/sync-config.yaml"
+export DOKKU_STUB_CONFIG_UNSET_FAIL_KEY=POWERSYNC_CONFIG_B64
+export CURL_STUB_RC=22
+rc=0; publish "${CONFIG}" || rc=$?
+assert_rc 1 "${rc}" "a failed rollback unset fails the run"
+assert_published "${PS_APP}" "${CONFIG}" "the store is left on the unverified config"
+
+unset DOKKU_STUB_CONFIG_UNSET_FAIL_KEY
+: > "${DOKKU_STUB_LOG}"; : > "${CURL_STUB_LOG}"
+rc=0; publish "${CONFIG}" || rc=$?
+assert_rc 1 "${rc}" "the next run fails rather than reporting an unchanged no-op"
+assert_not_logged "config:unset" "the fallback is not dropped while the app is unhealthy"
+
+# 13c. The probe on the unchanged path must not cost the happy case anything
+#      beyond the probe itself: a healthy deployed app still writes nothing.
+start_case "unchanged and healthy still writes nothing"
+reset_state
+seed_backend_url
+printf 'POWERSYNC_CONFIG_B64=%s\n' "$(base64 < "${CONFIG}" | tr -d '\n')" \
+  >> "${DOKKU_STUB_STATE}/${PS_APP}.env"
+export CURL_STUB_RC=0
+rc=0; publish "${CONFIG}" || rc=$?
+assert_rc 0 "${rc}" "unchanged publish on a healthy app succeeds"
+assert_not_logged "config:set" "no config:set"
+assert_not_logged "config:unset" "no config:unset"
 
 report

@@ -39,6 +39,10 @@ PS_READINESS_TIMEOUT_SECONDS="${PS_READINESS_TIMEOUT_SECONDS:-10}"
 # The rollback re-probe is shorter — the app was healthy on this config a
 # moment ago, and the script exits non-zero either way.
 PS_ROLLBACK_READINESS_ATTEMPTS="${PS_ROLLBACK_READINESS_ATTEMPTS:-6}"
+# The steady-state check on the unchanged path is shorter still, and skips the
+# usual pre-attempt wait: nothing was restarted, so a healthy app answers
+# immediately and the common no-op deploy pays almost nothing for it.
+PS_NOOP_READINESS_ATTEMPTS="${PS_NOOP_READINESS_ATTEMPTS:-3}"
 
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then
   echo "Usage: $0 <powersync-app> [backend-app]" >&2
@@ -193,10 +197,14 @@ resolve_readiness_url() {
   printf '%s' "${url%/}"
 }
 
+# $3: seconds to wait before the *first* attempt.  Defaults to the normal
+#     interval, which is right after a restart; a steady-state check passes 0.
 probe_readiness() {
-  local url="$1" attempts="$2" last="" code="" attempt
+  local url="$1" attempts="$2" delay="${3:-${PS_READINESS_INTERVAL_SECONDS}}"
+  local last="" code="" attempt
   for attempt in $(seq 1 "${attempts}"); do
-    sleep "${PS_READINESS_INTERVAL_SECONDS}"
+    sleep "${delay}"
+    delay="${PS_READINESS_INTERVAL_SECONDS}"
     if last=$(curl -fsS --max-time "${PS_READINESS_TIMEOUT_SECONDS}" \
          -w "HTTP %{http_code}" -o /dev/null "${url}" 2>&1); then
       # `curl -f` fails on >=400 but *succeeds* on a 3xx, and a vhost that has
@@ -286,6 +294,27 @@ fi
 
 if [ "${CONFIG_CHANGED}" = false ] && [ "${#CLEARED_OVERRIDES[@]}" -eq 0 ]; then
   echo "==> ${PS_APP}: sync config unchanged — nothing published, no restart"
+  # Unchanged in the store does not mean healthy in the container, and the gap
+  # between them is durable rather than self-correcting.  A previous run whose
+  # *rollback write* failed — or one that had nothing to roll back to — exits
+  # leaving the store holding the config that failed readiness.  The file has
+  # not moved, so every later run matches it and lands here: without a probe
+  # they would all report success while the app stays down on it, and no run
+  # would ever see a change to publish.  Verifying instead of assuming is what
+  # keeps that state loud.  It catches host-side breakage this script never
+  # wrote, too.
+  if [ "${DEPLOYED}" = "true" ]; then
+    echo "==> Verifying the published config is actually serving"
+    if ! probe_readiness "${READINESS_URL}/probes/readiness" \
+         "${PS_NOOP_READINESS_ATTEMPTS}" 0; then
+      echo "ERROR: ${PS_APP} is not ready, and the published config already" >&2
+      echo "       matches ${PS_CONFIG_FILE} — so this run has nothing to" >&2
+      echo "       change, and neither will the next one.  A release that" >&2
+      echo "       failed to roll back leaves exactly this state." >&2
+      echo "       Inspect: dokku logs ${PS_APP} --tail 100" >&2
+      exit 1
+    fi
+  fi
   drop_legacy_fallback
   exit 0
 fi

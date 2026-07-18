@@ -45,7 +45,13 @@ DOKKU="ssh dokku@<dokku-host>" \
 ```
 
 The script compares the file against the published value and writes nothing
-when they match, so a no-change deploy never restarts PowerSync.
+when they match, so a no-change deploy never restarts PowerSync. It still
+probes readiness on that path, because "the store matches the file" does not
+imply "the container is serving it": a release whose *rollback* failed leaves
+the store holding the config that failed readiness, and since the file has not
+moved, every later run would match it and report success while the app stays
+down. Verifying costs one HTTP request and turns that state from permanently
+green into loudly red.
 
 Before it changes anything it resolves everything it needs to *verify* the
 change: if it can't read the app's current config, can't tell whether the app
@@ -261,8 +267,9 @@ Dokku host:
 
 - `test-publish-sync-config.sh` — the unchanged-config no-op, stale-override
   healing, the fail-closed pre-flight (unreadable config, unknown deployment
-  state, unresolvable probe target), the readiness rollback, and the
-  compensating restore when a write fails mid-sequence.
+  state, unresolvable probe target), the readiness rollback, the compensating
+  restore when a write fails mid-sequence, and — for both rollback mutations —
+  a follow-up run proving a failed rollback does not go quiet.
 - `test-deploy-powersync.sh` — the bootstrap ordering invariant: env vars, then
   publish, then `git:from-image`. A fresh environment whose image starts before
   its config is published comes up with nothing to read.
