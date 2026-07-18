@@ -240,98 +240,6 @@ class SettingsScreen extends ConsumerWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Clarify settings
-// ---------------------------------------------------------------------------
-
-class _ClarifySettings extends ConsumerWidget {
-  const _ClarifySettings();
-
-  /// The one-line summary shown under the tile for each mode.
-  static String _summary(ClarifyMode mode) => switch (mode) {
-        ClarifyMode.oneToOne => 'One Capture, one Outcome',
-        ClarifyMode.nToM => 'Split and merge Captures',
-      };
-
-  /// The longer explanation shown beside each option in the picker.
-  static String _description(ClarifyMode mode) => switch (mode) {
-        ClarifyMode.oneToOne =>
-          'Each Capture clarifies to exactly one Outcome and leaves the Inbox '
-              'straight away.',
-        ClarifyMode.nToM =>
-          'Carve several Outcomes out of one Capture, or merge several Captures '
-              'into one Outcome. A Capture stays in the Inbox until you say it '
-              'is done.',
-      };
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final mode = ref.watch(clarifyModeProvider);
-
-    return ListTile(
-      key: const Key('clarify_mode_tile'),
-      leading:
-          const Icon(Icons.call_split_outlined, color: Color(0xFF9CA3AF)),
-      title: const Text(
-        'Clarify mode',
-        style:
-            TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-      ),
-      subtitle: Text(
-        _summary(mode),
-        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-      ),
-      onTap: () => _pickMode(context, ref, current: mode),
-    );
-  }
-
-  Future<void> _pickMode(
-    BuildContext context,
-    WidgetRef ref, {
-    required ClarifyMode current,
-  }) async {
-    final picked = await showDialog<ClarifyMode>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Clarify mode'),
-        children: [
-          for (final mode in ClarifyMode.values)
-            SimpleDialogOption(
-              key: Key('clarify_mode_option_${mode.wireValue}'),
-              onPressed: () => Navigator.pop(ctx, mode),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _summary(mode),
-                    style: TextStyle(
-                      fontWeight: mode == current
-                          ? FontWeight.w700
-                          : FontWeight.normal,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _description(mode),
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF9CA3AF)),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-    if (picked != null) {
-      await ref.read(clarifyModeProvider.notifier).setMode(picked);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Daily planning settings
-// ---------------------------------------------------------------------------
-
 class _FocusSessionPlanningSettings extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -434,6 +342,79 @@ class _FocusSessionPlanningSettings extends ConsumerWidget {
       await ref
           .read(focusSessionPlanningSettingsProvider.notifier)
           .setDefaultSnoozeDuration(picked);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Clarify settings
+// ---------------------------------------------------------------------------
+
+class _ClarifySettings extends ConsumerWidget {
+  const _ClarifySettings();
+
+  static String _label(ClarifyMode mode) => switch (mode) {
+        ClarifyMode.oneToOne => '1-1 mode',
+        ClarifyMode.nToM => 'n-m mode',
+      };
+
+  static String _description(ClarifyMode mode) => switch (mode) {
+        // "at most" because discarding is a legitimate verdict that clarifies
+        // the Capture without creating anything (ADR-0006).
+        ClarifyMode.oneToOne => 'Each Capture becomes at most one Outcome.',
+        // The n-m clarify surfaces have not shipped yet, so the copy promises
+        // only what selecting the mode actually does today: persist and sync.
+        ClarifyMode.nToM => 'Split and merge. Not available yet — your choice '
+            'is saved and syncs across devices.',
+      };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(clarifyModeProvider);
+
+    return ListTile(
+      key: const Key('clarify_mode_tile'),
+      leading: const Icon(Icons.call_split_outlined, color: Color(0xFF9CA3AF)),
+      title: const Text(
+        'Clarify mode',
+        style:
+            TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+      ),
+      subtitle: Text(
+        '${_label(mode)} — ${_description(mode)}',
+        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+      ),
+      onTap: () => _pickMode(context, ref, current: mode),
+    );
+  }
+
+  Future<void> _pickMode(
+    BuildContext context,
+    WidgetRef ref, {
+    required ClarifyMode current,
+  }) async {
+    final picked = await showDialog<ClarifyMode>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Clarify mode'),
+        children: ClarifyMode.values
+            .map((mode) => SimpleDialogOption(
+                  key: Key('clarify_mode_option_${mode.name}'),
+                  onPressed: () => Navigator.pop(ctx, mode),
+                  child: Text(
+                    '${_label(mode)} — ${_description(mode)}',
+                    style: TextStyle(
+                      fontWeight: mode == current
+                          ? FontWeight.w700
+                          : FontWeight.normal,
+                    ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked != null) {
+      await ref.read(clarifyModeProvider.notifier).setMode(picked);
     }
   }
 }

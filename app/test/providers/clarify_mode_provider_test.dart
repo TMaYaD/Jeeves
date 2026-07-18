@@ -10,105 +10,128 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../test_helpers.dart';
 
+// Must match currentUserIdProvider.build() default so the notifier finds rows.
+const _userId = 'local';
+
+/// A memory database closed when the running test ends.
+GtdDatabase _memoryDb() {
+  final db = GtdDatabase(NativeDatabase.memory());
+  addTearDown(db.close);
+  return db;
+}
+
 ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       overrides: [databaseProvider.overrideWithValue(db)],
     );
 
+/// A container over its own fresh database, both disposed when the test ends.
+ProviderContainer _containerWithFreshDb() {
+  final container = _container(_memoryDb());
+  addTearDown(container.dispose);
+  return container;
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
-  late GtdDatabase db;
-  late ProviderContainer container;
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  setUp(() {
-    SharedPreferences.setMockInitialValues({});
-    db = GtdDatabase(NativeDatabase.memory());
-    container = _container(db);
-  });
-
-  tearDown(() async {
-    container.dispose();
-    await db.close();
-  });
-
-  group('ClarifyMode', () {
-    test('an absent or unrecognised wire value decodes to the default', () {
-      expect(ClarifyMode.fromWireValue(null), ClarifyMode.oneToOne);
-      expect(ClarifyMode.fromWireValue(''), ClarifyMode.oneToOne);
-      // A value written by a future build this one cannot render must degrade
-      // to the quick flow rather than throw.
-      expect(ClarifyMode.fromWireValue('someFutureMode'), ClarifyMode.oneToOne);
+  group('ClarifyMode.fromString', () {
+    test('round-trips both modes by name', () {
+      for (final mode in ClarifyMode.values) {
+        expect(ClarifyMode.fromString(mode.name), mode);
+      }
     });
 
-    test('wire values are pinned independently of the Dart enum names', () {
-      expect(ClarifyMode.oneToOne.wireValue, 'oneToOne');
-      expect(ClarifyMode.nToM.wireValue, 'nToM');
+    test('falls back to oneToOne for absent or unrecognised values', () {
+      expect(ClarifyMode.fromString(null), ClarifyMode.oneToOne);
+      expect(ClarifyMode.fromString(''), ClarifyMode.oneToOne);
+      // A value a future client might write must degrade to the shipped mode
+      // rather than wedge the Inbox in a mode this build cannot drive.
+      expect(ClarifyMode.fromString('someFutureMode'), ClarifyMode.oneToOne);
     });
 
-    test('defaultMode is one-to-one', () {
-      expect(ClarifyMode.defaultMode, ClarifyMode.oneToOne);
+    test('wire values are the names the preference is stored under', () {
+      expect(ClarifyMode.oneToOne.name, 'oneToOne');
+      expect(ClarifyMode.nToM.name, 'nToM');
     });
   });
 
   group('clarifyModeProvider', () {
     test('defaults to oneToOne when nothing is persisted', () async {
-      await container.read(syncedPreferencesProvider.future);
+      final container = _containerWithFreshDb();
+
       expect(container.read(clarifyModeProvider), ClarifyMode.oneToOne);
+
+      await container.read(syncedPreferencesProvider.future);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(container.read(clarifyModeProvider), ClarifyMode.oneToOne,
+          reason: 'an empty prefs snapshot must not move the mode');
     });
 
-    test('setMode persists the wire value and updates state', () async {
+    test('setMode updates state and persists under the wire key', () async {
+      final container = _containerWithFreshDb();
       await container.read(syncedPreferencesProvider.future);
-      await container.read(clarifyModeProvider.notifier).setMode(ClarifyMode.nToM);
+
+      await container.read(clarifyModeProvider.notifier).setMode(
+            ClarifyMode.nToM,
+          );
 
       expect(container.read(clarifyModeProvider), ClarifyMode.nToM);
+      // Pin the wire key and encoding, not just the model.
       expect(
         container
             .read(syncedPreferencesProvider)
             .asData!
             .value
-            .get<String>(kClarifyModePrefKey),
+            .get<String>('clarify_mode'),
         'nToM',
+      );
+      expect(
+        await container.read(databaseProvider).userPreferencesDao.get(
+              _userId,
+              'clarify_mode',
+            ),
+        '"nToM"',
       );
     });
 
-    test('the choice round-trips through the store into a fresh container',
-        () async {
-      await container.read(syncedPreferencesProvider.future);
-      await container.read(clarifyModeProvider.notifier).setMode(ClarifyMode.nToM);
-
-      // A second container over the same database stands in for another device
-      // that received the row via PowerSync.
-      final other = _container(db);
-      addTearDown(other.dispose);
-      await other.read(syncedPreferencesProvider.future);
-
-      expect(other.read(clarifyModeProvider), ClarifyMode.nToM);
-    });
-
-    test('switching back to oneToOne round-trips too', () async {
+    test('toggling back to oneToOne round-trips', () async {
+      final container = _containerWithFreshDb();
       await container.read(syncedPreferencesProvider.future);
       final notifier = container.read(clarifyModeProvider.notifier);
+
       await notifier.setMode(ClarifyMode.nToM);
       await notifier.setMode(ClarifyMode.oneToOne);
 
       expect(container.read(clarifyModeProvider), ClarifyMode.oneToOne);
-      expect(
-        container
-            .read(syncedPreferencesProvider)
-            .asData!
-            .value
-            .get<String>(kClarifyModePrefKey),
-        'oneToOne',
-      );
     });
 
-    test('a corrupt stored value reads as the default rather than throwing',
-        () async {
+    test('the mode survives a provider-container recreation', () async {
+      final db = _memoryDb();
+
+      final first = _container(db);
+      await first.read(syncedPreferencesProvider.future);
+      await first.read(clarifyModeProvider.notifier).setMode(ClarifyMode.nToM);
+      first.dispose();
+
+      final second = _container(db);
+      addTearDown(second.dispose);
+      await second.read(syncedPreferencesProvider.future);
+      // Flush the syncedPreferences listener inside the notifier.
+      await Future<void>.delayed(Duration.zero);
+
+      expect(second.read(clarifyModeProvider), ClarifyMode.nToM);
+    });
+
+    test('an unrecognised persisted value reads as oneToOne', () async {
+      final container = _containerWithFreshDb();
       await container.read(syncedPreferencesProvider.future);
-      // Write a value no build understands, straight past the typed setter.
       await container
           .read(syncedPreferencesProvider.notifier)
-          .set(kClarifyModePrefKey, 'not_a_mode');
+          .set('clarify_mode', 'someFutureMode');
+      await Future<void>.delayed(Duration.zero);
 
       expect(container.read(clarifyModeProvider), ClarifyMode.oneToOne);
     });

@@ -23,9 +23,12 @@
 /// future key that is not explicitly registered otherwise. New list/set keys
 /// **must** be registered as [ConflictStrategy.setMerge] before use.
 ///
-/// A key may also be registered outright *with* the default strategy, when the
-/// choice is worth stating on the record rather than leaving to fall-through —
-/// see [isExplicitlyRegistered].
+/// A key may also register [ConflictStrategy.lww] *explicitly* in
+/// [preferenceConflictRegistry]. That is redundant at runtime — it is what the
+/// key would fall through to anyway — but it records that the strategy was
+/// chosen and reviewed rather than inherited by default, which is the bar
+/// ADR-0011 sets for keys whose arbitration a reader would otherwise have to
+/// reason about from scratch.
 ///
 /// ## Tombstone invariant (why "server-absent → keep local" is always safe)
 ///
@@ -38,6 +41,8 @@
 library;
 
 import 'dart:convert';
+
+import '../models/clarify_mode.dart' show kClarifyModePrefKey;
 
 /// How two conflicting rows for the same `user_preferences` key are reconciled.
 enum ConflictStrategy {
@@ -89,31 +94,28 @@ class ResolvedPreference {
 // Registry
 // ---------------------------------------------------------------------------
 
-/// Keys whose strategy is stated outright rather than inferred.
+/// Keys whose strategy is registered explicitly, by exact match.
 ///
-/// A key belongs here when the choice deserves to be a decision on the record —
-/// even when the chosen strategy happens to equal the default. `clarify_mode` is
-/// such a key: a scalar where LWW is plainly right, registered explicitly so a
-/// reader can tell "we considered this" apart from "it fell through" (ADR-0011).
-const _explicitStrategies = <String, ConflictStrategy>{
-  'clarify_mode': ConflictStrategy.lww,
+/// Consulted before the suffix rule and before the default, so an entry here
+/// always wins. An explicit [ConflictStrategy.lww] entry is a deliberate
+/// record that the strategy was considered for that key — see the library doc
+/// comment.
+const preferenceConflictRegistry = <String, ConflictStrategy>{
+  // Scalar mode selection. The latest intent on any device is the right winner:
+  // both modes read the same many-to-many storage, so an arbitration that lands
+  // on either value leaves every Capture and link valid (issue #433).
+  kClarifyModePrefKey: ConflictStrategy.lww,
 };
-
-/// Whether [key] has an outright entry in [_explicitStrategies], as opposed to
-/// being classified by the `snoozed_until` suffix rule or the default. Lets a
-/// test assert that a key was deliberately registered, not merely tolerated.
-bool isExplicitlyRegistered(String key) =>
-    _explicitStrategies.containsKey(key);
 
 /// Returns the [ConflictStrategy] for [key].
 ///
-/// Explicitly registered keys win first. Otherwise any key ending in
-/// `snoozed_until` is a snooze floor and arbitrates by
-/// [ConflictStrategy.maxTimestampValue]; this deliberately covers future snooze
-/// keys (e.g. the Nudge `snoozed_until` migrated onto this contract in #323)
-/// without a code change. Every other key defaults to [ConflictStrategy.lww].
+/// Resolution order: an exact entry in [preferenceConflictRegistry] wins; then
+/// any key ending in `snoozed_until` is a snooze floor and arbitrates by
+/// [ConflictStrategy.maxTimestampValue] (this deliberately covers future snooze
+/// keys — e.g. the Nudge `snoozed_until` migrated onto this contract in #323 —
+/// without a code change); every other key defaults to [ConflictStrategy.lww].
 ConflictStrategy strategyForKey(String key) {
-  final registered = _explicitStrategies[key];
+  final registered = preferenceConflictRegistry[key];
   if (registered != null) return registered;
   if (key.endsWith('snoozed_until')) return ConflictStrategy.maxTimestampValue;
   return ConflictStrategy.lww;

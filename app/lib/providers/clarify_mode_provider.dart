@@ -1,19 +1,15 @@
-/// The synced `clarify_mode` preference — which of the two clarify modes
-/// (CONTEXT.md § GTD Core) the clarify surfaces run in.
+/// The user's selected [ClarifyMode], replicated across devices via the
+/// `user_preferences` synced key-value store (issue #433).
 ///
-/// Backed by the `user_preferences` synced key-value store, so the choice
-/// replicates across the user's devices like every other setting. Conflicts
-/// resolve by last-write-wins, registered explicitly in
-/// `services/user_preferences_conflict.dart` per ADR-0011.
+/// Reads re-derive from `syncedPreferencesProvider` so a cross-device change
+/// lands without a restart; writes go through [SyncedPreferencesNotifier.set]
+/// and update state eagerly.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/clarify_mode.dart';
 import 'synced_preferences_provider.dart';
-
-/// The `user_preferences` key holding the persisted [ClarifyMode.wireValue].
-const kClarifyModePrefKey = 'clarify_mode';
 
 final clarifyModeProvider = NotifierProvider<ClarifyModeNotifier, ClarifyMode>(
   ClarifyModeNotifier.new,
@@ -22,24 +18,23 @@ final clarifyModeProvider = NotifierProvider<ClarifyModeNotifier, ClarifyMode>(
 class ClarifyModeNotifier extends Notifier<ClarifyMode> {
   @override
   ClarifyMode build() {
-    // Re-derive whenever synced preferences change — including a cross-device
-    // PowerSync update arriving after first build.
+    // Re-derive whenever synced preferences change (including PowerSync pulls).
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
         state = _fromPrefs(next.value);
       }
     });
-    // Return the default immediately; the listener corrects it once the DB
-    // snapshot loads.
+    // Return the default immediately; the listener above corrects it once the
+    // DB snapshot loads.
     final current = ref.read(syncedPreferencesProvider).asData?.value;
-    return current != null ? _fromPrefs(current) : ClarifyMode.defaultMode;
+    return current != null ? _fromPrefs(current) : ClarifyMode.oneToOne;
   }
 
   ClarifyMode _fromPrefs(SyncedPreferences prefs) =>
-      ClarifyMode.fromWireValue(prefs.get<String>(kClarifyModePrefKey));
+      ClarifyMode.fromString(prefs.get<String>(kClarifyModePrefKey));
 
   Future<void> setMode(ClarifyMode mode) async {
-    await syncedPrefs(ref).set(kClarifyModePrefKey, mode.wireValue);
+    await syncedPrefs(ref).set(kClarifyModePrefKey, mode.name);
     state = mode;
   }
 }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/models/clarify_mode.dart';
 import 'package:jeeves/services/user_preferences_conflict.dart';
 
 PreferenceRow _row(dynamic value, String updatedAt) => PreferenceRow(
@@ -36,12 +37,25 @@ void main() {
       }
     });
 
-    test('clarify_mode is registered outright, not left to fall through', () {
-      expect(strategyForKey('clarify_mode'), ConflictStrategy.lww);
-      // The value equals the default, so only this assertion distinguishes a
-      // deliberate registration from an unregistered key (ADR-0011).
-      expect(isExplicitlyRegistered('clarify_mode'), isTrue);
-      expect(isExplicitlyRegistered('an_unregistered_future_key'), isFalse);
+    test('clarify_mode is registered explicitly, not left to the default', () {
+      // The lookup below would return lww either way, so assert against the
+      // registry itself — the point of the entry is that the strategy was
+      // chosen for this key rather than inherited (ADR-0011, issue #433).
+      expect(preferenceConflictRegistry, contains(kClarifyModePrefKey),
+          reason: 'clarify_mode must have an explicit registry entry');
+      expect(preferenceConflictRegistry[kClarifyModePrefKey],
+          ConflictStrategy.lww);
+      expect(strategyForKey(kClarifyModePrefKey), ConflictStrategy.lww);
+    });
+
+    test('every registry entry resolves to its registered strategy', () {
+      // No current entry ends in `snoozed_until`, so this does not exercise
+      // precedence over the suffix rule — it pins that an exact-match entry is
+      // honoured, and covers future entries as they are added.
+      for (final entry in preferenceConflictRegistry.entries) {
+        expect(strategyForKey(entry.key), entry.value,
+            reason: '${entry.key} should resolve to its registered strategy');
+      }
     });
   });
 

@@ -348,7 +348,7 @@ All preference values are stored as JSON-encoded TEXT. A NULL value is a tombsto
 
 ### Conflict resolution
 
-Per-key conflict strategy is defined in `services/user_preferences_conflict.dart` — a `ConflictStrategy` registry (`lww` default, `maxTimestampValue` for snooze floors, `setMerge` provisioned for future list keys) with a pure `resolvePreferenceConflict` function. Deletion is a tombstone (present row, NULL value), never a physical removal. During normal reconciliation a server-absent row keeps the local value; the one residual wipe path is a backend-rejected upload (SYNC.md window 3), prevented by backend idempotency — and if it does happen, the connector dead-letters the entry (payload preserved, sync indicator flags the error, debug builds assert) instead of dropping it silently. The full matrix and the PowerSync reconciliation behaviour live in [SYNC.md](./SYNC.md).
+Per-key conflict strategy is defined in `services/user_preferences_conflict.dart` — a `ConflictStrategy` registry (`lww` default, `maxTimestampValue` for snooze floors, `setMerge` provisioned for future list keys) with a pure `resolvePreferenceConflict` function. `strategyForKey` resolves in three steps: an exact entry in `preferenceConflictRegistry` wins, then the `snoozed_until` suffix rule, then the `lww` default. A key may register `lww` explicitly to record that its strategy was chosen rather than inherited (`clarify_mode` does). Deletion is a tombstone (present row, NULL value), never a physical removal. During normal reconciliation a server-absent row keeps the local value; the one residual wipe path is a backend-rejected upload (SYNC.md window 3), prevented by backend idempotency — and if it does happen, the connector dead-letters the entry (payload preserved, sync indicator flags the error, debug builds assert) instead of dropping it silently. The full matrix and the PowerSync reconciliation behaviour live in [SYNC.md](./SYNC.md).
 
 ### One-time migration
 
@@ -381,10 +381,6 @@ Per-key conflict strategy is defined in `services/user_preferences_conflict.dart
 ### Cross-device reactivity
 
 `SyncedPreferencesNotifier.build()` subscribes to `dao.watchAll(userId)`. When PowerSync writes a remote change to the local `user_preferences` table, the stream fires and the in-memory state updates automatically. Providers that derive state from preferences (e.g. `focusSettingsProvider`, `focusSessionPlanningSettingsProvider`, `clarifyModeProvider`) watch `syncedPreferencesProvider` via `ref.listen` and re-derive their state on each change.
-
-### Clarify mode
-
-`clarifyModeProvider` (`providers/clarify_mode_provider.dart`) derives the `ClarifyMode` (`models/clarify_mode.dart`) from the `clarify_mode` key. The enum pins a `wireValue` separately from the Dart name so a rename cannot orphan already-synced rows, and `fromWireValue` resolves an absent or unrecognised value to `oneToOne` — a build that predates a mode degrades to the quick flow rather than throwing. Settings → Clarify exposes the choice. The mode governs *when* `captures.clarified_at` is stamped, never how anything is stored; both modes run over the same many-to-many `capture_outcomes` join, so switching is a preference change with no data migration. Only the 1-1 stamping is implemented today — `ClarificationService.clarifyCaptureToOutcome` stamps at the first link regardless of the stored mode.
 
 ## Focus Session Planning State
 

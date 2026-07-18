@@ -1,37 +1,40 @@
-/// The user-selectable clarify modes (CONTEXT.md § GTD Core).
+/// How the clarify act maps Captures onto Outcomes.
 ///
-/// Both modes run over the same many-to-many Capture↔Outcome storage — the
-/// mode is a preference, never a storage change. It governs only *when*
-/// `captures.clarified_at` is stamped:
-///
-/// - [ClarifyMode.oneToOne] — each Capture clarifies to exactly one Outcome and
-///   the first Outcome link stamps automatically.
-/// - [ClarifyMode.nToM] — split/merge: the user explicitly completes each
-///   Capture, and only that completion stamps. A Capture stays in the Inbox
-///   while Outcomes are incrementally carved out of it.
+/// A user preference over the *same* many-to-many storage (`captures` ×
+/// `capture_outcomes`), never a storage change — toggling mid-stream leaves
+/// every existing row valid. See `CONTEXT.md` § GTD Core (Capture) and
+/// ADR-0006.
 library;
 
+/// The `user_preferences` key the selected mode is stored under.
+///
+/// Declared beside the enum so both the provider that reads/writes it and the
+/// conflict registry that arbitrates it (`user_preferences_conflict.dart`) name
+/// the same literal.
+const kClarifyModePrefKey = 'clarify_mode';
+
+/// The two clarify modes. Persisted by [name], so the wire values are
+/// `oneToOne` / `nToM`.
 enum ClarifyMode {
-  oneToOne('oneToOne'),
-  nToM('nToM');
+  /// Each Capture clarifies to *at most* one Outcome: routing to an Intent
+  /// creates exactly one and `clarified_at` stamps automatically at that first
+  /// Outcome link, while a discard is the legitimate zero-Outcome verdict that
+  /// stamps without creating anything (ADR-0006). The shipped behaviour.
+  oneToOne,
 
-  const ClarifyMode(this.wireValue);
+  /// Split/merge. The user explicitly completes each Capture and only that
+  /// completion stamps `clarified_at`, so a Capture stays in the Inbox while
+  /// Outcomes are incrementally carved out of it.
+  nToM;
 
-  /// The string persisted in `user_preferences` under `clarify_mode`. Pinned
-  /// separately from the enum name so a future Dart-side rename cannot orphan
-  /// every already-synced row.
-  final String wireValue;
-
-  /// The default mode for a user who has never chosen one.
-  static const ClarifyMode defaultMode = ClarifyMode.oneToOne;
-
-  /// Decodes a persisted [wireValue]. An absent, null, or unrecognised value
-  /// resolves to [defaultMode] — a device running an older build must degrade
-  /// to the quick flow rather than crash on a mode it cannot render.
-  static ClarifyMode fromWireValue(String? value) {
-    for (final mode in ClarifyMode.values) {
-      if (mode.wireValue == value) return mode;
-    }
-    return defaultMode;
-  }
+  /// Decodes a persisted value, falling back to [oneToOne] for anything
+  /// unrecognised.
+  ///
+  /// The fallback is deliberate: a value written by a future client (or a
+  /// corrupted row) must degrade to the safe, shipped mode rather than wedge
+  /// the Inbox in a mode this build cannot drive.
+  static ClarifyMode fromString(String? value) => ClarifyMode.values.firstWhere(
+        (mode) => mode.name == value,
+        orElse: () => ClarifyMode.oneToOne,
+      );
 }
