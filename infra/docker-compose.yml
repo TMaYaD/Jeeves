@@ -48,7 +48,7 @@ services:
   # Both variables are then picked up below.
 
   powersync:
-    image: journeyapps/powersync-service:1.23.2@sha256:51a5917619cb69aa4d7257e5909db12afa5cf619c5c24c2109044bb6766b5b29
+    image: journeyapps/powersync-service:1.23.3@sha256:b6b22fa7d0d862f04bdff62846e656756d17bcf3dd6eca399a0633671051438b
     restart: unless-stopped
     depends_on:
       postgres:
