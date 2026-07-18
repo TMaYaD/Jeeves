@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Stub `id` for the bootstrap test only — deploy-powersync.sh refuses to run
+# as anything but root.  Kept in stubs/bootstrap/ so it is layered onto PATH
+# for that one test rather than shadowing `id` for every test.
+if [ "${1:-}" = "-u" ]; then
+  printf '0\n'
+  exit 0
+fi
+printf 'uid=0(root) gid=0(root) groups=0(root)\n'

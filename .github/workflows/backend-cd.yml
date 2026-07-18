@@ -15,8 +15,34 @@ jobs:
     name: Deploy to Dokku
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: read
 
     steps:
+      # Backend CI runs per push and two of them finish in whatever order their
+      # test jobs happen to take, so a *successful* run is not necessarily the
+      # *latest* one.  Deploying from a superseded run force-pushes older
+      # backend code over newer and republishes older sync rules on top of
+      # migrations that have already run — the drift this pipeline exists to
+      # prevent, arriving by a different route.  The concurrency group above
+      # serialises these runs but says nothing about their order, so compare
+      # the SHA rather than assume it.
+      - name: Check the deployed commit is still main's tip
+        id: freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          TIP=$(gh api "repos/${REPO}/commits/main" --jq .sha)
+          if [ "${TIP}" = "${RUN_SHA}" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Superseded: this run is for ${RUN_SHA}, main is at ${TIP}."
+            echo "The run for ${TIP} deploys it — skipping to avoid going backwards."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -25,27 +51,65 @@ jobs:
           # never used, so don't persist it into .git/config.
           persist-credentials: false
 
+      # HEAD^..HEAD is the complete change set only when the tip is a merge
+      # commit — HEAD^ is then main as it was before the merge, so the range
+      # covers the whole PR.  For any other tip (a direct multi-commit push to
+      # main) earlier commits fall outside it, and a backend change in one of
+      # them would be missed: the Dokku push would be skipped while the publish
+      # step below still ran, shipping buckets whose migration never deployed.
+      # That is the exact failure this pipeline exists to prevent, so when the
+      # range can't be trusted we deploy rather than guess.
       - name: Check for backend changes
         id: backend-changes
         run: |
-          if git diff --name-only HEAD^ HEAD | grep -q '^backend/'; then
+          if ! git rev-parse --verify --quiet HEAD^2 >/dev/null; then
+            echo "Tip is not a merge commit — pushed range is unbounded, deploying."
+            echo "changed=true" >> $GITHUB_OUTPUT
+          elif git diff --name-only HEAD^ HEAD | grep -q '^backend/'; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
 
+      # Not gated on backend-changes: the sync-rules publish below runs on
+      # every CD, including infra-only commits that skip the Dokku push.
       - name: Set up SSH
-        if: steps.backend-changes.outputs.changed == 'true'
+        if: steps.freshness.outputs.current == 'true'
         uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
           ssh-private-key: ${{ secrets.DOKKU_SSH_PRIVATE_KEY }}
 
       - name: Add Dokku host to known hosts
-        if: steps.backend-changes.outputs.changed == 'true'
+        if: steps.freshness.outputs.current == 'true'
         run: ssh-keyscan -H "${{ vars.DOKKU_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Deploy to Dokku
-        if: steps.backend-changes.outputs.changed == 'true'
+        if: steps.freshness.outputs.current == 'true' && steps.backend-changes.outputs.changed == 'true'
         run: |
           git remote add dokku "ssh://dokku@${{ vars.DOKKU_HOST }}/jeeves"
           git push dokku HEAD:main --force
+
+      # Migrations first, buckets second: the push above blocks until Dokku's
+      # release phase (`python -m app.migrate`) finishes, so a new table exists
+      # before the bucket that reads it goes live.  Sharing this job — and its
+      # single checkout, already pinned to workflow_run.head_sha — is what
+      # keeps the two in lock-step; a separate job could publish rules from a
+      # newer commit than the one just deployed.
+      #
+      # Gated on the sync config having actually validated: Backend CI boots
+      # PowerSync from this exact commit's config against a migrated Postgres,
+      # and this job only runs when that workflow concluded successfully.  The
+      # gate is structural rather than a status lookup — same SHA, no polling,
+      # no window where a red validation and a green publish overlap.
+      #
+      # Unconditional and unfiltered by path: publish-sync-config.sh writes
+      # nothing and triggers no restart when the published config already
+      # matches, so an unchanged config costs only a handful of `config:get`
+      # round-trips.  Running every time is also what self-heals a stale
+      # override set by hand on the host — something commit-range detection
+      # could never see.
+      - name: Publish PowerSync sync rules
+        if: steps.freshness.outputs.current == 'true'
+        run: |
+          DOKKU="ssh -o BatchMode=yes dokku@${{ vars.DOKKU_HOST }}" \
+            infra/dokku/publish-sync-config.sh jeeves-powersync jeeves
