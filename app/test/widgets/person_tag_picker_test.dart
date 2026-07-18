@@ -5,6 +5,8 @@
 /// its own navigation — the shape every real callsite has.
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/widgets/person_tag_picker.dart';
 
 import '../test_helpers.dart';
@@ -107,6 +110,19 @@ class _CallerPage extends StatelessWidget {
   }
 }
 
+/// A [TaskDetailNotifier] whose write never completes until [gate] is
+/// completed, so a test can hold the sheet in its committing state and drive
+/// the system back gesture at it.
+class _BlockingNotifier extends TaskDetailNotifier {
+  _BlockingNotifier(GtdDatabase db, String todoId)
+      : super(db: db, userId: _userId, todoId: todoId);
+
+  final gate = Completer<void>();
+
+  @override
+  Future<void> setPersonTags(Set<String> tagIds) => gate.future;
+}
+
 /// Counts route pops so a test can assert how many routes came off the stack,
 /// not merely which page is showing at the end.
 class _PopCounter extends NavigatorObserver {
@@ -127,6 +143,7 @@ Widget _harness(
   bool requireSelection = false,
   List<Tag> personTags = const [],
   NavigatorObserver? observer,
+  TaskDetailNotifier? notifier,
 }) {
   return ProviderScope(
     overrides: [
@@ -134,6 +151,8 @@ Widget _harness(
       // Single-value stream: drift's StreamQueryStore leaves a pending timer
       // behind on dispose, which fails the test.
       personTagsProvider.overrideWith((ref) => Stream.value(personTags)),
+      if (notifier != null && todoId != null)
+        taskDetailNotifierProvider(todoId).overrideWithValue(notifier),
     ],
     child: MaterialApp(
       navigatorObservers: [?observer],
@@ -372,6 +391,71 @@ void main() {
       expect(observed.callerRouteWasCurrent, isTrue);
       expect(find.byType(PersonTagPickerSheet), findsNothing);
       expect(find.text('Open caller'), findsOneWidget);
+    });
+
+    testWidgets('system back dismisses the sheet and yields no selection',
+        (tester) async {
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+
+      // The platform back gesture, not the Cancel button: PopScope is the only
+      // thing standing between it and the route, so it needs its own test.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PersonTagPickerSheet), findsNothing);
+      expect(observed.called, isTrue);
+      expect(observed.result, isNull,
+          reason: 'a dismissed sheet is a cancel — nothing was confirmed');
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    testWidgets('system back cannot dismiss the sheet mid-commit',
+        (tester) async {
+      await _insertTodo(db, id: 't6');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      final observed = _Observed();
+      final blocking = _BlockingNotifier(db, 't6');
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        todoId: 't6',
+        personTags: [_personTag('alice', 'Alice')],
+        notifier: blocking,
+      ));
+      await _openPicker(tester);
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+
+      // Done starts the write, which hangs on the gate — the sheet is now
+      // committing, so PopScope.canPop is false.
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pump();
+
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+
+      // Dismissing here would hand the caller a null while the write it
+      // asked for is still in flight.
+      expect(find.byType(PersonTagPickerSheet), findsOneWidget);
+      expect(observed.called, isFalse);
+
+      // Releasing the write lets the sheet finish the way it always would.
+      blocking.gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PersonTagPickerSheet), findsNothing);
+      expect(observed.result, {'alice'});
     });
   });
 }
