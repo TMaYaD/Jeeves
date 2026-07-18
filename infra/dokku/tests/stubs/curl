@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Stub `curl` for the infra tests.  Every request is logged so tests can assert
+# the URL and the number of probes.
+#
+# Outcome is either fixed (CURL_STUB_RC) or a per-call sequence
+# (CURL_STUB_RC_SEQUENCE, space-separated, last entry repeating) — the sequence
+# form is what lets a test drive "initial probe fails, rollback probe
+# succeeds".  The log doubles as the call counter, and the harness truncates it
+# per test case, so sequences are scoped to a case.
+set -uo pipefail
+
+printf '%s\n' "curl $*" >> "${CURL_STUB_LOG}"
+
+if [ -n "${CURL_STUB_RC_SEQUENCE:-}" ]; then
+  call=$(grep -c '' "${CURL_STUB_LOG}")
+  read -r -a rcs <<<"${CURL_STUB_RC_SEQUENCE}"
+  idx=$((call - 1))
+  [ "${idx}" -ge "${#rcs[@]}" ] && idx=$(( ${#rcs[@]} - 1 ))
+  rc="${rcs[idx]}"
+else
+  rc="${CURL_STUB_RC:-0}"
+fi
+
+if [ "${rc}" -eq 0 ]; then
+  # curl -f only fails on >=400, so a 3xx reaches the caller as a success with
+  # a redirect status.  CURL_STUB_HTTP_CODE lets a test reproduce that.
+  printf 'HTTP %s' "${CURL_STUB_HTTP_CODE:-200}"
+  exit 0
+fi
+printf 'curl: (22) HTTP 503' >&2
+exit "${rc}"

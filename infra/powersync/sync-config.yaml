@@ -1,4 +1,7 @@
-# PowerSync Service configuration for Jeeves (local dev).
+# PowerSync Service configuration for Jeeves — the single source of truth for
+# every environment.  Local dev mounts this file at /config; production gets
+# the same bytes as POWERSYNC_CONFIG_B64, published by
+# infra/dokku/publish-sync-config.sh on every backend deploy (ADR-0017).
 #
 # Docs: https://docs.powersync.com/self-hosting/configuration
 # Reference: https://github.com/powersync-ja/self-host-demo

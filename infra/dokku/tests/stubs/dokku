@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Stub `dokku` for the infra tests: a file-backed config store plus a log of
+# every invocation, so tests can assert both resulting state and call order.
+#
+# dokku is an external CLI reached over SSH, not a system component — there is
+# no way to exercise idempotence, rollback, or bootstrap ordering against a
+# real Dokku host from CI.
+#
+# Required env:
+#   DOKKU_STUB_STATE  directory holding <app>.env config stores
+#   DOKKU_STUB_LOG    file the invocation log is appended to
+#
+# Behaviour knobs (all optional):
+#   DOKKU_STUB_DEPLOYED       `ps:report --deployed` answer (default false)
+#   DOKKU_STUB_PS_REPORT_RC   make ps:report fail with this code
+#   DOKKU_STUB_VHOSTS         `domains:report` answer (default empty)
+#   DOKKU_STUB_PG_LINKS       apps listed in `postgres:info` Links
+#   DOKKU_STUB_WAL_LEVEL      `SHOW wal_level;` answer (default logical)
+set -uo pipefail
+
+CMD="${1:-}"; shift || true
+log() { printf '%s\n' "$*" >> "${DOKKU_STUB_LOG}"; }
+state_file() { printf '%s/%s.env' "${DOKKU_STUB_STATE}" "$1"; }
+
+case "${CMD}" in
+  config:get)
+    app="$1"; key="$2"
+    log "config:get ${app} ${key}"
+    f=$(state_file "${app}")
+    [ -f "${f}" ] || exit 1
+    line=$(grep -m1 "^${key}=" "${f}") || exit 1
+    printf '%s\n' "${line#*=}"
+    ;;
+
+  config:set|config:unset)
+    # --no-restart is logged, not swallowed: whether a config change restarts
+    # the app is load-bearing (a rollback that doesn't restart doesn't roll
+    # back), so tests have to be able to assert on it.
+    norestart=""
+    if [ "${1:-}" = "--no-restart" ]; then
+      norestart=" --no-restart"
+      shift
+    fi
+    app="$1"; shift
+    # Log key names only — a base64 config value would swamp the log.
+    keys=""
+    for arg in "$@"; do keys="${keys}${keys:+ }${arg%%=*}"; done
+    log "${CMD}${norestart} ${app} ${keys}"
+    f=$(state_file "${app}")
+    touch "${f}"
+    for arg in "$@"; do
+      key="${arg%%=*}"
+      grep -v "^${key}=" "${f}" > "${f}.tmp" || true
+      mv "${f}.tmp" "${f}"
+      [ "${CMD}" = "config:set" ] && printf '%s\n' "${arg}" >> "${f}"
+    done
+    ;;
+
+  ps:report)
+    log "ps:report $*"
+    [ "${DOKKU_STUB_PS_REPORT_RC:-0}" -eq 0 ] || exit "${DOKKU_STUB_PS_REPORT_RC}"
+    if [ "${2:-}" = "--deployed" ]; then
+      printf '%s\n' "${DOKKU_STUB_DEPLOYED:-false}"
+    else
+      # Shape the bootstrap smoke test greps for.
+      printf '       Status web 1:            running\n'
+    fi
+    ;;
+
+  domains:report)
+    log "domains:report $*"
+    printf '%s\n' "${DOKKU_STUB_VHOSTS:-}"
+    ;;
+
+  apps:exists)
+    log "apps:exists $*"
+    [ "${DOKKU_STUB_APP_EXISTS:-true}" = "true" ] || exit 1
+    ;;
+
+  postgres:info)
+    log "postgres:info $*"
+    printf '       Links:                 %s\n' "${DOKKU_STUB_PG_LINKS:-}"
+    ;;
+
+  postgres:link)
+    log "postgres:link $*"
+    # Real dokku-postgres injects DATABASE_URL into the app on link; the
+    # bootstrap reads it straight back, so the stub has to do the same.
+    printf 'DATABASE_URL=postgres://u:p@dokku-postgres-%s:5432/db\n' "$1" \
+      >> "$(state_file "$2")"
+    ;;
+
+  postgres:connect)
+    log "postgres:connect $*"
+    # Callers pipe SQL in; drain it so the writer doesn't see EPIPE.
+    cat >/dev/null
+    printf ' wal_level \n-----------\n %s\n(1 row)\n' "${DOKKU_STUB_WAL_LEVEL:-logical}"
+    ;;
+
+  git:from-image)
+    log "git:from-image $*"
+    printf 'Deployed %s\n' "${2:-}"
+    ;;
+
+  apps:create|ports:list|ports:set|resource:limit|postgres:restart|domains:set|letsencrypt:enable|letsencrypt:set)
+    log "${CMD} $*"
+    # ports:list output has to match the bootstrap's already-configured check.
+    [ "${CMD}" = "ports:list" ] && printf 'http 80 8080\n'
+    ;;
+
+  *)
+    echo "stub dokku: unsupported command '${CMD}'" >&2
+    exit 64
+    ;;
+esac
+exit 0

@@ -90,6 +90,17 @@ Recovery options, in order of preference:
 
 ## PowerSync configuration
 
-The sync rules and auth config live in `powersync/sync-config.yaml`.
-PowerSync uses the same `SECRET_KEY` as the backend to validate client JWTs.
-Bucket storage is colocated in Postgres — no additional database is required.
+The sync rules and auth config live in `powersync/sync-config.yaml` — the
+single source of truth for every environment. PowerSync uses the same
+`SECRET_KEY` as the backend to validate client JWTs. Bucket storage is
+colocated in Postgres — no additional database is required.
+
+The same bytes reach each environment by a different route: locally, Compose
+mounts the file at `/config` and PowerSync reads it via
+`POWERSYNC_CONFIG_PATH`; in production `infra/dokku/publish-sync-config.sh`
+delivers it as `POWERSYNC_CONFIG_B64` on every backend deploy, so schema
+migrations and bucket definitions ship together. Production deployments mount
+no config; an environment bootstrapped before ADR-0017 may still carry an inert
+`/config` mount until it is removed by hand. See
+[ADR-0017](../docs/adr/0017-sync-rules-as-dokku-config-var.md) and
+[dokku/README.md](./dokku/README.md), which has the one-line unmount.
