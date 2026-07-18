@@ -727,8 +727,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
   }
 
-  /// "Waiting for…" — called after [PersonTagPickerSheet] assigns a person
-  /// tag. Routing is intent-only; `next_action_text` is on an orthogonal
+  /// "Waiting for…" — a legacy bundled helper: it commits the route itself
+  /// via [ClarificationService.clarifyToOutcome], then reads back whatever
+  /// delegates are assigned to the Outcome and advances the cursor. Retained
+  /// because the test suite drives it directly; widget-owned routing commits
+  /// through `ProcessToHandlers` and reports via
+  /// [recordReviewActionAndAdvance] instead.
+  ///
+  /// Routing is intent-only; `next_action_text` is on an orthogonal
   /// axis and is not touched here. The (now-removed) "Waiting for…"
   /// placeholder for actionless tasks belonged to the user-action axis,
   /// not the routing axis — the next-action dialog is the user-facing

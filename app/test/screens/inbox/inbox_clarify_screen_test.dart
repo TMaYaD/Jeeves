@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/services/clarification_service.dart';
@@ -323,12 +324,18 @@ Widget _buildApp(
   GtdDatabase db,
   String captureId, {
   ClarificationService? clarificationService,
+  List<Tag>? personTags,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
       if (clarificationService != null)
         clarificationServiceProvider.overrideWithValue(clarificationService),
+      // Only the Waiting For flow opens the person picker. Override with a
+      // single-value stream there so drift's StreamQueryStore (which leaves a
+      // pending timer behind on dispose) is never subscribed to.
+      if (personTags != null)
+        personTagsProvider.overrideWith((ref) => Stream.value(personTags)),
     ],
     child: MaterialApp.router(
       routerConfig: GoRouter(
@@ -410,6 +417,51 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(await _inboxIds(db), isEmpty);
+    });
+
+    testWidgets('Waiting For delegates the Capture and returns to the Inbox',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Ask Bob'));
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('alice'),
+        name: const Value('Alice'),
+        type: const Value('person'),
+        userId: const Value(_userId),
+      ));
+
+      await tester.pumpWidget(_buildApp(
+        db,
+        'x',
+        personTags: [
+          Tag(id: 'alice', name: 'Alice', type: 'person', userId: _userId),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      // Waiting For sits below the default 800x600 test viewport.
+      await tester.ensureVisible(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+      // The picker's confirm is a FilledButton labelled "Done"; the route bar
+      // carries its own "Done" — disambiguate by widget type.
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pumpAndSettle();
+
+      // The whole chain: the picker returns the selection, the routing write
+      // carves the Outcome with the delegate attached, and only then does the
+      // screen pop — so the Inbox is what the user lands on.
+      final outcome = await _outcomeOf(db, 'x');
+      expect(outcome, isNotNull);
+      expect(
+        await db.todoDao.getPersonTagIdsForTodo(outcome!.id),
+        contains('alice'),
+      );
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
+      expect(find.text('Inbox'), findsOneWidget);
     });
 
     testWidgets('Maybe carves an Outcome with intent = maybe', (tester) async {

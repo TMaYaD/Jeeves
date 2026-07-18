@@ -642,6 +642,35 @@ AND (
     });
   }
 
+  /// [setPersonTagsForTodo] plus a `last_clarified_at` stamp, in one
+  /// transaction. Choosing a task's delegates is a single clarifying act, so
+  /// the two writes must land together: a stamp that fails after the tag
+  /// replacement would leave the new delegate set wearing the old clarified
+  /// moment, and the task would sort as if it had never been revisited.
+  Future<void> setPersonTagsAndStamp(
+    String todoId,
+    Set<String> targetPersonTagIds,
+    String userId, {
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    await transaction(() async {
+      await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
+      // Stamped inline rather than through [stampLastClarifiedAt]: that method
+      // notifies view watchers itself, and firing that mid-transaction would
+      // have them re-read pre-commit state. Notify once below, after commit.
+      await (update(todos)..where((t) => t.id.equals(todoId))).write(
+        TodosCompanion(
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      );
+    });
+    // `todos` / `todo_tags` are PowerSync views in production, so the writes
+    // above report `changes() == 0` and Drift skips its own invalidation.
+    attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+  }
+
   /// Single source of truth for routing-transition writes across inbox-clarify
   /// and re-clarification review.
   ///
