@@ -41,7 +41,16 @@ class _StubNotificationService extends NotificationService {
 
 /// Pumps the real Settings screen so the clarify-mode tile is exercised in the
 /// widget tree it actually ships in.
-Future<ProviderContainer> _pumpSettings(WidgetTester tester) async {
+///
+/// [initialMode] seeds the persisted preference before the screen builds, so a
+/// test can start from a non-default mode. Without it every case would begin at
+/// `oneToOne` and the reverse transition — plus any assertion that dismissing
+/// leaves the mode *untouched* rather than resetting it to the default — would
+/// be untestable.
+Future<ProviderContainer> _pumpSettings(
+  WidgetTester tester, {
+  ClarifyMode? initialMode,
+}) async {
   final db = GtdDatabase(NativeDatabase.memory());
   addTearDown(db.close);
   final container = ProviderContainer(
@@ -52,6 +61,9 @@ Future<ProviderContainer> _pumpSettings(WidgetTester tester) async {
   );
   addTearDown(container.dispose);
   await container.read(syncedPreferencesProvider.future);
+  if (initialMode != null) {
+    await container.read(clarifyModeProvider.notifier).setMode(initialMode);
+  }
 
   await tester.pumpWidget(
     UncontrolledProviderScope(
@@ -112,9 +124,39 @@ void main() {
       );
     });
 
+    testWidgets('picking 1-1 from n-m persists the mode back', (tester) async {
+      final container =
+          await _pumpSettings(tester, initialMode: ClarifyMode.nToM);
+
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('clarify_mode_tile')),
+        200,
+      );
+      await tester.tap(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('clarify_mode_option_oneToOne')));
+      await tester.pumpAndSettle();
+
+      // The return trip has to persist too: a user who tries n-m must be able
+      // to get back to the shipped 1-1 flow.
+      expect(container.read(clarifyModeProvider), ClarifyMode.oneToOne);
+      expect(
+        container
+            .read(syncedPreferencesProvider)
+            .asData!
+            .value
+            .get<String>('clarify_mode'),
+        'oneToOne',
+      );
+    });
+
     testWidgets('dismissing the picker leaves the mode untouched',
         (tester) async {
-      final container = await _pumpSettings(tester);
+      // Seeded to n-m deliberately: starting from the default would let this
+      // pass even if dismissal reset the mode.
+      final container =
+          await _pumpSettings(tester, initialMode: ClarifyMode.nToM);
 
       await tester.scrollUntilVisible(
         find.byKey(const Key('clarify_mode_tile')),
@@ -127,7 +169,15 @@ void main() {
       await tester.tapAt(const Offset(10, 10));
       await tester.pumpAndSettle();
 
-      expect(container.read(clarifyModeProvider), ClarifyMode.oneToOne);
+      expect(container.read(clarifyModeProvider), ClarifyMode.nToM);
+      expect(
+        container
+            .read(syncedPreferencesProvider)
+            .asData!
+            .value
+            .get<String>('clarify_mode'),
+        'nToM',
+      );
     });
   });
 }

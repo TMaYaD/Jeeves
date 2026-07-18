@@ -359,7 +359,9 @@ class _ClarifySettings extends ConsumerWidget {
       };
 
   static String _description(ClarifyMode mode) => switch (mode) {
-        ClarifyMode.oneToOne => 'Each Capture becomes one Outcome.',
+        // "at most" because discarding is a legitimate verdict that clarifies
+        // the Capture without creating anything (ADR-0006).
+        ClarifyMode.oneToOne => 'Each Capture becomes at most one Outcome.',
         // The n-m clarify surfaces have not shipped yet, so the copy promises
         // only what selecting the mode actually does today: persist and sync.
         ClarifyMode.nToM => 'Split and merge. Not available yet — your choice '

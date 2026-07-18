@@ -16,8 +16,10 @@ const kClarifyModePrefKey = 'clarify_mode';
 /// The two clarify modes. Persisted by [name], so the wire values are
 /// `oneToOne` / `nToM`.
 enum ClarifyMode {
-  /// Each Capture clarifies to exactly one Outcome, and `clarified_at` stamps
-  /// automatically at the first Outcome link. The shipped behaviour.
+  /// Each Capture clarifies to *at most* one Outcome: routing to an Intent
+  /// creates exactly one and `clarified_at` stamps automatically at that first
+  /// Outcome link, while a discard is the legitimate zero-Outcome verdict that
+  /// stamps without creating anything (ADR-0006). The shipped behaviour.
   oneToOne,
 
   /// Split/merge. The user explicitly completes each Capture and only that
