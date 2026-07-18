@@ -77,6 +77,12 @@ class _FailingClarificationService extends DaoClarificationService {
     String? userId,
   }) =>
       Future<void>.error(StateError('write failed'));
+
+  // Discarding a Capture is a different method on a different write path, so
+  // failing `clarifyToOutcome` alone would leave it uncovered.
+  @override
+  Future<void> discardCapture(String captureId, {DateTime? now}) =>
+      Future<void>.error(StateError('write failed'));
 }
 
 Widget _harness(
@@ -134,10 +140,13 @@ Widget _captureHarness(
   GtdDatabase db, {
   required Capture capture,
   Future<void> Function(ProcessAction)? onAfterRoute,
+  ClarificationService? clarificationService,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      if (clarificationService != null)
+        clarificationServiceProvider.overrideWithValue(clarificationService),
       personTagsProvider.overrideWith((ref) => Stream.value(const <Tag>[])),
     ],
     child: MaterialApp(
@@ -805,6 +814,30 @@ void main() {
       expect(find.text('Operation failed. Please try again.'), findsOneWidget);
       expect(fired, isEmpty,
           reason: 'the write did not land, so nothing may be recorded');
+    });
+
+    testWidgets('a failed Discard reports the error and leaves the Capture',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'boom3');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        clarificationService: _FailingClarificationService(db),
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+
+      await tester.tap(find.text('Discard'));
+      await tester.pumpAndSettle();
+
+      // Discard runs through `discardCapture`, not `clarifyToOutcome` — a
+      // separate write path, so it needs its own failure coverage.
+      expect(find.text('Operation failed. Please try again.'), findsOneWidget);
+      expect(fired, isEmpty,
+          reason: 'the write did not land, so nothing may be recorded');
+      // The verdict never committed, so the Capture is still in the Inbox for
+      // the user to retry rather than silently gone.
+      expect((await db.captureDao.getCapture('boom3'))!.clarifiedAt, isNull);
     });
 
     testWidgets('a failing onAfterRoute does not report the write as failed',
