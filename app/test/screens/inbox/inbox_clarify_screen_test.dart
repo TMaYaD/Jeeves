@@ -311,6 +311,14 @@ bool _skipEnabled(WidgetTester tester) =>
         .onPressed !=
     null;
 
+/// Whether the app-bar back button is currently tappable.
+bool _backEnabled(WidgetTester tester) =>
+    tester
+        .widget<IconButton>(
+            find.widgetWithIcon(IconButton, Icons.arrow_back_ios_new))
+        .onPressed !=
+    null;
+
 Widget _buildApp(
   GtdDatabase db,
   String captureId, {
@@ -543,6 +551,62 @@ void main() {
       gate.complete();
       await tester.pumpAndSettle();
       expect(await _outcomeOf(db, 'x'), isNotNull);
+    });
+
+    testWidgets('every navigation escape is shut while a write is in flight',
+        (tester) async {
+      await db.captureDao.insertCapture(
+        _captureCompanion(id: 'x', title: 'Buy milk'),
+      );
+
+      final gate = Completer<void>();
+      await tester.pumpWidget(_buildApp(
+        db,
+        'x',
+        clarificationService: _BlockingClarificationService(
+          DaoClarificationService(db),
+          gate.future,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Edit the title so there is a pending Capture write to lose: the
+      // routing verdict carries the new title into the Outcome, but the
+      // Capture only catches up in `onAfterRoute`.
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'New title');
+      await tester.pump();
+      expect(_backEnabled(tester), isTrue);
+
+      await tester.ensureVisible(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next Action'));
+      await tester.pump();
+
+      // The app-bar button and platform back are separate escapes from Skip;
+      // either one popping here unmounts the screen before the text flush,
+      // leaving the Capture's title behind the Outcome's.
+      expect(_backEnabled(tester), isFalse);
+
+      // Platform back is the escape no widget owns, so drive it for real
+      // rather than reading `canPop` off the PopScope. Assert on the app-bar
+      // title, not a ListView child: the `ensureVisible` above scrolled the
+      // title field out of the cache extent, so it is no longer built.
+      // `pumpAndSettle`, not `pump`: the pop is an animated route transition,
+      // so a single frame leaves the outgoing screen still in the tree and the
+      // assertion below would hold whether or not the guard did anything.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Clarify'), findsOneWidget,
+          reason: 'system back must not pop the screen mid-write');
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      // Both writes landed, so the provenance record matches what the user
+      // actually wrote.
+      expect((await _outcomeOf(db, 'x'))!.title, 'New title');
+      expect((await db.captureDao.getCapture('x'))!.title, 'New title');
     });
 
     testWidgets('empty title does not clarify the Capture', (tester) async {

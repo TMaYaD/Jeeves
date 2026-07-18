@@ -45,9 +45,13 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// nameable, so a blank title disables every route that creates one.
   bool _titleIsBlank = false;
 
-  /// Mirrors [ProcessToHandlers]' in-flight state, so Skip — which sits
-  /// outside the bar and navigates away — disables alongside the bar's own
-  /// buttons instead of letting the user pop mid-write.
+  /// Mirrors [ProcessToHandlers]' in-flight state, so every affordance that
+  /// leaves this screen — Skip, the app-bar back button, platform back —
+  /// shuts alongside the bar's own buttons.
+  ///
+  /// Popping mid-write is not merely cosmetic: the routing verdict lands, but
+  /// the widget unmounts before `onAfterRoute` runs, so [_saveCaptureText] is
+  /// skipped and the Capture keeps a title the Outcome no longer has.
   bool _routing = false;
 
   /// Non-person tag hints on this Capture, read once alongside it.
@@ -172,6 +176,16 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return PopScope(
+      // Platform back is the one escape no widget owns, so it needs the guard
+      // here rather than an `enabled:` flag. Shut while a route is in flight,
+      // for the reason [_routing] documents.
+      canPop: !_routing,
+      child: _buildScaffold(context),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -181,7 +195,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
         scrolledUnderElevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-          onPressed: () => context.pop(),
+          onPressed: _routing ? null : () => context.pop(),
         ),
       ),
       body: _loading
@@ -381,10 +395,8 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                 const SizedBox(height: 20),
                 // Skip is a nav escape hatch, not a verdict — it leaves
                 // `clarified_at` NULL and the Capture in the Inbox — so it
-                // stays outside the routing bar. Disabled while a route is in
-                // flight: popping mid-write would skip the text flush in
-                // `onAfterRoute` and leave the Capture's title behind the
-                // Outcome's.
+                // stays outside the routing bar, and so it does not inherit
+                // the bar's in-flight disabling for free (see [_routing]).
                 ClarifyDestinationButton(
                   label: 'Skip',
                   icon: Icons.next_plan_outlined,
