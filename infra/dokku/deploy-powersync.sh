@@ -1,40 +1,39 @@
 #!/usr/bin/env bash
-# One-shot bootstrap for a PowerSync Dokku app.
+# Fresh-environment bootstrap for a PowerSync Dokku app.
 # Run as root on the Dokku host.  Idempotent — safe to re-run.
 #
-# Usage:
-#   sudo ./deploy-powersync.sh <powersync-app> <backend-app> <domain>
-#   e.g.: sudo ./deploy-powersync.sh jeeves-powersync jeeves powersync.jeeves.loonyb.in
+# This is the bootstrap path only: everything CI cannot do (app creation,
+# postgres linking, wal_level, domains, Let's Encrypt).  Once an environment
+# exists, sync-rule changes publish themselves — Backend CD runs
+# publish-sync-config.sh on every deploy.
+#
+# Needs the whole infra/ directory on the host, not just this file:
+#   scp -r infra/ root@<dokku-host>:/root/jeeves-infra/
+#   sudo bash /root/jeeves-infra/dokku/deploy-powersync.sh \
+#     <powersync-app> <backend-app> <domain>
+#   e.g.: ... jeeves-powersync jeeves powersync.jeeves.loonyb.in
 #
 # Optional env overrides:
 #   PS_IMAGE   PowerSync image to deploy
 #              (default: pinned by digest below)
-#   DOKKU_UID  herokuish container UID for storage volume chown
-#              (default: 32767 — current Dokku default; set if your
-#              install uses a different UID)
 #
 # What it does, in order (each step idempotent):
-#   1. Storage dir + sync-config.yaml + chown to dokku UID
-#   2. Create the dokku app, set ports + resource limit
-#   3. Pull SECRET_KEY from <backend-app>; derive postgres service from its
+#   1. Create the dokku app, set ports + resource limit
+#   2. Pull SECRET_KEY from <backend-app>; derive postgres service from its
 #      DATABASE_URL and link the same postgres service to the powersync app
 #      (this puts the powersync container on the postgres docker network and
 #      injects DATABASE_URL automatically)
-#   4. Configure the linked postgres for logical replication
+#   3. Configure the linked postgres for logical replication
 #      (`wal_level=logical`); restarts the postgres service if needed
-#   5. Set PowerSync env: PS_SECRET_KEY_B64 (base64url, no padding, no
-#      newlines), PS_DATA_SOURCE_URI, NODE_OPTIONS, POWERSYNC_CONFIG_PATH
-#   6. Mount the config volume at /config
-#   7. Add the public domain
-#   8. Deploy the PowerSync image (env/network/storage/domain are in place
-#      first so the first container start comes up healthy)
-#   9. Enable Let's Encrypt
-#  10. Wire <backend-app>: set POWERSYNC_URL, restart only if changed
-#  11. Smoke-test the public endpoint
-#
-# Sync rules: the embedded heredoc must stay in lock-step with
-# infra/powersync/sync-config.yaml (the local-dev source of truth).  The
-# duplication goes away when the dokku-powersync plugin lands (#201).
+#   4. Set PowerSync env: PS_SECRET_KEY_B64 (base64url, no padding, no
+#      newlines), PS_DATA_SOURCE_URI, NODE_OPTIONS
+#   5. Publish infra/powersync/sync-config.yaml via publish-sync-config.sh
+#   6. Add the public domain
+#   7. Deploy the PowerSync image (env/network/domain are in place first so
+#      the first container start comes up healthy)
+#   8. Enable Let's Encrypt
+#   9. Wire <backend-app>: set POWERSYNC_URL, restart only if changed
+#  10. Smoke-test the public endpoint
 set -euo pipefail
 
 if [ $# -ne 3 ]; then
@@ -47,8 +46,7 @@ PS_APP="$1"
 BACKEND_APP="$2"
 PS_DOMAIN="$3"
 PS_IMAGE="${PS_IMAGE:-journeyapps/powersync-service:1.23.0@sha256:6405a437bf527957c99e670497a537903af8e1469724b70d030a74aaef5241fa}"
-CONFIG_STORAGE="/var/lib/dokku/data/storage/${PS_APP}"
-DOKKU_UID="${DOKKU_UID:-32767}"
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 
 # ----- Preconditions ---------------------------------------------------------
 if [ "$(id -u)" -ne 0 ]; then
@@ -62,151 +60,8 @@ fi
 
 echo "==> Bootstrap target: ${PS_APP} (backend: ${BACKEND_APP}, domain: ${PS_DOMAIN})"
 
-# ----- 1. Storage dir + sync-config.yaml -------------------------------------
-echo "==> [1/11] Storage dir + sync-config.yaml"
-mkdir -p "${CONFIG_STORAGE}"
-cat > "${CONFIG_STORAGE}/sync-config.yaml" <<'YAML'
-# PowerSync Service configuration.
-#
-# Docs: https://docs.powersync.com/self-hosting/configuration
-# Reference: https://github.com/powersync-ja/self-host-demo
-#
-# Top-level keys (replication, storage, client_auth, api) are parsed by
-# PowerSync directly.  Only the sync rules live under `sync_config.content`
-# (a string the service parses as its own YAML document).
-
-# --- Replication source -------------------------------------------------------
-replication:
-  connections:
-    - type: postgresql
-      # Connects to the same Postgres instance used by the backend.
-      uri: !env PS_DATA_SOURCE_URI
-      sslmode: disable
-      # Required: enable logical replication slot for change capture.
-      slot_name: powersync_slot
-
-# --- Sync rules ---------------------------------------------------------------
-# Eleven user-scoped buckets — todos, tags, todo_tags, time_logs,
-# focus_sessions, focus_session_tasks, focus_session_dispositions,
-# user_preferences, and the Capture split (issue #184): captures,
-# capture_outcomes, capture_tags.
-#
-# The parameter query below relies on the JWT carrying a `user_id` claim —
-# `token_parameters.user_id` is read directly and no users-table lookup is
-# required.
-#
-# The junction tables (todo_tags, focus_session_tasks,
-# focus_session_dispositions, capture_outcomes, capture_tags) carry a
-# denormalized `user_id` column (migrations 0008, 0025, 0027, 0026) following
-# PowerSync's "Denormalize Foreign Key onto Child Table"
-# pattern for many-to-many join tables [1] — PowerSync rejects JOINs in bucket
-# data queries as a fatal sync-rules error ("Must SELECT from a single
-# table"), which aborts the whole config.  Their SELECTs list columns
-# explicitly because PowerSync manages `id` itself for junction tables and
-# declaring it on the client would duplicate the column.
-#
-# [1] https://docs.powersync.com/sync/rules/many-to-many-join-tables
-sync_config:
-  content: |
-    bucket_definitions:
-      by_user_todos:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT * FROM todos WHERE user_id = bucket.user_id
-
-      by_user_tags:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT * FROM tags WHERE user_id = bucket.user_id
-
-      by_user_todo_tags:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT id, todo_id, tag_id, user_id FROM todo_tags WHERE user_id = bucket.user_id
-
-      by_user_time_logs:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT * FROM time_logs WHERE user_id = bucket.user_id
-
-      by_user_focus_sessions:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT * FROM focus_sessions WHERE user_id = bucket.user_id
-
-      by_user_focus_session_tasks:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT id, focus_session_id, task_id, position, disposition, user_id
-            FROM focus_session_tasks WHERE user_id = bucket.user_id
-
-      by_user_focus_session_dispositions:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT id, focus_session_id, task_id, disposition, user_id
-            FROM focus_session_dispositions WHERE user_id = bucket.user_id
-
-      by_user_preferences:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT * FROM user_preferences WHERE user_id = bucket.user_id
-
-      by_user_captures:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT * FROM captures WHERE user_id = bucket.user_id
-
-      by_user_capture_outcomes:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT id, capture_id, outcome_id, created_at, user_id
-            FROM capture_outcomes WHERE user_id = bucket.user_id
-
-      by_user_capture_tags:
-        parameters:
-          - SELECT token_parameters.user_id AS user_id
-        data:
-          - SELECT id, capture_id, tag_id, user_id
-            FROM capture_tags WHERE user_id = bucket.user_id
-
-# --- Client auth --------------------------------------------------------------
-# Validate JWTs signed by the backend using the shared secret.
-# PowerSync requires symmetric keys to be declared in JWKS format.  `kid`
-# must match the `kid` header set when the backend signs a token.
-client_auth:
-  audience: ["jeeves"]
-  jwks:
-    keys:
-      - kty: oct
-        alg: HS256
-        k: !env PS_SECRET_KEY_B64
-        kid: jeeves-dev
-
-# --- Internal storage (bucket state) ------------------------------------------
-# Uses the same Postgres instance — no MongoDB required.
-storage:
-  type: postgresql
-  uri: !env PS_DATA_SOURCE_URI
-  sslmode: disable
-
-# --- API server ---------------------------------------------------------------
-api:
-  port: 8080
-YAML
-chown -R "${DOKKU_UID}:${DOKKU_UID}" "${CONFIG_STORAGE}"
-
-# ----- 2. Create app + ports + resource --------------------------------------
-echo "==> [2/11] App + ports + resource limit"
+# ----- 1. Create app + ports + resource --------------------------------------
+echo "==> [1/10] App + ports + resource limit"
 if dokku apps:exists "${PS_APP}" >/dev/null 2>&1; then
   echo "    App ${PS_APP} already exists"
 else
@@ -221,12 +76,12 @@ else
   echo "    WARN: resource:limit failed (plugin not installed?)"
 fi
 
-# ----- 3. Link the same postgres service that the backend uses ---------------
+# ----- 2. Link the same postgres service that the backend uses ---------------
 # Without the link, the powersync container isn't on the postgres docker
 # network and can't resolve the `dokku-postgres-<svc>` hostname — pgwire
 # then fails with an opaque "postgres query failed" (no PG-level error,
 # because the connection never reaches Postgres).
-echo "==> [3/11] Link postgres service (auto-derived from ${BACKEND_APP})"
+echo "==> [2/10] Link postgres service (auto-derived from ${BACKEND_APP})"
 SECRET_KEY=$(dokku config:get "${BACKEND_APP}" SECRET_KEY 2>/dev/null || true)
 BACKEND_DB_URL=$(dokku config:get "${BACKEND_APP}" DATABASE_URL 2>/dev/null || true)
 if [ -z "${SECRET_KEY}" ]; then
@@ -260,7 +115,7 @@ else
   dokku postgres:link "${PG_SERVICE}" "${PS_APP}" --no-restart
 fi
 
-# ----- 4. Configure postgres for logical replication -------------------------
+# ----- 3. Configure postgres for logical replication -------------------------
 # PowerSync's WAL-streaming replicator needs `wal_level=logical`; dokku-postgres
 # ships with the PG default (`replica`) and PowerSync fails fast at startup with
 # "wal_level must be set to 'logical'".  ALTER SYSTEM writes to
@@ -269,7 +124,7 @@ fi
 #
 # This restarts the postgres service, which briefly disconnects every linked
 # app (backend included).  The cost is one-time: subsequent runs short-circuit.
-echo "==> [4/11] Configure postgres for logical replication"
+echo "==> [3/10] Configure postgres for logical replication"
 # psql output via `dokku postgres:connect` includes the column header, a dash
 # separator, the value row, and a row count.  Extract just the value row.
 pg_wal_level() {
@@ -308,7 +163,7 @@ else
   echo "    wal_level set to 'logical'"
 fi
 
-# ----- 5. Set PowerSync env vars ---------------------------------------------
+# ----- 4. Set PowerSync env vars ---------------------------------------------
 # sync-config.yaml's JWKS block reads PS_SECRET_KEY_B64 (base64url, no padding).
 # Strip embedded newlines: GNU base64 wraps at 76 cols; both GNU and BSD add a
 # trailing newline.  Either would corrupt PS_SECRET_KEY_B64 and silently break
@@ -323,9 +178,8 @@ if [ -z "${DATABASE_URL}" ]; then
   exit 1
 fi
 
-echo "==> [5/11] Set env vars on ${PS_APP}"
+echo "==> [4/10] Set env vars on ${PS_APP}"
 dokku config:set --no-restart "${PS_APP}" \
-  POWERSYNC_CONFIG_PATH=/config/sync-config.yaml \
   NODE_OPTIONS="--max-old-space-size=400" \
   PS_SECRET_KEY_B64="${SECRET_KEY_B64}" \
   PS_DATA_SOURCE_URI="${DATABASE_URL}" > /dev/null
@@ -334,27 +188,31 @@ dokku config:unset --no-restart "${PS_APP}" \
   JEEVES_SECRET_KEY SECRET_KEY PS_JEEVES_SECRET_KEY PS_JEEVES_SECRET_KEY_B64 \
   >/dev/null 2>&1 || true
 
-# ----- 6. Mount the config volume --------------------------------------------
-echo "==> [6/11] Mount ${CONFIG_STORAGE} -> /config"
-if ! dokku storage:list "${PS_APP}" 2>/dev/null | grep -qE ":/config$"; then
-  dokku storage:mount "${PS_APP}" "${CONFIG_STORAGE}:/config"
-else
-  echo "    Already mounted"
-fi
+# ----- 5. Publish the sync config --------------------------------------------
+# Same script CI runs on every deploy, reading the same
+# infra/powersync/sync-config.yaml.  Nothing is mounted at /config: the config
+# travels as POWERSYNC_CONFIG_B64 (see the script header and ADR-0017).  On a
+# fresh app there is no container yet, so it publishes and skips the readiness
+# probe — the deploy and smoke test below cover that.
+# Invoked via `bash` rather than directly: a plain `scp -r` of infra/ masks the
+# source modes by the remote umask, so the exec bit is not guaranteed to
+# survive the copy documented in the header.
+echo "==> [5/10] Publish sync config"
+bash "${SCRIPT_DIR}/publish-sync-config.sh" "${PS_APP}" "${BACKEND_APP}"
 
-# ----- 7. Public domain -------------------------------------------------------
-echo "==> [7/11] Domain ${PS_DOMAIN}"
+# ----- 6. Public domain -------------------------------------------------------
+echo "==> [6/10] Domain ${PS_DOMAIN}"
 if ! dokku domains:report "${PS_APP}" --domains-app-vhosts 2>/dev/null | grep -qw "${PS_DOMAIN}"; then
   dokku domains:set "${PS_APP}" "${PS_DOMAIN}"
 else
   echo "    Domain already configured"
 fi
 
-# ----- 8. Deploy the PowerSync image -----------------------------------------
+# ----- 7. Deploy the PowerSync image -----------------------------------------
 # git:from-image exits non-zero with "No changes detected" when the image
 # digest already matches the deployed one — that's a success state for
 # idempotence, not a failure.  Capture output and treat that case as a no-op.
-echo "==> [8/11] Deploy image"
+echo "==> [7/10] Deploy image"
 PS_DEPLOY_OUT=$(dokku git:from-image "${PS_APP}" "${PS_IMAGE}" 2>&1) || PS_DEPLOY_RC=$?
 printf '%s\n' "${PS_DEPLOY_OUT}"
 if [ "${PS_DEPLOY_RC:-0}" -ne 0 ]; then
@@ -366,8 +224,8 @@ if [ "${PS_DEPLOY_RC:-0}" -ne 0 ]; then
 fi
 unset PS_DEPLOY_OUT PS_DEPLOY_RC
 
-# ----- 9. Let's Encrypt ------------------------------------------------------
-echo "==> [9/11] Let's Encrypt"
+# ----- 8. Let's Encrypt ------------------------------------------------------
+echo "==> [8/10] Let's Encrypt"
 # Always run letsencrypt:enable, even when a cert is already issued: other
 # dokku operations (config:set restart, ps:rebuild, domains:set) regenerate
 # the nginx vhost and can drop the SSL listener binding, leaving the host
@@ -384,8 +242,8 @@ if [ -n "${LETSENCRYPT_EMAIL:-}" ]; then
 fi
 dokku letsencrypt:enable "${PS_APP}"
 
-# ----- 10. Wire backend ------------------------------------------------------
-echo "==> [10/11] Wire ${BACKEND_APP} → POWERSYNC_URL"
+# ----- 9. Wire backend ------------------------------------------------------
+echo "==> [9/10] Wire ${BACKEND_APP} → POWERSYNC_URL"
 PS_URL="https://${PS_DOMAIN}"
 CURRENT_URL=$(dokku config:get "${BACKEND_APP}" POWERSYNC_URL 2>/dev/null || true)
 if [ "${CURRENT_URL}" != "${PS_URL}" ]; then
@@ -405,7 +263,7 @@ fi
 # bad SSL binding fails loudly.  Retry briefly because the container can
 # need a few seconds after deploy to be ready.
 echo ""
-echo "==> [11/11] Smoke test: container status"
+echo "==> [10/10] Smoke test: container status"
 SMOKE_OK=0
 for attempt in 1 2 3 4 5 6; do
   sleep 5
@@ -423,7 +281,7 @@ if [ "${SMOKE_OK}" -ne 1 ]; then
 fi
 echo "    OK (web 1 running)"
 
-echo "==> [11/11] Smoke test: ${PS_URL}/probes/readiness"
+echo "==> [10/10] Smoke test: ${PS_URL}/probes/readiness"
 SMOKE_OK=0
 SMOKE_LAST=""
 for attempt in 1 2 3 4 5 6; do
@@ -431,8 +289,18 @@ for attempt in 1 2 3 4 5 6; do
   if SMOKE_LAST=$(curl -fsS --max-time 10 \
        -w "HTTP %{http_code}" -o /dev/null \
        "${PS_URL}/probes/readiness" 2>&1); then
-    SMOKE_OK=1
-    break
+    # `curl -f` fails on >=400 but succeeds on a 3xx, and a lost SSL binding or
+    # a vhost falling through to the default app answers with a redirect —
+    # exactly the regressions this smoke test exists to catch.  Require a 2xx.
+    case "${SMOKE_LAST##* }" in
+      2??)
+        SMOKE_OK=1
+        break
+        ;;
+      *)
+        SMOKE_LAST="${SMOKE_LAST} — not 2xx (redirect or wrong vhost)"
+        ;;
+    esac
   fi
   echo "    attempt ${attempt}: ${SMOKE_LAST}"
 done
