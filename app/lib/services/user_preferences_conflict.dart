@@ -23,6 +23,10 @@
 /// future key that is not explicitly registered otherwise. New list/set keys
 /// **must** be registered as [ConflictStrategy.setMerge] before use.
 ///
+/// A key may also be registered outright *with* the default strategy, when the
+/// choice is worth stating on the record rather than leaving to fall-through —
+/// see [isExplicitlyRegistered].
+///
 /// ## Tombstone invariant (why "server-absent → keep local" is always safe)
 ///
 /// Deletion in this store is modelled as a *tombstone* — a present row with
@@ -85,13 +89,32 @@ class ResolvedPreference {
 // Registry
 // ---------------------------------------------------------------------------
 
+/// Keys whose strategy is stated outright rather than inferred.
+///
+/// A key belongs here when the choice deserves to be a decision on the record —
+/// even when the chosen strategy happens to equal the default. `clarify_mode` is
+/// such a key: a scalar where LWW is plainly right, registered explicitly so a
+/// reader can tell "we considered this" apart from "it fell through" (ADR-0011).
+const _explicitStrategies = <String, ConflictStrategy>{
+  'clarify_mode': ConflictStrategy.lww,
+};
+
+/// Whether [key] has an outright entry in [_explicitStrategies], as opposed to
+/// being classified by the `snoozed_until` suffix rule or the default. Lets a
+/// test assert that a key was deliberately registered, not merely tolerated.
+bool isExplicitlyRegistered(String key) =>
+    _explicitStrategies.containsKey(key);
+
 /// Returns the [ConflictStrategy] for [key].
 ///
-/// Any key ending in `snoozed_until` is a snooze floor and arbitrates by
+/// Explicitly registered keys win first. Otherwise any key ending in
+/// `snoozed_until` is a snooze floor and arbitrates by
 /// [ConflictStrategy.maxTimestampValue]; this deliberately covers future snooze
 /// keys (e.g. the Nudge `snoozed_until` migrated onto this contract in #323)
 /// without a code change. Every other key defaults to [ConflictStrategy.lww].
 ConflictStrategy strategyForKey(String key) {
+  final registered = _explicitStrategies[key];
+  if (registered != null) return registered;
   if (key.endsWith('snoozed_until')) return ConflictStrategy.maxTimestampValue;
   return ConflictStrategy.lww;
 }

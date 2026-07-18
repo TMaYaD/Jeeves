@@ -380,7 +380,11 @@ Per-key conflict strategy is defined in `services/user_preferences_conflict.dart
 
 ### Cross-device reactivity
 
-`SyncedPreferencesNotifier.build()` subscribes to `dao.watchAll(userId)`. When PowerSync writes a remote change to the local `user_preferences` table, the stream fires and the in-memory state updates automatically. Providers that derive state from preferences (e.g. `focusSettingsProvider`, `focusSessionPlanningSettingsProvider`) watch `syncedPreferencesProvider` via `ref.listen` and re-derive their state on each change.
+`SyncedPreferencesNotifier.build()` subscribes to `dao.watchAll(userId)`. When PowerSync writes a remote change to the local `user_preferences` table, the stream fires and the in-memory state updates automatically. Providers that derive state from preferences (e.g. `focusSettingsProvider`, `focusSessionPlanningSettingsProvider`, `clarifyModeProvider`) watch `syncedPreferencesProvider` via `ref.listen` and re-derive their state on each change.
+
+### Clarify mode
+
+`clarifyModeProvider` (`providers/clarify_mode_provider.dart`) derives the `ClarifyMode` (`models/clarify_mode.dart`) from the `clarify_mode` key. The enum pins a `wireValue` separately from the Dart name so a rename cannot orphan already-synced rows, and `fromWireValue` resolves an absent or unrecognised value to `oneToOne` — a build that predates a mode degrades to the quick flow rather than throwing. Settings → Clarify exposes the choice. The mode governs *when* `captures.clarified_at` is stamped, never how anything is stored; both modes run over the same many-to-many `capture_outcomes` join, so switching is a preference change with no data migration. Only the 1-1 stamping is implemented today — `ClarificationService.clarifyCaptureToOutcome` stamps at the first link regardless of the stored mode.
 
 ## Focus Session Planning State
 

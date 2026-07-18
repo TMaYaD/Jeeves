@@ -59,6 +59,10 @@ ResolvedPreference resolveWithStrategy(...);          // strategy-explicit varia
 
 An unregistered key resolves as `lww`, which is non-destructive: it never deletes a value, it only prefers the newer of two present values, and server-absent always keeps local. A key only needs explicit registration when blanket LWW would be *wrong* (snooze floors, sets), not merely to be safe.
 
+### Registered-outright keys
+
+A key may nonetheless be listed in the registry's explicit map *with* the default strategy, when the choice is worth stating on the record rather than leaving to fall-through. `clarify_mode` is the one such key today. `isExplicitlyRegistered(key)` distinguishes the two — it is what lets a test assert a key was deliberately considered, since the resolved strategy alone cannot tell a registration apart from a default.
+
 ## Conflict matrix — every current `user_preferences` key
 
 The three cases are uniform per strategy:
@@ -81,6 +85,7 @@ Every current key, grouped by family:
 | `periodic_review_banner_dismissed_date`, `periodic_review_banner_enabled`, `periodic_review_notification_enabled`, `periodic_review_notification_hour`, `periodic_review_notification_minute`, `periodic_review_notification_skipped_date` | date / bool / int | `lww` | Scalar settings / suppression |
 | `periodic_review_nudge_content_firing_edge` | datetime | `lww` | Latest firing edge wins |
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
+| `clarify_mode` | String (`oneToOne` \| `nToM`) | `lww` **(explicit)** | Scalar; latest intent wins. Registered outright rather than left to fall through — see [Registered-outright keys](#registered-outright-keys) |
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
 **Snooze arbitration departs deliberately from the blanket LWW default** — see [ADR-0011](./adr/0011-user-preferences-conflict-resolution.md).

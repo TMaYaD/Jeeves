@@ -35,6 +35,14 @@ void main() {
             reason: '$key should be a snooze floor');
       }
     });
+
+    test('clarify_mode is registered outright, not left to fall through', () {
+      expect(strategyForKey('clarify_mode'), ConflictStrategy.lww);
+      // The value equals the default, so only this assertion distinguishes a
+      // deliberate registration from an unregistered key (ADR-0011).
+      expect(isExplicitlyRegistered('clarify_mode'), isTrue);
+      expect(isExplicitlyRegistered('an_unregistered_future_key'), isFalse);
+    });
   });
 
   group('three-case coverage (applies to every key)', () {
