@@ -31,7 +31,8 @@ export '../models/todo.dart' show RoutingKind;
 /// verdict against the [ClarifySubject] — in place for an Outcome, or as
 /// create-link-stamp for a Capture. `trash` on a Capture is the one asymmetric
 /// case: it is a zero-Outcome discard ([ClarificationService.discardCapture]),
-/// not a created-then-trashed Outcome. `keep` stamps `last_clarified_at` on an
+/// not a created-then-trashed Outcome — and it labels itself "Discard" rather
+/// than "Trash" to say so. `keep` stamps `last_clarified_at` on an
 /// Outcome and leaves a Capture in the Inbox;
 /// `nextActionDialog` is a modifier on the `next` button (not a standalone
 /// button) — it is on by default, so tapping Next opens [NextActionDialog]
@@ -205,7 +206,9 @@ const _kRenderOrder = <ProcessAction>[
   ProcessAction.trash,
 ];
 
-/// Default user-visible labels for each renderable action.
+/// Default user-visible labels for each renderable action, on an
+/// [OutcomeSubject]. [_kCaptureLabels] overrides the ones that read
+/// differently on a Capture.
 const _kDefaultLabels = <ProcessAction, String>{
   ProcessAction.keep: 'Keep',
   ProcessAction.reclarify: 'Re-clarify…',
@@ -215,6 +218,30 @@ const _kDefaultLabels = <ProcessAction, String>{
   ProcessAction.done: 'Done',
   ProcessAction.trash: 'Trash',
 };
+
+/// Capture-side label overrides, applied over [_kDefaultLabels] when the
+/// subject is a [CaptureSubject].
+///
+/// `trash` is the one action whose canonical name depends on the subject.
+/// On an Outcome it sets `Intent = trash`, landing the row on the **Trash**
+/// List (CONTEXT.md). On a Capture it is the zero-Outcome **Discard**
+/// verdict ([ClarificationService.discardCapture]): nothing is created, so
+/// nothing ever reaches that List and "Trash" would name a destination the
+/// item never arrives at.
+const _kCaptureLabels = <ProcessAction, String>{
+  ProcessAction.trash: 'Discard',
+};
+
+/// Shown when a routing write throws. One message for every surface: the bar
+/// owns the tap handler, so this is the only place a callsite could learn the
+/// write failed.
+const _kWriteFailedMessage = 'Operation failed. Please try again.';
+
+/// Shown when the routing write landed but the callsite's [onAfterRoute] hook
+/// threw. Deliberately distinct from [_kWriteFailedMessage]: "please try
+/// again" would be wrong advice — the route is already committed.
+const _kAfterRouteFailedMessage =
+    'Saved, but finishing up failed. Some details may not have been updated.';
 
 const _kDefaultIcons = <ProcessAction, IconData>{
   // `keep` is intentionally distinct from `next` so it doesn't collide
@@ -250,6 +277,7 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
     this.labels = const <ProcessAction, String>{},
     this.lastAction,
     this.onAfterRoute,
+    this.onProcessingChanged,
   });
 
   /// The Capture or Outcome this bar clarifies — selects the write path.
@@ -272,8 +300,11 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
   ///
   /// **Use sparingly.** The default labels are the canonical vocabulary; the
   /// whole point of this widget is to collapse the pre-extraction drift
-  /// ("Discard"/"Trash", "Maybe"/"Send to Someday"/"Move to Maybe",
-  /// "Promote to Next Action(s)"/"Next") into one set of names. An override
+  /// ("Done (discard)"/"Trash", "Maybe"/"Send to Someday"/"Move to Maybe",
+  /// "Promote to Next Action(s)"/"Next") into one set of names. Note that
+  /// "Discard" is *not* drift: it is the canonical Capture-side name for
+  /// `trash`, resolved automatically from the subject (see
+  /// [_kCaptureLabels]). An override
   /// is only justified when the surface needs context the canonical label
   /// can't carry — e.g. `keep` becoming "Keep waiting" / "Keep on Someday" /
   /// "Still relevant" because plain "Keep" is ambiguous, or `next` becoming
@@ -297,6 +328,20 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
   /// `next` / `waitingFor`, and only the [ProcessAction.nextActionDialog]
   /// modifier writes `next_action_text` from inside the widget.
   final Future<void> Function(ProcessAction)? onAfterRoute;
+
+  /// Notified with `true` when a tap begins its write and `false` once it
+  /// settles — the same in-flight state that disables this bar's own buttons.
+  ///
+  /// For callsites that render their own affordances *beside* the bar and must
+  /// disable them in step. The standalone clarify screen's Skip button is the
+  /// motivating case: it navigates away, so leaving it live during a write lets
+  /// the user pop the screen mid-flight and lose the post-write text flush.
+  ///
+  /// The closing `false` fires even when this bar has since unmounted — a
+  /// parent that outlives it (conditional rendering, or an [onAfterRoute] that
+  /// navigates) would otherwise stay latched on. **Callsites must therefore
+  /// guard their own `setState` with a `mounted` check.**
+  final ValueChanged<bool>? onProcessingChanged;
 
   @override
   ConsumerState<ProcessToHandlers> createState() => _ProcessToHandlersState();
@@ -349,12 +394,54 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   Future<void> _runOnce(Future<void> Function() action) async {
     if (_processing) return;
     setState(() => _processing = true);
+    widget.onProcessingChanged?.call(true);
     try {
       await action();
+    } catch (_) {
+      // This widget owns the tap handler, so no callsite can wrap the write in
+      // its own try/catch — an uncaught failure here escapes as an unhandled
+      // async error and the tap silently does nothing. Report it instead.
+      // [onAfterRoute] is deliberately not reached: the write did not land, so
+      // advancing a cursor or recording a routing would be a lie.
+      //
+      // Only *write* failures reach here: [_notifyAfterRoute] handles the
+      // callback separately, so this message never claims a landed write
+      // failed.
+      _report(_kWriteFailedMessage);
     } finally {
       if (mounted) setState(() => _processing = false);
+      widget.onProcessingChanged?.call(false);
     }
   }
+
+  /// Invokes the callsite's [ProcessToHandlers.onAfterRoute] hook behind its
+  /// own error boundary.
+  ///
+  /// The routing write has already landed by the time this runs, so a failing
+  /// hook must not surface as [_kWriteFailedMessage]: that would invite the
+  /// user to retry a write that actually succeeded. The hook's own failure is
+  /// still reported — swallowing it silently is what left callsite bookkeeping
+  /// (cursor advance, text flush) failing invisibly.
+  Future<void> _notifyAfterRoute(ProcessAction action) async {
+    try {
+      await widget.onAfterRoute?.call(action);
+    } catch (_) {
+      _report(_kAfterRouteFailedMessage);
+    }
+  }
+
+  void _report(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  /// The canonical label for [a] against the current subject — the
+  /// [_kCaptureLabels] override on a Capture, else [_kDefaultLabels].
+  String _labelFor(ProcessAction a) =>
+      (widget.subject is CaptureSubject ? _kCaptureLabels[a] : null) ??
+      _kDefaultLabels[a]!;
 
   Future<void> _onTap(ProcessAction action) async {
     switch (action) {
@@ -454,7 +541,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         // a discard verdict — the one outcome the split exists to prevent.
         break;
     }
-    await widget.onAfterRoute?.call(ProcessAction.keep);
+    await _notifyAfterRoute(ProcessAction.keep);
   }
 
   /// Opens the [ClarifyCard] sub-flow as a full-page route. The pushed
@@ -516,13 +603,13 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       await _keep();
       return;
     }
-    await widget.onAfterRoute?.call(routed);
+    await _notifyAfterRoute(routed);
   }
 
   Future<void> _next() async {
     if (!await _subjectExists()) return;
     await _commit(RoutingKind.nextAction);
-    await widget.onAfterRoute?.call(ProcessAction.next);
+    await _notifyAfterRoute(ProcessAction.next);
   }
 
   Future<void> _nextWithDialog() async {
@@ -547,7 +634,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       // unchanged value.
       await _commit(RoutingKind.nextAction, nextActionText: result);
     }
-    await widget.onAfterRoute?.call(ProcessAction.nextActionDialog);
+    await _notifyAfterRoute(ProcessAction.nextActionDialog);
   }
 
   Future<void> _waitingFor() async {
@@ -589,7 +676,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         );
     }
     if (!confirmed) return;
-    await widget.onAfterRoute?.call(ProcessAction.waitingFor);
+    await _notifyAfterRoute(ProcessAction.waitingFor);
   }
 
   Future<void> _route(ProcessAction action) async {
@@ -604,7 +691,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // `someday` / `done` / `trash` without losing its delegate. The picker
     // is the only path that mutates person tags.
     await _commit(to);
-    await widget.onAfterRoute?.call(action);
+    await _notifyAfterRoute(action);
   }
 
   @override
@@ -620,7 +707,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         children: [
           for (var i = 0; i < ordered.length; i++) ...[
             _ActionButton(
-              label: widget.labels[ordered[i]] ?? _kDefaultLabels[ordered[i]]!,
+              label: widget.labels[ordered[i]] ?? _labelFor(ordered[i]),
               icon: _kDefaultIcons[ordered[i]]!,
               color: _kDefaultColors[ordered[i]]!,
               enabled: !_processing && !widget.disabled.contains(ordered[i]),

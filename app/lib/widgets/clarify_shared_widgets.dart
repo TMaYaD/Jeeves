@@ -1,8 +1,12 @@
-/// Shared UI widgets for the inbox clarification flow.
+/// Shared *field* widgets for the clarification flow — the labels, energy
+/// picker and estimate chips both [ClarifyCard] and the standalone
+/// [InboxClarifyScreen] render above their action bar.
 ///
-/// Used by both the planning wizard's [InboxClarificationStep] (via
-/// [ClarifyCard]) and the standalone [InboxClarifyScreen] so the two surfaces
-/// stay visually identical without duplicating code.
+/// Routing buttons are **not** here: those come from [ProcessToHandlers], the
+/// single canonical action bar, which owns the writes as well as the copy.
+/// [ClarifyDestinationButton] survives for the one affordance that is not a
+/// routing verdict — [InboxClarifyScreen]'s Skip. Consolidating it with
+/// `ProcessToHandlers`' own button (they are near-identical) is a follow-up.
 library;
 
 import 'package:flutter/material.dart';
