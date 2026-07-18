@@ -564,6 +564,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     required RoutingKind to,
     String? title,
     String? nextActionText,
+    Set<String>? personTagIds,
   }) async {
     final idx = state.inboxNav.index;
     final capture = await _db.captureDao.getCapture(captureId);
@@ -578,6 +579,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         title: title ?? capture.title,
         notes: capture.notes,
         nextActionText: nextActionText,
+        personTagIds: personTagIds,
         tagIds: await _db.captureDao.tagHintIdsForCapture(captureId),
       );
     }
@@ -621,15 +623,23 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         nextActionText: title,
       );
 
-  /// Clarifies the current Capture into a delegated Outcome. Person-tag
-  /// assignment is performed externally (by the picker) before this is invoked.
-  Future<void> processInboxItemToWaitingFor(String id,
-          {required String title}) =>
+  /// Clarifies the current Capture into a delegated Outcome.
+  ///
+  /// [personTagIds] must carry the delegates the picker collected: the Outcome
+  /// does not exist until this call, so there is no row for the picker to have
+  /// assigned them to beforehand. Routing to Waiting For without them would
+  /// create an Outcome that lands on Next and never surfaces on Waiting For.
+  Future<void> processInboxItemToWaitingFor(
+    String id, {
+    required String title,
+    required Set<String> personTagIds,
+  }) =>
       _routeInboxItem(
         id,
         to: RoutingKind.waitingFor,
         title: title,
         nextActionText: title,
+        personTagIds: personTagIds,
       );
 
   /// Clarifies the current Capture into a Someday/Maybe Outcome.

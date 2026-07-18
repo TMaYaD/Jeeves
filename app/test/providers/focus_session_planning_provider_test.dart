@@ -582,9 +582,12 @@ void main() {
     });
 
     test(
-        'revert preserves pre-existing person tags (no data loss from import/sync)',
+        'a person tag hint survives re-routing (no data loss from import/sync)',
         () async {
-      // Inbox item with a pre-existing person-tag association (e.g. from sync).
+      // A Nirvana import records a WAITINGFOR person as a Capture tag *hint*
+      // (REQUIREMENTS.md), so the delegate must ride through clarification —
+      // and through a re-route, which discards the first Outcome and carves a
+      // fresh one.
       await _insertInboxItem(db, id: 'item-1');
       await db.tagDao.upsertTag(const TagsCompanion(
         id: Value('alice'),
@@ -592,20 +595,49 @@ void main() {
         type: Value('person'),
         userId: Value('local'),
       ));
-      await db.tagDao.assignTag('item-1', 'alice', 'local');
+      await db.captureDao.assignTagHint('item-1', 'alice', 'local');
 
       final notifier = container.read(focusSessionPlanningProvider.notifier);
       await notifier.loadInboxSnapshot();
 
-      // Route to maybe, then re-route to next_action — the in-handler revert
-      // path runs and must NOT drop the pre-existing 'alice' tag.
       await notifier.processInboxItemToMaybe('item-1');
       notifier.previousInboxItem();
       await notifier.processInboxItem('item-1', title: 'Test item');
 
-      final tagIds = await db.todoDao.getPersonTagIdsForTodo('item-1');
+      // Read through the provenance link: the re-route minted a new Outcome,
+      // so asserting against the Capture's id would pass without testing
+      // anything.
+      final outcome = (await _outcomeOf(db, 'item-1'))!;
+      final tagIds = await db.todoDao.getPersonTagIdsForTodo(outcome.id);
       expect(tagIds, contains('alice'),
-          reason: 'pre-existing person tag must survive revert');
+          reason: 'the delegate hint must survive onto the re-routed Outcome');
+    });
+
+    test('Waiting For carries the picker\'s delegates onto the new Outcome',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('bob'),
+        name: Value('Bob'),
+        type: Value('person'),
+        userId: Value('local'),
+      ));
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+      await notifier.processInboxItemToWaitingFor(
+        'item-1',
+        title: 'Chase the invoice',
+        personTagIds: {'bob'},
+      );
+
+      // No Outcome exists before this call, so the delegates cannot have been
+      // assigned beforehand — routing without them would land the Outcome on
+      // Next and never on Waiting For.
+      final outcome = (await _outcomeOf(db, 'item-1'))!;
+      expect(await db.todoDao.getPersonTagIdsForTodo(outcome.id),
+          contains('bob'));
+      expect(outcome.intent, 'next');
     });
 
     test('routing bails out when the snapshot row was deleted before apply',

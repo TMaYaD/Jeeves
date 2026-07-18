@@ -196,9 +196,11 @@ class LocalDataMigrationService {
 ///    originals intact rather than orphaning the links.
 /// 3. Only then delete the migrated `todos` / `todo_tags` rows.
 ///
-/// Idempotent: rows already carved out are skipped by the NOT EXISTS guard,
-/// so a retry after a partial run completes it instead of duplicating.
-/// Returns the number of Captures created.
+/// Idempotent: the Capture insert is `INSERT OR IGNORE` and the tag copy is
+/// keyed on the deterministic junction id, so a retry after a partial run
+/// finishes it — copying any tags still missing and clearing the leftover
+/// original — instead of duplicating or stranding it. Returns the number of
+/// todos moved out of `todos`.
 ///
 /// Takes the database directly rather than a [Ref] so it can run from inside
 /// [powerSyncInstanceProvider], before anything reads the Inbox.
@@ -232,12 +234,16 @@ Future<int> carveOutLocalInbox({
   required Future<void> Function(String, List<Object?>) exec,
   String userId = kLocalUserId,
 }) async {
+  // Every eligible todo, including any whose Capture already exists: a
+  // NOT EXISTS guard here would permanently strand a half-carved row — its
+  // tags never copied and the original never deleted — leaving the item in
+  // both halves of the split forever. Re-processing one is harmless because
+  // each step below is individually idempotent.
   final pending = await query(
     '''
     SELECT id, title, notes, capture_source, created_at, updated_at
     FROM todos
     WHERE user_id = ? AND clarified = 0
-      AND NOT EXISTS (SELECT 1 FROM captures WHERE captures.id = todos.id)
     ''',
     [userId],
   );
@@ -248,7 +254,7 @@ Future<int> carveOutLocalInbox({
     // Inbox and must still be after the move.
     await exec(
       '''
-      INSERT INTO captures
+      INSERT OR IGNORE INTO captures
         (id, title, notes, capture_source, created_at, clarified_at,
          updated_at, user_id)
       VALUES (?, ?, ?, ?, ?, NULL, ?, ?)

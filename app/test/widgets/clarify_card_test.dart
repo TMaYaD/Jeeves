@@ -300,6 +300,42 @@ void main() {
       expect(fired, [ProcessAction.trash]);
     });
 
+    testWidgets(
+        'a tag added just before routing still reaches the new Outcome',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'racy', title: 'Ship it');
+      final ctx = await _insertTag(db, id: 'c1', name: 'work', type: 'context');
+
+      // A controller that emits the initial (empty) hints and nothing more —
+      // standing in for the real stream not having caught up yet. The picker
+      // callback's DAO write is `unawaited`, so without a synchronously
+      // maintained draft the route below would carry the pre-tap hints and
+      // silently drop the tag from the Outcome.
+      final hints = StreamController<List<Tag>>();
+      addTearDown(hints.close);
+      hints.add(const <Tag>[]);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        contextTags: [ctx],
+        tagHintsStream: hints.stream,
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.ensureVisible(find.text('@work'));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.text('@work'));
+      await tester.pump();
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      final outcomeId =
+          (await db.captureDao.outcomeIdsForCapture('racy')).single;
+      expect(await _joinedTagIds(db, outcomeId), contains('c1'));
+    });
+
     testWidgets('tag hints on the Capture seed the new Outcome\'s tags',
         (tester) async {
       final capture = await _insertCapture(db, id: 'hinted', title: 'Ship it');

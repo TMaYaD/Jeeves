@@ -86,6 +86,20 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   // they type — without a SnackBar or other toast surface.
   bool _titleIsBlank = false;
 
+  /// Tag-hint ids for the draft, on a Capture card.
+  ///
+  /// Seeded from the live hints on first build, then mutated **synchronously**
+  /// by the picker callbacks. The DAO writes those callbacks fire are
+  /// `unawaited`, and the hint stream needs a frame to come back, so a user who
+  /// taps a destination immediately after touching a tag would otherwise route
+  /// with the previous build's hints and lose the edit from the new Outcome.
+  Set<String>? _draftTagIds;
+
+  /// Whether [_draftTagIds] has been seeded from a *loaded* hint list. The
+  /// provider's first emission is `loading`, which reads as an empty list —
+  /// seeding from that would leave the draft permanently tagless.
+  bool _draftTagsSeeded = false;
+
   static const _textDebounceMs = 400;
   Timer? _textDebouncer;
   String? _lastSavedTitle;
@@ -259,6 +273,34 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     await ref.read(databaseProvider).captureDao.removeTagHint(_subjectId, tagId);
   }
 
+  // Draft tag bookkeeping — no-ops on an Outcome card, where tag edits are
+  // written straight to `todo_tags` and there is no draft to keep in step.
+
+  void _draftAdd(Tag t) {
+    if (!_isCapture) return;
+    setState(() => _draftTagIds = {...?_draftTagIds, t.id});
+  }
+
+  void _draftRemove(String tagId) {
+    if (!_isCapture) return;
+    setState(() => _draftTagIds = {...?_draftTagIds}..remove(tagId));
+  }
+
+  void _draftRemoveAll(List<Tag> tags) {
+    if (!_isCapture) return;
+    setState(() => _draftTagIds = {...?_draftTagIds}
+      ..removeAll(tags.map((t) => t.id)));
+  }
+
+  /// Swap [t] in for whatever tags of the same axis are currently drafted —
+  /// the single-project invariant, applied to the draft as well as the DB.
+  void _draftReplaceOfType(Tag t, List<Tag> current) {
+    if (!_isCapture) return;
+    setState(() => _draftTagIds = {...?_draftTagIds}
+      ..removeAll(current.map((c) => c.id))
+      ..add(t.id));
+  }
+
   Future<DateTime?> _pickDate(BuildContext context) {
     final now = DateTime.now();
     final candidate = _dueDate ?? now.add(const Duration(days: 1));
@@ -289,9 +331,12 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // and rides the draft into the Outcome.
     _initialiseFrom(title: capture.title, notes: capture.notes);
 
-    final hints =
-        ref.watch(captureTagHintsProvider(captureId)).asData?.value ??
-            const <Tag>[];
+    final hintsAsync = ref.watch(captureTagHintsProvider(captureId));
+    final hints = hintsAsync.asData?.value ?? const <Tag>[];
+    if (hintsAsync.hasValue && !_draftTagsSeeded) {
+      _draftTagsSeeded = true;
+      _draftTagIds = {for (final t in hints) t.id};
+    }
     return _buildBody(
       context,
       tags: hints,
@@ -324,6 +369,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   ClarifyDraft _draft(List<Tag> hints) {
     final title = (_titleCtrl?.text ?? '').trim();
     final notes = (_notesCtrl?.text ?? '').trim();
+    final personHintIds = {
+      for (final t in hints)
+        if (t.type == 'person') t.id,
+    };
     return ClarifyDraft(
       title: title,
       notes: notes.isEmpty ? null : notes,
@@ -333,11 +382,14 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       dueDate: _dueDate != null
           ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
           : null,
-      // Person tags never come from hints — the Waiting For picker supplies
-      // those separately, and they are on the orthogonal delegation axis.
+      // The synchronous draft set once seeded, else whatever hints have
+      // loaded. Person tags never travel this way — the Waiting For picker
+      // supplies those, on the orthogonal delegation axis.
       tagIds: {
-        for (final t in hints)
-          if (t.type != 'person') t.id,
+        for (final id in _draftTagsSeeded
+            ? _draftTagIds ?? const <String>{}
+            : {for (final t in hints) t.id})
+          if (!personHintIds.contains(id)) id,
       },
       // Title-as-action coupling: a Capture is by definition a first
       // clarification, so there is no deliberate phrase to clobber and the
@@ -443,16 +495,28 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         // the optional-tag hint.
         ProjectPickerWidget(
           currentProjectTag: projectTag,
-          onAssign: (t) => unawaited(_saveAssignProject(t.id)),
-          onClear: () => unawaited(_saveClearProject()),
+          onAssign: (t) {
+            _draftReplaceOfType(t, projectTags);
+            unawaited(_saveAssignProject(t.id));
+          },
+          onClear: () {
+            _draftRemoveAll(projectTags);
+            unawaited(_saveClearProject());
+          },
         ),
         const SizedBox(height: 12),
         // Context row — multi-select; reuse ContextTagPickerWidget. Its
         // "+ context" trailing affordance doubles as the optional-tag hint.
         ContextTagPickerWidget(
           assignedTags: contextTags,
-          onAssign: (t) => unawaited(_saveAssignContext(t.id)),
-          onRemove: (t) => unawaited(_saveRemoveContext(t.id)),
+          onAssign: (t) {
+            _draftAdd(t);
+            unawaited(_saveAssignContext(t.id));
+          },
+          onRemove: (t) {
+            _draftRemove(t.id);
+            unawaited(_saveRemoveContext(t.id));
+          },
         ),
         const SizedBox(height: 20),
 

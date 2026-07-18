@@ -132,13 +132,17 @@ void main() {
 
     expect(await db.select(db.captures).get(), hasLength(1));
     expect(await db.captureDao.watchInbox().first, hasLength(1));
+    expect(await db.todoDao.getTodo('t1'), isNull);
   });
 
-  test('an already-carved id is skipped rather than colliding', () async {
-    // Mirrors a partially-applied run: the Capture exists but the todo row
-    // was not yet deleted. The NOT EXISTS guard must skip it, and the retry
-    // must still clear the leftover original.
+  test('a partially-carved row is finished, not stranded', () async {
+    // Mirrors a half-applied run: the Capture exists but the todo row and its
+    // tags were not yet moved. The retry must finish the job — skipping the
+    // row (as a NOT EXISTS guard would) leaves the item in both halves of the
+    // split forever.
     await _insertTodo(db, id: 't1', title: 'Buy milk');
+    final tagId = await db.tagDao.findOrCreateTag('errands', 'context', _userId);
+    await db.tagDao.assignTag('t1', tagId, _userId);
     final now = DateTime.now();
     await db.captureDao.insertCapture(CapturesCompanion(
       id: const Value('t1'),
@@ -148,8 +152,15 @@ void main() {
       updatedAt: Value(now),
     ));
 
-    expect(await _carve(db), 0);
+    expect(await _carve(db), 1);
+
+    // Exactly one Capture (the insert is OR IGNORE, so no collision), its tag
+    // hint now copied, and the leftover original cleared.
     expect(await db.select(db.captures).get(), hasLength(1));
+    expect(await db.captureDao.tagHintIdsForCapture('t1'), {tagId});
+    expect(await db.todoDao.getTodo('t1'), isNull,
+        reason: 'the leftover original must not survive as a duplicate Inbox '
+            'representation');
   });
 
   test('an empty inbox carves nothing', () async {
