@@ -21,7 +21,8 @@ Flow:
      then in the PersonTagPickerSheet:
        a) On the first item, tap "Add person", type "alice", tap Add.
        b) On the second item, tick the existing "alice" row.
-     Tap "Done" — `processInboxItem` is invoked via `onAfterConfirm`.
+     Tap "Done" — the sheet pops with the selection, then
+     `ProcessToHandlers` commits the Waiting For route with those ids.
   4. Step through Energy / Time / Today's Plan to finish the ritual.
   5. Open drawer → Waiting For.
   6. ASSERT both items appear under the "alice" section header.

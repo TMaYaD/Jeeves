@@ -32,3 +32,6 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 ## 2026-07-18 (issue #430 — Done/discard conflation on the standalone clarify screen)
 - Instinct: fix a clarify screen missing a Discard button by adding a fifth button to its existing strip. Here: the screen should not own a strip at all — `ProcessToHandlers` is the single canonical action bar and every other clarify surface already renders it. Migrating the bar fixes label, icon, colour and the missing zero-Outcome write for free, and makes cross-surface consistency structural rather than a thing to re-check.
 - Instinct: a `try`/`finally` around an async tap handler is complete error handling. Here: `ProcessToHandlers._runOnce` had no `catch` and no callsite could add one (the widget owns the handler), so a failed clarify write escaped as an unhandled async error and every ceremony surface silently did nothing.
+
+## 2026-07-18 (issue #429 — PersonTagPickerSheet returns its selection)
+- Instinct: a modal takes an `onConfirm` callback, runs it, then pops itself. Here: modals pop with their result and the caller acts afterwards — a callback firing under an open sheet makes the caller's `pop()` close the sheet instead of its own route, and any write the sheet did before the callback lands even when the callback then bails.

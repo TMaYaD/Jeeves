@@ -8,48 +8,42 @@ import '../providers/task_detail_provider.dart';
 
 /// Bottom-sheet multi-select picker for person-typed tags (Waiting For).
 ///
-/// Two modes, exactly one of which must be selected by the caller:
+/// **The sheet pops with the chosen ids** — `Set<String>` on "Done", `null`
+/// on cancel, barrier dismissal or system back. The caller awaits that result
+/// and performs its own writes and navigation afterwards, so nothing ever
+/// navigates while the sheet is still the top route. `null` means cancelled;
+/// an empty set means "confirmed with nobody selected", reachable only when
+/// [requireSelection] is false.
+///
+/// Two modes, distinguished by whether [todoId] is given. They differ only in
+/// who attaches the delegates to an Outcome:
 ///
 /// - **Write mode** ([todoId] given) — the subject is an existing Outcome.
-///   Pre-selects its assigned tags and, on confirm, diffs the selection and
-///   calls [TaskDetailNotifier.assignPersonTag] /
-///   [TaskDetailNotifier.removePersonTag]. Clearing all selections calls
-///   [TaskDetailNotifier.clearAllPersonTags].
-/// - **Selection-only mode** ([onConfirmSelection] given) — the subject is an
-///   Inbox Capture. Its Outcome does not exist yet (ADR-0006: clarifying a
-///   Capture *creates* the Outcome), so there is no row to attach person tags
-///   to. The sheet writes nothing and hands the chosen set back for
-///   [ClarificationService.clarifyCaptureToOutcome] to apply to the Outcome it
-///   mints.
+///   Pre-selects its assigned tags and, on confirm, replaces its person-tag
+///   set with the selection via [TaskDetailNotifier.setPersonTags] before
+///   returning it.
+/// - **Selection-only mode** (no [todoId]) — the sheet attaches nothing; the
+///   caller's own routing write does. Used for an Inbox Capture, whose
+///   Outcome does not exist yet (ADR-0006: clarifying a Capture *creates* the
+///   Outcome) so there is no row to attach to, and by callers whose routing
+///   write replaces the person-tag set atomically anyway.
+///
+/// Independent of mode, the inline "Add person" field persists the new person
+/// tag as soon as it is added: creating a person is its own act, and the new
+/// tag stays in the catalogue even if the user then cancels the sheet.
 class PersonTagPickerSheet extends ConsumerStatefulWidget {
   const PersonTagPickerSheet({
     super.key,
     this.todoId,
     required this.assignedPersonTagIds,
-    this.onAfterConfirm,
-    this.onConfirmSelection,
     this.requireSelection = false,
-  }) : assert(
-          (todoId == null) != (onConfirmSelection == null),
-          'Pass todoId to write tags onto an existing Outcome, or '
-          'onConfirmSelection to collect them for a Capture whose Outcome does '
-          'not exist yet — exactly one, never both.',
-        );
+  });
 
   /// The Outcome to write person tags to. Null in selection-only mode.
   final String? todoId;
 
   /// IDs of person-tags currently assigned to the todo.
   final Set<String> assignedPersonTagIds;
-
-  /// Called after tag assignments complete when the user taps "Done".
-  /// Use this to perform caller-specific side-effects (e.g., clarifying an
-  /// inbox item) that should only run on explicit confirmation, not on cancel.
-  final Future<void> Function()? onAfterConfirm;
-
-  /// Selection-only mode: receives the chosen person-tag ids on "Done"
-  /// instead of the sheet writing them. See the class doc.
-  final Future<void> Function(Set<String> selected)? onConfirmSelection;
 
   /// When true, "Done" is a no-op if no person is selected — prevents routing
   /// without a waiter (e.g., the inbox "Waiting For" destination).
@@ -66,6 +60,13 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
   final _newPersonController = TextEditingController();
   bool _creatingNew = false;
   String _filter = '';
+
+  /// True from the moment "Done" is accepted until the sheet pops. Confirming
+  /// is the one path that both writes and pops, so leaving it re-entrant lets
+  /// a second tap pop the *caller's* route behind the closing sheet — the
+  /// failure this sheet's result-returning contract exists to prevent — and
+  /// lets a cancel land a `null` result on top of a write that did commit.
+  bool _committing = false;
 
   @override
   void initState() {
@@ -93,121 +94,128 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
             .where((t) => t.name.toLowerCase().contains(_filter))
             .toList();
 
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-        left: 24,
-        right: 24,
-        top: 24,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Waiting For',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _searchController,
-            autofocus: false,
-            decoration: const InputDecoration(
-              hintText: 'Search people…',
-              prefixIcon: Icon(Icons.search, size: 20),
-              border: OutlineInputBorder(),
-              isDense: true,
+    return PopScope(
+      // Back gesture / drag-dismiss during the commit would pop a `null`
+      // result out from under a write that is still landing.
+      canPop: !_committing,
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+          left: 24,
+          right: 24,
+          top: 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Waiting For',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-          ),
-          const SizedBox(height: 8),
-          if (visible.isEmpty && _filter.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text(
-                'No match for "$_filter"',
-                style: TextStyle(
-                    fontSize: 14, color: Theme.of(context).hintColor),
-              ),
-            )
-          else
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 240),
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: visible.length,
-                itemBuilder: (_, i) {
-                  final tag = visible[i];
-                  final isSelected = _selected.contains(tag.id);
-                  return CheckboxListTile(
-                    value: isSelected,
-                    title: Text(tag.name),
-                    dense: true,
-                    onChanged: (_) => setState(() {
-                      if (isSelected) {
-                        _selected.remove(tag.id);
-                      } else {
-                        _selected.add(tag.id);
-                      }
-                    }),
-                  );
-                },
+            const SizedBox(height: 12),
+            TextField(
+              controller: _searchController,
+              autofocus: false,
+              decoration: const InputDecoration(
+                hintText: 'Search people…',
+                prefixIcon: Icon(Icons.search, size: 20),
+                border: OutlineInputBorder(),
+                isDense: true,
               ),
             ),
-          const SizedBox(height: 8),
-          if (_creatingNew)
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _newPersonController,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      hintText: 'Person name',
-                      border: OutlineInputBorder(),
-                      isDense: true,
+            const SizedBox(height: 8),
+            if (visible.isEmpty && _filter.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  'No match for "$_filter"',
+                  style: TextStyle(
+                      fontSize: 14, color: Theme.of(context).hintColor),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 240),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: visible.length,
+                  itemBuilder: (_, i) {
+                    final tag = visible[i];
+                    final isSelected = _selected.contains(tag.id);
+                    return CheckboxListTile(
+                      value: isSelected,
+                      title: Text(tag.name),
+                      dense: true,
+                      onChanged: (_) => setState(() {
+                        if (isSelected) {
+                          _selected.remove(tag.id);
+                        } else {
+                          _selected.add(tag.id);
+                        }
+                      }),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 8),
+            if (_creatingNew)
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _newPersonController,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        hintText: 'Person name',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      textCapitalization: TextCapitalization.words,
+                      onSubmitted: (_) => _createAndSelect(),
                     ),
-                    textCapitalization: TextCapitalization.words,
-                    onSubmitted: (_) => _createAndSelect(),
                   ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _createAndSelect,
+                    child: const Text('Add'),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() {
+                      _creatingNew = false;
+                      _newPersonController.clear();
+                    }),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              )
+            else
+              TextButton.icon(
+                onPressed: () => setState(() => _creatingNew = true),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add person'),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed:
+                      _committing ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: _createAndSelect,
-                  child: const Text('Add'),
-                ),
-                TextButton(
-                  onPressed: () => setState(() {
-                    _creatingNew = false;
-                    _newPersonController.clear();
-                  }),
-                  child: const Text('Cancel'),
+                  onPressed: (_committing ||
+                          (widget.requireSelection && _selected.isEmpty))
+                      ? null
+                      : _confirm,
+                  child: const Text('Done'),
                 ),
               ],
-            )
-          else
-            TextButton.icon(
-              onPressed: () => setState(() => _creatingNew = true),
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add person'),
             ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: (widget.requireSelection && _selected.isEmpty)
-                    ? null
-                    : _confirm,
-                child: const Text('Done'),
-              ),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -237,54 +245,56 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
   }
 
   Future<void> _confirm() async {
-    final collect = widget.onConfirmSelection;
-    if (collect != null) {
-      // Selection-only: nothing exists to write to yet. The caller passes the
-      // set straight into clarifyCaptureToOutcome, which attaches it to the
-      // Outcome it creates in the same transaction.
-      await collect(Set.unmodifiable(_selected));
-      if (mounted) Navigator.pop(context);
+    if (_committing) return;
+    // Freeze the selection before the first await: what gets written and what
+    // gets returned must be the same set.
+    final selected = Set<String>.unmodifiable(_selected);
+    final todoId = widget.todoId;
+    setState(() => _committing = true);
+
+    try {
+      if (todoId != null) {
+        await ref.read(taskDetailNotifierProvider(todoId)).setPersonTags(
+              selected,
+            );
+      }
+    } catch (e) {
+      debugPrint('Failed to save person tags: $e');
+      if (!mounted) return;
+      setState(() => _committing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to save. Please try again.')),
+      );
+      // Stay open on failure: popping with a result would tell the caller a
+      // delegate set landed that did not.
       return;
     }
 
-    final notifier = ref.read(taskDetailNotifierProvider(widget.todoId!));
-    final added = _selected.difference(widget.assignedPersonTagIds);
-    final removed = widget.assignedPersonTagIds.difference(_selected);
-
-    for (final tagId in added) {
-      await notifier.assignPersonTag(tagId);
-    }
-    for (final tagId in removed) {
-      await notifier.removePersonTag(tagId);
-    }
-
-    await widget.onAfterConfirm?.call();
-
-    if (mounted) Navigator.pop(context);
+    if (mounted) Navigator.pop(context, selected);
   }
 }
 
-/// Shows the [PersonTagPickerSheet] as a modal bottom sheet.
+/// Shows the [PersonTagPickerSheet] as a modal bottom sheet and returns the
+/// chosen person-tag ids, or `null` if the user cancelled.
 ///
-/// [onAfterConfirm] is called after tag assignments when the user taps "Done".
-/// [requireSelection] disables "Done" until at least one person is selected.
-Future<void> showPersonTagPicker(
+/// The caller performs its own writes and navigation on the result — the
+/// sheet has already closed by the time this future completes. Pass [todoId]
+/// to have the sheet write the diff onto an existing Outcome; omit it to
+/// collect the selection without writing. [requireSelection] disables "Done"
+/// until at least one person is selected.
+Future<Set<String>?> showPersonTagPicker(
   BuildContext context, {
   String? todoId,
   required Set<String> assignedPersonTagIds,
-  Future<void> Function()? onAfterConfirm,
-  Future<void> Function(Set<String> selected)? onConfirmSelection,
   bool requireSelection = false,
 }) {
-  return showModalBottomSheet(
+  return showModalBottomSheet<Set<String>>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Theme.of(context).colorScheme.surface,
     builder: (_) => PersonTagPickerSheet(
       todoId: todoId,
       assignedPersonTagIds: assignedPersonTagIds,
-      onAfterConfirm: onAfterConfirm,
-      onConfirmSelection: onConfirmSelection,
       requireSelection: requireSelection,
     ),
   );

@@ -85,6 +85,20 @@ class _FailingClarificationService extends DaoClarificationService {
       Future<void>.error(StateError('write failed'));
 }
 
+/// A [ClarificationService] whose subject disappeared between render and
+/// commit — the snapshot-staleness case [_subjectExists] guards.
+class _VanishedClarificationService extends DaoClarificationService {
+  _VanishedClarificationService(super.db);
+
+  @override
+  Future<bool> exists(String id) async => false;
+
+  // `_subjectExists` dispatches on subject kind, so the Capture branch needs
+  // its own stub — overriding `exists` alone leaves it live.
+  @override
+  Future<bool> captureExists(String captureId) async => false;
+}
+
 Widget _harness(
   GtdDatabase db, {
   required Todo todo,
@@ -141,13 +155,14 @@ Widget _captureHarness(
   required Capture capture,
   Future<void> Function(ProcessAction)? onAfterRoute,
   ClarificationService? clarificationService,
+  List<Tag> personTags = const [],
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
       if (clarificationService != null)
         clarificationServiceProvider.overrideWithValue(clarificationService),
-      personTagsProvider.overrideWith((ref) => Stream.value(const <Tag>[])),
+      personTagsProvider.overrideWith((ref) => Stream.value(personTags)),
     ],
     child: MaterialApp(
       home: Scaffold(
@@ -521,6 +536,122 @@ void main() {
       final row = await db.todoDao.getTodo('wf2');
       expect(row?.intent, 'next');
       expect(row?.lastClarifiedAt, isNotNull);
+      expect(afterArg, ProcessAction.waitingFor);
+    });
+
+    testWidgets('a subject that vanished mid-pick leaves no person tags behind',
+        (tester) async {
+      // The picker used to write its tag diff before the existence check, so
+      // confirming into a row that had since been deleted left orphan
+      // person-tag mutations with no routing write. The selection now comes
+      // back as a value and nothing is written until the check passes.
+      final todo = await _insertTodo(db, id: 'wf3');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      var afterCount = 0;
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        personTags: [_personTag('alice', 'Alice')],
+        clarificationService: _VanishedClarificationService(db),
+        onAfterRoute: (_) async => afterCount++,
+      ));
+
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pumpAndSettle();
+
+      expect(await db.todoDao.getPersonTagIdsForTodo('wf3'), isEmpty);
+      final row = await db.todoDao.getTodo('wf3');
+      expect(row?.lastClarifiedAt, isNull);
+      expect(afterCount, 0);
+    });
+
+    testWidgets('a Capture that vanished mid-pick carves no Outcome',
+        (tester) async {
+      // The Capture branch of `_subjectExists` routes through `captureExists`,
+      // so it needs its own coverage — the Outcome test above cannot reach it.
+      final capture = await _insertCapture(db, id: 'wfc3');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      var afterCount = 0;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        personTags: [_personTag('alice', 'Alice')],
+        clarificationService: _VanishedClarificationService(db),
+        onAfterRoute: (_) async => afterCount++,
+      ));
+
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pumpAndSettle();
+
+      expect(await db.select(db.todos).get(), isEmpty);
+      expect(await db.select(db.todoTags).get(), isEmpty);
+      expect((await db.captureDao.getCapture('wfc3'))!.clarifiedAt, isNull);
+      expect(afterCount, 0);
+    });
+
+    testWidgets('cancelling on a Capture writes nothing and does not fire',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'wfc1');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      var afterCount = 0;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        personTags: [_personTag('alice', 'Alice')],
+        onAfterRoute: (_) async => afterCount++,
+      ));
+
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(await db.select(db.todos).get(), isEmpty,
+          reason: 'no Outcome may be carved for a cancelled pick');
+      expect((await db.captureDao.getCapture('wfc1'))!.clarifiedAt, isNull);
+      expect(afterCount, 0);
+    });
+
+    testWidgets('confirming on a Capture carves an Outcome with the delegate',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'wfc2', title: 'Ask Bob');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      ProcessAction? afterArg;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        personTags: [_personTag('alice', 'Alice')],
+        onAfterRoute: (action) async => afterArg = action,
+      ));
+
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pumpAndSettle();
+
+      // The Outcome does not exist until this commit, so the delegate can only
+      // have arrived via clarifyCaptureToOutcome's personTagIds.
+      final outcomes = await db.select(db.todos).get();
+      expect(outcomes, hasLength(1));
+      expect(outcomes.single.title, 'Ask Bob');
+      // Delegation is carried by the person tag; `waitingFor` routes intent to
+      // `next` like any other actionable Outcome.
+      expect(outcomes.single.intent, 'next');
+      expect(
+        await db.todoDao.getPersonTagIdsForTodo(outcomes.single.id),
+        contains('alice'),
+      );
+      expect((await db.captureDao.getCapture('wfc2'))!.clarifiedAt, isNotNull);
       expect(afterArg, ProcessAction.waitingFor);
     });
   });
