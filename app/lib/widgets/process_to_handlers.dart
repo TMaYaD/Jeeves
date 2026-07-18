@@ -652,44 +652,36 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   }
 
   Future<void> _waitingFor() async {
-    var confirmed = false;
-    switch (widget.subject) {
-      case OutcomeSubject(:final todo):
-        final currentTagIds = await _clarification.getPersonTagIds(todo.id);
-        if (!mounted) return;
-        await showPersonTagPicker(
-          context,
-          todoId: todo.id,
-          assignedPersonTagIds: currentTagIds,
-          requireSelection: true,
-          onAfterConfirm: () async {
-            if (!await _subjectExists()) return;
-            confirmed = true;
-            final selected = await _clarification.getPersonTagIds(todo.id);
-            // Routing to waitingFor is intent-only — `next_action_text` is on
-            // the orthogonal "what's the action?" axis and is not touched
-            // here. Callsites that want to couple a phrase write own it via
-            // `onAfterRoute` (or the `nextActionDialog` modifier when editing
-            // an existing phrase).
-            await _commit(RoutingKind.waitingFor, personTagIds: selected);
-          },
-        );
-      case CaptureSubject():
-        // The Outcome does not exist yet, so the picker has nothing to write
-        // to. Collect the delegates instead and let clarifyCaptureToOutcome
-        // attach them to the Outcome it mints, in the same transaction.
-        await showPersonTagPicker(
-          context,
-          assignedPersonTagIds: const <String>{},
-          requireSelection: true,
-          onConfirmSelection: (selected) async {
-            if (!await _subjectExists()) return;
-            confirmed = true;
-            await _commit(RoutingKind.waitingFor, personTagIds: selected);
-          },
-        );
-    }
-    if (!confirmed) return;
+    // Pre-seed from the existing Outcome's delegates; a Capture has none —
+    // its Outcome does not exist yet (ADR-0006).
+    final assigned = switch (widget.subject) {
+      OutcomeSubject(:final todo) => await _clarification.getPersonTagIds(
+          todo.id,
+        ),
+      CaptureSubject() => const <String>{},
+    };
+    if (!mounted) return;
+
+    // Selection-only on both branches: `_commit`'s routing write replaces the
+    // person-tag set atomically (clarifyToOutcome) or attaches it to the
+    // Outcome it mints (clarifyCaptureToOutcome), so the picker has nothing
+    // left to write.
+    final selected = await showPersonTagPicker(
+      context,
+      assignedPersonTagIds: assigned,
+      requireSelection: true,
+    );
+    if (selected == null || !mounted) return; // user cancelled
+
+    // Checked after the picker closes but before any write: confirming into a
+    // row that has since vanished must leave nothing behind.
+    if (!await _subjectExists()) return;
+
+    // Routing to waitingFor is intent-only — `next_action_text` is on the
+    // orthogonal "what's the action?" axis and is not touched here. Callsites
+    // that want to couple a phrase write own it via `onAfterRoute` (or the
+    // `nextActionDialog` modifier when editing an existing phrase).
+    await _commit(RoutingKind.waitingFor, personTagIds: selected);
     await _notifyAfterRoute(ProcessAction.waitingFor);
   }
 
