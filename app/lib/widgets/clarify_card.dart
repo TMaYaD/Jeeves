@@ -1,11 +1,22 @@
-/// Generic clarification card. Renders an editable view of a [Todo] plus the
-/// canonical [ProcessToHandlers] action bar.
+/// Generic clarification card. Renders an editable view of a Capture or an
+/// Outcome plus the canonical [ProcessToHandlers] action bar.
 ///
-/// The card autosaves attribute edits (title / notes / energy / time / due)
-/// directly to [TodoDao]; routing actions are delegated to the canonical
-/// [ProcessToHandlers] action bar, which owns its own DAO writes. Per-flow
-/// nav side-effects (recording routing history, advancing the cursor) are
-/// wired through [onAfterRoute].
+/// Two shapes, matching the ADR-0006 split:
+///
+/// - [ClarifyCard.forCapture] — an Inbox Capture on its first pass through the
+///   flow. Title and notes autosave onto the Capture. Energy, time estimate
+///   and due date have **no column on a Capture** (they are Outcome
+///   attributes), so the card holds them as draft state and
+///   [ClarificationService.clarifyCaptureToOutcome] writes them onto the
+///   Outcome it mints. Tag edits persist as *tag hints* (`capture_tags`) which
+///   seed that Outcome's tags, so — like the text — they survive Skip and Back
+///   even though no Outcome exists yet.
+/// - [ClarifyCard.forOutcome] — the re-clarify sub-flow on an already
+///   clarified Outcome. Every edit autosaves straight to `todos`, as before.
+///
+/// Routing is delegated to [ProcessToHandlers], which owns the write for
+/// whichever subject it is given. Per-flow nav side-effects (recording routing
+/// history, advancing the cursor) are wired through [onAfterRoute].
 ///
 /// Used by the daily-planning ritual's inbox-clarify step and by the
 /// Weekly Review wizard (zero-inbox step + the `reclarify` sub-flow opened
@@ -18,6 +29,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'clarify_shared_widgets.dart';
@@ -25,30 +37,29 @@ import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
 import 'project_picker.dart';
 
-/// Distinguishes the inbox-clarify caller (always mirror title into
-/// `next_action_text` on Next/WaitingFor) from the re-clarify sub-flow on a
-/// previously-clarified item (only mirror when the existing
-/// `next_action_text` is null/empty so a deliberately written phrase is not
-/// clobbered).
-enum ClarifyMode { inbox, reclarify }
-
-/// Generic clarification card. Renders an editable view of [todoId] plus the
-/// canonical "process to" action bar. Title/notes/energy/time/due autosave
-/// directly via [TodoDao]; routing buttons drive [ProcessToHandlers].
+/// Generic clarification card — see the library doc for the two shapes.
 class ClarifyCard extends ConsumerStatefulWidget {
-  const ClarifyCard({
+  /// Clarify an Inbox Capture into a new Outcome.
+  const ClarifyCard.forCapture({
     super.key,
-    required this.todoId,
-    this.mode = ClarifyMode.inbox,
+    required this.captureId,
     this.lastAction,
     this.onAfterRoute,
-  });
+  }) : todoId = null;
 
-  final String todoId;
+  /// Re-clarify an Outcome that has already been through the flow once.
+  const ClarifyCard.forOutcome({
+    super.key,
+    required this.todoId,
+    this.lastAction,
+    this.onAfterRoute,
+  }) : captureId = null;
 
-  /// Selects the title-as-action mirror policy applied in [onAfterRoute].
-  /// See [ClarifyMode].
-  final ClarifyMode mode;
+  /// The Capture being clarified, or null when re-clarifying an Outcome.
+  final String? captureId;
+
+  /// The Outcome being re-clarified, or null when clarifying a Capture.
+  final String? todoId;
 
   /// The action most recently applied to this item — drives the
   /// "previously selected" affordance on the matching destination button.
@@ -75,6 +86,20 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   // they type — without a SnackBar or other toast surface.
   bool _titleIsBlank = false;
 
+  /// Tag-hint ids for the draft, on a Capture card.
+  ///
+  /// Seeded from the live hints on first build, then mutated **synchronously**
+  /// by the picker callbacks. The DAO writes those callbacks fire are
+  /// `unawaited`, and the hint stream needs a frame to come back, so a user who
+  /// taps a destination immediately after touching a tag would otherwise route
+  /// with the previous build's hints and lose the edit from the new Outcome.
+  Set<String>? _draftTagIds;
+
+  /// Whether [_draftTagIds] has been seeded from a *loaded* hint list. The
+  /// provider's first emission is `loading`, which reads as an empty list —
+  /// seeding from that would leave the draft permanently tagless.
+  bool _draftTagsSeeded = false;
+
   static const _textDebounceMs = 400;
   Timer? _textDebouncer;
   String? _lastSavedTitle;
@@ -82,17 +107,32 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
-  void _initialiseFrom(Todo todo) {
+  /// True when this card is clarifying a Capture rather than re-clarifying an
+  /// Outcome. Selects every save path below.
+  bool get _isCapture => widget.captureId != null;
+
+  /// The row id being edited — a Capture id or an Outcome id.
+  String get _subjectId => widget.captureId ?? widget.todoId!;
+
+  void _initialiseFrom({
+    required String title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+  }) {
     if (_initialised) return;
     _initialised = true;
-    _titleCtrl = TextEditingController(text: todo.title);
-    _notesCtrl = TextEditingController(text: todo.notes ?? '');
-    _lastSavedTitle = todo.title.trim();
-    _lastSavedNotes = (todo.notes ?? '').trim();
-    _titleIsBlank = todo.title.trim().isEmpty;
-    _energyLevel = todo.energyLevel;
-    _timeEstimate = todo.timeEstimate;
-    _dueDate = todo.dueDate?.toLocal();
+    _titleCtrl = TextEditingController(text: title);
+    _notesCtrl = TextEditingController(text: notes ?? '');
+    _lastSavedTitle = title.trim();
+    _lastSavedNotes = (notes ?? '').trim();
+    _titleIsBlank = title.trim().isEmpty;
+    // A Capture carries none of these columns — they start empty and live as
+    // draft state until the Outcome is created.
+    _energyLevel = energyLevel;
+    _timeEstimate = timeEstimate;
+    _dueDate = dueDate?.toLocal();
   }
 
   @override
@@ -108,12 +148,15 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     final hasPendingWrite = trimmedTitle.isNotEmpty &&
         (trimmedTitle != _lastSavedTitle || trimmedNotes != _lastSavedNotes);
     if (hasPendingWrite) {
-      final dao = ref.read(databaseProvider).todoDao;
-      unawaited(dao.updateFields(
-        widget.todoId,
-        title: trimmedTitle,
-        notes: trimmedNotes,
-      ));
+      final db = ref.read(databaseProvider);
+      final id = _subjectId;
+      unawaited(
+        _isCapture
+            ? db.captureDao
+                .updateFields(id, title: trimmedTitle, notes: trimmedNotes)
+            : db.todoDao
+                .updateFields(id, title: trimmedTitle, notes: trimmedNotes),
+      );
     }
     _titleCtrl?.dispose();
     _notesCtrl?.dispose();
@@ -142,59 +185,121 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       return;
     }
     final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(
-      widget.todoId,
-      title: trimmedTitle,
-      notes: trimmedNotes,
-    );
+    final id = _subjectId;
+    if (_isCapture) {
+      await db.captureDao
+          .updateFields(id, title: trimmedTitle, notes: trimmedNotes);
+    } else {
+      await db.todoDao
+          .updateFields(id, title: trimmedTitle, notes: trimmedNotes);
+    }
     _lastSavedTitle = trimmedTitle;
     _lastSavedNotes = trimmedNotes;
   }
 
+  // Energy / time estimate / due date are Outcome attributes with no column on
+  // a Capture. On a Capture card the setState in the callsite *is* the save:
+  // the value rides the draft into clarifyCaptureToOutcome. On an Outcome card
+  // they autosave as before.
+
   Future<void> _saveEnergy(String? level) async {
-    if (level == null) return;
+    if (_isCapture || level == null) return;
     final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(widget.todoId, energyLevel: level);
+    await db.todoDao.updateFields(_subjectId, energyLevel: level);
   }
 
   Future<void> _saveTimeEstimate(int? minutes) async {
+    if (_isCapture) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.updateFields(
-      widget.todoId,
+      _subjectId,
       timeEstimate: minutes,
       clearTimeEstimate: minutes == null,
     );
   }
 
   Future<void> _saveDueDate(DateTime? date, {required bool clear}) async {
+    if (_isCapture) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.updateFields(
-      widget.todoId,
+      _subjectId,
       dueDate: date,
       clearDueDate: clear,
     );
   }
 
-  // Tag edits route through [TaskDetailNotifier], which owns the
+  // Tag edits on an Outcome route through [TaskDetailNotifier], which owns the
   // single-project invariant and user-scoped writes. None of these methods
   // touches `todos.intent` or person-tag join rows, so the intent ⊥ delegate
   // orthogonality invariant (ARCHITECTURE.md) is preserved structurally.
   // Unlike the person-tag methods, context/project edits deliberately do NOT
   // stamp `last_clarified_at` — the categorisation axes are not the clarified
   // moment (matches task_detail_screen behaviour).
+  //
+  // On a Capture the same edits persist as tag *hints* (`capture_tags`), which
+  // seed the Outcome's tags at clarification. CaptureDao.assignProjectHint
+  // enforces the same single-project invariant so a hint can't seed an Outcome
+  // that violates it.
   TaskDetailNotifier get _tagNotifier =>
-      ref.read(taskDetailNotifierProvider(widget.todoId));
+      ref.read(taskDetailNotifierProvider(_subjectId));
 
-  Future<void> _saveAssignProject(String tagId) =>
-      _tagNotifier.assignProject(tagId);
+  Future<void> _saveAssignProject(String tagId) async {
+    if (!_isCapture) return _tagNotifier.assignProject(tagId);
+    final db = ref.read(databaseProvider);
+    await db.captureDao.assignProjectHint(
+      _subjectId,
+      tagId,
+      ref.read(currentUserIdProvider),
+    );
+  }
 
-  Future<void> _saveClearProject() => _tagNotifier.clearProject();
+  Future<void> _saveClearProject() async {
+    if (!_isCapture) return _tagNotifier.clearProject();
+    await ref.read(databaseProvider).captureDao.clearProjectHint(_subjectId);
+  }
 
-  Future<void> _saveAssignContext(String tagId) =>
-      _tagNotifier.assignContextTag(tagId);
+  Future<void> _saveAssignContext(String tagId) async {
+    if (!_isCapture) return _tagNotifier.assignContextTag(tagId);
+    final db = ref.read(databaseProvider);
+    await db.captureDao.assignTagHint(
+      _subjectId,
+      tagId,
+      ref.read(currentUserIdProvider),
+    );
+  }
 
-  Future<void> _saveRemoveContext(String tagId) =>
-      _tagNotifier.removeContextTag(tagId);
+  Future<void> _saveRemoveContext(String tagId) async {
+    if (!_isCapture) return _tagNotifier.removeContextTag(tagId);
+    await ref.read(databaseProvider).captureDao.removeTagHint(_subjectId, tagId);
+  }
+
+  // Draft tag bookkeeping — no-ops on an Outcome card, where tag edits are
+  // written straight to `todo_tags` and there is no draft to keep in step.
+
+  void _draftAdd(Tag t) {
+    if (!_isCapture) return;
+    setState(() => _draftTagIds = {...?_draftTagIds, t.id});
+  }
+
+  void _draftRemove(String tagId) {
+    if (!_isCapture) return;
+    setState(() => _draftTagIds = {...?_draftTagIds}..remove(tagId));
+  }
+
+  void _draftRemoveAll(List<Tag> tags) {
+    if (!_isCapture) return;
+    setState(() => _draftTagIds = {...?_draftTagIds}
+      ..removeAll(tags.map((t) => t.id)));
+  }
+
+  /// Swap [t] in for whatever tags of the same axis are currently drafted —
+  /// the single-project invariant, applied to the draft as well as the DB.
+  void _draftReplaceOfType(Tag t, List<Tag> current) {
+    if (!_isCapture) return;
+    setState(() => _draftTagIds = {...?_draftTagIds}
+      ..removeAll(current.map((c) => c.id))
+      ..add(t.id));
+  }
 
   Future<DateTime?> _pickDate(BuildContext context) {
     final now = DateTime.now();
@@ -211,19 +316,99 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   @override
   Widget build(BuildContext context) {
-    final todoAsync = ref.watch(taskDetailTodoProvider(widget.todoId));
-    final todo = todoAsync.value;
+    final captureId = widget.captureId;
+    return captureId != null
+        ? _buildForCapture(context, captureId)
+        : _buildForOutcome(context, widget.todoId!);
+  }
+
+  Widget _buildForCapture(BuildContext context, String captureId) {
+    final capture = ref.watch(captureProvider(captureId)).value;
+    if (capture == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    // A Capture stores only title and notes; the rest of the card starts empty
+    // and rides the draft into the Outcome.
+    _initialiseFrom(title: capture.title, notes: capture.notes);
+
+    final hintsAsync = ref.watch(captureTagHintsProvider(captureId));
+    final hints = hintsAsync.asData?.value ?? const <Tag>[];
+    if (hintsAsync.hasValue && !_draftTagsSeeded) {
+      _draftTagsSeeded = true;
+      _draftTagIds = {for (final t in hints) t.id};
+    }
+    return _buildBody(
+      context,
+      tags: hints,
+      subject: CaptureSubject(
+        capture: capture,
+        draft: () => _draft(hints),
+      ),
+    );
+  }
+
+  Widget _buildForOutcome(BuildContext context, String todoId) {
+    final todo = ref.watch(taskDetailTodoProvider(todoId)).value;
     if (todo == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    _initialiseFrom(todo);
+    _initialiseFrom(
+      title: todo.title,
+      notes: todo.notes,
+      energyLevel: todo.energyLevel,
+      timeEstimate: todo.timeEstimate,
+      dueDate: todo.dueDate,
+    );
+    final tags =
+        ref.watch(taskTagsProvider(todoId)).asData?.value ?? const <Tag>[];
+    return _buildBody(context, tags: tags, subject: OutcomeSubject(todo));
+  }
 
+  /// Snapshot of the card's current state, read at tap time by
+  /// [CaptureSubject.draft].
+  ClarifyDraft _draft(List<Tag> hints) {
+    final title = (_titleCtrl?.text ?? '').trim();
+    final notes = (_notesCtrl?.text ?? '').trim();
+    final personHintIds = {
+      for (final t in hints)
+        if (t.type == 'person') t.id,
+    };
+    return ClarifyDraft(
+      title: title,
+      notes: notes.isEmpty ? null : notes,
+      energyLevel: _energyLevel,
+      timeEstimate: _timeEstimate,
+      // Strip the time component: the picker collects a calendar day.
+      dueDate: _dueDate != null
+          ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
+          : null,
+      // The synchronous draft set once seeded, else whatever hints have
+      // loaded. Person tags never travel this way — the Waiting For picker
+      // supplies those, on the orthogonal delegation axis.
+      tagIds: {
+        for (final id in _draftTagsSeeded
+            ? _draftTagIds ?? const <String>{}
+            : {for (final t in hints) t.id})
+          if (!personHintIds.contains(id)) id,
+      },
+      // Title-as-action coupling: a Capture is by definition a first
+      // clarification, so there is no deliberate phrase to clobber and the
+      // title always mirrors. applyRouting consumes this only for Next and
+      // Waiting For, so the other destinations are unaffected.
+      nextActionText: title.isEmpty ? null : title,
+    );
+  }
+
+  Widget _buildBody(
+    BuildContext context, {
+    required List<Tag> tags,
+    required ClarifySubject subject,
+  }) {
     // Tags are watched live so the pickers re-render on DB change; keeping a
     // local mirror would go stale across the async write. Person tags are
     // intentionally excluded here — they are edited via the Waiting For
     // routing button (which opens PersonTagPickerSheet), never on this card.
-    final tagsAsync = ref.watch(taskTagsProvider(widget.todoId));
-    final allTags = tagsAsync.asData?.value ?? const <Tag>[];
+    final allTags = tags;
     final projectTags = allTags.where((t) => t.type == 'project').toList();
     final projectTag = projectTags.isEmpty ? null : projectTags.first;
     final contextTags = allTags.where((t) => t.type == 'context').toList();
@@ -310,16 +495,28 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         // the optional-tag hint.
         ProjectPickerWidget(
           currentProjectTag: projectTag,
-          onAssign: (t) => unawaited(_saveAssignProject(t.id)),
-          onClear: () => unawaited(_saveClearProject()),
+          onAssign: (t) {
+            _draftReplaceOfType(t, projectTags);
+            unawaited(_saveAssignProject(t.id));
+          },
+          onClear: () {
+            _draftRemoveAll(projectTags);
+            unawaited(_saveClearProject());
+          },
         ),
         const SizedBox(height: 12),
         // Context row — multi-select; reuse ContextTagPickerWidget. Its
         // "+ context" trailing affordance doubles as the optional-tag hint.
         ContextTagPickerWidget(
           assignedTags: contextTags,
-          onAssign: (t) => unawaited(_saveAssignContext(t.id)),
-          onRemove: (t) => unawaited(_saveRemoveContext(t.id)),
+          onAssign: (t) {
+            _draftAdd(t);
+            unawaited(_saveAssignContext(t.id));
+          },
+          onRemove: (t) {
+            _draftRemove(t.id);
+            unawaited(_saveRemoveContext(t.id));
+          },
         ),
         const SizedBox(height: 20),
 
@@ -403,7 +600,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         const ClarifyFieldLabel('PROCESS TO'),
         const SizedBox(height: 12),
         ProcessToHandlers(
-          todo: todo,
+          subject: subject,
           disabled: disabled,
           // Opt out of the default-on `nextActionDialog` modifier: the
           // clarify card supplies the phrase via the title-as-action
@@ -424,31 +621,21 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             // lost. With the dialog modifier excepted, Next reports plain
             // `next`.
             //
-            // ClarifyMode.inbox     → always mirror (the row is fresh, so
-            //                         any existing phrase is stale or
-            //                         missing).
-            // ClarifyMode.reclarify → only mirror when `next_action_text`
-            //                         is null/empty; otherwise the user
-            //                         has already written a deliberate
-            //                         phrase and we must not clobber it.
-            if (action == ProcessAction.next ||
-                action == ProcessAction.waitingFor) {
+            // Capture → the mirror travels in the draft (see [_draft]) and is
+            //           applied by clarifyCaptureToOutcome as it creates the
+            //           Outcome; there is nothing to write here.
+            // Outcome → only mirror when `next_action_text` is null/empty;
+            //           otherwise the user has already written a deliberate
+            //           phrase and we must not clobber it.
+            if (!_isCapture &&
+                (action == ProcessAction.next ||
+                    action == ProcessAction.waitingFor)) {
               final title = _titleCtrl?.text.trim() ?? '';
               if (title.isNotEmpty) {
-                var shouldMirror = widget.mode == ClarifyMode.inbox;
-                if (!shouldMirror) {
-                  final current = await ref
-                      .read(databaseProvider)
-                      .todoDao
-                      .getTodo(widget.todoId);
-                  final existing = current?.nextActionText?.trim() ?? '';
-                  shouldMirror = existing.isEmpty;
-                }
-                if (shouldMirror) {
-                  await ref
-                      .read(databaseProvider)
-                      .todoDao
-                      .setNextActionText(widget.todoId, title);
+                final db = ref.read(databaseProvider);
+                final current = await db.todoDao.getTodo(_subjectId);
+                if ((current?.nextActionText?.trim() ?? '').isEmpty) {
+                  await db.todoDao.setNextActionText(_subjectId, title);
                 }
               }
             }

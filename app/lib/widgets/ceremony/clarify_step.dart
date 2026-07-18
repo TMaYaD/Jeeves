@@ -114,10 +114,12 @@ class _ClarifyStepState extends State<ClarifyStep> {
     }
 
     final index = nav.index;
-    final todoId = nav.current!;
-    return ClarifyCard(
-      key: ValueKey(todoId),
-      todoId: todoId,
+    // The ceremony inbox snapshots hold Capture ids since the split (ADR-0006):
+    // the step clarifies Captures into Outcomes, it never edits an Outcome.
+    final captureId = nav.current!;
+    return ClarifyCard.forCapture(
+      key: ValueKey(captureId),
+      captureId: captureId,
       // The RoutingKindToProcessAction extension lives in
       // process_to_handlers.dart and is imported transitively via
       // clarify_card.dart → process_to_handlers.dart.

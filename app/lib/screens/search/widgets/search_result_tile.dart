@@ -12,12 +12,16 @@ class SearchResultTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final todo = result.todo;
-
-    final isDone = todo.doneAt != null;
+    final isDone = result.todo?.doneAt != null;
 
     return InkWell(
-      onTap: () => context.push('/task/${todo.id}'),
+      // A Capture has no task-detail screen — it isn't an Outcome yet — so a
+      // hit opens the clarify surface instead.
+      onTap: () => context.push(
+        result.isCapture
+            ? '/inbox/${result.id}/clarify'
+            : '/task/${result.id}',
+      ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
@@ -28,7 +32,7 @@ class SearchResultTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    todo.title,
+                    result.title,
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: result.matchedFields
@@ -58,7 +62,9 @@ class SearchResultTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            if (isDone)
+            if (result.isCapture)
+              const _InboxChip()
+            else if (isDone)
               const _DoneChip()
             else if (result.tags.any((t) => t.type == 'person'))
               const _WaitingChip(),
@@ -106,6 +112,30 @@ class _MatchHint extends StatelessWidget {
       child: Text(
         hints.join(' · '),
         style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+      ),
+    );
+  }
+}
+
+/// Marks a hit that is still an unclarified Capture, so the user knows why it
+/// opens the clarify screen rather than task detail.
+class _InboxChip extends StatelessWidget {
+  const _InboxChip();
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFF2563EB);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: const Text(
+        'Inbox',
+        style:
+            TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color),
       ),
     );
   }

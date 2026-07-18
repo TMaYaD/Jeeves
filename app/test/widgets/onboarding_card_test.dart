@@ -34,7 +34,7 @@ Widget _buildCard(Stream<bool> hasTodosStream) {
 
   return ProviderScope(
     overrides: [
-      hasTodosProvider.overrideWith((ref) => hasTodosStream),
+      hasAnyItemProvider.overrideWith((ref) => hasTodosStream),
       databaseProvider.overrideWithValue(GtdDatabase(NativeDatabase.memory())),
     ],
     child: MaterialApp.router(routerConfig: router),
@@ -106,7 +106,7 @@ void main() {
     expect(find.text('login screen'), findsOneWidget);
   });
 
-  testWidgets('card disappears when hasTodosProvider emits true', (tester) async {
+  testWidgets('card disappears when hasAnyItemProvider emits true', (tester) async {
     final controller = StreamController<bool>();
     controller.add(false);
 

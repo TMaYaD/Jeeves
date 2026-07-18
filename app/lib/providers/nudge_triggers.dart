@@ -133,10 +133,10 @@ TriggerState _dprCadenceTrigger(Ref ref) {
   if (session.requireValue != null) return TriggerState.idle;
 
   // Content precondition: DPR is meaningful only when there is something
-  // to plan. hasTodos gates the onboarding state; inbox-or-next non-empty
+  // to plan. hasAnyItem gates the onboarding state; inbox-or-next non-empty
   // gates the "everything is done already" state.
-  final hasTodos = ref.watch(hasTodosProvider);
-  if (!hasTodos.hasValue || !hasTodos.requireValue) return TriggerState.idle;
+  final hasAnyItem = ref.watch(hasAnyItemProvider);
+  if (!hasAnyItem.hasValue || !hasAnyItem.requireValue) return TriggerState.idle;
   final inbox = ref.watch(unfilteredInboxProvider);
   final next = ref.watch(unfilteredNextProvider);
   if (!inbox.hasValue || !next.hasValue) return TriggerState.idle;
@@ -168,8 +168,8 @@ TriggerState _wrCadenceTrigger(Ref ref) {
   if (!ref.watch(periodicReviewIsDueProvider)) return TriggerState.idle;
 
   // Content precondition: WR has nothing to review in the onboarding state.
-  final hasTodos = ref.watch(hasTodosProvider);
-  if (!hasTodos.hasValue || !hasTodos.requireValue) return TriggerState.idle;
+  final hasAnyItem = ref.watch(hasAnyItemProvider);
+  if (!hasAnyItem.hasValue || !hasAnyItem.requireValue) return TriggerState.idle;
 
   final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
   // firingSince: when the cadence-due edge would have fired. For a
@@ -218,19 +218,19 @@ final contentStateTriggerProvider =
 /// can observe genuine `false→true` transitions (and not mistake a
 /// loading→firing edge on startup for a re-fire).
 final wrContentFiringProvider = Provider<bool?>((ref) {
-  final hasTodos = ref.watch(hasTodosProvider);
+  final hasAnyItem = ref.watch(hasAnyItemProvider);
   final inbox = ref.watch(unfilteredInboxProvider);
   final next = ref.watch(unfilteredNextProvider);
   final waiting = ref.watch(unfilteredWaitingForProvider);
   final maybe = ref.watch(unfilteredMaybeProvider);
-  if (!hasTodos.hasValue ||
+  if (!hasAnyItem.hasValue ||
       !inbox.hasValue ||
       !next.hasValue ||
       !waiting.hasValue ||
       !maybe.hasValue) {
     return null; // still loading — truth value unknown
   }
-  if (!hasTodos.requireValue) return false;
+  if (!hasAnyItem.requireValue) return false;
   return emptyActionableBannerTrigger(
     inbox: inbox,
     next: next,

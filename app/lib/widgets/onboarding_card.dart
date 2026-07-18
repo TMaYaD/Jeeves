@@ -9,7 +9,7 @@ import 'jeeves_logo.dart';
 ///
 /// Self-hiding: collapses to [SizedBox.shrink] once the user has permanently
 /// dismissed it (via [onboardingSeenNotifier]) or once any todo exists in the
-/// database (via [hasTodosProvider]).
+/// database (via [hasAnyItemProvider]).
 class OnboardingCard extends ConsumerWidget {
   const OnboardingCard({super.key});
 
@@ -17,7 +17,7 @@ class OnboardingCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Auto-dismiss silently the moment any todo appears (e.g. after a Nirvana
     // import) so the card never re-surfaces without user action.
-    ref.listen<AsyncValue<bool>>(hasTodosProvider, (_, next) {
+    ref.listen<AsyncValue<bool>>(hasAnyItemProvider, (_, next) {
       if (next.asData?.value == true) markOnboardingSeen();
     });
 
@@ -26,9 +26,9 @@ class OnboardingCard extends ConsumerWidget {
       builder: (context, seen, _) {
         if (seen) return const SizedBox.shrink();
 
-        final hasTodosAsync = ref.watch(hasTodosProvider);
-        final hasTodos = hasTodosAsync.asData?.value;
-        if (hasTodos == null || hasTodos) return const SizedBox.shrink();
+        final hasAnyItemAsync = ref.watch(hasAnyItemProvider);
+        final hasAnyItem = hasAnyItemAsync.asData?.value;
+        if (hasAnyItem == null || hasAnyItem) return const SizedBox.shrink();
 
         return _OnboardingCardContent(
           key: const Key('onboarding_card'),

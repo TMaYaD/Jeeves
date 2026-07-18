@@ -72,6 +72,17 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   Stream<bool> watchHasCaptures() =>
       (select(captures)..limit(1)).watch().map((rows) => rows.isNotEmpty);
 
+  /// Emits true as soon as **any** item exists — a Capture (Inbox or clarified)
+  /// or an Outcome (`todos`). Drives the first-launch onboarding collapse:
+  /// once the split lands, a brand-new user's first quick-add is a Capture, but
+  /// a Nirvana import (clarified Outcomes) or a fully-cleared Inbox must also
+  /// keep the card dismissed, so both tables are watched (issue #184 Phase 2).
+  Stream<bool> watchHasAnyItem() => customSelect(
+        'SELECT (EXISTS(SELECT 1 FROM captures) '
+        'OR EXISTS(SELECT 1 FROM todos)) AS has_any',
+        readsFrom: {captures, todos},
+      ).watch().map((rows) => rows.first.read<int>('has_any') != 0);
+
   /// Count of Inbox captures — the Inbox badge.
   Stream<int> watchInboxCount() {
     final query = selectOnly(captures)
@@ -83,11 +94,51 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   Future<Capture?> getCapture(String id) =>
       (select(captures)..where((c) => c.id.equals(id))).getSingleOrNull();
 
+  /// Live single-Capture read. The clarify surfaces bind to this so a Capture
+  /// edited (or hard-deleted) on another device re-renders the open card.
+  /// Emits null once the row is gone.
+  Stream<Capture?> watchCapture(String id) =>
+      (select(captures)..where((c) => c.id.equals(id))).watchSingleOrNull();
+
   // --- Capture writes -------------------------------------------------------
 
   /// Insert a new Capture (Inbox: `clarified_at` stays NULL).
   Future<void> insertCapture(CapturesCompanion companion) async {
     await into(captures).insert(companion);
+    attachedDatabase.notifyCapturesViewWrite();
+  }
+
+  /// Persist text edits made on a Capture's clarify card.
+  ///
+  /// A Capture carries only [title] and [notes]; energy, time estimate, due
+  /// date and Intent are *Outcome* attributes, so a clarify card holds those
+  /// as draft state until [ClarificationService.clarifyCaptureToOutcome] mints
+  /// the Outcome and writes them there. `null` means "no change"; pass
+  /// [clearNotes] to null the column.
+  ///
+  /// Deliberately does **not** touch `clarified_at`: refining the wording of a
+  /// Capture is not the clarify act (ADR-0006), so an edited Capture stays in
+  /// the Inbox. This is the difference from [TodoDao.updateFields], which
+  /// stamps `last_clarified_at` because each edit to an Outcome *is* a
+  /// clarifying micro-act.
+  Future<void> updateFields(
+    String id, {
+    String? title,
+    String? notes,
+    bool clearNotes = false,
+  }) async {
+    if (title == null && notes == null && !clearNotes) return;
+    await (update(captures)..where((c) => c.id.equals(id))).write(
+      CapturesCompanion(
+        title: title != null ? Value(title) : const Value.absent(),
+        notes: clearNotes
+            ? const Value(null)
+            : notes != null
+                ? Value(notes)
+                : const Value.absent(),
+        updatedAt: Value(DateTime.now().toUtc()),
+      ),
+    );
     attachedDatabase.notifyCapturesViewWrite();
   }
 
@@ -176,6 +227,18 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
     return [for (final r in rows) r.outcomeId];
   }
 
+  /// The Capture ids still claiming [outcomeId] — the inverse of
+  /// [outcomeIdsForCapture]. Because Capture↔Outcome is many-to-many (merge
+  /// links several Captures to one Outcome), a caller cleaning up after one
+  /// Capture must check this before hard-deleting the Outcome: a non-empty
+  /// result means another Capture still owns it and it must survive.
+  Future<List<String>> captureIdsForOutcome(String outcomeId) async {
+    final rows = await (select(captureOutcomes)
+          ..where((l) => l.outcomeId.equals(outcomeId)))
+        .get();
+    return [for (final r in rows) r.captureId];
+  }
+
   /// Provenance for an Outcome: the Captures it was clarified from, newest link
   /// first. Drives the "Captured from…" display (issue #184 Phase 4).
   Stream<List<Capture>> watchCapturesForOutcome(String outcomeId) {
@@ -222,6 +285,56 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
         .go();
     attachedDatabase.notifyCapturesViewWrite();
     return rows;
+  }
+
+  /// Live tag hints on a Capture, alphabetical — drives the clarify card's
+  /// project / context pickers. These are hints, not Organising: they seed the
+  /// Outcome's tags when the Capture is clarified and mean nothing on their
+  /// own (CONTEXT.md).
+  Stream<List<Tag>> watchTagHints(String captureId) {
+    final query = select(tags).join([
+      innerJoin(captureTags, captureTags.tagId.equalsExp(tags.id)),
+    ])
+      ..where(captureTags.captureId.equals(captureId))
+      ..orderBy([OrderingTerm.asc(tags.name)]);
+    return query
+        .watch()
+        .map((rows) => rows.map((r) => r.readTable(tags)).toList());
+  }
+
+  /// Attach a project-typed tag hint, replacing any existing one.
+  ///
+  /// A Capture carries at most one project hint, mirroring the single-project
+  /// invariant [TaskDetailNotifier.assignProject] enforces on Outcomes — the
+  /// hint would otherwise seed an Outcome that violates it.
+  Future<void> assignProjectHint(
+    String captureId,
+    String tagId,
+    String userId,
+  ) async {
+    await transaction(() async {
+      await _deleteHintsOfType(captureId, 'project');
+      await assignTagHint(captureId, tagId, userId);
+    });
+  }
+
+  /// Drop the Capture's project-typed tag hint, if any.
+  Future<void> clearProjectHint(String captureId) async {
+    await _deleteHintsOfType(captureId, 'project');
+    attachedDatabase.notifyCapturesViewWrite();
+  }
+
+  Future<void> _deleteHintsOfType(String captureId, String type) async {
+    final existing = await (select(captureTags).join([
+      innerJoin(tags, tags.id.equalsExp(captureTags.tagId)),
+    ])
+          ..where(
+            captureTags.captureId.equals(captureId) & tags.type.equals(type),
+          ))
+        .get();
+    for (final row in existing) {
+      await removeTagHint(captureId, row.readTable(tags).id);
+    }
   }
 
   /// The tag-hint ids on a Capture.

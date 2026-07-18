@@ -392,6 +392,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                         }
                                       },
                                     ),
+                                    // "Captured from…" provenance — hidden when
+                                    // the Outcome has no capture links (issue
+                                    // #184 Phase 4).
+                                    _CapturedFromSection(outcomeId: widget.todoId),
                                   ],
                                 ),
                               ),
@@ -655,5 +659,94 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         ),
       ),
     );
+  }
+}
+
+/// "Captured from…" provenance for an Outcome (issue #184 Phase 4).
+///
+/// Collapsed by default; lists each source Capture's raw fragment and when it
+/// was captured. Renders nothing when the Outcome has no `capture_outcomes`
+/// links — historical Outcomes (created before the Capture split, or outside
+/// the clarify flow) simply show no section, so no threshold logic is needed.
+class _CapturedFromSection extends ConsumerWidget {
+  const _CapturedFromSection({required this.outcomeId});
+
+  final String outcomeId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final capturesAsync = ref.watch(capturesForOutcomeProvider(outcomeId));
+    final captures = capturesAsync.asData?.value ?? const <Capture>[];
+    if (captures.isEmpty) return const SizedBox.shrink();
+
+    final count = captures.length;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Theme(
+        // Strip the default divider lines so the tile matches the flat
+        // info-section styling above it.
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        // ExpansionTile renders a ListTile, which paints its ink splash on the
+        // nearest Material ancestor. This section sits inside the footer's
+        // decorated Container (a DecoratedBox with a background colour), which
+        // would hide those splashes — Flutter asserts on exactly that. A
+        // transparency Material gives the tile its own ink surface without
+        // painting over the footer's background.
+        child: Material(
+          type: MaterialType.transparency,
+          child: ExpansionTile(
+          key: const Key('captured_from_section'),
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(left: 8, bottom: 8),
+          leading: const Icon(Icons.inbox_outlined,
+              size: 18, color: Color(0xFF9CA3AF)),
+          title: Text(
+            count == 1 ? 'Captured from 1 capture' : 'Captured from $count captures',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5,
+              color: Color(0xFF6B7280),
+            ),
+          ),
+          children: [
+            for (final capture in captures)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      capture.title,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF374151),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _capturedAtLabel(capture.createdAt),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF9CA3AF),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _capturedAtLabel(DateTime createdAt) {
+    final local = createdAt.toLocal();
+    final y = local.year.toString().padLeft(4, '0');
+    final m = local.month.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    return 'Captured $y-$m-$d';
   }
 }

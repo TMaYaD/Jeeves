@@ -27,9 +27,12 @@ export '../models/todo.dart' show RoutingKind;
 
 /// User-visible "process to" actions.
 ///
-/// Five real routes (`next`, `waitingFor`, `someday`, `done`, `trash`) map to
-/// [ClarificationService.clarifyToOutcome] internally; `keep` stamps
-/// `last_clarified_at` only;
+/// Five real routes (`next`, `waitingFor`, `someday`, `done`, `trash`) commit a
+/// verdict against the [ClarifySubject] — in place for an Outcome, or as
+/// create-link-stamp for a Capture. `trash` on a Capture is the one asymmetric
+/// case: it is a zero-Outcome discard ([ClarificationService.discardCapture]),
+/// not a created-then-trashed Outcome. `keep` stamps `last_clarified_at` on an
+/// Outcome and leaves a Capture in the Inbox;
 /// `nextActionDialog` is a modifier on the `next` button (not a standalone
 /// button) — it is on by default, so tapping Next opens [NextActionDialog]
 /// before invoking the `next` mapping unless a callsite removes it via
@@ -80,6 +83,99 @@ extension ProcessActionToRoutingKind on ProcessAction {
         ProcessAction.trash => RoutingKind.trash,
         ProcessAction.keep || ProcessAction.reclarify => null,
       };
+}
+
+/// The Outcome-shaped attributes a clarify card has collected for a Capture.
+///
+/// A Capture carries only title and notes; energy, time estimate, due date and
+/// tags are *Outcome* attributes with no column to live in until the Outcome
+/// exists (ADR-0006). The card holds them here and
+/// [ClarificationService.clarifyCaptureToOutcome] writes them onto the Outcome
+/// it mints, in the same transaction as the provenance link and the stamp.
+class ClarifyDraft {
+  const ClarifyDraft({
+    required this.title,
+    this.notes,
+    this.energyLevel,
+    this.timeEstimate,
+    this.dueDate,
+    this.tagIds = const <String>{},
+    this.nextActionText,
+  });
+
+  final String title;
+  final String? notes;
+  final String? energyLevel;
+  final int? timeEstimate;
+  final DateTime? dueDate;
+
+  /// Non-person tags (context / project) to attach to the new Outcome. Person
+  /// tags travel separately — the Waiting For picker supplies them.
+  final Set<String> tagIds;
+
+  /// The phrase to record as the new Outcome's next action, if the card wants
+  /// one. The clarify card owns this policy (it mirrors the title so a freshly
+  /// clarified row never lands on the Next list actionless); the
+  /// [ProcessAction.nextActionDialog] modifier overrides it when active.
+  final String? nextActionText;
+}
+
+/// What a [ProcessToHandlers] bar is clarifying — the two shapes of ADR-0006.
+///
+/// The distinction is not cosmetic: it selects an entirely different write.
+/// Re-clarifying an [OutcomeSubject] edits one `todos` row in place, while
+/// clarifying a [CaptureSubject] *creates* an Outcome, links it back to the
+/// Capture (`capture_outcomes` provenance) and stamps `captures.clarified_at`.
+sealed class ClarifySubject {
+  const ClarifySubject();
+
+  /// Row id of the subject — an Outcome id or a Capture id.
+  String get id;
+
+  /// Current title, for dialog copy and (on a Capture) the new Outcome.
+  String get title;
+
+  /// The phrase already recorded as this subject's next action, if any. Always
+  /// null for a Capture: no Outcome exists yet to carry one.
+  String? get nextActionText;
+}
+
+/// An existing Outcome being re-clarified — the review surfaces.
+final class OutcomeSubject extends ClarifySubject {
+  const OutcomeSubject(this.todo);
+
+  final Todo todo;
+
+  @override
+  String get id => todo.id;
+
+  @override
+  String get title => todo.title;
+
+  @override
+  String? get nextActionText => todo.nextActionText;
+}
+
+/// An Inbox Capture being clarified for the first time.
+///
+/// [draft] is a callback, not a value: the clarify card's title and notes live
+/// in [TextEditingController]s that do not rebuild the widget on every
+/// keystroke, so a draft snapshotted at build time would be stale by the time
+/// the user taps a destination. It is read at tap time instead.
+final class CaptureSubject extends ClarifySubject {
+  const CaptureSubject({required this.capture, required this.draft});
+
+  final Capture capture;
+  final ClarifyDraft Function() draft;
+
+  @override
+  String get id => capture.id;
+
+  @override
+  String get title => draft().title;
+
+  @override
+  String? get nextActionText => null;
 }
 
 /// Default actions (and modifiers) active when neither
@@ -147,7 +243,7 @@ const _kDefaultColors = <ProcessAction, Color>{
 class ProcessToHandlers extends ConsumerStatefulWidget {
   const ProcessToHandlers({
     super.key,
-    required this.todo,
+    required this.subject,
     this.include = const <ProcessAction>{},
     this.except = const <ProcessAction>{},
     this.disabled = const <ProcessAction>{},
@@ -156,7 +252,8 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
     this.onAfterRoute,
   });
 
-  final Todo todo;
+  /// The Capture or Outcome this bar clarifies — selects the write path.
+  final ClarifySubject subject;
 
   /// Surfaces non-default actions (e.g. `keep`). The `nextActionDialog`
   /// modifier is on by default — remove it via [except], don't add it here.
@@ -290,16 +387,73 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
 
   /// Snapshot-based callsites (inbox-clarify, periodic review) can lose a
   /// row between render and tap — sync or another device may hard-delete it.
-  /// PowerSync exposes `todos` as a SQLite VIEW with INSTEAD OF triggers, so
-  /// the affected-rows count for an UPDATE is always 0; we can't tell from
-  /// the write whether anything happened. Pre-check existence here so we
-  /// don't fire [onAfterRoute] (which advances the snapshot cursor and
+  /// PowerSync exposes `todos` and `captures` as SQLite VIEWs with INSTEAD OF
+  /// triggers, so the affected-rows count for an UPDATE is always 0; we can't
+  /// tell from the write whether anything happened. Pre-check existence here
+  /// so we don't fire [onAfterRoute] (which advances the snapshot cursor and
   /// records a phantom routing record) for a row that no longer exists.
-  Future<bool> _todoExists() => _clarification.exists(widget.todo.id);
+  Future<bool> _subjectExists() => switch (widget.subject) {
+        OutcomeSubject(:final todo) => _clarification.exists(todo.id),
+        CaptureSubject(:final capture) =>
+          _clarification.captureExists(capture.id),
+      };
+
+  /// Commits the routing verdict [to] against the subject.
+  ///
+  /// For an [OutcomeSubject] this edits the existing `todos` row in place.
+  /// For a [CaptureSubject] it creates the Outcome the draft describes, links
+  /// it back to the Capture as provenance and stamps `clarified_at` — except
+  /// for Trash, which is the zero-Outcome discard: it stamps and creates
+  /// nothing (ADR-0006).
+  Future<void> _commit(
+    RoutingKind to, {
+    String? nextActionText,
+    Set<String>? personTagIds,
+  }) async {
+    switch (widget.subject) {
+      case OutcomeSubject(:final todo):
+        await _clarification.clarifyToOutcome(
+          todo.id,
+          to: to,
+          nextActionText: nextActionText,
+          personTagIds: personTagIds,
+          userId: personTagIds != null ? ref.read(currentUserIdProvider) : null,
+        );
+      case CaptureSubject(:final capture, :final draft):
+        if (to == RoutingKind.trash) {
+          await _clarification.discardCapture(capture.id);
+          return;
+        }
+        final d = draft();
+        await _clarification.clarifyCaptureToOutcome(
+          capture.id,
+          to: to,
+          userId: ref.read(currentUserIdProvider),
+          title: d.title,
+          notes: d.notes,
+          energyLevel: d.energyLevel,
+          timeEstimate: d.timeEstimate,
+          dueDate: d.dueDate,
+          // The dialog modifier's phrase wins over the card's title mirror.
+          nextActionText: nextActionText ?? d.nextActionText,
+          personTagIds: personTagIds,
+          tagIds: d.tagIds,
+        );
+    }
+  }
 
   Future<void> _keep() async {
-    if (!await _todoExists()) return;
-    await _clarification.stampClarified(widget.todo.id);
+    if (!await _subjectExists()) return;
+    switch (widget.subject) {
+      case OutcomeSubject(:final todo):
+        await _clarification.stampClarified(todo.id);
+      case CaptureSubject():
+        // "Keep" on a Capture means leave it in the Inbox: the clarify act is
+        // not complete, so `clarified_at` must stay NULL. Stamping here would
+        // clear the item from the Inbox without producing either an Outcome or
+        // a discard verdict — the one outcome the split exists to prevent.
+        break;
+    }
     await widget.onAfterRoute?.call(ProcessAction.keep);
   }
 
@@ -311,15 +465,25 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   /// routing maps to [ProcessAction.keep] so the review step advances
   /// without recording a routing.
   Future<void> _reclarify() async {
-    if (!await _todoExists()) return;
+    final subject = widget.subject;
+    if (subject is! OutcomeSubject) {
+      // Re-clarify is a review-surface entry: it re-opens a card on an Outcome
+      // that was already clarified once. A Capture has never been clarified,
+      // so there is nothing to re-open — its first pass through the card *is*
+      // the clarification. No inbox callsite includes this action; reaching
+      // here means a callsite was miswired, so fail loudly.
+      throw UnsupportedError(
+        'ProcessAction.reclarify applies to an Outcome, not a Capture',
+      );
+    }
+    if (!await _subjectExists()) return;
     if (!mounted) return;
     final routed = await Navigator.of(context).push<ProcessAction>(
       MaterialPageRoute<ProcessAction>(
         builder: (routeContext) => Scaffold(
           appBar: AppBar(title: const Text('Re-clarify')),
-          body: ClarifyCard(
-            todoId: widget.todo.id,
-            mode: ClarifyMode.reclarify,
+          body: ClarifyCard.forOutcome(
+            todoId: subject.todo.id,
             onAfterRoute: (action) async {
               if (Navigator.of(routeContext).canPop()) {
                 Navigator.of(routeContext).pop(action);
@@ -338,26 +502,24 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   }
 
   Future<void> _next() async {
-    if (!await _todoExists()) return;
-    await _clarification.clarifyToOutcome(
-      widget.todo.id,
-      to: RoutingKind.nextAction,
-    );
+    if (!await _subjectExists()) return;
+    await _commit(RoutingKind.nextAction);
     await widget.onAfterRoute?.call(ProcessAction.next);
   }
 
   Future<void> _nextWithDialog() async {
     // Edit-existing semantics: prefer the row's stored value so the user
-    // sees what's currently saved.
-    final initial = widget.todo.nextActionText ?? '';
+    // sees what's currently saved. A Capture has none — its Outcome does not
+    // exist yet — so the dialog opens empty.
+    final initial = widget.subject.nextActionText ?? '';
     final result = await showNextActionDialog(
       context,
       initial: initial,
-      taskTitle: widget.todo.title,
+      taskTitle: widget.subject.title,
     );
     if (result == null) return; // user cancelled
     if (!mounted) return;
-    if (!await _todoExists()) return;
+    if (!await _subjectExists()) return;
     if (result.isNotEmpty) {
       // A blank save must not route: promoting to Next with no phrase
       // would land the item actionless on the Next list — the exact
@@ -365,50 +527,55 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       // still notify the callsite so it can react (e.g. clear a stale
       // action record); its handler re-reads the row and sees the
       // unchanged value.
-      await _clarification.clarifyToOutcome(
-        widget.todo.id,
-        to: RoutingKind.nextAction,
-        nextActionText: result,
-      );
+      await _commit(RoutingKind.nextAction, nextActionText: result);
     }
     await widget.onAfterRoute?.call(ProcessAction.nextActionDialog);
   }
 
   Future<void> _waitingFor() async {
-    final userId = ref.read(currentUserIdProvider);
-    final currentTagIds =
-        await _clarification.getPersonTagIds(widget.todo.id);
-    if (!mounted) return;
     var confirmed = false;
-    await showPersonTagPicker(
-      context,
-      todoId: widget.todo.id,
-      assignedPersonTagIds: currentTagIds,
-      requireSelection: true,
-      onAfterConfirm: () async {
-        if (!await _todoExists()) return;
-        confirmed = true;
-        final selected =
-            await _clarification.getPersonTagIds(widget.todo.id);
-        // Routing to waitingFor is intent-only — `next_action_text` is on
-        // the orthogonal "what's the action?" axis and is not touched here.
-        // Callsites that want to couple a phrase write own it via
-        // `onAfterRoute` (or the `nextActionDialog` modifier when editing
-        // an existing phrase).
-        await _clarification.clarifyToOutcome(
-          widget.todo.id,
-          to: RoutingKind.waitingFor,
-          personTagIds: selected,
-          userId: userId,
+    switch (widget.subject) {
+      case OutcomeSubject(:final todo):
+        final currentTagIds = await _clarification.getPersonTagIds(todo.id);
+        if (!mounted) return;
+        await showPersonTagPicker(
+          context,
+          todoId: todo.id,
+          assignedPersonTagIds: currentTagIds,
+          requireSelection: true,
+          onAfterConfirm: () async {
+            if (!await _subjectExists()) return;
+            confirmed = true;
+            final selected = await _clarification.getPersonTagIds(todo.id);
+            // Routing to waitingFor is intent-only — `next_action_text` is on
+            // the orthogonal "what's the action?" axis and is not touched
+            // here. Callsites that want to couple a phrase write own it via
+            // `onAfterRoute` (or the `nextActionDialog` modifier when editing
+            // an existing phrase).
+            await _commit(RoutingKind.waitingFor, personTagIds: selected);
+          },
         );
-      },
-    );
+      case CaptureSubject():
+        // The Outcome does not exist yet, so the picker has nothing to write
+        // to. Collect the delegates instead and let clarifyCaptureToOutcome
+        // attach them to the Outcome it mints, in the same transaction.
+        await showPersonTagPicker(
+          context,
+          assignedPersonTagIds: const <String>{},
+          requireSelection: true,
+          onConfirmSelection: (selected) async {
+            if (!await _subjectExists()) return;
+            confirmed = true;
+            await _commit(RoutingKind.waitingFor, personTagIds: selected);
+          },
+        );
+    }
     if (!confirmed) return;
     await widget.onAfterRoute?.call(ProcessAction.waitingFor);
   }
 
   Future<void> _route(ProcessAction action) async {
-    if (!await _todoExists()) return;
+    if (!await _subjectExists()) return;
     final to = switch (action) {
       ProcessAction.someday => RoutingKind.maybe,
       ProcessAction.done => RoutingKind.done,
@@ -418,7 +585,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // Person tags are orthogonal to intent: a delegated task can become
     // `someday` / `done` / `trash` without losing its delegate. The picker
     // is the only path that mutates person tags.
-    await _clarification.clarifyToOutcome(widget.todo.id, to: to);
+    await _commit(to);
     await widget.onAfterRoute?.call(action);
   }
 

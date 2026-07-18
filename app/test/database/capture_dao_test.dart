@@ -28,16 +28,11 @@ CapturesCompanion _capture({
 }
 
 /// A minimal clarified Outcome row so provenance links have a valid FK target.
-Future<void> _insertOutcome(GtdDatabase db, String id, String title) async {
-  final now = DateTime.now();
-  await db.into(db.todos).insert(TodosCompanion(
-        id: Value(id),
-        title: Value(title),
-        userId: const Value(_userId),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
-}
+/// Goes through the production write path ([TodoDao.insertOutcome]) so these
+/// tests exercise the same insert — and the same view-notify — the clarify flow
+/// uses, rather than a raw `todos` insert that skips it.
+Future<void> _insertOutcome(GtdDatabase db, String id, String title) =>
+    db.todoDao.insertOutcome(id: id, title: title, userId: _userId);
 
 Future<String> _insertTag(GtdDatabase db, String name) =>
     db.tagDao.findOrCreateTag(name, 'context', _userId);
@@ -118,6 +113,61 @@ void main() {
         (await db.captureDao.getCapture('c1'))!.clarifiedAt,
         DateTime.utc(2026, 6, 1, 9),
       );
+    });
+
+    test('updateFields edits text and leaves the Capture in the Inbox',
+        () async {
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'buy milk'));
+
+      await db.captureDao
+          .updateFields('c1', title: 'Buy oat milk', notes: 'the barista one');
+
+      final edited = (await db.captureDao.getCapture('c1'))!;
+      expect(edited.title, 'Buy oat milk');
+      expect(edited.notes, 'the barista one');
+      // Refining the wording of a Capture is not the clarify act (ADR-0006):
+      // the row must still be in the Inbox afterwards.
+      expect(edited.clarifiedAt, isNull);
+      expect(await db.captureDao.watchInbox().first, hasLength(1));
+    });
+
+    test('updateFields clears notes only via the clear flag', () async {
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+      await db.captureDao.updateFields('c1', notes: 'keep me');
+
+      // A null `notes` means "no change", not "erase".
+      await db.captureDao.updateFields('c1', title: 'Idea, refined');
+      expect((await db.captureDao.getCapture('c1'))!.notes, 'keep me');
+
+      await db.captureDao.updateFields('c1', clearNotes: true);
+      expect((await db.captureDao.getCapture('c1'))!.notes, isNull);
+    });
+
+    test('updateFields with nothing to write is a no-op', () async {
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+      final before = (await db.captureDao.getCapture('c1'))!;
+
+      await db.captureDao.updateFields('c1');
+
+      // No mutation means no updated_at churn — an empty autosave flush must
+      // not manufacture a sync upload.
+      expect((await db.captureDao.getCapture('c1'))!.updatedAt, before.updatedAt);
+    });
+
+    test('watchCapture emits edits and then null once the row is gone',
+        () async {
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+
+      expect((await db.captureDao.watchCapture('c1').first)!.title, 'Idea');
+
+      await db.captureDao.updateFields('c1', title: 'Sharper idea');
+      expect(
+        (await db.captureDao.watchCapture('c1').first)!.title,
+        'Sharper idea',
+      );
+
+      await db.captureDao.deleteCapture('c1');
+      expect(await db.captureDao.watchCapture('c1').first, isNull);
     });
 
     test('linkOutcome preserves the first link\'s createdAt on a repeat',
@@ -206,6 +256,52 @@ void main() {
 
       final prov = await db.captureDao.watchCapturesForOutcome('o1').first;
       expect(prov.map((c) => c.id).toSet(), {'c1', 'c2'});
+    });
+
+    test('watchHasAnyItem is true for a capture, an outcome, or both',
+        () async {
+      // Empty DB → false.
+      expect(await db.captureDao.watchHasAnyItem().first, isFalse);
+
+      // Capture-only → true.
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+      expect(await db.captureDao.watchHasAnyItem().first, isTrue);
+
+      // Removing the only capture → false again.
+      await db.captureDao.deleteCapture('c1');
+      expect(await db.captureDao.watchHasAnyItem().first, isFalse);
+
+      // Outcome-only (no captures) → true.
+      await _insertOutcome(db, 'o1', 'Outcome');
+      expect(await db.captureDao.watchHasAnyItem().first, isTrue);
+
+      // Both populated → true.
+      await db.captureDao.insertCapture(_capture(id: 'c2', title: 'Another'));
+      expect(await db.captureDao.watchHasAnyItem().first, isTrue);
+    });
+
+    test('watchHasAnyItem re-emits on inserts and deletes in either table',
+        () async {
+      final emissions = <bool>[];
+      final sub = db.captureDao.watchHasAnyItem().listen(emissions.add);
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
+
+      await db.captureDao.insertCapture(_capture(id: 'c1', title: 'Idea'));
+      await pumpEventQueue();
+      await _insertOutcome(db, 'o1', 'Outcome');
+      await pumpEventQueue();
+      // Delete the capture — the outcome still keeps it true.
+      await db.captureDao.deleteCapture('c1');
+      await pumpEventQueue();
+      // Delete the last outcome via the production path — now nothing remains.
+      await db.todoDao.deleteOutcome('o1');
+      await pumpEventQueue();
+
+      expect(emissions.first, isFalse, reason: 'starts empty');
+      expect(emissions.last, isFalse, reason: 'ends empty after both deleted');
+      expect(emissions.contains(true), isTrue,
+          reason: 'reacted to inserts in either table');
     });
 
     test('deterministic junction ids are stable for a pair', () {

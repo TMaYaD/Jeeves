@@ -14,7 +14,7 @@ ProviderContainer _container(GtdDatabase db) => ProviderContainer(
 void main() {
   setUpAll(configureSqliteForTests);
 
-  group('InboxNotifier.addTodo', () {
+  group('InboxNotifier.addCapture', () {
     late GtdDatabase db;
     late ProviderContainer container;
 
@@ -27,28 +27,40 @@ void main() {
       await db.close();
     });
 
-    test('addTodo stores item with clarified = false', () async {
-      await container.read(inboxNotifierProvider).addTodo('Buy milk');
+    test('addCapture stores an unclarified Capture', () async {
+      await container.read(inboxNotifierProvider).addCapture('Buy milk');
 
-      final items = await db.inboxDao.watchInbox().first;
+      final items = await db.captureDao.watchInbox().first;
       expect(items.length, 1);
       expect(items.first.title, 'Buy milk');
-      expect(items.first.clarified, isFalse);
+      // NULL clarified_at is what puts it in the Inbox (ADR-0006).
+      expect(items.first.clarifiedAt, isNull);
       expect(items.first.captureSource, 'manual');
+
+      // Quick-add produces a Capture, never an Outcome: what the item should
+      // become is exactly the question clarification answers later.
+      expect(await db.select(db.todos).get(), isEmpty);
     });
 
-    test('addTodo called twice yields two clarified = false items', () async {
+    test('addCapture called twice yields two Inbox Captures', () async {
       final notifier = container.read(inboxNotifierProvider);
-      await notifier.addTodo('Task one');
-      await notifier.addTodo('Task two');
+      await notifier.addCapture('Task one');
+      await notifier.addCapture('Task two');
 
-      final items = await db.inboxDao.watchInbox().first;
+      final items = await db.captureDao.watchInbox().first;
       expect(items.length, 2);
-      expect(items.every((t) => !t.clarified), isTrue);
+      expect(items.every((c) => c.clarifiedAt == null), isTrue);
+    });
+
+    test('addCapture rejects a blank title', () async {
+      final notifier = container.read(inboxNotifierProvider);
+
+      expect(() => notifier.addCapture('   '), throwsArgumentError);
+      expect(await db.captureDao.watchInbox().first, isEmpty);
     });
 
     test('fresh database has no inbox items', () async {
-      final items = await db.inboxDao.watchInbox().first;
+      final items = await db.captureDao.watchInbox().first;
       expect(items, isEmpty);
     });
   });

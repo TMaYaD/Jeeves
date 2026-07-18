@@ -8,7 +8,7 @@ import '../../../providers/onboarding_provider.dart';
 import '../../../database/gtd_database.dart';
 import '../../../widgets/async_list.dart';
 import '../../../widgets/onboarding_card.dart';
-import 'todo_list_item.dart';
+import 'capture_list_item.dart';
 
 class _TightBouncingScrollPhysics extends BouncingScrollPhysics {
   const _TightBouncingScrollPhysics({super.parent});
@@ -46,7 +46,7 @@ class InboxList extends ConsumerWidget {
 
     return RefreshIndicator(
       onRefresh: onRefresh,
-      child: AsyncList<Todo>(
+      child: AsyncList<Capture>(
         asyncValue: asyncItems,
         emptyTitle: 'No items yet — add something above',
         emptyBuilder: (_) => const _InboxEmptyState(),
@@ -56,8 +56,8 @@ class InboxList extends ConsumerWidget {
           ),
           padding: const EdgeInsets.only(top: 8),
           itemCount: items.length,
-          itemBuilder: (_, index) => TodoListItem(
-            todo: items[index],
+          itemBuilder: (_, index) => CaptureListItem(
+            capture: items[index],
             onTap: () => context.push('/inbox/${items[index].id}/clarify'),
           ),
         ),

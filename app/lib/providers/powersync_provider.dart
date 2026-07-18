@@ -23,6 +23,7 @@ import '../database/powersync_schema.g.dart';
 import '../database/powersync_storage.dart';
 import '../services/api_service.dart';
 import '../services/backend_connector.dart';
+import '../services/migration_service.dart' show migrateLocalInboxToCaptures;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -41,6 +42,14 @@ final FutureProvider<ps.PowerSyncDatabase> powerSyncInstanceProvider =
   ref.keepAlive();
 
   final db = await PowerSyncStorageImpl().openDatabase(powersyncSchema);
+
+  // Carve a local-only user's Inbox out of `todos` into `captures` before
+  // anything reads it (issue #184 Phase 2). A signed-in user gets the
+  // equivalent move server-side from Alembic 0026 and it arrives via sync; a
+  // user who has never signed in has no server to do it, so without this their
+  // Inbox would vanish the moment the UI started reading `captures`. Idempotent
+  // and insert-before-delete, so it is safe on every launch.
+  await migrateLocalInboxToCaptures(db);
 
   // Bridge the current auth state to PowerSync's connection lifecycle.
   // [currentUserIdProvider] holds `'local'` when no-one is logged in and

@@ -22,9 +22,10 @@ import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 
 import '../../test_helpers.dart';
 
+/// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
 Future<void> _insertInbox(GtdDatabase db, String id) async {
   final now = DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.captureDao.insertCapture(CapturesCompanion(
     id: Value(id),
     title: Value('Inbox item $id'),
     userId: const Value('local'),

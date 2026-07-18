@@ -224,7 +224,7 @@ class _ReviewCard extends ConsumerWidget {
         const SizedBox(height: 12),
 
         ProcessToHandlers(
-          todo: task,
+          subject: OutcomeSubject(task),
           include: {
             if (showKeep) ProcessAction.keep,
           },

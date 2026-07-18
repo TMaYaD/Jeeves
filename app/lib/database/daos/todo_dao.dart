@@ -804,4 +804,75 @@ AND (
     await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
     attachedDatabase.notifyTodosViewWrite();
   }
+
+  // ---------------------------------------------------------------------------
+  // Outcome creation / deletion (Capture clarify — issue #184 Phase 2)
+  // ---------------------------------------------------------------------------
+
+  /// Inserts a new **clarified Outcome** row from a clarify-card draft.
+  ///
+  /// This is the create half of clarifying a Capture (ADR-0006): promoting a
+  /// Capture produces a *new* Outcome rather than flipping the raw fragment in
+  /// place. The row lands clarified (`clarified = true`) with `last_clarified_at`
+  /// stamped — Outcome creation is a clarifying micro-act per CONTEXT.md — and a
+  /// default `intent = 'next'`; the caller then refines intent / Completion via
+  /// [applyRouting]. Person and non-person tag associations are attached
+  /// out-of-band by the caller (the clarify service).
+  ///
+  /// [now] is injectable for deterministic testing.
+  Future<void> insertOutcome({
+    required String id,
+    required String title,
+    required String userId,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? captureSource,
+    DateTime? now,
+  }) async {
+    // Normalise to UTC once and reuse for every timestamp column: a non-UTC
+    // injected [now] must not land createdAt/updatedAt in local time while
+    // lastClarifiedAt is UTC. UTC also keeps Drift's storeDateTimeAsText path
+    // emitting standard ISO-8601 strings PowerSync can upload (see
+    // rescheduleTask for the offset-string rationale).
+    final ts = (now ?? DateTime.now()).toUtc();
+    await into(todos).insert(TodosCompanion(
+      id: Value(id),
+      title: Value(title),
+      notes: Value(notes),
+      energyLevel: Value(energyLevel),
+      timeEstimate: Value(timeEstimate),
+      dueDate: dueDate != null ? Value(dueDate.toUtc()) : const Value.absent(),
+      captureSource: Value(captureSource),
+      userId: Value(userId),
+      createdAt: Value(ts),
+      updatedAt: Value(ts),
+      clarified: const Value(true),
+      lastClarifiedAt: Value(ts),
+    ));
+    attachedDatabase.notifyTodosViewWrite();
+  }
+
+  /// Hard-deletes an Outcome by [id]. Used by the Capture clarify flow to
+  /// overwrite a session-created Outcome when the user re-routes a Capture
+  /// (Ceremony Back → re-tap) or discards it — the Capture itself persists as
+  /// provenance, only the just-carved Outcome is removed. Returns 1 if a row
+  /// existed and was deleted, 0 if [id] was already gone.
+  ///
+  /// The affected-row count is derived from a pre-delete existence check, not
+  /// from the delete's return value: in production `todos` is a PowerSync view
+  /// whose INSTEAD OF trigger makes every write report `changes() == 0`, so
+  /// `delete(...).go()` can't distinguish "deleted one row" from "matched
+  /// nothing". Both run in one transaction so the count can't race the delete.
+  Future<int> deleteOutcome(String id) async {
+    return transaction(() async {
+      final existed = await (select(todos)..where((t) => t.id.equals(id)))
+              .getSingleOrNull() !=
+          null;
+      await (delete(todos)..where((t) => t.id.equals(id))).go();
+      attachedDatabase.notifyTodosViewWrite();
+      return existed ? 1 : 0;
+    });
+  }
 }

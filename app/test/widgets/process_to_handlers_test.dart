@@ -94,7 +94,7 @@ Widget _harness(
         body: ListView(
           children: [
             ProcessToHandlers(
-              todo: todo,
+              subject: OutcomeSubject(todo),
               include: include,
               except: except,
               disabled: disabled,

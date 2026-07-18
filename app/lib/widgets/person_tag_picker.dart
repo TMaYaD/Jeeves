@@ -8,20 +8,36 @@ import '../providers/task_detail_provider.dart';
 
 /// Bottom-sheet multi-select picker for person-typed tags (Waiting For).
 ///
-/// Pre-selects the tags already assigned to the todo. On confirm, diffs the
-/// selection and calls [TaskDetailNotifier.assignPersonTag] /
-/// [TaskDetailNotifier.removePersonTag].  Clearing all selections calls
-/// [TaskDetailNotifier.clearAllPersonTags].
+/// Two modes, exactly one of which must be selected by the caller:
+///
+/// - **Write mode** ([todoId] given) — the subject is an existing Outcome.
+///   Pre-selects its assigned tags and, on confirm, diffs the selection and
+///   calls [TaskDetailNotifier.assignPersonTag] /
+///   [TaskDetailNotifier.removePersonTag]. Clearing all selections calls
+///   [TaskDetailNotifier.clearAllPersonTags].
+/// - **Selection-only mode** ([onConfirmSelection] given) — the subject is an
+///   Inbox Capture. Its Outcome does not exist yet (ADR-0006: clarifying a
+///   Capture *creates* the Outcome), so there is no row to attach person tags
+///   to. The sheet writes nothing and hands the chosen set back for
+///   [ClarificationService.clarifyCaptureToOutcome] to apply to the Outcome it
+///   mints.
 class PersonTagPickerSheet extends ConsumerStatefulWidget {
   const PersonTagPickerSheet({
     super.key,
-    required this.todoId,
+    this.todoId,
     required this.assignedPersonTagIds,
     this.onAfterConfirm,
+    this.onConfirmSelection,
     this.requireSelection = false,
-  });
+  }) : assert(
+          (todoId == null) != (onConfirmSelection == null),
+          'Pass todoId to write tags onto an existing Outcome, or '
+          'onConfirmSelection to collect them for a Capture whose Outcome does '
+          'not exist yet — exactly one, never both.',
+        );
 
-  final String todoId;
+  /// The Outcome to write person tags to. Null in selection-only mode.
+  final String? todoId;
 
   /// IDs of person-tags currently assigned to the todo.
   final Set<String> assignedPersonTagIds;
@@ -30,6 +46,10 @@ class PersonTagPickerSheet extends ConsumerStatefulWidget {
   /// Use this to perform caller-specific side-effects (e.g., clarifying an
   /// inbox item) that should only run on explicit confirmation, not on cancel.
   final Future<void> Function()? onAfterConfirm;
+
+  /// Selection-only mode: receives the chosen person-tag ids on "Done"
+  /// instead of the sheet writing them. See the class doc.
+  final Future<void> Function(Set<String> selected)? onConfirmSelection;
 
   /// When true, "Done" is a no-op if no person is selected — prevents routing
   /// without a waiter (e.g., the inbox "Waiting For" destination).
@@ -217,7 +237,17 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
   }
 
   Future<void> _confirm() async {
-    final notifier = ref.read(taskDetailNotifierProvider(widget.todoId));
+    final collect = widget.onConfirmSelection;
+    if (collect != null) {
+      // Selection-only: nothing exists to write to yet. The caller passes the
+      // set straight into clarifyCaptureToOutcome, which attaches it to the
+      // Outcome it creates in the same transaction.
+      await collect(Set.unmodifiable(_selected));
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+
+    final notifier = ref.read(taskDetailNotifierProvider(widget.todoId!));
     final added = _selected.difference(widget.assignedPersonTagIds);
     final removed = widget.assignedPersonTagIds.difference(_selected);
 
@@ -240,9 +270,10 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
 /// [requireSelection] disables "Done" until at least one person is selected.
 Future<void> showPersonTagPicker(
   BuildContext context, {
-  required String todoId,
+  String? todoId,
   required Set<String> assignedPersonTagIds,
   Future<void> Function()? onAfterConfirm,
+  Future<void> Function(Set<String> selected)? onConfirmSelection,
   bool requireSelection = false,
 }) {
   return showModalBottomSheet(
@@ -253,6 +284,7 @@ Future<void> showPersonTagPicker(
       todoId: todoId,
       assignedPersonTagIds: assignedPersonTagIds,
       onAfterConfirm: onAfterConfirm,
+      onConfirmSelection: onConfirmSelection,
       requireSelection: requireSelection,
     ),
   );

@@ -31,9 +31,10 @@ const _skipKey = Key('planning_skip');
 const _nextKey = Key('planning_next_step');
 const _slotKey = Key('planning_footer_slot');
 
+/// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
 Future<void> _insertInbox(GtdDatabase db, String id) async {
   final now = DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.captureDao.insertCapture(CapturesCompanion(
     id: Value(id),
     title: Value('Inbox item $id'),
     userId: const Value('local'),

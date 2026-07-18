@@ -56,7 +56,7 @@ class _MockAuthNotifier extends AuthNotifier {
 // ---------------------------------------------------------------------------
 
 Widget _buildShellOnly({
-  List<Todo> items = const [],
+  List<Capture> items = const [],
   VoidCallback? onLogout,
   FocusSessionPlanningSettings planningSettings =
       const FocusSessionPlanningSettings(bannerEnabled: false),

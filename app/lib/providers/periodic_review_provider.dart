@@ -159,8 +159,10 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     _loadingInboxSnapshot = true;
     state = state.copyWith(clearInboxLoadError: true);
     try {
-      final todos = await _db.inboxDao.watchInbox().first;
-      final ids = todos.reversed.map((t) => t.id).toList();
+      // Captures with `clarified_at IS NULL` (ADR-0006) — the snapshot holds
+      // Capture ids, and the zero-inbox step clarifies each into an Outcome.
+      final captures = await _db.captureDao.watchInbox().first;
+      final ids = captures.reversed.map((c) => c.id).toList();
       state = state.copyWith(inboxNav: state.inboxNav.withItems(ids));
     } catch (e) {
       state = state.copyWith(inboxLoadError: e.toString());

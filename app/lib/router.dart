@@ -122,7 +122,7 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/inbox/:id/clarify',
       builder: (context, state) => InboxClarifyScreen(
-        todoId: state.pathParameters['id']!,
+        captureId: state.pathParameters['id']!,
       ),
     ),
     GoRoute(

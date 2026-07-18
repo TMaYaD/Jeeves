@@ -101,10 +101,73 @@ Future<void> _tapNextAction(WidgetTester tester) async {
   await tester.tap(next);
 }
 
+/// Pumps a bounded number of frames instead of [WidgetTester.pumpAndSettle].
+///
+/// The Capture clarify path writes through the real Drift database, and each
+/// [GtdDatabase.notifyCapturesViewWrite] keeps drift's StreamQueryStore
+/// emitting, so `pumpAndSettle` never reaches a quiet frame — it spins
+/// synchronously and hangs the isolate hard enough that even the per-test
+/// timeout can't fire. Bounded pumping is the same tactic the tag-editing
+/// group's controlled streams use for the Outcome path.
+Future<void> _pumpFrames(WidgetTester tester, {int frames = 40}) async {
+  for (var i = 0; i < frames; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+}
+
+/// Bounded scroll to bring [label] into the viewport, then tap it. The Tags
+/// section pushes the PROCESS TO bar below the fold and a ListView doesn't
+/// build off-screen children.
+Future<void> _scrollAndTap(WidgetTester tester, String label) async {
+  for (var i = 0; i < 15 && find.text(label).evaluate().isEmpty; i++) {
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -200));
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(find.text(label), findsOneWidget,
+      reason: 'the $label button never came into view');
+  // Being *built* isn't enough to be tappable: a ListView builds children
+  // within its cacheExtent while they still sit below the viewport, and a tap
+  // at such a widget's centre hit-tests the empty area instead — silently
+  // doing nothing. ensureVisible scrolls it fully into view first.
+  await tester.ensureVisible(find.text(label));
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.tap(find.text(label));
+}
+
+/// Ids currently in the Inbox, read with a plain select rather than
+/// `CaptureDao.watchInbox().first`. Awaiting a live drift `watch()` inside
+/// `testWidgets` never completes — the test binding owns the clock, so the
+/// stream's first event is never delivered and the isolate hangs hard enough
+/// that the per-test timeout can't fire.
+Future<List<String>> _inboxIds(GtdDatabase db) async {
+  final rows = await (db.select(db.captures)
+        ..where((c) => c.clarifiedAt.isNull()))
+      .get();
+  return [for (final r in rows) r.id];
+}
+
+Future<Capture> _insertCapture(
+  GtdDatabase db, {
+  required String id,
+  String title = 'Buy milk',
+}) async {
+  final now = DateTime.now();
+  await db.captureDao.insertCapture(CapturesCompanion(
+    id: Value(id),
+    title: Value(title),
+    captureSource: const Value('manual'),
+    userId: const Value(_userId),
+    createdAt: Value(now),
+    updatedAt: Value(now),
+  ));
+  return (await db.captureDao.getCapture(id))!;
+}
+
+/// Harness for the re-clarify surface: an Outcome that has already been
+/// through the flow once. Every edit autosaves straight to `todos`.
 Widget _harness(
   GtdDatabase db, {
   required Todo todo,
-  ClarifyMode mode = ClarifyMode.inbox,
   Future<void> Function(ProcessAction)? onAfterRoute,
   List<Tag> contextTags = const <Tag>[],
   List<Tag> projectTags = const <Tag>[],
@@ -128,9 +191,40 @@ Widget _harness(
     ],
     child: MaterialApp(
       home: Scaffold(
-        body: ClarifyCard(
+        body: ClarifyCard.forOutcome(
           todoId: todo.id,
-          mode: mode,
+          onAfterRoute: onAfterRoute,
+        ),
+      ),
+    ),
+  );
+}
+
+/// Harness for the Inbox surface: a Capture on its first pass. Routing creates
+/// a new Outcome rather than editing one (ADR-0006).
+Widget _captureHarness(
+  GtdDatabase db, {
+  required Capture capture,
+  Future<void> Function(ProcessAction)? onAfterRoute,
+  List<Tag> contextTags = const <Tag>[],
+  List<Tag> projectTags = const <Tag>[],
+  Stream<List<Tag>>? tagHintsStream,
+}) {
+  return ProviderScope(
+    overrides: [
+      databaseProvider.overrideWithValue(db),
+      captureProvider(capture.id).overrideWith((_) => Stream.value(capture)),
+      captureTagHintsProvider(capture.id).overrideWith(
+        (_) => tagHintsStream ?? Stream.value(const <Tag>[]),
+      ),
+      personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+      contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
+      projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
+    ],
+    child: MaterialApp(
+      home: Scaffold(
+        body: ClarifyCard.forCapture(
+          captureId: capture.id,
           onAfterRoute: onAfterRoute,
         ),
       ),
@@ -150,39 +244,131 @@ void main() {
     testWidgets(
         'tapping Next does not open NextActionDialog and routes immediately',
         (tester) async {
-      final todo = await _insertInboxTodo(db, id: 'x', title: 'Buy milk');
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
       final fired = <ProcessAction>[];
-      await tester.pumpWidget(_harness(
+      await tester.pumpWidget(_captureHarness(
         db,
-        todo: todo,
+        capture: capture,
         onAfterRoute: (action) async => fired.add(action),
       ));
-      await tester.pumpAndSettle();
+      await _pumpFrames(tester, frames: 5);
 
-      await _tapNextAction(tester);
-      await tester.pumpAndSettle();
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
 
       // Dialog modifier is excepted — no dialog pops.
       expect(find.byType(NextActionDialog), findsNothing);
       // The button reports plain `next`, not the dialog modifier.
       expect(fired, [ProcessAction.next]);
 
-      final row = await db.todoDao.getTodo('x');
+      // Clarifying a Capture *creates* an Outcome rather than flipping a
+      // column (ADR-0006): exactly one, linked back and routed.
+      final outcomeIds = await db.captureDao.outcomeIdsForCapture('x');
+      expect(outcomeIds, hasLength(1));
+      final row = await db.todoDao.getTodo(outcomeIds.single);
       expect(row?.intent, 'next');
       // Title-as-action coupling still mirrors the title into the phrase so
       // the row leaves the inbox with a defined action.
       expect(row?.nextActionText, 'Buy milk');
+      // And the Capture is stamped, so it leaves the Inbox.
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
+      expect(await _inboxIds(db), isEmpty);
+    });
+
+    testWidgets('Trash discards the Capture without creating an Outcome',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'junk', title: 'Noise');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Trash');
+      await _pumpFrames(tester);
+
+      // The behaviour change this phase ships: routing a Capture to Trash is a
+      // stamp-only discard, not a created-then-trashed Outcome. Nothing lands
+      // on the Trash List, which stays a record of Outcomes.
+      expect(await db.select(db.todos).get(), isEmpty);
+      expect(await db.captureDao.outcomeIdsForCapture('junk'), isEmpty);
+      // The Capture itself survives as the record of the discard.
+      expect((await db.captureDao.getCapture('junk'))!.clarifiedAt, isNotNull);
+      expect(await _inboxIds(db), isEmpty);
+      expect(fired, [ProcessAction.trash]);
+    });
+
+    testWidgets(
+        'a tag added just before routing still reaches the new Outcome',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'racy', title: 'Ship it');
+      final ctx = await _insertTag(db, id: 'c1', name: 'work', type: 'context');
+
+      // A controller that emits the initial (empty) hints and nothing more —
+      // standing in for the real stream not having caught up yet. The picker
+      // callback's DAO write is `unawaited`, so without a synchronously
+      // maintained draft the route below would carry the pre-tap hints and
+      // silently drop the tag from the Outcome.
+      final hints = StreamController<List<Tag>>();
+      addTearDown(hints.close);
+      hints.add(const <Tag>[]);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        contextTags: [ctx],
+        tagHintsStream: hints.stream,
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.ensureVisible(find.text('@work'));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.text('@work'));
+      await tester.pump();
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      final outcomeId =
+          (await db.captureDao.outcomeIdsForCapture('racy')).single;
+      expect(await _joinedTagIds(db, outcomeId), contains('c1'));
+    });
+
+    testWidgets('tag hints on the Capture seed the new Outcome\'s tags',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'hinted', title: 'Ship it');
+      final ctx = await _insertTag(db, id: 'c1', name: 'work', type: 'context');
+      await db.captureDao.assignTagHint('hinted', 'c1', _userId);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        contextTags: [ctx],
+        tagHintsStream: Stream.value([ctx]),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      final outcomeId =
+          (await db.captureDao.outcomeIdsForCapture('hinted')).single;
+      expect(await _joinedTagIds(db, outcomeId), contains('c1'),
+          reason: 'a tag hint is a hint *for* clarification — it carries onto '
+              'the Outcome the Capture becomes');
     });
   });
 
-  group('ClarifyCard — title-as-action mirror is mode-aware', () {
+  group('ClarifyCard — re-clarify does not clobber a deliberate phrase', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
     testWidgets(
-        'reclarify mode does NOT clobber an existing next_action_text',
+        're-clarify does NOT clobber an existing next_action_text',
         (tester) async {
       // Seed a previously-clarified row that already has a deliberate phrase.
       final now = DateTime.now();
@@ -201,7 +387,6 @@ void main() {
       await tester.pumpWidget(_harness(
         db,
         todo: todo,
-        mode: ClarifyMode.reclarify,
       ));
       await tester.pumpAndSettle();
 
@@ -210,13 +395,13 @@ void main() {
 
       final row = await db.todoDao.getTodo('rc-mirror-1');
       expect(row?.nextActionText, 'Email guest list',
-          reason: 'reclarify must not overwrite a deliberate phrase with the '
+          reason: 're-clarify must not overwrite a deliberate phrase with the '
               'title');
       expect(row?.intent, 'next');
     });
 
     testWidgets(
-        'reclarify mode DOES set next_action_text from title when previously '
+        're-clarify DOES set next_action_text from title when previously '
         'empty', (tester) async {
       await _insertInboxTodo(
         db,
@@ -232,7 +417,6 @@ void main() {
       await tester.pumpWidget(_harness(
         db,
         todo: fresh,
-        mode: ClarifyMode.reclarify,
       ));
       await tester.pumpAndSettle();
 
@@ -241,7 +425,7 @@ void main() {
 
       final row = await db.todoDao.getTodo('rc-mirror-2');
       expect(row?.nextActionText, 'Decide on venue',
-          reason: 'an empty next_action_text in reclarify mode is filled from '
+          reason: 'an empty next_action_text on re-clarify is filled from '
               'the title so the row leaves with a defined action');
     });
   });

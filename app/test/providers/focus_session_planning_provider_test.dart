@@ -48,19 +48,29 @@ ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       ],
     );
 
+/// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
 Future<void> _insertInboxItem(
   GtdDatabase db, {
   required String id,
   DateTime? createdAt,
 }) async {
   final now = createdAt ?? DateTime.now();
-  await db.inboxDao.insertTodo(TodosCompanion(
+  await db.captureDao.insertCapture(CapturesCompanion(
     id: Value(id),
     title: Value('Item $id'),
     userId: const Value('local'),
     createdAt: Value(now),
     updatedAt: Value(now),
   ));
+}
+
+/// The Outcome a Capture was clarified into, or null if it produced none
+/// (a discard). Clarifying creates a *new* row, so assertions read through
+/// the provenance link rather than re-reading the Capture's id.
+Future<Todo?> _outcomeOf(GtdDatabase db, String captureId) async {
+  final ids = await db.captureDao.outcomeIdsForCapture(captureId);
+  if (ids.isEmpty) return null;
+  return db.todoDao.getTodo(ids.single);
 }
 
 void main() {
@@ -175,9 +185,9 @@ void main() {
       expect(state.inboxNav.index, equals(1),
           reason: 'Index advanced exactly once');
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      expect(await db.captureDao.outcomeIdsForCapture('item-1'), hasLength(1),
+          reason: 'a raced double-tap must not carve two Outcomes');
+      final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
     });
 
@@ -197,9 +207,9 @@ void main() {
           reason: 'Routing recorded exactly once for index 0');
       expect(state.inboxNav.index, equals(1));
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-2')))
-          .getSingle();
+      expect(await db.captureDao.outcomeIdsForCapture('item-2'), hasLength(1),
+          reason: 'a raced double-tap must not carve two Outcomes');
+      final row = (await _outcomeOf(db, 'item-2'))!;
       expect(row.clarified, isTrue);
       expect(row.intent, 'maybe');
     });
@@ -354,11 +364,10 @@ void main() {
       expect(state.inboxNav.index, 1);
       expect(state.inboxRoutings, isEmpty);
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
-      expect(row.clarified, isFalse,
-          reason: 'skip must not write to DB');
+      expect(await _outcomeOf(db, 'item-1'), isNull,
+          reason: 'skip must not mint an Outcome');
+      expect((await db.captureDao.getCapture('item-1'))!.clarifiedAt, isNull,
+          reason: 'skip leaves the Capture in the Inbox');
     });
 
     test('processInboxItem writes to DB, advances index, and records routing',
@@ -373,9 +382,7 @@ void main() {
       expect(state.inboxNav.index, 1);
       expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
     });
 
@@ -391,9 +398,7 @@ void main() {
       expect(state.inboxNav.index, 1);
       expect(state.inboxRoutings[0], equals(RoutingKind.maybe));
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
       expect(row.intent, 'maybe');
     });
@@ -410,9 +415,7 @@ void main() {
       expect(state.inboxNav.index, 1);
       expect(state.inboxRoutings[0], equals(RoutingKind.done));
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.doneAt, isNotNull);
     });
 
@@ -427,9 +430,7 @@ void main() {
 
       // After Back, the prior routing remains in DB and in inboxRoutings so
       // the "previously selected" affordance can render.
-      final afterBack = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final afterBack = (await _outcomeOf(db, 'item-1'))!;
       expect(afterBack.clarified, isTrue,
           reason: 'Back must not revert DB state');
       expect(afterBack.intent, 'maybe');
@@ -439,9 +440,7 @@ void main() {
       // Re-tapping a different destination triggers the revert + re-apply.
       await notifier.processInboxItem('item-1', title: 'Test item');
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
       expect(row.intent, 'next',
           reason: 'revert restored prior intent before re-routing');
@@ -450,15 +449,13 @@ void main() {
       expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
     });
 
-    test('revert does not modify title, notes, energy, time estimate, due date',
+    test('revert does not modify the Capture-carried title and notes',
         () async {
       final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
+      await db.captureDao.insertCapture(CapturesCompanion(
         id: const Value('rich-item'),
         title: const Value('My task'),
         notes: const Value('some notes'),
-        energyLevel: const Value('high'),
-        timeEstimate: const Value(30),
         userId: const Value('local'),
         createdAt: Value(now),
         updatedAt: Value(now),
@@ -470,13 +467,13 @@ void main() {
       notifier.previousInboxItem();
       await notifier.processInboxItemToMaybe('rich-item');
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('rich-item')))
-          .getSingle();
+      final row = (await _outcomeOf(db, 'rich-item'))!;
       expect(row.title, 'My task');
       expect(row.notes, 'some notes');
-      expect(row.energyLevel, 'high');
-      expect(row.timeEstimate, 30);
+      // Energy and time estimate are deliberately absent: they are Outcome
+      // attributes a Capture has no column for (ADR-0006). The clarify card
+      // supplies them in its draft; this provider-level path carries only
+      // what the Capture itself holds.
     });
 
     test('re-routing to a different destination undoes prior routing side effects',
@@ -493,9 +490,7 @@ void main() {
       // Re-route to Next Action — the handler reverts maybe before applying.
       await notifier.processInboxItem('item-1', title: 'Test item');
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
       expect(row.intent, 'next',
           reason: 'revert restored prior intent before next_action routing');
@@ -514,9 +509,7 @@ void main() {
       notifier.previousInboxItem();
       await notifier.processInboxItem('item-1', title: 'Test item');
 
-      final row = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.doneAt, isNull);
       expect(row.clarified, isTrue);
     });
@@ -529,16 +522,12 @@ void main() {
       await notifier.loadInboxSnapshot();
 
       await notifier.processInboxItem('item-1', title: 'Test item');
-      final beforeRow = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final beforeRow = (await _outcomeOf(db, 'item-1'))!;
 
       notifier.previousInboxItem();
       await notifier.processInboxItem('item-1', title: 'Test item'); // same destination
 
-      final afterRow = await (db.select(db.todos)
-            ..where((t) => t.id.equals('item-1')))
-          .getSingle();
+      final afterRow = (await _outcomeOf(db, 'item-1'))!;
 
       expect(afterRow.clarified, equals(beforeRow.clarified));
       expect(afterRow.intent, equals(beforeRow.intent));
@@ -593,9 +582,12 @@ void main() {
     });
 
     test(
-        'revert preserves pre-existing person tags (no data loss from import/sync)',
+        'a person tag hint survives re-routing (no data loss from import/sync)',
         () async {
-      // Inbox item with a pre-existing person-tag association (e.g. from sync).
+      // A Nirvana import records a WAITINGFOR person as a Capture tag *hint*
+      // (REQUIREMENTS.md), so the delegate must ride through clarification —
+      // and through a re-route, which discards the first Outcome and carves a
+      // fresh one.
       await _insertInboxItem(db, id: 'item-1');
       await db.tagDao.upsertTag(const TagsCompanion(
         id: Value('alice'),
@@ -603,20 +595,49 @@ void main() {
         type: Value('person'),
         userId: Value('local'),
       ));
-      await db.tagDao.assignTag('item-1', 'alice', 'local');
+      await db.captureDao.assignTagHint('item-1', 'alice', 'local');
 
       final notifier = container.read(focusSessionPlanningProvider.notifier);
       await notifier.loadInboxSnapshot();
 
-      // Route to maybe, then re-route to next_action — the in-handler revert
-      // path runs and must NOT drop the pre-existing 'alice' tag.
       await notifier.processInboxItemToMaybe('item-1');
       notifier.previousInboxItem();
       await notifier.processInboxItem('item-1', title: 'Test item');
 
-      final tagIds = await db.todoDao.getPersonTagIdsForTodo('item-1');
+      // Read through the provenance link: the re-route minted a new Outcome,
+      // so asserting against the Capture's id would pass without testing
+      // anything.
+      final outcome = (await _outcomeOf(db, 'item-1'))!;
+      final tagIds = await db.todoDao.getPersonTagIdsForTodo(outcome.id);
       expect(tagIds, contains('alice'),
-          reason: 'pre-existing person tag must survive revert');
+          reason: 'the delegate hint must survive onto the re-routed Outcome');
+    });
+
+    test('Waiting For carries the picker\'s delegates onto the new Outcome',
+        () async {
+      await _insertInboxItem(db, id: 'item-1');
+      await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('bob'),
+        name: Value('Bob'),
+        type: Value('person'),
+        userId: Value('local'),
+      ));
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      await notifier.loadInboxSnapshot();
+      await notifier.processInboxItemToWaitingFor(
+        'item-1',
+        title: 'Chase the invoice',
+        personTagIds: {'bob'},
+      );
+
+      // No Outcome exists before this call, so the delegates cannot have been
+      // assigned beforehand — routing without them would land the Outcome on
+      // Next and never on Waiting For.
+      final outcome = (await _outcomeOf(db, 'item-1'))!;
+      expect(await db.todoDao.getPersonTagIdsForTodo(outcome.id),
+          contains('bob'));
+      expect(outcome.intent, 'next');
     });
 
     test('routing bails out when the snapshot row was deleted before apply',
@@ -627,7 +648,7 @@ void main() {
       await notifier.loadInboxSnapshot();
 
       // External delete lands AFTER snapshot load but BEFORE routing.
-      await (db.delete(db.todos)..where((t) => t.id.equals('item-1'))).go();
+      await db.captureDao.deleteCapture('item-1');
 
       // Routing must not advance the cursor or record a phantom routing.
       await notifier.processInboxItem('item-1', title: 'Test item');
@@ -1084,7 +1105,7 @@ void main() {
     Future<String> insertInboxTask(String title) async {
       final now = DateTime.now();
       final id = 'inbox-${now.microsecondsSinceEpoch}';
-      await db.inboxDao.insertTodo(TodosCompanion(
+      await db.captureDao.insertCapture(CapturesCompanion(
         id: Value(id),
         title: Value(title),
         userId: const Value(userId),
@@ -1100,7 +1121,7 @@ void main() {
 
       await notifier.processInboxItem(id, title: 'Buy milk');
 
-      final todo = await db.todoDao.getTodo(id);
+      final todo = await _outcomeOf(db, id);
       expect(todo?.nextActionText, 'Buy milk');
       expect(todo?.clarified, isTrue);
     });
@@ -1124,7 +1145,7 @@ void main() {
 
       await notifier.processInboxItemToMaybe(id);
 
-      final todo = await db.todoDao.getTodo(id);
+      final todo = await _outcomeOf(db, id);
       expect(todo?.intent, 'maybe');
       expect(todo?.clarified, isTrue);
     });
