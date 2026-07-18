@@ -1059,5 +1059,61 @@ void main() {
       final row = await db.todoDao.getTodo('rc4');
       expect(row, isNull);
     });
+
+    testWidgets(
+        'backing out of a sub-flow whose Outcome was deleted still advances '
+        'the outer cursor (#428)', (tester) async {
+      // The CTA pops `keep` explicitly, but the AppBar arrow and system back
+      // stay reachable on the missing panel and pop with *no* result. That
+      // null used to route through `_keep()`, whose opening existence check
+      // fails on precisely the row that was just deleted — so it returned
+      // early, never bubbled, and left the user on the outer card for a dead
+      // item. Same dead end as the CTA case, reached by a different gesture.
+      await useTallViewport(tester);
+      final todo = await _insertTodo(db, id: 'rc5', title: 'Doomed outcome');
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+      final fired = <ProcessAction>[];
+
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        include: const {ProcessAction.reclarify},
+        onAfterRoute: (action) async => fired.add(action),
+        todoStream: subject.stream,
+      ));
+
+      await tester.tap(find.text('Re-clarify…'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      subject.add(todo);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.widgetWithText(TextField, 'Doomed outcome'), findsOneWidget);
+
+      await (db.delete(db.todos)..where((t) => t.id.equals('rc5'))).go();
+      subject.add(null);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('This outcome no longer exists'), findsOneWidget);
+
+      // Back out via the AppBar arrow rather than the CTA — pops with no
+      // result, which is the path the CTA's explicit `pop(keep)` bypasses.
+      await tester.pageBack();
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(find.byType(ClarifyCard), findsNothing,
+          reason: 'backing out closes the sub-flow');
+      expect(fired, [ProcessAction.keep],
+          reason: 'a back-out on a deleted subject must still advance the '
+              'cursor, not strand the user on the outer card');
+      expect(await db.todoDao.getTodo('rc5'), isNull,
+          reason: 'and must not stamp or resurrect the deleted row');
+    });
   });
 }

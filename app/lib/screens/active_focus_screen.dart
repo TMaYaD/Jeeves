@@ -80,8 +80,20 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
   Future<void> _onComplete(String todoId) async {
     _notificationTimer?.cancel();
-    ref.read(notificationServiceProvider).cancelFocusNotification();
-    ref.read(sprintTimerProvider.notifier).stopSprint().ignore();
+    // Both are best-effort — completing the task must not fail because a
+    // notification could not be cancelled — but they are awaited and logged
+    // through [_tryTeardownStep] rather than left as bare discarded futures,
+    // so a throw cannot surface as an unhandled async error after this method
+    // has already moved on.
+    await _tryTeardownStep(
+      'cancel focus notification',
+      () => ref.read(notificationServiceProvider).cancelFocusNotification(),
+    );
+    await _tryTeardownStep(
+      'stop sprint',
+      () => ref.read(sprintTimerProvider.notifier).stopSprint(),
+    );
+    if (!mounted) return;
     final db = ref.read(databaseProvider);
     await db.todoDao.markDone(todoId);
     await ref.read(focusModeProvider.notifier).endFocus();
@@ -120,10 +132,51 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
   /// Stops the sprint and returns to the focus list without completing the task.
   Future<void> _onStop(String todoId) async {
     _notificationTimer?.cancel();
-    ref.read(notificationServiceProvider).cancelFocusNotification();
-    await ref.read(sprintTimerProvider.notifier).stopSprint();
+    // Each step is attempted regardless of the ones before it, for the same
+    // reason the missing-task bounce does it: chained, the least important
+    // failure suppresses the two that matter. A notification cancel that threw
+    // used to skip both `stopSprint` and `endFocus`, so the one control the
+    // user has for ending a sprint would leave it running — and tapping Stop
+    // again would fail identically, which is not the "visible and retryable"
+    // recovery this path was documented to offer.
+    //
+    // Only `endFocus` failing is worth throwing over, and that asymmetry is
+    // about what the user can still do. Focus mode is what keeps this screen
+    // reachable, so if clearing it fails the user is genuinely stuck on a
+    // sprint they asked to end, and the failure has to surface. The other two
+    // are cleanup: by the time they are known to have failed, a successful
+    // `endFocus` has already cleared `activeTodoId`, which redirects and
+    // unmounts this screen — so re-throwing would raise an error about a
+    // screen the user has left, over work they cannot retry, having navigated
+    // away regardless. Those are logged instead.
+    Object? cleanupError;
+    Future<void> attempt(String label, Future<void> Function() step) async {
+      try {
+        await step();
+      } catch (e, s) {
+        cleanupError ??= e;
+        debugPrint('Stop teardown step "$label" failed: $e\n$s');
+      }
+    }
+
+    await attempt(
+      'cancel focus notification',
+      () => ref.read(notificationServiceProvider).cancelFocusNotification(),
+    );
+    await attempt(
+      'stop sprint',
+      () => ref.read(sprintTimerProvider.notifier).stopSprint(),
+    );
+    // Deliberately unguarded: this is the one whose failure must reach the
+    // caller.
     await ref.read(focusModeProvider.notifier).endFocus();
+
     if (!mounted) return;
+    if (cleanupError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Focus ended, but cleanup was partial.')),
+      );
+    }
     context.go('/focus');
   }
 
@@ -197,13 +250,17 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(
-          // On failure the sprint may still be running, so the copy must not
-          // claim otherwise — it points at the control that can finish the job.
+          // The failure copy stops short of claiming focus ended, but it no
+          // longer sends the user to "Stop on the focus screen" either: every
+          // stop control lives behind an active focus mode, so that advice was
+          // unreachable precisely when it was offered. `stopSprint` now clears
+          // local sprint state even when it throws, so what a failure leaves
+          // behind is incomplete cleanup, not a sprint the user must chase.
           content: Text(
             endedCleanly
                 ? 'That task no longer exists — focus ended.'
-                : 'That task no longer exists. Ending focus failed — try Stop '
-                    'on the focus screen.',
+                : 'That task no longer exists. Focus may not have closed '
+                    'cleanly.',
           ),
         ),
       );

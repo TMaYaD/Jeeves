@@ -191,6 +191,47 @@ void main() {
       expect(find.byType(CircularProgressIndicator), findsNothing);
     });
 
+    testWidgets(
+        'a null that then errors shows the error, not the missing panel',
+        (tester) async {
+      // The retained-value exemption is keyed on holding an actual row. A watch
+      // that emitted `null` and then failed retains the null, so gating the
+      // error branch on bare `hasValue` would render the *missing* panel: the
+      // surface would claim the row was deleted when the read merely failed,
+      // and offer an escape premised on that. Mirrors the empty-list case in
+      // async_list_test.dart.
+      final controller = StreamController<String?>.broadcast();
+      addTearDown(controller.close);
+      late AsyncValue<String?> observed;
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [_rowProvider.overrideWith((ref) => controller.stream)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Consumer(builder: (context, ref, _) {
+              observed = ref.watch(_rowProvider);
+              return _subject(observed);
+            }),
+          ),
+        ),
+      ));
+      controller.add(null);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('This item no longer exists'), findsOneWidget);
+
+      controller.addError(Exception('SecretInternalDetail'));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(observed.hasError, isTrue);
+      expect(find.textContaining('Something went wrong'), findsOneWidget);
+      expect(find.text('This item no longer exists'), findsNothing);
+      expect(find.textContaining('SecretInternalDetail'), findsNothing);
+    });
+
     testWidgets('AsyncData(null) renders the missing panel, NOT a spinner',
         (tester) async {
       await tester.pumpWidget(_wrap(_subject(const AsyncData<String?>(null))));

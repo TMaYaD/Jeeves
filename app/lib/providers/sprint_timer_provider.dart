@@ -168,6 +168,18 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   DateTime? _endTime;
   int? _overtimeStartMs;
 
+  /// Bumped by [stopSprint]. Every other transition captures it on entry and
+  /// re-checks after each await via [_superseded], so an operation that was
+  /// already in flight when a stop landed cannot write state, re-persist the
+  /// sprint or restart the ticker afterwards. See [stopSprint] for why it
+  /// cannot simply refuse to run while another transition holds the floor.
+  int _stopGeneration = 0;
+
+  /// Whether a [stopSprint] has landed since [gen] was captured — meaning the
+  /// caller is finishing work about a sprint that no longer exists and must
+  /// abandon it rather than write.
+  bool _superseded(int gen) => gen != _stopGeneration;
+
   @override
   SprintTimerState build() {
     ref.onDispose(() => _ticker?.cancel());
@@ -193,6 +205,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   /// Starts a focus sprint for [task] using the currently configured durations.
   Future<void> startSprint(Todo task) async {
     if (state.isProcessing) return;
+    final gen = _stopGeneration;
     state = state.copyWith(isProcessing: true);
     try {
       _ticker?.cancel();
@@ -212,6 +225,8 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
           .timeLogDao
           .totalMinutesForTask(task.id);
       final sprintNumber = _calcSprintNumber(totalMinutes, sm);
+      // Two awaits happened above; a stop may have landed while they ran.
+      if (_superseded(gen)) return;
       _endTime = DateTime.now().add(sprintDur);
 
       // Carry forward lastBreakEndedAt so post-break cooldown survives
@@ -230,73 +245,149 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       );
 
       await _persist();
+      // A stop cancels pending notifications, so one scheduled after it
+      // outlives the sprint it belongs to.
+      if (_superseded(gen)) return;
       await _scheduleEndNotification(
           _endTime!, isFocus: true, taskTitle: task.title);
+      // Re-check before arming the ticker: a stop during the awaits above has
+      // already cancelled it, and starting it again here would leave it
+      // ticking on a sprint that is over. A stop landing mid-schedule also
+      // cancels nothing, so undo the late notification too (see [_startBreak]).
+      if (_superseded(gen)) {
+        await _cancelSprintNotifications();
+        return;
+      }
       _startTicker();
     } finally {
-      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+      // Only the owning transition clears the flag. A superseded one bailing
+      // out here would otherwise clear an `isProcessing` that the [stopSprint]
+      // which superseded it had set and still owns.
+      if (!_superseded(gen) && state.isProcessing) {
+        state = state.copyWith(isProcessing: false);
+      }
     }
   }
 
   /// Ends the current sprint early and starts a break.
   Future<void> startBreak() async {
     if (!state.isFocus || state.isProcessing) return;
+    final gen = _stopGeneration;
     state = state.copyWith(isProcessing: true);
     try {
       _ticker?.cancel();
       HapticFeedback.lightImpact();
       await _cancelSprintNotifications();
+      if (_superseded(gen)) return;
       state = state.copyWith(isProcessing: false);
-      await _startBreak();
+      await _startBreak(gen: gen);
     } finally {
-      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+      // Only the owning transition clears the flag. A superseded one bailing
+      // out here would otherwise clear an `isProcessing` that the [stopSprint]
+      // which superseded it had set and still owns.
+      if (!_superseded(gen) && state.isProcessing) {
+        state = state.copyWith(isProcessing: false);
+      }
     }
   }
 
   /// Stops the sprint and returns to idle. The open time log is closed by
   /// [FocusSessionDao.setCurrentTask] when [FocusModeNotifier.endFocus] is called.
+  /// Stopping is terminal, which makes it the one transition that must always
+  /// run to completion. Three things follow, each of which used to be wrong:
+  ///
+  /// - **No `isProcessing` early-return.** The other transitions bail when one
+  ///   is already in flight, but a stop that bails is a silent no-op its caller
+  ///   cannot tell apart from a successful stop — so the missing-task teardown
+  ///   would report the sprint ended and clear focus mode while it kept
+  ///   running. A stop issued mid-operation wins instead.
+  /// - **The two cleanups are attempted independently.** Chaining them let the
+  ///   less important failure suppress the one that matters: a notification
+  ///   channel throwing would skip `_clearPrefs`, leaving the sprint on disk
+  ///   for `_restoreFromPrefs` to resurrect on the next launch.
+  /// - **The local reset is unconditional.** It used to sit after both awaits,
+  ///   so a throw left the state reporting `isActive` — a sprint the UI still
+  ///   counted as running with nothing able to stop it, since every stop
+  ///   control lives behind an active focus mode the caller has usually just
+  ///   cleared.
+  ///
+  /// The first failure still propagates, so callers that report teardown
+  /// failure keep doing so; what changes is that they no longer report it *and*
+  /// strand a phantom sprint.
   Future<void> stopSprint() async {
-    if (state.isProcessing) return;
+    // Supersede every transition currently in flight. Without the
+    // `isProcessing` early-return, a stop can now interleave with one — and a
+    // transition resumes after its awaits holding values computed before the
+    // stop, so it would happily re-arm the ticker and re-persist the sprint it
+    // was told to abandon, resurrecting it on the next launch. Bumping the
+    // generation makes every such resumption a no-op; see [_superseded].
+    _stopGeneration++;
     state = state.copyWith(isProcessing: true);
+    _ticker?.cancel();
+    HapticFeedback.mediumImpact();
+    Object? firstError;
+    StackTrace? firstStack;
     try {
-      _ticker?.cancel();
-      HapticFeedback.mediumImpact();
       await _cancelSprintNotifications();
+    } catch (e, s) {
+      firstError = e;
+      firstStack = s;
+    }
+    try {
       await _clearPrefs();
-      state = const SprintTimerState();
-    } finally {
-      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+    } catch (e, s) {
+      firstError ??= e;
+      firstStack ??= s;
+    }
+    state = const SprintTimerState();
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStack!);
     }
   }
 
   /// Records a completed sprint, logs time to the task, then starts the break.
   Future<void> completeSprint() async {
     if (state.isProcessing) return;
+    final gen = _stopGeneration;
     state = state.copyWith(isProcessing: true);
     try {
       _ticker?.cancel();
       HapticFeedback.heavyImpact();
       await _cancelSprintNotifications();
-      await _startBreak();
+      if (_superseded(gen)) return;
+      await _startBreak(gen: gen);
     } finally {
-      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+      // Only the owning transition clears the flag. A superseded one bailing
+      // out here would otherwise clear an `isProcessing` that the [stopSprint]
+      // which superseded it had set and still owns.
+      if (!_superseded(gen) && state.isProcessing) {
+        state = state.copyWith(isProcessing: false);
+      }
     }
   }
 
   /// Skips the break and starts the next sprint immediately (works from break_ or breakOvertime).
   Future<void> skipBreak() async {
     if (!state.isBreak || state.isProcessing) return;
+    final gen = _stopGeneration;
     state = state.copyWith(isProcessing: true);
     try {
       _ticker?.cancel();
       HapticFeedback.lightImpact();
       await _cancelSprintNotifications();
+      if (_superseded(gen)) return;
       final now = DateTime.now();
       await _persistLastBreakEndedAt(now);
+      if (_superseded(gen)) return;
       state = state.copyWith(isProcessing: false, lastBreakEndedAt: now);
-      await _startNextSprint();
+      await _startNextSprint(gen: gen);
     } finally {
-      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+      // Only the owning transition clears the flag. A superseded one bailing
+      // out here would otherwise clear an `isProcessing` that the [stopSprint]
+      // which superseded it had set and still owns.
+      if (!_superseded(gen) && state.isProcessing) {
+        state = state.copyWith(isProcessing: false);
+      }
     }
   }
 
@@ -305,7 +396,12 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   // ---------------------------------------------------------------------------
 
   Future<void> _restoreFromPrefs() async {
+    // `build()` fires this without awaiting it, so a stop issued during the
+    // first frames can land while the prefs read is in flight — after which
+    // restoring would put back the very sprint that was just cleared.
+    final gen = _stopGeneration;
     final prefs = await SharedPreferences.getInstance();
+    if (_superseded(gen)) return;
     final activeTaskId = prefs.getString(_kPrefActiveTaskId);
 
     // Restore lastBreakEndedAt regardless of whether a sprint is active.
@@ -449,13 +545,20 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
+  /// [gen] threads the caller's [_stopGeneration] through, so a stop that lands
+  /// mid-break-start cannot be undone by this method re-persisting the break
+  /// after it. Defaults to the current generation for the restore path, which
+  /// runs before any transition is in flight.
   Future<void> _startBreak({
     DateTime? endTime,
     Duration? remaining,
     int? sm,
     int? bm,
     DateTime? lastBreakEndedAt,
+    int? gen,
   }) async {
+    final g = gen ?? _stopGeneration;
+    if (_superseded(g)) return;
     final breakMin = bm ?? state.breakDurationMinutes;
     final sprintMin = sm ?? state.sprintDurationMinutes;
     final breakDur = Duration(minutes: breakMin);
@@ -470,13 +573,32 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       breakDurationMinutes: breakMin,
     );
     final prefs = await SharedPreferences.getInstance();
+    // A stop between the state write above and this persist would otherwise be
+    // undone on disk — the sprint would be gone from memory but back on the
+    // next launch.
+    if (_superseded(g)) return;
     await prefs.setString(_kPrefEndTime, _endTime!.toIso8601String());
     await prefs.setString(_kPrefPhase, _kPhaseBreak);
+    // Checked either side of the schedule. Before, because a stop already
+    // landed means there is nothing to schedule for. After, because the stop
+    // may land *while* this call is in flight — its cancellation then runs
+    // against a notification that does not exist yet, and the schedule lands
+    // afterwards, outliving the sprint it belongs to. The OS would fire
+    // "break over" for a break that was stopped, so the superseded transition
+    // cleans up the one side effect only it knows it created.
+    if (_superseded(g)) return;
     await _scheduleEndNotification(_endTime!, isFocus: false);
+    if (_superseded(g)) {
+      await _cancelSprintNotifications();
+      return;
+    }
     _startTicker();
   }
 
-  Future<void> _startNextSprint() async {
+  /// [gen] threads the caller's generation through — see [_startBreak].
+  Future<void> _startNextSprint({int? gen}) async {
+    final g = gen ?? _stopGeneration;
+    if (_superseded(g)) return;
     final sm = state.sprintDurationMinutes;
     final bm = state.breakDurationMinutes;
     final sprintDur = Duration(minutes: sm);
@@ -497,11 +619,20 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       lastBreakEndedAt: state.lastBreakEndedAt,
     );
     await _persist();
+    // See [_startBreak]: a notification scheduled after a stop outlives the
+    // sprint it belongs to.
+    if (_superseded(g)) return;
     await _scheduleEndNotification(
       _endTime!,
       isFocus: true,
       taskTitle: state.activeTaskTitle ?? '',
     );
+    // See [_startBreak]: a stop landing mid-schedule cancels nothing, so the
+    // superseded transition undoes its own late notification.
+    if (_superseded(g)) {
+      await _cancelSprintNotifications();
+      return;
+    }
     _startTicker();
   }
 

@@ -68,12 +68,20 @@ class AsyncList<T> extends StatelessWidget {
     // would *also* replace a list the user is already reading with a spinner
     // the moment its watch errors or reloads.
     //
-    // Order is error → loading → empty → data, keyed on `hasValue`, which is
-    // exactly what [AsyncSubject] does; see *Async surfaces* in
-    // ARCHITECTURE.md. A watch that still holds rows is exempt from both the
-    // error and the loading surface: showing the last known rows beats
-    // blanking them mid-retry.
-    if (asyncValue.hasError && !asyncValue.hasValue) {
+    // Order is error → loading → empty → data, which is exactly what
+    // [AsyncSubject] does; see *Async surfaces* in ARCHITECTURE.md. A watch
+    // that still holds rows is exempt from both the error and the loading
+    // surface: showing the last known rows beats blanking them mid-retry.
+    //
+    // That exemption is keyed on having rows to *show*, not merely on
+    // `hasValue`. A watch that emitted `[]` and then errored retains the empty
+    // list, so a bare `hasValue` test would skip this branch and render
+    // "nothing here yet" — reporting an empty list when the truth is that the
+    // read failed, which makes an empty inbox indistinguishable from a broken
+    // one. An empty retained value has nothing worth preserving.
+    final hasRenderableRows =
+        asyncValue.hasValue && asyncValue.value!.isNotEmpty;
+    if (asyncValue.hasError && !hasRenderableRows) {
       debugPrint(
           'AsyncList error: ${asyncValue.error}\n${asyncValue.stackTrace}');
       return const ErrorSurface();

@@ -89,6 +89,10 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// (docs/TESTING.md).
   Set<String> _hintTagIds = const <String>{};
 
+  /// Whether [_loadHints] has finished — resolved *or* failed. Gates the four
+  /// Outcome-creating routes; see [_loadHints] for why.
+  bool _hintsSettled = false;
+
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
   @override
@@ -107,6 +111,14 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// so the screen stays usable and the user loses tag seeding rather than the
   /// ability to clarify. A missing Capture is no longer this method's problem
   /// — the watch renders it as the missing state.
+  ///
+  /// Either way this settles [_hintsSettled], which ungates the routing
+  /// buttons. Until it does, the four Outcome-creating routes are disabled:
+  /// the hints ride the draft into `clarifyCaptureToOutcome`, so a tap landing
+  /// first would mint an Outcome missing every tag the Capture carried, with
+  /// nothing on screen to suggest anything was lost. This screen used to load
+  /// the hints alongside the Capture behind one spinner; binding the Capture
+  /// to a watch left them racing.
   Future<void> _loadHints() async {
     try {
       final hints = await ref
@@ -121,13 +133,17 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
           for (final t in hints)
             if (t.type != 'person') t.id,
         };
+        _hintsSettled = true;
       });
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Couldn't load this item's tags.")),
-        );
-      }
+      if (!mounted) return;
+      // Settle on failure too. The hints are a seeding nicety, not a
+      // precondition for clarifying, so a failed read must degrade to "route
+      // without them" rather than leaving the destinations disabled forever.
+      setState(() => _hintsSettled = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't load this item's tags.")),
+      );
     }
   }
 
@@ -222,6 +238,16 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   }
 
   Widget _buildScaffold(BuildContext context) {
+    final captureAsync = ref.watch(captureProvider(widget.captureId));
+    // Latch the deletion. `dataBuilder` is not called on the missing branch, so
+    // [_capture] would otherwise keep the last row it saw and
+    // [_saveCaptureText]'s null guard would sail straight past it, writing
+    // `updateFields` to a row that is gone — a harmless no-op under
+    // `NativeDatabase`, but in production PowerSync queues the UPDATE, the
+    // backend 404s it, and it lands in `sync_dead_letters`. `hasValue` with a
+    // null value is the same "gone, not loading" test [AsyncSubject] makes;
+    // mirrors `ClarifyCard`'s `_subjectGone`.
+    if (captureAsync.hasValue && captureAsync.value == null) _capture = null;
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -235,7 +261,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
         ),
       ),
       body: AsyncSubject<Capture>(
-        asyncValue: ref.watch(captureProvider(widget.captureId)),
+        asyncValue: captureAsync,
         missingIcon: Icons.inbox_outlined,
         missingTitle: 'This item is no longer in your Inbox',
         missingSubtitle: 'It may have been deleted on another device.',
@@ -412,11 +438,15 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
               const SizedBox(height: 12),
               ProcessToHandlers(
                 subject: CaptureSubject(capture: capture, draft: _draft),
-                // Title is required to name an Outcome, so the four routes
-                // that create one are gated on it. Discard stays enabled:
-                // an unnamed fragment is exactly the kind of thing a user
-                // wants to throw away.
-                disabled: _titleIsBlank
+                // The same four routes are gated twice, for two reasons that
+                // both come down to what an Outcome must carry. A title,
+                // because an Outcome must be nameable; and settled tag hints,
+                // because they ride the draft into the Outcome and a tap that
+                // beats the hint read would silently drop them. Discard is
+                // exempt from both: it creates no Outcome, so it needs neither
+                // a name nor tags — an unnamed fragment is exactly the kind of
+                // thing a user wants to throw away.
+                disabled: (_titleIsBlank || !_hintsSettled)
                     ? const <ProcessAction>{
                         ProcessAction.next,
                         ProcessAction.waitingFor,

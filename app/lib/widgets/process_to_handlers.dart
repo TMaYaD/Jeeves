@@ -600,6 +600,20 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     );
     if (!mounted) return;
     if (routed == null) {
+      // Backing out without routing. The card's missing-state CTA pops `keep`
+      // explicitly (above), but the AppBar arrow and system back stay
+      // reachable on the missing panel and pop with *no* result. Routing that
+      // null through [_keep] would hit its opening existence check, which
+      // fails on precisely the row that was just deleted — so it would return
+      // early, never bubble, and leave the user on the outer card for a dead
+      // item: the same dead end the CTA exists to avoid, reached by a
+      // different gesture. Bubble `keep` directly when the subject is gone, so
+      // the cursor advances without recording a routing or stamping a dead row.
+      if (!await _subjectExists()) {
+        if (!mounted) return;
+        await _notifyAfterRoute(ProcessAction.keep);
+        return;
+      }
       await _keep();
       return;
     }

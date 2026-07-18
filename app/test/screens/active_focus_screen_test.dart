@@ -134,10 +134,20 @@ class _FailingSprintTimer extends SprintTimerNotifier {
   @override
   Future<void> startSprint(Todo task) async {}
 
+  /// Mirrors the real [SprintTimerNotifier.stopSprint] contract: the local
+  /// state reset happens in a `finally`, so it survives the throw. Modelled
+  /// rather than simply throwing, because a fake that stayed active would let
+  /// this file assert a bounce over a phantom sprint that production no longer
+  /// leaves behind. The invariant itself is pinned against the real notifier in
+  /// sprint_timer_provider_test.dart; this fake only has to not contradict it.
   @override
   Future<void> stopSprint() async {
     stopCalls++;
-    throw StateError('sprint teardown failed');
+    try {
+      throw StateError('sprint teardown failed');
+    } finally {
+      state = const SprintTimerState();
+    }
   }
 }
 
@@ -307,6 +317,13 @@ void main() {
       // exactly the state the teardown exists to clear.
       expect(container.read(focusModeProvider).isActive, isFalse,
           reason: 'a failed step must not skip the ones after it');
+      // And the failed stop must not leave a sprint behind. Clearing focus mode
+      // is exactly what puts every stop control out of reach — `/focus/active`
+      // bounces without an active focus, and nothing on `/focus` can stop a
+      // sprint — so a sprint still reporting itself active here would be one
+      // the user can neither see nor end.
+      expect(container.read(sprintTimerProvider).isActive, isFalse,
+          reason: 'a failed stop must not strand an unreachable sprint');
       // The bounce is one-shot — `_missingBounceScheduled` blocks a retry — so
       // a throw that escapes leaves the user on a blank surface bound to a
       // task that no longer exists, with nothing coming to rescue them.

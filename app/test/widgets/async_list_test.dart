@@ -284,6 +284,7 @@ void main() {
       final controller = StreamController<List<String>>.broadcast();
       addTearDown(controller.close);
       late WidgetRef capturedRef;
+      late AsyncValue<List<String>> observed;
 
       await tester.pumpWidget(ProviderScope(
         overrides: [_rowsProvider.overrideWith((ref) => controller.stream)],
@@ -291,8 +292,9 @@ void main() {
           home: Scaffold(
             body: Consumer(builder: (context, ref, _) {
               capturedRef = ref;
+              observed = ref.watch(_rowsProvider);
               return AsyncList<String>(
-                asyncValue: ref.watch(_rowsProvider),
+                asyncValue: observed,
                 emptyIcon: Icons.inbox_outlined,
                 emptyTitle: 'Nothing here yet',
                 dataBuilder: (_, items) => Text('rows: ${items.length}'),
@@ -310,10 +312,56 @@ void main() {
         await tester.pump(const Duration(milliseconds: 50));
       }
 
-      // The `!hasValue` guard on the new error branch must not swallow a
-      // refresh that still holds rows.
+      // Pin the state the widget was actually handed, so this keeps exercising
+      // the retained-value branch rather than passing because the refresh
+      // resolved before the assertions ran.
+      expect(observed.isLoading, isTrue);
+      expect(observed.hasValue, isTrue);
+      // The error branch's guard must not swallow a refresh that still holds
+      // rows.
       expect(find.text('rows: 2'), findsOneWidget);
       expect(find.textContaining('Something went wrong'), findsNothing);
+    });
+
+    testWidgets('an empty list that then errors shows the error, not "empty"',
+        (tester) async {
+      // The retained-value exemption is keyed on having rows to show. A watch
+      // that delivered `[]` and then failed retains the empty list, so gating
+      // the error branch on bare `hasValue` would render the empty state — the
+      // widget would report "nothing to see" when the truth is that the read
+      // failed, making an empty inbox indistinguishable from a broken one.
+      final controller = StreamController<List<String>>.broadcast();
+      addTearDown(controller.close);
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [_rowsProvider.overrideWith((ref) => controller.stream)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Consumer(builder: (context, ref, _) {
+              return AsyncList<String>(
+                asyncValue: ref.watch(_rowsProvider),
+                emptyIcon: Icons.inbox_outlined,
+                emptyTitle: 'Nothing here yet',
+                dataBuilder: (_, items) => Text('rows: ${items.length}'),
+              );
+            }),
+          ),
+        ),
+      ));
+      controller.add(const <String>[]);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('Nothing here yet'), findsOneWidget);
+
+      controller.addError(StateError('SecretInternalDetail'));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(find.textContaining('Something went wrong'), findsOneWidget);
+      expect(find.text('Nothing here yet'), findsNothing);
+      expect(find.textContaining('SecretInternalDetail'), findsNothing);
     });
 
     testWidgets('an error after rows have loaded keeps showing the rows',

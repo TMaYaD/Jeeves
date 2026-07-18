@@ -747,10 +747,20 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
                 (action == ProcessAction.next ||
                     action == ProcessAction.waitingFor)) {
               final title = _titleCtrl?.text.trim() ?? '';
-              if (title.isNotEmpty) {
+              if (title.isNotEmpty && !_subjectGone) {
                 final db = ref.read(databaseProvider);
                 final current = await db.todoDao.getTodo(_subjectId);
-                if ((current?.nextActionText?.trim() ?? '').isEmpty) {
+                // A deleted row reads as `null`, which `?? ''` would flatten
+                // into "no deliberate phrase to protect" — the one condition
+                // that *permits* the write. So absence is checked explicitly,
+                // or the mirror fires precisely on the rows it must not touch.
+                // `_subjectGone` is re-tested because the delete can land
+                // during the read above. Guarded rather than returned early:
+                // `onAfterRoute` below still has to run, or the ceremony
+                // cursor never advances.
+                if (current != null &&
+                    !_subjectGone &&
+                    (current.nextActionText?.trim() ?? '').isEmpty) {
                   await db.todoDao.setNextActionText(_subjectId, title);
                 }
               }

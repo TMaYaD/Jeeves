@@ -88,9 +88,16 @@ class AsyncSubject<T extends Object> extends StatelessWidget {
     // error, and `when` dispatches that to its loading branch. Routing on
     // `isLoading` first would therefore turn every errored watch into another
     // indefinite spinner: the same defect as the null collapse, one state
-    // over. A subject that already has a value is exempt — showing the last
+    // over. A subject that already holds a row is exempt — showing the last
     // known row beats replacing it with an error panel mid-retry.
-    if (async.hasError && !async.hasValue) {
+    //
+    // That exemption is keyed on holding an actual row, not merely on
+    // `hasValue`. A watch that emitted `null` and then errored retains the
+    // null, so a bare `hasValue` test would skip this branch and render the
+    // *missing* panel — telling the user the row was deleted when the read
+    // merely failed, and offering an escape premised on that. A retained null
+    // is nothing worth preserving, so it yields to the error.
+    if (async.hasError && async.value == null) {
       debugPrint('AsyncSubject error: ${async.error}\n${async.stackTrace}');
       return _chromed(context, const ErrorSurface());
     }

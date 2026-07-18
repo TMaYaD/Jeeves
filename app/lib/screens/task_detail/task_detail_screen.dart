@@ -43,7 +43,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     _notesFocusNode = FocusNode();
 
     _titleFocusNode.addListener(() {
-      if (!_titleFocusNode.hasFocus && mounted) {
+      if (!_titleFocusNode.hasFocus && mounted && !_subjectGone) {
         ref
             .read(taskDetailNotifierProvider(widget.todoId))
             .updateTitle(_titleController.text)
@@ -56,6 +56,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         setState(() {
           _isEditingNotes = false;
         });
+        if (_subjectGone) return;
         ref
             .read(taskDetailNotifierProvider(widget.todoId))
             .updateNotes(_notesController.text)
@@ -75,6 +76,30 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
   TaskDetailNotifier get _notifier =>
       ref.read(taskDetailNotifierProvider(widget.todoId));
+
+  /// Whether the watched Outcome has been hard-deleted while this screen was
+  /// open — `AsyncData(null)`, the same "gone, not loading" test [AsyncSubject]
+  /// makes. Mirrors `ClarifyCard`'s `_subjectGone`.
+  ///
+  /// **Defence in depth, not a fix for an observed bug.** The autosaves below
+  /// are wired to focus *loss*, so the worry is that swapping in the missing
+  /// panel unmounts the editors and fires them on the way out, writing to a row
+  /// that is gone. Probing it says that does not currently happen: unmounting
+  /// the field detaches its [FocusNode] without delivering the callback, and
+  /// nothing re-triggers it while this State is still mounted — the surrounding
+  /// unfocus-on-tap gesture included. That makes this guard unreachable today
+  /// and deliberately untested; a test asserting no write would pass with or
+  /// without it, which is worse than no test.
+  ///
+  /// It stays because the invariant is the same one `ClarifyCard` and
+  /// `InboxClarifyScreen` enforce for real — never write to a subject known to
+  /// be gone — and because it rests on a Flutter focus-teardown detail rather
+  /// than anything this screen controls. If that detail changes, the cost is a
+  /// queued UPDATE that the backend 404s into `sync_dead_letters`.
+  bool get _subjectGone {
+    final async = ref.read(taskDetailTodoProvider(widget.todoId));
+    return async.hasValue && async.value == null;
+  }
 
   @override
   Widget build(BuildContext context) {

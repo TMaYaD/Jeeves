@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:jeeves/database/daos/capture_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
@@ -16,6 +17,34 @@ import 'package:jeeves/services/clarification_service.dart';
 import '../../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
+
+/// A [CaptureDao] whose tag-hint read parks on [gate], so a test can hold the
+/// hints back while the Capture watch resolves normally. Ordering those two
+/// independently is the whole point: both are async, so without a gate the
+/// pre-hint frame cannot be reached deterministically.
+class _GatedCaptureDao extends CaptureDao {
+  _GatedCaptureDao(super.db, this.gate);
+
+  final Future<void> gate;
+
+  @override
+  Future<List<Tag>> tagHintsForCapture(String captureId) async {
+    await gate;
+    return super.tagHintsForCapture(captureId);
+  }
+}
+
+/// [GtdDatabase] handing out the gated DAO. Everything else is the real thing.
+class _GatedDb extends GtdDatabase {
+  _GatedDb(super.e, Future<void> gate) : _gate = gate;
+
+  final Future<void> _gate;
+
+  late final CaptureDao _gatedDao = _GatedCaptureDao(this, _gate);
+
+  @override
+  CaptureDao get captureDao => _gatedDao;
+}
 
 // Use 'local' to match CurrentUserIdNotifier's default build() value.
 const _userId = 'local';
@@ -68,6 +97,15 @@ Future<Todo?> _outcomeOf(GtdDatabase db, String captureId) async {
   final ids = await db.captureDao.outcomeIdsForCapture(captureId);
   if (ids.isEmpty) return null;
   return db.todoDao.getTodo(ids.single);
+}
+
+/// Tag ids joined to [todoId]. Read with a plain `select` — awaiting a live
+/// drift `watch()` inside `testWidgets` never completes (docs/TESTING.md).
+Future<Set<String>> _tagIdsOf(GtdDatabase db, String todoId) async {
+  final rows = await (db.select(db.todoTags)
+        ..where((t) => t.todoId.equals(todoId)))
+      .get();
+  return {for (final r in rows) r.tagId};
 }
 
 /// Scrolls [label] into view and taps it.
@@ -419,6 +457,58 @@ void main() {
       expect(outcome!.clarified, isTrue);
       expect(outcome.title, 'Buy milk');
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
+    });
+
+    testWidgets(
+        'no Outcome can be committed before the tag hints have loaded',
+        (tester) async {
+      // The hints ride the draft into `clarifyCaptureToOutcome`, so a route
+      // that beats the hint read mints an Outcome carrying none of the tags the
+      // Capture had — silently, with nothing on screen to suggest a loss. This
+      // screen used to read the hints alongside the Capture behind one spinner;
+      // binding the Capture to a watch left the two racing, so the four
+      // Outcome-creating routes are gated on the hints settling.
+      final gate = Completer<void>();
+      final gatedDb = _GatedDb(NativeDatabase.memory(), gate.future);
+      addTearDown(gatedDb.close);
+      await gatedDb.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+      await gatedDb.tagDao.upsertTag(const TagsCompanion(
+        id: Value('ctx1'),
+        name: Value('errands'),
+        type: Value('context'),
+        userId: Value(_userId),
+      ));
+      await gatedDb.captureDao.assignTagHint('x', 'ctx1', _userId);
+
+      // The Capture watch resolves; only the hints are held.
+      await tester.pumpWidget(_buildApp(gatedDb, 'x'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('clarify_title')), findsOneWidget,
+          reason: 'precondition: the card rendered, only hints are pending');
+
+      await tester.ensureVisible(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      expect(await _outcomeOf(gatedDb, 'x'), isNull,
+          reason: 'routing must not commit while the hints are still in '
+              'flight — the Outcome would lose every tag hint');
+
+      // Release the hints: the same tap now routes, carrying them.
+      gate.complete();
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final outcome = await _outcomeOf(gatedDb, 'x');
+      expect(outcome, isNotNull, reason: 'and routing works once they land');
+      final tagIds = await _tagIdsOf(gatedDb, outcome!.id);
+      expect(tagIds, contains('ctx1'),
+          reason: 'the hint seeded the Outcome rather than being dropped');
     });
 
     testWidgets('Next Action leaves the Inbox empty', (tester) async {
