@@ -1,12 +1,22 @@
 name: Backend CI
 
+# This workflow is the gate for Backend CD, which deploys the backend *and*
+# publishes the PowerSync sync rules — so everything CD depends on has to be
+# validated here, and the trigger has to cover everything that can invalidate
+# it.  Hence infra/ paths, and hence the infra jobs below living in this
+# workflow rather than a separate one: a separate workflow could not gate CD
+# without racing it (CD fires on this workflow's conclusion, and would happily
+# publish while the other was still running or already red).
+#
+# The CD job's own `grep '^backend/'` check still scopes the actual Dokku push,
+# so an infra-only commit runs the publish step without redeploying the backend.
 on:
   push:
     branches: [main]
-    paths: ["backend/**"]
+    paths: ["backend/**", "infra/**", ".github/workflows/backend-ci.yml"]
   pull_request:
     branches: [main]
-    paths: ["backend/**"]
+    paths: ["backend/**", "infra/**", ".github/workflows/backend-ci.yml"]
 
 jobs:
   lint:
@@ -64,3 +74,113 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m app.migrate
       - run: pytest --cov=app --cov-report=term-missing
+
+  infra-shell:
+    name: Infra shell lint + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Covers the extensionless test stubs as well as the *.sh scripts.
+      - name: shellcheck
+        run: |
+          find infra/dokku -type f \( -name '*.sh' -o -path '*/stubs/*' \) -print0 \
+            | xargs -0 shellcheck --severity=style
+      - name: publish-sync-config.sh tests
+        run: ./infra/dokku/tests/test-publish-sync-config.sh
+      - name: deploy-powersync.sh bootstrap ordering test
+        run: ./infra/dokku/tests/test-deploy-powersync.sh
+
+  sync-config:
+    name: PowerSync boots from POWERSYNC_CONFIG_B64
+    runs-on: ubuntu-latest
+    # Proves the delivery mechanism CD depends on: that PowerSync accepts our
+    # config as base64 (not just as a mounted file), that the YAML parses, that
+    # the `!env PS_*` tags resolve, and that every bucket's SQL is valid against
+    # the real migrated schema.  A strong filter, not a guarantee — this is not
+    # the production database, which is why publish-sync-config.sh still rolls
+    # back on a failed readiness probe.
+    env:
+      DATABASE_URL: postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves
+      SECRET_KEY: ci-test-secret-not-for-production
+      # Readiness polling: PowerSync has to connect, create its replication
+      # slot, and snapshot before it reports ready on a cold start.
+      READINESS_ATTEMPTS: "30"
+      READINESS_INTERVAL_SECONDS: "5"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # Both image pins come from docker-compose.yml so this job can't drift
+      # from the stack it is meant to represent (Dependabot maintains them
+      # there).
+      - name: Resolve pinned images
+        id: images
+        run: |
+          {
+            echo "postgres=$(grep -oE 'postgres:[0-9]+-alpine@sha256:[0-9a-f]+' infra/docker-compose.yml | head -1)"
+            echo "powersync=$(grep -oE 'journeyapps/powersync-service:[^ ]+' infra/docker-compose.yml | head -1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Start Postgres with logical replication
+        run: |
+          docker run -d --name postgres --network host \
+            -e POSTGRES_USER=jeeves -e POSTGRES_PASSWORD=jeeves -e POSTGRES_DB=jeeves \
+            "${{ steps.images.outputs.postgres }}" \
+            postgres -c wal_level=logical -c max_wal_senders=10 -c max_replication_slots=10
+          for _ in $(seq 1 30); do
+            docker exec postgres pg_isready -U jeeves && exit 0
+            sleep 2
+          done
+          echo "Postgres did not become ready" >&2
+          docker logs postgres
+          exit 1
+
+      # The buckets are validated against the schema the migrations produce, so
+      # a bucket referencing a table or column that no migration creates fails
+      # here rather than in production.
+      - name: Apply migrations
+        working-directory: backend
+        run: |
+          pip install -e ".[dev]"
+          python -m app.migrate
+
+      - name: Start PowerSync from POWERSYNC_CONFIG_B64
+        run: |
+          docker run -d --name powersync --network host \
+            -e POWERSYNC_CONFIG_B64="$(base64 -w0 infra/powersync/sync-config.yaml)" \
+            -e PS_DATA_SOURCE_URI="postgresql://jeeves:jeeves@localhost:5432/jeeves" \
+            -e PS_SECRET_KEY_B64="$(printf '%s' "$SECRET_KEY" | base64 | tr -d '\n=' | tr '/+' '_-')" \
+            "${{ steps.images.outputs.powersync }}"
+
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 "$READINESS_ATTEMPTS"); do
+            if curl -fsS --max-time 10 -o /dev/null http://localhost:8080/probes/readiness; then
+              echo "ready after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep "$READINESS_INTERVAL_SECONDS"
+          done
+          echo "PowerSync never became ready on the base64 config" >&2
+          exit 1
+
+      # Readiness alone can go green while an individual bucket is rejected, so
+      # also fail on PowerSync's unambiguous sync-rule parse errors.
+      - name: Assert no sync-rule errors
+        run: |
+          if docker logs powersync 2>&1 | grep -E 'SqlRuleError|Must SELECT from a single table'; then
+            echo "PowerSync rejected one or more bucket definitions" >&2
+            exit 1
+          fi
+
+      - name: PowerSync logs
+        if: always()
+        run: docker logs powersync 2>&1 | tail -100

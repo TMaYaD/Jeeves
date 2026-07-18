@@ -37,7 +37,7 @@ Prospective renames considered and **deferred**, pending legacy cleanup:
 #### Language
 
 **Capture**:
-A raw, unprocessed fragment the user has put into the system because it has their attention. Pending clarification; not yet an Outcome or Action. A Capture's clarification is its terminal act, recorded once as `clarified_at` — stamped when the user completes the clarify act for that Capture, whether it produced new Outcomes, merged into existing ones, or was discarded (a zero-Outcome clarification is a legitimate verdict, not a special case). An unstamped Capture sits in the Inbox; a stamped one persists as provenance for the Outcomes it clarified into — Captures are never deleted and merge never consumes them.
+A raw, unprocessed fragment the user has put into the system because it has their attention. Pending clarification; not yet an Outcome or Action. A Capture's clarification is its terminal act, recorded once as `clarified_at` — stamped when the user completes the clarify act for that Capture, whether it produced new Outcomes, merged into existing ones, or was **discarded** (a zero-Outcome clarification is a legitimate verdict, not a special case — see **Discard**). An unstamped Capture sits in the Inbox; a stamped one persists as provenance for the Outcomes it clarified into — Captures are never deleted and merge never consumes them.
 A Capture may carry **tag hints** from capture time (stored in the `capture_tags` join). A tag hint is *not* Organising and never stamps anything: it is a suggestion the user recorded alongside the raw fragment, surfaced during clarification as removable chips on the Outcome draft (when carving a new Outcome) and as prefill (when merging into an existing one). Organising — sorting an Outcome into structure — happens on the Outcome, not the Capture.
 _Avoid_: Todo, Task, Item, Inbox item, Thought, Stuff, Note
 
@@ -144,8 +144,16 @@ The implicit List of completed Outcomes the user still considers part of their r
 _Avoid_: Completed, Finished, Archive (Archive implies removal from active concerns; Done is just the achieved set)
 
 **Trash**:
-The implicit List of Outcomes the user has discarded. Defined by: `Intent = trash` (regardless of Completion).
+The implicit List of Outcomes the user has discarded. Defined by: `Intent = trash` (regardless of Completion). Distinct from **Discard**, which is a verdict on a *Capture* and puts nothing on this List.
 _Avoid_: Deleted, Removed (the row persists; Intent expresses the user's stance)
+
+**Discard**:
+The zero-Outcome clarification of a **Capture** — the verdict "this was never worth doing." The clarify act completes, so `clarified_at` is stamped and the Capture leaves the Inbox, but no Outcome is created (`ClarificationService.discardCapture`). The Capture itself persists as the record of what was discarded.
+
+Discard is **not** the same verdict as **Done**, and the two must never share an affordance: Done says the Capture clarified into an Outcome that is *already achieved*, and records a Completion. Discard says there was nothing to record at all. Nor is Discard the same as **Trash**: Trash is a List of Outcomes (`Intent = trash`), and since a discarded Capture never becomes an Outcome it can never appear there.
+
+UI label mapping — the `trash` action in `ProcessToHandlers` resolves its copy from the subject: **"Discard"** on a Capture (this term), **"Trash"** on an Outcome (the List above). One code identifier, two canonical names, because the two subjects genuinely mean different things.
+_Avoid_: Delete, Dismiss, Done (Done is a different verdict entirely), Trash (Trash is the Outcome-side List)
 
 #### Relationships
 
