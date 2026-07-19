@@ -185,9 +185,12 @@ void main() {
     test('a stop lands while a real transition is suspended mid-flight',
         () async {
       // Drives an *actually* suspended operation rather than setting
-      // `isProcessing` by hand: `completeSprint` is held inside
-      // `_cancelSprintNotifications`, past its own re-entrancy guard, which is
-      // the state a hand-set flag only imitates.
+      // `isProcessing` by hand: `completeSprint` is held inside the break-end
+      // *scheduling* (`_startBreak` → `_scheduleEndNotification`), which is
+      // where `_GatedNotificationService` parks it. Cancellation is left
+      // ungated so the stop can run. By that point the transition has already
+      // written state and persisted the break — the state a hand-set flag only
+      // imitates.
       //
       // Two failures are in scope. A stop that bailed on `isProcessing`
       // returned normally having done nothing, and the missing-task teardown

@@ -245,9 +245,24 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       );
 
       await _persist();
-      // A stop cancels pending notifications, so one scheduled after it
-      // outlives the sprint it belongs to.
-      if (_superseded(gen)) return;
+      // A stop that landed while that persist was in flight cleared prefs
+      // *before* it finished, so the sprint this transition just wrote is back
+      // on disk with nothing left to remove it — `_restoreFromPrefs` would hand
+      // it straight back on the next launch. Only this transition knows it
+      // wrote them, so it clears them. (A stop also cancels pending
+      // notifications, so one scheduled past this point would outlive its
+      // sprint too.)
+      //
+      // Reachable only because [stopSprint] no longer bails on `isProcessing`:
+      // before that it never got as far as clearing, so there was nothing to
+      // write back over. Untested — `shared_preferences` gives no ordering
+      // guarantee between concurrent writes, but its test mock completes them
+      // too promptly to land a stop mid-write, and a test that passed with or
+      // without this clear would be worse than none.
+      if (_superseded(gen)) {
+        await _clearPrefs();
+        return;
+      }
       await _scheduleEndNotification(
           _endTime!, isFocus: true, taskTitle: task.title);
       // Re-check before arming the ticker: a stop during the awaits above has
@@ -579,6 +594,12 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     if (_superseded(g)) return;
     await prefs.setString(_kPrefEndTime, _endTime!.toIso8601String());
     await prefs.setString(_kPrefPhase, _kPhaseBreak);
+    // Same write-back race as [startSprint]: a stop landing across those two
+    // writes clears prefs before they finish, so the break is left on disk.
+    if (_superseded(g)) {
+      await _clearPrefs();
+      return;
+    }
     // Checked either side of the schedule. Before, because a stop already
     // landed means there is nothing to schedule for. After, because the stop
     // may land *while* this call is in flight — its cancellation then runs
@@ -619,9 +640,13 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       lastBreakEndedAt: state.lastBreakEndedAt,
     );
     await _persist();
-    // See [_startBreak]: a notification scheduled after a stop outlives the
-    // sprint it belongs to.
-    if (_superseded(g)) return;
+    // Same write-back race as [startSprint]: a stop that cleared prefs while
+    // this persist was in flight leaves the sprint on disk unless the
+    // superseded transition removes what it wrote.
+    if (_superseded(g)) {
+      await _clearPrefs();
+      return;
+    }
     await _scheduleEndNotification(
       _endTime!,
       isFocus: true,

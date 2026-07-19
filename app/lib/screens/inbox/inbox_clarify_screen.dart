@@ -135,7 +135,8 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
         };
         _hintsSettled = true;
       });
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('Tag-hint load failed for ${widget.captureId}: $e\n$stack');
       if (!mounted) return;
       // Settle on failure too. The hints are a seeding nicety, not a
       // precondition for clarifying, so a failed read must degrade to "route
