@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide Intent;
@@ -16,6 +18,7 @@ import 'package:jeeves/providers/sprint_timer_provider.dart'
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
+import 'package:jeeves/widgets/state_surfaces.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
 
@@ -51,6 +54,11 @@ Future<Todo> _insertAt(
   Todo? initialTodo,
   List<Tag> initialTags = const [],
   List<Capture> capturedFrom = const [],
+  // Stream feeding `taskDetailTodoProvider` — the screen's live subject
+  // binding. Tests that delete the row (or fail the query) underneath an open
+  // screen own a controller here, exactly as a live Drift watch would emit,
+  // without leaving a pending timer behind on dispose.
+  Stream<Todo?>? todoStream,
 }) {
   final router = GoRouter(
     initialLocation: '/inbox',
@@ -78,7 +86,7 @@ Future<Todo> _insertAt(
       inboxItemsProvider.overrideWith((_) => Stream.value([])),
       databaseProvider.overrideWithValue(db),
       taskDetailTodoProvider(todoId)
-          .overrideWith((_) => Stream.value(initialTodo)),
+          .overrideWith((_) => todoStream ?? Stream.value(initialTodo)),
       taskTagsProvider(todoId)
           .overrideWith((_) => Stream.value(initialTags)),
       // Stubbed like the other row streams above: a live Drift query stream
@@ -603,6 +611,52 @@ void main() {
 
       expect(find.text('Trashed'), findsOneWidget);
       expect(find.text('Done'), findsNothing);
+    });
+
+    testWidgets('an Outcome deleted while open reaches the missing state',
+        (tester) async {
+      await _insertAt(db, id: 'gone', title: 'Buy milk');
+      final todo = (await db.todoDao.getTodo('gone'))!;
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      final (widget, router) =
+          _buildScreen(db, 'gone', todoStream: feed.stream);
+      await _showTaskDetail(tester, widget, router, 'gone');
+      feed.add(todo);
+      await tester.pumpAndSettle();
+      expect(find.text('Buy milk'), findsOneWidget);
+
+      // The row leaves local storage. That is the whole signal the screen has.
+      await db.todoDao.deleteOutcome('gone');
+      feed.add(null);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('This item is no longer here'), findsOneWidget);
+
+      // And the missing state is not a dead end.
+      await tester.tap(find.text('Go back'));
+      await tester.pumpAndSettle();
+      expect(find.text('Inbox'), findsOneWidget);
+    });
+
+    testWidgets('a failed Outcome query renders an error without leaking it',
+        (tester) async {
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      final (widget, router) =
+          _buildScreen(db, 'boom', todoStream: feed.stream);
+      await _showTaskDetail(tester, widget, router, 'boom');
+      feed.addError(Exception('watch failed'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(ErrorSurface.surfaceKey), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      // Raw exception text is not user-facing copy.
+      expect(find.textContaining('watch failed'), findsNothing);
+      expect(find.text('This item is no longer here'), findsNothing);
     });
   });
 }

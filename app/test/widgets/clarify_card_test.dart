@@ -24,6 +24,7 @@ import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/person_tag_picker.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
+import 'package:jeeves/widgets/state_surfaces.dart';
 
 import '../test_helpers.dart';
 
@@ -844,6 +845,41 @@ void main() {
 
       expect(find.byKey(const Key('clarify_title')), findsNothing);
       expect(find.byKey(const Key('clarify_subject_missing')), findsOneWidget);
+    });
+
+    testWidgets('a failed Capture query renders an error, not a spinner',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final feed = StreamController<Capture?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, captureStream: feed.stream),
+      );
+      feed.addError(Exception('watch failed'));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.byKey(ErrorSurface.surfaceKey), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      // An error is not an absence — the row may well still be there.
+      expect(find.byKey(const Key('clarify_subject_missing')), findsNothing);
+    });
+
+    testWidgets('a failed Outcome query renders an error, not a spinner',
+        (tester) async {
+      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _harness(db, todo: todo, todoStream: feed.stream),
+      );
+      feed.addError(Exception('watch failed'));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.byKey(ErrorSurface.surfaceKey), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byKey(const Key('clarify_subject_missing')), findsNothing);
     });
   });
 }

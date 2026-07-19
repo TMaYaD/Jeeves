@@ -8,6 +8,7 @@ import '../../database/gtd_database.dart';
 import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
+import '../../widgets/async_subject.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
@@ -82,25 +83,27 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
-      child: todoAsync.when(
-        loading: () => const Scaffold(
-          backgroundColor: Colors.white,
-          body: Center(child: CircularProgressIndicator()),
+      child: AsyncSubject<Todo>(
+        asyncValue: todoAsync,
+        // Same copy as the clarify surfaces: to the user an Outcome that is
+        // gone is gone, whichever screen was showing it.
+        missingTitle: 'This item is no longer here',
+        missingIcon: Icons.inventory_2_outlined,
+        missingSubtitle: 'It was removed while you had it open.',
+        missingCta: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => context.pop(),
+            child: const Text('Go back'),
+          ),
         ),
-        error: (err, _) => Scaffold(
+        // dataBuilder returns a whole route, so the other three surfaces need
+        // the same chrome around them — not least the app bar's back arrow.
+        surfaceWrapper: (context, surface) => Scaffold(
           backgroundColor: Colors.white,
           appBar: AppBar(backgroundColor: Colors.white, elevation: 0),
-          body: Center(child: Text('Error: $err')),
+          body: surface,
         ),
-        data: (todo) {
-          if (todo == null) {
-            return Scaffold(
-              backgroundColor: Colors.white,
-              appBar: AppBar(backgroundColor: Colors.white, elevation: 0),
-              body: const Center(child: Text('Task not found')),
-            );
-          }
-
+        dataBuilder: (context, todo) {
           if (!_titleInitialized) {
             _titleController.text = todo.title;
             _titleInitialized = true;

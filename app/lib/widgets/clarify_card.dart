@@ -40,6 +40,7 @@ import '../database/gtd_database.dart';
 import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
+import 'async_subject.dart';
 import 'clarify_shared_widgets.dart';
 import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
@@ -411,32 +412,32 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       if (incoming == null) return;
       _adoptFromSubject(title: incoming.title, notes: incoming.notes);
     });
-    final captureAsync = ref.watch(captureProvider(captureId));
-    final capture = captureAsync.value;
-    if (capture == null) {
-      // Known to be gone versus not yet known: only the first is a
-      // missing-item state.
-      return captureAsync.hasValue
-          ? const ClarifySubjectMissing()
-          : const Center(child: CircularProgressIndicator());
-    }
-    // A Capture stores only title and notes; the rest of the card starts empty
-    // and rides the draft into the Outcome.
-    _initialiseFrom(title: capture.title, notes: capture.notes);
+    return AsyncSubject<Capture>(
+      asyncValue: ref.watch(captureProvider(captureId)),
+      missingTitle: 'This item is no longer here',
+      // The card is always embedded — in a ceremony step, or in the reclarify
+      // route — and its host owns the exit, so it supplies no CTA of its own.
+      missingBuilder: (_) => const ClarifySubjectMissing(),
+      dataBuilder: (context, capture) {
+        // A Capture stores only title and notes; the rest of the card starts
+        // empty and rides the draft into the Outcome.
+        _initialiseFrom(title: capture.title, notes: capture.notes);
 
-    final hintsAsync = ref.watch(captureTagHintsProvider(captureId));
-    final hints = hintsAsync.asData?.value ?? const <Tag>[];
-    if (hintsAsync.hasValue && !_draftTagsSeeded) {
-      _draftTagsSeeded = true;
-      _draftTagIds = {for (final t in hints) t.id};
-    }
-    return _buildBody(
-      context,
-      tags: hints,
-      subject: CaptureSubject(
-        capture: capture,
-        draft: () => _draft(hints),
-      ),
+        final hintsAsync = ref.watch(captureTagHintsProvider(captureId));
+        final hints = hintsAsync.asData?.value ?? const <Tag>[];
+        if (hintsAsync.hasValue && !_draftTagsSeeded) {
+          _draftTagsSeeded = true;
+          _draftTagIds = {for (final t in hints) t.id};
+        }
+        return _buildBody(
+          context,
+          tags: hints,
+          subject: CaptureSubject(
+            capture: capture,
+            draft: () => _draft(hints),
+          ),
+        );
+      },
     );
   }
 
@@ -453,23 +454,23 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         dueDate: incoming.dueDate,
       );
     });
-    final todoAsync = ref.watch(taskDetailTodoProvider(todoId));
-    final todo = todoAsync.value;
-    if (todo == null) {
-      return todoAsync.hasValue
-          ? const ClarifySubjectMissing()
-          : const Center(child: CircularProgressIndicator());
-    }
-    _initialiseFrom(
-      title: todo.title,
-      notes: todo.notes,
-      energyLevel: todo.energyLevel,
-      timeEstimate: todo.timeEstimate,
-      dueDate: todo.dueDate,
+    return AsyncSubject<Todo>(
+      asyncValue: ref.watch(taskDetailTodoProvider(todoId)),
+      missingTitle: 'This item is no longer here',
+      missingBuilder: (_) => const ClarifySubjectMissing(),
+      dataBuilder: (context, todo) {
+        _initialiseFrom(
+          title: todo.title,
+          notes: todo.notes,
+          energyLevel: todo.energyLevel,
+          timeEstimate: todo.timeEstimate,
+          dueDate: todo.dueDate,
+        );
+        final tags =
+            ref.watch(taskTagsProvider(todoId)).asData?.value ?? const <Tag>[];
+        return _buildBody(context, tags: tags, subject: OutcomeSubject(todo));
+      },
     );
-    final tags =
-        ref.watch(taskTagsProvider(todoId)).asData?.value ?? const <Tag>[];
-    return _buildBody(context, tags: tags, subject: OutcomeSubject(todo));
   }
 
   /// Snapshot of the card's current state, read at tap time by

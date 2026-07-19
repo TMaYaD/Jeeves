@@ -27,6 +27,7 @@ import '../../database/gtd_database.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/task_detail_provider.dart';
 import '../../services/clarification_service.dart';
+import '../../widgets/async_subject.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/process_to_handlers.dart';
 
@@ -46,12 +47,6 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   int? _timeEstimate;
   DateTime? _dueDate;
   Capture? _capture;
-
-  /// True once local storage has answered with no row for [widget.captureId].
-  ///
-  /// Distinct from "not answered yet": the screen renders a spinner while the
-  /// subject is unknown and a missing-item state once it is known to be gone.
-  bool _subjectMissing = false;
 
   /// True once the subject has been reconciled at least once, from either the
   /// build-time seed or the listener. Gates the seed so it runs exactly once.
@@ -142,11 +137,9 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     _seeded = true;
     if (capture == null) {
       _capture = null;
-      _subjectMissing = true;
       return;
     }
     _capture = capture;
-    _subjectMissing = false;
     if (_appliedTitle == null || _titleCtrl.text.trim() == _appliedTitle) {
       if (_titleCtrl.text != capture.title) _titleCtrl.text = capture.title;
       _appliedTitle = capture.title.trim();
@@ -255,11 +248,11 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       // here rather than an `enabled:` flag. Shut while a route is in flight,
       // for the reason [_routing] documents.
       canPop: !_routing,
-      child: _buildScaffold(context),
+      child: _buildScaffold(context, subject),
     );
   }
 
-  Widget _buildScaffold(BuildContext context) {
+  Widget _buildScaffold(BuildContext context, AsyncValue<Capture?> subject) {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -272,11 +265,19 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
           onPressed: _routing ? null : () => context.pop(),
         ),
       ),
-      body: _subjectMissing
-          ? const ClarifySubjectMissing()
-          : _capture == null
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
+      body: AsyncSubject<Capture>(
+        asyncValue: subject,
+        missingTitle: 'This item is no longer here',
+        // The screen is its own route, so the app-bar back arrow is the only
+        // other exit — and it is not an affordance the missing state points
+        // at. Name the destination instead: pop lands on the Inbox.
+        missingBuilder: (context) => ClarifySubjectMissing(
+          cta: TextButton(
+            onPressed: () => context.pop(),
+            child: const Text('Back to Inbox'),
+          ),
+        ),
+        dataBuilder: (context, capture) => ListView(
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
               children: [
@@ -428,7 +429,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                 const SizedBox(height: 12),
                 ProcessToHandlers(
                   subject: CaptureSubject(
-                    capture: _capture!,
+                    capture: capture,
                     draft: _draft,
                   ),
                   // Title is required to name an Outcome, so the four routes
@@ -482,6 +483,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                 ),
               ],
             ),
+      ),
     );
   }
 }
