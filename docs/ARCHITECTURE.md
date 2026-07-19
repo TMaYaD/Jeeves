@@ -40,7 +40,7 @@ Located in `app/`.
 - **Local Storage:** Offline-first architecture using `drift` and `sqlite3_flutter_libs` as the structured SQL engine.
 - **API Communication:** `dio` and `retrofit`.
 - **Data Models:** `freezed` and `json_serializable` for robust immutable models.
-- **Sync:** PowerSync (`powersync ^2.x` Dart package) — bidirectional sync via `JeevesBackendConnector` and a self-hosted `journeyapps/powersync-service` instance.
+- **Sync:** PowerSync (`powersync ^2.x` Dart package) — bidirectional sync via `JevesBackendConnector` and a self-hosted `journeyapps/powersync-service` instance.
 - **Web storage:** OPFS-backed SQLite via `WebPowerSyncOpenFactory` from `package:powersync/web.dart`, using the WASM worker assets in `app/web/`.
 
 ### Backend (Python/FastAPI)
@@ -65,6 +65,19 @@ PowerSync provides bidirectional offline-first sync between the Flutter SQLite s
 - PowerSync uses Postgres for internal bucket storage — no additional database is required.
 - Sync rules deploy with the backend. `infra/powersync/sync-config.yaml` is the only place bucket definitions exist; Backend CD pushes to Dokku (whose release phase runs Alembic) and then runs `infra/dokku/publish-sync-config.sh`, which publishes that file to the PowerSync app as `POWERSYNC_CONFIG_B64` and no-ops when it is unchanged. A migration and the buckets that read its tables therefore ship in one pipeline run rather than one shipping and the other waiting on a human. The ordering is sequential, not atomic — see ADR-0017 and `infra/dokku/README.md` for the residual window and the manual two-phase procedure destructive migrations still need.
 - Conflict resolution: last-write-wins by default, with a per-key strategy registry for `user_preferences` (snooze floors use a non-regressing `maxTimestampValue` rule; list/set keys are provisioned for merge). See [SYNC.md](./SYNC.md) for the full conflict matrix, the tombstone invariant, and the PowerSync write-checkpoint behaviour.
+
+#### The two-stage boundary
+
+Sync is two stages, and the seam between them is a hard boundary:
+
+1. **UI ↔ local storage** — widgets, providers, and DAOs read and write the local Drift database.
+2. **Local storage ↔ remote** — PowerSync replicates down; `JevesBackendConnector` uploads up.
+
+**Stage 2 is out of scope for all UI behaviour.** The UI's contract is with the local row and nothing else. It cannot determine — and must not attempt to determine — whether a local change originated from another screen, a background job, or a replicated delete from another device. "The row is gone locally" is the complete signal; there is no UI-visible notion of a *remote* delete, and a screen reacting to a subject disappearing is doing local-storage reactivity, not sync.
+
+The practical consequence is about how UI behaviour gets *justified*, not just how it is implemented. Writing to a row absent from local storage is incorrect on its own terms. That a stray write would also be queued, rejected by the backend, and dead-lettered is a downstream symptom which confirms the bug — it is never the reason to fix it. A UI fix argued from its downstream sync symptom will be scoped wrong, because it optimises for the connector's behaviour rather than the local invariant. UI feature code therefore does not reference `JevesBackendConnector`, the CRUD/upload queue, `sync_dead_letters`, or backend status codes — the sole exemption is the informational status adapter below — and UI tests exercise local storage directly rather than a sync round-trip.
+
+**Sync status is informational, never blocking.** The one stage-2 signal the UI may see is replication health, and `syncStatusProvider` is the only adapter licensed to source it: it combines PowerSync's engine status with the `sync_dead_letters` count — a non-zero count forces the error state — and feeds the app-shell indicator and the settings SYNC row, both of which only *render* it. Behaviour must never depend on it — no gating a write, disabling a control, or branching a flow on sync state. The offline-first contract is that every user action completes against local storage regardless of what stage 2 is doing. Reading sync status to decide *whether* something happens is a stage-2 dependency wearing a display read's clothing.
 
 #### Upload-error policy
 
