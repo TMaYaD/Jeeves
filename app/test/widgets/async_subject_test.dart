@@ -100,6 +100,59 @@ void main() {
     expect(find.text('This item is no longer here'), findsNothing);
   });
 
+  testWidgets(
+      'a refresh error over stale data keeps the row and logs the error',
+      (tester) async {
+    // The counterpart to the case above: once a row *is* on screen, a failed
+    // background re-read must not tear down what the user is looking at.
+    // `dataBuilder` may be a whole route, so an ErrorSurface here would cost
+    // far more than the stale row it replaced. The error still has to be
+    // diagnosable, so it is logged rather than silently dropped.
+    final feed = StreamController<String?>.broadcast();
+    addTearDown(feed.close);
+    final subject = StreamProvider<String?>((_) => feed.stream);
+
+    await tester.pumpWidget(ProviderScope(
+      child: MaterialApp(
+        home: Scaffold(
+          body: Consumer(
+            builder: (context, ref, _) => AsyncSubject<String>(
+              asyncValue: ref.watch(subject),
+              dataBuilder: (_, s) => Text(s),
+              missingTitle: 'This item is no longer here',
+            ),
+          ),
+        ),
+      ),
+    ));
+
+    feed.add('Buy milk');
+    await tester.pumpAndSettle();
+    expect(find.text('Buy milk'), findsOneWidget);
+
+    // `debugPrint` is a foundation debug variable: the test harness asserts it
+    // is back to its original value by the end of the test body, which runs
+    // before any `addTearDown`. Restore it inline, not in a tear-down.
+    final logged = <String>[];
+    final original = debugPrint;
+    debugPrint = (message, {wrapWidth}) => logged.add(message ?? '');
+    try {
+      feed.addError(Exception('watch failed'));
+      await tester.pumpAndSettle();
+    } finally {
+      debugPrint = original;
+    }
+
+    expect(find.text('Buy milk'), findsOneWidget);
+    expect(find.byKey(ErrorSurface.surfaceKey), findsNothing);
+    expect(find.byKey(LoadingSurface.surfaceKey), findsNothing);
+    expect(
+      logged.where((m) => m.contains('watch failed')),
+      isNotEmpty,
+      reason: 'a swallowed refresh error leaves a stale row unexplainable',
+    );
+  });
+
   testWidgets('the missing state renders the way out it was given',
       (tester) async {
     var tapped = false;

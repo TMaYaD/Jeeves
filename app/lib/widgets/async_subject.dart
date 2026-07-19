@@ -65,9 +65,28 @@ class AsyncSubject<T extends Object> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final subject = asyncValue.value;
-    if (subject != null) return dataBuilder(context, subject);
+    if (subject != null) {
+      // Data before error, deliberately — the one place this diverges from
+      // [AsyncList], which routes everything through `when()` and so lets a
+      // refresh error replace a rendered list.
+      //
+      // A subject-bound surface cannot afford that. [dataBuilder] here may
+      // return a whole route (see [surfaceWrapper]), so swapping in
+      // [ErrorSurface] on a failed background refresh would tear down the
+      // open screen — app bar actions, notes, scroll position, the lot — and
+      // dead-end the user on a generic message with no retry, all because a
+      // re-read of a row they can already see failed. Last known-good row
+      // wins; the error is logged rather than rendered so a persistently
+      // failing watch is still diagnosable.
+      if (asyncValue.hasError) _logError();
+      return dataBuilder(context, subject);
+    }
     return _wrap(context, _surface(context));
   }
+
+  void _logError() => debugPrint(
+        'AsyncSubject error: ${asyncValue.error}\n${asyncValue.stackTrace}',
+      );
 
   Widget _wrap(BuildContext context, Widget surface) =>
       surfaceWrapper?.call(context, surface) ?? surface;
@@ -77,9 +96,7 @@ class AsyncSubject<T extends Object> extends StatelessWidget {
     // error, not a confirmed absence. Only a clean `AsyncData(null)` means the
     // row is genuinely gone.
     if (asyncValue.hasError) {
-      debugPrint(
-        'AsyncSubject error: ${asyncValue.error}\n${asyncValue.stackTrace}',
-      );
+      _logError();
       return const ErrorSurface();
     }
 

@@ -658,5 +658,38 @@ void main() {
       expect(find.textContaining('watch failed'), findsNothing);
       expect(find.text('This item is no longer here'), findsNothing);
     });
+
+    testWidgets(
+        'the non-data surfaces keep the loaded screen\'s back affordance',
+        (tester) async {
+      await _insertAt(db, id: 'chrome', title: 'Buy milk');
+      final todo = (await db.todoDao.getTodo('chrome'))!;
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      final (widget, router) =
+          _buildScreen(db, 'chrome', todoStream: feed.stream);
+      await _showTaskDetail(tester, widget, router, 'chrome');
+      feed.add(todo);
+      await tester.pumpAndSettle();
+
+      // The affordance the loaded screen offers.
+      expect(find.byIcon(Icons.arrow_back_ios_new), findsOneWidget);
+
+      // The row leaves local storage underneath the open screen. The chrome
+      // the user is looking at must not change shape just because the body
+      // did — an implicit leading would swap in the platform default back
+      // icon and route the tap through Navigator.maybePop instead.
+      feed.add(null);
+      await tester.pumpAndSettle();
+
+      expect(find.text('This item is no longer here'), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_back_ios_new), findsOneWidget);
+
+      // And it still goes back where the loaded screen's does.
+      await tester.tap(find.byIcon(Icons.arrow_back_ios_new));
+      await tester.pumpAndSettle();
+      expect(find.text('Inbox'), findsOneWidget);
+    });
   });
 }

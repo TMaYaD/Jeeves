@@ -100,7 +100,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         // the same chrome around them — not least the app bar's back arrow.
         surfaceWrapper: (context, surface) => Scaffold(
           backgroundColor: Colors.white,
-          appBar: AppBar(backgroundColor: Colors.white, elevation: 0),
+          appBar: AppBar(
+            backgroundColor: Colors.white,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            leading: _backLeading(),
+          ),
           body: surface,
         ),
         dataBuilder: (context, todo) {
@@ -417,15 +422,23 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
+  /// The screen's back affordance. Shared by the loaded app bar and the one
+  /// [AsyncSubject.surfaceWrapper] puts around the loading / error / missing
+  /// surfaces: leaving the wrapper's leading implicit would swap in the
+  /// platform default back icon and route the tap through
+  /// [Navigator.maybePop] instead of the router, so the way out of the screen
+  /// would change shape exactly when the body did.
+  Widget _backLeading() => IconButton(
+        icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: Colors.black),
+        onPressed: () => context.pop(),
+      );
+
   AppBar _buildAppBar(Todo todo) {
     return AppBar(
       backgroundColor: Colors.white,
       elevation: 0,
       scrolledUnderElevation: 0,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: Colors.black),
-        onPressed: () => context.pop(),
-      ),
+      leading: _backLeading(),
       actions: [
         // Ad-hoc engagement entry point (issue #180): works with or without
         // an open FocusSession — engagement is independent of the session
