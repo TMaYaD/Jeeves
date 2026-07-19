@@ -14,6 +14,7 @@ import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/services/clarification_service.dart';
+import 'package:jeeves/widgets/state_surfaces.dart';
 import '../../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -343,6 +344,10 @@ class _CaptureFeed {
   /// gets — it carries no notion of *why* (ARCHITECTURE.md § two-stage
   /// boundary).
   void emitMissing() => _controller.add(null);
+
+  /// The live query itself failed. Distinct from [emitMissing]: local storage
+  /// has not said the row is gone, it has not said anything.
+  void emitError() => _controller.addError(Exception('watch failed'));
 
   Future<void> close() => _controller.close();
 }
@@ -1079,6 +1084,43 @@ void main() {
       expect(find.byKey(const Key('clarify_title')), findsNothing);
       expect(find.text('Next Action'), findsNothing);
       expect(find.byKey(const Key('clarify_subject_missing')), findsOneWidget);
+    });
+
+    testWidgets('the missing state offers a way back to the Inbox',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      await db.captureDao.deleteCapture('x');
+      feed.emitMissing();
+      await tester.pumpAndSettle();
+
+      // Without a way out the user is stranded on a subject that no longer
+      // exists — platform back is not an affordance the screen offers.
+      await tester.tap(find.text('Back to Inbox'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Inbox'), findsOneWidget);
+      expect(find.byKey(const Key('clarify_subject_missing')), findsNothing);
+    });
+
+    testWidgets('a failed subject query renders an error, not a spinner',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
+      feed.emitError();
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(ErrorSurface.surfaceKey), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      // An error is not an absence: the row may well still be there.
+      expect(find.byKey(const Key('clarify_subject_missing')), findsNothing);
     });
   });
 }

@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'state_surfaces.dart';
+
 /// Builder that renders the standard loading / error / empty / data surfaces
 /// for an [AsyncValue] holding a list.
 ///
-/// Owns the visual contract shared by every GTD list screen (Inbox,
-/// Next Actions, Waiting For, Someday-Maybe, Search): a centered spinner
-/// while loading; a friendly error message that never leaks raw exception
-/// text; an empty-state container with an icon, a per-callsite title, an
-/// optional subtitle and an optional CTA.
+/// Renders every GTD list screen (Inbox, Next Actions, Waiting For,
+/// Someday-Maybe, Search) through the shared surfaces in
+/// `state_surfaces.dart`: a centered spinner while loading; a friendly error
+/// message that never leaks raw exception text; an empty-state container with
+/// an icon, a per-callsite title, an optional subtitle and an optional CTA.
+/// [AsyncSubject] renders the same three surfaces for a single-row subject, so
+/// a list with no rows and a subject whose row is gone look identical.
 ///
 /// The *only* legitimate per-screen variation is empty-state copy and the
 /// optional CTA. Pass [emptyBuilder] for the rare case where a callsite
@@ -58,16 +62,16 @@ class AsyncList<T> extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return asyncValue.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => const LoadingSurface(),
       error: (err, stack) {
         debugPrint('AsyncList error: $err\n$stack');
-        return const _ErrorSurface();
+        return const ErrorSurface();
       },
       data: (items) {
         if (items.isEmpty) {
           return emptyBuilder != null
               ? emptyBuilder!(context)
-              : _EmptySurface(
+              : EmptySurface(
                   icon: emptyIcon,
                   title: emptyTitle,
                   subtitle: emptySubtitle,
@@ -76,76 +80,6 @@ class AsyncList<T> extends StatelessWidget {
         }
         return dataBuilder(context, items);
       },
-    );
-  }
-}
-
-class _ErrorSurface extends StatelessWidget {
-  const _ErrorSurface();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24),
-        child: Text(
-          'Something went wrong. Please try again.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Color(0xFF9CA3AF)),
-        ),
-      ),
-    );
-  }
-}
-
-class _EmptySurface extends StatelessWidget {
-  const _EmptySurface({
-    required this.icon,
-    required this.title,
-    this.subtitle,
-    this.cta,
-  });
-
-  final IconData? icon;
-  final String title;
-  final String? subtitle;
-  final Widget? cta;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: 48, color: const Color(0xFFD1D5DB)),
-              const SizedBox(height: 12),
-            ],
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xFF6B7280)),
-            ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                subtitle!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF9CA3AF),
-                  fontSize: 13,
-                ),
-              ),
-            ],
-            if (cta != null) ...[
-              const SizedBox(height: 16),
-              cta!,
-            ],
-          ],
-        ),
-      ),
     );
   }
 }

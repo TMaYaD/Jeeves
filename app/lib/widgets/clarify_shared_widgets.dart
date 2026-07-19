@@ -11,6 +11,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'state_surfaces.dart';
+
 const _labelGray = Color(0xFF9CA3AF);
 const _textGray = Color(0xFF6B7280);
 const _borderGray = Color(0xFFD1D5DB);
@@ -184,38 +186,29 @@ class ClarifyDestinationButton extends StatelessWidget {
 /// replicated in from another — "the row is no longer there" is the whole
 /// signal it has (ARCHITECTURE.md § Sync Engine — the UI's contract is with
 /// the local row).
+///
+/// Built on [EmptySurface] so a clarify subject that is gone and a list with
+/// nothing in it read as the same thing, because to the user they are.
+///
+/// [cta] is the way out. Callsites reached as their own route supply one —
+/// a pushed clarify screen has no other exit once its fields are gone. The
+/// ceremony surfaces pass none: their step footer already owns Skip, and a
+/// second exit there would offer to leave the whole ritual.
 class ClarifySubjectMissing extends StatelessWidget {
-  const ClarifySubjectMissing({super.key});
+  const ClarifySubjectMissing({super.key, this.cta});
+
+  final Widget? cta;
 
   @override
   Widget build(BuildContext context) {
-    return Center(
+    return KeyedSubtree(
       key: const Key('clarify_subject_missing'),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.inventory_2_outlined, size: 40, color: _labelGray),
-            SizedBox(height: 12),
-            Text(
-              'This item is no longer here',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF374151),
-              ),
-            ),
-            SizedBox(height: 6),
-            Text(
-              'It was removed while you had it open, so there is nothing '
-              'left to clarify.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, color: _textGray),
-            ),
-          ],
-        ),
+      child: EmptySurface(
+        icon: Icons.inventory_2_outlined,
+        title: 'This item is no longer here',
+        subtitle: 'It was removed while you had it open, so there is '
+            'nothing left to clarify.',
+        cta: cta,
       ),
     );
   }

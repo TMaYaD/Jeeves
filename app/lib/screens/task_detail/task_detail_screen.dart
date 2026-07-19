@@ -8,6 +8,7 @@ import '../../database/gtd_database.dart';
 import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
+import '../../widgets/async_subject.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
@@ -82,25 +83,32 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
-      child: todoAsync.when(
-        loading: () => const Scaffold(
-          backgroundColor: Colors.white,
-          body: Center(child: CircularProgressIndicator()),
+      child: AsyncSubject<Todo>(
+        asyncValue: todoAsync,
+        // Same copy as the clarify surfaces: to the user an Outcome that is
+        // gone is gone, whichever screen was showing it.
+        missingTitle: 'This item is no longer here',
+        missingIcon: Icons.inventory_2_outlined,
+        missingSubtitle: 'It was removed while you had it open.',
+        missingCta: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => context.pop(),
+            child: const Text('Go back'),
+          ),
         ),
-        error: (err, _) => Scaffold(
+        // dataBuilder returns a whole route, so the other three surfaces need
+        // the same chrome around them — not least the app bar's back arrow.
+        surfaceWrapper: (context, surface) => Scaffold(
           backgroundColor: Colors.white,
-          appBar: AppBar(backgroundColor: Colors.white, elevation: 0),
-          body: Center(child: Text('Error: $err')),
+          appBar: AppBar(
+            backgroundColor: Colors.white,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            leading: _backLeading(),
+          ),
+          body: surface,
         ),
-        data: (todo) {
-          if (todo == null) {
-            return Scaffold(
-              backgroundColor: Colors.white,
-              appBar: AppBar(backgroundColor: Colors.white, elevation: 0),
-              body: const Center(child: Text('Task not found')),
-            );
-          }
-
+        dataBuilder: (context, todo) {
           if (!_titleInitialized) {
             _titleController.text = todo.title;
             _titleInitialized = true;
@@ -414,15 +422,23 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
+  /// The screen's back affordance. Shared by the loaded app bar and the one
+  /// [AsyncSubject.surfaceWrapper] puts around the loading / error / missing
+  /// surfaces: leaving the wrapper's leading implicit would swap in the
+  /// platform default back icon and route the tap through
+  /// [Navigator.maybePop] instead of the router, so the way out of the screen
+  /// would change shape exactly when the body did.
+  Widget _backLeading() => IconButton(
+        icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: Colors.black),
+        onPressed: () => context.pop(),
+      );
+
   AppBar _buildAppBar(Todo todo) {
     return AppBar(
       backgroundColor: Colors.white,
       elevation: 0,
       scrolledUnderElevation: 0,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: Colors.black),
-        onPressed: () => context.pop(),
-      ),
+      leading: _backLeading(),
       actions: [
         // Ad-hoc engagement entry point (issue #180): works with or without
         // an open FocusSession — engagement is independent of the session
