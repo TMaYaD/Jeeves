@@ -66,6 +66,17 @@ PowerSync provides bidirectional offline-first sync between the Flutter SQLite s
 - Sync rules deploy with the backend. `infra/powersync/sync-config.yaml` is the only place bucket definitions exist; Backend CD pushes to Dokku (whose release phase runs Alembic) and then runs `infra/dokku/publish-sync-config.sh`, which publishes that file to the PowerSync app as `POWERSYNC_CONFIG_B64` and no-ops when it is unchanged. A migration and the buckets that read its tables therefore ship in one pipeline run rather than one shipping and the other waiting on a human. The ordering is sequential, not atomic — see ADR-0017 and `infra/dokku/README.md` for the residual window and the manual two-phase procedure destructive migrations still need.
 - Conflict resolution: last-write-wins by default, with a per-key strategy registry for `user_preferences` (snooze floors use a non-regressing `maxTimestampValue` rule; list/set keys are provisioned for merge). See [SYNC.md](./SYNC.md) for the full conflict matrix, the tombstone invariant, and the PowerSync write-checkpoint behaviour.
 
+#### The two-stage boundary
+
+Sync is two stages, and the seam between them is a hard boundary:
+
+1. **UI ↔ local storage** — widgets, providers, and DAOs read and write the local Drift database.
+2. **Local storage ↔ remote** — PowerSync replicates down; `JevesBackendConnector` uploads up.
+
+**Stage 2 is out of scope for all UI code.** The UI's contract is with the local row and nothing else. It cannot determine — and must not attempt to determine — whether a local change originated from another screen, a background job, or a replicated delete from another device. "The row is gone locally" is the complete signal; there is no UI-visible notion of a *remote* delete, and a screen reacting to a subject disappearing is doing local-storage reactivity, not sync.
+
+The practical consequence is about how UI behaviour gets *justified*, not just how it is implemented. Writing to a row absent from local storage is incorrect on its own terms. That a stray write would also be queued, rejected by the backend, and dead-lettered is a downstream symptom which confirms the bug — it is never the reason to fix it. A UI fix argued from its downstream sync symptom will be scoped wrong, because it optimises for the connector's behaviour rather than the local invariant. UI code therefore does not reference `BackendConnector`, the CRUD/upload queue, `sync_dead_letters`, or backend status codes, and UI tests exercise local storage directly rather than a sync round-trip.
+
 #### Upload-error policy
 
 A CRUD entry whose REST upload fails is classified per status code by the pure function `JevesBackendConnector.classifyUploadError` — never by a blanket "4xx is fatal" rule. PowerSync queue mechanics force a three-way choice: rethrowing keeps the entry queued but blocks every later upload behind it (head-of-line), so only genuinely transient errors retry; everything else must leave the queue loudly and losslessly.
