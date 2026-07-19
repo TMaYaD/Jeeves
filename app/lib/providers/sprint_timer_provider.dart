@@ -218,7 +218,13 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     await _scheduleEndNotification(_endTime!,
         isFocus: isFocus, taskTitle: taskTitle);
     if (!_superseded(gen)) return true;
-    await _cancelSprintNotifications();
+    // Cleanup is skipped when a *newer* sprint is already running. Sprint- and
+    // break-end notifications use fixed ids, so that sprint's own schedule has
+    // already replaced this stale one — there is nothing of ours left to
+    // remove, and cancelling by those shared ids would silently delete the
+    // live sprint's alert instead. Better a stale notification that was
+    // overwritten anyway than a running sprint that never announces its end.
+    if (!state.isActive) await _cancelSprintNotifications();
     return false;
   }
 

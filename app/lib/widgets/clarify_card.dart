@@ -456,15 +456,6 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // catch path for the same reason; this is the watch-shaped
           // equivalent. (Riverpod 3 delivers a stream error as loading
           // *carrying* an error, so `hasError` is the failure signal here.)
-          // Settled means *resolved or failed*, not merely resolved. Hints
-          // are a seeding nicety, not a precondition for clarifying, so a
-          // hint watch that errors must degrade to "route without them"
-          // rather than disabling the four Outcome routes for the life of the
-          // card and stranding the user on an item they cannot process.
-          // `InboxClarifyScreen` settles its flag in both the success and the
-          // catch path for the same reason; this is the watch-shaped
-          // equivalent. (Riverpod 3 delivers a stream error as loading
-          // *carrying* an error, so `hasError` is the failure signal here.)
           hintsPending: !(hintsAsync.hasValue || hintsAsync.hasError),
           subject: CaptureSubject(
             capture: capture,

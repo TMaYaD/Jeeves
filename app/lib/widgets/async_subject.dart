@@ -40,10 +40,16 @@ import 'state_surfaces.dart';
 /// non-null). A reload retains its previous value, so `hasValue` alone is not
 /// the test: it stays true across a refresh that began from a null.
 ///
-/// [AsyncSubject] branches on this to pick the missing panel, and the surfaces
-/// that write — `TaskDetailScreen`, `TaskStatusRow`, `ClarifyCard`,
-/// `InboxClarifyScreen` — use it to refuse writes against a row that is gone.
-/// Named once so those five callers cannot drift apart on what "gone" means.
+/// Used by the four surfaces that *write* — `TaskDetailScreen`,
+/// `TaskStatusRow`, `ClarifyCard`, `InboxClarifyScreen` — to refuse a write
+/// against a row that is gone. Named once so they cannot drift apart on what
+/// "gone" means.
+///
+/// [AsyncSubject] itself does not call it: its missing branch is a plain
+/// `value == null` check, which is this same predicate by construction at that
+/// point (the error- and loading-with-null branches have already returned) and
+/// which promotes the value to non-null for `dataBuilder`. Spelling it `isGone`
+/// there would cost that promotion and force an unchecked cast.
 extension AsyncSubjectGone<T> on AsyncValue<T?> {
   bool get isGone => hasValue && value == null;
 }

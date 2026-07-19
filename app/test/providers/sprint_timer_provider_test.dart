@@ -240,8 +240,11 @@ void main() {
 }
 
 /// `build()` kicks `_restoreFromPrefs()` fire-and-forget, so the restored state
-/// lands a few microtasks later. Yielding the event loop is what lets it.
-Future<void> _settle() => Future<void>.delayed(Duration.zero);
+/// lands a few microtasks later — and `completeSprint` chains several awaits
+/// before it settles. `pumpEventQueue` drains many turns rather than the single
+/// one a bare zero-delay yields, so a multi-step flow finishes before the
+/// assertions rather than racing them.
+Future<void> _settle() => pumpEventQueue();
 
 /// Reads the notifier, lets its fire-and-forget restore land, and pins the
 /// precondition every test here shares: the sprint under test is one the
