@@ -73,9 +73,11 @@ Sync is two stages, and the seam between them is a hard boundary:
 1. **UI ↔ local storage** — widgets, providers, and DAOs read and write the local Drift database.
 2. **Local storage ↔ remote** — PowerSync replicates down; `JevesBackendConnector` uploads up.
 
-**Stage 2 is out of scope for all UI code.** The UI's contract is with the local row and nothing else. It cannot determine — and must not attempt to determine — whether a local change originated from another screen, a background job, or a replicated delete from another device. "The row is gone locally" is the complete signal; there is no UI-visible notion of a *remote* delete, and a screen reacting to a subject disappearing is doing local-storage reactivity, not sync.
+**Stage 2 is out of scope for all UI behaviour.** The UI's contract is with the local row and nothing else. It cannot determine — and must not attempt to determine — whether a local change originated from another screen, a background job, or a replicated delete from another device. "The row is gone locally" is the complete signal; there is no UI-visible notion of a *remote* delete, and a screen reacting to a subject disappearing is doing local-storage reactivity, not sync.
 
 The practical consequence is about how UI behaviour gets *justified*, not just how it is implemented. Writing to a row absent from local storage is incorrect on its own terms. That a stray write would also be queued, rejected by the backend, and dead-lettered is a downstream symptom which confirms the bug — it is never the reason to fix it. A UI fix argued from its downstream sync symptom will be scoped wrong, because it optimises for the connector's behaviour rather than the local invariant. UI code therefore does not reference `BackendConnector`, the CRUD/upload queue, `sync_dead_letters`, or backend status codes, and UI tests exercise local storage directly rather than a sync round-trip.
+
+**Sync status is informational, never blocking.** The one stage-2 signal the UI may see is replication health: `syncStatusProvider` feeds the app-shell indicator and the settings SYNC row, and both only *render* it. Behaviour must never depend on it — no gating a write, disabling a control, or branching a flow on sync state. The offline-first contract is that every user action completes against local storage regardless of what stage 2 is doing. Reading sync status to decide *whether* something happens is a stage-2 dependency wearing a display read's clothing.
 
 #### Upload-error policy
 
