@@ -356,9 +356,16 @@ void main() {
       final subject = StreamController<Todo?>.broadcast();
       addTearDown(subject.close);
 
+      final sprint = _RecordingSprintTimer('sp2');
+      final notifications = _StubNotificationService();
       final (widget, _) = _buildScreen(db, 'sp2',
-          todoStream: subject.stream, sprint: _RecordingSprintTimer('sp2'));
+          todoStream: subject.stream,
+          sprint: sprint,
+          notifications: notifications);
       await tester.pumpWidget(widget);
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(ActiveFocusScreen)),
+      );
       subject.addError(Exception('SecretInternalDetail'));
       // Bounded pumping: the error branch logs through `debugPrint`, whose
       // throttle timer keeps the binding from reaching a quiet frame.
@@ -371,6 +378,22 @@ void main() {
       expect(find.textContaining('Something went wrong'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing);
       expect(tester.takeException(), isNull);
+
+      // An error is *not* a deletion, and the screen must not treat it as one.
+      // Only `missingBuilder` schedules the bounce; the error branch renders and
+      // stops there. Tearing a live sprint down over a read that failed — and
+      // that Riverpod is already retrying — would destroy work the user has not
+      // finished, on a signal that says nothing about whether the task exists.
+      // Pinned behaviourally, so wiring the error branch to the teardown later
+      // fails here rather than silently shipping.
+      expect(sprint.stopCalls, 0, reason: 'an errored watch must not stop the '
+          'sprint — the task may well still be there');
+      expect(container.read(focusModeProvider).isActive, isTrue,
+          reason: 'nor end focus mode');
+      expect(notifications.cancelFocusCalls, 0,
+          reason: 'nor tear down the focus notification');
+      expect(find.text('Focus home'), findsNothing,
+          reason: 'nor bounce the user off the screen');
     });
   });
 }

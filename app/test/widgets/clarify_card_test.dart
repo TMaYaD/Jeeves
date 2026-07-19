@@ -415,6 +415,37 @@ void main() {
           reason: 'and the hint seeds the Outcome rather than being dropped');
     });
 
+    testWidgets('a failed tag-hint read still lets the user route',
+        (tester) async {
+      // The gate settles on failure as well as success. Leaving it pending
+      // would disable the four Outcome routes for the life of the card, which
+      // strands the user on an item they cannot process — a worse outcome than
+      // clarifying without the hints. `InboxClarifyScreen` has the same
+      // contract on its one-shot read.
+      final capture = await _insertCapture(db, id: 'hinterr', title: 'Ship it');
+      final hints = StreamController<List<Tag>>.broadcast();
+      addTearDown(hints.close);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        tagHintsStream: hints.stream,
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      hints.addError(StateError('hint read failed'));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      final outcomeIds = await db.captureDao.outcomeIdsForCapture('hinterr');
+      expect(outcomeIds, hasLength(1),
+          reason: 'routing must not stay gated behind a hint read that failed');
+      expect(await _joinedTagIds(db, outcomeIds.single), isEmpty,
+          reason: 'it simply carries no hints');
+    });
+
     testWidgets(
         'a person hint dropped from the live list after seeding still never '
         'reaches the Outcome', (tester) async {
