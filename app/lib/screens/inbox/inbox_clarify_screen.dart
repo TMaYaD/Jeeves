@@ -1,15 +1,22 @@
 /// Standalone clarify screen for a single Inbox Capture.
 ///
 /// Opened when the user taps an inbox row outside of a planning session. It
-/// loads its own Capture and pops once the item is clarified, but the routing
-/// verdict itself is not its own: the action bar is [ProcessToHandlers], the
-/// same widget every ceremony clarify surface renders, so the destinations,
-/// their copy and the writes behind them cannot drift from those surfaces.
+/// binds to its Capture live and pops once the item is clarified, but the
+/// routing verdict itself is not its own: the action bar is
+/// [ProcessToHandlers], the same widget every ceremony clarify surface
+/// renders, so the destinations, their copy and the writes behind them cannot
+/// drift from those surfaces.
 ///
 /// Title and notes are saved onto the Capture after a successful route.
 /// Energy, time estimate and due date have no column on a Capture (ADR-0006) —
 /// they are held as draft state here and ride the [ClarifyDraft] into the
 /// Outcome that [ClarificationService.clarifyCaptureToOutcome] creates.
+///
+/// The subject comes from [captureProvider], so a row that changes — or
+/// disappears — while the screen is open re-renders it. That is local-storage
+/// reactivity and nothing more: the screen has no way to tell whether a change
+/// came from another screen, a background job or a replicated write, and does
+/// not try (ARCHITECTURE.md § Sync Engine — the UI's contract is with the local row).
 library;
 
 import 'package:flutter/material.dart';
@@ -18,6 +25,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
 import '../../providers/database_provider.dart';
+import '../../providers/task_detail_provider.dart';
 import '../../services/clarification_service.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/process_to_handlers.dart';
@@ -37,8 +45,27 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   String? _energyLevel;
   int? _timeEstimate;
   DateTime? _dueDate;
-  bool _loading = true;
   Capture? _capture;
+
+  /// True once local storage has answered with no row for [widget.captureId].
+  ///
+  /// Distinct from "not answered yet": the screen renders a spinner while the
+  /// subject is unknown and a missing-item state once it is known to be gone.
+  bool _subjectMissing = false;
+
+  /// True once the subject has been reconciled at least once, from either the
+  /// build-time seed or the listener. Gates the seed so it runs exactly once.
+  bool _seeded = false;
+
+  /// The subject values last written into the controllers — either seeded from
+  /// the row or saved back to it.
+  ///
+  /// A controller whose text still matches its marker is *clean*: the user has
+  /// not typed since, so an incoming change may be applied to it. Anything
+  /// else is a local edit in progress and is left alone. Null until the first
+  /// row arrives, which is what makes the first emission seed the fields.
+  String? _appliedTitle;
+  String? _appliedNotes;
 
   /// Mirrors `_titleCtrl.text.trim().isEmpty` so the routing buttons and the
   /// title's error state react as the user types. An Outcome must be
@@ -70,41 +97,65 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     super.initState();
     _titleCtrl = TextEditingController();
     _notesCtrl = TextEditingController();
-    _loadCapture();
+    _loadTagHints();
   }
 
-  Future<void> _loadCapture() async {
-    final db = ref.read(databaseProvider);
+  /// Reads the tag hints that seed the new Outcome's tags.
+  ///
+  /// Failing to read them costs the user their hints, not their clarification,
+  /// so it leaves the screen usable with an empty set rather than tearing it
+  /// down — the subject the screen actually renders comes from elsewhere.
+  Future<void> _loadTagHints() async {
+    final List<Tag> hints;
     try {
-      final capture = await db.captureDao.getCapture(widget.captureId);
-      if (!mounted) return;
-      if (capture == null) {
-        context.pop();
-        return;
-      }
-      final hints = await db.captureDao.tagHintsForCapture(widget.captureId);
-      if (!mounted) return;
-      setState(() {
-        // Person hints are excluded: delegation is the orthogonal axis and the
-        // Waiting For picker is the only thing that writes it.
-        _hintTagIds = {
-          for (final t in hints)
-            if (t.type != 'person') t.id,
-        };
-        _capture = capture;
-        _titleCtrl.text = capture.title;
-        _notesCtrl.text = capture.notes ?? '';
-        _titleIsBlank = capture.title.trim().isEmpty;
-        // Energy / estimate / due start empty: a Capture carries none of them.
-        _loading = false;
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to load item. Please try again.')),
-        );
-        context.pop();
-      }
+      hints = await ref
+          .read(databaseProvider)
+          .captureDao
+          .tagHintsForCapture(widget.captureId);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      // Person hints are excluded: delegation is the orthogonal axis and the
+      // Waiting For picker is the only thing that writes it.
+      _hintTagIds = {
+        for (final t in hints)
+          if (t.type != 'person') t.id,
+      };
+    });
+  }
+
+  /// Reconciles the screen with the subject as local storage now holds it.
+  ///
+  /// Applied to clean fields only — see [_appliedTitle]. Energy, estimate and
+  /// due date have no column on a Capture, so there is nothing to reconcile
+  /// for them; they stay draft state until the Outcome is minted.
+  void _applySubject(Capture? capture) {
+    if (!mounted) return;
+    setState(() => _reconcile(capture));
+  }
+
+  /// The reconciliation itself, without the [setState]. The listener wraps it;
+  /// the build-time seed calls it bare, because a build is already in flight.
+  void _reconcile(Capture? capture) {
+    _seeded = true;
+    if (capture == null) {
+      _capture = null;
+      _subjectMissing = true;
+      return;
+    }
+    _capture = capture;
+    _subjectMissing = false;
+    if (_appliedTitle == null || _titleCtrl.text.trim() == _appliedTitle) {
+      if (_titleCtrl.text != capture.title) _titleCtrl.text = capture.title;
+      _appliedTitle = capture.title.trim();
+      _titleIsBlank = _appliedTitle!.isEmpty;
+    }
+    final notes = capture.notes ?? '';
+    if (_appliedNotes == null || _notesCtrl.text.trim() == _appliedNotes) {
+      if (_notesCtrl.text != notes) _notesCtrl.text = notes;
+      _appliedNotes = notes.trim();
     }
   }
 
@@ -148,19 +199,26 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// the record of *what* was discarded — the original fragment is the
   /// correct history. Notes are skipped with it: a blank-titled discard has no
   /// edit worth keeping.
+  ///
+  /// `clearNotes` is driven by the field alone: clearing an already-null
+  /// column is a no-op, so there is no need to know what the row held — and
+  /// no load-time snapshot to get it wrong.
   Future<void> _saveCaptureText() async {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) return;
-    final capture = _capture;
-    if (capture == null) return;
+    if (_capture == null) return;
     final notes = _notesCtrl.text.trim();
-    final hadNotes = (capture.notes ?? '').isNotEmpty;
     await ref.read(databaseProvider).captureDao.updateFields(
           widget.captureId,
           title: title,
           notes: notes.isNotEmpty ? notes : null,
-          clearNotes: notes.isEmpty && hadNotes,
+          clearNotes: notes.isEmpty,
         );
+    // What we just wrote is now what the row holds, so the fields are clean
+    // again and a later incoming change may be applied to them.
+    if (!mounted) return;
+    _appliedTitle = title;
+    _appliedNotes = notes;
   }
 
   Future<DateTime?> _pickDate() {
@@ -176,6 +234,22 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Reconcile from the listener rather than from the build itself: applying
+    // a change writes into the controllers, and a controller that notifies
+    // its TextField mid-build would rebuild a widget that is already building.
+    ref.listen<AsyncValue<Capture?>>(
+      captureProvider(widget.captureId),
+      (_, next) => next.whenData(_applySubject),
+    );
+    // Seed from the value the provider already holds. The listener alone would
+    // miss it: the subject can reach AsyncData before this screen mounts — the
+    // provider is autoDispose, so anything else still bound to the same Capture
+    // keeps it alive past its loading state — and ref.listen fires only on
+    // later changes. Reconciling mid-build is safe only here: it runs once, and
+    // only while nothing has been applied yet, which is exactly when the
+    // spinner is up and no TextField is attached to the controllers to notify.
+    final subject = ref.watch(captureProvider(widget.captureId));
+    if (!_seeded) subject.whenData(_reconcile);
     return PopScope(
       // Platform back is the one escape no widget owns, so it needs the guard
       // here rather than an `enabled:` flag. Shut while a route is in flight,
@@ -198,7 +272,9 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
           onPressed: _routing ? null : () => context.pop(),
         ),
       ),
-      body: _loading
+      body: _subjectMissing
+          ? const ClarifySubjectMissing()
+          : _capture == null
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               physics: const ClampingScrollPhysics(),

@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/services/clarification_service.dart';
@@ -320,15 +321,74 @@ bool _backEnabled(WidgetTester tester) =>
         .onPressed !=
     null;
 
+/// Feeds [captureProvider] without subscribing to a live drift `watch()`.
+///
+/// The screen binds to the Capture live, so the stream behind that provider is
+/// what a test uses to make the row change (or disappear) underneath an open
+/// screen. A real `watch()` would leave drift's StreamQueryStore holding a
+/// pending timer and hang `pumpAndSettle` (docs/TESTING.md), so tests write to
+/// the database and then push the re-read row — or `null` for a delete — down
+/// this controller themselves.
+class _CaptureFeed {
+  final _controller = StreamController<Capture?>.broadcast();
+
+  Stream<Capture?> get stream => _controller.stream;
+
+  /// Re-reads [captureId] from local storage and emits it, exactly as a live
+  /// query would after a write lands.
+  Future<void> emitFrom(GtdDatabase db, String captureId) async =>
+      _controller.add(await db.captureDao.getCapture(captureId));
+
+  /// The row is gone from local storage. That is the complete signal the UI
+  /// gets — it carries no notion of *why* (ARCHITECTURE.md § two-stage
+  /// boundary).
+  void emitMissing() => _controller.add(null);
+
+  Future<void> close() => _controller.close();
+}
+
+/// An Inbox that holds a live listener on the subject, so the autoDispose
+/// [captureProvider] is already in `AsyncData` when the clarify screen mounts.
+class _LiveSubjectInbox extends ConsumerWidget {
+  const _LiveSubjectInbox({required this.captureId});
+
+  final String captureId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(captureProvider(captureId));
+    return Scaffold(
+      body: Center(
+        child: TextButton(
+          onPressed: () => context.push('/inbox/$captureId/clarify'),
+          child: const Text('Clarify'),
+        ),
+      ),
+    );
+  }
+}
+
 Widget _buildApp(
   GtdDatabase db,
   String captureId, {
   ClarificationService? clarificationService,
   List<Tag>? personTags,
+  _CaptureFeed? captureFeed,
+  // Starts on the Inbox with a live listener already bound to the subject, so
+  // the autoDispose provider is holding data by the time the clarify screen
+  // mounts. Reproduces the real ordering: the screen is not always the thing
+  // that brings the subject into existence.
+  bool subjectAlreadyLive = false,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      // The screen's live subject binding. Default to a one-shot read of the
+      // stored row: enough for the screen to render, with no pending timer.
+      captureProvider(captureId).overrideWith(
+        (_) => captureFeed?.stream ??
+            Stream.fromFuture(db.captureDao.getCapture(captureId)),
+      ),
       if (clarificationService != null)
         clarificationServiceProvider.overrideWithValue(clarificationService),
       // Only the Waiting For flow opens the person picker. Override with a
@@ -340,11 +400,14 @@ Widget _buildApp(
     child: MaterialApp.router(
       routerConfig: GoRouter(
         // Nest the clarify route under /inbox so pop() has a page to return to.
-        initialLocation: '/inbox/$captureId/clarify',
+        initialLocation:
+            subjectAlreadyLive ? '/inbox' : '/inbox/$captureId/clarify',
         routes: [
           GoRoute(
             path: '/inbox',
-            builder: (context, _) => const Scaffold(body: Text('Inbox')),
+            builder: (context, _) => subjectAlreadyLive
+                ? _LiveSubjectInbox(captureId: captureId)
+                : const Scaffold(body: Text('Inbox')),
             routes: [
               GoRoute(
                 path: ':id/clarify',
@@ -853,6 +916,169 @@ void main() {
               .getSingle();
       expect(row.notes, isNull);
       expect(row.lastClarifiedAt, isNotNull);
+    });
+  });
+
+  // The screen used to read its Capture exactly once and hold the snapshot for
+  // its whole lifetime, so a row that changed underneath it was invisible and
+  // got overwritten on the way out. It now binds to the row live (#427).
+  group('InboxClarifyScreen — live subject binding', () {
+    late GtdDatabase db;
+    late _CaptureFeed feed;
+
+    setUp(() {
+      db = _openInMemory();
+      feed = _CaptureFeed();
+    });
+    tearDown(() async {
+      await feed.close();
+      await db.close();
+    });
+
+    testWidgets('adopts a change to a field the user has not edited',
+        (tester) async {
+      await db.captureDao.insertCapture(
+        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+      );
+
+      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      // The row changes in local storage. The screen cannot tell whether that
+      // came from another screen, a background job or a replicated edit — the
+      // changed row is the whole signal.
+      await db.captureDao.updateFields('x', title: 'Buy oat milk');
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      final titleField =
+          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
+      expect(titleField.controller?.text, 'Buy oat milk');
+    });
+
+    testWidgets('renders a subject the provider already holds', (tester) async {
+      await db.captureDao.insertCapture(
+        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+      );
+
+      // The Inbox binds to the subject first, so by the time clarify opens the
+      // provider is past its loading state and will not emit again.
+      await tester.pumpWidget(
+        _buildApp(db, 'x', captureFeed: feed, subjectAlreadyLive: true),
+      );
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Clarify'));
+      // Fixed pumps rather than pumpAndSettle: without the build-time seed the
+      // screen stays on its spinner, and a spinner never settles.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // The only value the listener would ever have applied was emitted before
+      // this screen mounted, so the seed is the sole path to the subject.
+      final titleField =
+          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
+      expect(titleField.controller?.text, 'Buy milk');
+      final notesField =
+          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
+      expect(notesField.controller?.text, 'Full fat');
+    });
+
+    testWidgets('leaves a field the user is editing alone', (tester) async {
+      await db.captureDao.insertCapture(
+        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+      );
+
+      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy almond milk');
+      await tester.pumpAndSettle();
+
+      await db.captureDao.updateFields('x', title: 'Buy oat milk');
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      // Dirty field: the user's in-progress edit wins.
+      final titleField =
+          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
+      expect(titleField.controller?.text, 'Buy almond milk');
+      // Clean field: the incoming notes land.
+      final notesField =
+          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
+      expect(notesField.controller?.text, 'Full fat');
+    });
+
+    testWidgets('an incoming edit is not overwritten by the routing save',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      await db.captureDao.updateFields('x', title: 'Buy oat milk');
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      // The save on the way out must carry the row's current title, not the
+      // one this screen happened to load with.
+      expect((await db.captureDao.getCapture('x'))!.title, 'Buy oat milk');
+      expect((await _outcomeOf(db, 'x'))!.title, 'Buy oat milk');
+    });
+
+    testWidgets('clearing notes persists after an intermediate save',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      // The intermediate save: notes reach the row while the screen is open.
+      // Before #427 the screen's load-time snapshot still said "no notes", so
+      // the subsequent clear computed `clearNotes: false` and the stale notes
+      // survived as Capture provenance.
+      await db.captureDao.updateFields('x', notes: 'Full fat');
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      expect((await db.captureDao.getCapture('x'))!.notes, isNull);
+    });
+
+    testWidgets('a subject that disappears stops being editable',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('clarify_title')), findsOneWidget);
+
+      // The row is gone from local storage.
+      await db.captureDao.deleteCapture('x');
+      feed.emitMissing();
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('clarify_title')), findsNothing);
+      expect(find.text('Next Action'), findsNothing);
+      expect(find.byKey(const Key('clarify_subject_missing')), findsOneWidget);
     });
   });
 }
