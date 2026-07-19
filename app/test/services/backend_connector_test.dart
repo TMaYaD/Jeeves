@@ -69,13 +69,13 @@ ResponseBody _jsonResponse(int status, [String body = '{}']) =>
 void main() {
   setUpAll(configureSqliteForTests);
 
-  group('JevesBackendConnector.classifyUploadError', () {
+  group('JeevesBackendConnector.classifyUploadError', () {
     // One case per row of the upload-error policy table (docs/ARCHITECTURE.md
     // § Sync Engine). Nothing is ever silently dropped: every 4xx that is not
     // retried or safely discarded must be dead-lettered.
     test('network errors (no status) are retried', () {
       expect(
-        JevesBackendConnector.classifyUploadError(
+        JeevesBackendConnector.classifyUploadError(
             _entry('todos', UpdateType.put), _dioError(null)),
         UploadErrorAction.retry,
       );
@@ -83,7 +83,7 @@ void main() {
 
     test('401 is retried — the entry survives a failed token refresh', () {
       expect(
-        JevesBackendConnector.classifyUploadError(
+        JeevesBackendConnector.classifyUploadError(
             _entry('todos', UpdateType.put), _dioError(401)),
         UploadErrorAction.retry,
       );
@@ -92,7 +92,7 @@ void main() {
     test('408 and 429 are transient back-pressure — retried', () {
       for (final code in [408, 429]) {
         expect(
-          JevesBackendConnector.classifyUploadError(
+          JeevesBackendConnector.classifyUploadError(
               _entry('todos', UpdateType.put), _dioError(code)),
           UploadErrorAction.retry,
           reason: '$code should be retried',
@@ -103,7 +103,7 @@ void main() {
     test('5xx is retried', () {
       for (final code in [500, 502, 503]) {
         expect(
-          JevesBackendConnector.classifyUploadError(
+          JeevesBackendConnector.classifyUploadError(
               _entry('todos', UpdateType.put), _dioError(code)),
           UploadErrorAction.retry,
           reason: '$code should be retried',
@@ -115,7 +115,7 @@ void main() {
         () {
       for (final op in [UpdateType.patch, UpdateType.delete]) {
         expect(
-          JevesBackendConnector.classifyUploadError(
+          JeevesBackendConnector.classifyUploadError(
               _entry('todos', op), _dioError(404)),
           UploadErrorAction.discard,
           reason: '404 on $op should be discarded',
@@ -125,7 +125,7 @@ void main() {
 
     test('404 on put is dead-lettered, not discarded', () {
       expect(
-        JevesBackendConnector.classifyUploadError(
+        JeevesBackendConnector.classifyUploadError(
             _entry('todo_tags', UpdateType.put), _dioError(404)),
         UploadErrorAction.deadLetter,
       );
@@ -134,7 +134,7 @@ void main() {
     test('403, 409, 400, 422 and unknown 4xx are dead-lettered', () {
       for (final code in [400, 403, 409, 418, 422]) {
         expect(
-          JevesBackendConnector.classifyUploadError(
+          JeevesBackendConnector.classifyUploadError(
               _entry('todos', UpdateType.put), _dioError(code)),
           UploadErrorAction.deadLetter,
           reason: '$code should be dead-lettered',
@@ -143,7 +143,7 @@ void main() {
     });
   });
 
-  group('JevesBackendConnector.uploadCrudBatch', () {
+  group('JeevesBackendConnector.uploadCrudBatch', () {
     late GtdDatabase db;
 
     setUp(() {
@@ -154,13 +154,13 @@ void main() {
       await db.close();
     });
 
-    JevesBackendConnector connector(_ScriptedAdapter adapter) {
+    JeevesBackendConnector connector(_ScriptedAdapter adapter) {
       final api = ApiService(
         baseUrl: 'http://scripted.invalid',
         adapter: adapter,
       );
       api.setAuthToken('initial-token');
-      return JevesBackendConnector(api, db);
+      return JeevesBackendConnector(api, db);
     }
 
     (CrudBatch, bool Function()) batchOf(List<CrudEntry> entries) {
@@ -188,7 +188,7 @@ void main() {
       );
       api.setAuthToken('stale-token');
       api.setOnUnauthorized(() async => null); // refresh fails
-      final conn = JevesBackendConnector(api, db);
+      final conn = JeevesBackendConnector(api, db);
       final (batch, completed) =
           batchOf([_entry('todos', UpdateType.put)]);
 
@@ -212,7 +212,7 @@ void main() {
       );
       api.setAuthToken('stale-token');
       api.setOnUnauthorized(() async => 'fresh-token');
-      final conn = JevesBackendConnector(api, db);
+      final conn = JeevesBackendConnector(api, db);
       final (batch, completed) =
           batchOf([_entry('todos', UpdateType.put)]);
 
@@ -630,18 +630,18 @@ void main() {
     });
   });
 
-  group('JevesBackendConnector.isSilentDataLossDrop', () {
+  group('JeevesBackendConnector.isSilentDataLossDrop', () {
     // The connector's debug assert refuses to silently drop a user_preferences
     // upload on a fatal 4xx (the #306 read-side wipe). These cases lock in which
     // dropped entries trip that guard.
     test('a non-delete user_preferences write trips the guard', () {
       expect(
-        JevesBackendConnector.isSilentDataLossDrop(
+        JeevesBackendConnector.isSilentDataLossDrop(
             _entry('user_preferences', UpdateType.put)),
         isTrue,
       );
       expect(
-        JevesBackendConnector.isSilentDataLossDrop(
+        JeevesBackendConnector.isSilentDataLossDrop(
             _entry('user_preferences', UpdateType.patch)),
         isTrue,
       );
@@ -649,7 +649,7 @@ void main() {
 
     test('a user_preferences delete is exempt (idempotent 404)', () {
       expect(
-        JevesBackendConnector.isSilentDataLossDrop(
+        JeevesBackendConnector.isSilentDataLossDrop(
             _entry('user_preferences', UpdateType.delete)),
         isFalse,
       );
@@ -666,7 +666,7 @@ void main() {
       ]) {
         for (final op in UpdateType.values) {
           expect(
-            JevesBackendConnector.isSilentDataLossDrop(_entry(table, op)),
+            JeevesBackendConnector.isSilentDataLossDrop(_entry(table, op)),
             isFalse,
             reason: '$table / $op should not be flagged',
           );

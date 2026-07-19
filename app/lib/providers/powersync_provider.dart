@@ -72,7 +72,7 @@ final FutureProvider<ps.PowerSyncDatabase> powerSyncInstanceProvider =
         // databaseProvider is a synchronous Provider over a delayed Drift
         // connection, so reading it here cannot deadlock — queries the
         // connector issues before the connection resolves are queued.
-        final connector = JevesBackendConnector(
+        final connector = JeevesBackendConnector(
           ref.read(apiServiceProvider),
           ref.read(databaseProvider),
         );

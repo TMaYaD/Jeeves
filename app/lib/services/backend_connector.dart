@@ -41,8 +41,8 @@ enum UploadErrorAction {
   deadLetter,
 }
 
-class JevesBackendConnector extends ps.PowerSyncBackendConnector {
-  JevesBackendConnector(this._api, this._db);
+class JeevesBackendConnector extends ps.PowerSyncBackendConnector {
+  JeevesBackendConnector(this._api, this._db);
 
   final ApiService _api;
   final GtdDatabase _db;
@@ -129,7 +129,7 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
             await _uploadCaptureTag(entry);
           default:
             throw StateError(
-              'JevesBackendConnector: no upload handler for table '
+              'JeevesBackendConnector: no upload handler for table '
               '"${entry.table}". Add a case to uploadCrudBatch() or rows on '
               'this table will be silently lost from the CRUD queue.',
             );
@@ -142,7 +142,7 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
             // Safe metadata only: CrudEntry.toString() interpolates the full
             // opData payload, and debugPrint emits in profile/release builds.
             debugPrint(
-              'JevesBackendConnector: discarding ${entry.table}/${entry.id} '
+              'JeevesBackendConnector: discarding ${entry.table}/${entry.id} '
               '${entry.op.toJson()} (status ${e.response?.statusCode}) — the '
               'remote row is already gone; the next pull converges local '
               'state',
@@ -173,7 +173,7 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
     // and debugPrint emits in profile/release builds. Payload and body are
     // persisted in sync_dead_letters instead — that row is the diagnostic log.
     debugPrint(
-      'JevesBackendConnector: dead-lettering ${entry.table}/${entry.id} '
+      'JeevesBackendConnector: dead-lettering ${entry.table}/${entry.id} '
       '${entry.op.toJson()} (status $status); payload and response body '
       'recorded in sync_dead_letters',
     );
@@ -186,7 +186,7 @@ class JevesBackendConnector extends ps.PowerSyncBackendConnector {
     // legitimate write never 4xx here.
     assert(
       !isSilentDataLossDrop(entry),
-      'JevesBackendConnector: dead-lettered a user_preferences upload '
+      'JeevesBackendConnector: dead-lettered a user_preferences upload '
       '(status $status) for $entry — risks the #306 read-side wipe. Make the '
       'backend route accept this write instead of returning 4xx.',
     );

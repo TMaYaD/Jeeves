@@ -21,7 +21,7 @@ SyncStatus _map(ps.SyncStatus status) {
 /// Returns [SyncStatus.localOnly] immediately when the user is unauthenticated.
 /// Once authenticated, combines PowerSync's connection status stream with the
 /// dead-letter count from `sync_dead_letters`: any recorded non-retryable
-/// upload failure (see `JevesBackendConnector.classifyUploadError`) forces
+/// upload failure (see `JeevesBackendConnector.classifyUploadError`) forces
 /// [SyncStatus.error] so the drawer's sync indicator surfaces it — even while
 /// the engine itself reports a healthy connection.
 final syncStatusProvider = StreamProvider<SyncStatus>((ref) async* {
