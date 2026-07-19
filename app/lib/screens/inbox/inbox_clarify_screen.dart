@@ -53,6 +53,10 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// subject is unknown and a missing-item state once it is known to be gone.
   bool _subjectMissing = false;
 
+  /// True once the subject has been reconciled at least once, from either the
+  /// build-time seed or the listener. Gates the seed so it runs exactly once.
+  bool _seeded = false;
+
   /// The subject values last written into the controllers — either seeded from
   /// the row or saved back to it.
   ///
@@ -129,27 +133,30 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// for them; they stay draft state until the Outcome is minted.
   void _applySubject(Capture? capture) {
     if (!mounted) return;
+    setState(() => _reconcile(capture));
+  }
+
+  /// The reconciliation itself, without the [setState]. The listener wraps it;
+  /// the build-time seed calls it bare, because a build is already in flight.
+  void _reconcile(Capture? capture) {
+    _seeded = true;
     if (capture == null) {
-      setState(() {
-        _capture = null;
-        _subjectMissing = true;
-      });
+      _capture = null;
+      _subjectMissing = true;
       return;
     }
-    setState(() {
-      _capture = capture;
-      _subjectMissing = false;
-      if (_appliedTitle == null || _titleCtrl.text.trim() == _appliedTitle) {
-        if (_titleCtrl.text != capture.title) _titleCtrl.text = capture.title;
-        _appliedTitle = capture.title.trim();
-        _titleIsBlank = _appliedTitle!.isEmpty;
-      }
-      final notes = capture.notes ?? '';
-      if (_appliedNotes == null || _notesCtrl.text.trim() == _appliedNotes) {
-        if (_notesCtrl.text != notes) _notesCtrl.text = notes;
-        _appliedNotes = notes.trim();
-      }
-    });
+    _capture = capture;
+    _subjectMissing = false;
+    if (_appliedTitle == null || _titleCtrl.text.trim() == _appliedTitle) {
+      if (_titleCtrl.text != capture.title) _titleCtrl.text = capture.title;
+      _appliedTitle = capture.title.trim();
+      _titleIsBlank = _appliedTitle!.isEmpty;
+    }
+    final notes = capture.notes ?? '';
+    if (_appliedNotes == null || _notesCtrl.text.trim() == _appliedNotes) {
+      if (_notesCtrl.text != notes) _notesCtrl.text = notes;
+      _appliedNotes = notes.trim();
+    }
   }
 
   @override
@@ -234,6 +241,15 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       captureProvider(widget.captureId),
       (_, next) => next.whenData(_applySubject),
     );
+    // Seed from the value the provider already holds. The listener alone would
+    // miss it: the subject can reach AsyncData before this screen mounts — the
+    // provider is autoDispose, so anything else still bound to the same Capture
+    // keeps it alive past its loading state — and ref.listen fires only on
+    // later changes. Reconciling mid-build is safe only here: it runs once, and
+    // only while nothing has been applied yet, which is exactly when the
+    // spinner is up and no TextField is attached to the controllers to notify.
+    final subject = ref.watch(captureProvider(widget.captureId));
+    if (!_seeded) subject.whenData(_reconcile);
     return PopScope(
       // Platform back is the one escape no widget owns, so it needs the guard
       // here rather than an `enabled:` flag. Shut while a route is in flight,

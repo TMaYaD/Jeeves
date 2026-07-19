@@ -347,12 +347,38 @@ class _CaptureFeed {
   Future<void> close() => _controller.close();
 }
 
+/// An Inbox that holds a live listener on the subject, so the autoDispose
+/// [captureProvider] is already in `AsyncData` when the clarify screen mounts.
+class _LiveSubjectInbox extends ConsumerWidget {
+  const _LiveSubjectInbox({required this.captureId});
+
+  final String captureId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(captureProvider(captureId));
+    return Scaffold(
+      body: Center(
+        child: TextButton(
+          onPressed: () => context.push('/inbox/$captureId/clarify'),
+          child: const Text('Clarify'),
+        ),
+      ),
+    );
+  }
+}
+
 Widget _buildApp(
   GtdDatabase db,
   String captureId, {
   ClarificationService? clarificationService,
   List<Tag>? personTags,
   _CaptureFeed? captureFeed,
+  // Starts on the Inbox with a live listener already bound to the subject, so
+  // the autoDispose provider is holding data by the time the clarify screen
+  // mounts. Reproduces the real ordering: the screen is not always the thing
+  // that brings the subject into existence.
+  bool subjectAlreadyLive = false,
 }) {
   return ProviderScope(
     overrides: [
@@ -374,11 +400,14 @@ Widget _buildApp(
     child: MaterialApp.router(
       routerConfig: GoRouter(
         // Nest the clarify route under /inbox so pop() has a page to return to.
-        initialLocation: '/inbox/$captureId/clarify',
+        initialLocation:
+            subjectAlreadyLive ? '/inbox' : '/inbox/$captureId/clarify',
         routes: [
           GoRoute(
             path: '/inbox',
-            builder: (context, _) => const Scaffold(body: Text('Inbox')),
+            builder: (context, _) => subjectAlreadyLive
+                ? _LiveSubjectInbox(captureId: captureId)
+                : const Scaffold(body: Text('Inbox')),
             routes: [
               GoRoute(
                 path: ':id/clarify',
@@ -926,6 +955,35 @@ void main() {
       final titleField =
           tester.widget<TextField>(find.byKey(const Key('clarify_title')));
       expect(titleField.controller?.text, 'Buy oat milk');
+    });
+
+    testWidgets('renders a subject the provider already holds', (tester) async {
+      await db.captureDao.insertCapture(
+        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+      );
+
+      // The Inbox binds to the subject first, so by the time clarify opens the
+      // provider is past its loading state and will not emit again.
+      await tester.pumpWidget(
+        _buildApp(db, 'x', captureFeed: feed, subjectAlreadyLive: true),
+      );
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Clarify'));
+      // Fixed pumps rather than pumpAndSettle: without the build-time seed the
+      // screen stays on its spinner, and a spinner never settles.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // The only value the listener would ever have applied was emitted before
+      // this screen mounted, so the seed is the sole path to the subject.
+      final titleField =
+          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
+      expect(titleField.controller?.text, 'Buy milk');
+      final notesField =
+          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
+      expect(notesField.controller?.text, 'Full fat');
     });
 
     testWidgets('leaves a field the user is editing alone', (tester) async {
