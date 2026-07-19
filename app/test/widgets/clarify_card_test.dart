@@ -375,6 +375,46 @@ void main() {
               'the Outcome the Capture becomes');
     });
 
+    testWidgets('routing is gated until the tag hints have arrived',
+        (tester) async {
+      // The hints ride the draft into `clarifyCaptureToOutcome`. Until the
+      // watch delivers, `_draft` reads the *currently emitted* list — empty —
+      // so a tap landing first mints an Outcome carrying none of the Capture's
+      // tags, silently. `InboxClarifyScreen` gates the same four routes on the
+      // same hazard; this pins the ceremony surface's half.
+      final capture = await _insertCapture(db, id: 'gated', title: 'Ship it');
+      final ctx = await _insertTag(db, id: 'c1', name: 'work', type: 'context');
+      await db.captureDao.assignTagHint('gated', 'c1', _userId);
+      final hints = StreamController<List<Tag>>.broadcast();
+      addTearDown(hints.close);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        contextTags: [ctx],
+        tagHintsStream: hints.stream,
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      // Hints still in flight: the route must not commit.
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+      expect(await db.captureDao.outcomeIdsForCapture('gated'), isEmpty,
+          reason: 'routing must not commit while the hints are still in '
+              'flight — the Outcome would lose every tag hint');
+
+      // They land; the same tap now routes, carrying them.
+      hints.add([ctx]);
+      await _pumpFrames(tester, frames: 5);
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      final outcomeId =
+          (await db.captureDao.outcomeIdsForCapture('gated')).single;
+      expect(await _joinedTagIds(db, outcomeId), contains('c1'),
+          reason: 'and the hint seeds the Outcome rather than being dropped');
+    });
+
     testWidgets(
         'a person hint dropped from the live list after seeding still never '
         'reaches the Outcome', (tester) async {

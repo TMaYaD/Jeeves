@@ -447,6 +447,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         return _buildBody(
           context,
           tags: hints,
+          hintsPending: !hintsAsync.hasValue,
           subject: CaptureSubject(
             capture: capture,
             draft: () => _draft(hints),
@@ -519,6 +520,9 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     BuildContext context, {
     required List<Tag> tags,
     required ClarifySubject subject,
+    // True while a Capture card's tag hints are still arriving. Outcome cards
+    // leave it false: they have no hints to wait for.
+    bool hintsPending = false,
   }) {
     // Tags are watched live so the pickers re-render on DB change; keeping a
     // local mirror would go stale across the async write. Person tags are
@@ -529,10 +533,18 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     final projectTag = projectTags.isEmpty ? null : projectTags.first;
     final contextTags = allTags.where((t) => t.type == 'context').toList();
 
-    // Title is required to route to anything except Trash. Disable the
-    // four committed routes; Trash stays enabled so the user can throw away
-    // an unnamed item.
-    final disabled = _titleIsBlank
+    // Gated twice, for two reasons that both come down to what an Outcome must
+    // carry. A title, because an Outcome must be nameable. And settled tag
+    // hints, because they ride the draft into `clarifyCaptureToOutcome` — a tap
+    // landing while they are still arriving reads the *currently emitted* list,
+    // which is empty, and mints an Outcome missing every tag the Capture had,
+    // silently. `InboxClarifyScreen` gates the same four routes on the same
+    // hazard; this is the ceremony surface's half of it.
+    //
+    // Trash stays enabled through both: it creates no Outcome, so it needs
+    // neither a name nor tags — an unnamed fragment is exactly what a user
+    // wants to throw away.
+    final disabled = (_titleIsBlank || hintsPending)
         ? const <ProcessAction>{
             ProcessAction.next,
             ProcessAction.waitingFor,

@@ -81,10 +81,13 @@ class AsyncList<T> extends StatelessWidget {
     // one. An empty retained value has nothing worth preserving.
     final hasRenderableRows =
         asyncValue.hasValue && asyncValue.value!.isNotEmpty;
-    if (asyncValue.hasError && !hasRenderableRows) {
+    // Logged for *every* error, including one arriving on a list that still has
+    // rows. That case keeps the rows on screen rather than an error panel, but
+    // must not swallow the exception — same bargain [AsyncSubject] makes.
+    if (asyncValue.hasError) {
       debugPrint(
           'AsyncList error: ${asyncValue.error}\n${asyncValue.stackTrace}');
-      return const ErrorSurface();
+      if (!hasRenderableRows) return const ErrorSurface();
     }
     // Same guard as the error branch, for the same reason: a reload that
     // started from a retained *empty* list reports `hasValue`, so testing that

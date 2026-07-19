@@ -213,6 +213,15 @@ Tag _personTag(String id, String name) => Tag(
       userId: _userId,
     );
 
+/// Bounded pumping for the sub-flow tests. Deliberately `pump`, not
+/// `pumpAndSettle`: the pushed card watches a stream whose query store keeps
+/// emitting, so settling never reaches a quiet frame.
+Future<void> _pumpFor(WidgetTester tester, {int frames = 10}) async {
+  for (var i = 0; i < frames; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -1152,13 +1161,9 @@ void main() {
       // loading→missing and still pass, never touching the present→missing
       // transition it exists to cover.
       await tester.tap(find.text('Re-clarify…'));
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       subject.add(todo);
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       expect(find.byType(ClarifyCard), findsOneWidget);
       // Pins the premise: the card is showing the live Outcome, not a spinner.
       expect(find.widgetWithText(TextField, 'Live outcome'), findsOneWidget);
@@ -1171,17 +1176,13 @@ void main() {
       // whether or not the escape bubbles correctly.
       await (db.delete(db.todos)..where((t) => t.id.equals('rc4'))).go();
       subject.add(null);
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       expect(find.text('This outcome no longer exists'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing,
           reason: 'the null emission is *gone*, not still loading');
 
       await tester.tap(find.text('Continue'));
-      for (var i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester, frames: 12);
 
       expect(find.byType(ClarifyCard), findsNothing,
           reason: 'the escape closes the sub-flow');
@@ -1217,20 +1218,14 @@ void main() {
       ));
 
       await tester.tap(find.text('Re-clarify…'));
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       subject.add(todo);
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       expect(find.widgetWithText(TextField, 'Doomed outcome'), findsOneWidget);
 
       await (db.delete(db.todos)..where((t) => t.id.equals('rc5'))).go();
       subject.add(null);
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       expect(find.text('This outcome no longer exists'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing,
           reason: 'the null emission is *gone*, not still loading');
@@ -1238,9 +1233,7 @@ void main() {
       // Back out via the AppBar arrow rather than the CTA — pops with no
       // result, which is the path the CTA's explicit `pop(keep)` bypasses.
       await tester.pageBack();
-      for (var i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester, frames: 12);
 
       expect(find.byType(ClarifyCard), findsNothing,
           reason: 'backing out closes the sub-flow');
@@ -1273,26 +1266,18 @@ void main() {
       ));
 
       await tester.tap(find.text('Re-clarify\u2026'));
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       subject.add(todo);
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       expect(find.widgetWithText(TextField, 'Doomed outcome'), findsOneWidget);
 
       await (db.delete(db.todos)..where((t) => t.id.equals('rc6'))).go();
       subject.add(null);
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester);
       expect(find.text('This outcome no longer exists'), findsOneWidget);
 
       await tester.binding.handlePopRoute();
-      for (var i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpFor(tester, frames: 12);
 
       expect(find.byType(ClarifyCard), findsNothing,
           reason: 'system back closes the sub-flow');

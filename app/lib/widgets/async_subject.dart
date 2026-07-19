@@ -114,9 +114,14 @@ class AsyncSubject<T extends Object> extends StatelessWidget {
     // *missing* panel — telling the user the row was deleted when the read
     // merely failed, and offering an escape premised on that. A retained null
     // is nothing worth preserving, so it yields to the error.
-    if (async.hasError && async.value == null) {
+    //
+    // The log fires for *every* error, exempt or not: the exempt case keeps the
+    // row on screen rather than an error panel, which is the right surface but
+    // would otherwise swallow the exception entirely. [ErrorSurface]'s bargain
+    // is that the detail reaches the log even when it never reaches the user.
+    if (async.hasError) {
       debugPrint('AsyncSubject error: ${async.error}\n${async.stackTrace}');
-      return _chromed(context, const ErrorSurface());
+      if (async.value == null) return _chromed(context, const ErrorSurface());
     }
     // Keyed on the same "is there a row worth showing" test as the error branch
     // rather than on `hasValue` alone. A reload that started from a retained
@@ -132,6 +137,11 @@ class AsyncSubject<T extends Object> extends StatelessWidget {
     }
 
     final subject = async.value;
+    // `async.isGone` by construction: the error-with-null and loading-with-null
+    // branches above have already returned, so a null here is a delivered null.
+    // Written as a null check rather than the extension because that is what
+    // promotes `subject` to non-null for [dataBuilder] — spelling it `isGone`
+    // would buy consistency at the price of an unchecked cast.
     if (subject == null) {
       if (missingBuilder != null) return missingBuilder!(context);
       return _chromed(

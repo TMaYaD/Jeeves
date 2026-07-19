@@ -124,10 +124,18 @@ class _StatusMenuSheet extends ConsumerWidget {
     // is gone. `AsyncData(null)` is the same "gone, not loading" test
     // `AsyncSubject` makes; see `TaskDetailScreen._mutate`, which guards the
     // sheets that screen owns for the same reason.
+    //
+    // Failures are logged rather than discarded, matching
+    // `TaskDetailScreen._mutate`: these are user-initiated status changes, so a
+    // write that fails silently loses the choice with no trace anywhere.
     Future<void> write(Future<void> Function(TaskDetailNotifier n) mutate) async {
       final subject = ref.read(taskDetailTodoProvider(todo.id));
       if (subject.isGone) return;
-      await mutate(notifier);
+      try {
+        await mutate(notifier);
+      } catch (e) {
+        debugPrint('Status row write failed: $e');
+      }
     }
     final isDone = todo.doneAt != null;
     final isTrashed = todo.intent == 'trash';

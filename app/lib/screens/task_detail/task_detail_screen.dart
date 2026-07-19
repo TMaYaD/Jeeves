@@ -87,9 +87,16 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   /// the missing panel neither dismisses it nor disables its buttons. The user
   /// is left tapping live controls over a row that is gone, and each tap would
   /// queue an UPDATE that the backend 404s into `sync_dead_letters`.
-  void _mutate(void Function(TaskDetailNotifier n) write) {
+  ///
+  /// Failures are logged rather than discarded. These are user-initiated edits
+  /// — assigning a project, setting an estimate — so a write that fails
+  /// silently loses the user's change with no trace anywhere. The focus-loss
+  /// autosaves above already log; centralising it here puts every write on the
+  /// same footing without eleven callsites each remembering to.
+  void _mutate(Future<void> Function(TaskDetailNotifier n) write) {
     if (_subjectGone) return;
-    write(_notifier);
+    write(_notifier)
+        .catchError((Object e) => debugPrint('Task detail write failed: $e'));
   }
 
   /// Whether the watched Outcome has been hard-deleted while this screen was
@@ -171,8 +178,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       // Project Picker Custom UI
                       ProjectPickerWidget(
                         currentProjectTag: projectTag,
-                        onAssign: (tag) => _mutate((n) => n.assignProject(tag.id).ignore()),
-                        onClear: () => _mutate((n) => n.clearProject().ignore()),
+                        onAssign: (tag) => _mutate((n) => n.assignProject(tag.id)),
+                        onClear: () => _mutate((n) => n.clearProject()),
                         customChild: Padding(
                           padding: const EdgeInsets.only(bottom: 4),
                           child: Row(
@@ -367,7 +374,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                                               }
                                                               final newNotes = lines.join('\n');
                                                               setState(() => _notesController.text = newNotes);
-                                                              _mutate((n) => n.updateNotes(newNotes).ignore());
+                                                              _mutate((n) => n.updateNotes(newNotes));
                                                             },
                                                           ),
                                                         );
@@ -424,9 +431,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                           ),
                                         );
                                         if (picked != null) {
-                                          _mutate((n) => n.setDueDate(picked).ignore());
+                                          _mutate((n) => n.setDueDate(picked));
                                         } else {
-                                          _mutate((n) => n.clearDueDate().ignore());
+                                          _mutate((n) => n.clearDueDate());
                                         }
                                       },
                                     ),
@@ -609,9 +616,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 return ContextTagPickerWidget(
                   assignedTags: contextTags,
                   onAssign: (tag) =>
-                      _mutate((n) => n.assignContextTag(tag.id).ignore()),
+                      _mutate((n) => n.assignContextTag(tag.id)),
                   onRemove: (tag) =>
-                      _mutate((n) => n.removeContextTag(tag.id).ignore()),
+                      _mutate((n) => n.removeContextTag(tag.id)),
                 );
               },
             ),
@@ -647,9 +654,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     trailing: val == current ? const Icon(Icons.check, color: Color(0xFF2563EB)) : null,
                     onTap: () {
                       if (val == null) {
-                        _mutate((n) => n.clearTimeEstimate().ignore());
+                        _mutate((n) => n.clearTimeEstimate());
                       } else {
-                        _mutate((n) => n.setTimeEstimate(val).ignore());
+                        _mutate((n) => n.setTimeEstimate(val));
                       }
                       Navigator.pop(ctx);
                     },
@@ -685,9 +692,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 emptySelectionAllowed: true,
                 onSelectionChanged: (s) {
                   if (s.isEmpty || s.first == null) {
-                    _mutate((n) => n.clearEnergyLevel().ignore());
+                    _mutate((n) => n.clearEnergyLevel());
                   } else {
-                    _mutate((n) => n.setEnergyLevel(s.first!).ignore());
+                    _mutate((n) => n.setEnergyLevel(s.first!));
                   }
                   Navigator.pop(ctx);
                 },

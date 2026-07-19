@@ -14,6 +14,15 @@ Widget _wrap(Widget child) => ProviderScope(
 /// Riverpod actually produces rather than a hand-built `AsyncError`.
 final _rowsProvider = StreamProvider<List<String>>((ref) => const Stream.empty());
 
+/// Bounded pumping, not `pumpAndSettle`. The error branch logs through
+/// `debugPrint`, whose throttle timer keeps the binding from ever reaching a
+/// quiet frame, so settling would hang rather than fail.
+Future<void> _pumpBriefly(WidgetTester tester, {int frames = 5}) async {
+  for (var i = 0; i < frames; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+}
+
 void main() {
   group('AsyncList', () {
     testWidgets('loading state renders a CircularProgressIndicator',
@@ -264,9 +273,7 @@ void main() {
       controller.addError(Exception('SecretInternalDetail'));
       // Bounded pumping: the error branch logs through `debugPrint`, whose
       // throttle timer keeps the binding from ever reaching a quiet frame.
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpBriefly(tester);
 
       // Pin the premise, so this fails loudly if Riverpod changes the shape
       // rather than silently reducing to a weaker assertion.
@@ -304,13 +311,9 @@ void main() {
         ),
       ));
       controller.add(<String>['a', 'b']);
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpBriefly(tester);
       capturedRef.invalidate(_rowsProvider);
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpBriefly(tester);
 
       // Pin the state the widget was actually handed, so this keeps exercising
       // the retained-value branch rather than passing because the refresh
@@ -349,19 +352,59 @@ void main() {
         ),
       ));
       controller.add(const <String>[]);
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpBriefly(tester);
       expect(find.text('Nothing here yet'), findsOneWidget);
 
       controller.addError(StateError('SecretInternalDetail'));
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpBriefly(tester);
 
       expect(find.textContaining('Something went wrong'), findsOneWidget);
       expect(find.text('Nothing here yet'), findsNothing);
       expect(find.textContaining('SecretInternalDetail'), findsNothing);
+    });
+
+    testWidgets('a reload that started from an empty list shows a spinner',
+        (tester) async {
+      // The counterpart of the AsyncSubject case: a refresh retains the
+      // previous value, so a reload begun from `[]` reports `hasValue` with an
+      // empty list inside. Keyed on that flag alone the widget would render
+      // "nothing here yet" while the read that would populate it is still in
+      // flight — an empty inbox and a pending one look identical.
+      final controller = StreamController<List<String>>.broadcast();
+      addTearDown(controller.close);
+      late WidgetRef capturedRef;
+      late AsyncValue<List<String>> observed;
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [_rowsProvider.overrideWith((ref) => controller.stream)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Consumer(builder: (context, ref, _) {
+              capturedRef = ref;
+              observed = ref.watch(_rowsProvider);
+              return AsyncList<String>(
+                asyncValue: observed,
+                emptyIcon: Icons.inbox_outlined,
+                emptyTitle: 'Nothing here yet',
+                dataBuilder: (_, items) => Text('rows: ${items.length}'),
+              );
+            }),
+          ),
+        ),
+      ));
+      controller.add(const <String>[]);
+      await _pumpBriefly(tester);
+      expect(find.text('Nothing here yet'), findsOneWidget);
+
+      capturedRef.invalidate(_rowsProvider);
+      await _pumpBriefly(tester);
+
+      expect(observed.isLoading, isTrue);
+      expect(observed.hasValue, isTrue,
+          reason: 'the reload retains the empty list it already delivered');
+
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.text('Nothing here yet'), findsNothing);
     });
 
     testWidgets('an error after rows have loaded keeps showing the rows',
@@ -391,13 +434,9 @@ void main() {
         ),
       ));
       controller.add(<String>['a', 'b']);
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpBriefly(tester);
       controller.addError(Exception('SecretInternalDetail'));
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
+      await _pumpBriefly(tester);
 
       expect(observed.hasError, isTrue);
       expect(observed.hasValue, isTrue,

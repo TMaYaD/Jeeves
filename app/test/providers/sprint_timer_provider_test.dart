@@ -131,10 +131,7 @@ void main() {
 
       // Let the notifier restore itself from those prefs, so the sprint under
       // test is one it produced rather than one the test assigned.
-      final notifier = container.read(sprintTimerProvider.notifier);
-      await _settle();
-      expect(container.read(sprintTimerProvider).isActive, isTrue,
-          reason: 'precondition: a sprint was restored from prefs');
+      final notifier = await _startedNotifier(container);
 
       await expectLater(notifier.stopSprint(), throwsA(isA<StateError>()));
 
@@ -170,9 +167,7 @@ void main() {
       ]);
       addTearDown(container.dispose);
 
-      final notifier = container.read(sprintTimerProvider.notifier);
-      await _settle();
-      expect(container.read(sprintTimerProvider).isActive, isTrue);
+      final notifier = await _startedNotifier(container);
 
       await notifier.stopSprint();
 
@@ -206,9 +201,7 @@ void main() {
       ]);
       addTearDown(container.dispose);
 
-      final notifier = container.read(sprintTimerProvider.notifier);
-      await _settle();
-      expect(container.read(sprintTimerProvider).isActive, isTrue);
+      final notifier = await _startedNotifier(container);
 
       // Suspend a real transition *after* its side effects have begun: by the
       // time `_startBreak` reaches the schedule it has already written state
@@ -249,3 +242,14 @@ void main() {
 /// `build()` kicks `_restoreFromPrefs()` fire-and-forget, so the restored state
 /// lands a few microtasks later. Yielding the event loop is what lets it.
 Future<void> _settle() => Future<void>.delayed(Duration.zero);
+
+/// Reads the notifier, lets its fire-and-forget restore land, and pins the
+/// precondition every test here shares: the sprint under test is one the
+/// notifier rebuilt from prefs, not one the test assigned.
+Future<SprintTimerNotifier> _startedNotifier(ProviderContainer c) async {
+  final notifier = c.read(sprintTimerProvider.notifier);
+  await _settle();
+  expect(c.read(sprintTimerProvider).isActive, isTrue,
+      reason: 'precondition: a sprint was restored from prefs');
+  return notifier;
+}
