@@ -95,6 +95,82 @@ abstract class ClarificationService {
   /// **not** surface on the Trash List, which remains about Outcomes.
   Future<void> discardCapture(String captureId, {DateTime? now});
 
+  /// Carves a **new** Outcome out of the Capture [captureId] without
+  /// completing the clarify act — the split half of the n-m clarify surface.
+  ///
+  /// Creates the Outcome, applies the routing [to] the New Outcome form chose,
+  /// attaches [tagIds] and [personTagIds], and links it to the Capture as
+  /// provenance. Deliberately does **not** stamp `captures.clarified_at` and
+  /// does **not** drop Outcomes an earlier carve produced: in n-m mode a
+  /// Capture stays in the Inbox while several Outcomes accumulate against it,
+  /// and only the user's explicit verdict ([completeCaptureClarification] /
+  /// [discardCapture]) ends that (CONTEXT.md § GTD Core). This is exactly what
+  /// separates it from [clarifyCaptureToOutcome], which is the 1-1 mode's
+  /// create-link-stamp path and overwrites.
+  ///
+  /// [notes], [energyLevel], [timeEstimate] and [dueDate] are Outcome
+  /// attributes with no column on a Capture (ADR-0006). The n-m New Outcome
+  /// form collects them exactly as the 1-1 card does, so they are written here
+  /// or they are lost.
+  ///
+  /// Returns the new Outcome id.
+  Future<String> carveOutcome(
+    String captureId, {
+    required String userId,
+    required String title,
+    RoutingKind? to,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  });
+
+  /// Links the Capture [captureId] to the **existing** Outcome [outcomeId] —
+  /// the merge half of the n-m clarify surface.
+  ///
+  /// Merge links, it never consumes: the Capture survives as provenance and
+  /// the Outcome is untouched apart from gaining a link (CONTEXT.md § GTD
+  /// Core). Idempotent, and — like [carveOutcome] — does not stamp
+  /// `clarified_at`.
+  Future<void> mergeIntoOutcome(
+    String captureId,
+    String outcomeId, {
+    required String userId,
+    DateTime? now,
+  });
+
+  /// Retracts this Capture's claim on [outcomeId].
+  ///
+  /// The link always goes. Whether the Outcome goes with it depends on where
+  /// it came from, which only the clarify surface knows: [deleteCarved] is
+  /// true for an Outcome carved during this clarify session (undoing the carve
+  /// should leave nothing behind) and false for one that pre-existed it
+  /// (merging was a link, so unmerging is a detach — the Outcome is the user's
+  /// existing work and must survive).
+  ///
+  /// Even with [deleteCarved] the delete is gated on no *other* Capture
+  /// claiming the Outcome, for the reason [_dropOwnOutcomes] documents.
+  Future<void> unlinkOutcome(
+    String captureId,
+    String outcomeId, {
+    required bool deleteCarved,
+  });
+
+  /// Completes the clarify act for [captureId], keeping every Outcome it has
+  /// carved or merged into — the n-m surface's "Done with this Capture"
+  /// verdict.
+  ///
+  /// Stamps `captures.clarified_at` and nothing else, so the Capture leaves
+  /// the Inbox and persists as provenance for its Outcomes. The zero-Outcome
+  /// counterpart is [discardCapture], which additionally drops anything the
+  /// Capture still claims.
+  Future<void> completeCaptureClarification(String captureId, {DateTime? now});
+
   /// Whether the clarify subject still exists. Snapshot-based callsites
   /// (inbox-clarify, periodic review) can lose a row between render and
   /// tap — sync or another device may hard-delete it. PowerSync exposes
@@ -279,12 +355,128 @@ class DaoClarificationService implements ClarificationService {
   /// Callers must already be inside the write transaction.
   Future<void> _dropOwnOutcomes(String captureId) async {
     for (final oid in await _db.captureDao.outcomeIdsForCapture(captureId)) {
-      await _db.captureDao.unlinkOutcome(captureId, oid);
-      final stillClaimed = await _db.captureDao.captureIdsForOutcome(oid);
-      if (stillClaimed.isEmpty) {
-        await _db.todoDao.deleteOutcome(oid);
-      }
+      await _retractClaim(captureId, oid, deleteIfOrphaned: true);
     }
+  }
+
+  /// Drops [captureId]'s claim on [outcomeId], and the Outcome with it when
+  /// [deleteIfOrphaned] and no other Capture is left claiming it.
+  ///
+  /// The single implementation of the unlink → check-orphan → delete sequence
+  /// that both [_dropOwnOutcomes] and [unlinkOutcome] need. Keeping it in one
+  /// place is what stops the orphan gate — the thing preventing one Capture's
+  /// retraction from destroying another's merged work — from being weakened on
+  /// one path and not the other.
+  ///
+  /// Callers must already be inside the write transaction.
+  Future<void> _retractClaim(
+    String captureId,
+    String outcomeId, {
+    required bool deleteIfOrphaned,
+  }) async {
+    await _db.captureDao.unlinkOutcome(captureId, outcomeId);
+    if (!deleteIfOrphaned) return;
+    final stillClaimed = await _db.captureDao.captureIdsForOutcome(outcomeId);
+    if (stillClaimed.isEmpty) {
+      await _db.todoDao.deleteOutcome(outcomeId);
+    }
+  }
+
+  @override
+  Future<String> carveOutcome(
+    String captureId, {
+    required String userId,
+    required String title,
+    RoutingKind? to,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  }) async {
+    final id = outcomeId ?? uuid.v4();
+    return _db.transaction(() async {
+      // Same commit-time guard as clarifyCaptureToOutcome: a Capture that
+      // vanished between render and tap must not mint an orphan Outcome behind
+      // a dangling link.
+      if (await _db.captureDao.getCapture(captureId) == null) {
+        throw StateError('Capture $captureId not found');
+      }
+      await _db.todoDao.insertOutcome(
+        id: id,
+        title: title,
+        userId: userId,
+        notes: notes,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+        dueDate: dueDate,
+        now: now,
+      );
+      for (final tagId in tagIds) {
+        await _db.tagDao.assignTag(id, tagId, userId);
+      }
+      if (to != null) {
+        await _db.todoDao.applyRouting(
+          id,
+          to: to,
+          nextActionText: nextActionText,
+          personTagIds: personTagIds,
+          userId: personTagIds != null ? userId : null,
+          now: now,
+        );
+      }
+      await _db.captureDao.linkOutcome(captureId, id, userId, at: now);
+      return id;
+    });
+  }
+
+  @override
+  Future<void> mergeIntoOutcome(
+    String captureId,
+    String outcomeId, {
+    required String userId,
+    DateTime? now,
+  }) async {
+    await _db.transaction(() async {
+      if (await _db.captureDao.getCapture(captureId) == null) {
+        throw StateError('Capture $captureId not found');
+      }
+      // The Outcome is the *other* side of a snapshot-driven pick, so it can
+      // vanish the same way. Guard it too rather than writing a link whose FK
+      // has no target.
+      if (await _db.todoDao.getTodo(outcomeId) == null) {
+        throw StateError('Outcome $outcomeId not found');
+      }
+      await _db.captureDao.linkOutcome(captureId, outcomeId, userId, at: now);
+    });
+  }
+
+  @override
+  Future<void> unlinkOutcome(
+    String captureId,
+    String outcomeId, {
+    required bool deleteCarved,
+  }) async {
+    await _db.transaction(
+      () => _retractClaim(captureId, outcomeId, deleteIfOrphaned: deleteCarved),
+    );
+  }
+
+  @override
+  Future<void> completeCaptureClarification(
+    String captureId, {
+    DateTime? now,
+  }) async {
+    await _db.transaction(() async {
+      if (await _db.captureDao.getCapture(captureId) == null) {
+        throw StateError('Capture $captureId not found');
+      }
+      await _db.captureDao.stampClarified(captureId, at: now);
+    });
   }
 
   @override

@@ -51,6 +51,11 @@ class InboxClarificationStep extends ConsumerWidget {
             .read(focusSessionPlanningProvider.notifier)
             .recordInboxRoutingAndAdvance(kind);
       },
+      // The n-m verdict picked no destination, so there is no routing to
+      // record — only the cursor advance, which is what [skipInboxItem]
+      // already is (advance, write nothing, record nothing).
+      onAfterComplete: () async =>
+          ref.read(focusSessionPlanningProvider.notifier).skipInboxItem(),
       onLoad: () =>
           ref.read(focusSessionPlanningProvider.notifier).loadInboxSnapshot(),
     );

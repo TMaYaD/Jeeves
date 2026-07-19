@@ -499,6 +499,34 @@ AND (
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
+  /// Outcomes whose title contains [query], case-insensitively — the match
+  /// behind the n-m clarify surface's unified capture-to-Outcome field.
+  ///
+  /// Restricted to live Outcomes: trashed ones (`intent = 'trash'`) and
+  /// achieved ones (`done_at IS NOT NULL`) are excluded, because merging a
+  /// fresh Capture into work the user has discarded or already finished is
+  /// never the verdict they meant. Ordered by title so the same query always
+  /// offers the same rows in the same order; [limit] keeps the suggestion list
+  /// short enough to scan.
+  Future<List<Todo>> searchOutcomesByTitle(String query, {int limit = 8}) {
+    final term = query.trim();
+    if (term.isEmpty) return Future.value(const []);
+    // Escape the LIKE wildcards so a user typing `%` or `_` searches for that
+    // character rather than matching everything.
+    final escaped =
+        term.replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
+    return customSelect(
+      'SELECT * FROM todos '
+      "WHERE todos.title LIKE ? ESCAPE '\\' "
+      'AND todos.done_at IS NULL '
+      "AND (todos.intent IS NULL OR todos.intent != 'trash') "
+      'ORDER BY todos.title '
+      'LIMIT ?',
+      variables: [Variable('%$escaped%'), Variable<int>(limit)],
+      readsFrom: {todos},
+    ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
   /// One-shot snapshot of tasks needing re-clarification.
   Future<List<Todo>> getNeedsReview() {
     return customSelect(

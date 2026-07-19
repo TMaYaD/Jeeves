@@ -31,8 +31,14 @@ export '../models/todo.dart' show RoutingKind;
 /// verdict against the [ClarifySubject] — in place for an Outcome, or as
 /// create-link-stamp for a Capture. `trash` on a Capture is the one asymmetric
 /// case: it is a zero-Outcome discard ([ClarificationService.discardCapture]),
-/// not a created-then-trashed Outcome — and it labels itself "Discard" rather
-/// than "Trash" to say so. `keep` stamps `last_clarified_at` on an
+/// not a created-then-trashed Outcome — and it labels itself "Discard Capture"
+/// rather than "Trash" to say so. `completeCapture` is the Capture-only
+/// terminal verdict of the n-m surface: it stamps `clarified_at` and creates
+/// nothing, because the Outcomes were already carved by the New Outcome form,
+/// so there is no destination left to pick. It is the green counterpart to
+/// `trash`'s red "Discard Capture", and the two are mutually exclusive —
+/// exactly one of them ends a Capture's clarify act.
+/// `keep` stamps `last_clarified_at` on an
 /// Outcome and leaves a Capture in the Inbox;
 /// `nextActionDialog` is a modifier on the `next` button (not a standalone
 /// button) — it is on by default, so tapping Next opens [NextActionDialog]
@@ -48,6 +54,7 @@ enum ProcessAction {
   someday,
   done,
   trash,
+  completeCapture,
   nextActionDialog,
   reclarify,
 }
@@ -72,7 +79,9 @@ extension RoutingKindToProcessAction on RoutingKind {
 /// the inner card's own [ProcessToHandlers] performs any routing it
 /// produces and the sub-flow result bubbles back as the routed action).
 /// [ProcessAction.nextActionDialog] collapses onto [RoutingKind.nextAction]
-/// (it's a UI modifier, not a distinct route).
+/// (it's a UI modifier, not a distinct route). [ProcessAction.completeCapture]
+/// also returns null: the n-m verdict picks no destination at all — the
+/// Outcomes it leaves behind carry their own, already applied.
 extension ProcessActionToRoutingKind on ProcessAction {
   RoutingKind? toRoutingKind() => switch (this) {
         ProcessAction.next ||
@@ -82,7 +91,10 @@ extension ProcessActionToRoutingKind on ProcessAction {
         ProcessAction.someday => RoutingKind.maybe,
         ProcessAction.done => RoutingKind.done,
         ProcessAction.trash => RoutingKind.trash,
-        ProcessAction.keep || ProcessAction.reclarify => null,
+        ProcessAction.keep ||
+        ProcessAction.reclarify ||
+        ProcessAction.completeCapture =>
+          null,
       };
 }
 
@@ -164,10 +176,29 @@ final class OutcomeSubject extends ClarifySubject {
 /// keystroke, so a draft snapshotted at build time would be stale by the time
 /// the user taps a destination. It is read at tap time instead.
 final class CaptureSubject extends ClarifySubject {
-  const CaptureSubject({required this.capture, required this.draft});
+  const CaptureSubject({
+    required this.capture,
+    required this.draft,
+    this.completesClarification = true,
+  });
 
   final Capture capture;
   final ClarifyDraft Function() draft;
+
+  /// Whether routing this Capture *ends* its clarify act.
+  ///
+  /// The one parameter separating the two clarify modes (CONTEXT.md § GTD
+  /// Core). In 1-1 mode it is true: the first destination creates the Outcome,
+  /// links it and stamps `clarified_at` in one shot, so routing is the
+  /// clarification. In n-m mode it is false: routing carves *one* Outcome out
+  /// of a Capture that may yield several, leaving the Capture in the Inbox
+  /// until the user's own verdict ([ProcessAction.completeCapture] or
+  /// [ProcessAction.trash]) ends it.
+  ///
+  /// A flag rather than a second subject type on purpose: both modes route the
+  /// same draft to the same destinations through this one widget, and only the
+  /// stamp differs.
+  final bool completesClarification;
 
   @override
   String get id => capture.id;
@@ -203,6 +234,7 @@ const _kRenderOrder = <ProcessAction>[
   ProcessAction.waitingFor,
   ProcessAction.someday,
   ProcessAction.done,
+  ProcessAction.completeCapture,
   ProcessAction.trash,
 ];
 
@@ -217,6 +249,7 @@ const _kDefaultLabels = <ProcessAction, String>{
   ProcessAction.someday: 'Someday',
   ProcessAction.done: 'Done',
   ProcessAction.trash: 'Trash',
+  ProcessAction.completeCapture: 'Done with this Capture',
 };
 
 /// Capture-side label overrides, applied over [_kDefaultLabels] when the
@@ -229,7 +262,7 @@ const _kDefaultLabels = <ProcessAction, String>{
 /// nothing ever reaches that List and "Trash" would name a destination the
 /// item never arrives at.
 const _kCaptureLabels = <ProcessAction, String>{
-  ProcessAction.trash: 'Discard',
+  ProcessAction.trash: 'Discard Capture',
 };
 
 /// Shown when a routing write throws. One message for every surface: the bar
@@ -255,6 +288,7 @@ const _kDefaultIcons = <ProcessAction, IconData>{
   ProcessAction.someday: Icons.star_border,
   ProcessAction.done: Icons.task_alt_outlined,
   ProcessAction.trash: Icons.delete_outline,
+  ProcessAction.completeCapture: Icons.task_alt_outlined,
 };
 
 const _kDefaultColors = <ProcessAction, Color>{
@@ -265,6 +299,9 @@ const _kDefaultColors = <ProcessAction, Color>{
   ProcessAction.someday: Color(0xFF6B7280),
   ProcessAction.done: Color(0xFF16A34A),
   ProcessAction.trash: Color(0xFFDC2626),
+  // Deliberately the same green as `done`: the verdict occupies the slot Done
+  // vacates and means the same thing at Capture scope — this is finished.
+  ProcessAction.completeCapture: Color(0xFF16A34A),
 };
 
 class ProcessToHandlers extends ConsumerStatefulWidget {
@@ -463,6 +500,8 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         await _runOnce(() => _route(ProcessAction.done));
       case ProcessAction.trash:
         await _runOnce(() => _route(ProcessAction.trash));
+      case ProcessAction.completeCapture:
+        await _runOnce(_completeCapture);
       case ProcessAction.nextActionDialog:
         // Modifier — never rendered as a standalone button. Defensive no-op.
         return;
@@ -512,6 +551,25 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
           return;
         }
         final d = draft();
+        if (!(widget.subject as CaptureSubject).completesClarification) {
+          // n-m: carve one Outcome out of the Capture and leave the Capture in
+          // the Inbox. Same draft, same destination — only the stamp differs
+          // (see [CaptureSubject.completesClarification]).
+          await _clarification.carveOutcome(
+            capture.id,
+            userId: ref.read(currentUserIdProvider),
+            title: d.title,
+            to: to,
+            notes: d.notes,
+            energyLevel: d.energyLevel,
+            timeEstimate: d.timeEstimate,
+            dueDate: d.dueDate,
+            nextActionText: nextActionText ?? d.nextActionText,
+            personTagIds: personTagIds,
+            tagIds: d.tagIds,
+          );
+          return;
+        }
         await _clarification.clarifyCaptureToOutcome(
           capture.id,
           to: to,
@@ -586,6 +644,28 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       return;
     }
     await _notifyAfterRoute(routed);
+  }
+
+  /// The n-m surface's completing verdict: stamp `clarified_at`, create
+  /// nothing.
+  ///
+  /// Every Outcome this Capture yields was already carved and routed by the
+  /// New Outcome form, so there is no draft left to mint and no destination to
+  /// apply — which is why this is not a [RoutingKind] and reports no routing a
+  /// ceremony could record.
+  Future<void> _completeCapture() async {
+    final subject = widget.subject;
+    if (subject is! CaptureSubject) {
+      // Only a Capture has a clarify act to complete; an Outcome's equivalent
+      // is `done`, which is a routing. A callsite offering this on an Outcome
+      // is miswired, so fail loudly rather than silently doing nothing.
+      throw UnsupportedError(
+        'ProcessAction.completeCapture applies to a Capture, not an Outcome',
+      );
+    }
+    if (!await _subjectExists()) return;
+    await _clarification.completeCaptureClarification(subject.capture.id);
+    await _notifyAfterRoute(ProcessAction.completeCapture);
   }
 
   Future<void> _next() async {

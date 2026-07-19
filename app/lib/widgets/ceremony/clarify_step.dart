@@ -45,6 +45,7 @@ class ClarifyStep extends StatefulWidget {
     required this.nav,
     required this.routings,
     required this.onAfterRoute,
+    this.onAfterComplete,
     this.onLoad,
   });
 
@@ -59,6 +60,13 @@ class ClarifyStep extends StatefulWidget {
   /// Called after the user commits a routing decision. The caller records the
   /// routing in ceremony state and advances the cursor.
   final Future<void> Function(ProcessAction action) onAfterRoute;
+
+  /// Called after the n-m verdict lands on the current Capture. The caller
+  /// advances the cursor and records **no** routing: in n-m mode the user
+  /// picked no destination, so there is nothing for the "previously selected"
+  /// affordance to restore on Back — the Capture's carved Outcomes are in the
+  /// database and the card re-renders them.
+  final Future<void> Function()? onAfterComplete;
 
   /// Called once on the first frame when [nav] is not yet loaded, so the
   /// caller can kick the snapshot load.
@@ -125,6 +133,7 @@ class _ClarifyStepState extends State<ClarifyStep> {
       // clarify_card.dart → process_to_handlers.dart.
       lastAction: widget.routings[index]?.toProcessAction(),
       onAfterRoute: widget.onAfterRoute,
+      onCaptureCompleted: widget.onAfterComplete,
     );
   }
 }

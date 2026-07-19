@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:drift/drift.dart';
 
+import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show Intent, RoutingKind;
 import 'auth_provider.dart';
@@ -33,6 +34,20 @@ final captureProvider =
   final db = ref.watch(databaseProvider);
   return db.captureDao.watchCapture(captureId);
 });
+
+/// Watches the Outcomes a Capture claims, each with the number of Captures
+/// claiming it — the n-m clarify surface's linked-Outcome list and the
+/// provenance chip on a merged one.
+///
+/// The inverse of [capturesForOutcomeProvider], which reads the same links from
+/// the Outcome's side for the task-detail "Captured from…" section.
+final carvedOutcomesProvider =
+    StreamProvider.autoDispose.family<List<CarvedOutcome>, String>(
+  (ref, captureId) {
+    final db = ref.watch(databaseProvider);
+    return db.captureDao.watchCarvedOutcomes(captureId);
+  },
+);
 
 /// Watches a Capture's tag *hints* (`capture_tags`) — the Capture-side
 /// counterpart of [taskTagsProvider], feeding the clarify card's pickers.

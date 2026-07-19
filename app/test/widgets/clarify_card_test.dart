@@ -300,9 +300,10 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
-      // On a Capture the action is labelled "Discard", not "Trash": it creates
-      // no Outcome, so it never reaches the Trash List.
-      await _scrollAndTap(tester, 'Discard');
+      // On a Capture the action is labelled "Discard Capture", not "Trash":
+      // it creates no Outcome, so it never reaches the Trash List, and it ends
+      // the Capture rather than routing one Outcome.
+      await _scrollAndTap(tester, 'Discard Capture');
       await _pumpFrames(tester);
 
       // Discarding a Capture is a stamp-only verdict, not a created-then-

@@ -37,16 +37,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/clarify_mode.dart';
 import '../providers/auth_provider.dart';
+import '../providers/clarify_mode_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'async_subject.dart';
+import 'capture_outcomes_section.dart';
 import 'clarify_shared_widgets.dart';
 import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
 import 'project_picker.dart';
 
 /// Generic clarification card — see the library doc for the two shapes.
+/// Shown when the post-verdict text flush fails. The verdict itself landed,
+/// so "try again" would be wrong advice — what is lost is the last edit to the
+/// Capture's own text, not the clarification.
+const _kFlushFailedMessage =
+    'Saved, but your latest edit to the Capture text was not.';
+
+/// Shown when the host's post-verdict hook fails (cursor advance, navigation).
+/// Deliberately distinct from [_kFlushFailedMessage] so the two failures are
+/// never mistaken for each other.
+const _kFinishingUpFailedMessage =
+    'Saved, but finishing up failed. Some details may not have been updated.';
+
 class ClarifyCard extends ConsumerStatefulWidget {
   /// Clarify an Inbox Capture into a new Outcome.
   const ClarifyCard.forCapture({
@@ -54,6 +69,7 @@ class ClarifyCard extends ConsumerStatefulWidget {
     required this.captureId,
     this.lastAction,
     this.onAfterRoute,
+    this.onCaptureCompleted,
   }) : todoId = null;
 
   /// Re-clarify an Outcome that has already been through the flow once.
@@ -62,7 +78,8 @@ class ClarifyCard extends ConsumerStatefulWidget {
     required this.todoId,
     this.lastAction,
     this.onAfterRoute,
-  }) : captureId = null;
+  })  : captureId = null,
+        onCaptureCompleted = null;
 
   /// The Capture being clarified, or null when re-clarifying an Outcome.
   final String? captureId;
@@ -77,6 +94,13 @@ class ClarifyCard extends ConsumerStatefulWidget {
   /// Called once after a successful route. Used for callsite-specific
   /// concerns like advancing the inbox cursor and recording routing history.
   final Future<void> Function(ProcessAction action)? onAfterRoute;
+
+  /// Called once after the n-m verdict lands (Done-with-this-Capture or
+  /// Discard). Separate from [onAfterRoute] because the n-m verdict is not a
+  /// routing decision: no destination was chosen, so there is no
+  /// [ProcessAction] to report and nothing for a host to record as the
+  /// item's routing. Hosts that only need to advance a cursor wire both.
+  final Future<void> Function()? onCaptureCompleted;
 
   @override
   ConsumerState<ClarifyCard> createState() => _ClarifyCardState();
@@ -429,6 +453,9 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           _draftTagsSeeded = true;
           _draftTagIds = {for (final t in hints) t.id};
         }
+        if (ref.watch(clarifyModeProvider) == ClarifyMode.nToM) {
+          return _buildNToM(capture, hints);
+        }
         return _buildBody(
           context,
           tags: hints,
@@ -523,14 +550,14 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     final contextTags = allTags.where((t) => t.type == 'context').toList();
 
     // Title is required to route to anything except Trash. Disable the
-    // four committed routes; Trash stays enabled so the user can throw away
-    // an unnamed item.
+    // committed routes; Trash stays enabled so the user can throw away an
+    // unnamed item.
     final disabled = _titleIsBlank
-        ? const <ProcessAction>{
+        ? <ProcessAction>{
             ProcessAction.next,
             ProcessAction.waitingFor,
             ProcessAction.someday,
-            ProcessAction.done,
+            if (!_isCapture) ProcessAction.done,
           }
         : const <ProcessAction>{};
 
@@ -717,7 +744,21 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // clarify card supplies the phrase via the title-as-action
           // coupling below, so tapping Next should route immediately
           // rather than popping the dialog.
-          except: const {ProcessAction.nextActionDialog},
+          // On a Capture, Done is not a clarify-time destination — an Outcome
+          // captured already-complete is a contradiction, and completing one
+          // belongs on its own surface. Trash stays as the Capture-level
+          // Discard verdict in the slot Done vacates. Re-clarifying an
+          // *Outcome* keeps Done: there the row exists and finishing it is a
+          // real verdict.
+          //
+          // Also opt out of the default-on `nextActionDialog` modifier: the
+          // clarify card supplies the phrase via the title-as-action coupling
+          // below, so tapping Next routes immediately rather than popping the
+          // dialog.
+          except: {
+            ProcessAction.nextActionDialog,
+            if (_isCapture) ProcessAction.done,
+          },
           lastAction: widget.lastAction,
           onAfterRoute: (action) async {
             // Make sure title/notes are persisted before yielding to the
@@ -754,6 +795,53 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           },
         ),
       ],
+    );
+  }
+
+  /// The n-m Capture body: the Capture read-only, the Outcomes it has yielded,
+  /// the inline New Outcome form and the verdict — all of it owned by
+  /// [CaptureOutcomesSection]. The card contributes no fields of its own in
+  /// that mode, because in n-m the Capture is provenance and the *Outcome* is
+  /// what the fields describe.
+  Widget _buildNToM(Capture capture, List<Tag> hints) {
+    return ListView(
+      physics: const ClampingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+      children: [
+        CaptureOutcomesSection(
+          capture: capture,
+          tagIds: _draft(hints).tagIds,
+          onCompleted: _onCaptureCompleted,
+        ),
+      ],
+    );
+  }
+
+  /// Post-verdict bookkeeping, with the two halves on their own error
+  /// boundaries.
+  ///
+  /// The verdict has already landed by the time this runs. A failure to flush
+  /// the card's text is a *different* event from the host failing to advance
+  /// its cursor, and collapsing them would let one hide the other — the host
+  /// would never be told, or the flush failure would be blamed on the host.
+  /// Each is reported where it happens and neither aborts the other.
+  Future<void> _onCaptureCompleted() async {
+    try {
+      await _flushTextSave();
+    } catch (_) {
+      _report(_kFlushFailedMessage);
+    }
+    try {
+      await widget.onCaptureCompleted?.call();
+    } catch (_) {
+      _report(_kFinishingUpFailedMessage);
+    }
+  }
+
+  void _report(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 }

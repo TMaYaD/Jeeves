@@ -294,8 +294,11 @@ ReviewActionRecord? _toReviewActionRecord(ProcessAction action) =>
         const ReviewActionRecord(kind: ReviewActionKind.markDone),
       ProcessAction.trash =>
         const ReviewActionRecord(kind: ReviewActionKind.trash),
+      // `completeCapture` is a Capture verdict; this surface reviews Outcomes
+      // and never offers it.
       ProcessAction.nextActionDialog ||
-      ProcessAction.reclarify =>
+      ProcessAction.reclarify ||
+      ProcessAction.completeCapture =>
         null,
     };
 
