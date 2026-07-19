@@ -176,3 +176,47 @@ class ClarifyDestinationButton extends StatelessWidget {
     );
   }
 }
+
+/// What a clarify surface renders once its subject is gone from local storage.
+///
+/// Deliberately says nothing about *why* it is gone. A clarify surface reads
+/// the local row and cannot tell a delete made on this device from one
+/// replicated in from another — "the row is no longer there" is the whole
+/// signal it has (ARCHITECTURE.md § Sync Engine — the UI's contract is with
+/// the local row).
+class ClarifySubjectMissing extends StatelessWidget {
+  const ClarifySubjectMissing({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      key: const Key('clarify_subject_missing'),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.inventory_2_outlined, size: 40, color: _labelGray),
+            SizedBox(height: 12),
+            Text(
+              'This item is no longer here',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF374151),
+              ),
+            ),
+            SizedBox(height: 6),
+            Text(
+              'It was removed while you had it open, so there is nothing '
+              'left to clarify.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: _textGray),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

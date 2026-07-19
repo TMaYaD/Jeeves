@@ -20,6 +20,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
+import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/person_tag_picker.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
@@ -175,13 +176,18 @@ Widget _harness(
   // they own (and close in tearDown) so the card re-renders on demand without a
   // real drift `watch()` leaving a pending timer behind on dispose.
   Stream<List<Tag>>? taskTagsStream,
+  // Stream feeding `taskDetailTodoProvider` — the card's live subject binding
+  // on the re-clarify surface. Same rationale as `taskTagsStream`.
+  Stream<Todo?>? todoStream,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
       // Static streams so drift's StreamQueryStore doesn't leave a pending
       // timer behind on dispose.
-      taskDetailTodoProvider(todo.id).overrideWith((_) => Stream.value(todo)),
+      taskDetailTodoProvider(todo.id).overrideWith(
+        (_) => todoStream ?? Stream.value(todo),
+      ),
       personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
@@ -209,11 +215,18 @@ Widget _captureHarness(
   List<Tag> contextTags = const <Tag>[],
   List<Tag> projectTags = const <Tag>[],
   Stream<List<Tag>>? tagHintsStream,
+  // Stream feeding `captureProvider` — the card's live subject binding. Tests
+  // that change (or delete) the row underneath an open card own a controller
+  // here and push the re-read row down it, exactly as a live drift `watch()`
+  // would, without leaving a pending timer behind on dispose.
+  Stream<Capture?>? captureStream,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
-      captureProvider(capture.id).overrideWith((_) => Stream.value(capture)),
+      captureProvider(capture.id).overrideWith(
+        (_) => captureStream ?? Stream.value(capture),
+      ),
       captureTagHintsProvider(capture.id).overrideWith(
         (_) => tagHintsStream ?? Stream.value(const <Tag>[]),
       ),
@@ -680,6 +693,157 @@ void main() {
       expect(find.text('@Alice'), findsNothing);
       expect(find.text('✓ @Alice'), findsNothing);
       expect(find.byType(PersonTagPickerSheet), findsNothing);
+    });
+  });
+
+  // The card seeded its fields from the first subject it saw and then ignored
+  // the row for the rest of its life, so a change underneath it was invisible
+  // and a delete left it looking editable. It now reconciles on every
+  // emission (#427).
+  group('ClarifyCard — live subject binding', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    String titleText(WidgetTester tester) =>
+        tester
+            .widget<TextField>(find.byKey(const Key('clarify_title')))
+            .controller
+            ?.text ??
+        '';
+
+    String notesText(WidgetTester tester) =>
+        tester
+            .widget<TextField>(find.byKey(const Key('clarify_notes')))
+            .controller
+            ?.text ??
+        '';
+
+    testWidgets('Capture card adopts a change to an untouched field',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final feed = StreamController<Capture?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, captureStream: feed.stream),
+      );
+      feed.add(capture);
+      await _pumpFrames(tester, frames: 5);
+      expect(titleText(tester), 'Buy milk');
+
+      // The row changes in local storage. Where the change came from is not
+      // something this card can know, or needs to.
+      await db.captureDao
+          .updateFields('x', title: 'Buy oat milk', notes: 'Barista');
+      feed.add(await db.captureDao.getCapture('x'));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(titleText(tester), 'Buy oat milk');
+      expect(notesText(tester), 'Barista');
+    });
+
+    testWidgets('Capture card leaves the field being edited alone',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final feed = StreamController<Capture?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, captureStream: feed.stream),
+      );
+      feed.add(capture);
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy almond milk');
+      await tester.pump();
+
+      await db.captureDao
+          .updateFields('x', title: 'Buy oat milk', notes: 'Barista');
+      feed.add(await db.captureDao.getCapture('x'));
+      await _pumpFrames(tester, frames: 5);
+
+      // Dirty field keeps the user's edit; the clean one takes the change.
+      expect(titleText(tester), 'Buy almond milk');
+      expect(notesText(tester), 'Barista');
+
+      // Let the autosave debounce fire before the card is torn down. Disposing
+      // with an unflushed edit takes the card's fire-and-forget flush path,
+      // which reads a provider from `dispose()` and throws under the test
+      // binding — a latent bug of its own, not what this test is pinning.
+      await _pumpFrames(tester, frames: 15);
+    });
+
+    testWidgets('Capture card stops being editable once the row is gone',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final feed = StreamController<Capture?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, captureStream: feed.stream),
+      );
+      feed.add(capture);
+      await _pumpFrames(tester, frames: 5);
+      expect(find.byKey(const Key('clarify_title')), findsOneWidget);
+
+      await db.captureDao.deleteCapture('x');
+      feed.add(null);
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.byKey(const Key('clarify_title')), findsNothing);
+      expect(find.byKey(const Key('clarify_subject_missing')), findsOneWidget);
+    });
+
+    testWidgets('Outcome card adopts a change to an untouched field',
+        (tester) async {
+      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _harness(db, todo: todo, todoStream: feed.stream),
+      );
+      feed.add(todo);
+      await _pumpFrames(tester, frames: 5);
+
+      await db.todoDao
+          .updateFields('t', title: 'Buy oat milk', energyLevel: 'low');
+      feed.add(await db.todoDao.getTodo('t'));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(titleText(tester), 'Buy oat milk');
+      // Energy is an Outcome column, so it reconciles the same way the text
+      // does — the picker reflects the stored value.
+      expect(
+        tester
+            .widget<ClarifyEnergyPicker>(find.byType(ClarifyEnergyPicker))
+            .selected,
+        'low',
+      );
+    });
+
+    testWidgets('Outcome card stops being editable once the row is gone',
+        (tester) async {
+      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _harness(db, todo: todo, todoStream: feed.stream),
+      );
+      feed.add(todo);
+      await _pumpFrames(tester, frames: 5);
+      expect(find.byKey(const Key('clarify_title')), findsOneWidget);
+
+      await db.todoDao.deleteOutcome('t');
+      feed.add(null);
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.byKey(const Key('clarify_title')), findsNothing);
+      expect(find.byKey(const Key('clarify_subject_missing')), findsOneWidget);
     });
   });
 }

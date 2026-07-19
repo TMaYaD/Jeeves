@@ -14,6 +14,14 @@
 /// - [ClarifyCard.forOutcome] — the re-clarify sub-flow on an already
 ///   clarified Outcome. Every edit autosaves straight to `todos`, as before.
 ///
+/// Either shape binds to its subject live — [captureProvider] /
+/// [taskDetailTodoProvider] — so a row that changes, or disappears, while the
+/// card is open re-renders it. Incoming changes are applied only to fields the
+/// user has not locally dirtied; an edit in progress always wins. This is
+/// local-storage reactivity: the card cannot tell whether a change came from
+/// another screen, a background job or a replicated write, and does not try
+/// (ARCHITECTURE.md § Sync Engine — the UI's contract is with the local row).
+///
 /// Routing is delegated to [ProcessToHandlers], which owns the write for
 /// whichever subject it is given. Per-flow nav side-effects (recording routing
 /// history, advancing the cursor) are wired through [onAfterRoute].
@@ -102,8 +110,19 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   static const _textDebounceMs = 400;
   Timer? _textDebouncer;
+
+  /// The subject values the card last put into its fields — seeded from the
+  /// row, or saved back to it.
+  ///
+  /// They serve double duty: they suppress redundant writes, and they are the
+  /// clean/dirty markers the live binding reconciles against. A field still
+  /// matching its marker is clean, so an incoming change may be applied to it;
+  /// anything else is an edit in progress and is left alone.
   String? _lastSavedTitle;
   String? _lastSavedNotes;
+  String? _lastSavedEnergy;
+  int? _lastSavedTimeEstimate;
+  DateTime? _lastSavedDueDate;
 
   static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
@@ -133,6 +152,64 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     _energyLevel = energyLevel;
     _timeEstimate = timeEstimate;
     _dueDate = dueDate?.toLocal();
+    _lastSavedEnergy = _energyLevel;
+    _lastSavedTimeEstimate = _timeEstimate;
+    _lastSavedDueDate = _dueDate;
+  }
+
+  /// Reconciles the card with the subject as local storage now holds it,
+  /// applying each incoming value only to a field that is still clean (see
+  /// [_lastSavedTitle]).
+  ///
+  /// Energy, estimate and due date have no column on a Capture, so on that
+  /// shape they are draft state with nothing to reconcile against and the
+  /// incoming values are ignored.
+  void _adoptFromSubject({
+    required String title,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+  }) {
+    if (!mounted || !_initialised) return;
+    var changed = false;
+    final trimmedTitle = title.trim();
+    if ((_titleCtrl?.text ?? '').trim() == _lastSavedTitle &&
+        trimmedTitle != _lastSavedTitle) {
+      _titleCtrl?.text = title;
+      _lastSavedTitle = trimmedTitle;
+      _titleIsBlank = trimmedTitle.isEmpty;
+      changed = true;
+    }
+    final trimmedNotes = (notes ?? '').trim();
+    if ((_notesCtrl?.text ?? '').trim() == _lastSavedNotes &&
+        trimmedNotes != _lastSavedNotes) {
+      _notesCtrl?.text = notes ?? '';
+      _lastSavedNotes = trimmedNotes;
+      changed = true;
+    }
+    if (_isCapture) {
+      if (changed) setState(() {});
+      return;
+    }
+    if (_energyLevel == _lastSavedEnergy && energyLevel != _lastSavedEnergy) {
+      _energyLevel = energyLevel;
+      _lastSavedEnergy = energyLevel;
+      changed = true;
+    }
+    if (_timeEstimate == _lastSavedTimeEstimate &&
+        timeEstimate != _lastSavedTimeEstimate) {
+      _timeEstimate = timeEstimate;
+      _lastSavedTimeEstimate = timeEstimate;
+      changed = true;
+    }
+    final incomingDue = dueDate?.toLocal();
+    if (_dueDate == _lastSavedDueDate && incomingDue != _lastSavedDueDate) {
+      _dueDate = incomingDue;
+      _lastSavedDueDate = incomingDue;
+      changed = true;
+    }
+    if (changed) setState(() {});
   }
 
   @override
@@ -204,12 +281,14 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   Future<void> _saveEnergy(String? level) async {
     if (_isCapture || level == null) return;
+    _lastSavedEnergy = level;
     final db = ref.read(databaseProvider);
     await db.todoDao.updateFields(_subjectId, energyLevel: level);
   }
 
   Future<void> _saveTimeEstimate(int? minutes) async {
     if (_isCapture) return;
+    _lastSavedTimeEstimate = minutes;
     final db = ref.read(databaseProvider);
     await db.todoDao.updateFields(
       _subjectId,
@@ -220,6 +299,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   Future<void> _saveDueDate(DateTime? date, {required bool clear}) async {
     if (_isCapture) return;
+    _lastSavedDueDate = date;
     final db = ref.read(databaseProvider);
     await db.todoDao.updateFields(
       _subjectId,
@@ -323,9 +403,22 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   Widget _buildForCapture(BuildContext context, String captureId) {
-    final capture = ref.watch(captureProvider(captureId)).value;
+    // Reconcile from the listener rather than from the build itself: applying
+    // a change writes into the controllers, and a controller that notifies its
+    // TextField mid-build would rebuild a widget that is already building.
+    ref.listen<AsyncValue<Capture?>>(captureProvider(captureId), (_, next) {
+      final incoming = next.value;
+      if (incoming == null) return;
+      _adoptFromSubject(title: incoming.title, notes: incoming.notes);
+    });
+    final captureAsync = ref.watch(captureProvider(captureId));
+    final capture = captureAsync.value;
     if (capture == null) {
-      return const Center(child: CircularProgressIndicator());
+      // Known to be gone versus not yet known: only the first is a
+      // missing-item state.
+      return captureAsync.hasValue
+          ? const ClarifySubjectMissing()
+          : const Center(child: CircularProgressIndicator());
     }
     // A Capture stores only title and notes; the rest of the card starts empty
     // and rides the draft into the Outcome.
@@ -348,9 +441,24 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   Widget _buildForOutcome(BuildContext context, String todoId) {
-    final todo = ref.watch(taskDetailTodoProvider(todoId)).value;
+    // See [_buildForCapture] for why reconciliation happens in the listener.
+    ref.listen<AsyncValue<Todo?>>(taskDetailTodoProvider(todoId), (_, next) {
+      final incoming = next.value;
+      if (incoming == null) return;
+      _adoptFromSubject(
+        title: incoming.title,
+        notes: incoming.notes,
+        energyLevel: incoming.energyLevel,
+        timeEstimate: incoming.timeEstimate,
+        dueDate: incoming.dueDate,
+      );
+    });
+    final todoAsync = ref.watch(taskDetailTodoProvider(todoId));
+    final todo = todoAsync.value;
     if (todo == null) {
-      return const Center(child: CircularProgressIndicator());
+      return todoAsync.hasValue
+          ? const ClarifySubjectMissing()
+          : const Center(child: CircularProgressIndicator());
     }
     _initialiseFrom(
       title: todo.title,
@@ -457,6 +565,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         const SizedBox(height: 16),
 
         TextField(
+          key: const Key('clarify_title'),
           controller: _titleCtrl,
           onChanged: (_) => _onTextChanged(),
           decoration: InputDecoration(
@@ -473,6 +582,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         const SizedBox(height: 12),
 
         TextField(
+          key: const Key('clarify_notes'),
           controller: _notesCtrl,
           onChanged: (_) => _onTextChanged(),
           decoration: InputDecoration(
