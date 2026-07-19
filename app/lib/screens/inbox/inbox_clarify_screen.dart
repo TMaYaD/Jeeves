@@ -248,7 +248,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     // backend 404s it, and it lands in `sync_dead_letters`. `hasValue` with a
     // null value is the same "gone, not loading" test [AsyncSubject] makes;
     // mirrors `ClarifyCard`'s `_subjectGone`.
-    if (captureAsync.hasValue && captureAsync.value == null) _capture = null;
+    if (captureAsync.isGone) _capture = null;
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(

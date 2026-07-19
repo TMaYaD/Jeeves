@@ -600,14 +600,13 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       await _clearPrefs();
       return;
     }
-    // Checked either side of the schedule. Before, because a stop already
-    // landed means there is nothing to schedule for. After, because the stop
-    // may land *while* this call is in flight — its cancellation then runs
-    // against a notification that does not exist yet, and the schedule lands
-    // afterwards, outliving the sprint it belongs to. The OS would fire
+    // Checked *after* the schedule, not before: the guard above already covers
+    // "a stop has landed", with no await between the two. What it cannot cover
+    // is a stop landing *while* this call is in flight — its cancellation then
+    // runs against a notification that does not exist yet, and the schedule
+    // lands afterwards, outliving the sprint it belongs to. The OS would fire
     // "break over" for a break that was stopped, so the superseded transition
     // cleans up the one side effect only it knows it created.
-    if (_superseded(g)) return;
     await _scheduleEndNotification(_endTime!, isFocus: false);
     if (_superseded(g)) {
       await _cancelSprintNotifications();

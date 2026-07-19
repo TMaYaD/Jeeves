@@ -383,7 +383,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// `AsyncLoading`) would reopen every write path against the dead row.
   void _trackSubjectPresence(AsyncValue<Object?> subject) {
     if (_subjectGone) return;
-    if (!(subject.hasValue && subject.value == null)) return;
+    if (!subject.isGone) return;
     _subjectGone = true;
     _textDebouncer?.cancel();
     _textDebouncer = null;

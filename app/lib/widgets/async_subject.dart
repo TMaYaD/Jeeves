@@ -31,6 +31,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'state_surfaces.dart';
 
+/// The "gone, not loading" test, in one place.
+///
+/// `AsyncData(null)` from a subject watch means the row was hard-deleted, not
+/// that it is still arriving — the subject watches use `watchSingleOrNull()`,
+/// which emits null for zero rows and keeps the stream open, and the app has no
+/// soft-delete (Trash is an `intent` value, so a trashed row still emits
+/// non-null). A reload retains its previous value, so `hasValue` alone is not
+/// the test: it stays true across a refresh that began from a null.
+///
+/// [AsyncSubject] branches on this to pick the missing panel, and the surfaces
+/// that write — `TaskDetailScreen`, `TaskStatusRow`, `ClarifyCard`,
+/// `InboxClarifyScreen` — use it to refuse writes against a row that is gone.
+/// Named once so those five callers cannot drift apart on what "gone" means.
+extension AsyncSubjectGone<T> on AsyncValue<T?> {
+  bool get isGone => hasValue && value == null;
+}
+
 /// Renders the four states of a subject-bound watch. See the library doc.
 class AsyncSubject<T extends Object> extends StatelessWidget {
   const AsyncSubject({

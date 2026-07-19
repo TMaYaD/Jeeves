@@ -165,27 +165,20 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     final sprint = ref.read(sprintTimerProvider.notifier);
     final focusMode = ref.read(focusModeProvider.notifier);
 
-    Object? cleanupError;
-    Future<void> attempt(String label, Future<void> Function() step) async {
-      try {
-        await step();
-      } catch (e, s) {
-        cleanupError ??= e;
-        debugPrint('Stop teardown step "$label" failed: $e\n$s');
-      }
-    }
-
-    await attempt(
+    // Reuses [_tryTeardownStep] rather than a near-identical local closure —
+    // the only thing this path needs beyond it is whether *anything* failed,
+    // which the bool it already returns answers.
+    final cancelled = await _tryTeardownStep(
       'cancel focus notification',
       notifications.cancelFocusNotification,
     );
-    await attempt('stop sprint', sprint.stopSprint);
+    final stopped = await _tryTeardownStep('stop sprint', sprint.stopSprint);
     // Deliberately unguarded: this is the one whose failure must reach the
     // caller.
     await focusMode.endFocus();
 
     if (!mounted) return;
-    if (cleanupError != null) {
+    if (!cancelled || !stopped) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Focus ended, but cleanup was partial.')),
       );
@@ -196,9 +189,9 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
   /// Runs one best-effort teardown step, logging and swallowing a failure and
   /// reporting whether it succeeded.
   ///
-  /// Used by the missing-task bounce and by [_onComplete]; [_onStop] runs the
-  /// same steps through its own local `attempt`, which additionally remembers
-  /// the first failure so it can surface one. All three share the reason for
+  /// Used by the missing-task bounce, [_onComplete] and [_onStop]; the latter
+  /// two differ only in what they do with the bool — [_onStop] keeps it to
+  /// decide whether to report a partial failure. All three share the reason for
   /// swallowing: teardown is cleanup around a decision the user has already
   /// made — completing a task, stopping a sprint, leaving a dead one — and a
   /// notification that would not cancel must not take that decision down with

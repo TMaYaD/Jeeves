@@ -168,7 +168,13 @@ class _ActiveFocusNotifier extends FocusModeNotifier {
   GtdDatabase db,
   String todoId, {
   required Stream<Todo?> todoStream,
-  SprintTimerNotifier? sprint,
+  // Required, not optional. Falling back to the real [SprintTimerNotifier]
+  // would start its `Timer.periodic`, which lives in the provider container
+  // rather than the widget and so outlives the screen — tripping the binding's
+  // "a Timer is still pending" teardown check in whichever test forgot to pass
+  // a stub. Every caller already supplies one; this stops the next one from
+  // not.
+  required SprintTimerNotifier sprint,
   _StubNotificationService? notifications,
 }) {
   final router = GoRouter(
@@ -191,7 +197,7 @@ class _ActiveFocusNotifier extends FocusModeNotifier {
       notificationServiceProvider
           .overrideWithValue(notifications ?? _StubNotificationService()),
       focusModeProvider.overrideWith(() => _ActiveFocusNotifier(todoId)),
-      if (sprint != null) sprintTimerProvider.overrideWith(() => sprint),
+      sprintTimerProvider.overrideWith(() => sprint),
       taskDetailTodoProvider(todoId).overrideWith((_) => todoStream),
     ],
     child: MaterialApp.router(routerConfig: router),
@@ -270,6 +276,10 @@ void main() {
       // active on a deleted task, and the focus home would offer to resume it.
       expect(container.read(focusModeProvider).isActive, isFalse);
       expect(sprint.stopCalls, 1);
+      // Surfaced explicitly: an exception escaping the post-frame bounce would
+      // otherwise be swallowed by the pumping above, leaving the assertions to
+      // pass or fail for reasons unrelated to what they claim to check.
+      expect(tester.takeException(), isNull);
       // ...including the persistent status-bar notification. Left standing it
       // would go on deep-linking into a sprint whose task is gone.
       expect(notifications.cancelFocusCalls, 1);
@@ -360,6 +370,7 @@ void main() {
       expect(find.textContaining('SecretInternalDetail'), findsNothing);
       expect(find.textContaining('Something went wrong'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(tester.takeException(), isNull);
     });
   });
 }

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show Intent, RoutingKind;
 import '../providers/task_detail_provider.dart';
+import 'async_subject.dart' show AsyncSubjectGone;
 import 'person_tag_picker.dart';
 
 /// Tappable status pill for the task detail header.
@@ -125,7 +126,7 @@ class _StatusMenuSheet extends ConsumerWidget {
     // sheets that screen owns for the same reason.
     Future<void> write(Future<void> Function(TaskDetailNotifier n) mutate) async {
       final subject = ref.read(taskDetailTodoProvider(todo.id));
-      if (subject.hasValue && subject.value == null) return;
+      if (subject.isGone) return;
       await mutate(notifier);
     }
     final isDone = todo.doneAt != null;

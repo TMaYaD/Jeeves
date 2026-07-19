@@ -111,7 +111,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   ///   guard, which is worse than no test.
   bool get _subjectGone {
     final async = ref.read(taskDetailTodoProvider(widget.todoId));
-    return async.hasValue && async.value == null;
+    return async.isGone;
   }
 
   @override
@@ -424,9 +424,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                           ),
                                         );
                                         if (picked != null) {
-                                          _mutate((n) => n.setDueDate(picked));
+                                          _mutate((n) => n.setDueDate(picked).ignore());
                                         } else {
-                                          _mutate((n) => n.clearDueDate());
+                                          _mutate((n) => n.clearDueDate().ignore());
                                         }
                                       },
                                     ),
@@ -647,9 +647,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     trailing: val == current ? const Icon(Icons.check, color: Color(0xFF2563EB)) : null,
                     onTap: () {
                       if (val == null) {
-                        _mutate((n) => n.clearTimeEstimate());
+                        _mutate((n) => n.clearTimeEstimate().ignore());
                       } else {
-                        _mutate((n) => n.setTimeEstimate(val));
+                        _mutate((n) => n.setTimeEstimate(val).ignore());
                       }
                       Navigator.pop(ctx);
                     },
@@ -685,9 +685,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 emptySelectionAllowed: true,
                 onSelectionChanged: (s) {
                   if (s.isEmpty || s.first == null) {
-                    _mutate((n) => n.clearEnergyLevel());
+                    _mutate((n) => n.clearEnergyLevel().ignore());
                   } else {
-                    _mutate((n) => n.setEnergyLevel(s.first!));
+                    _mutate((n) => n.setEnergyLevel(s.first!).ignore());
                   }
                   Navigator.pop(ctx);
                 },
