@@ -232,6 +232,51 @@ void main() {
       expect(find.textContaining('SecretInternalDetail'), findsNothing);
     });
 
+    testWidgets('a reload that started from null shows a spinner, not missing',
+        (tester) async {
+      // A refresh retains the previous value, so a reload begun from a null
+      // reports `hasValue` with a null inside. Keyed on that flag alone the
+      // widget would fall through to the missing panel and tell the user the
+      // row is deleted while the read that would say otherwise is still in
+      // flight — and offer an escape premised on it. Driven through a real
+      // provider like the tests above, so the state asserted on is one Riverpod
+      // actually produces.
+      final controller = StreamController<String?>.broadcast();
+      addTearDown(controller.close);
+      late WidgetRef capturedRef;
+      late AsyncValue<String?> observed;
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [_rowProvider.overrideWith((ref) => controller.stream)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Consumer(builder: (context, ref, _) {
+              capturedRef = ref;
+              observed = ref.watch(_rowProvider);
+              return _subject(observed);
+            }),
+          ),
+        ),
+      ));
+      controller.add(null);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('This item no longer exists'), findsOneWidget);
+
+      capturedRef.invalidate(_rowProvider);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(observed.isLoading, isTrue);
+      expect(observed.hasValue, isTrue,
+          reason: 'the reload retains the null it already delivered');
+
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.text('This item no longer exists'), findsNothing);
+    });
+
     testWidgets('AsyncData(null) renders the missing panel, NOT a spinner',
         (tester) async {
       await tester.pumpWidget(_wrap(_subject(const AsyncData<String?>(null))));

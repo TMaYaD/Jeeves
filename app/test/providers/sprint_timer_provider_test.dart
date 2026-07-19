@@ -101,6 +101,17 @@ Map<String, Object> _activeSprintPrefs(String taskId) => {
       _kPrefSprintNumber: 1,
     };
 
+/// Every key `_restoreFromPrefs` consults to rebuild a sprint. Asserting only
+/// the id would pass while the rest lingered — and a half-cleared sprint is
+/// exactly what a partially-failed teardown leaves behind.
+void _expectNoPersistedSprint(SharedPreferences prefs, {String? reason}) {
+  expect(prefs.getString(_kPrefActiveTaskId), isNull, reason: reason);
+  expect(prefs.getString(_kPrefActiveTaskTitle), isNull, reason: reason);
+  expect(prefs.getString(_kPrefEndTime), isNull, reason: reason);
+  expect(prefs.getString(_kPrefPhase), isNull, reason: reason);
+  expect(prefs.getInt(_kPrefSprintNumber), isNull, reason: reason);
+}
+
 void main() {
   // `stopSprint` reaches the haptics platform channel, and
   // `SharedPreferences.setMockInitialValues` needs a binding too — both throw
@@ -135,7 +146,7 @@ void main() {
       // prefs clear. This is the half that outlives the process — a sprint left
       // on disk is one `_restoreFromPrefs` hands back on the next launch.
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString(_kPrefActiveTaskId), isNull,
+      _expectNoPersistedSprint(prefs,
           reason: 'a failed notification cancel must not skip the prefs clear');
 
       // And prove it: a fresh container reads the same prefs the app would.
@@ -168,7 +179,7 @@ void main() {
       expect(container.read(sprintTimerProvider).isActive, isFalse);
       expect(container.read(sprintTimerProvider).activeTaskId, isNull);
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString(_kPrefActiveTaskId), isNull);
+      _expectNoPersistedSprint(prefs);
     });
 
     test('a stop lands while a real transition is suspended mid-flight',
@@ -211,8 +222,7 @@ void main() {
       expect(container.read(sprintTimerProvider).isActive, isFalse,
           reason: 'a stop must win over an in-flight operation, not skip');
       final prefsAfterStop = await SharedPreferences.getInstance();
-      expect(prefsAfterStop.getString(_kPrefActiveTaskId), isNull);
-      expect(prefsAfterStop.getString(_kPrefPhase), isNull,
+      _expectNoPersistedSprint(prefsAfterStop,
           reason: 'the stop clears what the suspended transition persisted');
       expect(notifications.scheduled, 0);
 
@@ -225,8 +235,7 @@ void main() {
       expect(container.read(sprintTimerProvider).isActive, isFalse,
           reason: 'a resumed transition must not resurrect the sprint');
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString(_kPrefActiveTaskId), isNull);
-      expect(prefs.getString(_kPrefPhase), isNull,
+      _expectNoPersistedSprint(prefs,
           reason: 'nor re-persist the break it was starting');
       expect(notifications.scheduled, 0,
           reason: 'nor leave a break-end notification the OS would still fire');

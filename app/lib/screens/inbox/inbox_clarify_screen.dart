@@ -266,11 +266,18 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
         missingTitle: 'This item is no longer in your Inbox',
         missingSubtitle: 'It may have been deleted on another device.',
         missingCta: FilledButton(
-          onPressed: () {
-            if (_missingEscapeFired) return;
-            _missingEscapeFired = true;
-            context.pop();
-          },
+          // Shut while a routing write is in flight, like every other escape on
+          // this screen. `PopScope` blocks the pop in that window, so an
+          // enabled button would burn the one-shot [_missingEscapeFired] latch
+          // on a pop that never happens — leaving the user's only way out dead
+          // for the rest of the screen's life.
+          onPressed: _routing
+              ? null
+              : () {
+                  if (_missingEscapeFired) return;
+                  _missingEscapeFired = true;
+                  context.pop();
+                },
           child: const Text('Back to Inbox'),
         ),
         dataBuilder: (context, capture) {

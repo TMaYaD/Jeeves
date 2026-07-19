@@ -1126,11 +1126,11 @@ void main() {
         'an Outcome deleted inside the sub-flow still advances the outer '
         'cursor (#428)', (tester) async {
       // The escape must reach `onAfterRoute`, which is what advances the
-      // review cursor. Popping with no result would route through `_keep()`,
-      // whose opening existence check fails on exactly the row that was just
-      // deleted — so it would return early, never bubble, and drop the user
-      // back on the outer card for a dead item. Hence the explicit
-      // `pop(ProcessAction.keep)`.
+      // review cursor. The CTA pops `ProcessAction.keep` explicitly, so its
+      // result bubbles straight through without touching the keep flow at all.
+      // (The no-result paths — AppBar and system back — are covered by the two
+      // tests below; `_keep()` now skips only the stamp for a deleted subject
+      // and notifies either way, so those bubble too.)
       await useTallViewport(tester);
       final todo = await _insertTodo(db, id: 'rc4', title: 'Live outcome');
       final subject = StreamController<Todo?>.broadcast();
@@ -1175,6 +1175,8 @@ void main() {
         await tester.pump(const Duration(milliseconds: 50));
       }
       expect(find.text('This outcome no longer exists'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'the null emission is *gone*, not still loading');
 
       await tester.tap(find.text('Continue'));
       for (var i = 0; i < 12; i++) {
@@ -1230,6 +1232,8 @@ void main() {
         await tester.pump(const Duration(milliseconds: 50));
       }
       expect(find.text('This outcome no longer exists'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'the null emission is *gone*, not still loading');
 
       // Back out via the AppBar arrow rather than the CTA — pops with no
       // result, which is the path the CTA's explicit `pop(keep)` bypasses.
@@ -1244,6 +1248,58 @@ void main() {
           reason: 'a back-out on a deleted subject must still advance the '
               'cursor, not strand the user on the outer card');
       expect(await db.todoDao.getTodo('rc5'), isNull,
+          reason: 'and must not stamp or resurrect the deleted row');
+    });
+
+    testWidgets(
+        'system back out of a sub-flow whose Outcome was deleted also advances '
+        'the outer cursor (#428)', (tester) async {
+      // Same contract as the AppBar case above, reached through the platform
+      // back channel instead. Worth its own test because it does not go through
+      // any widget this code owns — `handlePopRoute` drives the route directly,
+      // which is the path a hardware/gesture back takes.
+      await useTallViewport(tester);
+      final todo = await _insertTodo(db, id: 'rc6', title: 'Doomed outcome');
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+      final fired = <ProcessAction>[];
+
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        include: const {ProcessAction.reclarify},
+        onAfterRoute: (action) async => fired.add(action),
+        todoStream: subject.stream,
+      ));
+
+      await tester.tap(find.text('Re-clarify\u2026'));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      subject.add(todo);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.widgetWithText(TextField, 'Doomed outcome'), findsOneWidget);
+
+      await (db.delete(db.todos)..where((t) => t.id.equals('rc6'))).go();
+      subject.add(null);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(find.text('This outcome no longer exists'), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(find.byType(ClarifyCard), findsNothing,
+          reason: 'system back closes the sub-flow');
+      expect(fired, [ProcessAction.keep],
+          reason: 'a system back on a deleted subject must still advance the '
+              'cursor, not strand the user on the outer card');
+      expect(await db.todoDao.getTodo('rc6'), isNull,
           reason: 'and must not stamp or resurrect the deleted row');
     });
   });

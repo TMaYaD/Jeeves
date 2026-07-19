@@ -80,6 +80,15 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
   Future<void> _onComplete(String todoId) async {
     _notificationTimer?.cancel();
+    // Read every dependency up front. The two teardown steps below are awaited,
+    // so this widget can unmount across them — the missing-task bounce
+    // navigates away, for one — and `ref.read` after disposal throws. Holding
+    // the references means completion does not depend on still being mounted.
+    final notifications = ref.read(notificationServiceProvider);
+    final sprint = ref.read(sprintTimerProvider.notifier);
+    final db = ref.read(databaseProvider);
+    final focusMode = ref.read(focusModeProvider.notifier);
+
     // Both are best-effort — completing the task must not fail because a
     // notification could not be cancelled — but they are awaited and logged
     // through [_tryTeardownStep] rather than left as bare discarded futures,
@@ -87,16 +96,16 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     // has already moved on.
     await _tryTeardownStep(
       'cancel focus notification',
-      () => ref.read(notificationServiceProvider).cancelFocusNotification(),
+      notifications.cancelFocusNotification,
     );
-    await _tryTeardownStep(
-      'stop sprint',
-      () => ref.read(sprintTimerProvider.notifier).stopSprint(),
-    );
-    if (!mounted) return;
-    final db = ref.read(databaseProvider);
+    await _tryTeardownStep('stop sprint', sprint.stopSprint);
+
+    // Deliberately *not* behind a `mounted` check. This is the write the user
+    // asked for by tapping Complete; skipping it because the screen went away
+    // mid-teardown would silently drop their completion. Only the UI work
+    // below is conditional on still being mounted.
     await db.todoDao.markDone(todoId);
-    await ref.read(focusModeProvider.notifier).endFocus();
+    await focusMode.endFocus();
     if (!mounted) return;
 
     final allSessionTasks = await ref.read(activeSessionTasksProvider.future);
@@ -149,6 +158,13 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     // unmounts this screen — so re-throwing would raise an error about a
     // screen the user has left, over work they cannot retry, having navigated
     // away regardless. Those are logged instead.
+    // Resolved before the first await, as in [_onComplete] and the bounce: each
+    // step yields, this widget can be disposed across them, and `ref.read`
+    // after disposal throws — which would abandon the teardown mid-way.
+    final notifications = ref.read(notificationServiceProvider);
+    final sprint = ref.read(sprintTimerProvider.notifier);
+    final focusMode = ref.read(focusModeProvider.notifier);
+
     Object? cleanupError;
     Future<void> attempt(String label, Future<void> Function() step) async {
       try {
@@ -161,15 +177,12 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
     await attempt(
       'cancel focus notification',
-      () => ref.read(notificationServiceProvider).cancelFocusNotification(),
+      notifications.cancelFocusNotification,
     );
-    await attempt(
-      'stop sprint',
-      () => ref.read(sprintTimerProvider.notifier).stopSprint(),
-    );
+    await attempt('stop sprint', sprint.stopSprint);
     // Deliberately unguarded: this is the one whose failure must reach the
     // caller.
-    await ref.read(focusModeProvider.notifier).endFocus();
+    await focusMode.endFocus();
 
     if (!mounted) return;
     if (cleanupError != null) {
@@ -180,12 +193,16 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     context.go('/focus');
   }
 
-  /// Runs one best-effort teardown step, reporting whether it succeeded.
+  /// Runs one best-effort teardown step, logging and swallowing a failure and
+  /// reporting whether it succeeded.
   ///
-  /// Only the missing-task bounce uses this. [_onStop] deliberately does not:
-  /// it is user-initiated and leaves the user on the screen, so a failure
-  /// there is visible and retryable by tapping Stop again. Swallowing it would
-  /// hide a real problem on a path that can recover on its own.
+  /// Used by the missing-task bounce and by [_onComplete]; [_onStop] runs the
+  /// same steps through its own local `attempt`, which additionally remembers
+  /// the first failure so it can surface one. All three share the reason for
+  /// swallowing: teardown is cleanup around a decision the user has already
+  /// made — completing a task, stopping a sprint, leaving a dead one — and a
+  /// notification that would not cancel must not take that decision down with
+  /// it. What differs is only whether the caller reports the partial failure.
   Future<bool> _tryTeardownStep(
     String label,
     Future<void> Function() run,
@@ -218,6 +235,14 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       // up front and survives the redirect — that is what lets the SnackBar
       // still be showing once `/focus` has taken over.
       final messenger = ScaffoldMessenger.of(context);
+      // Same reason as the messenger, and as [_onComplete]: every dependency is
+      // resolved before the first await. Each step below yields, and this
+      // widget can be disposed across them — `ref.read` after disposal throws,
+      // which on a one-shot bounce would abandon the rest of the teardown with
+      // nothing coming to retry it.
+      final notifications = ref.read(notificationServiceProvider);
+      final sprint = ref.read(sprintTimerProvider.notifier);
+      final focusMode = ref.read(focusModeProvider.notifier);
       _notificationTimer?.cancel();
       // Awaited *before* navigating, exactly as [_onStop] does. Firing these
       // off after `context.go` would let `/focus` build against a container
@@ -236,16 +261,10 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       // state this teardown exists to clear.
       final cancelled = await _tryTeardownStep(
         'cancel focus notification',
-        () => ref.read(notificationServiceProvider).cancelFocusNotification(),
+        notifications.cancelFocusNotification,
       );
-      final stopped = await _tryTeardownStep(
-        'stop sprint',
-        () => ref.read(sprintTimerProvider.notifier).stopSprint(),
-      );
-      final ended = await _tryTeardownStep(
-        'end focus',
-        () => ref.read(focusModeProvider.notifier).endFocus(),
-      );
+      final stopped = await _tryTeardownStep('stop sprint', sprint.stopSprint);
+      final ended = await _tryTeardownStep('end focus', focusMode.endFocus);
       final endedCleanly = cancelled && stopped && ended;
       if (!mounted) return;
       messenger.showSnackBar(

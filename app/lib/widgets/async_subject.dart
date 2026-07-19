@@ -101,7 +101,13 @@ class AsyncSubject<T extends Object> extends StatelessWidget {
       debugPrint('AsyncSubject error: ${async.error}\n${async.stackTrace}');
       return _chromed(context, const ErrorSurface());
     }
-    if (!async.hasValue) {
+    // Keyed on the same "is there a row worth showing" test as the error branch
+    // rather than on `hasValue` alone. A reload that started from a retained
+    // *null* still reports `hasValue`, so testing that flag would fall through
+    // to the missing panel and assert the row is deleted while the read that
+    // would say otherwise is still in flight. A reload holding a real row is
+    // exempt, as before: the last known row beats a spinner mid-refresh.
+    if (async.isLoading && async.value == null) {
       return _chromed(
         context,
         const Center(child: CircularProgressIndicator()),

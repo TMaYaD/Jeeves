@@ -86,7 +86,11 @@ class AsyncList<T> extends StatelessWidget {
           'AsyncList error: ${asyncValue.error}\n${asyncValue.stackTrace}');
       return const ErrorSurface();
     }
-    if (!asyncValue.hasValue) {
+    // Same guard as the error branch, for the same reason: a reload that
+    // started from a retained *empty* list reports `hasValue`, so testing that
+    // flag alone would render "nothing here yet" while the read that would
+    // populate it is still running. A reload holding rows stays exempt.
+    if (asyncValue.isLoading && !hasRenderableRows) {
       return const Center(child: CircularProgressIndicator());
     }
     final items = asyncValue.value!;

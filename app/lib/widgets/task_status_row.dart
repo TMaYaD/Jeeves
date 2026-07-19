@@ -115,6 +115,19 @@ class _StatusMenuSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(taskDetailNotifierProvider(todo.id));
+
+    // Every write below goes through this rather than straight to [notifier].
+    // The sheet lives on its own modal route, so an Outcome deleted underneath
+    // it — sync applying a remote delete, say — neither dismisses it nor
+    // disables these tiles: the user is left choosing a status for a row that
+    // is gone. `AsyncData(null)` is the same "gone, not loading" test
+    // `AsyncSubject` makes; see `TaskDetailScreen._mutate`, which guards the
+    // sheets that screen owns for the same reason.
+    Future<void> write(Future<void> Function(TaskDetailNotifier n) mutate) async {
+      final subject = ref.read(taskDetailTodoProvider(todo.id));
+      if (subject.hasValue && subject.value == null) return;
+      await mutate(notifier);
+    }
     final isDone = todo.doneAt != null;
     final isTrashed = todo.intent == 'trash';
     final isMaybe = todo.intent == 'maybe';
@@ -145,7 +158,7 @@ class _StatusMenuSheet extends ConsumerWidget {
                 title: const Text('Next'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.clearAllPersonTags();
+                  await write((n) => n.clearAllPersonTags());
                 },
               ),
             // Next Actions — only shown when currently in Someday/Maybe
@@ -156,7 +169,7 @@ class _StatusMenuSheet extends ConsumerWidget {
                 title: const Text('Next Actions'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.setIntent(Intent.next);
+                  await write((n) => n.setIntent(Intent.next));
                 },
               ),
             // Waiting For >
@@ -182,7 +195,7 @@ class _StatusMenuSheet extends ConsumerWidget {
                 title: const Text('Someday'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.setIntent(Intent.maybe);
+                  await write((n) => n.setIntent(Intent.maybe));
                 },
               ),
             // Done — not shown when already done
@@ -193,7 +206,7 @@ class _StatusMenuSheet extends ConsumerWidget {
                 title: const Text('Done'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.markDone();
+                  await write((n) => n.markDone());
                 },
               ),
             // Trash — not shown when already trashed
@@ -204,7 +217,7 @@ class _StatusMenuSheet extends ConsumerWidget {
                 title: const Text('Trash'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.setIntent(Intent.trash);
+                  await write((n) => n.setIntent(Intent.trash));
                 },
               ),
             // Restore — a trashed Outcome chooses the Intent to return to
@@ -217,7 +230,7 @@ class _StatusMenuSheet extends ConsumerWidget {
                 title: const Text('Restore to Next'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.restoreTo(RoutingKind.nextAction);
+                  await write((n) => n.restoreTo(RoutingKind.nextAction));
                 },
               ),
               ListTile(
@@ -225,7 +238,7 @@ class _StatusMenuSheet extends ConsumerWidget {
                 title: const Text('Restore to Someday/Maybe'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.restoreTo(RoutingKind.maybe);
+                  await write((n) => n.restoreTo(RoutingKind.maybe));
                 },
               ),
             ] else if (isDone)
@@ -234,7 +247,7 @@ class _StatusMenuSheet extends ConsumerWidget {
                 title: const Text('Restore'),
                 onTap: () async {
                   Navigator.pop(context);
-                  await notifier.restoreTo(RoutingKind.nextAction);
+                  await write((n) => n.restoreTo(RoutingKind.nextAction));
                 },
               ),
           ],

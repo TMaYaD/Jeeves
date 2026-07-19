@@ -77,25 +77,38 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   TaskDetailNotifier get _notifier =>
       ref.read(taskDetailNotifierProvider(widget.todoId));
 
+  /// Every field mutation this screen issues, funnelled through one place so
+  /// the deleted-subject check cannot be forgotten at a callsite.
+  ///
+  /// The check has to live here rather than at the point the editor opens,
+  /// because the editors that matter are *modal routes* — the context-tag,
+  /// estimate and energy sheets, and the date picker. A sheet sits above this
+  /// screen on its own route, so the delete swapping the body underneath it for
+  /// the missing panel neither dismisses it nor disables its buttons. The user
+  /// is left tapping live controls over a row that is gone, and each tap would
+  /// queue an UPDATE that the backend 404s into `sync_dead_letters`.
+  void _mutate(void Function(TaskDetailNotifier n) write) {
+    if (_subjectGone) return;
+    write(_notifier);
+  }
+
   /// Whether the watched Outcome has been hard-deleted while this screen was
   /// open — `AsyncData(null)`, the same "gone, not loading" test [AsyncSubject]
   /// makes. Mirrors `ClarifyCard`'s `_subjectGone`.
   ///
-  /// **Defence in depth, not a fix for an observed bug.** The autosaves below
-  /// are wired to focus *loss*, so the worry is that swapping in the missing
-  /// panel unmounts the editors and fires them on the way out, writing to a row
-  /// that is gone. Probing it says that does not currently happen: unmounting
-  /// the field detaches its [FocusNode] without delivering the callback, and
-  /// nothing re-triggers it while this State is still mounted — the surrounding
-  /// unfocus-on-tap gesture included. That makes this guard unreachable today
-  /// and deliberately untested; a test asserting no write would pass with or
-  /// without it, which is worse than no test.
+  /// Read by [_mutate], which covers the modal editors, and by the two focus
+  /// listeners above. The two callers differ in how badly they need it:
   ///
-  /// It stays because the invariant is the same one `ClarifyCard` and
-  /// `InboxClarifyScreen` enforce for real — never write to a subject known to
-  /// be gone — and because it rests on a Flutter focus-teardown detail rather
-  /// than anything this screen controls. If that detail changes, the cost is a
-  /// queued UPDATE that the backend 404s into `sync_dead_letters`.
+  /// - **[_mutate] — reachable, and tested.** A modal sheet outlives the delete
+  ///   (see [_mutate]), so its controls stay live over a row that is gone.
+  /// - **The focus listeners — defence in depth.** Probing says unmounting a
+  ///   field detaches its [FocusNode] without delivering the callback, and
+  ///   nothing re-triggers it while this State is mounted (the surrounding
+  ///   unfocus-on-tap gesture included), so that path does not currently fire
+  ///   at all. It is guarded anyway because it rests on a Flutter
+  ///   focus-teardown detail rather than anything this screen controls, and
+  ///   deliberately left untested: a test there would pass with or without the
+  ///   guard, which is worse than no test.
   bool get _subjectGone {
     final async = ref.read(taskDetailTodoProvider(widget.todoId));
     return async.hasValue && async.value == null;
@@ -158,8 +171,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       // Project Picker Custom UI
                       ProjectPickerWidget(
                         currentProjectTag: projectTag,
-                        onAssign: (tag) => _notifier.assignProject(tag.id).ignore(),
-                        onClear: () => _notifier.clearProject().ignore(),
+                        onAssign: (tag) => _mutate((n) => n.assignProject(tag.id).ignore()),
+                        onClear: () => _mutate((n) => n.clearProject().ignore()),
                         customChild: Padding(
                           padding: const EdgeInsets.only(bottom: 4),
                           child: Row(
@@ -354,7 +367,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                                               }
                                                               final newNotes = lines.join('\n');
                                                               setState(() => _notesController.text = newNotes);
-                                                              _notifier.updateNotes(newNotes).ignore();
+                                                              _mutate((n) => n.updateNotes(newNotes).ignore());
                                                             },
                                                           ),
                                                         );
@@ -411,9 +424,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                           ),
                                         );
                                         if (picked != null) {
-                                          _notifier.setDueDate(picked);
+                                          _mutate((n) => n.setDueDate(picked));
                                         } else {
-                                          _notifier.clearDueDate();
+                                          _mutate((n) => n.clearDueDate());
                                         }
                                       },
                                     ),
@@ -596,9 +609,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 return ContextTagPickerWidget(
                   assignedTags: contextTags,
                   onAssign: (tag) =>
-                      _notifier.assignContextTag(tag.id).ignore(),
+                      _mutate((n) => n.assignContextTag(tag.id).ignore()),
                   onRemove: (tag) =>
-                      _notifier.removeContextTag(tag.id).ignore(),
+                      _mutate((n) => n.removeContextTag(tag.id).ignore()),
                 );
               },
             ),
@@ -634,9 +647,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     trailing: val == current ? const Icon(Icons.check, color: Color(0xFF2563EB)) : null,
                     onTap: () {
                       if (val == null) {
-                        _notifier.clearTimeEstimate();
+                        _mutate((n) => n.clearTimeEstimate());
                       } else {
-                        _notifier.setTimeEstimate(val);
+                        _mutate((n) => n.setTimeEstimate(val));
                       }
                       Navigator.pop(ctx);
                     },
@@ -672,9 +685,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                 emptySelectionAllowed: true,
                 onSelectionChanged: (s) {
                   if (s.isEmpty || s.first == null) {
-                    _notifier.clearEnergyLevel();
+                    _mutate((n) => n.clearEnergyLevel());
                   } else {
-                    _notifier.setEnergyLevel(s.first!);
+                    _mutate((n) => n.setEnergyLevel(s.first!));
                   }
                   Navigator.pop(ctx);
                 },

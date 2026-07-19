@@ -530,16 +530,23 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   }
 
   Future<void> _keep() async {
-    if (!await _subjectExists()) return;
-    switch (widget.subject) {
-      case OutcomeSubject(:final todo):
-        await _clarification.stampClarified(todo.id);
-      case CaptureSubject():
-        // "Keep" on a Capture means leave it in the Inbox: the clarify act is
-        // not complete, so `clarified_at` must stay NULL. Stamping here would
-        // clear the item from the Inbox without producing either an Outcome or
-        // a discard verdict — the one outcome the split exists to prevent.
-        break;
+    // Existence gates the *stamp*, not the notify — unlike the routing actions,
+    // which bail entirely so a vanished row cannot record a phantom verdict.
+    // Keep records no verdict to begin with (`toRoutingKind()` is null for it),
+    // so there is nothing phantom to avoid; what a silent bail costs instead is
+    // the callsite never hearing back, stranding a review cursor on an item
+    // that no longer exists. A deleted subject simply has nothing to stamp.
+    if (await _subjectExists()) {
+      switch (widget.subject) {
+        case OutcomeSubject(:final todo):
+          await _clarification.stampClarified(todo.id);
+        case CaptureSubject():
+          // "Keep" on a Capture means leave it in the Inbox: the clarify act is
+          // not complete, so `clarified_at` must stay NULL. Stamping here would
+          // clear the item from the Inbox without producing either an Outcome
+          // or a discard verdict — the one outcome the split exists to prevent.
+          break;
+      }
     }
     await _notifyAfterRoute(ProcessAction.keep);
   }
@@ -602,18 +609,12 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     if (routed == null) {
       // Backing out without routing. The card's missing-state CTA pops `keep`
       // explicitly (above), but the AppBar arrow and system back stay
-      // reachable on the missing panel and pop with *no* result. Routing that
-      // null through [_keep] would hit its opening existence check, which
-      // fails on precisely the row that was just deleted — so it would return
-      // early, never bubble, and leave the user on the outer card for a dead
-      // item: the same dead end the CTA exists to avoid, reached by a
-      // different gesture. Bubble `keep` directly when the subject is gone, so
-      // the cursor advances without recording a routing or stamping a dead row.
-      if (!await _subjectExists()) {
-        if (!mounted) return;
-        await _notifyAfterRoute(ProcessAction.keep);
-        return;
-      }
+      // reachable on the missing panel and pop with *no* result. [_keep]
+      // handles that: it skips the stamp for a subject that is gone and
+      // notifies either way, so the cursor advances instead of stranding the
+      // user on the outer card for a dead item. Checking existence here as
+      // well would reintroduce the gap — a delete landing between the two
+      // checks would put us back on the silent-bail path.
       await _keep();
       return;
     }

@@ -18,6 +18,7 @@ import 'package:jeeves/providers/sprint_timer_provider.dart'
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
+import 'package:jeeves/widgets/task_status_row.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
 
@@ -47,6 +48,33 @@ Future<Todo> _insertAt(
   return (await db.todoDao.getTodo(id))!;
 }
 
+/// Records the field writes the screen issues, so a test can assert a write did
+/// *not* happen. Asserting on the row instead proves nothing: `updateFields`
+/// against a deleted row matches zero rows and resurrects nothing, so the DB
+/// looks identical whether or not the guard is there.
+class _RecordingTaskDetailNotifier extends TaskDetailNotifier {
+  _RecordingTaskDetailNotifier({
+    required super.db,
+    required super.userId,
+    required super.todoId,
+  });
+
+  final List<String> energyWrites = [];
+  final List<Intent> intentWrites = [];
+
+  @override
+  Future<void> setEnergyLevel(String level) {
+    energyWrites.add(level);
+    return super.setEnergyLevel(level);
+  }
+
+  @override
+  Future<void> setIntent(Intent intent) {
+    intentWrites.add(intent);
+    return super.setIntent(intent);
+  }
+}
+
 (Widget, GoRouter) _buildScreen(
   GtdDatabase db,
   String todoId, {
@@ -57,6 +85,7 @@ Future<Todo> _insertAt(
   // `watchSingleOrNull()`-backed, so emitting `null` here is exactly what a
   // synced hard-delete looks like to the screen (#428).
   Stream<Todo?>? todoStream,
+  TaskDetailNotifier? notifier,
 }) {
   final router = GoRouter(
     initialLocation: '/inbox',
@@ -85,6 +114,8 @@ Future<Todo> _insertAt(
       databaseProvider.overrideWithValue(db),
       taskDetailTodoProvider(todoId)
           .overrideWith((_) => todoStream ?? Stream.value(initialTodo)),
+      if (notifier != null)
+        taskDetailNotifierProvider(todoId).overrideWithValue(notifier),
       taskTagsProvider(todoId)
           .overrideWith((_) => Stream.value(initialTags)),
       // Stubbed like the other row streams above: a live Drift query stream
@@ -644,6 +675,85 @@ void main() {
 
       expect(find.text('Task not found'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('a modal editor open across a delete cannot write to the row',
+        (tester) async {
+      // A bottom sheet is its own route: the delete swapping the body beneath it
+      // for the missing panel neither dismisses it nor disables its controls, so
+      // the user is left tapping live buttons over a row that is gone. Recorded
+      // at the notifier rather than asserted on the DB — an UPDATE matching zero
+      // rows leaves the table identical either way, so only the call proves it.
+      final todo = await _insertAt(db, id: 'del3', title: 'Vanishing task');
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+      final notifier = _RecordingTaskDetailNotifier(
+        db: db,
+        userId: _userId,
+        todoId: 'del3',
+      );
+
+      final (widget, router) = _buildScreen(db, 'del3',
+          todoStream: subject.stream, notifier: notifier);
+      await _showTaskDetail(tester, widget, router, 'del3');
+      subject.add(todo);
+      await tester.pumpAndSettle();
+
+      // Open the energy sheet, then let sync delete the row underneath it.
+      final energy = find.text('Energy');
+      await tester.ensureVisible(energy);
+      await tester.tap(energy);
+      await tester.pumpAndSettle();
+      expect(find.text('Energy Level'), findsOneWidget,
+          reason: 'precondition: the sheet is open');
+
+      subject.add(null);
+      await tester.pumpAndSettle();
+
+      // The sheet is still up. Tapping an option must not reach the notifier.
+      await tester.tap(find.text('High'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.energyWrites, isEmpty,
+          reason: 'a sheet outliving its subject must not write to it');
+    });
+
+    testWidgets('the status sheet open across a delete cannot write to the row',
+        (tester) async {
+      // `TaskStatusRow` opens its own modal sheet, so it is guarded inside that
+      // widget rather than by `TaskDetailScreen._mutate` — same hazard, second
+      // owner. Without it, choosing a status after the delete re-routes a row
+      // that no longer exists.
+      final todo = await _insertAt(db, id: 'del4', title: 'Vanishing task');
+      final subject = StreamController<Todo?>.broadcast();
+      addTearDown(subject.close);
+      final notifier = _RecordingTaskDetailNotifier(
+        db: db,
+        userId: _userId,
+        todoId: 'del4',
+      );
+
+      final (widget, router) = _buildScreen(db, 'del4',
+          todoStream: subject.stream, notifier: notifier);
+      await _showTaskDetail(tester, widget, router, 'del4');
+      subject.add(todo);
+      await tester.pumpAndSettle();
+
+      final statusRow = find.byType(TaskStatusRow);
+      await tester.ensureVisible(statusRow);
+      await tester.tap(statusRow);
+      await tester.pumpAndSettle();
+      expect(find.text('Someday'), findsOneWidget,
+          reason: 'precondition: the status sheet is open');
+
+      subject.add(null);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Someday'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.intentWrites, isEmpty,
+          reason: 'a status sheet outliving its subject must not re-route it');
     });
 
     testWidgets('the missing state offers a way out rather than dead-ending',

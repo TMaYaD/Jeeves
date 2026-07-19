@@ -35,6 +35,26 @@ class _GatedCaptureDao extends CaptureDao {
   }
 }
 
+/// A [CaptureDao] whose tag-hint read fails, standing in for the query throwing.
+class _ThrowingHintCaptureDao extends CaptureDao {
+  _ThrowingHintCaptureDao(super.db);
+
+  @override
+  Future<List<Tag>> tagHintsForCapture(String captureId) async {
+    throw StateError('hint read failed');
+  }
+}
+
+/// [GtdDatabase] handing out a failing-hint DAO.
+class _ThrowingHintDb extends GtdDatabase {
+  _ThrowingHintDb(super.e);
+
+  late final CaptureDao _dao = _ThrowingHintCaptureDao(this);
+
+  @override
+  CaptureDao get captureDao => _dao;
+}
+
 /// [GtdDatabase] handing out the gated DAO. Everything else is the real thing.
 class _GatedDb extends GtdDatabase {
   _GatedDb(super.e, Future<void> gate) : _gate = gate;
@@ -516,6 +536,35 @@ void main() {
       final tagIds = await _tagIdsOf(gatedDb, outcome!.id);
       expect(tagIds, contains('ctx1'),
           reason: 'the hint seeded the Outcome rather than being dropped');
+    });
+
+    testWidgets('a failed tag-hint read still lets the user route',
+        (tester) async {
+      // The gate settles on failure as well as success. Hints are a seeding
+      // nicety, not a precondition for clarifying, so a throwing read must
+      // degrade to "route without them" — leaving the four Outcome routes
+      // disabled forever would strand the user on an item they cannot process.
+      final failingDb = _ThrowingHintDb(NativeDatabase.memory());
+      addTearDown(failingDb.close);
+      await failingDb.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(failingDb, 'x'));
+      await tester.pumpAndSettle();
+
+      expect(find.text("Couldn't load this item's tags."), findsOneWidget,
+          reason: 'and says so rather than failing silently');
+
+      await tester.ensureVisible(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final outcome = await _outcomeOf(failingDb, 'x');
+      expect(outcome, isNotNull,
+          reason: 'routing must not stay gated behind a hint read that failed');
+      expect(await _tagIdsOf(failingDb, outcome!.id), isEmpty,
+          reason: 'it simply carries no hints');
     });
 
     testWidgets('Next Action leaves the Inbox empty', (tester) async {

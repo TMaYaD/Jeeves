@@ -282,11 +282,13 @@ void main() {
       addTearDown(subject.close);
 
       final sprint = _FailingSprintTimer('sp3');
+      final notifications = _StubNotificationService();
       final (widget, _) = _buildScreen(
         db,
         'sp3',
         todoStream: subject.stream,
         sprint: sprint,
+        notifications: notifications,
       );
       await tester.pumpWidget(widget);
       subject.add(todo);
@@ -317,6 +319,12 @@ void main() {
       // exactly the state the teardown exists to clear.
       expect(container.read(focusModeProvider).isActive, isFalse,
           reason: 'a failed step must not skip the ones after it');
+      // The cancel runs *before* the failing stop, so this pins the other half
+      // of independence: the steps around a failure all still happen. Left
+      // standing, the status-bar notification keeps deep-linking into a sprint
+      // whose task is gone.
+      expect(notifications.cancelFocusCalls, 1,
+          reason: 'a failed sprint stop must not skip notification cleanup');
       // And the failed stop must not leave a sprint behind. Clearing focus mode
       // is exactly what puts every stop control out of reach — `/focus/active`
       // bounces without an active focus, and nothing on `/focus` can stop a
