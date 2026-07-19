@@ -27,6 +27,7 @@ import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/widgets/capture_outcomes_section.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
+import 'package:jeeves/widgets/state_surfaces.dart';
 
 import '../test_helpers.dart';
 
@@ -114,6 +115,9 @@ void main() {
     VoidCallback? onCompleted,
     Set<String> tagIds = const {},
     ClarificationService? service,
+    // Leaves the link stream silent, so the surface stays on the loading
+    // state and the test can drive it to error or to a first value itself.
+    bool seedLinks = true,
   }) async {
     tester.view.physicalSize = const Size(1200, 4000);
     tester.view.devicePixelRatio = 1.0;
@@ -138,7 +142,7 @@ void main() {
         ),
       ),
     ));
-    carved.add(await _readCarved(db, capture.id));
+    if (seedLinks) carved.add(await _readCarved(db, capture.id));
     await _pumpFrames(tester);
   }
 
@@ -493,6 +497,70 @@ void main() {
     });
   });
 
+  // Discard drops this session's carves. Offering it against a list nobody
+  // has successfully read would destroy Outcomes on the strength of a failed
+  // query, so the destructive verdict is gated on the list being *known* —
+  // loading and error are not "no Outcomes" (widgets/state_surfaces.dart).
+  group('the verdict never rests on an unknown list', () {
+    testWidgets('withholds Discard while the links are still loading',
+        (tester) async {
+      final capture = await _insertCapture(db, 'c1');
+      await pumpSection(tester, capture, seedLinks: false);
+
+      expect(find.text('Discard Capture'), findsNothing);
+
+      // The slot still holds the non-destructive verdict so the bar does not
+      // jump when the answer lands, but it is not tappable while in flight.
+      final btn = tester.widget<OutlinedButton>(find.ancestor(
+        of: find.text('Done with this Capture'),
+        matching: find.byType(OutlinedButton),
+      ));
+      expect(btn.onPressed, isNull);
+    });
+
+    testWidgets('withholds Discard when the links fail, and Done still works',
+        (tester) async {
+      final capture = await _insertCapture(db, 'c1');
+      await db.todoDao
+          .insertOutcome(id: 'o1', title: 'Plan the trip', userId: _userId);
+      await db.captureDao.linkOutcome('c1', 'o1', _userId);
+      var completed = false;
+      await pumpSection(tester, capture,
+          seedLinks: false, onCompleted: () => completed = true);
+      carved.addError(StateError('links unavailable'));
+      await _pumpFrames(tester);
+
+      expect(find.byKey(ErrorSurface.surfaceKey), findsOneWidget);
+      expect(find.text('Discard Capture'), findsNothing);
+
+      // Done is the way out of the dead end, and it destroys nothing: the
+      // Outcome the failed read never showed is still linked afterwards.
+      await tester.tap(find.text('Done with this Capture'));
+      await _pumpFrames(tester);
+
+      expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNotNull);
+      expect(await db.todoDao.getTodo('o1'), isNotNull);
+      expect(await db.captureDao.outcomeIdsForCapture('c1'), ['o1']);
+      expect(completed, isTrue);
+    });
+
+    testWidgets('an error after a loaded-empty list still withholds Discard',
+        (tester) async {
+      // Error before absence: Riverpod retains the previous value alongside
+      // the error, so an absence-first check would read this as a confirmed
+      // "no Outcomes" and offer to discard on the strength of a stale answer.
+      final capture = await _insertCapture(db, 'c1');
+      await pumpSection(tester, capture);
+      expect(find.text('Discard Capture'), findsOneWidget);
+
+      carved.addError(StateError('links went away'));
+      await _pumpFrames(tester);
+
+      expect(find.text('Discard Capture'), findsNothing);
+      expect(find.text('Done with this Capture'), findsOneWidget);
+    });
+  });
+
   group('retraction cuts by provenance', () {
     testWidgets('retracting a session-carved Outcome deletes it',
         (tester) async {
@@ -620,6 +688,13 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       await tester.pumpWidget(cardHarness(mode, capture));
+      // The card resolves the Capture before it builds the section, so the
+      // section subscribes a frame later than the widget tree appears.
+      // `carved` is a broadcast controller and replays nothing, so seeding it
+      // any earlier drops the list on the floor and leaves the section stuck
+      // loading — which is now visible, because loading no longer passes
+      // itself off as an empty list.
+      await _pumpFrames(tester);
       carved.add(const []);
       await _pumpFrames(tester);
     }

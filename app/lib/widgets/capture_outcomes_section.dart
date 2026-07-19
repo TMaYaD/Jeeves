@@ -303,7 +303,18 @@ class _CaptureOutcomesSectionState
   @override
   Widget build(BuildContext context) {
     final linkedAsync = ref.watch(carvedOutcomesProvider(widget.capture.id));
-    final linked = linkedAsync.asData?.value ?? const <CarvedOutcome>[];
+    // `.value`, not `asData`: a re-subscribe puts the provider back into
+    // loading *with the last value still attached*, and `asData` throws that
+    // away — blanking the rows and springing the form open mid-session.
+    final linked = linkedAsync.value ?? const <CarvedOutcome>[];
+    // Error before absence: Riverpod hands back the previous value alongside
+    // an error too, so an absence-first read would call a list that failed to
+    // load "empty" and let the destructive verdict act on it
+    // (widgets/state_surfaces.dart). Loading with no value yet is likewise not
+    // an answer — only a list that came back, and came back clean, is.
+    final outcomesKnownEmpty =
+        !linkedAsync.hasError && linkedAsync.hasValue && linked.isEmpty;
+    final outcomesPending = !linkedAsync.hasError && !linkedAsync.hasValue;
     final linkedIds = {for (final l in linked) l.outcome.id};
     _knownOutcomeIds = linkedIds;
     // The form opens itself while there is nothing in the list, so the first
@@ -395,7 +406,8 @@ class _CaptureOutcomesSectionState
           capture: widget.capture,
           draft: _draft,
           formOpen: formOpen,
-          hasOutcomes: linked.isNotEmpty,
+          outcomesKnownEmpty: outcomesKnownEmpty,
+          outcomesPending: outcomesPending,
           titleIsBlank: _titleIsBlank,
           onCarved: _onCarved,
           onCompleted: widget.onCompleted,
@@ -823,7 +835,8 @@ class _RoutingAndVerdict extends StatelessWidget {
     required this.capture,
     required this.draft,
     required this.formOpen,
-    required this.hasOutcomes,
+    required this.outcomesKnownEmpty,
+    required this.outcomesPending,
     required this.titleIsBlank,
     required this.onCarved,
     required this.onCompleted,
@@ -832,7 +845,16 @@ class _RoutingAndVerdict extends StatelessWidget {
   final Capture capture;
   final ClarifyDraft Function() draft;
   final bool formOpen;
-  final bool hasOutcomes;
+
+  /// The link list has been *read*, and it is empty. Only a read list may put
+  /// the destructive verdict on the bar — loading and error are not "no
+  /// Outcomes", they are "no answer".
+  final bool outcomesKnownEmpty;
+
+  /// The link list is still in flight. The verdict keeps its slot so the bar
+  /// does not jump when the answer lands, but nothing may be committed on it.
+  final bool outcomesPending;
+
   final bool titleIsBlank;
   final Future<void> Function() onCarved;
   final Future<void> Function()? onCompleted;
@@ -850,17 +872,21 @@ class _RoutingAndVerdict extends StatelessWidget {
       include: {
         // Exactly one verdict, chosen on the *list* alone. A form filled in
         // but never routed is not an Outcome this Capture yielded, so it does
-        // not turn Discard into Done.
-        if (hasOutcomes) ProcessAction.completeCapture,
+        // not turn Discard into Done. The non-destructive verdict is the
+        // default: it takes the slot unless the list is known to be empty.
+        if (!outcomesKnownEmpty) ProcessAction.completeCapture,
       },
       except: {
         // Done and Trash are not clarify-time destinations for an Outcome: an
         // Outcome captured already-complete is a contradiction, and trashing
         // one belongs on its own surface. Trash survives only as the
         // Capture-level Discard verdict, which is why it is withheld exactly
-        // when the completing verdict is showing.
+        // when the completing verdict is showing. Discard destroys this
+        // session's carves, so it is offered only against a list that was
+        // actually read and came back empty — never on a failed or pending
+        // read, which would offer to discard Outcomes it simply could not see.
         ProcessAction.done,
-        if (hasOutcomes) ProcessAction.trash,
+        if (!outcomesKnownEmpty) ProcessAction.trash,
         // With no form open there is nothing to route — only a verdict to
         // give.
         if (!formOpen) ...{
@@ -872,13 +898,19 @@ class _RoutingAndVerdict extends StatelessWidget {
         // Next routes immediately rather than opening the dialog.
         ProcessAction.nextActionDialog,
       },
-      disabled: titleIsBlank
-          ? const {
-              ProcessAction.next,
-              ProcessAction.waitingFor,
-              ProcessAction.someday,
-            }
-          : const <ProcessAction>{},
+      disabled: {
+        if (titleIsBlank) ...{
+          ProcessAction.next,
+          ProcessAction.waitingFor,
+          ProcessAction.someday,
+        },
+        // The answer is imminent, so the verdict waits for it rather than
+        // committing on a list still in flight. An *errored* read gets no such
+        // treatment: nothing further is coming, and leaving the user with no
+        // way to finish would make the surface a dead end. Completing is safe
+        // either way — it stamps the Capture and destroys nothing.
+        if (outcomesPending) ProcessAction.completeCapture,
+      },
       onAfterRoute: (action) async {
         switch (action) {
           case ProcessAction.completeCapture:
