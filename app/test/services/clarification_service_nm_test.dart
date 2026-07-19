@@ -124,6 +124,85 @@ void main() {
         throwsA(isA<StateError>()),
       );
     });
+
+    // The n-m New Outcome form collects the same attributes the 1-1 card does
+    // (CONTEXT.md § GTD Core: they are Outcome attributes, with no column on a
+    // Capture to hold them). Carving must therefore write all of them, not just
+    // the title — otherwise the user fills in a form whose fields silently
+    // evaporate.
+    test('persists the whole clarify draft onto the carved Outcome', () async {
+      await _insertCapture(db, id: 'c1');
+      final due = DateTime(2026, 8, 1);
+
+      final outcomeId = await service.carveOutcome(
+        'c1',
+        userId: _userId,
+        title: 'Book the flights',
+        notes: 'Aim for a morning departure',
+        energyLevel: 'high',
+        timeEstimate: 45,
+        dueDate: due,
+      );
+
+      final outcome = await db.todoDao.getTodo(outcomeId);
+      expect(outcome!.notes, 'Aim for a morning departure');
+      expect(outcome.energyLevel, 'high');
+      expect(outcome.timeEstimate, 45);
+      expect(outcome.dueDate!.toLocal(), due);
+    });
+
+    test('applies the routing destination the New Outcome form chose', () async {
+      await _insertCapture(db, id: 'c1');
+
+      final outcomeId = await service.carveOutcome(
+        'c1',
+        userId: _userId,
+        title: 'Book the flights',
+        to: RoutingKind.maybe,
+      );
+
+      final outcome = await db.todoDao.getTodo(outcomeId);
+      expect(outcome!.intent, 'maybe');
+      // Routing the form's Outcome is not the Capture's verdict: the Capture
+      // stays in the Inbox until the user says it is done with.
+      expect(await _clarifiedAt(db, 'c1'), isNull);
+    });
+
+    test('records the next action when the carve routes to Next', () async {
+      await _insertCapture(db, id: 'c1');
+
+      final outcomeId = await service.carveOutcome(
+        'c1',
+        userId: _userId,
+        title: 'Book the flights',
+        to: RoutingKind.nextAction,
+        nextActionText: 'Compare fares',
+      );
+
+      final outcome = await db.todoDao.getTodo(outcomeId);
+      expect(outcome!.intent, 'next');
+      expect(outcome.nextActionText, 'Compare fares');
+    });
+
+    test('attaches person tags when the carve routes to Waiting For', () async {
+      await _insertCapture(db, id: 'c1');
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('p1'),
+        name: const Value('Dana'),
+        type: const Value('person'),
+        userId: const Value(_userId),
+      ));
+
+      final outcomeId = await service.carveOutcome(
+        'c1',
+        userId: _userId,
+        title: 'Chase the quote',
+        to: RoutingKind.waitingFor,
+        personTagIds: {'p1'},
+      );
+
+      expect(await db.todoDao.getPersonTagIdsForTodo(outcomeId), {'p1'});
+    });
   });
 
   group('mergeIntoOutcome', () {

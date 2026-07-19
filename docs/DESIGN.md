@@ -163,19 +163,27 @@ under the user's finger mid-transition — a double-tap must advance exactly
 one step. This absorption is part of the Wizard contract, owned by the
 `Wizard` widget itself.
 
-### Verdict footers — one button, swapping label
-Where a surface collects exactly one verdict and the verdict's *meaning*
-changes with the state of the surface, it renders one primary button whose
-label swaps, never two buttons behind a conditional.
+### Terminal verdicts share the slot the destinations vacate
+Where a surface collects routing destinations *and* one terminal verdict, the
+verdict occupies the slot a withheld destination leaves behind, laid out by
+the same parent as the destinations — not positioned to match them by hand.
+Two separately-tuned paddings drift; one parent cannot.
 
-The n-m clarify surface is the reference case: the footer reads **"Done with
-this Capture"** while one or more Outcomes are linked and **"Discard Capture"**
-at zero. Discard is a legitimate clarification verdict, not a destructive
-escape hatch, so it earns the primary slot rather than sitting permanently
-beside the happy path where it would read as a warning. Colour carries the
-distinction the label already makes — `ACCENT_DAILY` `#2563EB` for the
-committed verdict, `SKIP_GREY` `#6B7280` for the zero-Outcome one. Neither
-verdict opens a confirmation dialog.
+The clarify surfaces are the reference case. Their routing bar offers three
+destinations — Next Action, Waiting For, Someday — and withholds **Done** and
+**Trash** on a Capture. The Capture-level verdict renders in that vacated
+slot, through the same button as the destinations, so its horizontal inset,
+height, corner radius and the gap above it are theirs by construction.
+
+Exactly one verdict shows at a time, and its label swaps with meaning rather
+than splitting into two buttons behind a conditional: **"Done with this
+Capture"** once the Capture has yielded at least one Outcome, **"Discard
+Capture"** at zero. Each inherits the colour semantics of the slot it
+occupies — `#16A34A` (routing-Done green) for the completing verdict, `#DC2626`
+(routing-Trash red) for the discarding one. Discard is a legitimate
+clarification verdict, not a destructive escape hatch, so it earns that slot
+rather than sitting permanently beside the happy path where it would read as a
+warning. Neither verdict opens a confirmation dialog.
 
 This is the same principle as the wizard footer above — one affordance in one
 slot — applied to a terminal verdict rather than to forward progress.

@@ -41,16 +41,36 @@ String captureTagIdFor(String captureId, String tagId) =>
 /// Captures clarified into the same Outcome (CONTEXT.md § GTD Core: Capture ↔
 /// Outcome is many-to-many).
 class CarvedOutcome {
-  const CarvedOutcome({required this.outcome, required this.captureCount});
+  const CarvedOutcome({
+    required this.outcome,
+    required this.captureCount,
+    this.contexts = const [],
+  });
 
   final Todo outcome;
   final int captureCount;
+
+  /// Names of the Outcome's Context tags, alphabetical.
+  ///
+  /// Contexts gate *when* a next action is visible, so the clarify list shows
+  /// them beside the action they qualify (CONTEXT.md § GTD Core: Contexts
+  /// attach to the NextAction, not the Task).
+  final List<String> contexts;
 
   /// True when more than one Capture clarified into this Outcome.
   bool get isMerged => captureCount > 1;
 }
 
-@DriftAccessor(tables: [Captures, CaptureOutcomes, CaptureTags, Tags, Todos])
+/// Splits the `GROUP_CONCAT` of Context tag names into a sorted list. SQLite
+/// concatenates in unspecified order, so the sort is what keeps the clarify
+/// list from reshuffling its chips between rebuilds.
+List<String> _splitContexts(String? concatenated) {
+  if (concatenated == null || concatenated.isEmpty) return const [];
+  return concatenated.split(',')..sort();
+}
+
+@DriftAccessor(
+    tables: [Captures, CaptureOutcomes, CaptureTags, Tags, Todos, TodoTags])
 class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   CaptureDao(super.db);
 
@@ -267,19 +287,26 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
         'SELECT todos.*, ('
         '  SELECT COUNT(*) FROM capture_outcomes AS all_links '
         '  WHERE all_links.outcome_id = todos.id'
-        ') AS capture_count '
+        ') AS capture_count, ('
+        '  SELECT GROUP_CONCAT(tags.name) FROM tags '
+        '  INNER JOIN todo_tags ON todo_tags.tag_id = tags.id '
+        "  WHERE todo_tags.todo_id = todos.id AND tags.type = 'context'"
+        ') AS context_names '
         'FROM todos '
         'INNER JOIN capture_outcomes ON capture_outcomes.outcome_id = todos.id '
         'WHERE capture_outcomes.capture_id = ? '
         'ORDER BY capture_outcomes.created_at ASC',
         variables: [Variable<String>(captureId)],
-        readsFrom: {todos, captureOutcomes},
+        readsFrom: {todos, captureOutcomes, todoTags, tags},
       ).watch().map(
             (rows) => [
               for (final row in rows)
                 CarvedOutcome(
                   outcome: todos.map(row.data),
                   captureCount: row.read<int>('capture_count'),
+                  contexts: _splitContexts(
+                    row.read<String?>('context_names'),
+                  ),
                 ),
             ],
           );

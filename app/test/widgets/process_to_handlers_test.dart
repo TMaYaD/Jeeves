@@ -353,16 +353,19 @@ void main() {
       // An Outcome routed to trash lands on the Trash List (`Intent = trash`),
       // so "Trash" names a real destination.
       expect(find.text('Trash'), findsOneWidget);
-      expect(find.text('Discard'), findsNothing);
+      expect(find.text('Discard Capture'), findsNothing);
     });
 
-    testWidgets('trash is labelled "Discard" on a Capture', (tester) async {
+    testWidgets('trash is labelled "Discard Capture" on a Capture',
+        (tester) async {
       final capture = await _insertCapture(db, id: 'c7');
       await tester.pumpWidget(_captureHarness(db, capture: capture));
 
-      // A discarded Capture creates no Outcome, so it never reaches that List.
-      // Naming it "Trash" would promise a destination it never arrives at.
-      expect(find.text('Discard'), findsOneWidget);
+      // A discarded Capture creates no Outcome, so it never reaches that
+      // List. Naming it "Trash" would promise a destination it never arrives
+      // at, and the verdict names its subject because it ends the *Capture*,
+      // not one Outcome among several.
+      expect(find.text('Discard Capture'), findsOneWidget);
       expect(find.text('Trash'), findsNothing);
     });
   });
@@ -958,7 +961,7 @@ void main() {
         onAfterRoute: (action) async => fired.add(action),
       ));
 
-      await tester.tap(find.text('Discard'));
+      await tester.tap(find.text('Discard Capture'));
       await tester.pumpAndSettle();
 
       // Discard runs through `discardCapture`, not `clarifyToOutcome` — a

@@ -30,7 +30,7 @@ import '../../providers/database_provider.dart';
 import '../../providers/task_detail_provider.dart';
 import '../../services/clarification_service.dart';
 import '../../widgets/async_subject.dart';
-import '../../widgets/capture_outcomes_field.dart';
+import '../../widgets/capture_outcomes_section.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/process_to_handlers.dart';
 
@@ -280,7 +280,47 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
             child: const Text('Back to Inbox'),
           ),
         ),
-        dataBuilder: (context, capture) => ListView(
+        dataBuilder: (context, capture) =>
+            ref.watch(clarifyModeProvider) == ClarifyMode.nToM
+                ? _buildNToM(capture)
+                : _buildOneToOne(capture),
+      ),
+    );
+  }
+
+  /// The n-m body: the Capture read-only, the Outcomes it has yielded, the
+  /// inline New Outcome form and the verdict — all of it owned by
+  /// [CaptureOutcomesSection]. This screen contributes no fields of its own in
+  /// that mode, because in n-m the Capture is provenance and the *Outcome* is
+  /// what the fields describe.
+  Widget _buildNToM(Capture capture) {
+    return ListView(
+      physics: const ClampingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+      children: [
+        CaptureOutcomesSection(
+          capture: capture,
+          tagIds: _hintTagIds,
+          onCompleted: () async {
+            if (mounted) context.pop();
+          },
+        ),
+        const SizedBox(height: 20),
+        // Skip survives into n-m unchanged: leaving mid-split is exactly what
+        // that mode is for — the Capture keeps whatever Outcomes it has carved
+        // so far and stays in the Inbox.
+        ClarifyDestinationButton(
+          label: 'Skip',
+          icon: Icons.next_plan_outlined,
+          color: const Color(0xFF6B7280),
+          onTap: () => context.pop(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildOneToOne(Capture capture) {
+    return ListView(
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
               children: [
@@ -425,25 +465,6 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                 ),
                 const SizedBox(height: 28),
 
-                // n-m mode swaps the routing bar for the unified
-                // capture-to-Outcome field: a Capture may carve or merge into
-                // several Outcomes before the user declares it done, so
-                // routing is not the clarify act there. The 1-1 path below is
-                // untouched.
-                if (ref.watch(clarifyModeProvider) == ClarifyMode.nToM)
-                  CaptureOutcomesField(
-                    captureId: widget.captureId,
-                    tagIds: _hintTagIds,
-                    onCompleted: () async {
-                      if (!mounted) return;
-                      try {
-                        await _saveCaptureText();
-                      } finally {
-                        if (mounted) this.context.pop();
-                      }
-                    },
-                  )
-                else ...[
                 // Destinations. The canonical action bar owns every routing
                 // write — including the zero-Outcome Discard — so this screen
                 // cannot drift from the ceremony clarify surfaces.
@@ -463,13 +484,20 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                           ProcessAction.next,
                           ProcessAction.waitingFor,
                           ProcessAction.someday,
-                          ProcessAction.done,
                         }
                       : const <ProcessAction>{},
-                  // Opt out of the default-on `nextActionDialog` modifier:
-                  // this screen supplies the phrase via the title-as-action
-                  // coupling in [_draft], so Next routes immediately.
-                  except: const {ProcessAction.nextActionDialog},
+                  // Done is not a clarify-time destination — an Outcome
+                  // captured already-complete is a contradiction, and
+                  // completing one belongs on its own surface. Trash stays as
+                  // the Capture-level Discard verdict in the slot Done
+                  // vacates. Also opt out of the default-on `nextActionDialog`
+                  // modifier: this screen supplies the phrase via the
+                  // title-as-action coupling in [_draft], so Next routes
+                  // immediately.
+                  except: const {
+                    ProcessAction.done,
+                    ProcessAction.nextActionDialog,
+                  },
                   // Skip lives outside the bar, so it does not get the bar's
                   // own in-flight disabling for free — mirror the state out.
                   onProcessingChanged: (busy) {
@@ -485,21 +513,15 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                     try {
                       await _saveCaptureText();
                     } finally {
-                      // `this.context` (not the build parameter) so the guard
-                      // is the matching State.mounted check.
-                      if (mounted) this.context.pop();
+                      if (mounted) context.pop();
                     }
                   },
                 ),
-                ],
                 const SizedBox(height: 20),
                 // Skip is a nav escape hatch, not a verdict — it leaves
                 // `clarified_at` NULL and the Capture in the Inbox — so it
                 // stays outside the routing bar, and so it does not inherit
                 // the bar's in-flight disabling for free (see [_routing]).
-                // It survives into n-m mode unchanged: leaving mid-split is
-                // exactly what that mode is for — the Capture keeps whatever
-                // Outcomes it has carved so far and stays in the Inbox.
                 ClarifyDestinationButton(
                   label: 'Skip',
                   icon: Icons.next_plan_outlined,
@@ -508,8 +530,6 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                   onTap: () => context.pop(),
                 ),
               ],
-            ),
-      ),
-    );
+            );
   }
 }

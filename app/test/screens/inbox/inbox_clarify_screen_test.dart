@@ -162,6 +162,13 @@ class _RecordingClarificationService implements ClarificationService {
     String captureId, {
     required String userId,
     required String title,
+    RoutingKind? to,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -170,6 +177,13 @@ class _RecordingClarificationService implements ClarificationService {
         captureId,
         userId: userId,
         title: title,
+        to: to,
+        notes: notes,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+        dueDate: dueDate,
+        nextActionText: nextActionText,
+        personTagIds: personTagIds,
         tagIds: tagIds,
         outcomeId: outcomeId,
         now: now,
@@ -587,20 +601,24 @@ void main() {
       expect(outcome.intent, 'maybe');
     });
 
-    testWidgets('Done carves an already-achieved Outcome', (tester) async {
+    testWidgets('Done is not offered as a clarify-time destination',
+        (tester) async {
       await db.captureDao
           .insertCapture(_captureCompanion(id: 'x', title: 'Old idea'));
 
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      await _scrollAndTap(tester, 'Done');
-
-      // Done records a Completion — the user finished the thing. It is not a
-      // discard, so the Outcome must not land on the Trash List either.
-      final outcome = (await _outcomeOf(db, 'x'))!;
-      expect(outcome.doneAt, isNotNull);
-      expect(outcome.intent, isNot('trash'));
+      // An Outcome captured already-complete is a contradiction: Done is a
+      // completion event, not a destination you route to while clarifying.
+      // Completing an Outcome stays available on the Outcome's own surface.
+      expect(find.text('Done'), findsNothing);
+      // The three real destinations survive, with the verdict in the slot Done
+      // vacated.
+      expect(find.text('Next Action'), findsOneWidget);
+      expect(find.text('Waiting For'), findsOneWidget);
+      expect(find.text('Someday'), findsOneWidget);
+      expect(find.text('Discard Capture'), findsOneWidget);
     });
 
     testWidgets('Discard stamps the Capture and carves no Outcome',
@@ -611,7 +629,7 @@ void main() {
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      await _scrollAndTap(tester, 'Discard');
+      await _scrollAndTap(tester, 'Discard Capture');
 
       // A discard is the zero-Outcome verdict: the clarify act completed, so
       // `clarified_at` is stamped and the item leaves the Inbox, but nothing
@@ -629,7 +647,7 @@ void main() {
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      await _scrollAndTap(tester, 'Discard');
+      await _scrollAndTap(tester, 'Discard Capture');
 
       // The bug this screen shipped with: a button that said "discard" wrote a
       // completed Outcome. Nothing may land in `todos` on this path — not even
@@ -649,7 +667,7 @@ void main() {
       await tester.enterText(find.byKey(const Key('clarify_title')), '');
       await tester.pump();
 
-      await _scrollAndTap(tester, 'Discard');
+      await _scrollAndTap(tester, 'Discard Capture');
 
       // Discard stays enabled with a blank title so an unnamed fragment can be
       // thrown away — but the Capture is the provenance record of *what* was

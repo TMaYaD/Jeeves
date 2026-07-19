@@ -98,21 +98,33 @@ abstract class ClarificationService {
   /// Carves a **new** Outcome out of the Capture [captureId] without
   /// completing the clarify act — the split half of the n-m clarify surface.
   ///
-  /// Creates the Outcome (Intent `next`, per [TodoDao.insertOutcome]), attaches
-  /// [tagIds], and links it to the Capture as provenance. Deliberately does
-  /// **not** stamp `captures.clarified_at` and does **not** drop Outcomes an
-  /// earlier carve produced: in n-m mode a Capture stays in the Inbox while
-  /// several Outcomes accumulate against it, and only the user's explicit
-  /// verdict ([completeCaptureClarification] / [discardCapture]) ends that
-  /// (CONTEXT.md § GTD Core). This is exactly what separates it from
-  /// [clarifyCaptureToOutcome], which is the 1-1 mode's create-link-stamp
-  /// path and overwrites.
+  /// Creates the Outcome, applies the routing [to] the New Outcome form chose,
+  /// attaches [tagIds] and [personTagIds], and links it to the Capture as
+  /// provenance. Deliberately does **not** stamp `captures.clarified_at` and
+  /// does **not** drop Outcomes an earlier carve produced: in n-m mode a
+  /// Capture stays in the Inbox while several Outcomes accumulate against it,
+  /// and only the user's explicit verdict ([completeCaptureClarification] /
+  /// [discardCapture]) ends that (CONTEXT.md § GTD Core). This is exactly what
+  /// separates it from [clarifyCaptureToOutcome], which is the 1-1 mode's
+  /// create-link-stamp path and overwrites.
+  ///
+  /// [notes], [energyLevel], [timeEstimate] and [dueDate] are Outcome
+  /// attributes with no column on a Capture (ADR-0006). The n-m New Outcome
+  /// form collects them exactly as the 1-1 card does, so they are written here
+  /// or they are lost.
   ///
   /// Returns the new Outcome id.
   Future<String> carveOutcome(
     String captureId, {
     required String userId,
     required String title,
+    RoutingKind? to,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -343,11 +355,30 @@ class DaoClarificationService implements ClarificationService {
   /// Callers must already be inside the write transaction.
   Future<void> _dropOwnOutcomes(String captureId) async {
     for (final oid in await _db.captureDao.outcomeIdsForCapture(captureId)) {
-      await _db.captureDao.unlinkOutcome(captureId, oid);
-      final stillClaimed = await _db.captureDao.captureIdsForOutcome(oid);
-      if (stillClaimed.isEmpty) {
-        await _db.todoDao.deleteOutcome(oid);
-      }
+      await _retractClaim(captureId, oid, deleteIfOrphaned: true);
+    }
+  }
+
+  /// Drops [captureId]'s claim on [outcomeId], and the Outcome with it when
+  /// [deleteIfOrphaned] and no other Capture is left claiming it.
+  ///
+  /// The single implementation of the unlink → check-orphan → delete sequence
+  /// that both [_dropOwnOutcomes] and [unlinkOutcome] need. Keeping it in one
+  /// place is what stops the orphan gate — the thing preventing one Capture's
+  /// retraction from destroying another's merged work — from being weakened on
+  /// one path and not the other.
+  ///
+  /// Callers must already be inside the write transaction.
+  Future<void> _retractClaim(
+    String captureId,
+    String outcomeId, {
+    required bool deleteIfOrphaned,
+  }) async {
+    await _db.captureDao.unlinkOutcome(captureId, outcomeId);
+    if (!deleteIfOrphaned) return;
+    final stillClaimed = await _db.captureDao.captureIdsForOutcome(outcomeId);
+    if (stillClaimed.isEmpty) {
+      await _db.todoDao.deleteOutcome(outcomeId);
     }
   }
 
@@ -356,6 +387,13 @@ class DaoClarificationService implements ClarificationService {
     String captureId, {
     required String userId,
     required String title,
+    RoutingKind? to,
+    String? notes,
+    String? energyLevel,
+    int? timeEstimate,
+    DateTime? dueDate,
+    String? nextActionText,
+    Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -372,10 +410,24 @@ class DaoClarificationService implements ClarificationService {
         id: id,
         title: title,
         userId: userId,
+        notes: notes,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+        dueDate: dueDate,
         now: now,
       );
       for (final tagId in tagIds) {
         await _db.tagDao.assignTag(id, tagId, userId);
+      }
+      if (to != null) {
+        await _db.todoDao.applyRouting(
+          id,
+          to: to,
+          nextActionText: nextActionText,
+          personTagIds: personTagIds,
+          userId: personTagIds != null ? userId : null,
+          now: now,
+        );
       }
       await _db.captureDao.linkOutcome(captureId, id, userId, at: now);
       return id;
@@ -409,14 +461,9 @@ class DaoClarificationService implements ClarificationService {
     String outcomeId, {
     required bool deleteCarved,
   }) async {
-    await _db.transaction(() async {
-      await _db.captureDao.unlinkOutcome(captureId, outcomeId);
-      if (!deleteCarved) return;
-      final stillClaimed = await _db.captureDao.captureIdsForOutcome(outcomeId);
-      if (stillClaimed.isEmpty) {
-        await _db.todoDao.deleteOutcome(outcomeId);
-      }
-    });
+    await _db.transaction(
+      () => _retractClaim(captureId, outcomeId, deleteIfOrphaned: deleteCarved),
+    );
   }
 
   @override
