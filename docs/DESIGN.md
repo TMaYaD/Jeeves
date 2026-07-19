@@ -163,6 +163,23 @@ under the user's finger mid-transition — a double-tap must advance exactly
 one step. This absorption is part of the Wizard contract, owned by the
 `Wizard` widget itself.
 
+### Verdict footers — one button, swapping label
+Where a surface collects exactly one verdict and the verdict's *meaning*
+changes with the state of the surface, it renders one primary button whose
+label swaps, never two buttons behind a conditional.
+
+The n-m clarify surface is the reference case: the footer reads **"Done with
+this Capture"** while one or more Outcomes are linked and **"Discard Capture"**
+at zero. Discard is a legitimate clarification verdict, not a destructive
+escape hatch, so it earns the primary slot rather than sitting permanently
+beside the happy path where it would read as a warning. Colour carries the
+distinction the label already makes — `ACCENT_DAILY` `#2563EB` for the
+committed verdict, `SKIP_GREY` `#6B7280` for the zero-Outcome one. Neither
+verdict opens a confirmation dialog.
+
+This is the same principle as the wizard footer above — one affordance in one
+slot — applied to a terminal verdict rather than to forward progress.
+
 ## Interaction Patterns
 
 ### Ceremony back navigation

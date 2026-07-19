@@ -24,10 +24,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
+import '../../models/clarify_mode.dart';
+import '../../providers/clarify_mode_provider.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/task_detail_provider.dart';
 import '../../services/clarification_service.dart';
 import '../../widgets/async_subject.dart';
+import '../../widgets/capture_outcomes_field.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/process_to_handlers.dart';
 
@@ -422,6 +425,25 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                 ),
                 const SizedBox(height: 28),
 
+                // n-m mode swaps the routing bar for the unified
+                // capture-to-Outcome field: a Capture may carve or merge into
+                // several Outcomes before the user declares it done, so
+                // routing is not the clarify act there. The 1-1 path below is
+                // untouched.
+                if (ref.watch(clarifyModeProvider) == ClarifyMode.nToM)
+                  CaptureOutcomesField(
+                    captureId: widget.captureId,
+                    tagIds: _hintTagIds,
+                    onCompleted: () async {
+                      if (!mounted) return;
+                      try {
+                        await _saveCaptureText();
+                      } finally {
+                        if (mounted) this.context.pop();
+                      }
+                    },
+                  )
+                else ...[
                 // Destinations. The canonical action bar owns every routing
                 // write — including the zero-Outcome Discard — so this screen
                 // cannot drift from the ceremony clarify surfaces.
@@ -469,11 +491,15 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                     }
                   },
                 ),
+                ],
                 const SizedBox(height: 20),
                 // Skip is a nav escape hatch, not a verdict — it leaves
                 // `clarified_at` NULL and the Capture in the Inbox — so it
                 // stays outside the routing bar, and so it does not inherit
                 // the bar's in-flight disabling for free (see [_routing]).
+                // It survives into n-m mode unchanged: leaving mid-split is
+                // exactly what that mode is for — the Capture keeps whatever
+                // Outcomes it has carved so far and stays in the Inbox.
                 ClarifyDestinationButton(
                   label: 'Skip',
                   icon: Icons.next_plan_outlined,

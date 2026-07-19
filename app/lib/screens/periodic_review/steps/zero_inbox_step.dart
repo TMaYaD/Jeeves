@@ -63,6 +63,8 @@ class ZeroInboxStep extends ConsumerWidget {
         notifier.recordInboxRouting(index, kind);
         notifier.advanceInbox();
       },
+      onAfterComplete: () async =>
+          ref.read(periodicReviewProvider.notifier).advanceInbox(),
       onLoad: () =>
           ref.read(periodicReviewProvider.notifier).loadInboxSnapshot(),
     );

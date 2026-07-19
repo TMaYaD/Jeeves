@@ -158,6 +158,45 @@ class _RecordingClarificationService implements ClarificationService {
   }
 
   @override
+  Future<String> carveOutcome(
+    String captureId, {
+    required String userId,
+    required String title,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  }) =>
+      inner.carveOutcome(
+        captureId,
+        userId: userId,
+        title: title,
+        tagIds: tagIds,
+        outcomeId: outcomeId,
+        now: now,
+      );
+
+  @override
+  Future<void> mergeIntoOutcome(
+    String captureId,
+    String outcomeId, {
+    required String userId,
+    DateTime? now,
+  }) =>
+      inner.mergeIntoOutcome(captureId, outcomeId, userId: userId, now: now);
+
+  @override
+  Future<void> unlinkOutcome(
+    String captureId,
+    String outcomeId, {
+    required bool deleteCarved,
+  }) =>
+      inner.unlinkOutcome(captureId, outcomeId, deleteCarved: deleteCarved);
+
+  @override
+  Future<void> completeCaptureClarification(String captureId, {DateTime? now}) =>
+      inner.completeCaptureClarification(captureId, now: now);
+
+  @override
   Future<bool> exists(String id) => inner.exists(id);
 
   @override

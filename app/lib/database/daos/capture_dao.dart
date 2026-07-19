@@ -34,6 +34,22 @@ String captureOutcomeIdFor(String captureId, String outcomeId) => uuid.v5(
 String captureTagIdFor(String captureId, String tagId) =>
     uuid.v5(Namespace.url.value, 'jeeves://capture_tag/$captureId/$tagId');
 
+/// An Outcome a Capture claims, plus how many Captures claim it in total.
+///
+/// [captureCount] is the provenance signal the n-m clarify surface renders:
+/// `1` is an Outcome this Capture alone carved, `> 1` is a merge — several
+/// Captures clarified into the same Outcome (CONTEXT.md § GTD Core: Capture ↔
+/// Outcome is many-to-many).
+class CarvedOutcome {
+  const CarvedOutcome({required this.outcome, required this.captureCount});
+
+  final Todo outcome;
+  final int captureCount;
+
+  /// True when more than one Capture clarified into this Outcome.
+  bool get isMerged => captureCount > 1;
+}
+
 @DriftAccessor(tables: [Captures, CaptureOutcomes, CaptureTags, Tags, Todos])
 class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   CaptureDao(super.db);
@@ -238,6 +254,35 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
         .get();
     return [for (final r in rows) r.captureId];
   }
+
+  /// The Outcomes a Capture currently claims, oldest link first, each carrying
+  /// the number of Captures that claim it.
+  ///
+  /// Drives the n-m clarify surface: the list of Outcomes carved out of (or
+  /// merged into) the Capture being clarified, and the provenance chip that
+  /// marks a shared one. Link order is ascending so the list does not reshuffle
+  /// under the user as they add to it.
+  Stream<List<CarvedOutcome>> watchCarvedOutcomes(String captureId) =>
+      customSelect(
+        'SELECT todos.*, ('
+        '  SELECT COUNT(*) FROM capture_outcomes AS all_links '
+        '  WHERE all_links.outcome_id = todos.id'
+        ') AS capture_count '
+        'FROM todos '
+        'INNER JOIN capture_outcomes ON capture_outcomes.outcome_id = todos.id '
+        'WHERE capture_outcomes.capture_id = ? '
+        'ORDER BY capture_outcomes.created_at ASC',
+        variables: [Variable<String>(captureId)],
+        readsFrom: {todos, captureOutcomes},
+      ).watch().map(
+            (rows) => [
+              for (final row in rows)
+                CarvedOutcome(
+                  outcome: todos.map(row.data),
+                  captureCount: row.read<int>('capture_count'),
+                ),
+            ],
+          );
 
   /// Provenance for an Outcome: the Captures it was clarified from, newest link
   /// first. Drives the "Captured from…" display (issue #184 Phase 4).

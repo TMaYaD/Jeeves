@@ -37,10 +37,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/clarify_mode.dart';
 import '../providers/auth_provider.dart';
+import '../providers/clarify_mode_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'async_subject.dart';
+import 'capture_outcomes_field.dart';
 import 'clarify_shared_widgets.dart';
 import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
@@ -54,6 +57,7 @@ class ClarifyCard extends ConsumerStatefulWidget {
     required this.captureId,
     this.lastAction,
     this.onAfterRoute,
+    this.onCaptureCompleted,
   }) : todoId = null;
 
   /// Re-clarify an Outcome that has already been through the flow once.
@@ -62,7 +66,8 @@ class ClarifyCard extends ConsumerStatefulWidget {
     required this.todoId,
     this.lastAction,
     this.onAfterRoute,
-  }) : captureId = null;
+  })  : captureId = null,
+        onCaptureCompleted = null;
 
   /// The Capture being clarified, or null when re-clarifying an Outcome.
   final String? captureId;
@@ -77,6 +82,13 @@ class ClarifyCard extends ConsumerStatefulWidget {
   /// Called once after a successful route. Used for callsite-specific
   /// concerns like advancing the inbox cursor and recording routing history.
   final Future<void> Function(ProcessAction action)? onAfterRoute;
+
+  /// Called once after the n-m verdict lands (Done-with-this-Capture or
+  /// Discard). Separate from [onAfterRoute] because the n-m verdict is not a
+  /// routing decision: no destination was chosen, so there is no
+  /// [ProcessAction] to report and nothing for a host to record as the
+  /// item's routing. Hosts that only need to advance a cursor wire both.
+  final Future<void> Function()? onCaptureCompleted;
 
   @override
   ConsumerState<ClarifyCard> createState() => _ClarifyCardState();
@@ -708,6 +720,21 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         ),
         const SizedBox(height: 28),
 
+        // n-m mode replaces the routing bar on a Capture card with the unified
+        // capture-to-Outcome field: in that mode routing is not the clarify
+        // act, because a Capture may carve several Outcomes before the user
+        // declares it done. The Outcome carries the Intent, and is re-clarified
+        // on its own surface. The 1-1 path below is untouched.
+        if (_isCapture && ref.watch(clarifyModeProvider) == ClarifyMode.nToM)
+          CaptureOutcomesField(
+            captureId: _subjectId,
+            tagIds: _draft(tags).tagIds,
+            onCompleted: () async {
+              await _flushTextSave();
+              await widget.onCaptureCompleted?.call();
+            },
+          )
+        else ...[
         const ClarifyFieldLabel('PROCESS TO'),
         const SizedBox(height: 12),
         ProcessToHandlers(
@@ -753,6 +780,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             await widget.onAfterRoute?.call(action);
           },
         ),
+        ],
       ],
     );
   }
