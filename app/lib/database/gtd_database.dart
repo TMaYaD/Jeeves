@@ -462,7 +462,7 @@ class GtdDatabase extends _$GtdDatabase {
   static const int syncDeadLetterCap = 200;
 
   /// Record a non-retryable upload failure (see
-  /// `JevesBackendConnector.classifyUploadError`) and prune the rows with the
+  /// `JeevesBackendConnector.classifyUploadError`) and prune the rows with the
   /// stalest last occurrence (`createdAt`, id as tie-breaker) beyond
   /// [syncDeadLetterCap] — a failure that keeps repeating is refreshed by the
   /// upsert below and must outlive older one-off failures, so pruning cannot

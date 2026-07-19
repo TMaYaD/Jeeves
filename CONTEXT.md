@@ -453,7 +453,7 @@ A single user's instance of a Sync Shape — the actual replication stream mater
 _Avoid_: Sync stream (vaguer), Channel (overloaded), Shard
 
 **BackendConnector** *(the local-to-backend upload path)*:
-The interface (currently `JevesBackendConnector` in code) that PowerSync uses to upload local writes to the Jeeves backend's REST API. Local writes are queued by PowerSync and replayed through this connector when connectivity is available. The Sync engine reads from the backend's PostgreSQL directly; only writes flow through the connector.
+The interface (`JeevesBackendConnector` in code) that PowerSync uses to upload local writes to the Jeeves backend's REST API. Local writes are queued by PowerSync and replayed through this connector when connectivity is available. The Sync engine reads from the backend's PostgreSQL directly; only writes flow through the connector.
 _Avoid_: Sync connector (acceptable but BackendConnector is the canonical class name), Upload pipe
 
 **Dead Letter** *(a recorded non-retryable upload failure)*:

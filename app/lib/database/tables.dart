@@ -274,7 +274,7 @@ class UserPreferences extends Table with Synced {
 // ---------------------------------------------------------------------------
 
 /// Dead Letter: a durable record of a CRUD-queue upload that failed with a
-/// non-retryable status (see `JevesBackendConnector.classifyUploadError`).
+/// non-retryable status (see `JeevesBackendConnector.classifyUploadError`).
 ///
 /// Deliberately **not** `with Synced` — this is a plain local SQLite table,
 /// excluded from the PowerSync schema, never replicated. It is developer
