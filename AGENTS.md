@@ -76,6 +76,13 @@ Run full test suite before considering work complete.
 - Group by feature, not layer
 - Minimize coupling between files
 
+### Naming
+- **Be explicit and descriptive.** A name should tell the reader what the value is, its units, and where it comes from — without chasing the definition. `time_spent_minutes` over `time`; `retry_delay_ms` over `delay`; `unresolved_capture_count` over `n`.
+- **Encode units and dimensions in the name** (`_minutes`, `_ms`, `_bytes`, `_utc`). A unit mismatch hidden behind a bare name is a silent bug; one spelled out in the name is a visible diff.
+- **Cached/denormalized values MUST carry `cache` in the name**: `cached_xyz` or `xyz_cache` (e.g. `total_minutes_cache`, `cachedAvatarUrl`). A cache can be stale by definition — the name warns every reader that the value is derived, and makes a write path that forgets to recompute it stand out in review. A derived value stored under an innocent name *will* eventually be read as if it were the source of truth.
+- **Name the source of truth plainly, the derivation after its origin.** If a value is computed from an event log or another table, prefer deriving it at read time; when it must be stored, the name (per the rule above) is the contract that it is a copy, not the truth.
+- Abbreviations only when they are more familiar than the expansion (`id`, `url`, `db`) — never to save keystrokes.
+
 ### Testing
 - **Test real behavior only** - no mocks for system components
 - If it can't be tested as it runs in production, redesign it
