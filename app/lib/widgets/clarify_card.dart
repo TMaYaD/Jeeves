@@ -569,7 +569,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: const Color(0xFFEFF6FF),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(6),
             border: Border.all(color: const Color(0xFFDBEAFE)),
           ),
           child: const Row(
@@ -599,7 +599,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           decoration: InputDecoration(
             labelText: 'Title',
             errorText: _titleIsBlank ? 'Title is required to process' : null,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           ),
@@ -616,7 +616,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           decoration: InputDecoration(
             labelText: 'Notes (optional)',
             hintText: 'Context, desired outcome, dependencies…',
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           ),

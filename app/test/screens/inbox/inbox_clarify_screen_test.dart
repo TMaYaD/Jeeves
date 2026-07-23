@@ -1179,5 +1179,35 @@ void main() {
       // An error is not an absence: the row may well still be there.
       expect(find.byKey(const Key('clarify_subject_missing')), findsNothing);
     });
+
+    // docs/DESIGN.md § Roundedness: prompt banner is a surface (6px), the
+    // title/notes fields are inputs (4px). Guards the inline radii against the
+    // legacy 10/8px values (#456).
+    testWidgets('prompt banner is a 6px surface, inputs are 4px',
+        (tester) async {
+      await db.captureDao.insertCapture(
+        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
+      );
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      final banner = tester
+          .widgetList<Container>(find.byType(Container))
+          .firstWhere((c) =>
+              c.decoration is BoxDecoration &&
+              (c.decoration as BoxDecoration).color == const Color(0xFFEFF6FF));
+      final bannerRadius =
+          ((banner.decoration as BoxDecoration).borderRadius as BorderRadius)
+              .topLeft
+              .x;
+      expect(bannerRadius, 6);
+
+      for (final key in const [Key('clarify_title'), Key('clarify_notes')]) {
+        final field = tester.widget<TextField>(find.byKey(key));
+        final border = field.decoration!.border as OutlineInputBorder;
+        expect(border.borderRadius.topLeft.x, 4);
+      }
+    });
   });
 }

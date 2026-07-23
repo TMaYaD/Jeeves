@@ -833,7 +833,7 @@ class _ActionButton extends StatelessWidget {
         alignment: Alignment.centerLeft,
         minimumSize: const Size.fromHeight(44),
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
       ),
     );
   }
