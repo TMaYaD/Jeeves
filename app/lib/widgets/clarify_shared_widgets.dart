@@ -21,6 +21,12 @@ const _energyLowColor = Color(0xFF16A34A);
 const _energyMediumColor = Color(0xFFF59E0B);
 const _energyHighColor = Color(0xFFDC2626);
 
+// Canonical radii scale (docs/DESIGN.md § Roundedness): 2px buttons, 4px
+// chips/tags/inputs. Mirrors the file-local consts in
+// capture_outcomes_section.dart.
+const _radiusButton = BorderRadius.all(Radius.circular(2));
+const _radiusChip = BorderRadius.all(Radius.circular(4));
+
 class ClarifyFieldLabel extends StatelessWidget {
   const ClarifyFieldLabel(this.label, {super.key});
   final String label;
@@ -76,7 +82,7 @@ class ClarifyEnergyPicker extends StatelessWidget {
                   color: isSelected ? color : _borderGray,
                   width: isSelected ? 2 : 1,
                 ),
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: _radiusChip,
               ),
               child: Text(
                 label,
@@ -119,7 +125,7 @@ class ClarifyEstimateChip extends StatelessWidget {
           border: Border.all(
             color: selected ? _chipBlue : _borderGray,
           ),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: _radiusChip,
         ),
         child: Text(
           label,
@@ -173,7 +179,7 @@ class ClarifyDestinationButton extends StatelessWidget {
         alignment: Alignment.centerLeft,
         minimumSize: const Size.fromHeight(44),
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: _radiusButton),
       ),
     );
   }
