@@ -32,6 +32,7 @@ class LocalDataMigrationService {
       'captures',
       'capture_outcomes',
       'capture_tags',
+      'actions',
     ];
     for (final table in tables) {
       final rows = await db.getAll(
@@ -97,6 +98,14 @@ class LocalDataMigrationService {
       );
       await tx.execute(
         'UPDATE capture_tags SET user_id = ? WHERE user_id = ?',
+        [toUserId, fromUserId],
+      );
+
+      // Actions (issue #471). Plain reassignment like todos/captures — adopted
+      // local backfill rows re-key to the signed-in user before their queued
+      // PUTs upload, so the Outcome-ownership check on POST /actions/ passes.
+      await tx.execute(
+        'UPDATE actions SET user_id = ? WHERE user_id = ?',
         [toUserId, fromUserId],
       );
 
@@ -171,6 +180,10 @@ class LocalDataMigrationService {
       await tx.execute('DELETE FROM capture_tags WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM capture_outcomes WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM captures WHERE user_id = ?', [userId]);
+      // Actions before todos (actions.outcome_id → todos.id). Skipping this
+      // would orphan actions rows whose queued PUTs then 404 on the Outcome
+      // ownership check and dead-letter → sync-error badge (issue #471).
+      await tx.execute('DELETE FROM actions WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM todo_tags WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM tags WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM todos WHERE user_id = ?', [userId]);

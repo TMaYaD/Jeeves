@@ -32,6 +32,7 @@ INTENT_VALUES = ("next", "maybe", "trash")
 TAG_TYPES = ("context", "project", "area", "label", "person")
 ENERGY_LEVELS = ("low", "medium", "high")
 DISPOSITION_VALUES = ("rollover", "leave", "maybe")
+ACTION_ROLES = ("planned", "current", "done", "superseded")
 
 
 def _uuid() -> str:
@@ -140,6 +141,56 @@ class Todo(Base):
         "RecurrenceRule", back_populates="todo", uselist=False
     )
     location: Mapped["Location | None"] = relationship("Location", back_populates="todos")
+
+
+class Action(Base):
+    """A first-class Action against an Outcome (ADR-0001, story 1 — issue #471).
+
+    An Action is an owned entity (client-generated ``id``, like ``Capture``)
+    belonging to exactly one Outcome (``outcome_id`` FK → ``todos.id``).  It
+    carries one of four roles over its lifetime — ``planned`` / ``current`` /
+    ``done`` / ``superseded``.
+
+    Per ADR-0018 there is **no** ``superseded_at`` column and **no**
+    ``superseded_by_id``: a superseded row's timestamp is read from
+    ``updated_at`` and it carries no successor link (the Outcome's history is
+    the time-ordered chain of terminated Action rows).  ``role`` has no Postgres
+    CHECK — parity with ``todos.intent`` — the Drift column carries the CHECK.
+
+    This story is pure plumbing: nothing in-app reads or writes ``actions``
+    rows outside the migration/backfill.  A ``current`` Action is backfilled
+    from every Outcome whose ``next_action_text`` is non-blank (Alembic 0028 /
+    the Drift v26 upgrade), converging on a deterministic uuid5 id (ADR-0019).
+    """
+
+    __tablename__ = "actions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    # index=True auto-creates ix_actions_outcome_id / ix_actions_user_id — the
+    # same index names Alembic 0028 creates on Postgres.
+    outcome_id: Mapped[str] = mapped_column(
+        ForeignKey("todos.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Denormalized from todos.user_id so PowerSync can filter the per-user
+    # bucket with no JOIN (todo_tags / Alembic 0008 precedent).
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    # Mirrors todos.next_action_text storage (Text; the 500-char cap is
+    # client-side only, like the cursor).
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # planned | current | done | superseded (no Postgres CHECK — the Drift
+    # column carries it, parity with todos.intent).
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Planned-queue order; NULL for non-planned roles.
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Per-action metadata (story 7 writes it; backfill copies it).
+    energy_level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    time_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)  # minutes
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    # Client-stamped; a superseded row's timestamp is read from here (ADR-0018).
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Capture(Base):

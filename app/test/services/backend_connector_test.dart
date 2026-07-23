@@ -487,6 +487,32 @@ void main() {
     });
 
     test(
+        'actions route to their REST endpoint '
+        '(not the unknown-table StateError) — issue #471', () async {
+      final adapter = _ScriptedAdapter((options, i) async => _jsonResponse(201));
+      final conn = connector(adapter);
+      final (batch, completed) = batchOf([
+        _entry('actions', UpdateType.put, rowId: 'act-1'),
+        _entry('actions', UpdateType.patch, rowId: 'act-1'),
+        _entry('actions', UpdateType.delete, rowId: 'act-1'),
+      ]);
+
+      await conn.uploadCrudBatch(batch);
+
+      expect(completed(), isTrue);
+      expect(
+        adapter.requests.map((r) => '${r.method} ${r.path}').toList(),
+        [
+          'POST /actions/',
+          'PATCH /actions/act-1',
+          'DELETE /actions/act-1',
+        ],
+      );
+      expect(await deadLetters(), isEmpty,
+          reason: 'a routed table must not dead-letter on the default path');
+    });
+
+    test(
         'dead-lettering a non-delete user_preferences entry trips the #306 '
         'debug assert', () async {
       final adapter = _ScriptedAdapter((options, i) async =>

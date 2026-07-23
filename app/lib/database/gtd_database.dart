@@ -17,6 +17,7 @@ library;
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
+import 'daos/action_ids.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
 import 'daos/inbox_dao.dart';
@@ -32,7 +33,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, SyncDeadLetters, Captures, CaptureOutcomes, CaptureTags],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, SyncDeadLetters, Captures, CaptureOutcomes, CaptureTags, Actions],
   daos: [InboxDao, TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -45,7 +46,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 25;
+  int get schemaVersion => 26;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -452,6 +453,84 @@ class GtdDatabase extends _$GtdDatabase {
               await m.createTable(focusSessionDispositions);
             }
           }
+          if (from < 26) {
+            // Actions table (issue #471, ADR-0001 story 1). In production
+            // PowerSync creates `actions` as a view from powersyncSchema — so
+            // only create the real table on the NativeDatabase test path,
+            // guarding on sqlite_master exactly like the Capture tables
+            // (from < 24) and focus_session_dispositions (from < 25).
+            final rows = await customSelect(
+              "SELECT type FROM sqlite_master WHERE name = 'actions'",
+            ).get();
+            if (rows.isEmpty) {
+              await m.createTable(actions);
+            }
+
+            // Client-side backfill (ADR-0019): mint one `current` Action per
+            // Outcome with a non-blank next_action_text, on the same
+            // deterministic uuid5 id as the server backfill (Alembic 0028), so
+            // the two converge to a single row via upsert-on-replay (ADR-0015).
+            // The predicate mirrors the server's and the app's actionless
+            // normalisation — SQLite TRIM strips U+0020 only, matching the
+            // backend. uuid5 is not computable in SQLite, so iterate in Dart.
+            // created_at = COALESCE(last_clarified_at, created_at), derived only
+            // from replicated data so both origins produce field-identical
+            // rows. Each insert is guarded by NOT EXISTS so a device that
+            // already downloaded the server row — or re-runs the migration —
+            // mints nothing. This runs before any watcher exists, so it needs
+            // no notifyActionsViewWrite.
+            //
+            // Guard on the cursor columns' presence: onUpgrade runs every
+            // `from < N` block, so a low-`from` upgrade reaches here too, and a
+            // real todos view/table always carries these columns by now — but a
+            // synthetic partial-schema upgrade path (older migration unit tests)
+            // may not. Skip the backfill rather than fail on a missing column;
+            // if the cursor columns are absent there is nothing to backfill.
+            final todosCols = await customSelect('PRAGMA table_info(todos)').get();
+            final todosColNames =
+                todosCols.map((r) => r.read<String>('name')).toSet();
+            const requiredCols = {
+              'id',
+              'next_action_text',
+              'energy_level',
+              'time_estimate',
+              'last_clarified_at',
+              'created_at',
+              'user_id',
+            };
+            if (!requiredCols.every(todosColNames.contains)) {
+              return;
+            }
+            final qualifying = await customSelect(
+              "SELECT id, next_action_text, energy_level, time_estimate, "
+              "last_clarified_at, created_at, user_id FROM todos "
+              "WHERE next_action_text IS NOT NULL "
+              "AND TRIM(next_action_text) != ''",
+            ).get();
+            for (final row in qualifying) {
+              final todoId = row.read<String>('id');
+              final actionId = backfillActionIdFor(todoId);
+              await customStatement(
+                "INSERT INTO actions "
+                "(id, outcome_id, user_id, text, role, position, energy_level, "
+                " time_estimate, created_at, updated_at, done_at) "
+                "SELECT ?, ?, ?, ?, 'current', NULL, ?, ?, COALESCE(?, ?), "
+                "       NULL, NULL "
+                "WHERE NOT EXISTS (SELECT 1 FROM actions WHERE id = ?)",
+                [
+                  actionId,
+                  todoId,
+                  row.read<String>('user_id'),
+                  row.read<String>('next_action_text'),
+                  row.read<String?>('energy_level'),
+                  row.read<int?>('time_estimate'),
+                  row.read<String?>('last_clarified_at'),
+                  row.read<String>('created_at'),
+                  actionId,
+                ],
+              );
+            }
+          }
         },
       );
 
@@ -576,6 +655,18 @@ class GtdDatabase extends _$GtdDatabase {
         const TableUpdate('captures'),
         const TableUpdate('capture_outcomes'),
         const TableUpdate('capture_tags'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for the `actions` view (issue #471).
+  ///
+  /// In production PowerSync exposes `actions` as a view with INSTEAD OF
+  /// triggers, so a direct Drift write reports `changes() == 0` and Drift's
+  /// stream invalidation never fires (ADR-0010). Story 1 has no DAO that writes
+  /// `actions` yet (the v26 backfill runs during migration, before any watcher
+  /// exists, so it needs no notify) — this is wired now so the first
+  /// Action-writing DAO in story 2 has the self-notify path ready.
+  void notifyActionsViewWrite() => notifyUpdates({
+        const TableUpdate('actions'),
       });
 
   /// Runs [Migrator.addColumn] only when [table] is a real SQLite table.
