@@ -54,9 +54,8 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     // Filter against the live pending snapshot so a stale id (row deleted
     // between selection and commit) cannot be falsely reported as added.
     final committable = _selectedIds.intersection(pendingIds);
-    for (final id in committable) {
-      notifier.selectTask(id);
-    }
+    // Commit in one state publish so the list rebuilds once, not N times.
+    notifier.selectTasks(committable.toList());
     setState(_selectedIds.clear);
   }
 
@@ -68,13 +67,25 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     final asyncPending = ref.watch(nextForFocusSessionPlanningProvider);
     final asyncSkipped = ref.watch(skippedNextForFocusSessionPlanningProvider);
 
-    if (asyncSelected.isLoading || asyncPending.isLoading || asyncSkipped.isLoading) {
+    // Gate the spinner on "no data yet", not "a reload is in flight". Riverpod
+    // retains the previous value while a watched stream re-executes, so after
+    // the initial load `hasValue` stays true and this list is never unmounted
+    // again — Select, Skip, Undo, and multi-select all reorganise in place
+    // instead of flashing a spinner that would reset the scroll offset (#459).
+    // Gate the spinner on "no data yet", not "a reload is in flight". Riverpod
+    // retains the previous value while a watched stream re-executes, so after
+    // the initial load `hasValue` stays true and this list is never unmounted
+    // again — Select, Skip, Undo, and multi-select all reorganise in place
+    // instead of flashing a spinner that would reset the scroll offset (#459).
+    if (!asyncSelected.hasValue ||
+        !asyncPending.hasValue ||
+        !asyncSkipped.hasValue) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final selectedTasks = _sortTasks(asyncSelected.asData?.value ?? []);
-    final pendingTasks = asyncPending.asData?.value ?? [];
-    final skippedTasks = asyncSkipped.asData?.value ?? [];
+    final selectedTasks = _sortTasks(asyncSelected.requireValue);
+    final pendingTasks = asyncPending.requireValue;
+    final skippedTasks = asyncSkipped.requireValue;
 
     final totalMinutes =
         selectedTasks.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
