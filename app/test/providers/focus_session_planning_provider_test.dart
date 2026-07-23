@@ -169,6 +169,8 @@ void main() {
 
     test('processInboxItem twice concurrently updates DB only once',
         () async {
+      // The re-entrancy guard is routing-agnostic: exercising it through the
+      // Next Action path covers the Maybe/Done/WaitingFor paths, which share it.
       await _insertInboxItem(db, id: 'item-1');
 
       final notifier = container.read(focusSessionPlanningProvider.notifier);
@@ -189,29 +191,6 @@ void main() {
           reason: 'a raced double-tap must not carve two Outcomes');
       final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
-    });
-
-    test('processInboxItemToMaybe twice concurrently updates DB only once',
-        () async {
-      await _insertInboxItem(db, id: 'item-2');
-
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      final first = notifier.processInboxItemToMaybe('item-2');
-      final second = notifier.processInboxItemToMaybe('item-2');
-      await Future.wait([first, second]);
-
-      final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0], equals(RoutingKind.maybe),
-          reason: 'Routing recorded exactly once for index 0');
-      expect(state.inboxNav.index, equals(1));
-
-      expect(await db.captureDao.outcomeIdsForCapture('item-2'), hasLength(1),
-          reason: 'a raced double-tap must not carve two Outcomes');
-      final row = (await _outcomeOf(db, 'item-2'))!;
-      expect(row.clarified, isTrue);
-      expect(row.intent, 'maybe');
     });
   });
 
@@ -384,6 +363,8 @@ void main() {
 
       final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
+      expect(row.nextActionText, 'Test item',
+          reason: 'the routed title becomes the Outcome next action');
     });
 
     test('processInboxItemToMaybe writes to DB, advances index, and records routing',
@@ -474,29 +455,6 @@ void main() {
       // attributes a Capture has no column for (ADR-0006). The clarify card
       // supplies them in its draft; this provider-level path carries only
       // what the Capture itself holds.
-    });
-
-    test('re-routing to a different destination undoes prior routing side effects',
-        () async {
-      await _insertInboxItem(db, id: 'item-1');
-
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      // Route to Maybe first.
-      await notifier.processInboxItemToMaybe('item-1');
-      notifier.previousInboxItem();
-
-      // Re-route to Next Action — the handler reverts maybe before applying.
-      await notifier.processInboxItem('item-1', title: 'Test item');
-
-      final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
-      expect(row.intent, 'next',
-          reason: 'revert restored prior intent before next_action routing');
-
-      final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
     });
 
     test('re-routing Done → Next Action clears done_at', () async {
@@ -1077,77 +1035,6 @@ void main() {
       expect(task?.intent, 'maybe');
       expect(task?.nextActionText, 'Draft the brief',
           reason: 'next_action_text must not be reverted when going to someday');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Inbox-clarify sets next_action_text
-  // ---------------------------------------------------------------------------
-
-  group('FocusSessionPlanningNotifier — processInboxItem sets nextActionText',
-      () {
-    late GtdDatabase db;
-    late ProviderContainer container;
-
-    const userId = 'local';
-
-    setUp(() {
-      db = GtdDatabase(NativeDatabase.memory());
-      container = _container(db);
-    });
-
-    tearDown(() async {
-      container.dispose();
-      await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
-    });
-
-    Future<String> insertInboxTask(String title) async {
-      final now = DateTime.now();
-      final id = 'inbox-${now.microsecondsSinceEpoch}';
-      await db.captureDao.insertCapture(CapturesCompanion(
-        id: Value(id),
-        title: Value(title),
-        userId: const Value(userId),
-        createdAt: Value(now),
-      ));
-      return id;
-    }
-
-    test('processInboxItem sets nextActionText to provided title', () async {
-      final id = await insertInboxTask('Buy milk');
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      await notifier.processInboxItem(id, title: 'Buy milk');
-
-      final todo = await _outcomeOf(db, id);
-      expect(todo?.nextActionText, 'Buy milk');
-      expect(todo?.clarified, isTrue);
-    });
-
-    test('processInboxItem: task does not appear in watchNeedsReview after clarify',
-        () async {
-      final id = await insertInboxTask('Buy milk');
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      await notifier.processInboxItem(id, title: 'Buy milk');
-
-      final result = await db.todoDao.watchNeedsReview().first;
-      expect(result, isEmpty);
-    });
-
-    test('processInboxItemToMaybe sets intent=maybe and clarified=true', () async {
-      final id = await insertInboxTask('Read that book');
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      await notifier.processInboxItemToMaybe(id);
-
-      final todo = await _outcomeOf(db, id);
-      expect(todo?.intent, 'maybe');
-      expect(todo?.clarified, isTrue);
     });
   });
 

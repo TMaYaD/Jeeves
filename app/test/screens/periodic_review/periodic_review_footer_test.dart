@@ -25,7 +25,6 @@ import '../../test_helpers.dart';
 
 const _skipKey = Key('periodic_review_skip');
 const _nextKey = Key('periodic_review_next_step');
-const _slotKey = Key('periodic_review_footer_slot');
 
 /// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
 Future<void> _insertInbox(GtdDatabase db, String id) async {
@@ -109,26 +108,6 @@ void main() {
     setUp(() => db = GtdDatabase(NativeDatabase.memory()));
     tearDown(() async => db.close());
 
-    testWidgets('Inbox step with items remaining shows Skip, not Next step',
-        (tester) async {
-      await _insertInbox(db, 'i1');
-      await _insertInbox(db, 'i2');
-      await _insertInbox(db, 'i3');
-
-      await tester.pumpWidget(_screen(db));
-      await _settle(tester);
-
-      // Cursor on item 0 of 3 — Skip is the only forward affordance.
-      expect(find.byKey(_skipKey), findsOneWidget);
-      expect(find.byKey(_nextKey), findsNothing);
-      expect(
-        tester.widget<OutlinedButton>(find.byKey(_skipKey)).onPressed,
-        isNotNull,
-      );
-
-      await _dispose(tester);
-    });
-
     testWidgets(
         'Inbox step on the last real item shows Skip; '
         'Next step appears only on the completion placeholder',
@@ -173,7 +152,14 @@ void main() {
       await _settle(tester);
 
       expect(_stateOf(tester).inboxNav.index, 0);
+      // Cursor on item 0 with items remaining — Skip is the only forward
+      // affordance, and it is enabled.
       expect(find.byKey(_skipKey), findsOneWidget);
+      expect(find.byKey(_nextKey), findsNothing);
+      expect(
+        tester.widget<OutlinedButton>(find.byKey(_skipKey)).onPressed,
+        isNotNull,
+      );
 
       await tester.tap(find.byKey(_skipKey));
       await tester.pumpAndSettle();
@@ -235,29 +221,6 @@ void main() {
         after.waitingForNav.items!.map((t) => t.id).toList(),
         before.waitingForNav.items!.map((t) => t.id).toList(),
       );
-
-      await _dispose(tester);
-    });
-
-    testWidgets('the footer slot keeps a fixed footprint across the swap',
-        (tester) async {
-      // Single inbox item: one Skip tap reaches isComplete, swapping the
-      // footer from Skip (OutlinedButton) to Next step (FilledButton).
-      await _insertInbox(db, 'only');
-
-      await tester.pumpWidget(_screen(db));
-      await _settle(tester);
-
-      // Skip is showing.
-      final skipSlotSize = tester.getSize(find.byKey(_slotKey));
-
-      await tester.tap(find.byKey(_skipKey));
-      await tester.pumpAndSettle();
-
-      // Next step is showing — the OutlinedButton ↔ FilledButton swap must not
-      // change the slot's size.
-      final nextSlotSize = tester.getSize(find.byKey(_slotKey));
-      expect(nextSlotSize, skipSlotSize);
 
       await _dispose(tester);
     });

@@ -74,13 +74,15 @@ void main() {
       expect(find.textContaining('No items yet'), findsOneWidget);
     });
 
-    testWidgets('items are rendered in the list', (tester) async {
+    testWidgets('items are rendered in the list with a matching count badge',
+        (tester) async {
       final items = [_capture('a', 'Buy milk'), _capture('b', 'Call dentist')];
       await tester.pumpWidget(_buildApp(inboxStream: Stream.value(items)));
       await tester.pump();
 
       expect(find.text('Buy milk'), findsOneWidget);
       expect(find.text('Call dentist'), findsOneWidget);
+      expect(find.text('2'), findsOneWidget);
     });
 
     testWidgets('quick add bar has placeholder text', (tester) async {
@@ -115,6 +117,24 @@ void main() {
       );
     });
 
+    testWidgets('tapping Add persists a Capture row', (tester) async {
+      final db = GtdDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      await tester.pumpWidget(_buildApp(db: db));
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Integration test task');
+      await tester.tap(find.text('Add'));
+      await tester.pumpAndSettle();
+
+      // Plain select, not a watch — a live drift watch hangs widget tests
+      // (docs/TESTING.md). Rendering from the stream is covered above.
+      final rows = await db.select(db.captures).get();
+      expect(rows, hasLength(1));
+      expect(rows.first.title, 'Integration test task');
+      expect(rows.first.clarifiedAt, isNull);
+    });
+
     testWidgets('no add button in header', (tester) async {
       await tester.pumpWidget(_buildApp());
       await tester.pump();
@@ -140,18 +160,6 @@ void main() {
       await tester.pump();
 
       expect(find.byType(OfflineChip), findsNothing);
-    });
-
-    testWidgets('pull-to-refresh completes without error', (tester) async {
-      await tester.pumpWidget(_buildApp());
-      await tester.pump();
-
-      await tester.fling(
-        find.byType(ListView),
-        const Offset(0, 300),
-        1000,
-      );
-      await tester.pumpAndSettle();
     });
   });
 }

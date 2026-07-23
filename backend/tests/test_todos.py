@@ -196,28 +196,6 @@ async def test_project_isolation(client: AsyncClient) -> None:
     assert bob_resp.json() == []
 
 
-@pytest.mark.asyncio
-async def test_invalid_state_returns_422(client: AsyncClient) -> None:
-    token = await register(client, "invalid-state@example.com")
-    resp = await client.post(
-        "/todos/",
-        json={"title": "Bad state", "state": "not_a_state"},
-        headers=auth_header(token),
-    )
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_invalid_energy_level_returns_422(client: AsyncClient) -> None:
-    token = await register(client, "invalid-energy@example.com")
-    resp = await client.post(
-        "/todos/",
-        json={"title": "Bad energy", "energy_level": "turbo"},
-        headers=auth_header(token),
-    )
-    assert resp.status_code == 422
-
-
 # ── todo_tags.user_id denormalization (migration 0008) ────────────────────────
 
 

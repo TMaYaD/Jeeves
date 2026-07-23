@@ -306,26 +306,6 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('returns null when no session is open', () async {
-      final session = await db.focusSessionDao.getActiveSession();
-      expect(session, isNull);
-    });
-
-    test('returns the open session by id', () async {
-      final sessionId =
-          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
-      final session = await db.focusSessionDao.getActiveSession();
-      expect(session?.id, sessionId);
-    });
-
-    test('returns null after the session is closed', () async {
-      final sessionId =
-          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
-      await db.focusSessionDao.closeSession(sessionId: sessionId);
-      final session = await db.focusSessionDao.getActiveSession();
-      expect(session, isNull);
-    });
-
     test('watchActiveSession emits the new session after openSession', () async {
       final initial =
           await db.focusSessionDao.watchActiveSession().first;

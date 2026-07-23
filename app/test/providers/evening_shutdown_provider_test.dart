@@ -158,41 +158,9 @@ void main() {
       // No assertion — the absence of an exception is the contract.
     });
 
-    // ---- Disposition recording (in-memory) -----------------------------------
-
-    test('rolloverTask records "rollover" disposition in memory', () async {
-      await _insertTodo(db, id: 't1');
-      await _openSessionWith(db, ['t1']);
-
-      final notifier = container.read(eveningShutdownProvider.notifier);
-      notifier.rolloverTask('t1');
-
-      final state = container.read(eveningShutdownProvider);
-      expect(state.dispositions['t1'], equals('rollover'));
-    });
-
-    test('returnToNext records "leave" disposition in memory',
-        () async {
-      await _insertTodo(db, id: 't1');
-      await _openSessionWith(db, ['t1']);
-
-      final notifier = container.read(eveningShutdownProvider.notifier);
-      notifier.returnToNext('t1');
-
-      final state = container.read(eveningShutdownProvider);
-      expect(state.dispositions['t1'], equals('leave'));
-    });
-
-    test('deferTask records "maybe" disposition in memory', () async {
-      await _insertTodo(db, id: 't1');
-      await _openSessionWith(db, ['t1']);
-
-      final notifier = container.read(eveningShutdownProvider.notifier);
-      notifier.deferTask('t1');
-
-      final state = container.read(eveningShutdownProvider);
-      expect(state.dispositions['t1'], equals('maybe'));
-    });
+    // Disposition recording (rollover/leave/maybe) is covered by the
+    // "Unfinished snapshot navigation" group below, which asserts both the
+    // recorded disposition and the index advance for each of the three verbs.
 
     // ---- closeDay end-to-end with dispositions -------------------------------
 
@@ -531,26 +499,6 @@ void main() {
       notifier.previousUnfinishedTask(); // already at 0
 
       expect(container.read(eveningShutdownProvider).unfinishedNav.index, equals(0));
-    });
-
-    test('step is complete when all snapshot items have been resolved',
-        () async {
-      await _insertTodo(db, id: 't1');
-      await _insertTodo(db, id: 't2');
-      await _openSessionWith(db, ['t1', 't2']);
-
-      final notifier = container.read(eveningShutdownProvider.notifier);
-      await notifier.loadUnfinishedSnapshot();
-      notifier.goToStep(1); // simulate user being on the unfinished step
-
-      final snapshot =
-          container.read(eveningShutdownProvider).unfinishedNav.items!;
-      notifier.rolloverTask(snapshot[0].id); // index → 1
-      notifier.deferTask(snapshot[1].id);    // index would be 2 >= 2 → advanceStep
-
-      final state = container.read(eveningShutdownProvider);
-      expect(state.currentStep, equals(2),
-          reason: 'step advances off Resolve Unfinished onto CloseDay');
     });
 
     test('closeDay commits all accumulated dispositions after snapshot use',

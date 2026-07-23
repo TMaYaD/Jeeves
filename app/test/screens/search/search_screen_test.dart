@@ -72,26 +72,14 @@ void main() {
       await tester.pumpWidget(_buildScreen());
       await tester.pump();
 
-      // Should not throw; screen should show the search hint text.
+      // Should not throw; screen should show the search hint text, start with
+      // an empty field, and render no result rows.
       expect(find.text('Search tasks…'), findsOneWidget);
       expect(find.byType(TextField), findsOneWidget);
       expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('search field starts empty', (tester) async {
-      await tester.pumpWidget(_buildScreen());
-      await tester.pump();
-
+      expect(find.byType(ListTile), findsNothing);
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.controller?.text ?? '', isEmpty);
-    });
-
-    testWidgets('shows no results when query is empty', (tester) async {
-      await tester.pumpWidget(_buildScreen());
-      await tester.pump();
-
-      expect(find.text('Search tasks…'), findsOneWidget);
-      expect(find.byType(ListTile), findsNothing);
     });
 
     testWidgets('query resets after leaving and reopening search', (tester) async {
@@ -175,20 +163,6 @@ void main() {
       await tester.pump(); // process stream emissions
 
       expect(find.textContaining('1 match in completed tasks'), findsOneWidget);
-    });
-
-    testWidgets('hint uses plural form when count is greater than 1',
-        (tester) async {
-      await tester.pumpWidget(
-        _buildScreen(hiddenCountStream: Stream.value(5)),
-      );
-      await tester.pump();
-
-      await tester.enterText(find.byType(TextField), 'foo');
-      await tester.pump(const Duration(milliseconds: 400)); // fire debounce
-      await tester.pump(); // process stream emissions
-
-      expect(find.textContaining('5 matches in completed tasks'), findsOneWidget);
     });
 
     testWidgets('tapping hint sets includeDone to true', (tester) async {

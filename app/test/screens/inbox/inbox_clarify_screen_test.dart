@@ -507,8 +507,9 @@ void main() {
       expect(notesField.controller?.text, 'Full fat');
     });
 
-    testWidgets('Next Action carves a linked Outcome and stamps the Capture',
-        (tester) async {
+    testWidgets(
+        'Next Action carves a linked Outcome, stamps the Capture, and clears '
+        'the Inbox', (tester) async {
       await db.captureDao
           .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
@@ -525,18 +526,7 @@ void main() {
       expect(outcome!.clarified, isTrue);
       expect(outcome.title, 'Buy milk');
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
-    });
-
-    testWidgets('Next Action leaves the Inbox empty', (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
+      // And the clarified Capture leaves the Inbox.
       expect(await _inboxIds(db), isEmpty);
     });
 
@@ -637,18 +627,6 @@ void main() {
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
       expect(await _outcomeOf(db, 'x'), isNull);
       expect(await _inboxIds(db), isEmpty);
-    });
-
-    testWidgets('no discard-labelled action creates an Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Noise'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await _scrollAndTap(tester, 'Discard Capture');
-
       // The bug this screen shipped with: a button that said "discard" wrote a
       // completed Outcome. Nothing may land in `todos` on this path — not even
       // a trashed row, because Trash is a List of Outcomes and a discarded
@@ -827,7 +805,8 @@ void main() {
       expect((await db.captureDao.getCapture('x'))!.title, 'New title');
     });
 
-    testWidgets('energy chosen on the card lands on the new Outcome',
+    testWidgets(
+        'energy and time estimate chosen on the card land on the new Outcome',
         (tester) async {
       await db.captureDao
           .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
@@ -835,25 +814,12 @@ void main() {
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
-      // A Capture has no energy column — the card collects it as draft state
-      // and clarifyCaptureToOutcome writes it onto the Outcome it creates.
+      // A Capture has no energy or time-estimate column — the card collects
+      // them as draft state and clarifyCaptureToOutcome writes them onto the
+      // Outcome it creates.
       await tester.ensureVisible(find.text('High'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('High'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
-      expect((await _outcomeOf(db, 'x'))!.energyLevel, 'high');
-    });
-
-    testWidgets('time estimate chosen on the card lands on the new Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
       await tester.ensureVisible(find.text('30m'));
@@ -864,7 +830,9 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      expect((await _outcomeOf(db, 'x'))!.timeEstimate, 30);
+      final outcome = (await _outcomeOf(db, 'x'))!;
+      expect(outcome.energyLevel, 'high');
+      expect(outcome.timeEstimate, 30);
     });
 
     testWidgets('deleting notes clears them on the Capture and the Outcome',

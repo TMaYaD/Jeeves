@@ -149,25 +149,6 @@ void main() {
       expect(find.byType(FilterChip), findsNothing);
     });
 
-    testWidgets('tapping a chip selects it and shows clear button',
-        (tester) async {
-      final tag = _tag('ctx1', 'Work');
-      await tester.pumpWidget(_buildShell(
-        contextTagsWithCount: [_twc(tag, 2)],
-        contextTags: [tag],
-      ));
-      await tester.pump();
-      await _openDrawer(tester);
-
-      await tester.ensureVisible(find.byKey(const Key('tag_chip_ctx1')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tag_chip_ctx1')));
-      await tester.pumpAndSettle();
-
-      expect(
-          find.byKey(const Key('tag_cloud_clear_filters')), findsOneWidget);
-    });
-
     testWidgets('clear filters button deselects all tags', (tester) async {
       final tag = _tag('ctx1', 'Work');
       await tester.pumpWidget(_buildShell(
@@ -207,7 +188,9 @@ void main() {
       expect(find.byKey(const Key('active_filter_chip_ctx1')), findsNothing);
     });
 
-    testWidgets('selecting a tag updates tagFilterProvider state', (tester) async {
+    testWidgets(
+        'selecting a tag updates tagFilterProvider and shows the clear button',
+        (tester) async {
       final tag = _tag('ctx1', 'Work');
       late WidgetRef capturedRef;
       await tester.pumpWidget(ProviderScope(
@@ -270,6 +253,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(capturedRef.read(tagFilterProvider), contains('ctx1'));
+      // Selecting a tag also surfaces the clear-filters affordance.
+      expect(find.byKey(const Key('tag_cloud_clear_filters')), findsOneWidget);
     });
   });
 }

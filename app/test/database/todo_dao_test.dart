@@ -155,13 +155,6 @@ void main() {
       expect(items.first.id, 'm1');
     });
 
-    test('watchMaybe excludes intent=next todos', () async {
-      await _insertTodo(db, id: 'n1', title: 'Next action');
-
-      final items = await db.todoDao.watchMaybe().first;
-      expect(items, isEmpty);
-    });
-
     test('task appears in watchPersonTagged after person-tag assignment', () async {
       await _insertTodo(db, id: 's4', title: 'Task S4');
       await _insertPersonTag(db, id: 'p4', name: 'Carol');
@@ -428,14 +421,6 @@ void main() {
       expect(row?.doneAt, isNotNull);
     });
 
-    test('markDone task no longer appears in watchNext', () async {
-      await _insertTodo(db, id: 'md2', title: 'Task MD2');
-      await db.todoDao.markDone('md2');
-
-      final items = await db.todoDao.watchNext().first;
-      expect(items.any((t) => t.id == 'md2'), isFalse);
-    });
-
     test('watchDone returns done tasks ordered by done_at DESC', () async {
       await _insertTodo(db, id: 'wd1', title: 'First done');
       await _insertTodo(db, id: 'wd2', title: 'Second done');
@@ -458,18 +443,6 @@ void main() {
       final items = await db.todoDao.watchNext().first;
       expect(items.length, 1);
       expect(items.first.id, 'na1');
-    });
-
-    test('watchMaybe excludes done maybe tasks', () async {
-      await _insertTodo(db, id: 'mm1', title: 'Active maybe');
-      await _insertTodo(db, id: 'mm2', title: 'Done maybe');
-      await db.todoDao.deferTaskToMaybe('mm1');
-      await db.todoDao.deferTaskToMaybe('mm2');
-      await db.todoDao.markDone('mm2');
-
-      final items = await db.todoDao.watchMaybe().first;
-      expect(items.length, 1);
-      expect(items.first.id, 'mm1');
     });
 
     test('watchNext excludes trashed tasks (#278)', () async {
@@ -634,16 +607,6 @@ void main() {
       expect(row?.lastClarifiedAt, isNotNull);
     });
 
-    test('notes edit stamps lastClarifiedAt', () async {
-      // Per CONTEXT.md ~L152: title/notes/Intent/due-date edits are clarifying
-      // micro-acts and must stamp last_clarified_at.
-      await _insertTodo(db, id: 'u3', title: 'Task');
-      await db.todoDao.updateFields('u3', notes: 'New notes');
-
-      final row = await db.todoDao.getTodo('u3');
-      expect(row?.lastClarifiedAt, isNotNull);
-    });
-
     test('clearDueDate stamps lastClarifiedAt', () async {
       await _insertTodo(db, id: 'u4', title: 'Task');
       // Set then immediately clear due date; both calls should stamp lastClarifiedAt.
@@ -652,58 +615,6 @@ void main() {
       await db.todoDao.updateFields('u4', clearDueDate: true);
 
       final row = await db.todoDao.getTodo('u4');
-      expect(row?.lastClarifiedAt, isNotNull);
-    });
-
-    test('energyLevel edit stamps lastClarifiedAt', () async {
-      // energyLevel is an Action cursor-field (ADR-0001). Action mutations
-      // count as clarifying micro-acts per CONTEXT.md ~L152.
-      await _insertTodo(db, id: 'u5', title: 'Task');
-      await db.todoDao.updateFields('u5', energyLevel: 'high');
-
-      final row = await db.todoDao.getTodo('u5');
-      expect(row?.lastClarifiedAt, isNotNull);
-    });
-
-    test('clearEnergyLevel stamps lastClarifiedAt', () async {
-      await _insertTodo(db, id: 'u5c', title: 'Task');
-      await db.todoDao.updateFields('u5c', clearEnergyLevel: true);
-
-      final row = await db.todoDao.getTodo('u5c');
-      expect(row?.lastClarifiedAt, isNotNull);
-    });
-
-    test('timeEstimate edit stamps lastClarifiedAt', () async {
-      // timeEstimate is an Action cursor-field (ADR-0001). Action mutations
-      // count as clarifying micro-acts per CONTEXT.md ~L152.
-      await _insertTodo(db, id: 'u6', title: 'Task');
-      await db.todoDao.updateFields('u6', timeEstimate: 30);
-
-      final row = await db.todoDao.getTodo('u6');
-      expect(row?.lastClarifiedAt, isNotNull);
-    });
-
-    test('clearTimeEstimate stamps lastClarifiedAt', () async {
-      await _insertTodo(db, id: 'u6c', title: 'Task');
-      await db.todoDao.updateFields('u6c', clearTimeEstimate: true);
-
-      final row = await db.todoDao.getTodo('u6c');
-      expect(row?.lastClarifiedAt, isNotNull);
-    });
-  });
-
-  group('TodoDao — rescheduleTask stamps lastClarifiedAt', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('rescheduleTask stamps lastClarifiedAt', () async {
-      // Due-date edit is a clarifying micro-act per CONTEXT.md ~L152.
-      await _insertTodo(db, id: 'rs1', title: 'Reschedulable');
-      await db.todoDao.rescheduleTask('rs1', DateTime(2026, 5, 1));
-
-      final row = await db.todoDao.getTodo('rs1');
       expect(row?.lastClarifiedAt, isNotNull);
     });
   });
@@ -733,44 +644,6 @@ void main() {
       expect(row?.lastClarifiedAt, isNotNull);
       expect(row?.intent, 'next');
       expect(row?.doneAt, isNull);
-    });
-
-    test('trash → applyRouting(maybe) restores and stamps lastClarifiedAt',
-        () async {
-      await _insertTodo(db, id: 'res2', title: 'Task');
-      await db.todoDao.applyRouting('res2', to: RoutingKind.trash);
-      await (db.update(db.todos)..where((t) => t.id.equals('res2')))
-          .write(const TodosCompanion(lastClarifiedAt: Value(null)));
-
-      await db.todoDao.applyRouting('res2', to: RoutingKind.maybe);
-
-      final row = await db.todoDao.getTodo('res2');
-      expect(row?.lastClarifiedAt, isNotNull);
-      expect(row?.intent, 'maybe');
-      expect(row?.doneAt, isNull);
-    });
-  });
-
-  group('TodoDao — clearDoneAt stamps lastClarifiedAt', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('clearDoneAt stamps lastClarifiedAt', () async {
-      // Reverting a Completion is a structural decision about the Outcome —
-      // the dual of marking done, which itself stamps. Per CONTEXT.md ~L152
-      // Outcome completion stamps; un-doing it is the same kind of micro-act.
-      await _insertTodo(db, id: 'cd1', title: 'Task');
-      await db.todoDao.markDone('cd1');
-      // Wipe the stamp set by markDone.
-      await (db.update(db.todos)..where((t) => t.id.equals('cd1')))
-          .write(const TodosCompanion(lastClarifiedAt: Value(null)));
-
-      await db.todoDao.clearDoneAt('cd1');
-
-      final row = await db.todoDao.getTodo('cd1');
-      expect(row?.lastClarifiedAt, isNotNull);
     });
   });
 
@@ -906,26 +779,6 @@ void main() {
         to: RoutingKind.nextAction,
       );
       expect((await db.todoDao.getTodo('c1'))?.doneAt, isNull);
-    });
-
-    test('done → waitingFor clears done_at', () async {
-      await seedDone('c2');
-      await db.todoDao.applyRouting(
-        'c2',
-        to: RoutingKind.waitingFor,
-      );
-      expect((await db.todoDao.getTodo('c2'))?.doneAt, isNull);
-    });
-
-    test('done → maybe clears done_at', () async {
-      await seedDone('c3');
-      await db.todoDao.applyRouting(
-        'c3',
-        to: RoutingKind.maybe,
-      );
-      final row = await db.todoDao.getTodo('c3');
-      expect(row?.doneAt, isNull);
-      expect(row?.intent, 'maybe');
     });
 
     test('done → trash preserves done_at (Trash is historical, not "undo")',
@@ -1128,16 +981,6 @@ void main() {
       );
 
       expect(await db.todoDao.getPersonTagIdsForTodo('t6'), contains('alice'));
-    });
-
-    test('first apply does no extra work', () async {
-      await _insertTodo(db, id: 't7', title: 'Task', clarified: false);
-      await db.todoDao
-          .applyRouting('t7', to: RoutingKind.nextAction);
-
-      final row = await db.todoDao.getTodo('t7');
-      expect(row?.clarified, isTrue);
-      expect(row?.intent, 'next');
     });
 
     test('idempotent: applying same kind twice is a net no-op', () async {

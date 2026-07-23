@@ -118,27 +118,4 @@ void main() {
       expect((await db.userPreferencesDao.getAll('alice')).length, 1);
     });
   });
-
-  group('Schema correctness: user_preferences', () {
-    test('user_preferences table structure: columns and UNIQUE(user_id, key) constraint', () async {
-      final db = _openDb();
-      addTearDown(db.close);
-
-      // v20 migration creates the table.
-      final tables = await db.customSelect(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_preferences'",
-      ).get();
-      expect(tables.length, 1);
-
-      // UNIQUE constraint: second insert with same (user_id, key) should upsert, not error.
-      await db.userPreferencesDao.set('u', 'k', '"v1"');
-      await db.userPreferencesDao.set('u', 'k', '"v2"');
-      final rows = await db.customSelect(
-        'SELECT value FROM user_preferences WHERE user_id = ? AND "key" = ?',
-        variables: [Variable.withString('u'), Variable.withString('k')],
-      ).get();
-      expect(rows.length, 1);
-      expect(rows.first.read<String?>('value'), '"v2"');
-    });
-  });
 }

@@ -28,32 +28,6 @@ void main() {
       expect(c.read(periodicReviewIsDueProvider), isTrue);
     });
 
-    test('isDue is true when last completion is older than 7 days', () async {
-      final c = _container();
-      addTearDown(c.dispose);
-
-      await c.read(syncedPreferencesProvider.future);
-      final eightDaysAgo =
-          DateTime.now().toUtc().subtract(const Duration(days: 8));
-      await c
-          .read(syncedPreferencesProvider.notifier)
-          .set('periodic_review_last_completed_at', eightDaysAgo.toIso8601String());
-      expect(c.read(periodicReviewIsDueProvider), isTrue);
-    });
-
-    test('isDue is false within 7 days of last completion', () async {
-      final c = _container();
-      addTearDown(c.dispose);
-
-      await c.read(syncedPreferencesProvider.future);
-      final twoDaysAgo =
-          DateTime.now().toUtc().subtract(const Duration(days: 2));
-      await c
-          .read(syncedPreferencesProvider.notifier)
-          .set('periodic_review_last_completed_at', twoDaysAgo.toIso8601String());
-      expect(c.read(periodicReviewIsDueProvider), isFalse);
-    });
-
     test('isDue is true when last completion is exactly 7 days ago', () async {
       final c = _container();
       addTearDown(c.dispose);

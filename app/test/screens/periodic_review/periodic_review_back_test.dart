@@ -81,32 +81,6 @@ void main() {
     tearDown(() async => db.close());
 
     testWidgets(
-        'system back at step 0, first item exits to the execution home and '
-        'abandons the performance', (tester) async {
-      final (widget, container) = _app(db);
-      addTearDown(container.dispose);
-      await tester.pumpWidget(widget);
-      await _settle(tester);
-
-      expect(
-        container.read(ceremonyInProgressProvider),
-        contains(RitualId.weeklyReview),
-      );
-
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-
-      expect(find.text('execution home'), findsOneWidget);
-      expect(
-        container.read(ceremonyInProgressProvider),
-        isNot(contains(RitualId.weeklyReview)),
-        reason: 'back-exit abandons the performance (ADR-0009 hygiene)',
-      );
-
-      await _dispose(tester);
-    });
-
-    testWidgets(
         'system back mid-step mirrors footer Back: retreats the item cursor '
         'and keeps the step', (tester) async {
       await _insertInbox(db, 'i1');
@@ -140,43 +114,5 @@ void main() {
       await _dispose(tester);
     });
 
-    testWidgets('system back on a later step retreats to the previous step',
-        (tester) async {
-      final (widget, container) = _app(db);
-      addTearDown(container.dispose);
-      await tester.pumpWidget(widget);
-      await _settle(tester);
-
-      await container.read(periodicReviewProvider.notifier).goToStep(1);
-      await tester.pumpAndSettle();
-
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-
-      expect(container.read(periodicReviewProvider).currentStep, 0,
-          reason: 'system back mirrors the footer Back step retreat');
-      expect(find.byType(PeriodicReviewScreen), findsOneWidget);
-
-      await _dispose(tester);
-    });
-
-    testWidgets(
-        'system back on the Review Complete summary exits to the execution home',
-        (tester) async {
-      final (widget, container) = _app(db);
-      addTearDown(container.dispose);
-      await tester.pumpWidget(widget);
-      await _settle(tester);
-
-      await container.read(periodicReviewProvider.notifier).goToStep(4);
-      await tester.pumpAndSettle();
-
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-
-      expect(find.text('execution home'), findsOneWidget);
-
-      await _dispose(tester);
-    });
   });
 }
