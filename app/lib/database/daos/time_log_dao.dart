@@ -62,21 +62,31 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         .watchSingleOrNull();
   }
 
-  /// Ceiling-rounded sum of minutes spent on [taskId] across all log rows.
+  /// Correlated SQL subquery: ceiling-rounded total minutes across all
+  /// `time_logs` rows whose `task_id` equals [taskIdRef] (a SQL expression,
+  /// e.g. `'t.id'` or a bound `'?'`).
   ///
   /// Open rows (ended_at IS NULL) are included using the current UTC time.
   /// Per-interval ceiling arithmetic uses the `+ 0.9999` trick since SQLite
-  /// has no CEIL() function.
-  Future<int> totalMinutesForTask(String taskId) async {
-    final result = await customSelect(
-      'SELECT COALESCE(SUM('
+  /// has no CEIL() function. The inner alias `dtl` is chosen to avoid
+  /// colliding with outer-query table aliases.
+  ///
+  /// This is the single derivation of time-spent from TimeLogs (the source of
+  /// truth); queries that surface time-spent embed it rather than reading the
+  /// dead `todos.time_spent_minutes` column (issue #480).
+  static String totalMinutesSubquery(String taskIdRef) => '(SELECT COALESCE(SUM('
       '  CAST('
-      '    ((julianday(COALESCE(ended_at, datetime(\'now\'))) - julianday(started_at))'
+      '    ((julianday(COALESCE(dtl.ended_at, datetime(\'now\'))) - julianday(dtl.started_at))'
       '     * 86400 / 60 + 0.9999)'
       '  AS INTEGER)'
-      '), 0) AS total_minutes '
-      'FROM time_logs '
-      'WHERE task_id = ?',
+      '), 0) FROM time_logs dtl WHERE dtl.task_id = $taskIdRef)';
+
+  /// Ceiling-rounded sum of minutes spent on [taskId] across all log rows.
+  ///
+  /// See [totalMinutesSubquery] for the derivation semantics.
+  Future<int> totalMinutesForTask(String taskId) async {
+    final result = await customSelect(
+      'SELECT ${totalMinutesSubquery('?')} AS total_minutes',
       variables: [Variable<String>(taskId)],
       readsFrom: {timeLogs},
     ).getSingle();

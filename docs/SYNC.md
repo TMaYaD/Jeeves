@@ -122,7 +122,7 @@ The contract: **every client-owned column must round-trip verbatim** through the
 | `last_clarified_at` | client | stamped per clarifying micro-act; drives the Stale predicate |
 | `next_action_text` | client | the next-action cursor; NULL = Actionless |
 | `last_next_action_completion_at` | client | stamped when a focus session closes with the task non-done |
-| `time_spent_minutes` | client | cumulative focus-stint minutes |
+| `time_spent_minutes` | client | dead denormalized cache — no live write path since PR I retired the `transitionState` recompute; time-spent is derived from `SUM(time_logs)` at read time (issue #480); still round-trips until retired (#470 story 9) |
 | `created_at` | client, server default when omitted | offline captures keep their true capture time |
 | `updated_at` | client | the server never stamps it |
 | `user_id` | **server** | derived from the JWT; any client-sent value is ignored by design |

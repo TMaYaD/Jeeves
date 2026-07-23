@@ -645,7 +645,7 @@ Focus Mode includes an optional Pomodoro sprint timer bound to the active task. 
 
 - `startSprint(Todo)` — reads `focusSettingsProvider` for durations, then starts a focus sprint; triggers haptic feedback and schedules a local notification.
 - `pauseSprint()` / `resumeSprint()` — freezes/resumes the remaining duration; cancels/reschedules the end notification.
-- `completeSprint()` — logs the sprint duration to `todos.time_spent_minutes`, then starts the break timer.
+- `completeSprint()` — starts the break timer. It does not write time anywhere: time tracking flows through `time_logs` rows, opened and closed by `FocusSessionDao.setCurrentTask` as focus switches (see Time tracking below).
 - `stopSprint()` — cancels the timer and clears all persisted state.
 - `skipBreak()` — ends the break early and records `lastBreakEndedAt`.
 
@@ -688,12 +688,18 @@ Sprint count for a task is derived from its `timeEstimate` and the configured `s
 
 ```text
 totalSprints = max(1, ceil(timeEstimate / sprintDurationMinutes))
-currentSprint = floor(timeSpentMinutes / sprintDurationMinutes) + 1
+currentSprint = floor(totalMinutesForTask / sprintDurationMinutes) + 1
 ```
+
+where `totalMinutesForTask` is the live TimeLog-derived total (`TimeLogDao.totalMinutesForTask`).
 
 ### Time tracking
 
-When a sprint completes normally (`completeSprint`) or the timer expires while the app is backgrounded, the notifier atomically increments `time_spent_minutes` by the sprint duration in a single SQL UPDATE via Drift's `RawValuesInsertable`. The single-statement approach avoids a read-modify-write race with PowerSync's sync writes. This is best-effort: failures are silently ignored so the UI remains responsive.
+`time_logs` rows are the source of truth for time spent: one row per contiguous focus stint on a task, opened and closed by `FocusSessionDao.setCurrentTask` as focus switches. The sprint timer never writes time — a sprint is a display loop layered on top of the running log.
+
+Every surface that shows time-spent derives it from `SUM(time_logs)` at read time, via `TimeLogDao.totalMinutesForTask` (single task, e.g. sprint number) or the correlated subquery `TimeLogDao.totalMinutesSubquery` embedded in list queries (e.g. `FocusSessionDao.watchActiveSessionReviewSurface`, which feeds the evening shutdown's time figures). Per-interval minutes are ceiling-rounded; open rows count up to the current time.
+
+The `todos.time_spent_minutes` column is a dead denormalized cache: nothing writes it since the `transitionState` recompute was retired with PR I, and nothing may read it. It awaits retirement in the Action-entity epic (#470 story 9).
 
 ### Batching suggestion
 
