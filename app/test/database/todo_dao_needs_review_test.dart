@@ -39,16 +39,13 @@ Future<String> _insertClarifiedTask(
     lastClarifiedAt:
         lastClarifiedAt != null ? Value(lastClarifiedAt) : const Value.absent(),
   ));
-  if (nextActionText != null && nextActionText.trim().isNotEmpty) {
-    await db.into(db.actions).insert(ActionsCompanion(
-          id: Value('action-$id'),
-          outcomeId: Value(id),
-          userId: Value(_userId),
-          actionText: Value(nextActionText.trim()),
-          role: const Value('current'),
-          createdAt: Value(now),
-        ));
-  }
+  await seedCurrentAction(
+    db,
+    outcomeId: id,
+    text: nextActionText,
+    userId: _userId,
+    createdAt: now,
+  );
   return id;
 }
 

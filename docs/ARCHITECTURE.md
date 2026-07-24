@@ -733,7 +733,7 @@ A task's lifecycle decomposes along orthogonal axes — each axis is a separate 
 | Intent | `todos.intent` (`next` \| `maybe` \| `trash`) | What the user wants to do with this task |
 | Completion | `todos.done_at` (timestamp, nullable) | Non-null = done; value = when |
 | Schedule | `todos.due_date` (date, nullable) | Specific calendar date |
-| Current Action | `actions` row with `role = 'current'` | The Outcome's current Action; its existence = actionable today, its `text` is the phrase. `todos.next_action_text` is still written for compatibility but no longer read (ADR-0001 story 3; retired in story 9) |
+| Current Action | `actions` row with `role = 'current'` | The Outcome's current Action; its existence makes the Outcome **engageable** — there is a concrete thing to do, and only a `current` Action is engageable (CONTEXT.md § GTD Core / Relationships) — its `text` is the phrase. `todos.next_action_text` is still written for compatibility but no longer read (ADR-0001 story 3; retired in story 9) |
 | PersonBlocker | `todo_tags` rows referencing a `Tag` with `type = 'person'` | Outcome is blocked on a Person; existence of the link is the block, removal is its resolution |
 | Active focus | `focus_sessions.current_task_id` | Which task is currently in progress |
 | Today's plan | `focus_session_tasks` rows | Membership in the open session |
@@ -743,6 +743,9 @@ A task is **actionable** when:
 ```text
 clarified = true ∧ done_at IS NULL ∧ intent = 'next'
 ```
+
+**Actionable ≠ engageable, and neither one alone decides Next membership.**
+Actionable is the axis combination above — it says nothing about Actions. Engageable is the current-Action axis: the Outcome has a phrase the user can start on. An actionable but Actionless Outcome is still real work the user should see; it drops off Next only when it is *also* PersonBlocked (see the Next List rule below), because that combination is a pure wait.
 
 PersonBlocker is the only Blocker shape modelled today; the remaining shapes from the polymorphic-blockers design (Task / Time / Location) are tracked in TMaYaD/Jeeves#181 and are not part of this model yet.
 
