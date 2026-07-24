@@ -188,6 +188,78 @@ warning. Neither verdict opens a confirmation dialog.
 This is the same principle as the wizard footer above — one affordance in one
 slot — applied to a terminal verdict rather than to forward progress.
 
+## App title bar
+
+One shared bar is designed to carry every screen's chrome (`AppTitleBar`,
+`app/lib/widgets/app_title_bar/`; ruled in [ADR-0021](adr/0021-shared-app-title-bar.md)).
+It is a `PreferredSizeWidget` mounted in `Scaffold.appBar`, configured
+**entirely by constructor parameters passed top-down** — never by a provider or
+`content_for`-style slot written into from below, which during a route
+transition would race between the outgoing and incoming screen. Adoption is
+staged: the component ships with task detail as its single reference adoption,
+and the remaining screens migrate onto it in a follow-up. Until that migration
+lands the two chrome styles coexist.
+
+### Anatomy
+
+Left to right:
+
+    [leading] [overline / title] [badge] … [page actions] [pinned capture] [⋮]
+
+*   **leading** — `drawer` on the shell list routes, `back` on pushed routes,
+    `none` inside a ceremony (which has no unguarded exit). The screen names
+    which; the bar never inspects the router. A screen whose way out is a `go`
+    or is guarded passes its own `onLeadingPressed`.
+*   **overline** — the small label, with an optional icon, that sits above the
+    title and names what the title belongs to: the project above a task title,
+    the ceremony above a step title. 12px, w600, 0.8 letter-spacing, grey
+    `#6B7280`. Optional; when absent the bar is one row shorter.
+*   **title** — a plain string, 20px w700 `#1A1A2E`, one line, ellipsised. It
+    gets whatever width the actions leave. Screens needing richer chrome (a
+    search field, a progress bar) put it in the content region flush beneath
+    the bar; the bar has no below-title slot.
+*   **badge** — an optional count beside the title (the Inbox's unprocessed
+    count). A typed parameter, not a number smuggled into the title string; it
+    costs no action slot. 4px radius per Roundedness below.
+*   **page actions** — the screen's own icon actions, declared in priority
+    order and laid out **ascending in priority left to right**, so the
+    highest-priority action sits nearest the pinned slot. Each carries a stable
+    `Key` and a label, used as its tooltip in the bar and its row text in the ⋮
+    menu. An action may override its foreground colour to stay a call to action
+    (task detail's Start focus keeps the primary blue `#2667B7`).
+*   **pinned capture** — the fixed rightmost action slot, reserved for capture.
+    Identical position on every screen; never overflows.
+*   **⋮ overflow** — renders **only** when something overflowed, rightmost of
+    all.
+
+### Action budget
+
+The number of action buttons is budgeted by **screen-width breakpoint**, not by
+measured available width: a fixed budget is deterministic and testable, where
+measuring creates layout feedback loops and per-device surprises.
+
+| Width | Total action buttons (incl. the pinned action and the ⋮ when shown) |
+|---|---|
+| < 600 px (phone) | 3 |
+| 600–1023 px | 4 |
+| ≥ 1024 px (desktop) | 5 |
+
+When the page actions plus the pinned action fit the budget, everything renders
+and there is **no ⋮**. When they do not, the ⋮ claims a slot too, and how many
+page actions stay in the bar depends on whether the screen pins a capture
+action: with a pinned action the bar holds `budget − 2` page actions (one slot
+each to the pinned action and the ⋮); without one it holds `budget − 1` (only
+the ⋮ costs a slot). Either way the rest — always the lowest-priority tail —
+move into the ⋮ menu in priority order. On a phone with a pinned capture: two
+actions render `[Action 2][Action 1][Capture]`; three render
+`[Action 1][Capture][⋮ → Action 2, Action 3]`.
+
+Because placement moves with the breakpoint, tests never `find.byKey` a bar
+action directly — see the finder helper in [TESTING.md](./TESTING.md).
+
+Bar surfaces follow the canonical 2/4/6 scale (§ Roundedness) — the badge and
+any chip in the bar are 4px, never pills.
+
 ## Interaction Patterns
 
 ### Ceremony back navigation

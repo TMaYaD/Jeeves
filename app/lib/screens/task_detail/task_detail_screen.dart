@@ -8,6 +8,7 @@ import '../../database/gtd_database.dart';
 import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
+import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/async_subject.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
@@ -100,12 +101,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         // the same chrome around them — not least the app bar's back arrow.
         surfaceWrapper: (context, surface) => Scaffold(
           backgroundColor: Colors.white,
-          appBar: AppBar(
-            backgroundColor: Colors.white,
-            elevation: 0,
-            scrolledUnderElevation: 0,
-            leading: _backLeading(),
-          ),
+          appBar: AppTitleBar(title: '', onLeadingPressed: _back),
           body: surface,
         ),
         dataBuilder: (context, todo) {
@@ -124,7 +120,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
           return Scaffold(
             backgroundColor: Colors.white,
-            appBar: _buildAppBar(todo),
+            appBar: _buildTitleBar(todo, projectTag),
             body: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -422,42 +418,40 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     );
   }
 
-  /// The screen's back affordance. Shared by the loaded app bar and the one
+  /// The screen's way out. Shared by the loaded title bar and the one
   /// [AsyncSubject.surfaceWrapper] puts around the loading / error / missing
-  /// surfaces: leaving the wrapper's leading implicit would swap in the
-  /// platform default back icon and route the tap through
-  /// [Navigator.maybePop] instead of the router, so the way out of the screen
-  /// would change shape exactly when the body did.
-  Widget _backLeading() => IconButton(
-        icon: const Icon(Icons.arrow_back_ios_new, size: 20, color: Colors.black),
-        onPressed: () => context.pop(),
-      );
+  /// surfaces, and passed explicitly rather than left to [AppTitleBar]'s
+  /// default: the default pops the [Navigator], while this screen leaves
+  /// through the router, and the way out must not change shape when the body
+  /// does.
+  void _back() => context.pop();
 
-  AppBar _buildAppBar(Todo todo) {
-    return AppBar(
-      backgroundColor: Colors.white,
-      elevation: 0,
-      scrolledUnderElevation: 0,
-      leading: _backLeading(),
-      actions: [
+  /// The screen's chrome (ADR-0021). The bar carries the read-only identity of
+  /// the Outcome — project as the overline, title as the title — while the
+  /// body keeps the editable title field and project picker.
+  AppTitleBar _buildTitleBar(Todo todo, Tag? projectTag) {
+    return AppTitleBar(
+      title: todo.title,
+      overline: projectTag == null
+          ? null
+          : AppTitleBarOverline(
+              label: projectTag.name,
+              icon: Icons.folder_outlined,
+              iconColor: const Color(0xFF2563EB),
+            ),
+      onLeadingPressed: _back,
+      pageActions: [
         // Ad-hoc engagement entry point (issue #180): works with or without
         // an open FocusSession — engagement is independent of the session
-        // (ADR-0005). Visual treatment follows the epic #35 design pass.
+        // (ADR-0005). An icon action in the shared bar, keeping the primary
+        // blue as its foreground so it still reads as the call to action.
         if (todo.doneAt == null)
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: FilledButton.icon(
-              key: const Key('task_detail_start_focus'),
-              onPressed: () => _startFocus(todo),
-              icon: const Icon(Icons.play_arrow_rounded, size: 18),
-              label: const Text('Start focus'),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF2667B7),
-                visualDensity: VisualDensity.compact,
-                textStyle: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-            ),
+          AppTitleBarAction(
+            key: const Key('task_detail_start_focus'),
+            icon: Icons.play_arrow_rounded,
+            label: 'Start focus',
+            color: const Color(0xFF2667B7),
+            onPressed: () => _startFocus(todo),
           ),
       ],
     );
