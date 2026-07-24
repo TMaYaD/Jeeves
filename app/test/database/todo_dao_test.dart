@@ -171,15 +171,15 @@ void main() {
       // Subscribe BEFORE inserting the log, so the second emission proves
       // time_logs is in the watcher's readsFrom set — not just that the
       // initial projection derives correctly.
-      final minutes = <int>[];
-      final sub = db.todoDao
+      final timeSpentMinutesEmissions = <int>[];
+      final subscription = db.todoDao
           .watchPersonTaggedGrouped()
           .map((grouped) => grouped.values.single.single.timeSpentMinutes)
-          .listen(minutes.add);
-      addTearDown(sub.cancel);
+          .listen(timeSpentMinutesEmissions.add);
+      addTearDown(subscription.cancel);
 
-      await _waitUntil(() => minutes.isNotEmpty);
-      expect(minutes.last, 0,
+      await _waitUntil(() => timeSpentMinutesEmissions.isNotEmpty);
+      expect(timeSpentMinutesEmissions.last, 0,
           reason: 'no logs yet — the poisoned cache column (999) must be '
               'ignored');
 
@@ -192,8 +192,8 @@ void main() {
             endedAt: Value(DateTime.utc(2026, 5, 1, 9, 25).toIso8601String()),
           ));
 
-      await _waitUntil(() => minutes.last == 25);
-      expect(minutes.last, 25,
+      await _waitUntil(() => timeSpentMinutesEmissions.last == 25);
+      expect(timeSpentMinutesEmissions.last, 25,
           reason: 'must be SUM(time_logs), not the dead cache column');
     });
 
