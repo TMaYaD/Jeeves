@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/focus_session_planning_settings_provider.dart';
+import '../../../widgets/outcome_peek_sheet.dart';
 
 /// Colour of the capacity-bar segment representing minutes counted at the
 /// configurable default estimate (selected Outcomes that carry no time
@@ -180,6 +181,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                         isSelected: true,
                         onUndo: () => _handleUndo(t),
                         onSkip: () => _handleSkip(t),
+                        onPeek: _selectionMode
+                            ? null
+                            : () => OutcomePeekSheet.show(context, t),
                       )),
                   const SizedBox(height: 16),
                 ],
@@ -196,6 +200,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                         isChecked: _selectedIds.contains(t.id),
                         onLongPress: () => _enterSelectionMode(t.id),
                         onTapInSelectionMode: () => _toggleSelection(t.id),
+                        onPeek: _selectionMode
+                            ? null
+                            : () => OutcomePeekSheet.show(context, t),
                       )),
                   const SizedBox(height: 16),
                 ],
@@ -209,6 +216,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                         isSkipped: true,
                         onSelect: () => _handleSelect(t),
                         onUndo: () => _handleUndo(t),
+                        onPeek: _selectionMode
+                            ? null
+                            : () => OutcomePeekSheet.show(context, t),
                       )),
                 ],
 
@@ -484,6 +494,15 @@ class _MultiSelectActionBar extends StatelessWidget {
 /// leading checkbox is shown instead; the whole card responds to taps via
 /// [onTapInSelectionMode]. [onLongPress] is the entry point into selection
 /// mode and is only meaningful on Pending Review rows.
+///
+/// [onPeek] — a plain tap outside selection mode opens the read-only Outcome
+/// peek sheet. Callers pass `null` while multi-select is active so the card
+/// carries no gesture params in-mode: on Today's Plan / Skipped rows that
+/// leaves the card with no [GestureDetector] at all (tap inert, rendering and
+/// the trailing action buttons untouched); Pending rows keep their in-mode
+/// checkbox-toggle wiring. This is why the peek is gated at the call site
+/// rather than by threading [selectionMode] here — [selectionMode] stays purely
+/// a Pending-card rendering flag.
 class _ReviewCard extends StatelessWidget {
   const _ReviewCard({
     required this.todo,
@@ -496,6 +515,7 @@ class _ReviewCard extends StatelessWidget {
     this.isChecked = false,
     this.onLongPress,
     this.onTapInSelectionMode,
+    this.onPeek,
   });
 
   final Todo todo;
@@ -508,6 +528,7 @@ class _ReviewCard extends StatelessWidget {
   final bool isChecked;
   final VoidCallback? onLongPress;
   final VoidCallback? onTapInSelectionMode;
+  final VoidCallback? onPeek;
 
   @override
   Widget build(BuildContext context) {
@@ -629,13 +650,13 @@ class _ReviewCard extends StatelessWidget {
       ),
     );
 
-    if (onLongPress == null && onTapInSelectionMode == null) {
+    if (onLongPress == null && onTapInSelectionMode == null && onPeek == null) {
       return card;
     }
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onLongPress: onLongPress,
-      onTap: selectionMode ? onTapInSelectionMode : null,
+      onTap: selectionMode ? onTapInSelectionMode : onPeek,
       child: card,
     );
   }
