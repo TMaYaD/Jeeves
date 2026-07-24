@@ -52,7 +52,6 @@ void main() {
       final inbox = await db.captureDao.watchInbox().first;
       expect(inbox.map((c) => c.id), ['c1']);
       expect(inbox.first.clarifiedAt, isNull);
-      expect(await db.captureDao.watchInboxCount().first, 1);
     });
 
     test('watchInbox orders newest first', () async {
@@ -76,9 +75,8 @@ void main() {
       await db.captureDao.stampClarified('c1');
 
       expect(await db.captureDao.watchInbox().first, isEmpty);
-      expect(await db.captureDao.watchInboxCount().first, 0);
-      // The Capture persists (never deleted) — still visible to watchHasCaptures.
-      expect(await db.captureDao.watchHasCaptures().first, isTrue);
+      // The Capture persists (never deleted) — the row is still in the table.
+      expect(await db.select(db.captures).get(), isNotEmpty);
       expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNotNull);
     });
 
@@ -166,7 +164,9 @@ void main() {
         'Sharper idea',
       );
 
-      await db.captureDao.deleteCapture('c1');
+      // Simulates a sync-download removing the row (no production code path
+      // deletes Captures — ADR-0006).
+      await (db.delete(db.captures)..where((c) => c.id.equals('c1'))).go();
       expect(await db.captureDao.watchCapture('c1').first, isNull);
     });
 
@@ -268,7 +268,7 @@ void main() {
       expect(await db.captureDao.watchHasAnyItem().first, isTrue);
 
       // Removing the only capture → false again.
-      await db.captureDao.deleteCapture('c1');
+      await (db.delete(db.captures)..where((c) => c.id.equals('c1'))).go();
       expect(await db.captureDao.watchHasAnyItem().first, isFalse);
 
       // Outcome-only (no captures) → true.
@@ -292,7 +292,7 @@ void main() {
       await _insertOutcome(db, 'o1', 'Outcome');
       await pumpEventQueue();
       // Delete the capture — the outcome still keeps it true.
-      await db.captureDao.deleteCapture('c1');
+      await (db.delete(db.captures)..where((c) => c.id.equals('c1'))).go();
       await pumpEventQueue();
       // Delete the last outcome via the production path — now nothing remains.
       await db.todoDao.deleteOutcome('o1');

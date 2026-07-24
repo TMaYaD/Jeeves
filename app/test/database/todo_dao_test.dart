@@ -224,7 +224,7 @@ void main() {
         'Q3: intent=next, no next_action_text, no person-tag → on Next '
         '(re-clarify candidate; still surfaces)', () async {
       // An actionless Outcome with no PersonBlocker is on Next — the daily
-      // re-clarification surface will pick it up via watchNeedsReview,
+      // re-clarification surface will pick it up via getNeedsReview,
       // but it remains a member of the Next List itself.
       await _insertTodo(db, id: 'q3', title: 'Plan vacation');
 

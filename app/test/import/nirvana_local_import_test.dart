@@ -13,6 +13,16 @@ import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
+/// One-shot list of todos linked to [tagId] via the todo_tags junction.
+Future<List<Todo>> _todosLinkedToTag(GtdDatabase db, String tagId) async {
+  final links = await (db.select(db.todoTags)
+        ..where((tt) => tt.tagId.equals(tagId)))
+      .get();
+  final ids = links.map((l) => l.todoId).toSet();
+  final todos = await db.select(db.todos).get();
+  return todos.where((t) => ids.contains(t.id)).toList();
+}
+
 Uint8List _bytes(String s) => Uint8List.fromList(utf8.encode(s));
 
 Uint8List _fixtureBytes(String name) =>
@@ -58,8 +68,7 @@ void main() {
       expect(projectTags.first.name, 'Brush up on GTD®');
 
       final tagId = projectTags.first.id;
-      final tasksByProject =
-          await db.todoDao.watchByProject(tagId).first;
+      final tasksByProject = await _todosLinkedToTag(db, tagId);
       expect(tasksByProject.length, 2);
     });
 
@@ -380,8 +389,7 @@ void main() {
       expect(projectTags.length, 1);
 
       final tagId = projectTags.first.id;
-      final tasksByProject =
-          await db.todoDao.watchByProject(tagId).first;
+      final tasksByProject = await _todosLinkedToTag(db, tagId);
       expect(tasksByProject.length, 2);
       final names = tasksByProject.map((t) => t.title).toSet();
       expect(names, containsAll(['Read the Book', 'Read our Quick Guide']));

@@ -792,7 +792,7 @@ void main() {
       await _pumpFrames(tester, frames: 5);
       expect(find.byKey(const Key('clarify_title')), findsOneWidget);
 
-      await db.captureDao.deleteCapture('x');
+      await (db.delete(db.captures)..where((c) => c.id.equals('x'))).go();
       feed.add(null);
       await _pumpFrames(tester, frames: 5);
 
