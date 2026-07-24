@@ -17,6 +17,7 @@ library;
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
+import 'daos/action_dao.dart';
 import 'daos/action_ids.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
@@ -33,7 +34,7 @@ part 'gtd_database.g.dart';
 
 @DriftDatabase(
   tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, SyncDeadLetters, Captures, CaptureOutcomes, CaptureTags, Actions],
-  daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao],
+  daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor);

@@ -5,6 +5,21 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
+import '../../../providers/focus_session_planning_settings_provider.dart';
+import '../../../widgets/outcome_peek_sheet.dart';
+
+/// Colour of the capacity-bar segment representing minutes counted at the
+/// configurable default estimate (selected Outcomes that carry no time
+/// estimate). Tailwind blue-300 — the literal "lighter blue" ruled on #463,
+/// same family as the Daily Planning accent (`#2563EB`, blue-600).
+///
+/// NOTE (pending owner decision): the ruling contrasts a "standard tone" with
+/// this lighter blue, but the standard tone here is the load-status colour
+/// (green/amber/red), never blue — so on amber/red days this segment reads as a
+/// distinct hue marking provenance rather than status. The owner may instead
+/// prefer a lighter *tint of the current status colour*; that is a one-constant
+/// change confined to this value. The literal blue is the ruled default.
+const _kDefaultCountedFillColor = Color(0xFF93C5FD);
 
 class PlanSummaryStep extends ConsumerStatefulWidget {
   const PlanSummaryStep({super.key});
@@ -82,16 +97,28 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     final pendingTasks = asyncPending.requireValue;
     final skippedTasks = asyncSkipped.requireValue;
 
-    final totalMinutes =
-        selectedTasks.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
-    final ratio = availableMinutes > 0
-        ? totalMinutes / availableMinutes
-        : double.infinity;
+    // Estimate-less Outcomes are counted at the configurable default (never
+    // written onto the Outcome — this fold is the only place the default lands).
+    final defaultEstimate = ref.watch(
+      focusSessionPlanningSettingsProvider
+          .select((s) => s.defaultTimeEstimate),
+    );
+
+    // Split the capacity into real-estimate minutes and default-counted
+    // minutes so the bar can render them as two segments. The summary total is
+    // their sum, exactly as before.
+    final realMinutes = selectedTasks.fold<int>(
+        0, (sum, t) => sum + (t.timeEstimate ?? 0));
+    final defaultMinutes = selectedTasks
+        .where((t) => t.timeEstimate == null)
+        .length *
+        defaultEstimate;
+    final totalMinutes = realMinutes + defaultMinutes;
 
     final previewMinutes = _selectionMode
         ? pendingTasks
             .where((t) => _selectedIds.contains(t.id))
-            .fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0))
+            .fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? defaultEstimate))
         : 0;
 
     return Column(
@@ -105,7 +132,11 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
             children: [
               _SectionLabel('Capacity'),
               const SizedBox(height: 8),
-              _CapacityBar(ratio: ratio.clamp(0.0, 2.0)),
+              _CapacityBar(
+                realMinutes: realMinutes,
+                defaultMinutes: defaultMinutes,
+                availableMinutes: availableMinutes,
+              ),
               const SizedBox(height: 6),
               Text(
                 _capacitySummary(
@@ -150,6 +181,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                         isSelected: true,
                         onUndo: () => _handleUndo(t),
                         onSkip: () => _handleSkip(t),
+                        onPeek: _selectionMode
+                            ? null
+                            : () => OutcomePeekSheet.show(context, t),
                       )),
                   const SizedBox(height: 16),
                 ],
@@ -166,6 +200,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                         isChecked: _selectedIds.contains(t.id),
                         onLongPress: () => _enterSelectionMode(t.id),
                         onTapInSelectionMode: () => _toggleSelection(t.id),
+                        onPeek: _selectionMode
+                            ? null
+                            : () => OutcomePeekSheet.show(context, t),
                       )),
                   const SizedBox(height: 16),
                 ],
@@ -179,6 +216,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                         isSkipped: true,
                         onSelect: () => _handleSelect(t),
                         onUndo: () => _handleUndo(t),
+                        onPeek: _selectionMode
+                            ? null
+                            : () => OutcomePeekSheet.show(context, t),
                       )),
                 ],
 
@@ -257,29 +297,82 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
+/// Capacity progress bar with a two-tone fill.
+///
+/// Real-estimate minutes render in the load-status tone (green ≤ 0.8, amber
+/// ≤ 1.0, red over — keyed off the *combined* ratio so the warn/over
+/// thresholds are unchanged), and default-counted minutes render as a lighter
+/// blue segment ([_kDefaultCountedFillColor]) laid immediately after them. When
+/// there are no default-counted minutes the bar is pixel-identical to a single
+/// status-tone fill over the track. `LinearProgressIndicator` cannot paint two
+/// segments, so the fill is drawn directly while the geometry — 10px height,
+/// 4px clip, `#E5E7EB` track — is preserved exactly.
 class _CapacityBar extends StatelessWidget {
-  const _CapacityBar({required this.ratio});
+  const _CapacityBar({
+    required this.realMinutes,
+    required this.defaultMinutes,
+    required this.availableMinutes,
+  });
 
-  final double ratio;
+  final int realMinutes;
+  final int defaultMinutes;
+  final int availableMinutes;
 
   @override
   Widget build(BuildContext context) {
-    final Color barColor;
-    if (ratio <= 0.8) {
-      barColor = const Color(0xFF16A34A);
-    } else if (ratio <= 1.0) {
-      barColor = const Color(0xFFF59E0B);
+    final combinedRatio = availableMinutes > 0
+        ? (realMinutes + defaultMinutes) / availableMinutes
+        : double.infinity;
+
+    final Color statusColor;
+    if (combinedRatio <= 0.8) {
+      statusColor = const Color(0xFF16A34A);
+    } else if (combinedRatio <= 1.0) {
+      statusColor = const Color(0xFFF59E0B);
     } else {
-      barColor = const Color(0xFFDC2626);
+      statusColor = const Color(0xFFDC2626);
     }
+
+    // Fractional widths within the track. The real segment takes precedence;
+    // the default segment fills whatever remains up to a full bar.
+    double fraction(int minutes) => availableMinutes > 0
+        ? minutes / availableMinutes
+        : (minutes > 0 ? 1.0 : 0.0);
+    final realFraction = fraction(realMinutes).clamp(0.0, 1.0);
+    final defaultFraction =
+        fraction(defaultMinutes).clamp(0.0, 1.0 - realFraction);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(4),
-      child: LinearProgressIndicator(
-        value: ratio.clamp(0.0, 1.0),
-        minHeight: 10,
-        backgroundColor: const Color(0xFFE5E7EB),
-        valueColor: AlwaysStoppedAnimation<Color>(barColor),
+      child: SizedBox(
+        height: 10,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            return Stack(
+              children: [
+                const Positioned.fill(
+                  child: ColoredBox(color: Color(0xFFE5E7EB)),
+                ),
+                Row(
+                  children: [
+                    Container(
+                      key: const Key('capacity_real_segment'),
+                      width: width * realFraction,
+                      color: statusColor,
+                    ),
+                    if (defaultFraction > 0)
+                      Container(
+                        key: const Key('capacity_default_segment'),
+                        width: width * defaultFraction,
+                        color: _kDefaultCountedFillColor,
+                      ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -401,6 +494,15 @@ class _MultiSelectActionBar extends StatelessWidget {
 /// leading checkbox is shown instead; the whole card responds to taps via
 /// [onTapInSelectionMode]. [onLongPress] is the entry point into selection
 /// mode and is only meaningful on Pending Review rows.
+///
+/// [onPeek] — a plain tap outside selection mode opens the read-only Outcome
+/// peek sheet. Callers pass `null` while multi-select is active so the card
+/// carries no gesture params in-mode: on Today's Plan / Skipped rows that
+/// leaves the card with no [GestureDetector] at all (tap inert, rendering and
+/// the trailing action buttons untouched); Pending rows keep their in-mode
+/// checkbox-toggle wiring. This is why the peek is gated at the call site
+/// rather than by threading [selectionMode] here — [selectionMode] stays purely
+/// a Pending-card rendering flag.
 class _ReviewCard extends StatelessWidget {
   const _ReviewCard({
     required this.todo,
@@ -413,6 +515,7 @@ class _ReviewCard extends StatelessWidget {
     this.isChecked = false,
     this.onLongPress,
     this.onTapInSelectionMode,
+    this.onPeek,
   });
 
   final Todo todo;
@@ -425,6 +528,7 @@ class _ReviewCard extends StatelessWidget {
   final bool isChecked;
   final VoidCallback? onLongPress;
   final VoidCallback? onTapInSelectionMode;
+  final VoidCallback? onPeek;
 
   @override
   Widget build(BuildContext context) {
@@ -546,13 +650,13 @@ class _ReviewCard extends StatelessWidget {
       ),
     );
 
-    if (onLongPress == null && onTapInSelectionMode == null) {
+    if (onLongPress == null && onTapInSelectionMode == null && onPeek == null) {
       return card;
     }
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onLongPress: onLongPress,
-      onTap: selectionMode ? onTapInSelectionMode : null,
+      onTap: selectionMode ? onTapInSelectionMode : onPeek,
       child: card,
     );
   }

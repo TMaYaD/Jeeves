@@ -8,6 +8,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/services/notification_service.dart';
 import '../test_helpers.dart';
 
 /// Pumps the event loop until [predicate] holds or [timeout] elapses. Async
@@ -43,6 +44,8 @@ class _StubFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
 ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
         focusSessionPlanningProvider
             .overrideWith(() => _StubFocusSessionPlanningNotifier()),
       ],
@@ -92,7 +95,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('startDay preserves energyLevel and availableMinutes', () async {
@@ -164,7 +166,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('processInboxItem twice concurrently updates DB only once',
@@ -288,7 +289,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('loadInboxSnapshot populates state from DB in FIFO order', () async {
@@ -677,7 +677,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test(
@@ -794,7 +793,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     Future<String> insertStaleTask() async {
@@ -1099,7 +1097,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     Future<String> insertInboxTask(String title) async {
@@ -1246,6 +1243,273 @@ void main() {
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.pendingSelectedTaskIds, isEmpty);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Rollover pre-selection is recomputed on every planning ENTRY, not once per
+  // notifier build (#461).
+  //
+  // build()'s microtask fires once per process. Every in-process replan path —
+  // the sequenced Shutdown → Planning gate (reEnterPlanning) and a warm-process
+  // return to the planning screen (mount hook) — bypassed it, so carried-over
+  // tasks arrived unselected. ensureRolloverPreload() closes the gap: idempotent,
+  // skipped while a session is open, and its merge respects both the pending and
+  // the reviewed lists so a deselected task is never resurrected.
+  // ---------------------------------------------------------------------------
+
+  group("FocusSessionPlanningNotifier — rollover preload on replan", () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+
+    setUp(() {
+      db = GtdDatabase(NativeDatabase.memory());
+      container = _container(db);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    Future<void> insertTodo(String id) async {
+      final now = DateTime.now();
+      await db.into(db.todos).insert(TodosCompanion(
+        id: Value(id),
+        title: Value('Task $id'),
+        clarified: const Value(true),
+        userId: const Value('local'),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+    }
+
+    test(
+        'reEnterPlanning pre-selects the just-closed session\'s rollover tasks '
+        '(same-process replan — primary repro)', () async {
+      await insertTodo('A');
+      await insertTodo('B');
+
+      // Open a session (A, B). build()'s preload skips while it is open.
+      final sid = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['A', 'B'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      container.read(focusSessionPlanningProvider);
+      await pumpEventQueue();
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        isEmpty,
+        reason: 'no rollover preload while a session is open',
+      );
+
+      // Close it with A rollover, B leave — the sequenced-gate close.
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sid,
+        dispositions: {'A': 'rollover', 'B': 'leave'},
+        now: DateTime(2026, 5, 1, 17, 0),
+      );
+
+      // The in-process replan path. build() will NOT run again this process.
+      await container
+          .read(focusSessionPlanningProvider.notifier)
+          .reEnterPlanning();
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.pendingSelectedTaskIds, contains('A'),
+          reason:
+              'carried-over tasks arrive pre-selected on the in-process replan (AC1).');
+      expect(state.pendingSelectedTaskIds, isNot(contains('B')),
+          reason: 'leave-dispositioned tasks do not pre-select.');
+    });
+
+    test(
+        'a cold start with a session open does not preload a prior period\'s '
+        'rollovers; the next replan preloads the correct session', () async {
+      await insertTodo('X');
+      await insertTodo('Y');
+      await insertTodo('Z');
+
+      // Period 1: close a session carrying X over.
+      final s1 = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['X'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: s1,
+        dispositions: {'X': 'rollover'},
+        now: DateTime(2026, 5, 1, 17, 0),
+      );
+      // Period 2: a session is now open (the plan built from X already consumed
+      // that rollover; Y is a fresh member of this plan).
+      final s2 = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['X', 'Y', 'Z'],
+        now: DateTime(2026, 5, 2, 9, 0),
+      );
+
+      // Fresh cold start while s2 is open: build()'s preload must NOT drag X's
+      // stale rollover into the draft.
+      container.read(focusSessionPlanningProvider);
+      await pumpEventQueue();
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        isEmpty,
+        reason: 'the skip-while-open guard prevents a stale preload.',
+      );
+
+      // Close s2 carrying Y over; the replan preloads s2 (Y), not s1 (X).
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: s2,
+        dispositions: {'X': 'leave', 'Z': 'leave', 'Y': 'rollover'},
+        now: DateTime(2026, 5, 2, 17, 0),
+      );
+      await container
+          .read(focusSessionPlanningProvider.notifier)
+          .reEnterPlanning();
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.pendingSelectedTaskIds, ['Y'],
+          reason: 'only the most-recently-closed session\'s rollovers preload.');
+    });
+
+    test(
+        'ensureRolloverPreload is idempotent and respects the reviewed list '
+        '(warm-process mount hook + deselect + undo)', () async {
+      await insertTodo('A');
+
+      // build() runs while there is no closed session → empty preload.
+      final notifier =
+          container.read(focusSessionPlanningProvider.notifier);
+      await pumpEventQueue();
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        isEmpty,
+      );
+
+      // A session closes carrying A over — WITHOUT routing through
+      // reEnterPlanning (the warm-process return-to-screen case).
+      final sid = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['A'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sid,
+        dispositions: {'A': 'rollover'},
+        now: DateTime(2026, 5, 1, 17, 0),
+      );
+
+      // The mount hook fires ensureRolloverPreload() directly.
+      await notifier.ensureRolloverPreload();
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        ['A'],
+        reason: 'the mount hook pre-selects the rollover on a warm process.',
+      );
+
+      // Idempotent — a repeated call adds no duplicate.
+      await notifier.ensureRolloverPreload();
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        ['A'],
+      );
+
+      // Deselect A (skipTask records it as reviewed). A later preload must not
+      // resurrect a task the user deliberately skipped.
+      notifier.skipTask('A');
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        isNot(contains('A')),
+      );
+      await notifier.ensureRolloverPreload();
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        isNot(contains('A')),
+        reason: 'the reviewed-ids merge guard keeps a skipped task out (AC2).',
+      );
+
+      // Undo the review: undoTaskReview clears A from BOTH lists, returning it
+      // to the unreviewed pool. A subsequent preload then legitimately restores
+      // it as the rollover default — the intended default-restoration edge.
+      notifier.undoTaskReview('A');
+      await notifier.ensureRolloverPreload();
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        ['A'],
+        reason:
+            'undoTaskReview returns A to the unreviewed pool, so the rollover '
+            'default is restored on the next preload.',
+      );
+    });
+
+    test(
+        'cold start with no open session preloads the last closed session\'s '
+        'rollover (characterization — works-case pinned)', () async {
+      await insertTodo('X');
+      final sid = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['X'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sid,
+        dispositions: {'X': 'rollover'},
+        now: DateTime(2026, 5, 1, 17, 0),
+      );
+
+      // Fresh container, no open session: build()'s microtask preloads X.
+      container.read(focusSessionPlanningProvider);
+      await _settleUntil(() => container
+          .read(focusSessionPlanningProvider)
+          .pendingSelectedTaskIds
+          .contains('X'));
+
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        contains('X'),
+      );
+    });
+
+    test(
+        'overlapping ensureRolloverPreload calls pre-select each rollover '
+        'exactly once', () async {
+      await insertTodo('A');
+      final sid = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['A'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sid,
+        dispositions: {'A': 'rollover'},
+        now: DateTime(2026, 5, 1, 17, 0),
+      );
+
+      // The real overlap: reading the notifier schedules build()'s microtask
+      // preload, and the planning screen's mount hook fires its own
+      // ensureRolloverPreload() without awaiting. Fire both explicit calls
+      // unawaited so all three interleave over the async DAO reads.
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      final first = notifier.ensureRolloverPreload();
+      final second = notifier.ensureRolloverPreload();
+      await Future.wait([first, second]);
+      // Let build()'s microtask preload land too.
+      await _settleUntil(() => container
+          .read(focusSessionPlanningProvider)
+          .pendingSelectedTaskIds
+          .contains('A'));
+
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        ['A'],
+        reason:
+            'the merge reads pendingSelectedTaskIds and commits in the same '
+            'synchronous run after the last await, so overlapping preloads '
+            'cannot double-insert a rollover id.',
+      );
     });
   });
 }
