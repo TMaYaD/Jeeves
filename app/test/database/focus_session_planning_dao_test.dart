@@ -114,20 +114,99 @@ void main() {
       expect(tasks.map((t) => t.id), orderedEquals(['t1', 't2', 't3']));
     });
 
-    test('closes prior open session before opening a new one', () async {
+    test('throws when a session is already open — never auto-closes it '
+        '(ADR-0020)', () async {
       final firstId =
           await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+
+      // Opening a second session must throw — the sole enforcement of the
+      // single-open-session invariant. The prior session is left untouched.
+      await expectLater(
+        db.focusSessionDao.openSession(userId: _userId, taskIds: []),
+        throwsA(isA<StateError>()),
+      );
+
+      // The transaction rolled back: still exactly one open session, the first.
+      final allSessions = await db.select(db.focusSessions).get();
+      expect(allSessions, hasLength(1));
+      final active = await db.focusSessionDao.getActiveSession();
+      expect(active?.id, firstId);
+      expect(active?.endedAt, isNull);
+    });
+
+    test('opens a new session once the prior one has been closed', () async {
+      final firstId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      await db.focusSessionDao.closeSession(sessionId: firstId);
+
       final secondId =
           await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
-
-      final allSessions = await db.select(db.focusSessions).get();
-      final first = allSessions.firstWhere((s) => s.id == firstId);
-      final second = allSessions.firstWhere((s) => s.id == secondId);
-      expect(first.endedAt, isNotNull);
-      expect(second.endedAt, isNull);
-
       final active = await db.focusSessionDao.getActiveSession();
       expect(active?.id, secondId);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // watchQualifyingSessionExists — ES-anchor day attribution (ADR-0020)
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — qualifying session (ES-anchor attribution)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    // Anchor is 18:00 local; sessions are placed relative to it.
+    final esAnchor = DateTime(2026, 5, 20, 18, 0);
+
+    Future<String> openAt(DateTime startedAt) async =>
+        db.focusSessionDao.openSession(userId: _userId, taskIds: [], now: startedAt);
+
+    test('no sessions → false', () async {
+      expect(await db.focusSessionDao.qualifyingSessionExists(esAnchor), isFalse);
+    });
+
+    test('started after the anchor, still open → true', () async {
+      await openAt(esAnchor.add(const Duration(minutes: 30)));
+      expect(await db.focusSessionDao.qualifyingSessionExists(esAnchor), isTrue);
+    });
+
+    test('started after the anchor, already closed → true (ended_at plays '
+        'no part)', () async {
+      final id = await openAt(esAnchor.add(const Duration(minutes: 30)));
+      await db.focusSessionDao.closeSession(
+          sessionId: id, now: esAnchor.add(const Duration(hours: 1)));
+      expect(await db.focusSessionDao.qualifyingSessionExists(esAnchor), isTrue);
+    });
+
+    test('started exactly at the anchor → true (>= boundary)', () async {
+      await openAt(esAnchor);
+      expect(await db.focusSessionDao.qualifyingSessionExists(esAnchor), isTrue);
+    });
+
+    test('started before the anchor, still open → false (stale open)',
+        () async {
+      await openAt(esAnchor.subtract(const Duration(hours: 3)));
+      expect(await db.focusSessionDao.qualifyingSessionExists(esAnchor), isFalse);
+    });
+
+    test('started before the anchor, closed after it → false '
+        '(start-time only)', () async {
+      final id = await openAt(esAnchor.subtract(const Duration(hours: 3)));
+      await db.focusSessionDao.closeSession(
+          sessionId: id, now: esAnchor.add(const Duration(hours: 1)));
+      expect(await db.focusSessionDao.qualifyingSessionExists(esAnchor), isFalse);
+    });
+
+    test('watch stream re-emits false → true when a qualifying session opens',
+        () async {
+      final stream = db.focusSessionDao.watchQualifyingSessionExists(esAnchor);
+      expect(await stream.first, isFalse);
+      await openAt(esAnchor.add(const Duration(minutes: 10)));
+      expect(
+        await stream.firstWhere((v) => v),
+        isTrue,
+      );
     });
   });
 
@@ -692,6 +771,89 @@ void main() {
           .getLastClosedSessionRolloverTaskIds();
       // 'old' is from an older session and must not appear.
       expect(ids, isEmpty);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // watchLastClosedSessionRolloverTasks — the Todo-row, reactive counterpart of
+  // getLastClosedSessionRolloverTaskIds (shares its rollover-ids SQL).
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — watchLastClosedSessionRolloverTasks', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('emits empty list when no closed sessions exist', () async {
+      final tasks = await db.focusSessionDao
+          .watchLastClosedSessionRolloverTasks()
+          .first;
+      expect(tasks, isEmpty);
+    });
+
+    test('emits rollover Todo rows from the most recently closed session',
+        () async {
+      await _insertTodo(db, id: 'tA', title: 'A');
+      await _insertTodo(db, id: 'tB', title: 'B');
+      await _insertTodo(db, id: 'tC', title: 'C');
+
+      // First (older) session — tA rolled over.
+      final firstId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['tA'],
+        now: DateTime(2026, 4, 28, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: firstId,
+        dispositions: {'tA': 'rollover'},
+        now: DateTime(2026, 4, 28, 17, 0),
+      );
+
+      // Second (newer) session — tB rolled over, tC left.
+      final secondId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['tB', 'tC'],
+        now: DateTime(2026, 4, 29, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: secondId,
+        dispositions: {'tB': 'rollover', 'tC': 'leave'},
+        now: DateTime(2026, 4, 29, 17, 0),
+      );
+
+      final tasks = await db.focusSessionDao
+          .watchLastClosedSessionRolloverTasks()
+          .first;
+      // Only tB (rollover, newest session); tC (leave) and tA (older) excluded.
+      expect(tasks.map((t) => t.id), unorderedEquals(['tB']));
+      expect(tasks.single.title, 'B');
+    });
+
+    test('re-emits when a session closes', () async {
+      await _insertTodo(db, id: 'x', title: 'X');
+      final stream =
+          db.focusSessionDao.watchLastClosedSessionRolloverTasks();
+      final future = expectLater(
+        stream.map((rows) => rows.map((t) => t.id).toList()),
+        emitsInOrder([
+          <String>[],
+          ['x'],
+        ]),
+      );
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['x'],
+        now: DateTime(2026, 4, 29, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sessionId,
+        dispositions: {'x': 'rollover'},
+        now: DateTime(2026, 4, 29, 17, 0),
+      );
+
+      await future;
     });
   });
 }

@@ -132,4 +132,80 @@ void main() {
     });
 
   });
+
+  group('SomedayMaybeStep — Done route (#457)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    /// Enlarge the test viewport so all five action-bar buttons (Keep on
+    /// Someday, Re-clarify…, Next Action…, Done, Trash) fit on screen for
+    /// `tester.tap`.
+    Future<void> useTallViewport(WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() async => tester.binding.setSurfaceSize(null));
+    }
+
+    testWidgets(
+        'the action bar offers Done alongside the other Someday routes',
+        (tester) async {
+      await useTallViewport(tester);
+      await _insertSomedayTodo(db, id: 'sm1');
+      await _enterStep(tester, db);
+
+      expect(find.text('Done'), findsOneWidget);
+      expect(find.text('Keep on Someday'), findsOneWidget);
+      expect(find.text('Re-clarify…'), findsOneWidget);
+      expect(find.text('Next Action…'), findsOneWidget);
+      expect(find.text('Trash'), findsOneWidget);
+    });
+
+    testWidgets(
+        'tapping Done stamps Completion, leaves intent=maybe, and moves the '
+        'item from watchMaybe to watchDone', (tester) async {
+      await useTallViewport(tester);
+      await _insertSomedayTodo(db, id: 'sm1');
+      await _enterStep(tester, db);
+
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('sm1');
+      expect(row?.doneAt, isNotNull,
+          reason: 'Done stamps the Outcome\'s Completion');
+      expect(row?.intent, 'maybe',
+          reason: 'Completion ⊥ Intent — Done does not touch intent');
+
+      // The item leaves Someday/Maybe and surfaces on the Done List. Read the
+      // drift streams under `runAsync` so their query timers run on the real
+      // event loop (they never settle under fake test time, and would
+      // otherwise trip the pending-timer check at teardown).
+      final (maybeIds, doneIds) = (await tester.runAsync(() async {
+        final maybe = await db.todoDao.watchMaybe().first;
+        final done = await db.todoDao.watchDone().first;
+        return (
+          maybe.map((t) => t.id).toList(),
+          done.map((t) => t.id).toList(),
+        );
+      }))!;
+      expect(maybeIds, isNot(contains('sm1')));
+      expect(doneIds, contains('sm1'));
+    });
+
+    testWidgets(
+        'tapping Done records a Done routing and advances the cursor',
+        (tester) async {
+      await useTallViewport(tester);
+      await _insertSomedayTodo(db, id: 'sm1');
+      final container = await _enterStep(tester, db);
+
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+
+      final state = container.read(periodicReviewProvider);
+      expect(state.somedayRoutings[0], RoutingKind.done);
+      expect(state.somedayNav.isComplete, isTrue);
+    });
+  });
 }

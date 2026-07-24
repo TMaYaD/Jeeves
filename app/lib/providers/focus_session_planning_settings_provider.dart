@@ -15,6 +15,8 @@ const _kNotificationEnabled =
 const _kBannerEnabled = 'focus_session_planning_settings_banner_enabled';
 const _kDefaultSnoozeDuration =
     'focus_session_planning_settings_default_snooze_duration';
+const _kDefaultTimeEstimate =
+    'focus_session_planning_settings_default_time_estimate';
 
 final focusSessionPlanningSettingsProvider =
     NotifierProvider<FocusSessionPlanningSettingsNotifier,
@@ -46,6 +48,7 @@ class FocusSessionPlanningSettingsNotifier
       notificationEnabled: prefs.get<bool>(_kNotificationEnabled) ?? true,
       bannerEnabled: prefs.get<bool>(_kBannerEnabled) ?? true,
       defaultSnoozeDuration: prefs.get<int>(_kDefaultSnoozeDuration) ?? 60,
+      defaultTimeEstimate: prefs.get<int>(_kDefaultTimeEstimate) ?? 10,
     );
   }
 
@@ -64,6 +67,10 @@ class FocusSessionPlanningSettingsNotifier
 
   Future<void> setDefaultSnoozeDuration(int minutes) async {
     await syncedPrefs(ref).set(_kDefaultSnoozeDuration, minutes);
+  }
+
+  Future<void> setDefaultTimeEstimate(int minutes) async {
+    await syncedPrefs(ref).set(_kDefaultTimeEstimate, minutes);
   }
 
   Future<void> _rescheduleFocusSessionPlanningReminder() async {

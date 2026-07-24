@@ -1,9 +1,9 @@
 /// Providers and state management for the focus session planning ritual (Issue #82).
 ///
 /// Architecture:
-/// - [focusSessionPlanningCompletionNotifier] — a [ValueNotifier] read by
-///   [FocusScreen] to gate the "Begin Evening Shutdown" entry on the
-///   home schedule once today's planning has been completed.
+/// - The Now screen derives "planning done" from persistent session data (an
+///   open [FocusSession] exists via [activeSessionProvider]), not an in-memory
+///   flag — so it survives process death (issue #460, ADR-0020).
 /// - [FocusSessionPlanningNotifier] — manages step navigation and task selection
 ///   state; delegates database writes to [FocusSessionDao] and [TodoDao].
 /// - Task selection during the ritual is accumulated in-memory
@@ -16,7 +16,6 @@
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -51,17 +50,28 @@ const _kNotificationSnoozedUntilKey = 'planning_notification_snoozed_until';
 const int _maxStepIndex = 5;
 
 // ---------------------------------------------------------------------------
-// Router refresh notifier
+// Sequenced Shutdown → Daily Planning intent (issue #460, ADR-0020, ruling 4)
 // ---------------------------------------------------------------------------
 
-/// Tracks whether the focus session planning ritual has been completed today.
+/// Carries the *and-then-plan* intent through the blocked-start sequenced
+/// entry. Set true by the Daily Planning blocked-start interstitial before it
+/// routes the user to Evening Shutdown; read and cleared by the Close Day
+/// step, which — instead of exiting the app — routes into Daily Planning once
+/// the session has been reviewed and closed.
 ///
-/// Read by [FocusScreen] to gate the "Begin Evening Shutdown" entry on the
-/// home schedule. In-memory only — [startDay] sets it true; cold start
-/// resets it to false (the banner's own visibility is now driven by the
-/// Nudge module's persisted dismiss state and the active-session
-/// world-state precondition on the Daily Planning Cadence Trigger).
-final focusSessionPlanningCompletionNotifier = ValueNotifier<bool>(false);
+/// This is a user-initiated action spread across two ceremonies, not a
+/// route-level auto-launch (REQUIREMENTS.md § Ceremonies).
+final shutdownThenPlanProvider =
+    NotifierProvider<ShutdownThenPlanNotifier, bool>(
+  ShutdownThenPlanNotifier.new,
+);
+
+class ShutdownThenPlanNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void set(bool value) => state = value;
+}
 
 // ---------------------------------------------------------------------------
 // Notification suppression helpers (top-level so both the settings provider
@@ -147,6 +157,15 @@ final activeSessionProvider = StreamProvider<FocusSession?>((ref) {
 final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   return db.focusSessionDao.watchActiveSessionTasks();
+});
+
+/// Stream of the tasks carried over ('rollover' disposition) from the most
+/// recently closed session. Drives the Now screen's "Carried over from last
+/// session" section, shown only while no session is open (issue #460).
+final lastClosedSessionRolloverTasksProvider =
+    StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.focusSessionDao.watchLastClosedSessionRolloverTasks();
 });
 
 // ---------------------------------------------------------------------------
@@ -663,15 +682,34 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Task mutations (Step 2 — Next Actions review) -------------------------
 
-  /// Adds [id] to the pending day's plan (in-memory; committed by [startDay]).
-  void selectTask(String id) {
-    if (state.pendingSelectedTaskIds.contains(id)) return;
+  /// Adds [ids] to the pending day's plan in a single state publish
+  /// (in-memory; committed by [startDay]).
+  ///
+  /// Ids already selected — and any duplicates within [ids] — are skipped, so
+  /// the pending list never gains a repeat. Each newly added id is removed from
+  /// the reviewed/skipped list (picking up a task un-skips it). If nothing new
+  /// is added the state is left untouched (no rebuild), preserving the
+  /// early-return semantics [selectTask] relied on.
+  void selectTasks(List<String> ids) {
+    final existing = state.pendingSelectedTaskIds.toSet();
+    final toAdd = <String>[];
+    for (final id in ids) {
+      // Set.add returns false when the id is already present, covering both
+      // already-selected ids and repeats within [ids].
+      if (existing.add(id)) toAdd.add(id);
+    }
+    if (toAdd.isEmpty) return;
+    final addedSet = toAdd.toSet();
     state = state.copyWith(
-      pendingSelectedTaskIds: [...state.pendingSelectedTaskIds, id],
-      // Remove from skipped list if the user previously skipped this task.
-      reviewedTaskIds: state.reviewedTaskIds.where((t) => t != id).toList(),
+      pendingSelectedTaskIds: [...state.pendingSelectedTaskIds, ...toAdd],
+      // Remove any newly selected task from the skipped list.
+      reviewedTaskIds:
+          state.reviewedTaskIds.where((t) => !addedSet.contains(t)).toList(),
     );
   }
+
+  /// Adds [id] to the pending day's plan (in-memory; committed by [startDay]).
+  void selectTask(String id) => selectTasks([id]);
 
   /// Records [id] as skipped (reviewed but not selected).
   void skipTask(String id) {
@@ -874,14 +912,22 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Ritual lifecycle ------------------------------------------------------
 
-  /// Opens a new [FocusSession] with the pending task list and marks the
-  /// ritual as complete for today.
+  /// Opens a new [FocusSession] with the pending task list.
+  ///
+  /// Guards the single-open-session invariant (ADR-0020): if a session is
+  /// already open, the [FocusSessionDao.openSession] throw is the backstop —
+  /// the UI gates on this by routing the user through Evening Shutdown first.
+  /// On success, today's Daily Planning notification is now moot (a qualifying
+  /// session exists), so its pending one-off fire is cancelled.
   Future<void> startDay() async {
     await _db.focusSessionDao.openSession(
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
     );
-    focusSessionPlanningCompletionNotifier.value = true;
+    // A qualifying session now exists — today's DPR fire is moot. Best-effort.
+    await ref
+        .read(notificationServiceProvider)
+        .skipTodayRitualReminder(RitualId.dailyPlanning);
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,
       availableMinutes: state.availableMinutes,
@@ -889,16 +935,18 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
   }
 
-  /// Clears completion state and returns the user to the planning ritual.
+  /// Resets the planning ritual to a fresh performance.
   ///
   /// Task selections are **cleared** so the user can re-plan from scratch.
   /// Energy level and available time are preserved. Inbox snapshot resets so
-  /// it is re-loaded fresh on the next visit to Step 0.
+  /// it is re-loaded fresh on the next visit to Step 0. Called on the sequenced
+  /// Shutdown → Planning path (a completed performance), not on a direct
+  /// "Plan the Day" with no session (which resumes the in-memory draft as
+  /// today — issue #180 behaviour preserved).
   Future<void> reEnterPlanning() async {
     final preservedEnergy = state.energyLevel;
     final preservedMinutes = state.availableMinutes;
     final preservedTimeSet = state.availableTimeSet;
-    focusSessionPlanningCompletionNotifier.value = false;
     state = FocusSessionPlanningState(
       currentStep: 0,
       availableMinutes: preservedMinutes,

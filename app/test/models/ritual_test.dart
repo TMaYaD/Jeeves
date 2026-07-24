@@ -3,15 +3,18 @@ import 'package:jeeves/models/ritual.dart';
 
 void main() {
   group('RitualPriority', () {
-    test('ritualsByPriority ranks weeklyReview > dailyPlanning > eveningShutdown, '
-        'sorted descending', () {
+    test(
+        'ritualsByPriority ranks weeklyReview > eveningShutdown > '
+        'dailyPlanning, sorted descending', () {
+      // Evening Shutdown outranks Daily Planning: "Shutdown wins" while a
+      // session is open (ADR-0020).
       expect(
         RitualId.weeklyReview.priority,
-        greaterThan(RitualId.dailyPlanning.priority),
+        greaterThan(RitualId.eveningShutdown.priority),
       );
       expect(
-        RitualId.dailyPlanning.priority,
-        greaterThan(RitualId.eveningShutdown.priority),
+        RitualId.eveningShutdown.priority,
+        greaterThan(RitualId.dailyPlanning.priority),
       );
       // The derived list reflects that ranking, sorted descending (strict
       // ordering also proves the priorities are all distinct).

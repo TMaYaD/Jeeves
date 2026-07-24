@@ -30,7 +30,15 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   FocusSessionDao(super.db);
 
   /// Opens a new planning session for [userId] with [taskIds] as the day's
-  /// task list. Closes any previously open session first.
+  /// task list.
+  ///
+  /// A FocusSession changes lifecycle state only by explicit user action:
+  /// there is no implicit close of a still-open prior session (issue #460,
+  /// ADR-0020). If a session is already open, this throws [StateError] — the
+  /// caller must have the user close it via Evening Shutdown first. This throw
+  /// is the **sole** enforcement of the single-open-session invariant: the
+  /// production tables are PowerSync views, which cannot carry a partial unique
+  /// constraint on `ended_at IS NULL`, so no schema-level guard is possible.
   ///
   /// Returns the new session's id. Runs atomically in a transaction.
   ///
@@ -44,20 +52,27 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     final newId = uuid.v4();
 
     await transaction(() async {
-      // Close any open session (and its open time log).
-      final existing = await (select(focusSessions)
-            ..where((s) => s.endedAt.isNull()))
-          .getSingleOrNull();
+      // Single-open-session invariant (ADR-0020): never auto-close a prior
+      // session — that would silently destroy it without recording Review
+      // dispositions. Refuse to open a second session; the UI gates on this by
+      // routing the user through Evening Shutdown first.
+      //
+      // Fetch at most one open row rather than `getSingleOrNull()`: because the
+      // production tables are PowerSync views with no partial unique constraint
+      // (see above), a sync conflict can leave more than one session open, and
+      // `getSingleOrNull()` would then throw Drift's opaque "Too many elements"
+      // error instead of the ADR-specific guidance below.
+      final openRows = await (select(focusSessions)
+            ..where((s) => s.endedAt.isNull())
+            ..limit(1))
+          .get();
+      final existing = openRows.isEmpty ? null : openRows.first;
       if (existing != null) {
-        // Close open time log before closing session.
-        await (update(timeLogs)
-              ..where((t) =>
-                  t.endedAt.isNull() &
-                  t.focusSessionId.equals(existing.id)))
-            .write(TimeLogsCompanion(endedAt: Value(ts)));
-        await (update(focusSessions)
-              ..where((s) => s.id.equals(existing.id)))
-            .write(FocusSessionsCompanion(endedAt: Value(ts)));
+        throw StateError(
+          'A FocusSession (${existing.id}) is already open. Close it via '
+          'Evening Shutdown before opening a new one — sessions never '
+          'auto-close (ADR-0020).',
+        );
       }
 
       // Insert the new open session.
@@ -170,6 +185,45 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   Future<FocusSession?> getActiveSession() =>
       (select(focusSessions)..where((s) => s.endedAt.isNull()))
           .getSingleOrNull();
+
+  /// Stream of whether a session qualifies as belonging to the current
+  /// planning period — i.e. one exists whose `started_at >= [esAnchor]`, the
+  /// most recent Evening Shutdown anchor before now (issue #460; ADR-0020).
+  ///
+  /// Day attribution is ES-anchor-based, never calendar midnight: a session
+  /// belongs to the planning period opened by the most recent Evening Shutdown
+  /// anchor before its start. `ended_at` plays no part — a session started
+  /// after the last ES anchor qualifies whether it is still open or already
+  /// closed (a plan performed at 07:30 is after *yesterday's* ES anchor, so it
+  /// counts as today's). A session open since *before* the last ES anchor
+  /// belongs to the previous period and does not qualify — the Daily Planning
+  /// nudge re-arms for it while Evening Shutdown wins.
+  ///
+  /// UTC-ISO string comparison, consistent with the other DAO queries: stored
+  /// `started_at` values are UTC ISO-8601, which sort chronologically as text.
+  Stream<bool> watchQualifyingSessionExists(DateTime esAnchor) {
+    final anchorIso = esAnchor.toUtc().toIso8601String();
+    return customSelect(
+      'SELECT EXISTS('
+      '  SELECT 1 FROM focus_sessions WHERE started_at >= ?'
+      ') AS qualifying',
+      variables: [Variable<String>(anchorIso)],
+      readsFrom: {focusSessions},
+    ).watch().map((rows) => rows.first.read<int>('qualifying') == 1);
+  }
+
+  /// One-shot sibling of [watchQualifyingSessionExists].
+  Future<bool> qualifyingSessionExists(DateTime esAnchor) async {
+    final anchorIso = esAnchor.toUtc().toIso8601String();
+    final row = await customSelect(
+      'SELECT EXISTS('
+      '  SELECT 1 FROM focus_sessions WHERE started_at >= ?'
+      ') AS qualifying',
+      variables: [Variable<String>(anchorIso)],
+      readsFrom: {focusSessions},
+    ).getSingle();
+    return row.read<int>('qualifying') == 1;
+  }
 
   /// Stream of [Todo] rows that are members of [sessionId], ordered by position.
   Stream<List<Todo>> watchSessionTasks(String sessionId) {
@@ -356,25 +410,30 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   ///
   /// Returns an empty list when no closed session exists or none has rollover
   /// tasks.
-  Future<List<String>> getLastClosedSessionRolloverTaskIds() async {
-    final rows = await customSelect(
+  /// SQL selecting the rollover task ids of the most recently closed session
+  /// across both Disposition homes (ADR-0016): planned Outcomes carried over in
+  /// [focus_session_tasks] and off-Plan engaged Outcomes in
+  /// [focus_session_dispositions]. The UNION de-duplicates. Takes two positional
+  /// parameters, both the `'rollover'` disposition literal. Shared by
+  /// [getLastClosedSessionRolloverTaskIds] and
+  /// [watchLastClosedSessionRolloverTasks] so the disposition-homes rule lives
+  /// in one place.
+  static const String _lastClosedRolloverTaskIdsSql =
       'SELECT fst.task_id FROM focus_session_tasks fst '
       'JOIN focus_sessions fs ON fs.id = fst.focus_session_id '
-      'WHERE fs.ended_at IS NOT NULL '
-      'AND fst.disposition = ? '
+      'WHERE fs.ended_at IS NOT NULL AND fst.disposition = ? '
       'AND fs.ended_at = ('
-      '  SELECT MAX(ended_at) FROM focus_sessions '
-      '  WHERE ended_at IS NOT NULL'
-      ') '
+      '  SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL) '
       'UNION '
       'SELECT fsd.task_id FROM focus_session_dispositions fsd '
       'JOIN focus_sessions fs ON fs.id = fsd.focus_session_id '
-      'WHERE fs.ended_at IS NOT NULL '
-      'AND fsd.disposition = ? '
+      'WHERE fs.ended_at IS NOT NULL AND fsd.disposition = ? '
       'AND fs.ended_at = ('
-      '  SELECT MAX(ended_at) FROM focus_sessions '
-      '  WHERE ended_at IS NOT NULL'
-      ')',
+      '  SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL)';
+
+  Future<List<String>> getLastClosedSessionRolloverTaskIds() async {
+    final rows = await customSelect(
+      _lastClosedRolloverTaskIdsSql,
       variables: [
         Variable('rollover'),
         Variable('rollover'),
@@ -382,6 +441,26 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       readsFrom: {focusSessions, focusSessionTasks, focusSessionDispositions},
     ).get();
     return rows.map((r) => r.read<String>('task_id')).toList();
+  }
+
+  /// Reactive stream of the [Todo] rows carried over ('rollover' disposition)
+  /// from the most recently closed session — the Todo-row counterpart of
+  /// [getLastClosedSessionRolloverTaskIds], across both Disposition homes.
+  ///
+  /// Drives the Now screen's "Carried over from last session" section, which
+  /// shows only while no session is open. Re-emits when a session closes.
+  Stream<List<Todo>> watchLastClosedSessionRolloverTasks() {
+    return customSelect(
+      'SELECT t.* FROM todos t WHERE t.id IN '
+      '($_lastClosedRolloverTaskIdsSql)',
+      variables: [Variable('rollover'), Variable('rollover')],
+      readsFrom: {
+        focusSessions,
+        focusSessionTasks,
+        focusSessionDispositions,
+        todos,
+      },
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
   /// Stream of [Todo] rows in the currently open session.

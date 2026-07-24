@@ -88,6 +88,7 @@ class JeevesBackendConnector extends ps.PowerSyncBackendConnector {
   ///   - captures:            POST /captures/,            PATCH /captures/{id},            DELETE /captures/{id}
   ///   - capture_outcomes:    POST /capture_outcomes/,    PATCH /capture_outcomes/{id},    DELETE /capture_outcomes/{id}
   ///   - capture_tags:        POST /capture_tags/,                                         DELETE /capture_tags/{id}  (no mutable fields)
+  ///   - actions:             POST /actions/,             PATCH /actions/{id},             DELETE /actions/{id}
   ///
   /// Unknown tables must throw — otherwise `batch.complete()` would clear
   /// the local CRUD queue without ever talking to the server, silently
@@ -127,6 +128,8 @@ class JeevesBackendConnector extends ps.PowerSyncBackendConnector {
             await _uploadCaptureOutcome(entry);
           case 'capture_tags':
             await _uploadCaptureTag(entry);
+          case 'actions':
+            await _uploadAction(entry);
           default:
             throw StateError(
               'JeevesBackendConnector: no upload handler for table '
@@ -360,6 +363,19 @@ class JeevesBackendConnector extends ps.PowerSyncBackendConnector {
         await _api.patch('/capture_outcomes/${entry.id}', entry.opData ?? {});
       case ps.UpdateType.delete:
         await _api.delete('/capture_outcomes/${entry.id}');
+    }
+  }
+
+  Future<void> _uploadAction(ps.CrudEntry entry) async {
+    switch (entry.op) {
+      case ps.UpdateType.put:
+        final body = Map<String, dynamic>.from(entry.opData ?? {});
+        body['id'] = entry.id;
+        await _api.post('/actions/', body);
+      case ps.UpdateType.patch:
+        await _api.patch('/actions/${entry.id}', entry.opData ?? {});
+      case ps.UpdateType.delete:
+        await _api.delete('/actions/${entry.id}');
     }
   }
 
