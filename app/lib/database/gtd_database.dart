@@ -486,6 +486,10 @@ class GtdDatabase extends _$GtdDatabase {
             // synthetic partial-schema upgrade path (older migration unit tests)
             // may not. Skip the backfill rather than fail on a missing column;
             // if the cursor columns are absent there is nothing to backfill.
+            // The skip is block-scoped, NOT a bare `return`: this is the last
+            // `from < N` block today, but a future schema bump appends its own
+            // block right after, and `return` would exit the whole onUpgrade
+            // closure and silently skip every later migration.
             final todosCols = await customSelect('PRAGMA table_info(todos)').get();
             final todosColNames =
                 todosCols.map((r) => r.read<String>('name')).toSet();
@@ -498,37 +502,36 @@ class GtdDatabase extends _$GtdDatabase {
               'created_at',
               'user_id',
             };
-            if (!requiredCols.every(todosColNames.contains)) {
-              return;
-            }
-            final qualifying = await customSelect(
-              "SELECT id, next_action_text, energy_level, time_estimate, "
-              "last_clarified_at, created_at, user_id FROM todos "
-              "WHERE next_action_text IS NOT NULL "
-              "AND TRIM(next_action_text) != ''",
-            ).get();
-            for (final row in qualifying) {
-              final todoId = row.read<String>('id');
-              final actionId = backfillActionIdFor(todoId);
-              await customStatement(
-                "INSERT INTO actions "
-                "(id, outcome_id, user_id, text, role, position, energy_level, "
-                " time_estimate, created_at, updated_at, done_at) "
-                "SELECT ?, ?, ?, ?, 'current', NULL, ?, ?, COALESCE(?, ?), "
-                "       NULL, NULL "
-                "WHERE NOT EXISTS (SELECT 1 FROM actions WHERE id = ?)",
-                [
-                  actionId,
-                  todoId,
-                  row.read<String>('user_id'),
-                  row.read<String>('next_action_text'),
-                  row.read<String?>('energy_level'),
-                  row.read<int?>('time_estimate'),
-                  row.read<String?>('last_clarified_at'),
-                  row.read<String>('created_at'),
-                  actionId,
-                ],
-              );
+            if (requiredCols.every(todosColNames.contains)) {
+              final qualifying = await customSelect(
+                "SELECT id, next_action_text, energy_level, time_estimate, "
+                "last_clarified_at, created_at, user_id FROM todos "
+                "WHERE next_action_text IS NOT NULL "
+                "AND TRIM(next_action_text) != ''",
+              ).get();
+              for (final row in qualifying) {
+                final todoId = row.read<String>('id');
+                final actionId = backfillActionIdFor(todoId);
+                await customStatement(
+                  "INSERT INTO actions "
+                  "(id, outcome_id, user_id, text, role, position, energy_level, "
+                  " time_estimate, created_at, updated_at, done_at) "
+                  "SELECT ?, ?, ?, ?, 'current', NULL, ?, ?, COALESCE(?, ?), "
+                  "       NULL, NULL "
+                  "WHERE NOT EXISTS (SELECT 1 FROM actions WHERE id = ?)",
+                  [
+                    actionId,
+                    todoId,
+                    row.read<String>('user_id'),
+                    row.read<String>('next_action_text'),
+                    row.read<String?>('energy_level'),
+                    row.read<int?>('time_estimate'),
+                    row.read<String?>('last_clarified_at'),
+                    row.read<String>('created_at'),
+                    actionId,
+                  ],
+                );
+              }
             }
           }
         },

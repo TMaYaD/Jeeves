@@ -9,11 +9,14 @@ any read/write path depends on it (epic #470).  This migration is **additive**
 and, unlike the Capture split (0026), fully re-runnable per ADR-0012 — nothing
 is moved or deleted, so drift-recovery re-runs are safe:
 
-1. Schema (guarded): create ``actions`` with ``ix_actions_user_id`` /
-   ``ix_actions_outcome_id`` when it does not already exist (``inspector.
-   has_table`` — 0024/ADR-0012 discipline).  The ``ALTER PUBLICATION`` step gets
-   its **own** guard against ``pg_publication_tables`` rather than piggybacking
-   on ``has_table``, so a drifted store where the table exists but was never
+1. Schema (guarded): create ``actions`` when it does not already exist
+   (``inspector.has_table`` — 0024/ADR-0012 discipline).  ``ix_actions_user_id``
+   / ``ix_actions_outcome_id`` are then checked **independently** of the table
+   guard (against ``get_indexes``), so a store where the table exists but an
+   index was never created — a partially-applied forward run — still gets the
+   missing index on re-run.  The ``ALTER PUBLICATION`` step likewise gets its
+   **own** guard against ``pg_publication_tables`` rather than piggybacking on
+   ``has_table``, so a drifted store where the table exists but was never
    published still gets published on re-run.
 
 2. Backfill (data, idempotent): one ``current`` Action for every Outcome whose
@@ -107,7 +110,16 @@ def upgrade() -> None:
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("done_at", sa.DateTime(timezone=True), nullable=True),
         )
+
+    # Indexes are checked independently of the table guard: a drifted store
+    # where `actions` exists but an index was never created (a partially-applied
+    # forward run) still gets repaired on re-run, honouring the migration's
+    # re-runnable recovery contract (ADR-0012). Each is created only when absent
+    # so a clean re-run is a no-op.
+    existing_indexes = {index["name"] for index in sa.inspect(bind).get_indexes("actions")}
+    if "ix_actions_user_id" not in existing_indexes:
         op.create_index("ix_actions_user_id", "actions", ["user_id"])
+    if "ix_actions_outcome_id" not in existing_indexes:
         op.create_index("ix_actions_outcome_id", "actions", ["outcome_id"])
 
     # ── 2. Replicate to clients (Postgres only; independent publication guard) ─

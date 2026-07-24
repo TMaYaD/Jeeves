@@ -154,8 +154,13 @@ class Action(Base):
     Per ADR-0018 there is **no** ``superseded_at`` column and **no**
     ``superseded_by_id``: a superseded row's timestamp is read from
     ``updated_at`` and it carries no successor link (the Outcome's history is
-    the time-ordered chain of terminated Action rows).  ``role`` has no Postgres
-    CHECK — parity with ``todos.intent`` — the Drift column carries the CHECK.
+    the time-ordered chain of terminated Action rows).  ``role`` deliberately
+    carries **no** Postgres CHECK (unlike ``todos.intent``, which does): a
+    bad-``role`` row replayed through the connector would raise a constraint
+    violation → 500 → infinite retry, dead-lettering a legitimate replay — the
+    same no-4xx/no-500 rationale that keeps the partial unique index off the
+    table (ADR-0015 / action_routes.py docstring).  Enum validity rests on the
+    Pydantic schema; the Drift column carries a client-side CHECK.
 
     This story is pure plumbing: nothing in-app reads or writes ``actions``
     rows outside the migration/backfill.  A ``current`` Action is backfilled
@@ -177,8 +182,10 @@ class Action(Base):
     # Mirrors todos.next_action_text storage (Text; the 500-char cap is
     # client-side only, like the cursor).
     text: Mapped[str] = mapped_column(Text, nullable=False)
-    # planned | current | done | superseded (no Postgres CHECK — the Drift
-    # column carries it, parity with todos.intent).
+    # planned | current | done | superseded.  No Postgres CHECK by design: a bad
+    # role replayed through the connector would 500 → infinite retry (no-4xx/
+    # no-500 policy, action_routes.py docstring); the Drift column carries the
+    # CHECK, and the Pydantic schema validates on the write path.
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     # Planned-queue order; NULL for non-planned roles.
     position: Mapped[int | None] = mapped_column(Integer, nullable=True)

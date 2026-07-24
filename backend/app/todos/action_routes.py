@@ -27,6 +27,7 @@ enforced in later stories, not by the route or a constraint.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -70,22 +71,51 @@ async def create_action(
     if body.id is not None:
         existing = await db.get(Action, body.id)
         if existing:
-            if existing.user_id != current_user.id:
-                raise HTTPException(status_code=409, detail="Action id already exists")
-            for field, value in data.items():
-                setattr(existing, field, value)
-            await db.commit()
-            await db.refresh(existing)
-            return existing
+            return await _converge_onto(db, existing, data, current_user)
     action = Action(
         **({"id": body.id} if body.id is not None else {}),
         user_id=current_user.id,
         **data,
     )
     db.add(action)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Concurrent same-id create: two devices replaying the same
+        # deterministic backfill id (ADR-0019) both read no row, then race the
+        # insert.  The loser hits the primary-key violation here.  Rather than
+        # let it surface as a 500 (which PowerSync would retry — self-healing,
+        # but a transient 500 the no-4xx/no-500 replay policy keeps off this
+        # path, same reason FK checks 404 at route level and the partial unique
+        # index is omitted), roll back, re-read the winner's row, and converge
+        # onto it exactly as the read-hit path above would have.
+        await db.rollback()
+        if body.id is None:
+            raise
+        existing = await db.get(Action, body.id)
+        if existing is None:
+            raise
+        return await _converge_onto(db, existing, data, current_user)
     await db.refresh(action)
     return action
+
+
+async def _converge_onto(
+    db: AsyncSession, existing: Action, data: dict, current_user: User
+) -> Action:
+    """Apply the replayed client-owned fields onto an existing row (ADR-0015).
+
+    A cross-user id collision is a genuine anomaly, not a replay, and stays a
+    409.  Shared by the read-hit path and the concurrent-insert recovery path so
+    both converge identically.
+    """
+    if existing.user_id != current_user.id:
+        raise HTTPException(status_code=409, detail="Action id already exists")
+    for field, value in data.items():
+        setattr(existing, field, value)
+    await db.commit()
+    await db.refresh(existing)
+    return existing
 
 
 @router.patch("/actions/{action_id}", response_model=ActionOut)

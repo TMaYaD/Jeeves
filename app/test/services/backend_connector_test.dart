@@ -508,6 +508,13 @@ void main() {
           'DELETE /actions/act-1',
         ],
       );
+      // The POST must forward the CrudEntry id so a replayed create converges
+      // on the server's deterministic backfill row (ADR-0015/0019) — this test
+      // would otherwise pass if _uploadAction stopped sending entry.id.
+      final postData = adapter.requests.first.data;
+      final postBody =
+          postData is String ? jsonDecode(postData) as Map : postData as Map;
+      expect(postBody['id'], 'act-1');
       expect(await deadLetters(), isEmpty,
           reason: 'a routed table must not dead-letter on the default path');
     });

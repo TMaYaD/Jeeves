@@ -161,6 +161,30 @@ def test_backfill_rerun_is_a_noop() -> None:
     assert len(_actions(engine)) == 1
 
 
+def test_rerun_repairs_missing_indexes() -> None:
+    engine = _engine_with_todos()
+    _seed_todo(engine, id="t1", next_action_text="x", created_at="c", user_id="u1")
+    _apply_0028(engine)
+    # Simulate a partially-applied forward run: the table exists but its indexes
+    # were never created (or drifted away). Because the index creation is guarded
+    # independently of has_table, a re-run must repair both — the migration's
+    # re-runnable recovery contract (ADR-0012).
+    with engine.begin() as conn:
+        conn.execute(sa.text("DROP INDEX ix_actions_user_id"))
+        conn.execute(sa.text("DROP INDEX ix_actions_outcome_id"))
+    dropped = {ix["name"] for ix in sa.inspect(engine).get_indexes("actions")}
+    assert "ix_actions_user_id" not in dropped
+    assert "ix_actions_outcome_id" not in dropped
+
+    _apply_0028(engine)
+
+    repaired = {ix["name"] for ix in sa.inspect(engine).get_indexes("actions")}
+    assert "ix_actions_user_id" in repaired
+    assert "ix_actions_outcome_id" in repaired
+    # Repair is index-only: it must not duplicate the backfilled row.
+    assert len(_actions(engine)) == 1
+
+
 def test_backfill_text_copied_verbatim_no_trim() -> None:
     engine = _engine_with_todos()
     _seed_todo(engine, id="t1", next_action_text="  keep spaces  ", created_at="c", user_id="u1")
