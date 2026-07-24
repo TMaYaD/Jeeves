@@ -1472,5 +1472,44 @@ void main() {
         contains('X'),
       );
     });
+
+    test(
+        'overlapping ensureRolloverPreload calls pre-select each rollover '
+        'exactly once', () async {
+      await insertTodo('A');
+      final sid = await db.focusSessionDao.openSession(
+        userId: 'local',
+        taskIds: ['A'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sid,
+        dispositions: {'A': 'rollover'},
+        now: DateTime(2026, 5, 1, 17, 0),
+      );
+
+      // The real overlap: reading the notifier schedules build()'s microtask
+      // preload, and the planning screen's mount hook fires its own
+      // ensureRolloverPreload() without awaiting. Fire both explicit calls
+      // unawaited so all three interleave over the async DAO reads.
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      final first = notifier.ensureRolloverPreload();
+      final second = notifier.ensureRolloverPreload();
+      await Future.wait([first, second]);
+      // Let build()'s microtask preload land too.
+      await _settleUntil(() => container
+          .read(focusSessionPlanningProvider)
+          .pendingSelectedTaskIds
+          .contains('A'));
+
+      expect(
+        container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+        ['A'],
+        reason:
+            'the merge reads pendingSelectedTaskIds and commits in the same '
+            'synchronous run after the last await, so overlapping preloads '
+            'cannot double-insert a rollover id.',
+      );
+    });
   });
 }
