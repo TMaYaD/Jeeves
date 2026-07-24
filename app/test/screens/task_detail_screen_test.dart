@@ -21,7 +21,6 @@ import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../helpers/app_title_bar_test_helpers.dart';
 import '../test_helpers.dart';
 
 const _userId = 'local';
@@ -278,8 +277,14 @@ void main() {
       final (widget, router) = _buildScreen(db, 'engage0', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'engage0');
 
-      final action = await findBarAction(
-          tester, const Key('task_detail_start_focus'));
+      // This test asserts the *in-bar* rendering specifically — Start focus was
+      // demoted from a labelled FilledButton to an icon that stays in the bar —
+      // so it scopes the finder to the AppTitleBar directly rather than going
+      // through the overflow helper, which would also match an overflowed copy.
+      final action = find.descendant(
+        of: find.byType(AppTitleBar),
+        matching: find.byKey(const Key('task_detail_start_focus')),
+      );
       final button = tester.widget<IconButton>(action);
       expect(button.tooltip, 'Start focus',
           reason: 'the label survives as the tooltip');

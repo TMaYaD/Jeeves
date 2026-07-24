@@ -190,13 +190,15 @@ slot — applied to a terminal verdict rather than to forward progress.
 
 ## App title bar
 
-One shared bar carries every screen's chrome (`AppTitleBar`,
+One shared bar is designed to carry every screen's chrome (`AppTitleBar`,
 `app/lib/widgets/app_title_bar/`; ruled in [ADR-0021](adr/0021-shared-app-title-bar.md)).
 It is a `PreferredSizeWidget` mounted in `Scaffold.appBar`, configured
 **entirely by constructor parameters passed top-down** — never by a provider or
 `content_for`-style slot written into from below, which during a route
-transition would race between the outgoing and incoming screen. Task detail is
-the reference adoption.
+transition would race between the outgoing and incoming screen. Adoption is
+staged: the component ships with task detail as its single reference adoption,
+and the remaining screens migrate onto it in a follow-up. Until that migration
+lands the two chrome styles coexist.
 
 ### Anatomy
 
@@ -243,16 +245,17 @@ measuring creates layout feedback loops and per-device surprises.
 | ≥ 1024 px (desktop) | 5 |
 
 When the page actions plus the pinned action fit the budget, everything renders
-and there is **no ⋮**. When they do not, the ⋮ claims a slot too, so
-`budget − 2` page actions stay in the bar and the rest — always the
-lowest-priority tail — move into the ⋮ menu in priority order. On a phone: two
+and there is **no ⋮**. When they do not, the ⋮ claims a slot too, and how many
+page actions stay in the bar depends on whether the screen pins a capture
+action: with a pinned action the bar holds `budget − 2` page actions (one slot
+each to the pinned action and the ⋮); without one it holds `budget − 1` (only
+the ⋮ costs a slot). Either way the rest — always the lowest-priority tail —
+move into the ⋮ menu in priority order. On a phone with a pinned capture: two
 actions render `[Action 2][Action 1][Capture]`; three render
 `[Action 1][Capture][⋮ → Action 2, Action 3]`.
 
 Because placement moves with the breakpoint, tests never `find.byKey` a bar
 action directly — see the finder helper in [TESTING.md](./TESTING.md).
-
-### Roundedness
 
 Bar surfaces follow the canonical 2/4/6 scale (§ Roundedness) — the badge and
 any chip in the bar are 4px, never pills.
