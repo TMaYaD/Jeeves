@@ -10,6 +10,11 @@ GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 const _userId = 'test-user';
 
+/// Reads the unclarified `todos` rows — the pre-split Inbox projection these
+/// migration tests seed and assert against (was `InboxDao.watchInbox`).
+Future<List<Todo>> _inboxRows(GtdDatabase db) =>
+    (db.select(db.todos)..where((t) => t.clarified.equals(false))).get();
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -20,15 +25,16 @@ void main() {
 
       // Insert without specifying the new columns (they use DB defaults).
       final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
+      await db.into(db.todos).insert(TodosCompanion(
         id: const Value('a'),
         title: const Value('Test task'),
+        clarified: const Value(false),
         userId: Value(_userId),
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
 
-      final items = await db.inboxDao.watchInbox().first;
+      final items = await _inboxRows(db);
       expect(items.length, 1);
       expect(items.first.timeSpentMinutes, 0);
     });
@@ -54,7 +60,7 @@ void main() {
         ],
       );
 
-      final items = await db.inboxDao.watchInbox().first;
+      final items = await _inboxRows(db);
       expect(items.length, 1);
       expect(items.first.title, 'Legacy task');
       expect(items.first.timeSpentMinutes, 0);
@@ -211,7 +217,7 @@ void main() {
       );
 
       // Legacy data must survive and new columns must carry correct defaults.
-      final items = await db.inboxDao.watchInbox().first;
+      final items = await _inboxRows(db);
       expect(items.length, 1);
       expect(items.first.title, 'Legacy v1 task');
       expect(items.first.timeSpentMinutes, 0);
