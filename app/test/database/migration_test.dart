@@ -247,11 +247,11 @@ void main() {
       expect(rows.first.read<String>('title'), 'Waiting task');
     });
 
-    test('v19→v20 migration: next_action_text and last_next_action_completion_at added', () async {
+    test('v20→v21 migration: next_action_text and last_next_action_completion_at added', () async {
       final db = _openInMemory();
       addTearDown(db.close);
 
-      // Simulate a v19 database by recreating todos without the v20 columns.
+      // Simulate a pre-v21 database by recreating todos without the v21 columns.
       await db.customStatement('DROP TABLE IF EXISTS todos');
       await db.customStatement('''
         CREATE TABLE "todos" (
@@ -264,7 +264,7 @@ void main() {
         )
       ''');
 
-      // Seed a row at the v19 state.
+      // Seed a row at the pre-v21 state.
       final now = DateTime.now();
       await db.customInsert(
         'INSERT INTO todos (id, title, clarified, user_id, created_at) '
@@ -278,9 +278,9 @@ void main() {
         ],
       );
 
-      // Drive the v20 migration.
+      // Drive the v21 migration.
       final m = db.createMigrator();
-      await db.migration.onUpgrade(m, 19, 20);
+      await db.migration.onUpgrade(m, 20, 21);
 
       // Both new columns must exist.
       final cols = await db.customSelect('PRAGMA table_info(todos)').get();
@@ -524,19 +524,6 @@ void main() {
           [value],
         );
       }
-    });
-
-    test('v20→v21 migration: next_action_text and last_next_action_completion_at added to todos',
-        () async {
-      final db = _openInMemory();
-      addTearDown(db.close);
-
-      final m = db.createMigrator();
-      await db.migration.onUpgrade(m, 20, 21);
-
-      final cols = await db.customSelect('PRAGMA table_info(todos)').get();
-      final colNames = cols.map((r) => r.read<String>('name')).toSet();
-      expect(colNames, containsAll(['next_action_text', 'last_next_action_completion_at']));
     });
 
     test(
