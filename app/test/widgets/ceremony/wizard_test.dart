@@ -268,17 +268,19 @@ void main() {
     });
 
     group('Back button routing', () {
-      testWidgets(
-          'when nav.canGoBack is true: tapping Back calls the previous callback',
+      // The footer only sees onBack: non-null renders a Back button that invokes
+      // the callback on tap; whether that callback maps to previous() or
+      // goToStep(currentStep - 1) is the caller's decision, not this widget's.
+      // The null-onBack (Back-absent) case is covered by WizardFooter's
+      // 'renders Back only when onBack is non-null' above.
+      testWidgets('tapping Back invokes the supplied onBack callback',
           (tester) async {
-        var previousCalls = 0;
-        var goToStepCalls = 0;
+        var backCalls = 0;
 
         await tester.pumpWidget(_wrap(ListItemFooter(
           ceremonyId: _ceremonyId,
           accentColor: _accent,
-          // onBack wired to previous() — canGoBack == true path
-          onBack: () => previousCalls++,
+          onBack: () => backCalls++,
           onSkip: () {},
           onNext: () {},
           hasMoreItems: false,
@@ -289,49 +291,7 @@ void main() {
         await tester.tap(find.byKey(_backKey));
         await tester.pumpAndSettle();
 
-        expect(previousCalls, 1);
-        expect(goToStepCalls, 0);
-      });
-
-      testWidgets(
-          'when nav.canGoBack is false and stepIndex > 0: tapping Back calls goToStep(currentStep - 1)',
-          (tester) async {
-        var goToStepCalls = 0;
-
-        await tester.pumpWidget(_wrap(ListItemFooter(
-          ceremonyId: _ceremonyId,
-          accentColor: _accent,
-          // onBack wired to goToStep(currentStep - 1) — canGoBack == false, stepIndex > 0 path
-          onBack: () => goToStepCalls++,
-          onSkip: () {},
-          onNext: () {},
-          hasMoreItems: false,
-        )));
-        await tester.pumpAndSettle();
-
-        expect(find.byKey(_backKey), findsOneWidget);
-        await tester.tap(find.byKey(_backKey));
-        await tester.pumpAndSettle();
-
-        expect(goToStepCalls, 1);
-      });
-
-      testWidgets(
-          'when nav.canGoBack is false and stepIndex == 0: Back button is absent',
-          (tester) async {
-        await tester.pumpWidget(_wrap(ListItemFooter(
-          ceremonyId: _ceremonyId,
-          accentColor: _accent,
-          // onBack is null — canGoBack == false, stepIndex == 0 path
-          onBack: null,
-          onSkip: () {},
-          onNext: () {},
-          hasMoreItems: false,
-        )));
-        await tester.pumpAndSettle();
-
-        // When onBack is null the Back button is not rendered at all.
-        expect(find.byKey(_backKey), findsNothing);
+        expect(backCalls, 1);
       });
     });
   });

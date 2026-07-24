@@ -25,6 +25,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 
+import '../../helpers/settle.dart';
 import '../../test_helpers.dart';
 
 const _skipKey = Key('planning_skip');
@@ -66,14 +67,9 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
 }
 
 /// The ritual loads its inbox snapshot through a drift watch-stream, which
-/// only emits inside the real async zone. Give it a turn under
-/// [WidgetTester.runAsync] before settling the frame.
-Future<void> _settle(WidgetTester tester) async {
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 200)),
-  );
-  await tester.pumpAndSettle();
-}
+/// only emits inside the real async zone. Drain that queue (no wall-clock
+/// sleep) before settling the frame — see [settleWithRealAsync].
+Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
 /// Unmounts the tree so streaming providers dispose before the end-of-test
 /// pending-timer check.

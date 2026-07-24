@@ -1,5 +1,5 @@
 /// On-device Nirvana import: converts parsed items and writes them to the
-/// local Drift database via [TagDao] and [InboxDao]/[TodoDao].
+/// local Drift database via [TagDao], [TodoDao] and [CaptureDao].
 ///
 /// The import is fully transactional at the local-DB level — a mid-file
 /// failure leaves the database unchanged.  Writes are batched for large

@@ -14,51 +14,6 @@ Widget _wrap(Widget child, {Brightness brightness = Brightness.light}) {
 }
 
 void main() {
-  group('JeevesLogo auto-variant selection', () {
-    testWidgets('size < 32 picks Signature SVG asset', (tester) async {
-      await tester.pumpWidget(_wrap(const JeevesLogo(size: 20)));
-      // The resolved variant is Signature; the _SvgMark asset path contains 'signature'
-      expect(find.byType(JeevesLogo), findsOneWidget);
-      // No assertion on internal SvgPicture path (private), but widget builds
-    });
-
-    testWidgets('size >= 32 picks Pointillist SVG asset', (tester) async {
-      await tester.pumpWidget(_wrap(const JeevesLogo(size: 64)));
-      expect(find.byType(JeevesLogo), findsOneWidget);
-    });
-
-    testWidgets('size == 32 picks Pointillist (threshold is exclusive below)', (tester) async {
-      await tester.pumpWidget(_wrap(const JeevesLogo(size: 32)));
-      expect(find.byType(JeevesLogo), findsOneWidget);
-    });
-  });
-
-  group('JeevesLogo onDark inference', () {
-    testWidgets('light Theme → onDark is false (no override)', (tester) async {
-      await tester.pumpWidget(_wrap(
-        const JeevesLogo(size: 64),
-        brightness: Brightness.light,
-      ));
-      expect(find.byType(JeevesLogo), findsOneWidget);
-    });
-
-    testWidgets('dark Theme → onDark is true (no override)', (tester) async {
-      await tester.pumpWidget(_wrap(
-        const JeevesLogo(size: 64),
-        brightness: Brightness.dark,
-      ));
-      expect(find.byType(JeevesLogo), findsOneWidget);
-    });
-
-    testWidgets('onDark: true overrides light Theme', (tester) async {
-      await tester.pumpWidget(_wrap(
-        const JeevesLogo(size: 64, onDark: true),
-        brightness: Brightness.light,
-      ));
-      expect(find.byType(JeevesLogo), findsOneWidget);
-    });
-  });
-
   group('JeevesLogo clear-space padding', () {
     testWidgets('padding equals 0.5 × size on each side', (tester) async {
       const markSize = 48.0;
@@ -99,23 +54,7 @@ void main() {
     });
   });
 
-  group('JeevesLogo appIcon variant', () {
-    testWidgets('appIcon: true renders without error', (tester) async {
-      await tester.pumpWidget(_wrap(const JeevesLogo(size: 64, appIcon: true)));
-      expect(find.byType(JeevesLogo), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
-  });
-
   group('JeevesLogo explicit variants', () {
-    testWidgets('explicit signature at size >= 32 still shows signature', (tester) async {
-      await tester.pumpWidget(_wrap(const JeevesLogo(
-        size: 64,
-        variant: JeevesLogoVariant.signature,
-      )));
-      expect(find.byType(JeevesLogo), findsOneWidget);
-    });
-
     testWidgets('wordmark variant renders a Row', (tester) async {
       await tester.pumpWidget(_wrap(const JeevesLogo(
         size: 48,
@@ -133,15 +72,6 @@ void main() {
         variant: JeevesLogoVariant.wordmark,
       )));
       expect(find.text('Jeeves'), findsOneWidget);
-    });
-
-    testWidgets('explicit pointillist at size < 32 still shows pointillist', (tester) async {
-      await tester.pumpWidget(_wrap(const JeevesLogo(
-        size: 20,
-        variant: JeevesLogoVariant.pointillist,
-      )));
-      expect(find.byType(JeevesLogo), findsOneWidget);
-      expect(tester.takeException(), isNull);
     });
   });
 }

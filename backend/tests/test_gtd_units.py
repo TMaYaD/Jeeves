@@ -11,28 +11,17 @@ from app.todos.utils import _infer_tag_type
 
 class TestTodoStateValidator:
     def test_valid_states_are_accepted(self) -> None:
-        valid = ["next_action"]
-        for state in valid:
-            t = TodoCreate(title="x", state=state)
-            assert t.state == state
+        t = TodoCreate(title="x", state="next_action")
+        assert t.state == "next_action"
 
-    def test_waiting_for_is_rejected(self) -> None:
+    # waiting_for / inbox / someday_maybe are deliberately-excluded GTD states;
+    # "active" is a plain unknown value.  All hit the same rejection branch.
+    @pytest.mark.parametrize("state", ["waiting_for", "inbox", "someday_maybe", "active"])
+    def test_invalid_state_rejected_on_create(self, state: str) -> None:
         with pytest.raises(ValidationError, match="state must be one of"):
-            TodoCreate(title="x", state="waiting_for")
+            TodoCreate(title="x", state=state)
 
-    def test_inbox_is_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="state must be one of"):
-            TodoCreate(title="x", state="inbox")
-
-    def test_someday_maybe_is_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="state must be one of"):
-            TodoCreate(title="x", state="someday_maybe")
-
-    def test_invalid_state_raises(self) -> None:
-        with pytest.raises(ValidationError, match="state must be one of"):
-            TodoCreate(title="x", state="active")
-
-    def test_update_invalid_state_raises(self) -> None:
+    def test_invalid_state_rejected_on_update(self) -> None:
         with pytest.raises(ValidationError, match="state must be one of"):
             TodoUpdate(state="done_and_dusted")
 

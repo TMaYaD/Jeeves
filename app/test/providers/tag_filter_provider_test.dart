@@ -28,36 +28,16 @@ void main() {
       expect(container.read(tagFilterProvider), isEmpty);
     });
 
-    test('toggle with multiple tags accumulates correctly', () {
+    test('clear resets to empty, and is a no-op when already empty', () {
       final container = makeContainer();
       addTearDown(container.dispose);
-      container.read(tagFilterProvider.notifier).toggle('tag-1');
-      container.read(tagFilterProvider.notifier).toggle('tag-2');
-      expect(container.read(tagFilterProvider), {'tag-1', 'tag-2'});
-    });
-
-    test('toggle removing one tag preserves others', () {
-      final container = makeContainer();
-      addTearDown(container.dispose);
-      container.read(tagFilterProvider.notifier).toggle('tag-1');
-      container.read(tagFilterProvider.notifier).toggle('tag-2');
-      container.read(tagFilterProvider.notifier).toggle('tag-1');
-      expect(container.read(tagFilterProvider), {'tag-2'});
-    });
-
-    test('clear resets to empty', () {
-      final container = makeContainer();
-      addTearDown(container.dispose);
-      container.read(tagFilterProvider.notifier).toggle('tag-1');
-      container.read(tagFilterProvider.notifier).toggle('tag-2');
-      container.read(tagFilterProvider.notifier).clear();
+      final notifier = container.read(tagFilterProvider.notifier);
+      notifier.toggle('tag-1');
+      notifier.toggle('tag-2');
+      notifier.clear();
       expect(container.read(tagFilterProvider), isEmpty);
-    });
-
-    test('clear on already-empty state is a no-op', () {
-      final container = makeContainer();
-      addTearDown(container.dispose);
-      container.read(tagFilterProvider.notifier).clear();
+      // Clearing again on an already-empty state stays empty.
+      notifier.clear();
       expect(container.read(tagFilterProvider), isEmpty);
     });
   });

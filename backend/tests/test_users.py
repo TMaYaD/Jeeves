@@ -37,12 +37,7 @@ async def test_duplicate_email_returns_409(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_with_empty_email_returns_422(client: AsyncClient) -> None:
-    response = await client.post("/user", json={"email": "", "password": "secret"})
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_register_with_whitespace_email_returns_422(client: AsyncClient) -> None:
-    response = await client.post("/user", json={"email": "   ", "password": "secret"})
+@pytest.mark.parametrize("email", ["", "   "])
+async def test_register_with_blank_email_returns_422(client: AsyncClient, email: str) -> None:
+    response = await client.post("/user", json={"email": email, "password": "secret"})
     assert response.status_code == 422

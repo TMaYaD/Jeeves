@@ -80,19 +80,6 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('exact title match', () async {
-      await _insertTodo(db, id: 'a', title: 'Buy groceries');
-      await _insertTodo(db, id: 'b', title: 'Call dentist');
-
-      final results = await db.searchDao
-          .search(const SearchQuery(text: 'Buy groceries'))
-          .first;
-
-      expect(results.length, 1);
-      expect(results.first.todo!.id, 'a');
-      expect(results.first.matchedFields, contains(SearchMatchField.title));
-    });
-
     test('partial title match (case-insensitive)', () async {
       await _insertTodo(db, id: 'a', title: 'Buy groceries');
       await _insertTodo(db, id: 'b', title: 'Call dentist');
@@ -103,6 +90,7 @@ void main() {
 
       expect(results.length, 1);
       expect(results.first.todo!.id, 'a');
+      expect(results.first.matchedFields, contains(SearchMatchField.title));
     });
 
     test('uppercase query matches lowercase title', () async {

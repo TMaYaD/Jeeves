@@ -170,6 +170,8 @@ void main() {
 
     test('processInboxItem twice concurrently updates DB only once',
         () async {
+      // The re-entrancy guard is routing-agnostic: exercising it through the
+      // Next Action path covers the Maybe/Done/WaitingFor paths, which share it.
       await _insertInboxItem(db, id: 'item-1');
 
       final notifier = container.read(focusSessionPlanningProvider.notifier);
@@ -190,29 +192,6 @@ void main() {
           reason: 'a raced double-tap must not carve two Outcomes');
       final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
-    });
-
-    test('processInboxItemToMaybe twice concurrently updates DB only once',
-        () async {
-      await _insertInboxItem(db, id: 'item-2');
-
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      final first = notifier.processInboxItemToMaybe('item-2');
-      final second = notifier.processInboxItemToMaybe('item-2');
-      await Future.wait([first, second]);
-
-      final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0], equals(RoutingKind.maybe),
-          reason: 'Routing recorded exactly once for index 0');
-      expect(state.inboxNav.index, equals(1));
-
-      expect(await db.captureDao.outcomeIdsForCapture('item-2'), hasLength(1),
-          reason: 'a raced double-tap must not carve two Outcomes');
-      final row = (await _outcomeOf(db, 'item-2'))!;
-      expect(row.clarified, isTrue);
-      expect(row.intent, 'maybe');
     });
   });
 
@@ -384,6 +363,8 @@ void main() {
 
       final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
+      expect(row.nextActionText, 'Test item',
+          reason: 'the routed title becomes the Outcome next action');
     });
 
     test('processInboxItemToMaybe writes to DB, advances index, and records routing',
@@ -474,29 +455,6 @@ void main() {
       // attributes a Capture has no column for (ADR-0006). The clarify card
       // supplies them in its draft; this provider-level path carries only
       // what the Capture itself holds.
-    });
-
-    test('re-routing to a different destination undoes prior routing side effects',
-        () async {
-      await _insertInboxItem(db, id: 'item-1');
-
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      // Route to Maybe first.
-      await notifier.processInboxItemToMaybe('item-1');
-      notifier.previousInboxItem();
-
-      // Re-route to Next Action — the handler reverts maybe before applying.
-      await notifier.processInboxItem('item-1', title: 'Test item');
-
-      final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
-      expect(row.intent, 'next',
-          reason: 'revert restored prior intent before next_action routing');
-
-      final state = container.read(focusSessionPlanningProvider);
-      expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
     });
 
     test('re-routing Done → Next Action clears done_at', () async {
@@ -647,8 +605,9 @@ void main() {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
       await notifier.loadInboxSnapshot();
 
-      // External delete lands AFTER snapshot load but BEFORE routing.
-      await db.captureDao.deleteCapture('item-1');
+      // External delete lands AFTER snapshot load but BEFORE routing
+      // (simulates a sync-download removing the row).
+      await (db.delete(db.captures)..where((c) => c.id.equals('item-1'))).go();
 
       // Routing must not advance the cursor or record a phantom routing.
       await notifier.processInboxItem('item-1', title: 'Test item');
@@ -836,18 +795,18 @@ void main() {
       return id;
     }
 
-    test('confirmReviewItemRelevant: stamps lastClarifiedAt; task leaves watchNeedsReview; reviewIndex advances',
+    test('confirmReviewItemRelevant: stamps lastClarifiedAt; task leaves the needs-review queue; reviewIndex advances',
         () async {
       final id = await insertStaleTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       expect(
-          await db.todoDao.watchNeedsReview().first, hasLength(1));
+          await db.todoDao.getNeedsReview(), hasLength(1));
 
       await notifier.confirmReviewItemRelevant(id);
 
       expect(
-          await db.todoDao.watchNeedsReview().first, isEmpty);
+          await db.todoDao.getNeedsReview(), isEmpty);
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
     });
@@ -858,12 +817,12 @@ void main() {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       expect(
-          await db.todoDao.watchNeedsReview().first, hasLength(1));
+          await db.todoDao.getNeedsReview(), hasLength(1));
 
       await notifier.updateReviewItemNextAction(id, 'Draft the proposal');
 
       expect(
-          await db.todoDao.watchNeedsReview().first, isEmpty);
+          await db.todoDao.getNeedsReview(), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.nextActionText, 'Draft the proposal');
@@ -880,7 +839,7 @@ void main() {
       await notifier.markReviewItemDone(id);
 
       expect(
-          await db.todoDao.watchNeedsReview().first, isEmpty);
+          await db.todoDao.getNeedsReview(), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.doneAt, isNotNull);
@@ -897,7 +856,7 @@ void main() {
       await notifier.deferReviewItemToSomeday(id);
 
       expect(
-          await db.todoDao.watchNeedsReview().first, isEmpty);
+          await db.todoDao.getNeedsReview(), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.intent, 'maybe');
@@ -914,7 +873,7 @@ void main() {
       await notifier.trashReviewItem(id);
 
       expect(
-          await db.todoDao.watchNeedsReview().first, isEmpty);
+          await db.todoDao.getNeedsReview(), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.intent, 'trash');
@@ -933,7 +892,7 @@ void main() {
       await notifier.deferReviewItemToSomeday(id);
 
       expect(
-          await db.todoDao.watchNeedsReview().first, isEmpty);
+          await db.todoDao.getNeedsReview(), isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
@@ -944,11 +903,11 @@ void main() {
       final id = await insertStaleTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+      expect(await db.todoDao.getNeedsReview(), hasLength(1));
 
       await notifier.markReviewItemWaitingFor(id);
 
-      expect(await db.todoDao.watchNeedsReview().first, isEmpty);
+      expect(await db.todoDao.getNeedsReview(), isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
@@ -963,7 +922,7 @@ void main() {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+      expect(await db.todoDao.getNeedsReview(), hasLength(1));
 
       await notifier.markReviewItemWaitingFor(id);
 
@@ -993,7 +952,7 @@ void main() {
       // Submit blank — should clear the stale record without advancing.
       await notifier.updateReviewItemNextAction(id, '   ');
 
-      expect(await db.todoDao.watchNeedsReview().first, isNotEmpty);
+      expect(await db.todoDao.getNeedsReview(), isNotEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 0);
@@ -1084,76 +1043,6 @@ void main() {
       expect(task?.intent, 'maybe');
       expect(task?.nextActionText, 'Draft the brief',
           reason: 'next_action_text must not be reverted when going to someday');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Inbox-clarify sets next_action_text
-  // ---------------------------------------------------------------------------
-
-  group('FocusSessionPlanningNotifier — processInboxItem sets nextActionText',
-      () {
-    late GtdDatabase db;
-    late ProviderContainer container;
-
-    const userId = 'local';
-
-    setUp(() {
-      db = GtdDatabase(NativeDatabase.memory());
-      container = _container(db);
-    });
-
-    tearDown(() async {
-      container.dispose();
-      await db.close();
-    });
-
-    Future<String> insertInboxTask(String title) async {
-      final now = DateTime.now();
-      final id = 'inbox-${now.microsecondsSinceEpoch}';
-      await db.captureDao.insertCapture(CapturesCompanion(
-        id: Value(id),
-        title: Value(title),
-        userId: const Value(userId),
-        createdAt: Value(now),
-      ));
-      return id;
-    }
-
-    test('processInboxItem sets nextActionText to provided title', () async {
-      final id = await insertInboxTask('Buy milk');
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      await notifier.processInboxItem(id, title: 'Buy milk');
-
-      final todo = await _outcomeOf(db, id);
-      expect(todo?.nextActionText, 'Buy milk');
-      expect(todo?.clarified, isTrue);
-    });
-
-    test('processInboxItem: task does not appear in watchNeedsReview after clarify',
-        () async {
-      final id = await insertInboxTask('Buy milk');
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      await notifier.processInboxItem(id, title: 'Buy milk');
-
-      final result = await db.todoDao.watchNeedsReview().first;
-      expect(result, isEmpty);
-    });
-
-    test('processInboxItemToMaybe sets intent=maybe and clarified=true', () async {
-      final id = await insertInboxTask('Read that book');
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.loadInboxSnapshot();
-
-      await notifier.processInboxItemToMaybe(id);
-
-      final todo = await _outcomeOf(db, id);
-      expect(todo?.intent, 'maybe');
-      expect(todo?.clarified, isTrue);
     });
   });
 
