@@ -163,6 +163,22 @@ void main() {
       expect(row.lastClarifiedAt, isNotNull);
     });
 
+    test('completeCurrentAction ends the Action without completing or '
+        'stamping the Outcome', () async {
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
+      await db.todoDao.setNextActionText('a', 'call the plumber');
+      final clarifiedAt = (await _row(db, 'a')).lastClarifiedAt;
+
+      await service.completeCurrentAction('a');
+
+      final row = await _row(db, 'a');
+      expect(row.doneAt, isNull, reason: 'the Outcome is not achieved');
+      expect(row.lastClarifiedAt, clarifiedAt,
+          reason: 'completion is engagement, not clarification');
+      expect(row.nextActionText, isNull);
+      expect(await db.actionDao.getCurrentAction('a'), isNull);
+    });
+
     test('stampClarified touches only the clarification timestamp', () async {
       await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 

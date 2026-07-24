@@ -12,7 +12,15 @@
 ///   PowerSync view with INSTEAD OF triggers, so a Drift write reports
 ///   `changes() == 0` and Drift's stream invalidation never fires — the write
 ///   path must call [GtdDatabase.notifyActionsViewWrite] itself, plus
-///   [GtdDatabase.notifyTodosViewWrite] when it stamped.
+///   [GtdDatabase.notifyTodosViewWrite] when it touched `todos`.
+///
+/// **The one exception to the stamping rule is [completeCurrentAction]**
+/// (ADR-0001 story 4): finishing the current Action is an *engagement* signal,
+/// not a clarifying act (CONTEXT.md § Clarification), so it must leave
+/// `last_clarified_at` where it is — that is exactly what makes the Outcome owe
+/// a re-clarification the moment its Action is done. It still writes `todos`
+/// (the cursor clear), so its `todos` notification is unconditional rather than
+/// gated on `stamped`.
 ///
 /// Per **ADR-0018** supersession carries no linkage metadata: a superseded
 /// row's terminal timestamp is its `updated_at`, there is no `superseded_by_id`
@@ -127,6 +135,34 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// `setNextActionText('')` blank→NULL normalisation.
   Future<void> clearCurrentAction(String outcomeId, {DateTime? now}) =>
       supersedeCurrentAction(outcomeId, now: now);
+
+  /// Record the current Action as **done** (ADR-0001 story 4): flip it to
+  /// `role='done'` with `done_at`, and leave the Outcome in the no-current-
+  /// Action state (ADR-0004 — nothing is auto-promoted; the user re-clarifies).
+  ///
+  /// Deliberately does **not** stamp `Outcome.last_clarified_at`: completion is
+  /// the engagement signal, not clarification, so the Outcome immediately
+  /// satisfies the re-clarify predicate. It does clear
+  /// `todos.next_action_text` in the same transaction — mandatory, not
+  /// defensive, because the startup sweep reads a non-blank cursor with no
+  /// current row as drift and would mint a fresh `current` Action, resurrecting
+  /// the Action the user just finished.
+  ///
+  /// No-op on an Actionless Outcome, and idempotent: a replay finds no current
+  /// row and writes nothing, so a completion can never produce two terminal
+  /// rows or push the completion timestamp forward.
+  Future<void> completeCurrentAction(String outcomeId, {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await transaction(
+      () => applyCompleteCurrentAction(outcomeId, ts: ts),
+    );
+    if (effect.changed) {
+      attachedDatabase.notifyActionsViewWrite();
+      // The cursor clear writes `todos` without stamping, so this notification
+      // cannot ride on [ActionWriteEffect.stamped] — which is always false here.
+      attachedDatabase.notifyTodosViewWrite();
+    }
+  }
 
   void _notify(ActionWriteEffect effect) {
     if (effect.changed) attachedDatabase.notifyActionsViewWrite();
@@ -329,6 +365,36 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     final didMutate = current != null || hasReplacement;
     if (didMutate) await _stampOutcome(outcomeId, ts);
     return (changed: changed, stamped: didMutate);
+  }
+
+  /// Transaction-body variant of [completeCurrentAction], shared with the
+  /// Outcome-completion cascade in [TodoDao] so "Outcome done closes its
+  /// current Action" is encoded once. Always returns `stamped: false` — the
+  /// caller decides whether *its own* act (achieving the Outcome) stamps.
+  Future<ActionWriteEffect> applyCompleteCurrentAction(
+    String outcomeId, {
+    required DateTime ts,
+  }) async {
+    final resolved = await _resolveCurrentAction(outcomeId, ts);
+    final current = resolved.current;
+    if (current == null) return (changed: resolved.converged, stamped: false);
+
+    await (update(actions)..where((a) => a.id.equals(current.id))).write(
+      ActionsCompanion(
+        role: const Value('done'),
+        doneAt: Value(ts),
+        updatedAt: Value(ts),
+      ),
+    );
+    // Keep the cursor in agreement with the Action side (blank cursor ⟺ no
+    // current row) without stamping — see [completeCurrentAction].
+    await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
+      TodosCompanion(
+        nextActionText: const Value(null),
+        updatedAt: Value(ts),
+      ),
+    );
+    return (changed: true, stamped: false);
   }
 
   // ---------------------------------------------------------------------------

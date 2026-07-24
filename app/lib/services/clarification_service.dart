@@ -10,9 +10,9 @@
 /// interface carries two write families:
 ///
 /// - **Outcome routing** — [clarifyToOutcome], [completeOutcome],
-///   [stampClarified], [updateFields] (+ the [exists] / [getPersonTagIds]
-///   guards). These operate on the conflated `todos` row and back today's
-///   review + Inbox surfaces.
+///   [completeCurrentAction], [stampClarified], [updateFields] (+ the
+///   [exists] / [getPersonTagIds] guards). These operate on the conflated
+///   `todos` row and back today's review + Inbox surfaces.
 /// - **Capture clarification** (ADR-0006, the split model) —
 ///   [clarifyCaptureToOutcome], [discardCapture], [captureExists]. Clarifying a
 ///   Capture creates a *new* Outcome, links it (`capture_outcomes` provenance),
@@ -210,6 +210,18 @@ abstract class ClarificationService {
   /// Marks the Outcome achieved — stamps Completion (`done_at`) and
   /// `last_clarified_at`. Returns the number of affected rows.
   Future<int> completeOutcome(String id);
+
+  /// Records the Outcome's **current Action** as done, leaving the Outcome
+  /// itself active and Actionless (ADR-0004: nothing is auto-promoted).
+  ///
+  /// Vocabulary tension worth naming: this is an *engagement* write, so unlike
+  /// every other method on this seam it does **not** stamp
+  /// `last_clarified_at` (CONTEXT.md § Clarification). It lives here anyway
+  /// because it is the trigger of the re-clarification it feeds — the Focus
+  /// "Done" flow completes the Action and then takes a verdict through
+  /// [completeOutcome] / [clarifyToOutcome] / [stampClarified] on this same
+  /// interface.
+  Future<void> completeCurrentAction(String id);
 
   /// The "Keep" / "still relevant" verdict: stamps `last_clarified_at`
   /// only, leaving every other column untouched.
@@ -491,6 +503,10 @@ class DaoClarificationService implements ClarificationService {
 
   @override
   Future<int> completeOutcome(String id) => _db.todoDao.markDone(id);
+
+  @override
+  Future<void> completeCurrentAction(String id) =>
+      _db.actionDao.completeCurrentAction(id);
 
   @override
   Future<void> stampClarified(String id) =>

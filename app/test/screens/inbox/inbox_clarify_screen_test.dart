@@ -237,6 +237,10 @@ class _RecordingClarificationService implements ClarificationService {
   Future<int> completeOutcome(String id) => inner.completeOutcome(id);
 
   @override
+  Future<void> completeCurrentAction(String id) =>
+      inner.completeCurrentAction(id);
+
+  @override
   Future<void> stampClarified(String id) => inner.stampClarified(id);
 
   @override
