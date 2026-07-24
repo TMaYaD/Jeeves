@@ -14,8 +14,32 @@ import '../providers/database_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 import '../providers/task_detail_provider.dart';
+import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/elapsed_timer_widget.dart';
+import '../widgets/process_to_handlers.dart' show ProcessAction;
+import '../widgets/reclarify_prompt_sheet.dart';
+
+/// The focus-list transition message shown after a Focus "Done" verdict
+/// resolves.
+///
+/// "All done for today!" is claimed **only** on a genuine achieved-and-last
+/// verdict. This keys on the achieved verdict specifically ([ProcessAction.done]),
+/// not on any truthy resolution: a blank "More to do" save routes nothing yet
+/// still resolves as [ProcessAction.nextActionDialog], and a real "More to do"
+/// resolves as `nextActionDialog` too — neither achieves the Outcome, so
+/// neither may claim "All done". A `null` verdict (the prompt was dismissed)
+/// is likewise not an achievement.
+@visibleForTesting
+String focusAdvanceMessage({
+  required Todo? nextTask,
+  required ProcessAction? verdict,
+}) {
+  if (nextTask != null) return 'Done! Next up: ${nextTask.title}';
+  return verdict == ProcessAction.done
+      ? 'All done for today!'
+      : 'Sprint logged — nothing else planned.';
+}
 
 class ActiveFocusScreen extends ConsumerStatefulWidget {
   const ActiveFocusScreen({super.key});
@@ -76,26 +100,52 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     );
   }
 
-  Future<void> _onComplete(String todoId) async {
+  Future<void> _onComplete(Todo todo) async {
+    final todoId = todo.id;
     _notificationTimer?.cancel();
     NotificationService.instance.cancelFocusNotification();
-    ref.read(sprintTimerProvider.notifier).stopSprint().ignore();
-    final db = ref.read(databaseProvider);
-    await db.todoDao.markDone(todoId);
-    await ref.read(focusModeProvider.notifier).endFocus();
+    // Await the stop: stopSprint() persists sprint history (via _clearPrefs)
+    // before returning, so discarding the future would swallow storage errors
+    // and race the cleanup against completeCurrentAction. The first context use
+    // below (the re-clarify sheet) is already guarded by `if (!mounted)`, and
+    // the sheet still floats *before* endFocus() — this await adds no gap ahead
+    // of an unguarded context access. No `mounted` guard follows: the
+    // Action-completion write below must land even if the widget unmounts
+    // mid-stop (the Done must never be lost), and it touches no context.
+    await ref.read(sprintTimerProvider.notifier).stopSprint();
+
+    // Done completes the current *Action* — an engagement signal, not a
+    // declaration that the *Outcome* is achieved (CONTEXT.md § GTD Core). This
+    // terminates the Action (role='done' + done_at), clears the cursor, and
+    // deliberately does NOT stamp last_clarified_at, leaving the Outcome
+    // Actionless and owing a re-clarification.
+    await ref.read(clarificationServiceProvider).completeCurrentAction(todoId);
+    if (!mounted) return;
+
+    // Float the re-clarify prompt *before* endFocus(): endFocus() nulls
+    // activeTodoId, which the build redirect (top of this screen) turns into a
+    // navigation to /focus that would close the sheet underneath the user. The
+    // Action-completion write already landed above, so dismissing the sheet
+    // (or process death mid-prompt) can never lose the Done.
+    final verdict = await ReclarifyPromptSheet.show(context, todo);
     if (!mounted) return;
 
     final allSessionTasks = await ref.read(activeSessionTasksProvider.future);
     if (!mounted) return;
 
+    // The completed Action's Outcome is excluded by `t.id != todoId` whether or
+    // not it was achieved, so the advance-to-next pick is unchanged (AC5).
     final nextTask = allSessionTasks
         .where((t) => t.id != todoId && t.doneAt == null)
         .firstOrNull;
 
-    final message = nextTask != null
-        ? 'Done! Next up: ${nextTask.title}'
-        : 'All done for today!';
+    final message = focusAdvanceMessage(nextTask: nextTask, verdict: verdict);
 
+    // Show the transition snackbar and end the session while the screen is
+    // still active, *before* endFocus() nulls activeTodoId. endFocus() would
+    // otherwise trip the build redirect to /focus and unmount this screen,
+    // dropping the snackbar. The snackbar lives on the root ScaffoldMessenger,
+    // so it survives the subsequent navigation.
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -112,6 +162,9 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
         backgroundColor: const Color(0xFF2667B7),
       ),
     );
+
+    await ref.read(focusModeProvider.notifier).endFocus();
+    if (!mounted) return;
     context.go('/focus');
   }
 
@@ -154,7 +207,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
             }
             return _FocusBody(
               todo: todo,
-              onComplete: () => _onComplete(todo.id),
+              onComplete: () => _onComplete(todo),
               onStop: () => _onStop(todo.id),
             );
           },
