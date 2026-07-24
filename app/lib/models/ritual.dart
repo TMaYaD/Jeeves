@@ -19,10 +19,15 @@ extension RitualPriority on RitualId {
   /// Linear priority for the Nudge queue (higher = earlier). Today hardcoded;
   /// see `CONTEXT.md`'s **Ritual** entry for the rationale (Weekly Review
   /// restores the trusted state Daily Planning operates on).
+  ///
+  /// Evening Shutdown outranks Daily Planning: while a session is open,
+  /// "Shutdown wins" (ADR-0020). The two only fire together on a *stale* open
+  /// session (open since before the last ES anchor), where the user must close
+  /// the current session before planning a new one — so the ES nudge leads.
   int get priority => switch (this) {
         RitualId.weeklyReview => 2,
-        RitualId.dailyPlanning => 1,
-        RitualId.eveningShutdown => 0,
+        RitualId.eveningShutdown => 1,
+        RitualId.dailyPlanning => 0,
       };
 
   /// Stable string key for SharedPreferences / synced-prefs / debugging.
@@ -38,6 +43,6 @@ extension RitualPriority on RitualId {
 /// Rituals in descending priority order (queue position when all visible).
 const ritualsByPriority = <RitualId>[
   RitualId.weeklyReview,
-  RitualId.dailyPlanning,
   RitualId.eveningShutdown,
+  RitualId.dailyPlanning,
 ];

@@ -8,6 +8,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/services/notification_service.dart';
 import '../test_helpers.dart';
 
 /// Pumps the event loop until [predicate] holds or [timeout] elapses. Async
@@ -43,6 +44,8 @@ class _StubFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
 ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
         focusSessionPlanningProvider
             .overrideWith(() => _StubFocusSessionPlanningNotifier()),
       ],
@@ -92,7 +95,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('startDay preserves energyLevel and availableMinutes', () async {
@@ -164,7 +166,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('processInboxItem twice concurrently updates DB only once',
@@ -288,7 +289,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('loadInboxSnapshot populates state from DB in FIFO order', () async {
@@ -677,7 +677,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test(
@@ -794,7 +793,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     Future<String> insertStaleTask() async {
@@ -1099,7 +1097,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     Future<String> insertInboxTask(String title) async {

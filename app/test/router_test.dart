@@ -1,15 +1,15 @@
 /// Tests for the production router's redirect policy (issue #225).
 ///
-/// /focus must be unconditionally accessible regardless of
-/// focusSessionPlanningCompletionNotifier.value. Planning is entered
-/// explicitly via the Focus screen's "Plan the Day" button or the
-/// AppShell planning banner — never via an automatic redirect.
+/// /focus must be unconditionally accessible regardless of whether the day
+/// has been planned. Planning is entered explicitly via the Focus screen's
+/// "Plan the Day" button or the Nudge banner — never via an automatic
+/// redirect. "Planning done" derives from an open session (ADR-0020), not a
+/// notifier, so there is no router state to toggle here.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
-import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/router.dart'
     show appRouter, appRouterRedirect, buildAppRouterRedirect;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -63,13 +63,11 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    focusSessionPlanningCompletionNotifier.value = false;
   });
 
   testWidgets(
       '/focus is accessible when planning is incomplete (no auto-redirect)',
       (tester) async {
-    focusSessionPlanningCompletionNotifier.value = false;
     final router = _buildRouter();
 
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
@@ -83,7 +81,6 @@ void main() {
   });
 
   testWidgets('/focus is accessible when planning is complete', (tester) async {
-    focusSessionPlanningCompletionNotifier.value = true;
     final router = _buildRouter();
 
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));

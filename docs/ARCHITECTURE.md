@@ -260,7 +260,8 @@ Key methods:
 `FocusSessionTasks` (`focus_session_id`, `task_id`, `position`, `disposition`) lists the ordered tasks selected during the planning ritual. The `disposition` column records the user's per-task choice made during session review (see below); `NULL` while the session is open or for done tasks.
 
 Accessed via `FocusSessionDao` (in `database/daos/focus_session_dao.dart`):
-- `openSession(userId, taskIds)` — atomically closes any prior open session and opens a new one with the given task list.
+- `openSession(userId, taskIds)` — opens a new session with the given task list. Sessions never auto-close (ADR-0020): if one is already open, this **throws `StateError`** — the caller must have the user close it via Evening Shutdown first. This throw is the sole enforcement of the single-open-session invariant (the PowerSync views preclude a schema constraint).
+- `watchQualifyingSessionExists(esAnchor)` / `qualifyingSessionExists(esAnchor)` — stream/one-shot for "does a session exist with `started_at >=` the most recent Evening Shutdown anchor" — the ES-anchor day-attribution predicate (ADR-0020).
 - `closeSession(sessionId)` — closes the session and any open `TimeLog`.
 - `setCurrentTask(sessionId, taskId?)` — atomically closes prior `TimeLog`, opens a new one for `taskId` (if non-null), updates `current_task_id`. The task need not be a Plan member — the Focus may point at any Outcome being engaged (off-Plan engagement, ADR-0005); the TimeLog still attributes to the session and the Plan never auto-grows.
 - `watchActiveSession(userId)` / `getActiveSession(userId)` — stream/one-shot for the open session.
@@ -287,7 +288,7 @@ The session review screen is shown when the user taps "End Session" on `FocusScr
 **`FocusSessionReviewNotifier`**:
 - `initFromSession(sessionId)` — loads session tasks; called once on screen mount.
 - `setDisposition(taskId, disposition)` — updates the in-memory map.
-- `submitReview()` — calls `dao.reviewAndCloseSession`, then sets `focusSessionPlanningCompletionNotifier.value = false`.
+- Review is committed by `EveningShutdownNotifier.closeDay` (`providers/evening_shutdown_provider.dart`), which calls `dao.reviewAndCloseSession` to write dispositions and close the session. There is no completion flag: closing the session is what makes the Now screen's planning-done derivation (an open session exists) and the Evening Shutdown Cadence Trigger stand down (ADR-0020). On close it also best-effort cancels today's pending Evening Shutdown notification (the fire is moot with no open session).
 
 **Routing**: `/focus-session-review` is a top-level `GoRoute` outside the `ShellRoute`, accepting the session ID via `GoRouterState.extra`. The `FocusScreen` "End Session" button navigates here when unfinished tasks exist; if all tasks are done it calls `closeSession` directly and navigates to `/inbox`.
 
@@ -427,20 +428,19 @@ Per-key conflict strategy is defined in `services/user_preferences_conflict.dart
 
 ## Focus Session Planning State
 
-The focus session planning feature uses a mix of global `ValueNotifier` objects (for cross-widget reactivity without a Riverpod container), the `user_preferences` Drift table via `syncedPreferencesProvider` (the cross-device source of truth for settings and ceremony state), and `SharedPreferences` (for cold-start reads before Riverpod loads).
+The focus session planning feature uses Riverpod providers, the `user_preferences` Drift table via `syncedPreferencesProvider` (the cross-device source of truth for settings and ceremony state), and `SharedPreferences` (for cold-start reads before Riverpod loads). "Planning done today" is **not** a stored flag — it is derived from persistent session data (an open `FocusSession` exists, via `activeSessionProvider`), so it survives process death (ADR-0020; the fix for issue #460).
 
 ### Key objects
 
 | Object | Type | Purpose |
 |---|---|---|
-| `focusSessionPlanningCompletionNotifier` | `ValueNotifier<bool>` | `true` when the ritual has been completed today |
-| `focusSessionPlanningBannerDismissedNotifier` | `ValueNotifier<bool>` | `true` when the banner has been dismissed today |
-| `FocusSessionPlanningNotifier` | Riverpod `NotifierProvider` | Step navigation, task mutations, banner dismiss, skip/snooze |
+| `activeSessionProvider` | Riverpod `StreamProvider` | The open `FocusSession` or null — the Now screen's planning-done derivation |
+| `qualifyingSessionTodayProvider` | Riverpod `StreamProvider` | Whether a session started since the last ES anchor exists — the Daily Planning nudge's day-attribution gate |
+| `shutdownThenPlanProvider` | Riverpod `NotifierProvider<bool>` | Carries the and-then-plan intent through the sequenced Shutdown → Planning entry |
+| `FocusSessionPlanningNotifier` | Riverpod `NotifierProvider` | Step navigation, task mutations, skip/snooze |
 | `FocusSessionPlanningSettingsNotifier` | Riverpod `NotifierProvider` | User preferences: planning time, notification/banner toggles, snooze duration |
 
-`focusSessionPlanningCompletionNotifier` is set to `true` in-memory by `FocusSessionPlanningNotifier.startDay()` when the ritual ends; it is not persisted across restarts. `focusSessionPlanningBannerDismissedNotifier` is initialised from `SharedPreferences` in `initFocusSessionPlanningCompletion()`, which is called in `main()` before `runApp`.
-
-`FocusSessionPlanningNotifier` is not auto-disposed, so exiting the ceremony mid-ritual abandons the performance but retains the working state (step, cursors, routings) in memory as a draft that seeds the next performance — "Plan the Day" (`FocusScreen._replanDay`) calls `reEnterPlanning()` to reset only when the prior performance completed (`focusSessionPlanningCompletionNotifier == true`). The draft is in-memory only and silently degrades to a fresh start after process death — accepted behaviour (CONTEXT.md § Ceremony); tests must not assert draft survival across restarts.
+`FocusSessionPlanningNotifier` is not auto-disposed, so exiting the ceremony mid-ritual abandons the performance but retains the working state (step, cursors, routings) in memory as a draft that seeds the next performance. A direct "Plan the Day" with no open session resumes that draft (issue #180). The completed-performance reset (`reEnterPlanning()`) now happens on the sequenced Shutdown → Planning path: Re-plan is only offered while a session is open, so it lands on the blocked-start interstitial and passes through Evening Shutdown first; Close Day then routes into planning with a fresh performance. The draft is in-memory only and silently degrades to a fresh start after process death — accepted behaviour (CONTEXT.md § Ceremony); tests must not assert draft survival across restarts.
 
 ### Inbox clarification step — snapshot+index navigation
 
@@ -518,11 +518,11 @@ Sub-flows owned by the widget:
 
 ### Planning nudges
 
-The ritual can no longer be auto-launched. Users are nudged through two opt-in mechanisms:
+The ritual is never auto-launched. Users are nudged through two opt-in mechanisms, both governed by the Nudge module's Daily Planning Cadence Trigger (`providers/nudge_triggers.dart`):
 
-1. **`FocusSessionPlanningBanner`** (`lib/widgets/focus_session_planning_banner.dart`) — rendered at the top of `AppShell` (all shell-hosted routes). Visible when `focusSessionPlanningCompletionNotifier == false && !focusSessionPlanningBannerDismissedNotifier && planningSettings.bannerEnabled`. Tapping navigates to `/focus-session-planning`; the × button calls `FocusSessionPlanningNotifier.dismissBannerForToday()`.
+1. **Banner** — rendered by the shared Nudge banner surface. The Daily Planning Cadence Trigger fires when now is past today's DPR anchor AND no qualifying session exists (`qualifyingSessionTodayProvider` — none started since the last Evening Shutdown anchor), with content preconditions (something to plan) and the loading deferrals. A stale open session (started before the last ES anchor) does not qualify, so the banner re-arms for it and fires alongside Evening Shutdown, which wins via queue ordering (`ritualsByPriority`); tapping it lands on the blocked-start interstitial. `firingSince` is the later of today's DPR anchor and the last ES anchor, so a morning dismiss does not suppress the fresh post-ES-anchor re-arm. Dismiss/snooze state is persisted by the Nudge module (`nudgeStateProvider`), not a `ValueNotifier`.
 
-2. **Local notification** — scheduled daily at the user's configured planning time via `NotificationService.scheduleFocusSessionPlanningReminder()`. Uses `flutter_local_notifications` `zonedSchedule` with `matchDateTimeComponents: time` so the OS re-fires it every day without app interaction. Notification actions: Open (→ `/focus-session-planning`), Snooze (one-off reschedule), Skip today (cancel until tomorrow). Handled in `_handleNotificationResponse` in `main.dart`. `matchDateTimeComponents: time` means the OS reschedules the notification daily automatically — snooze schedules a one-off fire without removing the recurring daily reminder.
+2. **Local notification** — scheduled daily at the user's configured planning time via `NotificationService.scheduleRitualReminder(RitualId.dailyPlanning, …)`. Uses `flutter_local_notifications` `zonedSchedule` with `matchDateTimeComponents: time` so the OS re-fires it every day. Notification actions: Open (→ `/focus-session-planning`), Snooze (one-off reschedule), Skip today (cancel until tomorrow). Handled in `_handleNotificationResponse` in `main.dart`. Because the OS cannot evaluate DB state at fire time, transitions reconcile best-effort: opening a session cancels today's pending Daily Planning fire, closing one cancels today's Evening Shutdown fire.
 
 ### Persistence
 

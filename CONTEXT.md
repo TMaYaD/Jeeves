@@ -228,6 +228,10 @@ _Avoid_: Delete, Dismiss, Done (Done is a different verdict entirely), Trash (Tr
 **FocusSession**:
 A user session comprising three phases — **Planning**, **Execution**, and **Review** — during which the user engages with a curated subset of Outcomes. Calendar-independent: the same workflow applies whether multiple FocusSessions occur in a day or a single FocusSession spans multiple days. The UI currently surfaces FocusSession's lifecycle at a daily cadence through the planning and review Ceremonies (see Ceremony Framework context — TBD), but cadence is a UI choice, not a domain constraint. At most one FocusSession is open per user at any time.
 
+A FocusSession changes lifecycle state **only by explicit user action** — it opens when the user completes Planning and closes when the user completes Review; it never opens or closes on its own. The cadence anchors are **reminder anchors only** (they decide when a Ritual's Nudge fires, never when a session opens or closes), so an open session persists across idle time and process death until the user reviews it. The single-open invariant is enforced by the DAO: opening a second session throws while one is open (no schema constraint is possible on the PowerSync views), and the UI guides the user through Evening Shutdown first (ADR-0020).
+
+Because sessions never auto-close, **day attribution is anchor-based, not calendar midnight**: a session belongs to the planning period opened by the most recent **Evening Shutdown anchor** before its start. A session started at or after the last ES anchor is the *current period's* (whether still open or already closed); a session open since before the last ES anchor belongs to the previous period, and the Daily Planning nudge re-arms for it while Evening Shutdown wins. This "qualifying session" rule — `started_at >=` last ES anchor — is the single test for whether the current period's planning has happened.
+
 The three phases:
 
 - **Planning** — the user opens a FocusSession and curates its **Plan**: an explicit List of Outcomes scoped to this session. Surfaced today by the `focus_session_planning` Ceremony ("Daily Planning" at the daily cadence).
@@ -275,7 +279,7 @@ _Avoid_: PomodoroPhase, FocusBlock, WorkBlock
 **Disposition**:
 The user's decision in the Review phase for an Outcome that did not complete during the FocusSession. One of three values:
 
-- `rollover` — pre-select this Outcome for the next FocusSession's Planning (user can deselect there).
+- `rollover` — pre-select this Outcome for the next FocusSession's Planning (user can deselect there). Rendered in UI copy as **"Carried over from last session"** — "last session", not "yesterday", because sessions are calendar-independent and may span days. The code identifier stays `rollover`; the Now screen's carried-over section reads the `rollover` union across both Disposition homes (ADR-0016) from the most recently closed session, shown only while no session is open.
 - `leave` — return to its normal List membership; no special handling.
 - `maybe` — set Intent to `maybe`, moving the Outcome to Someday/Maybe.
 
@@ -331,7 +335,7 @@ A Trigger's predicate may consult any domain state — Ceremony completion histo
 
 A Trigger's predicate may also include **world-state preconditions** — facts about the system that gate whether the Ritual makes sense at all. World-state preconditions stay inside the Trigger's predicate, not as separate Ritual-level rules; Triggers remain autonomous. Today's examples are FocusSession-lifecycle gates (only one FocusSession can be active at a time, per the Engagement context):
 
-- The Daily Planning Ritual's Cadence Trigger predicate is "DPR period has turned AND no FocusSession is currently active AND DPR has not been completed in this period." A FocusSession is opened by DPR's completion (the Planning phase commits to opening one); attempting a second DPR while one is already open is incoherent.
+- The Daily Planning Ritual's Cadence Trigger predicate is "now is past today's DPR anchor AND no qualifying session exists (none started since the last Evening Shutdown anchor)." Day attribution is ES-anchor-based (see the FocusSession entry): a session started since the last ES anchor means the current period's planning has happened, so the nudge stands down; a *stale* open session (started before the last ES anchor) does **not** qualify, so DPR re-arms for it and fires alongside Evening Shutdown, which wins (the user must close the stale session before opening a new one). Firing begins at the later of today's DPR anchor and the last ES anchor.
 - The Evening Shutdown's Cadence Trigger predicate is "ES period has turned AND a FocusSession is currently active AND ES has not been completed in this period." ES is the Review phase of the active FocusSession; without one, it has nothing to operate on.
 
 A Trigger may borrow a default snooze duration from Cadence; the reference is explicit in the Trigger's implementation rather than a model-wide default.
@@ -400,7 +404,7 @@ _Avoid_: stack, list (too generic), priority list (acceptable but Nudge queue is
 - The **in-progress hygiene rule** is centralised at the Nudge level: while any Ceremony performance of this Ritual is in progress, no Nudge of this Ritual is visible regardless of Trigger state (ADR-0009). This is the one non-content rule the Nudge model carries.
 - A **Nudge** has zero or more *surfaces* (currently **Banner** and **Notification**) that deliver it to the user. Surfaces are pure projections — they read Nudge state to render and write Nudge state on user action. Each surface's user-action → Nudge-transition mapping is calibrated to its signal fidelity (e.g., Banner ✕ → dismiss because it is an explicit in-app gesture; Notification swipe → system-implicit snooze because it is low-signal). Adding or removing surfaces does not change what a Nudge *is*.
 - The **Nudge queue** orders currently-visible Nudges across all Rituals by Ritual priority (linear, hardcoded today: WR > DPR > ES). Surfaces consume the queue rather than reading individual Nudges directly — Banner and Notification take the queue head, future surfaces may consume more. The queue is a layer *above* individual Nudge visibility; each Nudge's own predicate stays independent of other Rituals' state.
-- A **Trigger** may consult state from other contexts as part of its predicate. Today's FocusSession-lifecycle gates live in the relevant Cadence Trigger predicates (DPR's "no FS active," ES's "FS active"), not as separate Ritual-level rules. The Engagement context's "only one active FocusSession" invariant is the ground truth; Triggers read it.
+- A **Trigger** may consult state from other contexts as part of its predicate. Today's FocusSession-lifecycle gates live in the relevant Cadence Trigger predicates (DPR's "no qualifying session since the last ES anchor," ES's "FS active"), not as separate Ritual-level rules. The Engagement context's "only one active FocusSession" invariant and its ES-anchor day-attribution rule are the ground truth; Triggers read them.
 - A **Ceremony** may be implemented as a **Wizard** (current default for all three Rituals) or any other UI form. The implementation form is independent of the Ceremony concept.
 - **Disposition** (defined in Engagement) is the per-Outcome decision used inside FocusSession's Review-type Ceremonies (Evening Shutdown). Other Ceremonies — notably the forthcoming PeriodicSession review — may introduce their own decision vocabularies.
 
