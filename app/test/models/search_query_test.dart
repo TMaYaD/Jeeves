@@ -26,10 +26,16 @@ void main() {
   });
 
   group('SearchQuery.copyWith', () {
-    test('copies text', () {
-      final q = const SearchQuery().copyWith(text: 'foo');
-      expect(q.text, 'foo');
-      expect(q.includeDone, isFalse);
+    test('changes the named field and preserves the rest', () {
+      final original = SearchQuery(
+        text: 'original',
+        energyLevels: const {'low'},
+        includeDone: true,
+      );
+      final updated = original.copyWith(text: 'updated');
+      expect(updated.text, 'updated');
+      expect(updated.energyLevels, {'low'});
+      expect(updated.includeDone, isTrue);
     });
 
     test('clears timeEstimateMaxMinutes', () {
@@ -43,17 +49,6 @@ void main() {
       final q = SearchQuery(dueDateBefore: date)
           .copyWith(clearDueDateBefore: true);
       expect(q.dueDateBefore, isNull);
-    });
-
-    test('preserves unchanged fields', () {
-      final original = SearchQuery(
-        text: 'original',
-        energyLevels: const {'low'},
-        includeDone: true,
-      );
-      final updated = original.copyWith(text: 'updated');
-      expect(updated.energyLevels, {'low'});
-      expect(updated.includeDone, isTrue);
     });
   });
 }

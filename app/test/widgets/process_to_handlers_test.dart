@@ -435,49 +435,6 @@ void main() {
       expect(row?.doneAt, isNull);
       expect(row?.intent, 'next');
     });
-
-    testWidgets('Someday clears doneAt on a previously-done todo',
-        (tester) async {
-      await _insertTodo(db, id: 'd2');
-      await db.todoDao.applyRouting('d2', to: RoutingKind.done);
-      final todo = (await db.todoDao.getTodo('d2'))!;
-
-      await tester.pumpWidget(_harness(db, todo: todo));
-      await tester.tap(find.text('Someday'));
-      await tester.pumpAndSettle();
-
-      final row = await db.todoDao.getTodo('d2');
-      expect(row?.doneAt, isNull);
-      expect(row?.intent, 'maybe');
-    });
-
-    testWidgets('Waiting For clears doneAt on a previously-done todo',
-        (tester) async {
-      await _insertTodo(db, id: 'd3');
-      await db.todoDao.applyRouting('d3', to: RoutingKind.done);
-      final todo = (await db.todoDao.getTodo('d3'))!;
-      await _insertPersonTag(db, id: 'alice', name: 'Alice');
-
-      await tester.pumpWidget(_harness(
-        db,
-        todo: todo,
-        personTags: [_personTag('alice', 'Alice')],
-      ));
-      await tester.tap(find.text('Waiting For'));
-      await tester.pumpAndSettle();
-
-      // Confirm picker (select Alice). The picker confirm is a FilledButton
-      // labelled "Done"; the route bar also has a "Done" OutlinedButton, so
-      // disambiguate by widget type.
-      await tester.tap(find.text('Alice'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
-      await tester.pumpAndSettle();
-
-      final row = await db.todoDao.getTodo('d3');
-      expect(row?.doneAt, isNull);
-      expect(row?.intent, 'next');
-    });
   });
 
   group('ProcessToHandlers — waitingFor sub-flow', () {

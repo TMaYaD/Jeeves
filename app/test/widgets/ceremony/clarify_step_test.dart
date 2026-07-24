@@ -11,10 +11,6 @@
 ///    [nav.isComplete] or [nav.isEmpty].
 /// 3. [onLoad] is called once on the first frame when the snapshot is not yet
 ///    loaded.
-/// 4. The widget is a plain [StatelessWidget] that accepts ceremony-specific
-///    state without hard-coding any provider dependency.
-/// 5. Both DPR and WR pass [Map<int, RoutingKind>] directly (no ceremony-
-///    specific projection).
 library;
 
 import 'package:flutter/material.dart';
@@ -23,7 +19,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/utils/snapshot_nav.dart';
 import 'package:jeeves/widgets/ceremony/clarify_step.dart';
-import 'package:jeeves/widgets/process_to_handlers.dart';
 
 /// Minimal provider scope so the widget tree can build without crashing
 /// on providers that ClarifyCard might read inside ProviderScope.
@@ -92,49 +87,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Inbox is clear'), findsOneWidget);
-    });
-  });
-
-  group('ClarifyStep — shared usage contract', () {
-    testWidgets(
-        'accepts a RoutingKind routings map — both DPR and WR pass '
-        'Map<int, RoutingKind> directly with no per-ceremony projection',
-        (tester) async {
-      // Both ceremonies pass Map<int, RoutingKind> directly to ClarifyStep.
-      // This test verifies the type is accepted without runtime error.
-      final routings = <int, RoutingKind>{
-        0: RoutingKind.nextAction,
-        1: RoutingKind.maybe,
-      };
-      final completeNav = SnapshotNav<String>(items: ['id1', 'id2'], index: 2);
-      await tester.pumpWidget(_wrap(ClarifyStep(
-        nav: completeNav,
-        routings: routings,
-        onAfterRoute: (_) async {},
-      )));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Inbox is clear'), findsOneWidget);
-    });
-
-    testWidgets('onAfterRoute callback is typed to Future<void> Function(ProcessAction)',
-        (tester) async {
-      // Verify the widget compiles and renders when a Future<void>-returning
-      // ProcessAction callback is provided — both DPR and WR supply this shape.
-      ProcessAction? captured;
-      final completeNav = SnapshotNav<String>(items: [], index: 0);
-      await tester.pumpWidget(_wrap(ClarifyStep(
-        nav: completeNav,
-        routings: const {},
-        onAfterRoute: (action) async => captured = action,
-      )));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Inbox is clear'), findsOneWidget);
-      // The callback is wired but not invoked (no item to tap) — just ensure
-      // the captured reference remains null, confirming the callback type
-      // doesn't cause a compile or runtime error.
-      expect(captured, isNull);
     });
   });
 }

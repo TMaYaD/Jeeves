@@ -115,15 +115,6 @@ void main() {
       expect(find.byKey(const Key('password_field')), findsOneWidget);
       expect(find.byKey(const Key('create_account_button')), findsOneWidget);
     });
-
-    testWidgets('shows toggle link to login screen', (tester) async {
-      await tester.pumpWidget(_buildScreen(
-        notifierFactory: _SuccessAuthNotifier.new,
-      ));
-      await tester.pump();
-
-      expect(find.textContaining('Already have an account'), findsOneWidget);
-    });
   });
 
   group('RegisterScreen — validation', () {

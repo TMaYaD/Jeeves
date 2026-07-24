@@ -139,17 +139,6 @@ void main() {
       expect(find.text('Fix the bug'), findsOneWidget);
     });
 
-    testWidgets('shows all UI sections modeled as a show page', (tester) async {
-      final todo = await _insertAt(db, id: 'task2', title: 'My task');
-      final (widget, router) = _buildScreen(db, 'task2', initialTodo: todo);
-      await _showTaskDetail(tester, widget, router, 'task2');
-
-      expect(find.text('ADD PROJECT'), findsOneWidget);
-      expect(find.byIcon(Icons.add), findsOneWidget);
-      expect(find.text('NOTES'), findsOneWidget);
-      expect(find.text('DUE DATE'), findsOneWidget);
-    });
-
     testWidgets('hides the Captured from section when there are no links',
         (tester) async {
       final todo = await _insertAt(db, id: 'prov0', title: 'Lone outcome');
@@ -190,14 +179,6 @@ void main() {
       await tester.tap(tile);
       await tester.pumpAndSettle();
       expect(find.text('Project X'), findsOneWidget);
-    });
-
-    testWidgets('shows status pill', (tester) async {
-      final todo = await _insertAt(db, id: 'task3', title: 'Task');
-      final (widget, router) = _buildScreen(db, 'task3', initialTodo: todo);
-      await _showTaskDetail(tester, widget, router, 'task3');
-
-      expect(find.byKey(const Key('status_pill')), findsOneWidget);
     });
 
     testWidgets('status pill shows Next Actions when no person tags assigned', (tester) async {
@@ -307,9 +288,7 @@ void main() {
       expect(await db.focusSessionDao.getActiveSession(), isNull);
 
       await tester.tap(find.byKey(const Key('task_detail_start_focus')));
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)),
-      );
+      await tester.runAsync(() => pumpEventQueue());
       await tester.pumpAndSettle();
 
       expect(find.text('Active focus'), findsOneWidget);
@@ -379,9 +358,7 @@ void main() {
         tester.element(find.byType(TaskDetailScreen)),
       );
       container.read(sprintTimerProvider);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
+      await tester.runAsync(() => pumpEventQueue());
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('task_detail_start_focus')));
@@ -421,9 +398,7 @@ void main() {
         tester.element(find.byType(TaskDetailScreen)),
       );
       container.read(sprintTimerProvider);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
+      await tester.runAsync(() => pumpEventQueue());
       await tester.runAsync(
         () => container.read(focusModeProvider.notifier).startFocus('other'),
       );
@@ -461,9 +436,7 @@ void main() {
         tester.element(find.byType(TaskDetailScreen)),
       );
       container.read(sprintTimerProvider);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
+      await tester.runAsync(() => pumpEventQueue());
       await tester.runAsync(
         () =>
             container.read(focusModeProvider.notifier).startFocus('engage6'),

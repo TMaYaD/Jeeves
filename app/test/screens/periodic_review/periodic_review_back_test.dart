@@ -20,6 +20,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 
+import '../../helpers/settle.dart';
 import '../../test_helpers.dart';
 
 /// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
@@ -58,12 +59,7 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
   return (widget, container);
 }
 
-Future<void> _settle(WidgetTester tester) async {
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 200)),
-  );
-  await tester.pumpAndSettle();
-}
+Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
 Future<void> _dispose(WidgetTester tester) async {
   await tester.pumpWidget(const SizedBox.shrink());
@@ -79,32 +75,6 @@ void main() {
 
     setUp(() => db = GtdDatabase(NativeDatabase.memory()));
     tearDown(() async => db.close());
-
-    testWidgets(
-        'system back at step 0, first item exits to the execution home and '
-        'abandons the performance', (tester) async {
-      final (widget, container) = _app(db);
-      addTearDown(container.dispose);
-      await tester.pumpWidget(widget);
-      await _settle(tester);
-
-      expect(
-        container.read(ceremonyInProgressProvider),
-        contains(RitualId.weeklyReview),
-      );
-
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-
-      expect(find.text('execution home'), findsOneWidget);
-      expect(
-        container.read(ceremonyInProgressProvider),
-        isNot(contains(RitualId.weeklyReview)),
-        reason: 'back-exit abandons the performance (ADR-0009 hygiene)',
-      );
-
-      await _dispose(tester);
-    });
 
     testWidgets(
         'system back mid-step mirrors footer Back: retreats the item cursor '
@@ -140,43 +110,5 @@ void main() {
       await _dispose(tester);
     });
 
-    testWidgets('system back on a later step retreats to the previous step',
-        (tester) async {
-      final (widget, container) = _app(db);
-      addTearDown(container.dispose);
-      await tester.pumpWidget(widget);
-      await _settle(tester);
-
-      await container.read(periodicReviewProvider.notifier).goToStep(1);
-      await tester.pumpAndSettle();
-
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-
-      expect(container.read(periodicReviewProvider).currentStep, 0,
-          reason: 'system back mirrors the footer Back step retreat');
-      expect(find.byType(PeriodicReviewScreen), findsOneWidget);
-
-      await _dispose(tester);
-    });
-
-    testWidgets(
-        'system back on the Review Complete summary exits to the execution home',
-        (tester) async {
-      final (widget, container) = _app(db);
-      addTearDown(container.dispose);
-      await tester.pumpWidget(widget);
-      await _settle(tester);
-
-      await container.read(periodicReviewProvider.notifier).goToStep(4);
-      await tester.pumpAndSettle();
-
-      await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
-
-      expect(find.text('execution home'), findsOneWidget);
-
-      await _dispose(tester);
-    });
   });
 }

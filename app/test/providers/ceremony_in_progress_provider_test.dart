@@ -27,20 +27,11 @@ void main() {
       expect(container.read(ceremonyInProgressProvider), isEmpty);
     });
 
-    test('enter is idempotent', () {
-      final notifier = container.read(ceremonyInProgressProvider.notifier);
-      notifier.enter(RitualId.weeklyReview);
-      notifier.enter(RitualId.weeklyReview);
-      expect(
-        container.read(ceremonyInProgressProvider),
-        {RitualId.weeklyReview},
-      );
-    });
-
-    test('multiple Rituals can be in progress simultaneously', () {
+    test('multiple Rituals coexist; re-entering an active one is idempotent', () {
       final notifier = container.read(ceremonyInProgressProvider.notifier);
       notifier.enter(RitualId.dailyPlanning);
       notifier.enter(RitualId.weeklyReview);
+      notifier.enter(RitualId.weeklyReview); // duplicate enter is a no-op
       expect(
         container.read(ceremonyInProgressProvider),
         {RitualId.dailyPlanning, RitualId.weeklyReview},

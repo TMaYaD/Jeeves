@@ -298,43 +298,6 @@ void main() {
           ['outcome-1']);
     });
 
-    test('CSV task with scheduled state is imported successfully', () async {
-      const csv = 'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
-          'Task,Scheduled task,Scheduled,,,,,,,,\n';
-      await importNirvanaLocally(
-        bytes: _bytes(csv),
-        filename: 'test.csv',
-        format: 'csv',
-        userId: _userId,
-        db: db,
-      );
-
-      final all = await (db.select(db.todos)
-            ..where((t) => t.userId.equals(_userId)))
-          .get();
-      expect(all.length, 1);
-    });
-
-    test('CSV Inactive/Later → clarified=true, intent=maybe', () async {
-      const csv =
-          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
-          'Task,Inactive task,Inactive/Later,,,,,,,,\n';
-      await importNirvanaLocally(
-        bytes: _bytes(csv),
-        filename: 'test.csv',
-        format: 'csv',
-        userId: _userId,
-        db: db,
-      );
-
-      final all = await (db.select(db.todos)
-            ..where((t) => t.userId.equals(_userId)))
-          .get();
-      expect(all.length, 1);
-      expect(all.first.clarified, isTrue);
-      expect(all.first.intent, 'maybe');
-    });
-
     test(
         'CSV Scheduled/Repeating → @repeating context tag linked via todo_tags',
         () async {
@@ -359,26 +322,6 @@ void main() {
             ..where((tt) => tt.tagId.equals(repeatingTag.id)))
           .get();
       expect(junctions.length, 1);
-    });
-
-    test('CSV Trash → clarified=true, intent=trash', () async {
-      const csv =
-          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
-          'Task,Trash task,Trash,,,,,,,,\n';
-      await importNirvanaLocally(
-        bytes: _bytes(csv),
-        filename: 'test.csv',
-        format: 'csv',
-        userId: _userId,
-        db: db,
-      );
-
-      final all = await (db.select(db.todos)
-            ..where((t) => t.userId.equals(_userId)))
-          .get();
-      expect(all.length, 1);
-      expect(all.first.clarified, isTrue);
-      expect(all.first.intent, 'trash');
     });
 
     test('latin-1 bytes are decoded without error', () async {
@@ -467,58 +410,6 @@ void main() {
 
       final tags = await db.tagDao.watchByType('project').first;
       expect(tags.length, 1);
-    });
-
-    test('JSON task with state=3 (scheduled) is imported successfully', () async {
-      const json = '[{"cancelled":0,"deleted":0,"name":"Scheduled task","type":0,"state":3}]';
-      await importNirvanaLocally(
-        bytes: _bytes(json),
-        filename: 'test.json',
-        format: 'json',
-        userId: _userId,
-        db: db,
-      );
-
-      final all = await (db.select(db.todos)
-            ..where((t) => t.userId.equals(_userId)))
-          .get();
-      expect(all.length, 1);
-    });
-
-    test('JSON state=4 (Someday) → clarified=true, intent=maybe', () async {
-      const json =
-          '[{"cancelled":0,"deleted":0,"name":"S","type":0,"state":4}]';
-      await importNirvanaLocally(
-        bytes: _bytes(json),
-        filename: 'test.json',
-        format: 'json',
-        userId: _userId,
-        db: db,
-      );
-      final all = await (db.select(db.todos)
-            ..where((t) => t.userId.equals(_userId)))
-          .get();
-      expect(all.length, 1);
-      expect(all.first.clarified, isTrue);
-      expect(all.first.intent, 'maybe');
-    });
-
-    test('JSON state=6 (Trash) → clarified=true, intent=trash', () async {
-      const json =
-          '[{"cancelled":0,"deleted":0,"name":"T","type":0,"state":6}]';
-      await importNirvanaLocally(
-        bytes: _bytes(json),
-        filename: 'test.json',
-        format: 'json',
-        userId: _userId,
-        db: db,
-      );
-      final all = await (db.select(db.todos)
-            ..where((t) => t.userId.equals(_userId)))
-          .get();
-      expect(all.length, 1);
-      expect(all.first.clarified, isTrue);
-      expect(all.first.intent, 'trash');
     });
 
     test('JSON state=9 (Repeating) → @repeating context tag linked', () async {

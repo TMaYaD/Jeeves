@@ -42,19 +42,13 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('GtdListScreen', () {
-    testWidgets('shows title', (tester) async {
-      await tester.pumpWidget(_buildScreen(Stream.value([])));
-      await tester.pump();
-      expect(find.text('Test List'), findsOneWidget);
-    });
-
     testWidgets('shows empty state message when no items', (tester) async {
       await tester.pumpWidget(_buildScreen(Stream.value([])));
       await tester.pump();
       expect(find.textContaining('Nothing here yet'), findsOneWidget);
     });
 
-    testWidgets('renders todo titles', (tester) async {
+    testWidgets('renders the list title and todo titles', (tester) async {
       final items = [
         _todo('a', 'Buy coffee'),
         _todo('b', 'Fix bug'),
@@ -62,6 +56,7 @@ void main() {
       await tester.pumpWidget(_buildScreen(Stream.value(items)));
       await tester.pump();
 
+      expect(find.text('Test List'), findsOneWidget);
       expect(find.text('Buy coffee'), findsOneWidget);
       expect(find.text('Fix bug'), findsOneWidget);
     });

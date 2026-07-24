@@ -1,58 +1,19 @@
-"""Unit tests for the SWS signature verification strategy."""
+"""Unit tests for the SWS signature verification strategy.
+
+The `db`, `redis`, and `signing_key` fixtures live in tests/auth/conftest.py
+(db comes from the top-level tests/conftest.py).
+"""
 
 import base64
-import os
-from collections.abc import AsyncIterator
 
-import fakeredis.aioredis
 import pytest
-import pytest_asyncio
 from fastapi import HTTPException
 from nacl.signing import SigningKey
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-os.environ.setdefault("SECRET_KEY", "test-secret-key")
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.providers.sws_nonce import create_nonce
 from app.auth.providers.sws_strategy import SIWS_TEMPLATE, verify_sws
-from app.database import Base
-
-TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
-
-
-@pytest_asyncio.fixture
-async def engine() -> AsyncIterator[AsyncEngine]:
-    _engine = create_async_engine(TEST_DB_URL, echo=False)
-    async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield _engine
-    await _engine.dispose()
-
-
-@pytest_asyncio.fixture
-async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
-    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    async with factory() as session:
-        yield session
-        await session.rollback()
-
-
-@pytest_asyncio.fixture
-async def redis() -> Redis:
-    return fakeredis.aioredis.FakeRedis(decode_responses=True)
-
-
-@pytest.fixture
-def signing_key() -> SigningKey:
-    """Real ed25519 keypair generated fresh for each test."""
-    return SigningKey.generate()
-
 
 # ---------------------------------------------------------------------------
 # Helpers

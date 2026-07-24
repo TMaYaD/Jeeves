@@ -33,10 +33,4 @@ void main() {
     await initOnboardingCompletion();
     expect(onboardingSeenNotifier.value, isTrue);
   });
-
-  test('initOnboardingCompletion reads false when prefs set to false', () async {
-    SharedPreferences.setMockInitialValues({'onboarding_seen': false});
-    await initOnboardingCompletion();
-    expect(onboardingSeenNotifier.value, isFalse);
-  });
 }

@@ -222,37 +222,22 @@ void main() {
       expect(items.first.intent, 'next');
     });
 
-    test('Completed Inactive/Later → doneAt set, intent=next, no auto-tag',
-        () {
-      const csv =
-          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
-          'Task,Done inactive,Inactive/Later,2024-01-01,,,,,,, \n';
-      final (items, _) = parseCsv(csv);
-      expect(items.first.doneAt, isNotNull);
-      expect(items.first.intent, 'next');
-      expect(items.first.tags, isEmpty);
-    });
-
-    test('Completed Trash → completed wins; doneAt set, intent=next', () {
-      const csv =
-          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
-          'Task,Done trashed,Trash,2024-01-01,,,,,,, \n';
-      final (items, _) = parseCsv(csv);
-      expect(items.first.doneAt, isNotNull);
-      expect(items.first.intent, 'next');
-      expect(items.first.tags, isEmpty);
-    });
-
     test(
-        'Completed Scheduled/Repeating → doneAt set, intent=next, NO @repeating tag',
-        () {
-      const csv =
-          'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
-          'Task,Done repeating,Scheduled/Repeating,2024-01-01,,,,,,, \n';
-      final (items, _) = parseCsv(csv);
-      expect(items.first.doneAt, isNotNull);
-      expect(items.first.intent, 'next');
-      expect(items.first.tags, isNot(contains('@repeating')));
+        'completed rows: COMPLETED wins over STATE — doneAt set, intent=next, '
+        'no state-derived auto-tag (@repeating et al. suppressed)', () {
+      // A completed export row is a logbook entry regardless of its STATE: it
+      // carries doneAt, resets to intent=next, and gains none of the
+      // state-derived auto-tags. isEmpty is the strong form that also proves
+      // @repeating suppression for the Scheduled/Repeating case.
+      for (final state in ['Inactive/Later', 'Trash', 'Scheduled/Repeating']) {
+        final csv =
+            'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+            'Task,Done row,$state,2024-01-01,,,,,,, \n';
+        final (items, _) = parseCsv(csv);
+        expect(items.first.doneAt, isNotNull, reason: 'state=$state');
+        expect(items.first.intent, 'next', reason: 'state=$state');
+        expect(items.first.tags, isEmpty, reason: 'state=$state');
+      }
     });
   });
 

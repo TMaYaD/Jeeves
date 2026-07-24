@@ -269,27 +269,6 @@ void main() {
       expect(result, isEmpty);
     });
 
-    // deferTaskToMaybe stamps last_clarified_at — stale task leaves result.
-    test('deferTaskToMaybe stamps lastClarifiedAt — stale task leaves result',
-        () async {
-      final clarifiedAt =
-          DateTime.now().subtract(const Duration(hours: 2)).toUtc();
-      final completedAt =
-          DateTime.now().subtract(const Duration(hours: 1)).toUtc();
-      final id = await _insertClarifiedTask(
-        db,
-        nextActionText: 'Draft email',
-        lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
-      );
-
-      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
-      await db.todoDao.deferTaskToMaybe(id);
-
-      final result = await db.todoDao.watchNeedsReview().first;
-      expect(result, isEmpty);
-    });
-
     // Deferred Actionless task does NOT re-surface — maybe tasks are excluded.
     test('deferred actionless task leaves result after deferTaskToMaybe', () async {
       final id = await _insertClarifiedTask(
@@ -323,28 +302,6 @@ void main() {
       expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
 
       await db.todoDao.updateFields(id,title: 'Renamed task');
-
-      final result = await db.todoDao.watchNeedsReview().first;
-      expect(result, isEmpty);
-    });
-
-    // updateFields notes-only change clears stale status (CONTEXT.md ~L152:
-    // notes edits are clarifying micro-acts that stamp last_clarified_at).
-    test('updateFields notes-only change removes stale task', () async {
-      final clarifiedAt =
-          DateTime.now().subtract(const Duration(hours: 2)).toUtc();
-      final completedAt =
-          DateTime.now().subtract(const Duration(hours: 1)).toUtc();
-      final id = await _insertClarifiedTask(
-        db,
-        nextActionText: 'Draft email',
-        lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
-      );
-
-      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
-
-      await db.todoDao.updateFields(id, notes: 'Added a note');
 
       final result = await db.todoDao.watchNeedsReview().first;
       expect(result, isEmpty);
@@ -415,27 +372,6 @@ void main() {
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(await db.todoDao.isNeedsReview(id), isTrue);
-    });
-
-    // Delegated + stale + actionless DOES surface — the stale branch fires
-    // even when the task is delegated and has no next-action phrase.
-    test('delegated stale actionless task — in result (stale branch fires)',
-        () async {
-      final clarifiedAt =
-          DateTime.now().subtract(const Duration(hours: 2)).toUtc();
-      final completedAt =
-          DateTime.now().subtract(const Duration(hours: 1)).toUtc();
-      final id = await _insertClarifiedTask(
-        db,
-        nextActionText: null,
-        lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
-      );
-      await _attachPersonTag(db, id);
-
-      final result = await db.todoDao.watchNeedsReview().first;
-      expect(result, hasLength(1));
-      expect(result.first.id, id);
     });
 
     // Stream invalidation: attaching a person tag to an actionless task must

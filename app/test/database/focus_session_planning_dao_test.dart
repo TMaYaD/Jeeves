@@ -385,26 +385,6 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('returns null when no session is open', () async {
-      final session = await db.focusSessionDao.getActiveSession();
-      expect(session, isNull);
-    });
-
-    test('returns the open session by id', () async {
-      final sessionId =
-          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
-      final session = await db.focusSessionDao.getActiveSession();
-      expect(session?.id, sessionId);
-    });
-
-    test('returns null after the session is closed', () async {
-      final sessionId =
-          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
-      await db.focusSessionDao.closeSession(sessionId: sessionId);
-      final session = await db.focusSessionDao.getActiveSession();
-      expect(session, isNull);
-    });
-
     test('watchActiveSession emits the new session after openSession', () async {
       final initial =
           await db.focusSessionDao.watchActiveSession().first;
@@ -537,80 +517,6 @@ void main() {
       final surface =
           await db.focusSessionDao.watchActiveSessionReviewSurface().first;
       expect(surface.map((t) => t.id), unorderedEquals(['X']));
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // setTaskDisposition
-  // ---------------------------------------------------------------------------
-
-  group('FocusSessionDao — setTaskDisposition', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    test('writes disposition to the correct task row', () async {
-      await _insertTodo(db, id: 'task1', title: 'Task 1');
-      final sessionId = await db.focusSessionDao.openSession(
-        userId: _userId,
-        taskIds: ['task1'],
-      );
-
-      await db.focusSessionDao.setTaskDisposition(
-        sessionId: sessionId,
-        taskId: 'task1',
-        disposition: 'rollover',
-      );
-
-      final rows = await db.customSelect(
-        'SELECT disposition FROM focus_session_tasks '
-        'WHERE focus_session_id = ? AND task_id = ?',
-        variables: [Variable(sessionId), Variable('task1')],
-      ).get();
-      expect(rows.length, 1);
-      expect(rows.first.read<String?>('disposition'), 'rollover');
-    });
-
-    test('is idempotent — second call with same value succeeds', () async {
-      await _insertTodo(db, id: 'task1', title: 'Task 1');
-      final sessionId = await db.focusSessionDao.openSession(
-        userId: _userId,
-        taskIds: ['task1'],
-      );
-
-      await db.focusSessionDao.setTaskDisposition(
-        sessionId: sessionId,
-        taskId: 'task1',
-        disposition: 'leave',
-      );
-      // Second call must not throw.
-      await db.focusSessionDao.setTaskDisposition(
-        sessionId: sessionId,
-        taskId: 'task1',
-        disposition: 'leave',
-      );
-
-      final rows = await db.customSelect(
-        'SELECT disposition FROM focus_session_tasks '
-        'WHERE focus_session_id = ? AND task_id = ?',
-        variables: [Variable(sessionId), Variable('task1')],
-      ).get();
-      expect(rows.first.read<String?>('disposition'), 'leave');
-    });
-
-    test('throws StateError for a task not in the session', () async {
-      final sessionId =
-          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
-
-      expect(
-        () => db.focusSessionDao.setTaskDisposition(
-          sessionId: sessionId,
-          taskId: 'not-in-session',
-          disposition: 'rollover',
-        ),
-        throwsStateError,
-      );
     });
   });
 

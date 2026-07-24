@@ -186,78 +186,41 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
-  testWidgets('AppShell navigation drawer labels are correct', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
+  testWidgets('AppShell drawer entries navigate to their routes',
+      (tester) async {
+    // One case per drawer destination. "Now" is the user-facing label for the
+    // execution home (design review: Focus ↔ Now); its route stays /focus, so
+    // tapping it lands on 'Focus body'. Done and Trash sit in the record group
+    // at the bottom of the scrollable nav column, so their tiles need the
+    // drawer scrolled before they are tappable.
+    const cases = <({String label, String body, bool scroll})>[
+      (label: 'Next Actions', body: 'Next Actions body', scroll: false),
+      (label: 'Waiting For', body: 'Waiting For body', scroll: false),
+      (label: 'Maybe', body: 'Someday body', scroll: false),
+      (label: 'Now', body: 'Focus body', scroll: false),
+      (label: 'Done', body: 'Done body', scroll: true),
+      (label: 'Trash', body: 'Trash body', scroll: true),
+    ];
 
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
+    for (final c in cases) {
+      await tester.pumpWidget(_buildShellOnly());
+      await tester.pump();
 
-    expect(find.text('Inbox'), findsOneWidget); // Plus "Inbox body" outside, but 'Inbox' list tile
-    expect(find.text('Next Actions'), findsOneWidget);
-    expect(find.text('Waiting For'), findsOneWidget);
-    expect(find.text('Maybe'), findsOneWidget);
-    // The execution home's user-facing title is "Now" (design review:
-    // Focus ↔ Now); the route stays /focus.
-    expect(find.text('Now'), findsOneWidget);
-    expect(find.text('Focus'), findsNothing);
-    await tester.pump(const Duration(milliseconds: 100));
-  });
+      await tester.tap(find.byIcon(Icons.menu));
+      await tester.pumpAndSettle();
 
-  testWidgets('AppShell navigates to Next Actions on drawer tap', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
+      if (c.scroll) {
+        await tester.drag(find.byType(Drawer), const Offset(0, -600));
+        await tester.pumpAndSettle();
+      }
 
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text(c.label));
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Next Actions'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Next Actions body'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 100));
-  });
-
-  testWidgets('AppShell navigates to Waiting For on drawer tap', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Waiting For'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Waiting For body'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 100));
-  });
-
-  testWidgets('AppShell navigates to Maybe on drawer tap', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Maybe'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Someday body'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 100));
-  });
-
-  testWidgets('AppShell "Now" entry navigates to /focus on tap', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Now'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Focus body'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text(c.body), findsOneWidget,
+          reason: 'tapping ${c.label} should navigate to ${c.body}');
+      await tester.pump(const Duration(milliseconds: 100));
+    }
   });
 
   testWidgets('AppShell drawer shows Settings tile', (tester) async {
@@ -304,35 +267,4 @@ void main() {
         isNull);
   });
 
-  testWidgets('AppShell navigates to Done on drawer tap', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-    await tester.drag(find.byType(Drawer), const Offset(0, -600));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Done'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Done body'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 100));
-  });
-
-  testWidgets('AppShell navigates to Trash on drawer tap', (tester) async {
-    await tester.pumpWidget(_buildShellOnly());
-    await tester.pump();
-
-    await tester.tap(find.byIcon(Icons.menu));
-    await tester.pumpAndSettle();
-    await tester.drag(find.byType(Drawer), const Offset(0, -600));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Trash'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Trash body'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 100));
-  });
 }
