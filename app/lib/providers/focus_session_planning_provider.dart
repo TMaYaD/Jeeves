@@ -425,7 +425,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
             snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
       }
     });
-    Future.microtask(_preloadRolloverIds);
+    Future.microtask(ensureRolloverPreload);
     return const FocusSessionPlanningState();
   }
 
@@ -434,22 +434,47 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       ref.read(clarificationServiceProvider);
   String get _userId => ref.read(currentUserIdProvider);
 
-  /// Pre-populates [pendingSelectedTaskIds] with rollover tasks from the most
-  /// recently closed session so they appear pre-selected in the plan summary.
-  Future<void> _preloadRolloverIds() async {
-    final ids = await _db.focusSessionDao
-        .getLastClosedSessionRolloverTaskIds();
-    if (ids.isEmpty) return;
-    final current = Set.of(state.pendingSelectedTaskIds);
-    final newIds = ids.where((id) => !current.contains(id)).toList();
-    if (newIds.isNotEmpty) {
-      state = state.copyWith(
-        pendingSelectedTaskIds: [
-          ...newIds,
-          ...state.pendingSelectedTaskIds,
-        ],
-      );
-    }
+  /// (Re)computes rollover pre-selection from the most recently closed session
+  /// and merges it into [pendingSelectedTaskIds] so carried-over tasks arrive
+  /// pre-selected in the Plan Summary.
+  ///
+  /// Idempotent and safe to call on every planning entry: the notifier
+  /// [build] microtask (cold start), [reEnterPlanning] (the sequenced
+  /// Shutdown → Planning replan), and the planning screen mount (warm-process
+  /// replan). A once-per-build preload missed every in-process replan path
+  /// (#461); recomputing at each entry closes that gap.
+  ///
+  /// Skipped entirely while a session is open ([FocusSessionDao.getActiveSession]
+  /// non-null): a mid-day cold start would otherwise read the *previous*
+  /// period's rollover ids — already consumed by the open plan — into a fresh
+  /// draft. The blocked-start interstitial owns that state (ADR-0020).
+  ///
+  /// Merge respects **both** lists: an id is added only when it is neither
+  /// already pending nor in [reviewedTaskIds], so a task the user deliberately
+  /// skipped or deselected is never resurrected by a repeated call. (An
+  /// [undoTaskReview] clears a task from both lists by design, so a later call
+  /// legitimately restores it as the rollover default — CONTEXT.md § Engagement.)
+  ///
+  /// Read-only over dispositions: no Disposition is minted here — carrying a
+  /// task over stays a user decision (CONTEXT.md § Engagement, Disposition).
+  Future<void> ensureRolloverPreload() async {
+    if (await _db.focusSessionDao.getActiveSession() != null) return;
+    if (!ref.mounted) return;
+    final ids =
+        await _db.focusSessionDao.getLastClosedSessionRolloverTaskIds();
+    if (ids.isEmpty || !ref.mounted) return;
+    final pending = Set.of(state.pendingSelectedTaskIds);
+    final reviewed = Set.of(state.reviewedTaskIds);
+    final newIds = ids
+        .where((id) => !pending.contains(id) && !reviewed.contains(id))
+        .toList();
+    if (newIds.isEmpty) return;
+    state = state.copyWith(
+      pendingSelectedTaskIds: [
+        ...newIds,
+        ...state.pendingSelectedTaskIds,
+      ],
+    );
   }
 
   // ---- Step navigation -------------------------------------------------------
@@ -971,5 +996,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       availableTimeSet: preservedTimeSet,
       energyLevel: preservedEnergy,
     );
+    // Re-populate the rollover pre-selection: build()'s microtask ran once per
+    // process and never fires again on this in-process replan path (#461). The
+    // just-closed session's rollover ids are now committed and queryable — the
+    // caller (close_day_step) awaits this before routing to the planning
+    // screen, so the carried-over tasks are pre-selected the moment it mounts.
+    await ensureRolloverPreload();
   }
 }
