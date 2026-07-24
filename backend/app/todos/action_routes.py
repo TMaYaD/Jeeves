@@ -26,6 +26,8 @@ dead-letter a legitimate replay.  The 0..1-current invariant is application-
 enforced in later stories, not by the route or a constraint.
 """
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -101,7 +103,7 @@ async def create_action(
 
 
 async def _converge_onto(
-    db: AsyncSession, existing: Action, data: dict, current_user: User
+    db: AsyncSession, existing: Action, data: dict[str, Any], current_user: User
 ) -> Action:
     """Apply the replayed client-owned fields onto an existing row (ADR-0015).
 
