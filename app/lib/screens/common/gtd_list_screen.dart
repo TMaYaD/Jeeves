@@ -73,7 +73,9 @@ class GtdListScreen extends ConsumerWidget {
                 emptyTitle: emptyTitle,
                 emptySubtitle: emptySubtitle,
                 dataBuilder: (context, items) => ListView.builder(
-                  padding: const EdgeInsets.only(top: 8, bottom: 24),
+                  // bottom: 96 clears the global capture FAB (#458) floating
+                  // over the bottom-right of every shell list.
+                  padding: const EdgeInsets.only(top: 8, bottom: 96),
                   itemCount: items.length,
                   itemBuilder: (_, i) => _GtdListItem(
                     todo: items[i],

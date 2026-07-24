@@ -30,6 +30,7 @@ import '../../providers/database_provider.dart';
 import '../../providers/task_detail_provider.dart';
 import '../../services/clarification_service.dart';
 import '../../widgets/async_subject.dart';
+import '../../widgets/capture/capture_fab.dart';
 import '../../widgets/capture_outcomes_section.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/process_to_handlers.dart';
@@ -258,6 +259,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   Widget _buildScaffold(BuildContext context, AsyncValue<Capture?> subject) {
     return Scaffold(
       backgroundColor: Colors.white,
+      floatingActionButton: const CaptureFab(),
       appBar: AppBar(
         title: const Text('Clarify'),
         backgroundColor: Colors.white,

@@ -13,6 +13,7 @@ import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
+import 'package:jeeves/widgets/capture/capture_fab.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
 
@@ -335,4 +336,62 @@ void main() {
     expect(find.text('Trash body'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 100));
   });
+
+  // -------------------------------------------------------------------------
+  // Global capture FAB (#458)
+  // -------------------------------------------------------------------------
+
+  testWidgets('capture FAB is suppressed on the Inbox (QuickAddBar owns it)',
+      (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    expect(find.text('Inbox body'), findsOneWidget);
+    expect(find.byType(CaptureFab), findsNothing);
+  });
+
+  // Every non-Inbox shell route carries the FAB. Driven off the drawer so the
+  // production route-aware suppression is exercised end to end.
+  for (final (label, body) in const [
+    ('Now', 'Focus body'),
+    ('Next Actions', 'Next Actions body'),
+    ('Waiting For', 'Waiting For body'),
+    ('Maybe', 'Someday body'),
+  ]) {
+    testWidgets('capture FAB is present on the $label route', (tester) async {
+      await tester.pumpWidget(_buildShellOnly());
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.menu));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+
+      expect(find.text(body), findsOneWidget);
+      expect(find.byType(CaptureFab), findsOneWidget);
+    });
+  }
+
+  // Done / Trash live below the drawer's scroll fold, so each needs its own
+  // fresh pump — only the Inbox mock route carries a menu button to reopen the
+  // drawer with.
+  for (final (label, body) in const [
+    ('Done', 'Done body'),
+    ('Trash', 'Trash body'),
+  ]) {
+    testWidgets('capture FAB is present on the $label route', (tester) async {
+      await tester.pumpWidget(_buildShellOnly());
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.menu));
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(Drawer), const Offset(0, -600));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+
+      expect(find.text(body), findsOneWidget);
+      expect(find.byType(CaptureFab), findsOneWidget);
+    });
+  }
 }

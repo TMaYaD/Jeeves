@@ -13,6 +13,7 @@ import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
+import '../../widgets/capture/capture_fab.dart';
 import '../../widgets/jeeves_logo.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -34,6 +35,7 @@ class SettingsScreen extends ConsumerWidget {
         leading: BackButton(onPressed: () => context.pop()),
       ),
       backgroundColor: Colors.white,
+      floatingActionButton: const CaptureFab(),
       body: ValueListenableBuilder<bool>(
         valueListenable: authStateNotifier,
         builder: (context, isAuthenticated, _) => ListView(

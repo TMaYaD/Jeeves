@@ -29,6 +29,7 @@ import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
+import '../../widgets/capture/capture_fab.dart';
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/next_step.dart';
@@ -112,6 +113,7 @@ class _PeriodicReviewScreenState
         onBack: null,
         child: Scaffold(
           backgroundColor: Colors.white,
+          floatingActionButton: CaptureFab(),
           body: SafeArea(child: SummaryStep()),
         ),
       );

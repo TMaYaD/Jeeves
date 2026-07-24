@@ -12,6 +12,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/widgets/capture/capture_fab.dart';
 import 'package:jeeves/widgets/ceremony/wizard.dart';
 
 const _ceremonyId = 'test_ritual';
@@ -466,6 +467,64 @@ void main() {
 
       expect(find.text('Step Alpha'), findsNothing);
       expect(find.text('Step Beta'), findsOneWidget);
+    });
+  });
+
+  group('Global capture FAB (#458) inside the wizard', () {
+    // A step whose body fills the content region and whose footer is unusually
+    // tall (a stacked action row). Because the FAB is anchored to the content
+    // region — not the scaffold — it must clear the footer's forward slot no
+    // matter how tall that footer grows across steps, which is what "clearance
+    // of the tallest per-step footer, not just one" means for the geometry.
+    WizardStep stepWithTallFooter() => WizardStep(
+          title: 'Step Alpha',
+          body: const SizedBox.expand(
+            child: Center(child: Text('Body content')),
+          ),
+          footer: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 80, child: Placeholder()),
+                SizedBox(
+                  key: _slotKey,
+                  width: 148,
+                  height: 48,
+                  child: FilledButton(
+                    key: _nextKey,
+                    onPressed: () {},
+                    child: const Text('Next step'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+
+    testWidgets('renders the capture FAB', (tester) async {
+      await tester.pumpWidget(_Harness(
+        buildSteps: (_, _) => [stepWithTallFooter()],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(CaptureFab), findsOneWidget);
+    });
+
+    testWidgets('FAB bottom edge clears the footer forward slot top edge',
+        (tester) async {
+      await tester.pumpWidget(_Harness(
+        buildSteps: (_, _) => [stepWithTallFooter()],
+      ));
+      await tester.pumpAndSettle();
+
+      final fabBottom = tester.getRect(find.byType(CaptureFab)).bottom;
+      final slotTop = tester.getRect(find.byKey(_slotKey)).top;
+
+      // The FAB lives in the content region, above the footer that owns the
+      // single forward affordance — never overlapping it, whatever the
+      // footer's height.
+      expect(fabBottom, lessThanOrEqualTo(slotTop));
     });
   });
 }

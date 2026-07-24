@@ -18,6 +18,7 @@ import 'package:jeeves/providers/sprint_timer_provider.dart'
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
+import 'package:jeeves/widgets/capture/capture_fab.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
@@ -145,9 +146,19 @@ void main() {
       await _showTaskDetail(tester, widget, router, 'task2');
 
       expect(find.text('ADD PROJECT'), findsOneWidget);
-      expect(find.byIcon(Icons.add), findsOneWidget);
+      // Keyed rather than found by icon: the global capture FAB (#458) also
+      // renders Icons.add on this screen, so the icon alone is ambiguous.
+      expect(find.byKey(const Key('add_context_tag')), findsOneWidget);
       expect(find.text('NOTES'), findsOneWidget);
       expect(find.text('DUE DATE'), findsOneWidget);
+    });
+
+    testWidgets('carries the global capture FAB', (tester) async {
+      final todo = await _insertAt(db, id: 'task2b', title: 'My task');
+      final (widget, router) = _buildScreen(db, 'task2b', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'task2b');
+
+      expect(find.byType(CaptureFab), findsOneWidget);
     });
 
     testWidgets('hides the Captured from section when there are no links',

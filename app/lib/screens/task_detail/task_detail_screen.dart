@@ -9,6 +9,7 @@ import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
 import '../../widgets/async_subject.dart';
+import '../../widgets/capture/capture_fab.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
@@ -106,6 +107,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
             scrolledUnderElevation: 0,
             leading: _backLeading(),
           ),
+          floatingActionButton: const CaptureFab(),
           body: surface,
         ),
         dataBuilder: (context, todo) {
@@ -125,6 +127,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           return Scaffold(
             backgroundColor: Colors.white,
             appBar: _buildAppBar(todo),
+            floatingActionButton: const CaptureFab(),
             body: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -190,6 +193,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         runSpacing: 8,
                         onTap: (_) => _showContextTagEditor(context),
                         trailing: GestureDetector(
+                          key: const Key('add_context_tag'),
                           onTap: () => _showContextTagEditor(context),
                           child: Container(
                             width: 24,

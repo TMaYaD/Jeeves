@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/import_provider.dart';
+import '../widgets/capture/capture_fab.dart';
 
 class ImportScreen extends ConsumerStatefulWidget {
   const ImportScreen({super.key});
@@ -92,6 +93,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
         centerTitle: false,
       ),
       backgroundColor: const Color(0xFFF9FAFB),
+      floatingActionButton: const CaptureFab(),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [

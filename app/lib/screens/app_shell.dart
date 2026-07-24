@@ -7,6 +7,7 @@ import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
 import '../providers/tags_provider.dart';
+import '../widgets/capture/capture_fab.dart';
 import '../widgets/jeeves_logo.dart';
 import '../widgets/nudge_banner.dart';
 import 'common/tag_cloud.dart';
@@ -30,6 +31,13 @@ class AppShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // The Inbox already owns capture through its QuickAddBar pill, so the FAB
+    // is suppressed there to avoid a redundant double affordance (#458 design
+    // ruling). Every other shell route (Now, Next Actions, Waiting For, Maybe,
+    // Done, Trash) gets the global capture FAB.
+    final location = GoRouterState.of(context).uri.path;
+    final showCaptureFab = location != '/inbox';
+
     return Shortcuts(
       shortcuts: {
         LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyK):
@@ -50,6 +58,7 @@ class AppShell extends ConsumerWidget {
         },
         child: Scaffold(
           drawer: const CustomDrawer(),
+          floatingActionButton: showCaptureFab ? const CaptureFab() : null,
           body: Column(
             children: [
               const NudgeBanner(),

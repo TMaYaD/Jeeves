@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../models/search_result.dart';
 import '../../providers/search_provider.dart';
 import '../../widgets/async_list.dart';
+import '../../widgets/capture/capture_fab.dart';
 import 'widgets/recent_searches_list.dart';
 import 'widgets/search_filter_bar.dart';
 import 'widgets/search_result_tile.dart';
@@ -83,6 +84,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final recentSearches = ref.watch(recentSearchesProvider);
 
     return Scaffold(
+      floatingActionButton: const CaptureFab(),
       body: SafeArea(
         child: Column(
           children: [

@@ -232,7 +232,14 @@ class FocusScreen extends ConsumerWidget {
                             ...carriedOver
                                 .map((t) => _CarriedOverTaskRow(todo: t)),
                           ],
-                          const SizedBox(height: 32),
+                          // Trailing clearance for the global capture FAB
+                          // (#458): the shell FAB floats over the bottom-right
+                          // of this scroll view, so the last content — the
+                          // shutdown/re-plan callout and, when present, the
+                          // CARRIED OVER section beneath it — needs ~96px below
+                          // it to scroll clear of the FAB rather than sit under
+                          // it.
+                          const SizedBox(height: 96),
                         ],
                       );
                 },

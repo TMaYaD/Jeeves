@@ -78,7 +78,8 @@ class WaitingForScreen extends ConsumerWidget {
                         ),
                       ),
                     ],
-                    const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                    // 96px clears the global capture FAB (#458).
+                    const SliverToBoxAdapter(child: SizedBox(height: 96)),
                   ],
                 ),
               ),

@@ -42,6 +42,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../capture/capture_fab.dart';
+
 /// One step of a [Wizard]. Carries display metadata and the widget tree
 /// for the step body and its footer.
 ///
@@ -203,7 +205,25 @@ class _WizardState extends State<Wizard> {
               accentColor: widget.accentColor,
               segmentCount: segmentCount,
             ),
-            Expanded(child: pageView),
+            // The global capture FAB (#458) is anchored bottom-right of the
+            // *content region*, not the scaffold, so it sits above the footer
+            // by construction — whatever the active step's footer height — and
+            // the footer's single forward-affordance slot is never occluded.
+            // A shell FAB can't reach here: the ceremonies are top-level routes
+            // pushed above the AppShell, so the wizard is capture's leverage
+            // point for all three at once.
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: pageView),
+                  const Positioned(
+                    right: 16,
+                    bottom: 16,
+                    child: CaptureFab(),
+                  ),
+                ],
+              ),
+            ),
             if (step.footer != null)
               // ExcludeFocus keeps keyboard/assistive-tech activation out of
               // the swapped-in footer for the same window IgnorePointer

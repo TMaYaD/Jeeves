@@ -17,6 +17,7 @@ import 'package:go_router/go_router.dart';
 import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/focus_session_planning_provider.dart';
+import '../../widgets/capture/capture_fab.dart';
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/day_checkin_energy_step.dart';
@@ -101,6 +102,7 @@ class _FocusSessionPlanningScreenState
         onBack: null,
         child: Scaffold(
           backgroundColor: Colors.white,
+          floatingActionButton: CaptureFab(),
           body: SafeArea(child: ScheduledReviewStep()),
         ),
       );

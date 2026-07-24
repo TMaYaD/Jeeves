@@ -15,6 +15,7 @@ import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../services/notification_service.dart';
+import '../widgets/capture/capture_fab.dart';
 import '../widgets/elapsed_timer_widget.dart';
 
 class ActiveFocusScreen extends ConsumerStatefulWidget {
@@ -141,6 +142,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
     return Scaffold(
       backgroundColor: Colors.white,
+      floatingActionButton: const CaptureFab(),
       body: SafeArea(
         child: todoAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
