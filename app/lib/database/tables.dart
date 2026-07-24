@@ -61,7 +61,7 @@ class Todos extends Table with Synced {
   ///   - title / notes / Intent / due-date edits
   ///   - any Action mutation (next-action text, energy, time-estimate, …)
   ///   - PersonBlocker (person-tag) add / remove
-  ///   - Outcome completion or trashing (and the reverse: restore, clearDoneAt)
+  ///   - Outcome completion or trashing (and the reverse: restore)
   ///
   /// Non-stamping writes include current-Action completion (engagement, not
   /// clarification), TimeLog writes, and Area / Label changes (organising).

@@ -878,7 +878,7 @@ void main() {
       expect(find.byKey(const Key('clarify_title')), findsOneWidget);
 
       // The row is gone from local storage.
-      await db.captureDao.deleteCapture('x');
+      await (db.delete(db.captures)..where((c) => c.id.equals('x'))).go();
       feed.emitMissing();
       await tester.pumpAndSettle();
 
@@ -896,7 +896,7 @@ void main() {
       await feed.emitFrom(db, 'x');
       await tester.pumpAndSettle();
 
-      await db.captureDao.deleteCapture('x');
+      await (db.delete(db.captures)..where((c) => c.id.equals('x'))).go();
       feed.emitMissing();
       await tester.pumpAndSettle();
 

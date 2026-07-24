@@ -103,11 +103,6 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
         );
   }
 
-  /// Emits true as soon as any capture exists (Inbox or clarified). Feeds the
-  /// onboarding first-launch collapse alongside `InboxDao.watchHasTodos`.
-  Stream<bool> watchHasCaptures() =>
-      (select(captures)..limit(1)).watch().map((rows) => rows.isNotEmpty);
-
   /// Emits true as soon as **any** item exists — a Capture (Inbox or clarified)
   /// or an Outcome (`todos`). Drives the first-launch onboarding collapse:
   /// once the split lands, a brand-new user's first quick-add is a Capture, but
@@ -118,14 +113,6 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
         'OR EXISTS(SELECT 1 FROM todos)) AS has_any',
         readsFrom: {captures, todos},
       ).watch().map((rows) => rows.first.read<int>('has_any') != 0);
-
-  /// Count of Inbox captures — the Inbox badge.
-  Stream<int> watchInboxCount() {
-    final query = selectOnly(captures)
-      ..addColumns([captures.id.count()])
-      ..where(captures.clarifiedAt.isNull());
-    return query.map((row) => row.read(captures.id.count()) ?? 0).watchSingle();
-  }
 
   Future<Capture?> getCapture(String id) =>
       (select(captures)..where((c) => c.id.equals(id))).getSingleOrNull();
@@ -206,15 +193,6 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
       ),
     );
     attachedDatabase.notifyCapturesViewWrite();
-  }
-
-  /// Delete a Capture. The clarify flow never deletes Captures (merge links,
-  /// never consumes — ADR-0006); this exists only for local-only cleanup and
-  /// test teardown.
-  Future<int> deleteCapture(String id) async {
-    final rows = await (delete(captures)..where((c) => c.id.equals(id))).go();
-    attachedDatabase.notifyCapturesViewWrite();
-    return rows;
   }
 
   // --- Capture ↔ Outcome provenance links -----------------------------------

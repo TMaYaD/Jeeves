@@ -62,7 +62,7 @@ Future<String> _attachPersonTag(
 void main() {
   setUpAll(configureSqliteForTests);
 
-  group('TodoDao.watchNeedsReview and getNeedsReviewCount', () {
+  group('TodoDao.getNeedsReview', () {
     late GtdDatabase db;
 
     setUp(() {
@@ -80,9 +80,8 @@ void main() {
         lastNextActionCompletionAt: null,
       );
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
-      expect(await db.todoDao.getNeedsReviewCount(), 0);
     });
 
     // Fixture 2: Stale task (session closed after last clarification).
@@ -99,11 +98,10 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(result.first.nextActionText, isNotNull);
-      expect(await db.todoDao.getNeedsReviewCount(), 1);
     });
 
     // Fixture 3: Stale task with no next_action_text — Actionless + Stale.
@@ -120,7 +118,7 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(result.first.nextActionText, isNull);
@@ -153,7 +151,7 @@ void main() {
         userId: Value(_userId),
       ));
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result.any((t) => t.id == id), isTrue);
     });
 
@@ -171,11 +169,11 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+      expect(await db.todoDao.getNeedsReview(), hasLength(1));
 
       await db.todoDao.stampLastClarifiedAt(id);
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
     });
 
@@ -187,11 +185,11 @@ void main() {
         lastNextActionCompletionAt: null,
       );
 
-      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+      expect(await db.todoDao.getNeedsReview(), hasLength(1));
 
       await db.todoDao.setNextActionText(id,'Draft proposal');
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
     });
 
@@ -200,7 +198,7 @@ void main() {
       final id = await _insertClarifiedTask(db, nextActionText: null);
       await db.todoDao.markDone(id);
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
     });
 
@@ -213,7 +211,7 @@ void main() {
         updates: {db.todos},
       );
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
     });
 
@@ -228,7 +226,7 @@ void main() {
         createdAt: Value(now),
       ));
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
     });
 
@@ -242,11 +240,10 @@ void main() {
         lastClarifiedAt: null,
       );
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(result.first.nextActionText, isNull);
-      expect(await db.todoDao.getNeedsReviewCount(), 1);
     });
 
     // markDone stamps last_clarified_at — task leaves result.
@@ -262,10 +259,10 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+      expect(await db.todoDao.getNeedsReview(), hasLength(1));
       await db.todoDao.markDone(id);
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
     });
 
@@ -281,7 +278,7 @@ void main() {
 
       // After deferring, intent = 'maybe'. The predicate requires intent = 'next',
       // so the task is excluded regardless of the Actionless branch.
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result.any((t) => t.id == id), isFalse);
     });
 
@@ -299,23 +296,23 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+      expect(await db.todoDao.getNeedsReview(), hasLength(1));
 
       await db.todoDao.updateFields(id,title: 'Renamed task');
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
     });
 
-    // isNeedsReview returns correct values.
-    test('isNeedsReview returns true for actionless task, false after fix', () async {
+    // Membership flips as the actionless condition is fixed.
+    test('actionless task is in the queue, leaves after a next action is set', () async {
       final id = await _insertClarifiedTask(db, nextActionText: null);
 
-      expect(await db.todoDao.isNeedsReview(id), isTrue);
+      expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isTrue);
 
       await db.todoDao.setNextActionText(id,'Do something');
 
-      expect(await db.todoDao.isNeedsReview(id), isFalse);
+      expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isFalse);
     });
 
     // ----- Delegated (person-tagged) actionless branch (#289) ----------------
@@ -330,10 +327,8 @@ void main() {
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
-      expect(await db.todoDao.getNeedsReviewCount(), 0);
-      expect(await db.todoDao.isNeedsReview(id), isFalse);
     });
 
     // Delegated + whitespace-only next_action_text — also excluded (guards
@@ -347,9 +342,8 @@ void main() {
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
-      expect(await db.todoDao.isNeedsReview(id), isFalse);
     });
 
     // Delegated + stale (lastNextActionCompletionAt > lastClarifiedAt) DOES
@@ -368,46 +362,9 @@ void main() {
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.watchNeedsReview().first;
+      final result = await db.todoDao.getNeedsReview();
       expect(result, hasLength(1));
       expect(result.first.id, id);
-      expect(await db.todoDao.isNeedsReview(id), isTrue);
-    });
-
-    // Stream invalidation: attaching a person tag to an actionless task must
-    // remove it from the live stream. Locks in the readsFrom widening to
-    // {todos, todoTags, tags}.
-    test(
-        'stream invalidates on person-tag attach — actionless task disappears',
-        () async {
-      final id = await _insertClarifiedTask(
-        db,
-        nextActionText: null,
-        lastNextActionCompletionAt: null,
-      );
-
-      final emissions = <List<Todo>>[];
-      final sub = db.todoDao.watchNeedsReview().listen(emissions.add);
-
-      // Let the initial emission settle.
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(emissions, isNotEmpty,
-          reason: 'stream should have emitted an initial value');
-      expect(emissions.last.any((t) => t.id == id), isTrue,
-          reason: 'baseline: actionless task should surface');
-
-      // Attach a person tag — the predicate must now exclude this row.
-      await _attachPersonTag(db, id);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      await sub.cancel();
-
-      expect(emissions.length, greaterThanOrEqualTo(2),
-          reason:
-              'stream should re-emit after person-tag attach (proves readsFrom '
-              'covers todo_tags/tags)');
-      expect(emissions.last.any((t) => t.id == id), isFalse,
-          reason:
-              'after person-tag attach, actionless+delegated task must leave the stream');
     });
   });
 }
