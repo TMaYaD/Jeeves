@@ -124,6 +124,24 @@ void main() {
     });
   });
 
+  group('hintFor — after an Action completion (#474)', () {
+    test('a completed Action leaves the Outcome Actionless → noNextAction, '
+        'even though the DAO surfaced it through the widened Stale branch', () {
+      // Completion terminates the current Action without stamping, so the
+      // Outcome is by construction Actionless. `isStale` stays false here: it
+      // mirrors only the session-history half of the widened DAO branch, and
+      // "define the next action" is the accurate prompt either way.
+      expect(
+        hintFor(_todo(), hasPersonTag: false, isStale: false),
+        ReclarifyHint.noNextAction,
+      );
+      expect(
+        hintFor(_todo(), hasPersonTag: true, isStale: false),
+        ReclarifyHint.noNextAction,
+      );
+    });
+  });
+
   group('isStaleReclarification', () {
     test('null lastNextActionCompletionAt → not stale', () {
       expect(isStaleReclarification(_todo()), isFalse);

@@ -291,19 +291,40 @@ EXISTS (
   /// Marks [todoId] as done by setting [done_at] to the current UTC timestamp.
   /// Also stamps [last_clarified_at] since marking done is a clarifying act.
   ///
+  /// Achieving the Outcome also **terminates its current Action** as `done`
+  /// (ADR-0001 story 4): the user finished that step in the act of finishing
+  /// the Outcome, so the Action row records a real completion rather than a
+  /// supersession. `planned` rows are left untouched as history, and the
+  /// cursor is cleared with the Action-side write so both sides keep agreeing.
+  ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   ///
   /// Returns the number of affected rows (0 if [todoId] not found, 1 on
   /// success). Inbox callers gate state advancement on a non-zero result.
   Future<int> markDone(String todoId, {DateTime? now}) async {
-    final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
-    return customUpdate(
-      'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
-      'WHERE id = ?',
-      variables: [Variable(ts), Variable(ts), Variable(ts), Variable(todoId)],
-      updates: {todos},
-      updateKind: UpdateKind.update,
-    );
+    final ts = (now ?? DateTime.now()).toUtc();
+    final tsIso = ts.toIso8601String();
+    late final int affected;
+    var actionTerminated = false;
+    await transaction(() async {
+      affected = await customUpdate(
+        'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
+        'WHERE id = ?',
+        variables: [
+          Variable(tsIso),
+          Variable(tsIso),
+          Variable(tsIso),
+          Variable(todoId),
+        ],
+        updates: {todos},
+        updateKind: UpdateKind.update,
+      );
+      actionTerminated = (await attachedDatabase.actionDao
+              .applyCompleteCurrentAction(todoId, ts: ts))
+          .changed;
+    });
+    if (actionTerminated) attachedDatabase.notifyActionsViewWrite();
+    return affected;
   }
 
   /// Stream of completed todos, ordered by [done_at] descending.
@@ -481,6 +502,22 @@ EXISTS (
   // Re-clarification surface (issue #237)
   // ---------------------------------------------------------------------------
 
+  /// The latest **Action termination** for the Outcome: the `done_at` of its
+  /// most recently completed Action (`updated_at` / `created_at` only as
+  /// fallbacks for a foreign row that arrived without one).
+  ///
+  /// `superseded` rows are deliberately excluded (ADR-0001 story 4). Every
+  /// app-side supersession stamps `last_clarified_at` with the same timestamp
+  /// it writes to the retired row, so `last_clarified_at < updated_at` is never
+  /// true for an honest one; the only `superseded` rows that could outrun the
+  /// stamp are the non-stamping *repairs* (multi-current convergence, the
+  /// startup sweep), and reading those as engagement would flip an Outcome
+  /// Stale on repair alone.
+  static const _latestActionTerminationClause = '''
+(SELECT MAX(COALESCE(actions.done_at, actions.updated_at, actions.created_at))
+ FROM actions
+ WHERE actions.outcome_id = todos.id AND actions.role = 'done')''';
+
   static const _needsReviewWhere = '''
 clarified = 1
 AND done_at IS NULL
@@ -489,6 +526,9 @@ AND (
   (last_next_action_completion_at IS NOT NULL
    AND (last_clarified_at IS NULL
         OR last_clarified_at < last_next_action_completion_at))
+  OR ($_latestActionTerminationClause IS NOT NULL
+      AND (last_clarified_at IS NULL
+           OR last_clarified_at < $_latestActionTerminationClause))
   OR (
     NOT $_hasCurrentActionClause
     AND NOT EXISTS (
@@ -501,11 +541,12 @@ AND (
 
   /// Stream of tasks needing re-clarification: Stale or Actionless per spec.
   ///
-  /// Stale: worked on in a session more recently than last clarified — read
-  /// from `last_next_action_completion_at`, which the Review surface stamps at
-  /// session close. It means "worked on in a session", not "an Action
-  /// terminated"; widening it over Action-termination timestamps waits for
-  /// those timestamps to exist (story 4).
+  /// Stale: engaged with more recently than last clarified, read from two
+  /// independent signals. `last_next_action_completion_at` means "worked on in
+  /// a session" and is stamped once, at session close, by the Review surface;
+  /// [_latestActionTerminationClause] means "an Action was completed" and comes
+  /// from the Action rows themselves (ADR-0001 story 4), so completing the
+  /// current Action surfaces the Outcome even when no session ever closed.
   /// Actionless: no current Action row AND not delegated. Delegated tasks
   /// (carrying any person-typed tag) are excluded from the actionless branch —
   /// their cadence belongs to the weekly Waiting For review, not the daily
@@ -752,13 +793,19 @@ AND (
   /// | `nextAction` | true      | 'next'  | clear   | set if `nextActionText`   |
   /// | `waitingFor` | true      | 'next'  | clear   | set if `nextActionText`   |
   /// | `maybe`      | true      | 'maybe' | clear   | leave                     |
-  /// | `done`       | true      | leave   | now     | leave                     |
+  /// | `done`       | true      | leave   | now     | clear (Action completed)  |
   /// | `trash`      | true      | 'trash' | leave   | leave                     |
   ///
   /// Cleanup rule: any non-Done, non-Trash route clears `done_at` if set, so
   /// promoting a previously-completed task back to active state can't leave
   /// a stale `done_at` behind. Done refreshes the timestamp; Trash leaves it
   /// alone so a completion record is preserved through soft-delete.
+  ///
+  /// Done also terminates the Outcome's current Action as `done` (ADR-0001
+  /// story 4) — the same cascade [markDone] runs, which is why the Done row's
+  /// `next_action_text` is cleared rather than left: the cursor has to keep
+  /// agreeing with the Action side. Trash deliberately leaves Action rows
+  /// alone; they persist exactly as the Outcome row does.
   ///
   /// Person-tag associations are orthogonal to the intent axis:
   /// [applyRouting] only touches them when the caller explicitly passes
@@ -786,6 +833,7 @@ AND (
     final touchesAction = (to == RoutingKind.nextAction ||
             to == RoutingKind.waitingFor) &&
         nextActionText != null;
+    var actionTerminated = false;
     await transaction(() async {
       final companion = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
@@ -831,6 +879,14 @@ AND (
         }
       }
 
+      if (to == RoutingKind.done) {
+        // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
+        // the same cascade markDone runs, sharing one apply-variant.
+        actionTerminated = (await attachedDatabase.actionDao
+                .applyCompleteCurrentAction(todoId, ts: ts))
+            .changed;
+      }
+
       if (personTagIds != null) {
         if (userId == null) {
           throw ArgumentError(
@@ -847,7 +903,9 @@ AND (
     // without depending solely on the async update bridge (#342). Person-tag
     // edits also touch the `todo_tags` view, so refresh those watchers too.
     attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
-    if (touchesAction) attachedDatabase.notifyActionsViewWrite();
+    if (touchesAction || actionTerminated) {
+      attachedDatabase.notifyActionsViewWrite();
+    }
   }
 
   static String? _normaliseText(String text) {

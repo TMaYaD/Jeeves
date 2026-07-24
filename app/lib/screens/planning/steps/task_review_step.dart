@@ -28,9 +28,16 @@ enum ReclarifyHint {
   staleWaitingFor,
 }
 
-/// Returns true when [t]'s session timestamps mark it as stale per the
-/// `_needsReviewWhere` stale branch: a session completion happened after the
-/// last clarification stamp.
+/// Returns true when [t]'s session timestamps mark it as stale: a session
+/// closed after the last clarification stamp.
+///
+/// This mirrors only the **session-history** half of `_needsReviewWhere`'s
+/// widened Stale branch. The other half — an Action completed after the last
+/// clarification (ADR-0001 story 4) — is deliberately not mirrored: a
+/// termination-surfaced Outcome is by construction Actionless, and [hintFor]
+/// already renders Actionless as [ReclarifyHint.noNextAction], which is the
+/// accurate, actionable prompt after finishing an Action. Plumbing termination
+/// timestamps into the planning snapshot would buy no better hint.
 bool isStaleReclarification(Todo t) =>
     t.lastNextActionCompletionAt != null &&
     (t.lastClarifiedAt == null ||

@@ -226,6 +226,43 @@ async def test_action_patch_and_delete(client: AsyncClient, db: AsyncSession) ->
 
 
 @pytest.mark.asyncio
+async def test_completion_patch_replays_idempotently(client: AsyncClient, db: AsyncSession) -> None:
+    """A completion replayed from an offline queue converges (ADR-0001 story 4).
+
+    The client uploads Action completion as PATCH {role, done_at, updated_at};
+    `update_action` applies fields unconditionally, so replaying the identical
+    payload lands the identical terminal row — no duplicate terminal rows and
+    no resurrection of the `current` role.
+    """
+    token = await register(client, "action-replay@example.com")
+    headers = auth_header(token)
+    todo_id = await _make_todo(client, token)
+    action_id = str(uuid4())
+    await client.post(
+        "/actions/",
+        json={"id": action_id, "outcome_id": todo_id, "text": "t", "role": "current"},
+        headers=headers,
+    )
+
+    payload = {
+        "role": "done",
+        "done_at": "2026-07-12T08:00:00.000Z",
+        "updated_at": "2026-07-12T08:00:00.000Z",
+    }
+    first = await client.patch(f"/actions/{action_id}", json=payload, headers=headers)
+    assert first.status_code == 200, first.text
+    replay = await client.patch(f"/actions/{action_id}", json=payload, headers=headers)
+    assert replay.status_code == 200, replay.text
+    assert first.json() == replay.json()
+
+    db.expire_all()
+    rows = (await db.execute(select(Action).where(Action.outcome_id == todo_id))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].role == "done"
+    _assert_instant(replay.json()["done_at"], "2026-07-12T08:00:00+00:00")
+
+
+@pytest.mark.asyncio
 async def test_action_patch_null_text_rejected(client: AsyncClient) -> None:
     token = await register(client, "action-null-text@example.com")
     headers = auth_header(token)

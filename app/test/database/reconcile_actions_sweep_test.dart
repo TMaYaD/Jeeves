@@ -310,6 +310,34 @@ void main() {
     expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
   });
 
+  test('completion interplay: a completed Action is never resurrected, because '
+      'completion cleared the cursor in the same transaction', () async {
+    // The exact failure mode the cursor clear prevents (issue #474, R3): Pass A
+    // buckets "non-blank cursor + no current row" as drift and mints a fresh
+    // current Action — resurrecting the Action the user just finished.
+    await _seedOutcome(db,
+        id: 'o1', nextActionText: 'ship it', lastClarifiedAt: _clarified);
+    await _insertAction(db,
+        id: backfillActionIdFor('o1'),
+        outcomeId: 'o1',
+        text: 'ship it',
+        role: 'current');
+
+    final completedAt = DateTime.parse('2026-06-20T09:00:00.000Z');
+    await db.actionDao.completeCurrentAction('o1', now: completedAt);
+
+    final repaired = await _sweep(db);
+
+    expect(repaired, 0, reason: 'a completed Outcome is not drift');
+    final rows = await _actions(db, 'o1');
+    expect(rows, hasLength(1), reason: 'nothing minted');
+    expect(rows.single['role'], 'done');
+    expect(rows.single['done_at'], completedAt.toIso8601String());
+    expect(await _current(db, 'o1'), isNull);
+    expect(await _lastClarified(db, 'o1'), _clarified,
+        reason: 'neither completion nor the sweep stamps');
+  });
+
   test('idempotent: a second sweep changes nothing', () async {
     await _seedOutcome(db,
         id: 'mint', nextActionText: 'a', lastClarifiedAt: _clarified);

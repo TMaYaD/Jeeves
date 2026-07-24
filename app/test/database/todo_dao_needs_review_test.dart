@@ -52,6 +52,30 @@ Future<String> _insertClarifiedTask(
   return id;
 }
 
+/// Inserts a terminal (or extra `current`) Action row directly, for the
+/// Stale-widening fixtures that need a specific termination timestamp.
+Future<void> _insertAction(
+  GtdDatabase db, {
+  required String id,
+  required String outcomeId,
+  required String role,
+  String text = 'some action',
+  DateTime? createdAt,
+  DateTime? updatedAt,
+  DateTime? doneAt,
+}) async {
+  await db.into(db.actions).insert(ActionsCompanion(
+        id: Value(id),
+        outcomeId: Value(outcomeId),
+        userId: Value(_userId),
+        actionText: Value(text),
+        role: Value(role),
+        createdAt: Value(createdAt ?? DateTime.now().toUtc()),
+        updatedAt: Value(updatedAt),
+        doneAt: Value(doneAt),
+      ));
+}
+
 /// Inserts a person-typed tag and links it to [todoId]. Returns the tag id.
 Future<String> _attachPersonTag(
   GtdDatabase db,
@@ -487,6 +511,127 @@ void main() {
       expect(emissions.last.any((t) => t.id == id), isFalse,
           reason:
               'after person-tag attach, actionless+delegated task must leave the stream');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Stale widened over Action terminations (ADR-0001 story 4, issue #474).
+  //
+  // Every fixture here attaches a person tag so the Actionless branch is
+  // excluded and only the Stale branch can put the Outcome in the result — the
+  // widening is what is under test, not the pre-existing Actionless rule.
+  // ---------------------------------------------------------------------------
+  group('TodoDao.watchNeedsReview — Action-termination widening', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() => db.close());
+
+    final clarifiedAt = DateTime.parse('2026-07-01T09:00:00.000Z');
+    final before = DateTime.parse('2026-07-01T08:00:00.000Z');
+    final after = DateTime.parse('2026-07-01T10:00:00.000Z');
+
+    test('a completed Action makes the Outcome stale even with no session '
+        'history at all', () async {
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: null,
+        lastClarifiedAt: clarifiedAt,
+        lastNextActionCompletionAt: null,
+      );
+      await _attachPersonTag(db, id);
+      await _insertAction(db,
+          id: 'a-done', outcomeId: id, role: 'done', doneAt: after);
+
+      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+      expect(await db.todoDao.getNeedsReviewCount(), 1);
+      expect(await db.todoDao.isNeedsReview(id), isTrue);
+    });
+
+    test('a completion the user has already re-clarified past does not surface',
+        () async {
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: null,
+        lastClarifiedAt: clarifiedAt,
+        lastNextActionCompletionAt: null,
+      );
+      await _attachPersonTag(db, id);
+      await _insertAction(db,
+          id: 'a-done', outcomeId: id, role: 'done', doneAt: before);
+
+      expect(await db.todoDao.watchNeedsReview().first, isEmpty);
+      expect(await db.todoDao.isNeedsReview(id), isFalse);
+    });
+
+    test('a done row missing done_at falls back to updated_at', () async {
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: null,
+        lastClarifiedAt: clarifiedAt,
+        lastNextActionCompletionAt: null,
+      );
+      await _attachPersonTag(db, id);
+      await _insertAction(db,
+          id: 'a-done', outcomeId: id, role: 'done', updatedAt: after);
+
+      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+    });
+
+    test('an app-side supersession is not stale — it stamps with the same '
+        'timestamp it writes to the retired row', () async {
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: 'Draft email',
+        lastClarifiedAt: clarifiedAt,
+        lastNextActionCompletionAt: null,
+      );
+      await _attachPersonTag(db, id);
+
+      await db.actionDao.clearCurrentAction(id, now: after);
+
+      expect(await db.todoDao.watchNeedsReview().first, isEmpty,
+          reason: 'equality, not `<` — the supersession already clarified');
+    });
+
+    test('a repair-only supersession does not fabricate staleness', () async {
+      // Multi-current convergence and the startup sweep retire rows *without*
+      // stamping; the widening must not read those as engagement (R2).
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: null,
+        lastClarifiedAt: clarifiedAt,
+        lastNextActionCompletionAt: null,
+      );
+      await _attachPersonTag(db, id);
+      await _insertAction(db,
+          id: 'a-repaired',
+          outcomeId: id,
+          role: 'superseded',
+          updatedAt: after);
+
+      expect(await db.todoDao.watchNeedsReview().first, isEmpty);
+      expect(await db.todoDao.isNeedsReview(id), isFalse);
+    });
+
+    test('completeCurrentAction puts the Outcome in the result without '
+        'stamping, and re-clarifying takes it back out', () async {
+      final id = await _insertClarifiedTask(
+        db,
+        nextActionText: 'Draft email',
+        lastClarifiedAt: clarifiedAt,
+        lastNextActionCompletionAt: null,
+      );
+      await _attachPersonTag(db, id);
+      expect(await db.todoDao.watchNeedsReview().first, isEmpty);
+
+      await db.actionDao.completeCurrentAction(id, now: after);
+
+      expect(await db.todoDao.watchNeedsReview().first, hasLength(1));
+
+      await db.todoDao.setNextActionText(id, 'Chase the reply');
+
+      expect(await db.todoDao.watchNeedsReview().first, isEmpty);
     });
   });
 }
