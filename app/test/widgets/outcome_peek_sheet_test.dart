@@ -192,6 +192,49 @@ void main() {
     });
 
     testWidgets(
+        'time logged is re-read fresh on reopen, not cached from first open '
+        '(outcomePeekTimeLoggedProvider must stay autoDispose)',
+        (tester) async {
+      final todo = _todo(id: 't6', title: 'Reopened outcome');
+      await _insertTodo(db, todo);
+
+      final base = DateTime(2024, 1, 1, 10, 0, 0).toUtc();
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('log-a'),
+            userId: const Value(_userId),
+            taskId: const Value('t6'),
+            startedAt: Value(base.toIso8601String()),
+            endedAt:
+                Value(base.add(const Duration(minutes: 5)).toIso8601String()),
+          ));
+
+      await tester.pumpWidget(_harness(db, todo));
+
+      // First open: 5 minutes logged so far.
+      await _openSheet(tester);
+      expect(find.text('5m'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+
+      // More time gets logged while the sheet is closed.
+      final later = base.add(const Duration(hours: 1));
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('log-b'),
+            userId: const Value(_userId),
+            taskId: const Value('t6'),
+            startedAt: Value(later.toIso8601String()),
+            endedAt: Value(
+                later.add(const Duration(minutes: 10)).toIso8601String()),
+          ));
+
+      // Re-opening for the same task must show the updated total (15m),
+      // not the stale first-ever value (5m) from a cached provider.
+      await _openSheet(tester);
+      expect(find.text('15m'), findsOneWidget);
+      expect(find.text('5m'), findsNothing);
+    });
+
+    testWidgets(
         'is read-only: no text fields, and the todos row is unchanged after '
         'open + dismiss', (tester) async {
       final todo = _todo(

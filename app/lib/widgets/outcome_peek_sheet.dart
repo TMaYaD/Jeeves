@@ -23,9 +23,12 @@ import '../database/gtd_database.dart';
 import '../providers/database_provider.dart';
 
 /// One-shot read of the ceiling-rounded minutes logged against [taskId],
-/// summed from the `time_logs` rows. Resolved once when the sheet opens.
+/// summed from the `time_logs` rows. Resolved fresh each time the sheet
+/// opens — `.autoDispose` drops the cached value once nothing is watching
+/// it, so re-opening the peek for the same task re-reads
+/// [TimeLogDao.totalMinutesForTask] instead of replaying a stale total.
 final outcomePeekTimeLoggedProvider =
-    FutureProvider.family<int, String>((ref, taskId) {
+    FutureProvider.autoDispose.family<int, String>((ref, taskId) {
   return ref.watch(databaseProvider).timeLogDao.totalMinutesForTask(taskId);
 });
 
