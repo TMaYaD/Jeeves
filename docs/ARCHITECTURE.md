@@ -657,7 +657,7 @@ All mutating methods are guarded by `isProcessing: bool` to prevent rapid-tap ra
 
 ### Persistence across backgrounding
 
-When a sprint starts the notifier stores the absolute end time in `SharedPreferences`. On app resume, `_restoreFromPrefs()` reads the stored end time and recalculates the remaining duration. If the timer has already expired, the expired handler runs immediately (logs time and starts the break, or resets to idle).
+When a sprint starts the notifier stores the absolute end time in `SharedPreferences`. On app resume, `_restoreFromPrefs()` reads the stored end time and recalculates the remaining duration. If the timer has already expired, the expired handler runs immediately (starts the break, or resets to idle — it writes no time; see Time tracking).
 
 **SharedPreferences keys:**
 
@@ -699,7 +699,7 @@ where `totalMinutesForTask` is the live TimeLog-derived total (`TimeLogDao.total
 
 Every surface that shows time-spent derives it from `SUM(time_logs)` at read time, via `TimeLogDao.totalMinutesForTask` (single task, e.g. sprint number) or the correlated subquery `TimeLogDao.totalMinutesSubquery` embedded in list queries (e.g. `FocusSessionDao.watchActiveSessionReviewSurface`, which feeds the evening shutdown's time figures). Per-interval minutes are ceiling-rounded; open rows count up to the current time.
 
-The `todos.time_spent_minutes` column is a dead denormalized cache: nothing writes it since the `transitionState` recompute was retired with PR I, and nothing may read it. It awaits retirement in the Action-entity epic (#470 story 9).
+The `todos.time_spent_minutes` column is a dead denormalized cache: nothing writes it since the `transitionState` recompute was retired with PR I. No query may project it as a time-spent source — queries that surface time-spent (`watchActiveSessionReviewSurface`, `watchPersonTaggedGrouped`) hydrate the model field from the derived subquery instead. Todo rows hydrated by generic `select(todos)` queries still carry the raw (stale) column value in `Todo.timeSpentMinutes`; no UI may display it from those rows. The column awaits retirement in the Action-entity epic (#470 story 9).
 
 ### Batching suggestion
 

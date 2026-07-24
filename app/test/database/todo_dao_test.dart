@@ -142,6 +142,32 @@ void main() {
       expect(items.any((t) => t.id == 'wn1'), isFalse);
     });
 
+    test(
+        'watchPersonTaggedGrouped derives timeSpentMinutes from time_logs, '
+        'ignoring the stale todos.time_spent_minutes column (issue #480)',
+        () async {
+      await _insertTodo(db, id: 'wg1', title: 'Grouped waiting');
+      await _insertPersonTag(db, id: 'pg1', name: 'Dave');
+      await db.tagDao.assignTag('wg1', 'pg1', _userId);
+      // Poison the dead cache column; the query must not surface it.
+      await db.customStatement(
+          'UPDATE todos SET time_spent_minutes = 999 WHERE id = ?', ['wg1']);
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('tl-wg1'),
+            userId: const Value(_userId),
+            taskId: const Value('wg1'),
+            startedAt:
+                Value(DateTime.utc(2026, 5, 1, 9, 0).toIso8601String()),
+            endedAt: Value(DateTime.utc(2026, 5, 1, 9, 25).toIso8601String()),
+          ));
+
+      final grouped = await db.todoDao.watchPersonTaggedGrouped().first;
+      final todo = grouped.values.single.single;
+      expect(todo.id, 'wg1');
+      expect(todo.timeSpentMinutes, 25,
+          reason: 'must be SUM(time_logs), not the dead cache column');
+    });
+
     test('watchMaybe returns only intent=maybe todos (not done)', () async {
       await _insertTodo(db, id: 'm1', title: 'Maybe 1');
       await db.todoDao.deferTaskToMaybe('m1');
