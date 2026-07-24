@@ -8,6 +8,7 @@ class FocusSessionPlanningSettings {
     this.bannerEnabled = true,
     this.defaultSnoozeDuration = 60,
     this.snoozeDurations = const [15, 60, 1440],
+    this.defaultTimeEstimate = 10,
   });
 
   final TimeOfDay planningTime;
@@ -20,12 +21,18 @@ class FocusSessionPlanningSettings {
   /// Available snooze durations in minutes (15 min, 1 hr, tomorrow).
   final List<int> snoozeDurations;
 
+  /// Minutes attributed to a selected Outcome that carries no time estimate,
+  /// used only in the Plan Summary capacity calculation. Never written onto
+  /// the Outcome (the Outcome's own `timeEstimate` stays unset).
+  final int defaultTimeEstimate;
+
   FocusSessionPlanningSettings copyWith({
     TimeOfDay? planningTime,
     bool? notificationEnabled,
     bool? bannerEnabled,
     int? defaultSnoozeDuration,
     List<int>? snoozeDurations,
+    int? defaultTimeEstimate,
   }) =>
       FocusSessionPlanningSettings(
         planningTime: planningTime ?? this.planningTime,
@@ -34,5 +41,6 @@ class FocusSessionPlanningSettings {
         defaultSnoozeDuration:
             defaultSnoozeDuration ?? this.defaultSnoozeDuration,
         snoozeDurations: snoozeDurations ?? this.snoozeDurations,
+        defaultTimeEstimate: defaultTimeEstimate ?? this.defaultTimeEstimate,
       );
 }
