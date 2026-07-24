@@ -63,6 +63,12 @@ class _FocusSessionPlanningScreenState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _ceremonyNotifier.enter(RitualId.dailyPlanning);
+      // Recompute rollover pre-selection on mount (#461). Covers the
+      // warm-process replan — reaching this screen next morning on an already
+      // built notifier, which build()'s once-per-process microtask misses.
+      // Fire-and-forget: the method is idempotent, guards against an open
+      // session, and its reviewed-ids merge keeps deselected tasks out.
+      ref.read(focusSessionPlanningProvider.notifier).ensureRolloverPreload();
     });
   }
 
