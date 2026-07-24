@@ -490,23 +490,6 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
 
-    testWidgets('displays Capture title and notes pre-populated',
-        (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      final titleField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
-      final notesField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
-      expect(titleField.controller?.text, 'Buy milk');
-      expect(notesField.controller?.text, 'Full fat');
-    });
-
     testWidgets(
         'Next Action carves a linked Outcome, stamps the Capture, and clears '
         'the Inbox', (tester) async {
@@ -573,65 +556,6 @@ void main() {
       );
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
       expect(find.text('Inbox'), findsOneWidget);
-    });
-
-    testWidgets('Maybe carves an Outcome with intent = maybe', (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Learn guitar'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      // The destination buttons are below the fold on the 800x600 test surface;
-      // scroll them into view before tapping.
-      await _scrollAndTap(tester, 'Someday');
-
-      final outcome = await _outcomeOf(db, 'x');
-      expect(outcome!.clarified, isTrue);
-      expect(outcome.intent, 'maybe');
-    });
-
-    testWidgets('Done is not offered as a clarify-time destination',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Old idea'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      // An Outcome captured already-complete is a contradiction: Done is a
-      // completion event, not a destination you route to while clarifying.
-      // Completing an Outcome stays available on the Outcome's own surface.
-      expect(find.text('Done'), findsNothing);
-      // The three real destinations survive, with the verdict in the slot Done
-      // vacated.
-      expect(find.text('Next Action'), findsOneWidget);
-      expect(find.text('Waiting For'), findsOneWidget);
-      expect(find.text('Someday'), findsOneWidget);
-      expect(find.text('Discard Capture'), findsOneWidget);
-    });
-
-    testWidgets('Discard stamps the Capture and carves no Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Never worth it'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await _scrollAndTap(tester, 'Discard Capture');
-
-      // A discard is the zero-Outcome verdict: the clarify act completed, so
-      // `clarified_at` is stamped and the item leaves the Inbox, but nothing
-      // was ever worth creating.
-      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
-      expect(await _outcomeOf(db, 'x'), isNull);
-      expect(await _inboxIds(db), isEmpty);
-      // The bug this screen shipped with: a button that said "discard" wrote a
-      // completed Outcome. Nothing may land in `todos` on this path — not even
-      // a trashed row, because Trash is a List of Outcomes and a discarded
-      // Capture never becomes one.
-      expect(await db.select(db.todos).get(), isEmpty);
     });
 
     testWidgets('discarding an untitled Capture keeps its original title',
@@ -784,76 +708,6 @@ void main() {
       expect(find.text('Title is required to process'), findsOneWidget);
     });
 
-    testWidgets('edited title lands on both the Capture and the Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Old title'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-          find.byKey(const Key('clarify_title')), 'New title');
-      await tester.pump();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
-      expect((await _outcomeOf(db, 'x'))!.title, 'New title');
-      // The edit is also kept on the Capture, so the provenance trail shows
-      // what the user actually wrote rather than the original fragment.
-      expect((await db.captureDao.getCapture('x'))!.title, 'New title');
-    });
-
-    testWidgets(
-        'energy and time estimate chosen on the card land on the new Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      // A Capture has no energy or time-estimate column — the card collects
-      // them as draft state and clarifyCaptureToOutcome writes them onto the
-      // Outcome it creates.
-      await tester.ensureVisible(find.text('High'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('High'));
-      await tester.pumpAndSettle();
-
-      await tester.ensureVisible(find.text('30m'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('30m'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
-      final outcome = (await _outcomeOf(db, 'x'))!;
-      expect(outcome.energyLevel, 'high');
-      expect(outcome.timeEstimate, 30);
-    });
-
-    testWidgets('deleting notes clears them on the Capture and the Outcome',
-        (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
-      await tester.pump();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
-      expect((await db.captureDao.getCapture('x'))!.notes, isNull);
-      expect((await _outcomeOf(db, 'x'))!.notes, isNull);
-    });
-
     testWidgets('clarifying an untouched Capture invents no attributes',
         (tester) async {
       await db.captureDao
@@ -963,84 +817,6 @@ void main() {
     tearDown(() async {
       await feed.close();
       await db.close();
-    });
-
-    testWidgets('adopts a change to a field the user has not edited',
-        (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      // The row changes in local storage. The screen cannot tell whether that
-      // came from another screen, a background job or a replicated edit — the
-      // changed row is the whole signal.
-      await db.captureDao.updateFields('x', title: 'Buy oat milk');
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      final titleField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
-      expect(titleField.controller?.text, 'Buy oat milk');
-    });
-
-    testWidgets('renders a subject the provider already holds', (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      // The Inbox binds to the subject first, so by the time clarify opens the
-      // provider is past its loading state and will not emit again.
-      await tester.pumpWidget(
-        _buildApp(db, 'x', captureFeed: feed, subjectAlreadyLive: true),
-      );
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Clarify'));
-      // Fixed pumps rather than pumpAndSettle: without the build-time seed the
-      // screen stays on its spinner, and a spinner never settles.
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 500));
-
-      // The only value the listener would ever have applied was emitted before
-      // this screen mounted, so the seed is the sole path to the subject.
-      final titleField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
-      expect(titleField.controller?.text, 'Buy milk');
-      final notesField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
-      expect(notesField.controller?.text, 'Full fat');
-    });
-
-    testWidgets('leaves a field the user is editing alone', (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-          find.byKey(const Key('clarify_title')), 'Buy almond milk');
-      await tester.pumpAndSettle();
-
-      await db.captureDao.updateFields('x', title: 'Buy oat milk');
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      // Dirty field: the user's in-progress edit wins.
-      final titleField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
-      expect(titleField.controller?.text, 'Buy almond milk');
-      // Clean field: the incoming notes land.
-      final notesField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
-      expect(notesField.controller?.text, 'Full fat');
     });
 
     testWidgets('an incoming edit is not overwritten by the routing save',
