@@ -866,44 +866,6 @@ AND (
   // Outcome creation / deletion (Capture clarify — issue #184 Phase 2)
   // ---------------------------------------------------------------------------
 
-  /// Promotes the unclarified `todos` row [id] to a clarified Outcome **in
-  /// place** — the legacy 1:1 clarify write, exposed through
-  /// [ClarificationService.promoteCaptureToOutcome].
-  ///
-  /// Under the pre-split conflated model an Inbox item was a `todos` row with
-  /// `clarified = false`; promoting it flips `clarified = true` and, per
-  /// ADR-0006, promotion IS Outcome creation, so this stamps `last_clarified_at`
-  /// (a clarifying micro-act per CONTEXT.md). [intent] / [dueDate] are optional
-  /// refinements written alongside the flip.
-  ///
-  /// Only an *unclarified* row is touched, so a repeated call is a no-op.
-  /// Returns the number of affected rows (0 if already clarified or not found,
-  /// 1 on success) so callers can guard against double-processing.
-  Future<int> processInboxItem(
-    String id, {
-    String? intent,
-    DateTime? dueDate,
-  }) async {
-    final ts = DateTime.now();
-    final rows = await (update(todos)
-          ..where(
-            (t) => t.id.equals(id) & t.clarified.equals(false),
-          ))
-        .write(TodosCompanion(
-      clarified: const Value(true),
-      intent: intent != null ? Value(intent) : const Value.absent(),
-      dueDate: dueDate != null ? Value(dueDate) : const Value.absent(),
-      lastClarifiedAt: Value(ts.toUtc()),
-      updatedAt: Value(ts),
-    ));
-    // `todos` is a PowerSync view in production: the INSTEAD OF trigger makes
-    // the write report changes()==0, so Drift skips its own stream
-    // invalidation. Notify explicitly so the Inbox / badge and the Next Actions
-    // list refresh without relying solely on the async bridge (#342).
-    attachedDatabase.notifyTodosViewWrite();
-    return rows;
-  }
-
   /// Inserts a new **clarified Outcome** row from a clarify-card draft.
   ///
   /// This is the create half of clarifying a Capture (ADR-0006): promoting a

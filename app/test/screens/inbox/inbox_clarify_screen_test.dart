@@ -234,14 +234,6 @@ class _RecordingClarificationService implements ClarificationService {
       );
 
   @override
-  Future<int> promoteCaptureToOutcome(
-    String id, {
-    String? intent,
-    DateTime? dueDate,
-  }) =>
-      inner.promoteCaptureToOutcome(id, intent: intent, dueDate: dueDate);
-
-  @override
   Future<int> completeOutcome(String id) => inner.completeOutcome(id);
 
   @override

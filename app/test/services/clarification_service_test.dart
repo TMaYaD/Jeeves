@@ -26,9 +26,9 @@ TodosCompanion _capture({required String id, required String title}) {
   return TodosCompanion(
     id: Value(id),
     title: Value(title),
-    // Unclarified: the pre-split Inbox shape these service tests seed. Several
-    // assertions depend on it (promoteCaptureToOutcome only touches an
-    // unclarified row; stampClarified must leave `clarified` false).
+    // Unclarified: the pre-split Inbox shape these service tests seed. The
+    // stampClarified test depends on it — a stamp-only write must leave
+    // `clarified` false.
     clarified: const Value(false),
     userId: Value(_userId),
     createdAt: Value(now),
@@ -151,32 +151,6 @@ void main() {
       expect(row.clarified, isTrue);
       expect(row.intent, 'next');
       expect(await service.getPersonTagIds('a'), {'alice-tag'});
-    });
-
-    test('promoteCaptureToOutcome flips clarified and guards re-processing',
-        () async {
-      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
-
-      expect(await service.promoteCaptureToOutcome('a'), 1);
-
-      final row = await _row(db, 'a');
-      expect(row.clarified, isTrue);
-      expect(row.lastClarifiedAt, isNotNull);
-
-      // Already-clarified rows are not double-processed.
-      expect(await service.promoteCaptureToOutcome('a'), 0);
-    });
-
-    test('promoteCaptureToOutcome passes intent and dueDate through',
-        () async {
-      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
-      final due = DateTime.utc(2026, 8, 1);
-
-      await service.promoteCaptureToOutcome('a', intent: 'maybe', dueDate: due);
-
-      final row = await _row(db, 'a');
-      expect(row.intent, 'maybe');
-      expect(row.dueDate?.toUtc(), due);
     });
 
     test('completeOutcome stamps done_at and last_clarified_at', () async {
