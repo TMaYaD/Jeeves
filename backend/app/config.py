@@ -51,6 +51,20 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_bcrypt_rounds(self) -> "Settings":
+        # bcrypt.gensalt() only accepts 4–31 and raises ValueError otherwise;
+        # validate here so a misconfiguration fails at startup rather than on
+        # the first password hash. Production must not run below the default 12.
+        if not 4 <= self.bcrypt_rounds <= 31:
+            raise ValueError(
+                f"BCRYPT_ROUNDS must be between 4 and 31 (bcrypt's valid range); "
+                f"got {self.bcrypt_rounds}"
+            )
+        if self.env == "production" and self.bcrypt_rounds < 12:
+            raise ValueError(f"BCRYPT_ROUNDS must be >= 12 in production; got {self.bcrypt_rounds}")
+        return self
+
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 15  # short-lived; renewed via refresh token
     refresh_token_expire_days: int = 365  # 1 year
