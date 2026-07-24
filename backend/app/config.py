@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Auth
     secret_key: str = "insecure-dev-key"
 
+    # bcrypt work factor for password hashing.  Default 12 is the production
+    # value; the test suite lowers it (via BCRYPT_ROUNDS) so its ~150 register()
+    # calls don't dominate the run — the real hashing code path is still used.
+    bcrypt_rounds: int = 12
+
     @model_validator(mode="after")
     def _normalize_database_url(self) -> "Settings":
         scheme, _, rest = self.database_url.partition("://")
