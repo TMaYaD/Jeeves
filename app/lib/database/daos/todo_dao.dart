@@ -454,25 +454,78 @@ EXISTS (
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final normalized = text.trim();
-    await transaction(() async {
-      await (update(todos)..where((t) => t.id.equals(todoId)))
-          .write(TodosCompanion(
-        nextActionText: Value(normalized.isEmpty ? null : normalized),
-        lastClarifiedAt: Value(ts),
-        updatedAt: Value(ts),
-      ));
-      if (normalized.isEmpty) {
-        await attachedDatabase.actionDao.applySupersedeCurrentAction(todoId, ts: ts);
-      } else {
-        await attachedDatabase.actionDao
-            .applySetCurrentAction(todoId, normalized, ts: ts);
-      }
-    });
+    await transaction(() => _applySetNextActionText(todoId, normalized, ts));
     // Both `todos` and `actions` are PowerSync views in production, so the
     // writes report changes()==0; notify Drift explicitly so watchers refresh
     // without relying solely on the async bridge (#342, ADR-0010).
     attachedDatabase.notifyTodosViewWrite();
     attachedDatabase.notifyActionsViewWrite();
+  }
+
+  /// The **atomic** actionless-mirror primitive (issue #501): check whether the
+  /// Outcome is Actionless and — only if it is — write [text] as its next
+  /// action, both inside **one** transaction. Returns `true` iff it wrote.
+  ///
+  /// The check reads the `current` Action via [ActionDao.getCurrentAction],
+  /// which runs on this transaction's executor (Drift zone routing), so a
+  /// `current` Action landed by sync cannot slip between the check and the
+  /// write. This is the single-call replacement for the read-then-write TOCTOU
+  /// the ClarifyCard title-mirror used to run across two awaits: an Outcome the
+  /// user has already given a deliberate phrase (a `current` Action exists) is
+  /// left untouched, never clobbered by a mirrored title.
+  ///
+  /// Write path: identical to [setNextActionText] on an Actionless Outcome —
+  /// the same cursor + Action dual-write, stamped with one shared [ts], and the
+  /// same post-commit view-notifies. Skip path (a `current` Action exists):
+  /// no writes, no stamp, no convergence, no notify.
+  ///
+  /// Blank [text] is a caller error (the mirror only fires with a non-blank
+  /// title), mirroring [ActionDao.setCurrentAction]'s contract.
+  Future<bool> setNextActionTextIfActionless(
+      String todoId, String text, {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final normalized = text.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(
+        text,
+        'text',
+        'setNextActionTextIfActionless requires non-blank text',
+      );
+    }
+    final wrote = await transaction(() async {
+      final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
+      if (current != null) return false;
+      await _applySetNextActionText(todoId, normalized, ts);
+      return true;
+    });
+    if (wrote) {
+      // See [setNextActionText]: view writes report changes()==0 (#342, ADR-0010).
+      attachedDatabase.notifyTodosViewWrite();
+      attachedDatabase.notifyActionsViewWrite();
+    }
+    return wrote;
+  }
+
+  /// Transaction body shared by [setNextActionText] and
+  /// [setNextActionTextIfActionless]: the cursor + Action dual-write and the
+  /// `last_clarified_at` / `updated_at` stamp, encoded once. Runs inside the
+  /// caller's transaction; the caller notifies after commit. [normalized] is
+  /// already trimmed — blank clears both sides (the blank→NULL normalisation).
+  Future<void> _applySetNextActionText(
+      String todoId, String normalized, DateTime ts) async {
+    await (update(todos)..where((t) => t.id.equals(todoId)))
+        .write(TodosCompanion(
+      nextActionText: Value(normalized.isEmpty ? null : normalized),
+      lastClarifiedAt: Value(ts),
+      updatedAt: Value(ts),
+    ));
+    if (normalized.isEmpty) {
+      await attachedDatabase.actionDao
+          .applySupersedeCurrentAction(todoId, ts: ts);
+    } else {
+      await attachedDatabase.actionDao
+          .applySetCurrentAction(todoId, normalized, ts: ts);
+    }
   }
 
   // ---------------------------------------------------------------------------

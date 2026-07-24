@@ -790,10 +790,11 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
               final title = _titleCtrl?.text.trim() ?? '';
               if (title.isNotEmpty) {
                 final db = ref.read(databaseProvider);
-                final current = await db.actionDao.getCurrentAction(_subjectId);
-                if (current == null) {
-                  await db.todoDao.setNextActionText(_subjectId, title);
-                }
+                // One atomic call: the actionless check and the mirror write
+                // share a transaction, so a `current` Action landed by sync
+                // between the two can no longer be clobbered (issue #501).
+                await db.todoDao
+                    .setNextActionTextIfActionless(_subjectId, title);
               }
             }
             await widget.onAfterRoute?.call(action);
