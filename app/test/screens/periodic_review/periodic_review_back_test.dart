@@ -20,6 +20,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 
+import '../../helpers/settle.dart';
 import '../../test_helpers.dart';
 
 /// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
@@ -58,12 +59,7 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
   return (widget, container);
 }
 
-Future<void> _settle(WidgetTester tester) async {
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 200)),
-  );
-  await tester.pumpAndSettle();
-}
+Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
 Future<void> _dispose(WidgetTester tester) async {
   await tester.pumpWidget(const SizedBox.shrink());

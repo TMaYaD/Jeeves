@@ -18,6 +18,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/screens/shutdown/shutdown_ritual_screen.dart';
 
+import '../../helpers/settle.dart';
 import '../../test_helpers.dart';
 
 const _userId = 'local';
@@ -58,12 +59,7 @@ Future<void> _insertTodo(GtdDatabase db, String id) async {
   return (widget, container);
 }
 
-Future<void> _settle(WidgetTester tester) async {
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 200)),
-  );
-  await tester.pumpAndSettle();
-}
+Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
 Future<void> _dispose(WidgetTester tester) async {
   await tester.pumpWidget(const SizedBox.shrink());

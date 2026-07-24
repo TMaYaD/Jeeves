@@ -21,6 +21,7 @@ import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 
 import '../../helpers/periodic_review_test_helpers.dart';
+import '../../helpers/settle.dart';
 import '../../test_helpers.dart';
 
 const _skipKey = Key('periodic_review_skip');
@@ -81,14 +82,9 @@ PeriodicReviewState _stateOf(WidgetTester tester) {
 }
 
 /// The wizard loads its per-step snapshots through drift watch-streams, which
-/// only emit inside the real async zone. Give them a turn under
-/// [WidgetTester.runAsync] before settling the frame.
-Future<void> _settle(WidgetTester tester) async {
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 200)),
-  );
-  await tester.pumpAndSettle();
-}
+/// only emit inside the real async zone. Drain that queue (no wall-clock sleep)
+/// before settling the frame — see [settleWithRealAsync].
+Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
 /// Unmounts the screen so the streaming providers behind the review cards
 /// dispose — and their drift stream-close timers fire — before the test
