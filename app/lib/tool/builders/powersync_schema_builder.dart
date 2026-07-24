@@ -9,6 +9,28 @@ class _PowersyncSchemaBuilder implements Builder {
     'lib/database/gtd_database.g.dart': ['lib/database/powersync_schema.g.dart'],
   };
 
+  /// Local-only indexes to declare on the generated PowerSync tables, keyed by
+  /// SQL table name.
+  ///
+  /// On-device a synced table is a *view* over `ps_data__<table>(id, data)`
+  /// with JSON extraction, so a correlated subquery against it full-scans the
+  /// store unless PowerSync is told to build an index. These declarations are
+  /// local artifacts — PowerSync recreates them when it opens the database, so
+  /// adding or removing one is not a migration and never triggers a re-sync.
+  ///
+  /// `actions(outcome_id, role)` backs the "has a current Action" EXISTS
+  /// predicate behind the Next List and the re-clarification queue, which runs
+  /// once per candidate Outcome on every list re-emission (ADR-0001 story 3).
+  ///
+  /// A table absent from this map declares no indexes.
+  /// `test/database/powersync_schema_consistency_test.dart` mirrors this map
+  /// and asserts each entry is *present* in the generated schema (not merely
+  /// that columns line up), so a dropped declaration fails the suite instead of
+  /// silently costing a full scan.
+  static const _indexes = <String, List<String>>{
+    'actions': ['outcome_id', 'role'],
+  };
+
   static const _typeMap = {
     'String': 'text',
     'int': 'integer',
@@ -146,7 +168,31 @@ class _PowersyncSchemaBuilder implements Builder {
       for (final (psType, colName) in columns) {
         buf.writeln("    ps.Column.$psType('$colName'),");
       }
-      buf.writeln('  ]),');
+      final indexColumns = _indexes[tableName];
+      if (indexColumns == null) {
+        buf.writeln('  ]),');
+        continue;
+      }
+      final columnNames = columns.map((c) => c.$2).toSet();
+      final unknown =
+          indexColumns.where((c) => !columnNames.contains(c)).toList();
+      if (unknown.isNotEmpty) {
+        throw StateError(
+          'powersync_schema_builder: index on table "$tableName" names '
+          'column(s) $unknown that the table does not have — fix the _indexes '
+          'map in powersync_schema_builder.dart.',
+        );
+      }
+      final indexName = indexColumns.join('_');
+      buf
+        ..writeln('  ], indexes: [')
+        ..writeln("    ps.Index('$indexName', [");
+      for (final colName in indexColumns) {
+        buf.writeln("      ps.IndexedColumn.ascending('$colName'),");
+      }
+      buf
+        ..writeln('    ]),')
+        ..writeln('  ]),');
     }
 
     buf.writeln(']);');

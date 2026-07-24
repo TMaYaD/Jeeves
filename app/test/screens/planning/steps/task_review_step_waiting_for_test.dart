@@ -27,6 +27,7 @@ GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 Future<String> _insertClarifiedTask(
   GtdDatabase db, {
   String? nextActionText,
+  String? currentActionText,
   DateTime? lastNextActionCompletionAt,
   DateTime? lastClarifiedAt,
   String title = 'Task',
@@ -48,6 +49,15 @@ Future<String> _insertClarifiedTask(
     lastClarifiedAt:
         lastClarifiedAt != null ? Value(lastClarifiedAt) : const Value.absent(),
   ));
+  // Dual-write invariant: a non-blank phrase is an Action row too, which is
+  // what the Actionless predicate and the hint now read (ADR-0001 story 3).
+  await seedCurrentAction(
+    db,
+    outcomeId: id,
+    text: currentActionText ?? nextActionText,
+    userId: _userId,
+    createdAt: now,
+  );
   return id;
 }
 
@@ -96,6 +106,51 @@ Future<void> _enterReviewStep(WidgetTester tester, GtdDatabase db) async {
 
 void main() {
   setUpAll(configureSqliteForTests);
+
+  group('TaskReviewStep — current Action (#473)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('renders the current Action, not the cursor column',
+        (tester) async {
+      await _insertClarifiedTask(
+        db,
+        nextActionText: 'stale cursor phrase',
+        currentActionText: 'Draft the agenda',
+        lastClarifiedAt:
+            DateTime.now().subtract(_staleTaskClarifiedOffset).toUtc(),
+        lastNextActionCompletionAt:
+            DateTime.now().subtract(_staleTaskCompletedOffset).toUtc(),
+        title: 'Run the retro',
+      );
+
+      await _enterReviewStep(tester, db);
+
+      expect(find.text('Draft the agenda'), findsOneWidget);
+      expect(find.text('stale cursor phrase'), findsNothing);
+      expect(find.text('Updated since last clarified'), findsOneWidget);
+    });
+
+    testWidgets('an Outcome with only a superseded Action reads as Actionless',
+        (tester) async {
+      final id = await _insertClarifiedTask(db, title: 'Fix the gate');
+      await db.into(db.actions).insert(ActionsCompanion(
+            id: const Value('retired'),
+            outcomeId: Value(id),
+            userId: const Value(_userId),
+            actionText: const Value('Old plan'),
+            role: const Value('superseded'),
+            createdAt: Value(DateTime.now()),
+          ));
+
+      await _enterReviewStep(tester, db);
+
+      expect(find.text('No next action defined'), findsOneWidget);
+      expect(find.text('Old plan'), findsNothing);
+    });
+  });
 
   group('TaskReviewStep — staleWaitingFor variant (#289)', () {
     late GtdDatabase db;

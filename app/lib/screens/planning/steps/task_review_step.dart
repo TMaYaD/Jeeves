@@ -2,7 +2,7 @@
 ///
 /// Surfaces tasks needing re-clarification one at a time:
 /// - Stale tasks: worked on in a session more recently than last clarified.
-/// - Actionless tasks: no next action defined (excluding delegated tasks).
+/// - Actionless tasks: no current Action (excluding delegated tasks).
 ///
 /// Context-aware action menu:
 /// - Stale tasks without a delegate show "Still relevant" (stamps
@@ -36,21 +36,24 @@ bool isStaleReclarification(Todo t) =>
     (t.lastClarifiedAt == null ||
         t.lastClarifiedAt!.isBefore(t.lastNextActionCompletionAt!));
 
-/// Mirror of [TodoDao] `_needsReviewWhere`'s actionless predicate:
-/// `next_action_text IS NULL OR TRIM(next_action_text) = ''`. Whitespace-only
-/// values land rows in the queue, so the hint must agree (#278).
+/// Mirror of [TodoDao] `_needsReviewWhere`'s actionless predicate: the Outcome
+/// has no `actions` row with `role='current'` (ADR-0001 story 3). Absence of a
+/// [currentActionText] *is* Actionless — the DAO predicate and this hint read
+/// the same evidence, so they cannot disagree.
 ///
-/// [hasPersonTag] and [isStale] are computed by the caller (the widget reads
-/// person tags from [FocusSessionPlanningState.reviewPersonTags] and stale
-/// from [isStaleReclarification]). Keeping the helper pure makes it
-/// trivially unit-testable.
+/// [currentActionText], [hasPersonTag] and [isStale] are computed by the caller
+/// (the widget reads the Action text from
+/// [FocusSessionPlanningState.reviewActionTexts], person tags from
+/// `reviewPersonTags`, and stale from [isStaleReclarification]). Keeping the
+/// helper pure makes it trivially unit-testable.
 ReclarifyHint hintFor(
   Todo t, {
   required bool hasPersonTag,
   required bool isStale,
+  String? currentActionText,
 }) {
   if (isStale && hasPersonTag) return ReclarifyHint.staleWaitingFor;
-  if (t.nextActionText == null || t.nextActionText!.trim().isEmpty) {
+  if (currentActionText == null || currentActionText.trim().isEmpty) {
     return ReclarifyHint.noNextAction;
   }
   return ReclarifyHint.updatedSinceClarified;
@@ -74,6 +77,7 @@ class TaskReviewStep extends ConsumerWidget {
 
     final task = nav.current!;
     final personTags = state.reviewPersonTags[task.id] ?? const <Tag>[];
+    final currentActionText = state.reviewActionTexts[task.id];
     return _ReviewCard(
       key: ValueKey(task.id),
       task: task,
@@ -81,8 +85,10 @@ class TaskReviewStep extends ConsumerWidget {
         task,
         hasPersonTag: personTags.isNotEmpty,
         isStale: isStaleReclarification(task),
+        currentActionText: currentActionText,
       ),
       personTags: personTags,
+      currentActionText: currentActionText,
       previousAction: state.reviewActions[nav.index],
     );
   }
@@ -98,11 +104,16 @@ class _ReviewCard extends ConsumerWidget {
     required this.task,
     required this.hint,
     this.personTags = const [],
+    this.currentActionText,
     this.previousAction,
   });
 
   final Todo task;
   final ReclarifyHint hint;
+
+  /// Text of [task]'s current Action, or null when it is Actionless. Renders
+  /// under the title and prefills the "Update next action…" dialog.
+  final String? currentActionText;
 
   /// Person-typed tags assigned to [task]. Drives the delegate name(s) in
   /// the [ReclarifyHint.staleWaitingFor] badge.
@@ -192,8 +203,8 @@ class _ReviewCard extends ConsumerWidget {
           ),
         ],
 
-        // Current next action (if present)
-        if (!isActionless && task.nextActionText != null) ...[
+        // Current Action (if present)
+        if (!isActionless && currentActionText != null) ...[
           const SizedBox(height: 8),
           Row(
             children: [
@@ -202,7 +213,7 @@ class _ReviewCard extends ConsumerWidget {
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
-                  task.nextActionText!,
+                  currentActionText!,
                   style: TextStyle(
                     fontSize: 13,
                     color: Colors.grey[600],
@@ -224,7 +235,7 @@ class _ReviewCard extends ConsumerWidget {
         const SizedBox(height: 12),
 
         ProcessToHandlers(
-          subject: OutcomeSubject(task),
+          subject: OutcomeSubject(task, currentActionText: currentActionText),
           include: {
             if (showKeep) ProcessAction.keep,
           },
@@ -241,9 +252,11 @@ class _ReviewCard extends ConsumerWidget {
               // A blank save does not route (the widget skips the write),
               // so the row keeps whatever next action it had — clear the
               // action record and stay on the same item.
-              final updated =
-                  await ref.read(databaseProvider).todoDao.getTodo(task.id);
-              final txt = updated?.nextActionText?.trim() ?? '';
+              final current = await ref
+                  .read(databaseProvider)
+                  .actionDao
+                  .getCurrentAction(task.id);
+              final txt = current?.actionText.trim() ?? '';
               if (txt.isEmpty) {
                 notifier.clearCurrentReviewAction();
                 return;

@@ -769,6 +769,15 @@ void main() {
         lastClarifiedAt: Value(clarifiedAt),
         lastNextActionCompletionAt: Value(completedAt),
       ));
+      // Dual-write invariant: the phrase is an Action row too — the grain the
+      // re-clarify predicate reads (ADR-0001 story 3).
+      await seedCurrentAction(
+        db,
+        outcomeId: id,
+        text: 'Do the thing',
+        userId: userId,
+        createdAt: now,
+      );
       return id;
     }
 

@@ -497,7 +497,7 @@ class _LinkedOutcomeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final action = item.outcome.nextActionText?.trim();
+    final action = item.currentActionText?.trim();
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),

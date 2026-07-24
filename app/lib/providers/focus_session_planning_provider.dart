@@ -300,6 +300,7 @@ class FocusSessionPlanningState {
     this.reviewNav = const SnapshotNav<Todo>(),
     this.reviewActions = const {},
     this.reviewPersonTags = const {},
+    this.reviewActionTexts = const {},
   });
 
   final int currentStep;
@@ -352,6 +353,14 @@ class FocusSessionPlanningState {
   /// Tasks with no person tag are absent from the map.
   final Map<String, List<Tag>> reviewPersonTags;
 
+  /// Current Action text for each task in [reviewNav.items], keyed by task id.
+  /// Absent means the Outcome is Actionless — the state the review step's
+  /// "No next action defined" hint names.
+  ///
+  /// Read from `actions` alongside the snapshot: the Action entity, not the
+  /// `next_action_text` cursor, is what the app believes (ADR-0001 story 3).
+  final Map<String, String> reviewActionTexts;
+
   FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
@@ -365,6 +374,7 @@ class FocusSessionPlanningState {
     SnapshotNav<Todo>? reviewNav,
     Map<int, ReviewActionRecord>? reviewActions,
     Map<String, List<Tag>>? reviewPersonTags,
+    Map<String, String>? reviewActionTexts,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -379,6 +389,7 @@ class FocusSessionPlanningState {
         reviewNav: reviewNav ?? this.reviewNav,
         reviewActions: reviewActions ?? this.reviewActions,
         reviewPersonTags: reviewPersonTags ?? this.reviewPersonTags,
+        reviewActionTexts: reviewActionTexts ?? this.reviewActionTexts,
       );
 }
 
@@ -485,10 +496,17 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           items.map((t) => t.id).toSet(),
         );
         if (!ref.mounted) return;
+        // Batched current-Action lookup, same discipline: one query for the
+        // whole snapshot rather than a DAO call per rendered card.
+        final actionTexts = await _db.actionDao.getCurrentActionTexts(
+          items.map((t) => t.id).toSet(),
+        );
+        if (!ref.mounted) return;
         state = state.copyWith(
           reviewNav: SnapshotNav<Todo>(items: items),
           reviewActions: {},
           reviewPersonTags: personTags,
+          reviewActionTexts: actionTexts,
         );
       }
       state = state.copyWith(currentStep: next.clamp(0, _maxStepIndex));

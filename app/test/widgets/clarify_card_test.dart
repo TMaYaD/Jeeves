@@ -399,6 +399,16 @@ void main() {
             createdAt: Value(now),
             updatedAt: Value(now),
           ));
+      // …and the Action row the phrase dual-writes to, which is what the
+      // mirror guard now consults (ADR-0001 story 3).
+      await seedCurrentAction(
+        db,
+        outcomeId: 'rc-mirror-1',
+        text: 'Email guest list',
+        userId: _userId,
+        id: 'rc-mirror-1-action',
+        createdAt: now,
+      );
       final todo = (await db.todoDao.getTodo('rc-mirror-1'))!;
 
       await tester.pumpWidget(_harness(

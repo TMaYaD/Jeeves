@@ -31,6 +31,7 @@ class PeriodicReviewState {
     this.nextNav = const SnapshotNav<Todo>(),
     this.somedayNav = const SnapshotNav<Todo>(),
     this.waitingForPersonTags = const {},
+    this.actionTexts = const {},
     this.inboxRoutings = const {},
     this.waitingForRoutings = const {},
     this.nextRoutings = const {},
@@ -54,6 +55,15 @@ class PeriodicReviewState {
   /// delegate name(s) inline without a per-item DAO call.
   final Map<String, List<Tag>> waitingForPersonTags;
 
+  /// Current Action text for the Outcomes in every list-driven snapshot,
+  /// keyed by Outcome id. An absent key is an Actionless Outcome.
+  ///
+  /// Loaded alongside each snapshot from `actions` — the Action entity, not
+  /// the `next_action_text` cursor, is what the steps render and what the
+  /// re-clarify dialog prefills (ADR-0001 story 3). One map across the steps
+  /// because Outcome ids are unique; each loader merges its slice in.
+  final Map<String, String> actionTexts;
+
   /// In-session record of the last [RoutingKind] applied at each cursor index
   /// for each list-driven step. Drives the "previously selected" affordance
   /// when the user backs up to revisit an item.
@@ -76,6 +86,7 @@ class PeriodicReviewState {
     SnapshotNav<Todo>? nextNav,
     SnapshotNav<Todo>? somedayNav,
     Map<String, List<Tag>>? waitingForPersonTags,
+    Map<String, String>? actionTexts,
     Map<int, RoutingKind>? inboxRoutings,
     Map<int, RoutingKind>? waitingForRoutings,
     Map<int, RoutingKind>? nextRoutings,
@@ -97,6 +108,7 @@ class PeriodicReviewState {
         somedayNav: somedayNav ?? this.somedayNav,
         waitingForPersonTags:
             waitingForPersonTags ?? this.waitingForPersonTags,
+        actionTexts: actionTexts ?? this.actionTexts,
         inboxRoutings: inboxRoutings ?? this.inboxRoutings,
         waitingForRoutings: waitingForRoutings ?? this.waitingForRoutings,
         nextRoutings: nextRoutings ?? this.nextRoutings,
@@ -181,9 +193,12 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
       // without spawning one DAO call per item.
       final tags = await _db.todoDao
           .getPersonTagsForTodos({for (final t in todos) t.id});
+      final actionTexts = await _db.actionDao
+          .getCurrentActionTexts({for (final t in todos) t.id});
       state = state.copyWith(
         waitingForNav: state.waitingForNav.withItems(todos),
         waitingForPersonTags: tags,
+        actionTexts: {...state.actionTexts, ...actionTexts},
       );
     } catch (e) {
       state = state.copyWith(waitingForLoadError: e.toString());
@@ -198,8 +213,14 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     state = state.copyWith(clearNextLoadError: true);
     try {
       final todos = await _db.todoDao.getNextExcludingPersonTagged();
+      // Batched current-Action lookup so the card renders the concrete
+      // commitment without one DAO call per item.
+      final actionTexts = await _db.actionDao
+          .getCurrentActionTexts({for (final t in todos) t.id});
       state = state.copyWith(
-          nextNav: state.nextNav.withItems(todos));
+        nextNav: state.nextNav.withItems(todos),
+        actionTexts: {...state.actionTexts, ...actionTexts},
+      );
     } catch (e) {
       state = state.copyWith(nextLoadError: e.toString());
     } finally {
@@ -213,7 +234,12 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     state = state.copyWith(clearSomedayLoadError: true);
     try {
       final todos = await _db.todoDao.watchMaybe().first;
-      state = state.copyWith(somedayNav: state.somedayNav.withItems(todos));
+      final actionTexts = await _db.actionDao
+          .getCurrentActionTexts({for (final t in todos) t.id});
+      state = state.copyWith(
+        somedayNav: state.somedayNav.withItems(todos),
+        actionTexts: {...state.actionTexts, ...actionTexts},
+      );
     } catch (e) {
       state = state.copyWith(somedayLoadError: e.toString());
     } finally {

@@ -29,7 +29,7 @@ class ReviewItemCard extends StatelessWidget {
   final ProcessToHandlers process;
 
   /// Free-form subtext rendered between the title and the notes — used by
-  /// the Next Actions step to surface the persisted `next_action_text`.
+  /// the Next Actions step to surface the Outcome's current Action.
   final String? subtext;
 
   /// Person tags rendered as small chips above the title. The Waiting For

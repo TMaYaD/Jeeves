@@ -134,6 +134,84 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   }
 
   // ---------------------------------------------------------------------------
+  // Reads (ADR-0001 story 3, issue #473) — the current Action *is* the answer
+  // to "what is this Outcome's next move?".
+  //
+  // Every method below is a pure SELECT: it never opens a transaction, never
+  // stamps `last_clarified_at`, never converges a multi-current set and never
+  // notifies. Repair belongs to the writers (which converge as they go) and to
+  // the startup sweep; a read that repaired would turn rendering a list into a
+  // sync-visible write. Where a multi-current race is visible, reads apply the
+  // same winner rule the writers use ([_winnerFirst]) so every surface — and
+  // every device — displays the same row.
+  // ---------------------------------------------------------------------------
+
+  /// SQL ordering fragment that puts the winning `current` row first, for
+  /// subselects in other DAOs' list queries (e.g. `CaptureDao`). Mirrors
+  /// [_winnerFirst]; the Dart comparator stays the canonical rule.
+  static const winnerFirstOrderSql =
+      'ORDER BY COALESCE(actions.updated_at, actions.created_at) DESC, '
+      'actions.id ASC';
+
+  /// The Outcome's current Action, or null when it is Actionless.
+  Future<Action?> getCurrentAction(String outcomeId) async =>
+      _pickWinner(await _currentActionsFor(outcomeId));
+
+  /// Live view of the Outcome's current Action. Re-emits on any `actions`
+  /// write — including one the sync bridge lands from another device, which
+  /// arrives via [GtdDatabase.notifyActionsViewWrite] (ADR-0010).
+  Stream<Action?> watchCurrentAction(String outcomeId) {
+    return (select(actions)
+          ..where((a) =>
+              a.outcomeId.equals(outcomeId) & a.role.equals('current')))
+        .watch()
+        .map(_pickWinner);
+  }
+
+  /// Current Action text for each of [outcomeIds], keyed by Outcome id. An
+  /// absent key means the Outcome is Actionless — the shape the one-at-a-time
+  /// review snapshots consume, so a wizard step renders every item's Action
+  /// without one DAO call per item.
+  ///
+  /// Chunked so a large snapshot cannot exceed SQLite's bound-variable limit.
+  Future<Map<String, String>> getCurrentActionTexts(
+    Set<String> outcomeIds,
+  ) async {
+    if (outcomeIds.isEmpty) return const {};
+    final ids = outcomeIds.toList();
+    final byOutcome = <String, List<Action>>{};
+    for (var start = 0; start < ids.length; start += _idChunkSize) {
+      final chunk = ids.sublist(
+        start,
+        (start + _idChunkSize).clamp(0, ids.length),
+      );
+      final rows = await (select(actions)
+            ..where((a) => a.outcomeId.isIn(chunk) & a.role.equals('current')))
+          .get();
+      for (final row in rows) {
+        (byOutcome[row.outcomeId] ??= <Action>[]).add(row);
+      }
+    }
+    return {
+      for (final entry in byOutcome.entries)
+        if (_pickWinner(entry.value) case final winner?)
+          entry.key: winner.actionText,
+    };
+  }
+
+  /// Chunk width for `IN (…)` id lookups, well inside SQLite's default
+  /// bound-variable ceiling.
+  static const _idChunkSize = 500;
+
+  /// Read-side application of the winner rule — deterministic display of an
+  /// accidental multi-current set, with nothing written.
+  static Action? _pickWinner(List<Action> currents) {
+    if (currents.isEmpty) return null;
+    if (currents.length == 1) return currents.first;
+    return ([...currents]..sort(_winnerFirst)).first;
+  }
+
+  // ---------------------------------------------------------------------------
   // Transaction-body variants — run inside the caller's transaction, never
   // notify (the caller notifies after its own commit). Used by the public
   // wrappers above and by TodoDao's dual-write choke points.

@@ -16,6 +16,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/screens/periodic_review/steps/_review_card.dart';
 import 'package:jeeves/screens/periodic_review/steps/next_step.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 
@@ -32,6 +33,7 @@ Future<String> _insertNextActionTodo(
   required String id,
   String title = 'Plain next action',
   String? nextActionText,
+  String? currentActionText,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
@@ -45,6 +47,16 @@ Future<String> _insertNextActionTodo(
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
+  // The Action row is what the step reads (ADR-0001 story 3); it defaults to
+  // agreeing with the cursor, as the dual-write choke points guarantee, and a
+  // test can set [currentActionText] separately to prove which one is read.
+  await seedCurrentAction(
+    db,
+    outcomeId: id,
+    text: currentActionText ?? nextActionText,
+    userId: _userId,
+    createdAt: now,
+  );
   return id;
 }
 
@@ -94,6 +106,39 @@ Future<ProviderContainer> _enterStep(
 
 void main() {
   setUpAll(configureSqliteForTests);
+
+  group('NextStep — current Action subtext (#473)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('the subtext is the current Action, not the cursor column',
+        (tester) async {
+      await _insertNextActionTodo(
+        db,
+        id: 'na1',
+        title: 'Repaint the fence',
+        nextActionText: 'stale cursor phrase',
+        currentActionText: 'Buy the primer',
+      );
+      await _enterStep(tester, db);
+
+      expect(find.text('Buy the primer'), findsOneWidget);
+      expect(find.text('stale cursor phrase'), findsNothing);
+    });
+
+    testWidgets('an Actionless Outcome renders no subtext', (tester) async {
+      await _insertNextActionTodo(db, id: 'na1', title: 'Repaint the fence');
+      await _enterStep(tester, db);
+
+      expect(find.text('Repaint the fence'), findsOneWidget);
+      // The card must be handed no subtext at all — asserting only the title
+      // would pass just as happily with a stale phrase rendered beneath it.
+      final card = tester.widget<ReviewItemCard>(find.byType(ReviewItemCard));
+      expect(card.subtext, isNull);
+    });
+  });
 
   group('NextStep — Re-clarify… sub-flow (#294)', () {
     late GtdDatabase db;

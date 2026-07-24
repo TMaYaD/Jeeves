@@ -495,6 +495,9 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         );
         final tags =
             ref.watch(taskTagsProvider(todoId)).asData?.value ?? const <Tag>[];
+        // No current-Action text: this card excepts the `nextActionDialog`
+        // modifier (the title-as-action coupling below supplies the phrase
+        // instead), so nothing here reads it.
         return _buildBody(context, tags: tags, subject: OutcomeSubject(todo));
       },
     );
@@ -776,17 +779,19 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             // Capture → the mirror travels in the draft (see [_draft]) and is
             //           applied by clarifyCaptureToOutcome as it creates the
             //           Outcome; there is nothing to write here.
-            // Outcome → only mirror when `next_action_text` is null/empty;
-            //           otherwise the user has already written a deliberate
-            //           phrase and we must not clobber it.
+            // Outcome → only mirror when the Outcome is Actionless (no
+            //           `current` Action row); otherwise the user has already
+            //           written a deliberate phrase and we must not clobber
+            //           it. The Action entity is the evidence, not the cursor
+            //           (ADR-0001 story 3).
             if (!_isCapture &&
                 (action == ProcessAction.next ||
                     action == ProcessAction.waitingFor)) {
               final title = _titleCtrl?.text.trim() ?? '';
               if (title.isNotEmpty) {
                 final db = ref.read(databaseProvider);
-                final current = await db.todoDao.getTodo(_subjectId);
-                if ((current?.nextActionText?.trim() ?? '').isEmpty) {
+                final current = await db.actionDao.getCurrentAction(_subjectId);
+                if (current == null) {
                   await db.todoDao.setNextActionText(_subjectId, title);
                 }
               }
