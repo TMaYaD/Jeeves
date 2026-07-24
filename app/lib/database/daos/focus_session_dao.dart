@@ -56,9 +56,17 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // session — that would silently destroy it without recording Review
       // dispositions. Refuse to open a second session; the UI gates on this by
       // routing the user through Evening Shutdown first.
-      final existing = await (select(focusSessions)
-            ..where((s) => s.endedAt.isNull()))
-          .getSingleOrNull();
+      //
+      // Fetch at most one open row rather than `getSingleOrNull()`: because the
+      // production tables are PowerSync views with no partial unique constraint
+      // (see above), a sync conflict can leave more than one session open, and
+      // `getSingleOrNull()` would then throw Drift's opaque "Too many elements"
+      // error instead of the ADR-specific guidance below.
+      final openRows = await (select(focusSessions)
+            ..where((s) => s.endedAt.isNull())
+            ..limit(1))
+          .get();
+      final existing = openRows.isEmpty ? null : openRows.first;
       if (existing != null) {
         throw StateError(
           'A FocusSession (${existing.id}) is already open. Close it via '
@@ -402,25 +410,30 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   ///
   /// Returns an empty list when no closed session exists or none has rollover
   /// tasks.
-  Future<List<String>> getLastClosedSessionRolloverTaskIds() async {
-    final rows = await customSelect(
+  /// SQL selecting the rollover task ids of the most recently closed session
+  /// across both Disposition homes (ADR-0016): planned Outcomes carried over in
+  /// [focus_session_tasks] and off-Plan engaged Outcomes in
+  /// [focus_session_dispositions]. The UNION de-duplicates. Takes two positional
+  /// parameters, both the `'rollover'` disposition literal. Shared by
+  /// [getLastClosedSessionRolloverTaskIds] and
+  /// [watchLastClosedSessionRolloverTasks] so the disposition-homes rule lives
+  /// in one place.
+  static const String _lastClosedRolloverTaskIdsSql =
       'SELECT fst.task_id FROM focus_session_tasks fst '
       'JOIN focus_sessions fs ON fs.id = fst.focus_session_id '
-      'WHERE fs.ended_at IS NOT NULL '
-      'AND fst.disposition = ? '
+      'WHERE fs.ended_at IS NOT NULL AND fst.disposition = ? '
       'AND fs.ended_at = ('
-      '  SELECT MAX(ended_at) FROM focus_sessions '
-      '  WHERE ended_at IS NOT NULL'
-      ') '
+      '  SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL) '
       'UNION '
       'SELECT fsd.task_id FROM focus_session_dispositions fsd '
       'JOIN focus_sessions fs ON fs.id = fsd.focus_session_id '
-      'WHERE fs.ended_at IS NOT NULL '
-      'AND fsd.disposition = ? '
+      'WHERE fs.ended_at IS NOT NULL AND fsd.disposition = ? '
       'AND fs.ended_at = ('
-      '  SELECT MAX(ended_at) FROM focus_sessions '
-      '  WHERE ended_at IS NOT NULL'
-      ')',
+      '  SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL)';
+
+  Future<List<String>> getLastClosedSessionRolloverTaskIds() async {
+    final rows = await customSelect(
+      _lastClosedRolloverTaskIdsSql,
       variables: [
         Variable('rollover'),
         Variable('rollover'),
@@ -438,19 +451,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// shows only while no session is open. Re-emits when a session closes.
   Stream<List<Todo>> watchLastClosedSessionRolloverTasks() {
     return customSelect(
-      'SELECT t.* FROM todos t WHERE t.id IN ('
-      '  SELECT fst.task_id FROM focus_session_tasks fst '
-      '  JOIN focus_sessions fs ON fs.id = fst.focus_session_id '
-      '  WHERE fs.ended_at IS NOT NULL AND fst.disposition = ? '
-      '  AND fs.ended_at = ('
-      '    SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL) '
-      '  UNION '
-      '  SELECT fsd.task_id FROM focus_session_dispositions fsd '
-      '  JOIN focus_sessions fs ON fs.id = fsd.focus_session_id '
-      '  WHERE fs.ended_at IS NOT NULL AND fsd.disposition = ? '
-      '  AND fs.ended_at = ('
-      '    SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL)'
-      ')',
+      'SELECT t.* FROM todos t WHERE t.id IN '
+      '($_lastClosedRolloverTaskIdsSql)',
       variables: [Variable('rollover'), Variable('rollover')],
       readsFrom: {
         focusSessions,

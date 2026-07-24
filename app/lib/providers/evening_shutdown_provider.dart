@@ -344,10 +344,17 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
         now: now,
       );
       // No open session remains — today's Evening Shutdown fire is moot.
-      // Best-effort reconciliation of the OS-scheduled notification.
-      await ref
-          .read(notificationServiceProvider)
-          .skipTodayRitualReminder(RitualId.eveningShutdown);
+      // Best-effort reconciliation of the OS-scheduled notification: a
+      // platform failure here must never abort the shutdown, which has
+      // already closed the session. Swallow so the completion-state update
+      // below still runs (ADR-0020).
+      try {
+        await ref
+            .read(notificationServiceProvider)
+            .skipTodayRitualReminder(RitualId.eveningShutdown);
+      } catch (_) {
+        // Best-effort OS notification reconciliation must not fail shutdown.
+      }
     }
 
     final today = planningToday();

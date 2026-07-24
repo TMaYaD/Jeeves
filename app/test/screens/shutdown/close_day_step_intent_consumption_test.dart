@@ -18,7 +18,6 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/shutdown/steps/close_day_step.dart';
@@ -26,19 +25,10 @@ import 'package:jeeves/services/notification_service.dart';
 
 import '../../test_helpers.dart';
 
-// No-ops the platform-channel notification skip `closeDay` performs on
-// close, mirroring evening_shutdown_provider_test.dart's stub.
-class _StubNotificationService extends NotificationService {
-  _StubNotificationService() : super.forTesting();
-
-  @override
-  Future<void> skipTodayRitualReminder(RitualId ritual) async {}
-}
-
 (Widget, ProviderContainer) _app(GtdDatabase db) {
   final container = ProviderContainer(overrides: [
     databaseProvider.overrideWithValue(db),
-    notificationServiceProvider.overrideWithValue(_StubNotificationService()),
+    notificationServiceProvider.overrideWithValue(StubNotificationService()),
   ]);
   final router = GoRouter(
     initialLocation: '/shutdown-close-day',

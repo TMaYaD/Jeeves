@@ -86,8 +86,7 @@ class FocusScreen extends ConsumerWidget {
                       ? const <Todo>[]
                       : (ref
                               .watch(lastClosedSessionRolloverTasksProvider)
-                              .asData
-                              ?.value ??
+                              .value ??
                           const <Todo>[]);
                   return ListView(
                         physics: const ClampingScrollPhysics(),

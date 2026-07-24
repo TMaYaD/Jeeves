@@ -867,4 +867,87 @@ void main() {
       expect(ids, isEmpty);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // watchLastClosedSessionRolloverTasks — the Todo-row, reactive counterpart of
+  // getLastClosedSessionRolloverTaskIds (shares its rollover-ids SQL).
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — watchLastClosedSessionRolloverTasks', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('emits empty list when no closed sessions exist', () async {
+      final tasks = await db.focusSessionDao
+          .watchLastClosedSessionRolloverTasks()
+          .first;
+      expect(tasks, isEmpty);
+    });
+
+    test('emits rollover Todo rows from the most recently closed session',
+        () async {
+      await _insertTodo(db, id: 'tA', title: 'A');
+      await _insertTodo(db, id: 'tB', title: 'B');
+      await _insertTodo(db, id: 'tC', title: 'C');
+
+      // First (older) session — tA rolled over.
+      final firstId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['tA'],
+        now: DateTime(2026, 4, 28, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: firstId,
+        dispositions: {'tA': 'rollover'},
+        now: DateTime(2026, 4, 28, 17, 0),
+      );
+
+      // Second (newer) session — tB rolled over, tC left.
+      final secondId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['tB', 'tC'],
+        now: DateTime(2026, 4, 29, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: secondId,
+        dispositions: {'tB': 'rollover', 'tC': 'leave'},
+        now: DateTime(2026, 4, 29, 17, 0),
+      );
+
+      final tasks = await db.focusSessionDao
+          .watchLastClosedSessionRolloverTasks()
+          .first;
+      // Only tB (rollover, newest session); tC (leave) and tA (older) excluded.
+      expect(tasks.map((t) => t.id), unorderedEquals(['tB']));
+      expect(tasks.single.title, 'B');
+    });
+
+    test('re-emits when a session closes', () async {
+      await _insertTodo(db, id: 'x', title: 'X');
+      final stream =
+          db.focusSessionDao.watchLastClosedSessionRolloverTasks();
+      final future = expectLater(
+        stream.map((rows) => rows.map((t) => t.id).toList()),
+        emitsInOrder([
+          <String>[],
+          ['x'],
+        ]),
+      );
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['x'],
+        now: DateTime(2026, 4, 29, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sessionId,
+        dispositions: {'x': 'rollover'},
+        now: DateTime(2026, 4, 29, 17, 0),
+      );
+
+      await future;
+    });
+  });
 }
