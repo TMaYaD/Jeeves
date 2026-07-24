@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../providers/connectivity_provider.dart';
 import '../../providers/inbox_provider.dart';
 import '../../providers/powersync_provider.dart';
 import '../../widgets/active_filter_bar.dart';
 import 'widgets/inbox_list.dart';
-import 'widgets/offline_chip.dart';
 import 'widgets/quick_add_bar.dart';
 
 /// Root screen: the GTD inbox capture view.
@@ -39,63 +37,14 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isOnline = ref.watch(isOnlineProvider).asData?.value ?? true;
-    final inboxCount =
-        ref.watch(inboxItemsProvider).asData?.value.length ?? 0;
-
     return Scaffold(
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header row: title + count badge + offline chip
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 20, 0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Builder(
-                          builder: (ctx) => IconButton(
-                            icon: const Icon(Icons.menu),
-                            onPressed: () {
-                              ctx.findRootAncestorStateOfType<ScaffoldState>()?.openDrawer();
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Inbox',
-                          style: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF1A1A2E),
-                          ),
-                        ),
-                        if (inboxCount > 0) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFE5E7EB),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text('$inboxCount'),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  if (!isOnline) const OfflineChip(),
-                ],
-              ),
-            ),
-            // Active tag filter strip (shown only when filter is active)
+            // Active tag filter strip (shown only when filter is active).
+            // The title, drawer, and unprocessed-count badge live in the shared
+            // AppShell title bar (ADR-0021).
             const ActiveFilterBar(),
             // Quick add bar (pill-shaped input)
             Padding(

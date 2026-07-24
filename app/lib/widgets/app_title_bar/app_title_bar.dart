@@ -32,6 +32,7 @@ class AppTitleBar extends StatelessWidget implements PreferredSizeWidget {
     this.badge,
     this.pageActions = const <AppTitleBarAction>[],
     this.leading = AppTitleBarLeading.back,
+    this.leadingEnabled = true,
     this.onLeadingPressed,
     this.pinnedAction,
   });
@@ -52,9 +53,15 @@ class AppTitleBar extends StatelessWidget implements PreferredSizeWidget {
   /// ceremony.
   final AppTitleBarLeading leading;
 
-  /// Overrides the leading's default behaviour (`context.pop()` for back,
-  /// `Scaffold.of(context).openDrawer()` for drawer) — for the screens whose
-  /// way out is a `go` rather than a pop, or is guarded.
+  /// When false the leading affordance renders visually disabled
+  /// (`onPressed: null`) rather than tappable — for screens that must gate the
+  /// way out while a route transition is in flight (Clarify's `_routing`
+  /// guard). Ignored when [leading] is [AppTitleBarLeading.none].
+  final bool leadingEnabled;
+
+  /// Overrides the leading's default behaviour (`Navigator.of(context).pop()`
+  /// for back, `Scaffold.of(context).openDrawer()` for drawer) — for the
+  /// screens whose way out is a `go` rather than a pop, or is guarded.
   final VoidCallback? onLeadingPressed;
 
   /// The reserved rightmost slot: capture (#458). Never overflows, identical
@@ -118,7 +125,9 @@ class AppTitleBar extends StatelessWidget implements PreferredSizeWidget {
           icon: const Icon(Icons.arrow_back_ios_new,
               size: 20, color: _iconColor),
           tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-          onPressed: onLeadingPressed ?? () => Navigator.of(context).pop(),
+          onPressed: leadingEnabled
+              ? (onLeadingPressed ?? () => Navigator.of(context).pop())
+              : null,
         );
       case AppTitleBarLeading.drawer:
         return IconButton(
@@ -127,7 +136,9 @@ class AppTitleBar extends StatelessWidget implements PreferredSizeWidget {
           tooltip: MaterialLocalizations.of(context).openAppDrawerTooltip,
           // The bar lives in the Scaffold's own appBar slot, so this resolves
           // to the shell Scaffold — no root-ancestor lookup needed.
-          onPressed: onLeadingPressed ?? () => Scaffold.of(context).openDrawer(),
+          onPressed: leadingEnabled
+              ? (onLeadingPressed ?? () => Scaffold.of(context).openDrawer())
+              : null,
         );
     }
   }

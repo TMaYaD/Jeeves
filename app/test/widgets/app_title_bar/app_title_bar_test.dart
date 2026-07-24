@@ -423,6 +423,38 @@ void main() {
 
       expect(find.byKey(appTitleBarLeadingKey), findsNothing);
     });
+
+    testWidgets('leadingEnabled false renders the back leading disabled',
+        (tester) async {
+      await tester.pumpWidget(_harness(
+        const AppTitleBar(
+          title: 'Clarify',
+          leadingEnabled: false,
+        ),
+      ));
+
+      final button =
+          tester.widget<IconButton>(find.byKey(appTitleBarLeadingKey));
+      expect(button.onPressed, isNull,
+          reason: 'a disabled leading gates the way out while routing');
+    });
+
+    testWidgets('leadingEnabled false disables an onLeadingPressed override',
+        (tester) async {
+      var pressed = 0;
+      await tester.pumpWidget(_harness(
+        AppTitleBar(
+          title: 'Clarify',
+          leadingEnabled: false,
+          onLeadingPressed: () => pressed++,
+        ),
+      ));
+
+      final button =
+          tester.widget<IconButton>(find.byKey(appTitleBarLeadingKey));
+      expect(button.onPressed, isNull);
+      expect(pressed, 0);
+    });
   });
 
   group('overflow-aware test helper', () {

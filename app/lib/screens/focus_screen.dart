@@ -27,33 +27,6 @@ class FocusScreen extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 20, 8),
-              child: Row(
-                children: [
-                  Builder(
-                    builder: (ctx) => IconButton(
-                      icon: const Icon(Icons.menu),
-                      onPressed: () {
-                        ctx.findRootAncestorStateOfType<ScaffoldState>()?.openDrawer();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // User-facing title is "Now" (epic #35 design review);
-                  // internal identifiers stay Focus — see CONTEXT.md's
-                  // term-unification divergence list.
-                  const Text(
-                    'Now',
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1A1A2E),
-                    ),
-                  ),
-                ],
-              ),
-            ),
             Expanded(
               child: asyncTasks.when(
                 loading: () => const Center(child: CircularProgressIndicator()),

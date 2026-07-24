@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/models/focus_session_planning_settings.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/auth_provider.dart';
-import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
@@ -13,6 +12,8 @@ import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
+import 'package:jeeves/widgets/nudge_banner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
 
@@ -58,13 +59,13 @@ class _MockAuthNotifier extends AuthNotifier {
 Widget _buildShellOnly({
   List<Capture> items = const [],
   VoidCallback? onLogout,
+  String initialLocation = '/inbox',
   FocusSessionPlanningSettings planningSettings =
       const FocusSessionPlanningSettings(bannerEnabled: false),
 }) {
   return ProviderScope(
     overrides: [
       authTokenProvider.overrideWith(() => _MockAuthNotifier(onLogout: onLogout)),
-      isOnlineProvider.overrideWith((_) => Stream.value(true)),
       inboxItemsProvider.overrideWith((_) => Stream.value(items)),
       nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
@@ -86,7 +87,7 @@ Widget _buildShellOnly({
       home: Builder(
         builder: (ctx) {
           final router = GoRouter(
-            initialLocation: '/inbox',
+            initialLocation: initialLocation,
             routes: [
               // /focus-session-planning is outside the ShellRoute — matches
               // production router where FocusSessionPlanningScreen renders
@@ -100,19 +101,9 @@ Widget _buildShellOnly({
                 routes: [
                   GoRoute(
                     path: '/inbox',
-                    builder: (context, _) => Scaffold(
-                      body: Row(children: [
-                        Builder(
-                          builder: (innerCtx) => IconButton(
-                            icon: const Icon(Icons.menu),
-                            onPressed: () {
-                              innerCtx.findRootAncestorStateOfType<ScaffoldState>()?.openDrawer();
-                            },
-                          ),
-                        ),
-                        const Text('Inbox body')
-                      ]),
-                    ),
+                    // Plain body — the drawer opens from the shared title bar's
+                    // leading slot now, not a per-screen menu button.
+                    builder: (_, _) => const Scaffold(body: Text('Inbox body')),
                   ),
                   GoRoute(
                     path: '/next-actions',
@@ -164,13 +155,16 @@ void main() {
     await tester.pumpWidget(_buildShellOnly());
     await tester.pump();
 
-    // Drawer is initially hidden
-    expect(find.text('Inbox'), findsNothing);
+    // Drawer is initially hidden — the bar titles the route 'Inbox', so anchor
+    // on a drawer-only marker (the Search tile's Ctrl+K hint) instead.
+    expect(find.text('Ctrl+K'), findsNothing);
 
-    // Open drawer via the menu button added in the mock child scaffold
-    await tester.tap(find.byIcon(Icons.menu));
+    // Open drawer via the shared title bar's leading (drawer) slot.
+    await tester.tap(find.byKey(appTitleBarLeadingKey));
     await tester.pumpAndSettle();
 
+    expect(find.text('Ctrl+K'), findsOneWidget);
+    // The bar's route title and the drawer's Inbox tile both read 'Inbox'.
     expect(find.text('Inbox'), findsWidgets);
     // Scroll the drawer to reveal sections further down.
     await tester.drag(find.byType(Drawer), const Offset(0, -300));
@@ -206,7 +200,7 @@ void main() {
       await tester.pumpWidget(_buildShellOnly());
       await tester.pump();
 
-      await tester.tap(find.byIcon(Icons.menu));
+      await tester.tap(find.byKey(appTitleBarLeadingKey));
       await tester.pumpAndSettle();
 
       if (c.scroll) {
@@ -227,7 +221,7 @@ void main() {
     await tester.pumpWidget(_buildShellOnly());
     await tester.pump();
 
-    await tester.tap(find.byIcon(Icons.menu));
+    await tester.tap(find.byKey(appTitleBarLeadingKey));
     await tester.pumpAndSettle();
 
     // Scroll to reveal the Settings tile at the bottom.
@@ -244,7 +238,7 @@ void main() {
     await tester.pumpWidget(_buildShellOnly());
     await tester.pump();
 
-    await tester.tap(find.byIcon(Icons.menu));
+    await tester.tap(find.byKey(appTitleBarLeadingKey));
     await tester.pumpAndSettle();
 
     // Scroll the nav column so the record group at its end is visible.
@@ -267,4 +261,107 @@ void main() {
         isNull);
   });
 
+  testWidgets('the shared bar titles each shell route from the route→title map',
+      (tester) async {
+    for (final entry in shellRouteTitles.entries) {
+      await tester.pumpWidget(_buildShellOnly(initialLocation: entry.key));
+      await tester.pump();
+
+      expect(
+        find.descendant(
+          of: find.byType(AppTitleBar),
+          matching: find.text(entry.value),
+        ),
+        findsOneWidget,
+        reason: '${entry.key} should carry the bar title "${entry.value}"',
+      );
+    }
+  });
+
+  testWidgets('the shell bar uses the drawer leading on shell routes',
+      (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+    expect(bar.leading, AppTitleBarLeading.drawer);
+  });
+
+  testWidgets('NudgeBanner renders inside the shell body below the bar',
+      (tester) async {
+    await tester.pumpWidget(_buildShellOnly());
+    await tester.pump();
+
+    expect(find.byType(NudgeBanner), findsOneWidget);
+  });
+
+  group('inbox unprocessed-count badge', () {
+    testWidgets('shows the count on /inbox when there are captures',
+        (tester) async {
+      await tester.pumpWidget(_buildShellOnly(items: [
+        Capture(
+          id: 'a',
+          title: 'Buy milk',
+          notes: null,
+          captureSource: 'manual',
+          createdAt: DateTime(2024, 1, 1),
+          clarifiedAt: null,
+          updatedAt: null,
+          userId: 'local',
+        ),
+        Capture(
+          id: 'b',
+          title: 'Call dentist',
+          notes: null,
+          captureSource: 'manual',
+          createdAt: DateTime(2024, 1, 1),
+          clarifiedAt: null,
+          updatedAt: null,
+          userId: 'local',
+        ),
+      ]));
+      await tester.pump();
+
+      expect(find.byKey(appTitleBarBadgeKey), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(appTitleBarBadgeKey),
+          matching: find.text('2'),
+        ),
+        findsOneWidget,
+      );
+      final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+      expect(bar.badge?.semanticsLabel, '2 unprocessed captures');
+    });
+
+    testWidgets('is absent on /inbox when there are no captures',
+        (tester) async {
+      await tester.pumpWidget(_buildShellOnly());
+      await tester.pump();
+
+      expect(find.byKey(appTitleBarBadgeKey), findsNothing);
+    });
+
+    testWidgets('is absent on non-inbox routes even with captures',
+        (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/next-actions',
+        items: [
+          Capture(
+            id: 'a',
+            title: 'Buy milk',
+            notes: null,
+            captureSource: 'manual',
+            createdAt: DateTime(2024, 1, 1),
+            clarifiedAt: null,
+            updatedAt: null,
+            userId: 'local',
+          ),
+        ],
+      ));
+      await tester.pump();
+
+      expect(find.byKey(appTitleBarBadgeKey), findsNothing);
+    });
+  });
 }

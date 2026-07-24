@@ -13,6 +13,7 @@ import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../providers/sync_status_provider.dart';
+import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/jeeves_logo.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -26,13 +27,7 @@ class SettingsScreen extends ConsumerWidget {
         : syncAsync.asData?.value;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-        backgroundColor: Colors.white,
-        foregroundColor: const Color(0xFF1A1A2E),
-        elevation: 0,
-        leading: BackButton(onPressed: () => context.pop()),
-      ),
+      appBar: const AppTitleBar(title: 'Settings'),
       backgroundColor: Colors.white,
       body: ValueListenableBuilder<bool>(
         valueListenable: authStateNotifier,

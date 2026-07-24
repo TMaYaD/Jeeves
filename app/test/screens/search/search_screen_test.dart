@@ -6,6 +6,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/search_result.dart';
 import 'package:jeeves/providers/search_provider.dart';
 import 'package:jeeves/screens/search/search_screen.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,6 +81,25 @@ void main() {
       expect(find.byType(ListTile), findsNothing);
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.controller?.text ?? '', isEmpty);
+    });
+
+    testWidgets('adopts the shared title bar with a back leading',
+        (tester) async {
+      // The bar owns the back affordance; the query field is no longer wrapped
+      // in a Row with its own back button.
+      await tester.pumpWidget(_buildScreen());
+      await tester.pump();
+
+      expect(
+        find.descendant(
+          of: find.byType(AppTitleBar),
+          matching: find.text('Search'),
+        ),
+        findsOneWidget,
+      );
+      final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+      expect(bar.leading, AppTitleBarLeading.back);
+      expect(find.byKey(appTitleBarLeadingKey), findsOneWidget);
     });
 
     testWidgets('query resets after leaving and reopening search', (tester) async {

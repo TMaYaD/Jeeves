@@ -14,7 +14,6 @@ class DoneScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GtdListScreen(
-      title: 'Done',
       provider: doneProvider,
       showFilterBar: false,
       emptyIcon: Icons.task_alt,

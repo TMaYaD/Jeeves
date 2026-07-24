@@ -7,9 +7,25 @@ import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
 import '../providers/tags_provider.dart';
+import '../widgets/app_title_bar/app_title_bar.dart';
 import '../widgets/jeeves_logo.dart';
 import '../widgets/nudge_banner.dart';
 import 'common/tag_cloud.dart';
+
+/// The shared title-bar title for each of the seven shell list routes, keyed
+/// by [GoRouterState] path. The bar's title is a pure function of route state,
+/// owned above the child screens (ADR-0021) — the children no longer hand-roll
+/// their own header. "Now" is the user-facing label for `/focus` (epic #35);
+/// the route and internal identifiers stay Focus (CONTEXT.md divergence list).
+const Map<String, String> shellRouteTitles = {
+  '/inbox': 'Inbox',
+  '/focus': 'Now',
+  '/next-actions': 'Next Actions',
+  '/waiting-for': 'Waiting For',
+  '/someday-maybe': 'Maybe',
+  '/done': 'Done',
+  '/trash': 'Trash',
+};
 
 /// Intent dispatched by the search keyboard shortcut (Ctrl+K or /).
 class _SearchIntent extends Intent {
@@ -30,6 +46,20 @@ class AppShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final location = GoRouterState.of(context).uri.path;
+    final title = shellRouteTitles[location] ?? '';
+
+    // The Inbox route carries the unprocessed-capture count as a typed badge;
+    // every other shell route shows none. Null at zero preserves the prior
+    // "only when > 0" behaviour.
+    final inboxCount = ref.watch(inboxItemsProvider).asData?.value.length ?? 0;
+    final badge = location == '/inbox' && inboxCount > 0
+        ? AppTitleBarBadge(
+            count: inboxCount,
+            semanticsLabel: '$inboxCount unprocessed captures',
+          )
+        : null;
+
     return Shortcuts(
       shortcuts: {
         LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyK):
@@ -50,6 +80,11 @@ class AppShell extends ConsumerWidget {
         },
         child: Scaffold(
           drawer: const CustomDrawer(),
+          appBar: AppTitleBar(
+            title: title,
+            badge: badge,
+            leading: AppTitleBarLeading.drawer,
+          ),
           body: Column(
             children: [
               const NudgeBanner(),

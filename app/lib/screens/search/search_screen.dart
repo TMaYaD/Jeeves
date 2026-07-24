@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../models/search_result.dart';
 import '../../providers/search_provider.dart';
+import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/async_list.dart';
 import 'widgets/recent_searches_list.dart';
 import 'widgets/search_filter_bar.dart';
@@ -83,6 +83,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final recentSearches = ref.watch(recentSearchesProvider);
 
     return Scaffold(
+      appBar: const AppTitleBar(title: 'Search'),
       body: SafeArea(
         child: Column(
           children: [
@@ -138,49 +139,40 @@ class _SearchBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The bar owns the back affordance; the query field sits flush beneath it,
+    // the ADR's home for screen-specific chrome (the bar title is a String).
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back),
-            tooltip: 'Back',
-            onPressed: () => context.pop(),
+      child: TextField(
+        controller: controller,
+        focusNode: focusNode,
+        autofocus: true,
+        onChanged: onChanged,
+        onSubmitted: onSubmitted,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          hintText: 'Search tasks…',
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide.none,
           ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              autofocus: true,
-              onChanged: onChanged,
-              onSubmitted: onSubmitted,
-              textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                hintText: 'Search tasks…',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide.none,
-                ),
-                filled: true,
-                fillColor: const Color(0xFFF3F4F6),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                prefixIcon: const Icon(
-                  Icons.search,
-                  color: Color(0xFF9CA3AF),
-                ),
-                suffixIcon: hasText
-                    ? IconButton(
-                        icon: const Icon(Icons.clear, size: 18),
-                        onPressed: onClear,
-                      )
-                    : null,
-              ),
-            ),
+          filled: true,
+          fillColor: const Color(0xFFF3F4F6),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 12,
           ),
-        ],
+          prefixIcon: const Icon(
+            Icons.search,
+            color: Color(0xFF9CA3AF),
+          ),
+          suffixIcon: hasText
+              ? IconButton(
+                  icon: const Icon(Icons.clear, size: 18),
+                  onPressed: onClear,
+                )
+              : null,
+        ),
       ),
     );
   }

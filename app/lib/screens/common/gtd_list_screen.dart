@@ -13,7 +13,6 @@ import '../../widgets/async_list.dart';
 class GtdListScreen extends ConsumerWidget {
   const GtdListScreen({
     super.key,
-    required this.title,
     required this.provider,
     this.emptyIcon = Icons.inbox_outlined,
     this.emptyTitle = 'Nothing here yet',
@@ -21,7 +20,6 @@ class GtdListScreen extends ConsumerWidget {
     this.showFilterBar = true,
   });
 
-  final String title;
   final StreamProvider<List<Todo>> provider;
   final IconData? emptyIcon;
   final String emptyTitle;
@@ -41,30 +39,6 @@ class GtdListScreen extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 20, 8),
-              child: Row(
-                children: [
-                  Builder(
-                    builder: (ctx) => IconButton(
-                      icon: const Icon(Icons.menu),
-                      onPressed: () {
-                        ctx.findRootAncestorStateOfType<ScaffoldState>()?.openDrawer();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1A1A2E),
-                    ),
-                  ),
-                ],
-              ),
-            ),
             if (showFilterBar) const ActiveFilterBar(),
             Expanded(
               child: AsyncList<Todo>(

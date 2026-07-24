@@ -190,15 +190,16 @@ slot — applied to a terminal verdict rather than to forward progress.
 
 ## App title bar
 
-One shared bar is designed to carry every screen's chrome (`AppTitleBar`,
+One shared bar carries every screen's chrome (`AppTitleBar`,
 `app/lib/widgets/app_title_bar/`; ruled in [ADR-0021](adr/0021-shared-app-title-bar.md)).
 It is a `PreferredSizeWidget` mounted in `Scaffold.appBar`, configured
 **entirely by constructor parameters passed top-down** — never by a provider or
 `content_for`-style slot written into from below, which during a route
-transition would race between the outgoing and incoming screen. Adoption is
-staged: the component ships with task detail as its single reference adoption,
-and the remaining screens migrate onto it in a follow-up. Until that migration
-lands the two chrome styles coexist.
+transition would race between the outgoing and incoming screen. Every screen
+adopts it: the shell list routes (via `AppShell`, one bar keyed off route
+state), task detail, clarify, settings, import, search, active focus, and the
+three ceremonies (via the shared `Wizard`). The auth routes keep their own
+minimal chrome. Capture is the one slot still to fill (`pinnedAction`, #458).
 
 ### Anatomy
 
@@ -209,7 +210,10 @@ Left to right:
 *   **leading** — `drawer` on the shell list routes, `back` on pushed routes,
     `none` inside a ceremony (which has no unguarded exit). The screen names
     which; the bar never inspects the router. A screen whose way out is a `go`
-    or is guarded passes its own `onLeadingPressed`.
+    or is guarded passes its own `onLeadingPressed`. A screen that must gate the
+    way out while a route transition is in flight passes `leadingEnabled: false`
+    — the leading renders visually disabled (`onPressed: null`) rather than
+    tappable (Clarify does this while `_routing`).
 *   **overline** — the small label, with an optional icon, that sits above the
     title and names what the title belongs to: the project above a task title,
     the ceremony above a step title. 12px, w600, 0.8 letter-spacing, grey
@@ -275,7 +279,7 @@ by `CeremonyPopScope` (`app/lib/widgets/ceremony/ceremony_pop_scope.dart`),
 which wraps each ceremony screen.
 
 ### Long-press multi-select
-Lists that surface batchable actions enter a multi-select mode on **long-press**, mirroring the long-press affordance the tag cloud uses for tag management. Once selection mode is active, a **contextual bar** appears immediately above the list (not in the screen-level app bar — that slot is reserved for step progress and titles) showing the selected count, a per-batch preview where relevant (e.g. total planned time), a "Select all" shortcut, a Clear (×) button, and a primary commit button. Cards in selection mode replace per-row trailing actions with a leading checkbox; tapping a card toggles its membership. Deselecting the last item auto-exits the mode. Each selection toggle fires a light haptic.
+Lists that surface batchable actions enter a multi-select mode on **long-press**, mirroring the long-press affordance the tag cloud uses for tag management. Once selection mode is active, a **contextual bar** appears immediately above the list (not in the screen-level app bar, which the shared title bar owns) showing the selected count, a per-batch preview where relevant (e.g. total planned time), a "Select all" shortcut, a Clear (×) button, and a primary commit button. Cards in selection mode replace per-row trailing actions with a leading checkbox; tapping a card toggles its membership. Deselecting the last item auto-exits the mode. Each selection toggle fires a light haptic.
 
 This pattern is used on Step 3 (Review Next Actions) of the Daily Planning ritual to add several Pending Review tasks to today's plan in one gesture; the bar there exposes "Add to Today" as the commit button.
 

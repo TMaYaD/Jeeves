@@ -71,9 +71,6 @@ dependencies:
   # Navigation
   go_router: ^17.3.0
 
-  # Connectivity
-  connectivity_plus: ^7.2.0
-
   # Local key-value persistence (planning ritual state)
   shared_preferences: ^2.3.3
 
