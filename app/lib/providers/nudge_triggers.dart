@@ -30,7 +30,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/ritual.dart';
 import 'ceremony_in_progress_provider.dart';
 import 'clock_provider.dart';
+import 'database_provider.dart';
 import 'focus_session_planning_provider.dart' show activeSessionProvider;
+import 'focus_session_planning_settings_provider.dart'
+    show focusSessionPlanningSettingsProvider;
 import 'gtd_lists_provider.dart';
 import 'nudge_clock_provider.dart';
 import 'onboarding_provider.dart';
@@ -96,6 +99,51 @@ DateTime _todayAt(DateTime now, int hour, int minute) {
   return DateTime(today.year, today.month, today.day, hour, minute);
 }
 
+/// The most recent [hour]:[minute] local-time anchor at or before [now] —
+/// today's if it has already passed, otherwise yesterday's.
+DateTime _lastAnchorBefore(DateTime now, int hour, int minute) {
+  final todayAnchor = _todayAt(now, hour, minute);
+  if (!now.isBefore(todayAnchor)) return todayAnchor;
+  return DateTime(now.year, now.month, now.day - 1, hour, minute);
+}
+
+// ---------------------------------------------------------------------------
+// Day-attribution anchors (issue #460, ADR-0020)
+// ---------------------------------------------------------------------------
+
+/// Today's Daily Planning anchor instant, derived from the user's configured
+/// planning time (default 08:00). Used only by the DPR Cadence Trigger for its
+/// past-anchor gate and `firingSince` — it is *not* the day boundary for
+/// session attribution (that is [lastShutdownAnchorProvider]).
+final planningAnchorProvider = Provider<DateTime>((ref) {
+  final now = _now(ref);
+  final planningTime =
+      ref.watch(focusSessionPlanningSettingsProvider).planningTime;
+  return _todayAt(now, planningTime.hour, planningTime.minute);
+});
+
+/// The most recent Evening Shutdown anchor at or before now, derived from the
+/// user's configured shutdown time (default 18:00 — the same source
+/// [_esCadenceTrigger] reads). This is the **day boundary for session
+/// attribution** (ADR-0020): a session belongs to the planning period opened
+/// by the most recent ES anchor before its `started_at`.
+final lastShutdownAnchorProvider = Provider<DateTime>((ref) {
+  final now = _now(ref);
+  final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
+  return _lastAnchorBefore(now, shutdownTime.hour, shutdownTime.minute);
+});
+
+/// Whether a session qualifies as belonging to the current planning period —
+/// i.e. one exists whose `started_at >=` [lastShutdownAnchorProvider]. This is
+/// the single source of "did today's planning happen" for the Daily Planning
+/// nudge (ADR-0020). `ended_at` plays no part; an open session that started
+/// before the last ES anchor does *not* qualify.
+final qualifyingSessionTodayProvider = StreamProvider<bool>((ref) {
+  final anchor = ref.watch(lastShutdownAnchorProvider);
+  final db = ref.watch(databaseProvider);
+  return db.focusSessionDao.watchQualifyingSessionExists(anchor);
+});
+
 // ---------------------------------------------------------------------------
 // Cadence Trigger
 // ---------------------------------------------------------------------------
@@ -103,8 +151,12 @@ DateTime _todayAt(DateTime now, int hour, int minute) {
 /// The Cadence Trigger for [ritual]. See file-level docs for semantics.
 ///
 /// Per-Ritual predicate sketches:
-///   - DPR: no FS active AND no FS opened today AND DPR not in-progress.
-///     firingSince = start of today.
+///   - DPR: now ≥ today's DPR anchor AND no qualifying session (none started
+///     since the last ES anchor) AND DPR not in-progress. Fires even on a day
+///     whose plan+shutdown both completed, once past the ES anchor (the ES
+///     anchor starts the next planning period); with a stale open session it
+///     fires alongside ES, which wins via queue ordering.
+///     firingSince = later of (today's DPR anchor, last ES anchor).
 ///   - ES:  FS active AND now ≥ shutdown anchor AND ES not in-progress.
 ///     firingSince = today's shutdown anchor.
 ///   - WR:  (no prior completion OR now ≥ last completion + 7d) AND
@@ -123,14 +175,21 @@ final cadenceTriggerProvider =
 
 TriggerState _dprCadenceTrigger(Ref ref) {
   final now = _now(ref);
-  // Defer until the active-session stream has emitted at least once;
-  // otherwise we'd flash a DPR firing state during cold start before the
-  // stream resolves to "yes, today's session exists."
-  final session = ref.watch(activeSessionProvider);
-  if (!session.hasValue) return TriggerState.idle;
-  // World-state precondition: no FocusSession currently active. Opening
-  // a new one is incoherent if one is already running.
-  if (session.requireValue != null) return TriggerState.idle;
+
+  // Past-anchor gate (ADR-0020): no nagging before today's DPR anchor.
+  final dprAnchor = ref.watch(planningAnchorProvider);
+  if (now.isBefore(dprAnchor)) return TriggerState.idle;
+
+  // Day-attribution precondition: suppress while a qualifying session exists
+  // (one started since the last ES anchor — open *or* already closed). Defer
+  // until the stream has emitted at least once, otherwise we'd flash a DPR
+  // firing state during cold start before it resolves. Note the deliberate
+  // absence of a "no session open" precondition: a *stale* open session
+  // (started before the last ES anchor) does not qualify, so DPR re-arms for
+  // it and fires alongside ES — Evening Shutdown wins via queue ordering.
+  final qualifying = ref.watch(qualifyingSessionTodayProvider);
+  if (!qualifying.hasValue) return TriggerState.idle;
+  if (qualifying.requireValue) return TriggerState.idle;
 
   // Content precondition: DPR is meaningful only when there is something
   // to plan. hasAnyItem gates the onboarding state; inbox-or-next non-empty
@@ -144,7 +203,11 @@ TriggerState _dprCadenceTrigger(Ref ref) {
     return TriggerState.idle;
   }
 
-  return TriggerState(isFiring: true, firingSince: _startOfToday(now));
+  // firingSince = the later of today's DPR anchor and the last ES anchor, so a
+  // morning dismiss does not suppress the fresh post-ES-anchor re-arm edge.
+  final lastEs = ref.watch(lastShutdownAnchorProvider);
+  final since = dprAnchor.isAfter(lastEs) ? dprAnchor : lastEs;
+  return TriggerState(isFiring: true, firingSince: since);
 }
 
 TriggerState _esCadenceTrigger(Ref ref) {

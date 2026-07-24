@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:powersync/powersync.dart' as ps;
 
+import '../database/daos/action_ids.dart';
 import '../providers/powersync_provider.dart';
 import '../providers/user_constants.dart' show kLocalUserId;
 
@@ -32,6 +33,7 @@ class LocalDataMigrationService {
       'captures',
       'capture_outcomes',
       'capture_tags',
+      'actions',
     ];
     for (final table in tables) {
       final rows = await db.getAll(
@@ -97,6 +99,14 @@ class LocalDataMigrationService {
       );
       await tx.execute(
         'UPDATE capture_tags SET user_id = ? WHERE user_id = ?',
+        [toUserId, fromUserId],
+      );
+
+      // Actions (issue #471). Plain reassignment like todos/captures — adopted
+      // local backfill rows re-key to the signed-in user before their queued
+      // PUTs upload, so the Outcome-ownership check on POST /actions/ passes.
+      await tx.execute(
+        'UPDATE actions SET user_id = ? WHERE user_id = ?',
         [toUserId, fromUserId],
       );
 
@@ -171,6 +181,10 @@ class LocalDataMigrationService {
       await tx.execute('DELETE FROM capture_tags WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM capture_outcomes WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM captures WHERE user_id = ?', [userId]);
+      // Actions before todos (actions.outcome_id → todos.id). Skipping this
+      // would orphan actions rows whose queued PUTs then 404 on the Outcome
+      // ownership check and dead-letter → sync-error badge (issue #471).
+      await tx.execute('DELETE FROM actions WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM todo_tags WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM tags WHERE user_id = ?', [userId]);
       await tx.execute('DELETE FROM todos WHERE user_id = ?', [userId]);
@@ -290,6 +304,225 @@ Future<int> carveOutLocalInbox({
   await exec('DELETE FROM todos WHERE id IN ($placeholders)', ids);
 
   return pending.length;
+}
+
+/// Reconcile the `actions` table against the authoritative next-action cursor
+/// (`todos.next_action_text` + the `energy_level` / `time_estimate` cursor
+/// fields), discharging the #471 backfill drift obligation and repairing the
+/// ongoing old-client replay window (ADR-0001 story 2, issue #472).
+///
+/// The #471 backfill was a one-time snapshot: every cursor edit after it — and
+/// every `PATCH todos.next_action_text` an old app version replays during the
+/// dual-write rollout — strands the Action row in one of three drift modes.
+/// This sweep repairs them, always in the direction **cursor → actions** (the
+/// cursor stays authoritative for reads until story 3). It is a
+/// clarification-neutral repair: it **never** stamps `last_clarified_at`
+/// (ADR-0012 spirit — never auto-stamp on drift), and it is idempotent and safe
+/// on every launch. Runs from [powerSyncInstanceProvider] right after
+/// [migrateLocalInboxToCaptures], before any watcher exists, so — like the v26
+/// backfill — it needs no view-notify.
+Future<int> reconcileActionsWithCursor(ps.PowerSyncDatabase db) async {
+  var repaired = 0;
+  await db.writeTransaction((tx) async {
+    repaired = await reconcileActionsWithCursorSteps(
+      query: (sql, args) => tx.getAll(sql, args),
+      exec: (sql, args) => tx.execute(sql, args).then((_) {}),
+    );
+  });
+  return repaired;
+}
+
+/// The reconciliation itself, expressed over a transaction's read/write pair so
+/// the exact SQL can be driven against a real SQLite database in tests (see
+/// `reconcile_actions_sweep_test.dart`) — PowerSync only supplies the
+/// transaction. Callers must already be inside a write transaction.
+///
+/// Returns the number of Action rows written (minted, updated, resurrected, or
+/// retired) — used only as a signal in tests.
+/// How many ids the sweep binds into a single `IN (...)` lookup — well under
+/// SQLite's most conservative `SQLITE_MAX_VARIABLE_NUMBER` (999).
+const _sweepIdChunk = 500;
+
+Future<int> reconcileActionsWithCursorSteps({
+  required Future<List<Map<String, Object?>>> Function(String, List<Object?>)
+      query,
+  required Future<void> Function(String, List<Object?>) exec,
+  DateTime? now,
+}) async {
+  final ts = (now ?? DateTime.now()).toUtc();
+  final tsIso = ts.toIso8601String();
+  var repaired = 0;
+
+  // Pass A — outcomes with a live cursor: mint / update / resurrect so exactly
+  // one `current` Action matches the cursor.
+  //
+  // The pass reads the whole set in two statements, not two per Outcome: it
+  // runs inside the startup write transaction that blocks initialization, so
+  // read cost must not scale with the number of actionable Outcomes. The join
+  // below pairs every cursor-bearing Outcome with its `current` Actions,
+  // winner-first *within* each Outcome (greatest COALESCE(updated_at,
+  // created_at), tie-break smallest id) — so per Outcome the first row is the
+  // keeper, any further rows are multi-current losers, and a lone row with a
+  // NULL action id is the mode-3 "missing row" case. Writes stay per-row
+  // because they only fire on genuine drift: the steady state — every launch
+  // after the repairing one — is two reads and no writes at all.
+  final joined = await query(
+    '''
+    SELECT t.id AS outcome_id, t.user_id AS user_id,
+           t.next_action_text AS cursor_text,
+           t.energy_level AS cursor_energy,
+           t.time_estimate AS cursor_time,
+           a.id AS action_id, a.text AS action_text,
+           a.energy_level AS action_energy,
+           a.time_estimate AS action_time
+    FROM todos t
+    LEFT JOIN actions a ON a.outcome_id = t.id AND a.role = 'current'
+    WHERE t.next_action_text IS NOT NULL AND TRIM(t.next_action_text) != ''
+    ORDER BY t.id ASC, COALESCE(a.updated_at, a.created_at) DESC, a.id ASC
+    ''',
+    [],
+  );
+
+  // Regroup the join into one entry per Outcome. Rows for an Outcome arrive
+  // contiguous and winner-first, so insertion order is the convergence order.
+  final byOutcome = <String, List<Map<String, Object?>>>{};
+  for (final row in joined) {
+    (byOutcome[row['outcome_id'] as String] ??= []).add(row);
+  }
+
+  // Outcomes with no `current` Action at all — resolved against the
+  // deterministic backfill slot in one batched lookup below.
+  final missing = <Map<String, Object?>>[];
+
+  for (final rows in byOutcome.values) {
+    final keeper = rows.first;
+    if (keeper['action_id'] == null) {
+      missing.add(keeper);
+      continue;
+    }
+
+    // Converge any accidental multi-current set: retire all but the winner.
+    for (final loser in rows.skip(1)) {
+      await exec(
+        "UPDATE actions SET role = 'superseded', updated_at = ? WHERE id = ?",
+        [tsIso, loser['action_id']],
+      );
+      repaired++;
+    }
+
+    // Mode 1 — stale row: bring text + metadata in line with the cursor.
+    final differs = keeper['action_text'] != keeper['cursor_text'] ||
+        keeper['action_energy'] != keeper['cursor_energy'] ||
+        keeper['action_time'] != keeper['cursor_time'];
+    if (differs) {
+      await exec(
+        "UPDATE actions "
+        "SET text = ?, energy_level = ?, time_estimate = ?, updated_at = ? "
+        "WHERE id = ?",
+        [
+          keeper['cursor_text'],
+          keeper['cursor_energy'],
+          keeper['cursor_time'],
+          tsIso,
+          keeper['action_id'],
+        ],
+      );
+      repaired++;
+    }
+  }
+
+  // Mode 3 — missing row: mint or resurrect via the deterministic backfill id
+  // so independent devices converge on one row (ADR-0019 + ADR-0015 upsert).
+  // The occupancy of every deterministic slot is read in one chunked lookup
+  // rather than a `SELECT role FROM actions WHERE id = ?` per Outcome.
+  final detIdFor = {
+    for (final row in missing)
+      row['outcome_id'] as String: backfillActionIdFor(row['outcome_id'] as String),
+  };
+  final detRole = <String, Object?>{};
+  final detIds = detIdFor.values.toList();
+  for (var i = 0; i < detIds.length; i += _sweepIdChunk) {
+    final end = i + _sweepIdChunk;
+    final slice = detIds.sublist(i, end > detIds.length ? detIds.length : end);
+    final placeholders = List.filled(slice.length, '?').join(', ');
+    final rows = await query(
+      'SELECT id, role FROM actions WHERE id IN ($placeholders)',
+      slice,
+    );
+    for (final r in rows) {
+      detRole[r['id'] as String] = r['role'];
+    }
+  }
+
+  for (final row in missing) {
+    final outcomeId = row['outcome_id'] as String;
+    final cursorText = row['cursor_text'];
+    final energy = row['cursor_energy'];
+    final time = row['cursor_time'];
+    final userId = row['user_id'] as String;
+    final detId = detIdFor[outcomeId]!;
+
+    if (!detRole.containsKey(detId)) {
+      await exec(
+        "INSERT INTO actions "
+        "(id, outcome_id, user_id, text, role, energy_level, time_estimate, "
+        "created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, 'current', ?, ?, ?, ?)",
+        [detId, outcomeId, userId, cursorText, energy, time, tsIso, tsIso],
+      );
+      repaired++;
+    } else if (detRole[detId] == 'superseded') {
+      // Resurrect the deterministic row — guarded on `superseded` so a future
+      // `done` row can never be revived. This also self-heals the transient
+      // both-superseded convergence race (two devices mutually retire under
+      // sync lag, leaving the outcome currentless while the cursor still holds
+      // text): the next startup sweep flips the deterministic row back.
+      await exec(
+        "UPDATE actions "
+        "SET role = 'current', text = ?, energy_level = ?, time_estimate = ?, "
+        "updated_at = ? "
+        "WHERE id = ? AND role = 'superseded'",
+        [cursorText, energy, time, tsIso, detId],
+      );
+      repaired++;
+    } else {
+      // The deterministic slot is held by a non-superseded (`done`) row —
+      // completion semantics are story 4. Honour the cursor with a fresh-id
+      // current row; cross-device convergence collapses any duplicates later
+      // via the winner rule. (Unreachable in story 2: nothing writes `done`.)
+      await exec(
+        "INSERT INTO actions "
+        "(id, outcome_id, user_id, text, role, energy_level, time_estimate, "
+        "created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, 'current', ?, ?, ?, ?)",
+        [ps.uuid.v4(), outcomeId, userId, cursorText, energy, time, tsIso, tsIso],
+      );
+      repaired++;
+    }
+  }
+
+  // Pass B — mode 2 phantom rows: cursor blank/NULL but a `current` Action
+  // survives. Retire (not delete): preserve the ADR-0018 history chain — a
+  // clear was semantically an abandon.
+  final phantoms = await query(
+    '''
+    SELECT a.id AS action_id
+    FROM actions a
+    JOIN todos t ON t.id = a.outcome_id
+    WHERE a.role = 'current'
+      AND (t.next_action_text IS NULL OR TRIM(t.next_action_text) = '')
+    ''',
+    [],
+  );
+  for (final p in phantoms) {
+    await exec(
+      "UPDATE actions SET role = 'superseded', updated_at = ? WHERE id = ?",
+      [tsIso, p['action_id']],
+    );
+    repaired++;
+  }
+
+  return repaired;
 }
 
 final migrationServiceProvider = Provider<LocalDataMigrationService>(

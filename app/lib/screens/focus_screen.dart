@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../models/ritual.dart';
 import '../providers/database_provider.dart';
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
+import '../services/notification_service.dart' show notificationServiceProvider;
 
 enum _FocusMenuAction { planDay }
 
@@ -69,15 +71,24 @@ class FocusScreen extends ConsumerWidget {
                     sprintMinutes: sprintMinutes,
                   );
 
-                  return ValueListenableBuilder<bool>(
-                    valueListenable: focusSessionPlanningCompletionNotifier,
-                    builder: (context, planningDone, _) {
-                      // The "Begin Evening Shutdown" entry is shown once the
-                      // user has both completed today's planning and is in an
-                      // open focus session with at least one task on it.
-                      final showShutdownEntry =
-                          planningDone && sortedTasks.isNotEmpty;
-                      return ListView(
+                  // Planning-done derives from persistent session data: an
+                  // open FocusSession exists (ADR-0020). This survives process
+                  // death, so the "closed / carried over after idle" misreport
+                  // (issue #460) becomes unreproducible.
+                  final planningDone = activeSession != null;
+                  // The "Begin Evening Shutdown" entry is shown once the user
+                  // is in an open focus session with at least one task on it.
+                  final showShutdownEntry =
+                      planningDone && sortedTasks.isNotEmpty;
+                  // Tasks carried over ('rollover') from the last closed
+                  // session — only while no session is open.
+                  final carriedOver = planningDone
+                      ? const <Todo>[]
+                      : (ref
+                              .watch(lastClosedSessionRolloverTasksProvider)
+                              .value ??
+                          const <Todo>[]);
+                  return ListView(
                         physics: const ClampingScrollPhysics(),
                         padding: const EdgeInsets.symmetric(
                             horizontal: 20, vertical: 8),
@@ -175,7 +186,9 @@ class FocusScreen extends ConsumerWidget {
                               ),
                             ),
                           const SizedBox(height: 48),
-                          if (showShutdownEntry && activeSession != null)
+                          // showShutdownEntry ⇒ planningDone ⇒ activeSession is
+                          // non-null (flow analysis promotes it inside here).
+                          if (showShutdownEntry)
                             _PrimaryCallout(
                               kind: tasks.every((t) => t.doneAt != null)
                                   ? _CalloutKind.endSession
@@ -207,22 +220,21 @@ class FocusScreen extends ConsumerWidget {
                                 ],
                               ),
                             ),
-                          // Tasks pre-selected for tomorrow's session via
-                          // last evening's "rollover" disposition. Surfaced
-                          // before today's planning has been confirmed so
-                          // users can see what carried over.
-                          if (!planningDone && sortedTasks.isNotEmpty) ...[
+                          // Tasks carried over ('rollover' disposition) from
+                          // the last closed session. "Last session", not
+                          // "yesterday": sessions are calendar-independent and
+                          // may span days (issue #460; CONTEXT.md § Engagement).
+                          if (!planningDone && carriedOver.isNotEmpty) ...[
                             const SizedBox(height: 24),
-                            const _SectionLabel('CARRIED OVER FROM YESTERDAY'),
+                            const _SectionLabel(
+                                'CARRIED OVER FROM LAST SESSION'),
                             const SizedBox(height: 8),
-                            ...sortedTasks
+                            ...carriedOver
                                 .map((t) => _CarriedOverTaskRow(todo: t)),
                           ],
                           const SizedBox(height: 32),
                         ],
                       );
-                    },
-                  );
                 },
               ),
             ),
@@ -232,16 +244,13 @@ class FocusScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _replanDay(BuildContext context, WidgetRef ref) async {
-    // Reset only after a completed performance (post-completion Re-plan).
-    // An abandoned performance's working state persists as an in-memory
-    // draft that seeds the next performance — entering must not clear it
-    // (issue #180; the draft silently degrades to a fresh start after
-    // process death, which is accepted behaviour).
-    if (focusSessionPlanningCompletionNotifier.value) {
-      await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
-    }
-    if (!context.mounted) return;
+  void _replanDay(BuildContext context, WidgetRef ref) {
+    // Entering the planning ceremony is a plain navigation. The reset of a
+    // completed performance now happens on the sequenced Shutdown → Planning
+    // path (see close_day_step.dart): Re-plan is only offered while a session
+    // is open, so it lands on the blocked-start interstitial and passes
+    // through Evening Shutdown first. A direct "Plan the Day" with no session
+    // resumes the in-memory draft as today (issue #180 behaviour preserved).
     context.go('/focus-session-planning');
   }
 
@@ -258,7 +267,10 @@ class FocusScreen extends ConsumerWidget {
     if (allDone) {
       final db = ref.read(databaseProvider);
       await db.focusSessionDao.closeSession(sessionId: session.id);
-      focusSessionPlanningCompletionNotifier.value = false;
+      // No open session — today's Evening Shutdown fire is moot. Best-effort.
+      await ref
+          .read(notificationServiceProvider)
+          .skipTodayRitualReminder(RitualId.eveningShutdown);
       if (!context.mounted) return;
       context.go('/inbox');
     } else {

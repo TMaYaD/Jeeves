@@ -79,7 +79,7 @@ Every current key, grouped by family:
 | Key (family) | Type | Strategy | Rationale |
 |---|---|---|---|
 | `focus_settings_sprint_duration_minutes`, `focus_settings_break_duration_minutes` | int | `lww` | Scalar setting; latest intent wins |
-| `focus_session_planning_settings_time_hour`, `…_time_minute`, `…_notification_enabled`, `…_banner_enabled`, `…_default_snooze_duration` | int / bool | `lww` | Scalar settings |
+| `focus_session_planning_settings_time_hour`, `…_time_minute`, `…_notification_enabled`, `…_banner_enabled`, `…_default_snooze_duration`, `…_default_time_estimate` | int / bool | `lww` | Scalar settings |
 | `planning_banner_dismissed_date`, `planning_notification_skipped_date` | date | `lww` | Latest-intent scalar, not a set |
 | `shutdown_ritual_completed_date`, `shutdown_banner_dismissed_date`, `shutdown_notification_skipped_date` | date | `lww` | Latest completion / suppression wins |
 | `periodic_review_last_completed_at` | datetime | `lww` | Monotonic in normal use ⇒ coincides with max |
@@ -165,3 +165,23 @@ Column ownership — every column is client-owned except `user_id` (server-deriv
 | `capture_tags` | `id`, `capture_id`, `tag_id` | `user_id` |
 
 The standing tripwires are in `backend/tests/test_captures.py` — connector-shaped roundtrip tests per table (alongside `test_connector_shaped_payload_roundtrips_client_state` for `todos`) plus junction `user_id`-denormalization and ownership-`404` tests. On the client, `app/test/services/backend_connector_test.dart` pins the upload routing, and `app/test/database/capture_view_notify_test.dart` pins the ADR-0010 view-notify invariant for the Capture views. When adding a column to a Drift Capture table, add it to the matching Create/Update/Out schemas and to the roundtrip test — or record it here as server-owned.
+
+## The `actions` upload contract
+
+`actions` (issue #471 story 1, issue #472 story 2; ADR-0001) replicates like every other bucket and uploads through `POST`/`PATCH`/`DELETE` routes in `backend/app/todos/action_routes.py`. From **story 2** the client writes rows on every next-action write path through `ActionDao` (`app/lib/database/daos/action_dao.dart`), and those ops flow through the connector unchanged — no backend change was needed. The route contract mirrors the `captures` owned-entity contract:
+
+- **Every column is client-owned except `user_id`**, server-derived from the JWT. `actions` is an owned entity (client-declared `id`, like `captures`), not a junction; `outcome_id` is the FK to its Outcome.
+- **`text`, `role`, and `created_at` are NOT NULL** — an explicit `null` for any of them `422`s rather than surfacing as a commit-time `500`. `role` is validated against `planned` / `current` / `done` / `superseded`. `position`, `energy_level`, `time_estimate`, `updated_at`, `done_at` are nullable and round-trip verbatim. Per ADR-0018 there is no `superseded_at` / `superseded_by_id` column.
+- **Create dedupes on the client `id`** per the create-dedupe contract above: a same-user replay upserts the submitted columns and converges (`2xx`); a cross-user id collision is a `409`. This is the exact path the dual-origin backfill relies on to collapse the server-minted and client-minted rows (they share a deterministic id — ADR-0019).
+- **Outcome ownership is a route-level `404`** — `POST`/`PATCH` require the `outcome_id` Outcome to belong to the JWT user, never left to the FK (a Postgres FK violation would be a `500` → infinite retry).
+- **No partial unique index on `(outcome_id) WHERE role = 'current'`** ships: a unique violation would `500` → infinite retry, and catching it to `4xx` would dead-letter a legitimate replay (the create-dedupe contract forbids that). The 0..1-current invariant is application-enforced from story 2 on — `ActionDao` (and the reconciliation sweep) converge any cross-device multi-`current` set deterministically (winner = greatest `COALESCE(updated_at, created_at)`, tie-break smallest `id`; the rest retired), so every device collapses to the same single `current` row.
+- **Delete cascade.** `TodoDao.deleteOutcome` (carve-undo / discard) removes the Outcome's Action rows explicitly before the Outcome, so no orphans remain locally; the server FK is `ON DELETE CASCADE`, so a queued `DELETE /actions/{id}` may arrive after the row is already gone and return `404` — the connector's fatal-4xx path discards those harmlessly (a delete-when-gone is success, per the status table above).
+- **Story-2 sweep convergence.** The startup `reconcileActionsWithCursor` sweep repairs cursor→actions drift; its mint/resurrect path reuses the deterministic backfill id `backfillActionIdFor(todo_id)`, so two devices sweeping independently upsert onto the **same** id (create-dedupe / ADR-0015) rather than minting divergent random-id `current` rows that would break the 0..1-current invariant on sync.
+
+Column ownership — every column is client-owned except `user_id` (server-derived from the JWT):
+
+| Table | Client-owned columns | Server-owned |
+|---|---|---|
+| `actions` | `id`, `outcome_id`, `text`, `role`, `position`, `energy_level`, `time_estimate`, `created_at`, `updated_at`, `done_at` | `user_id` |
+
+The standing tripwires are in `backend/tests/test_actions.py` (connector-shaped roundtrip, upsert-on-replay, cross-user `409`, Outcome-ownership `404`) and `backend/tests/test_actions_migration.py` (Alembic 0028 backfill idempotency + the cross-language uuid5 golden vector). On the client, `app/test/services/backend_connector_test.dart` pins the `actions` upload routing, `app/test/database/action_backfill_migration_test.dart` pins the Drift v26 backfill, and `app/test/database/action_backfill_id_test.dart` pins the golden vector from the Dart side. Story 2's DAO and dual-write are pinned by `app/test/database/action_dao_test.dart` (lifecycle primitives + stamping), `app/test/database/action_dual_write_test.dart` (cursor ⇔ Action equivalence at every choke point), `app/test/database/reconcile_actions_sweep_test.dart` (the cursor→actions sweep modes, resurrect guard, both-superseded self-heal, idempotency, non-stamping), and `app/test/database/action_view_notify_test.dart` (ADR-0010 view-notify on direct `actions` writes). When adding a column to the Drift `Actions` table, add it to the matching Create/Update/Out schemas and to the roundtrip test — or record it here as server-owned.

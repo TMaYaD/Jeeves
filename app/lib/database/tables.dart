@@ -439,3 +439,60 @@ class CaptureTags extends Table with Synced {
   @override
   Set<Column<Object>> get primaryKey => {captureId, tagId};
 }
+
+// ---------------------------------------------------------------------------
+// actions
+// ---------------------------------------------------------------------------
+
+/// A first-class Action against an Outcome (`todos`) — ADR-0001, story 1
+/// (issue #471). An owned entity (client-declared `id`, like [Captures]),
+/// distinct from the Outcome it belongs to, carrying one of four roles over
+/// its lifetime: `planned` / `current` / `done` / `superseded`.
+///
+/// Per ADR-0018 a superseded Action carries **no** linkage metadata — no
+/// `superseded_by_id`, no dedicated `superseded_at`; a superseded row's
+/// timestamp is read from `updated_at`, and the Outcome's history is the
+/// time-ordered chain of terminated Action rows.
+///
+/// Story 1 is pure plumbing: no DAO reads or writes `actions` yet. The table
+/// exists and replicates so no version skew can lose an Action, and the Drift
+/// v26 upgrade backfills one `current` Action per Outcome with a non-blank
+/// `next_action_text`, converging with the server backfill on a deterministic
+/// uuid5 id (see `backfillActionIdFor`, ADR-0019).
+class Actions extends Table with Synced {
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get outcomeId =>
+      text().references(Todos, #id, onDelete: KeyAction.cascade)();
+  TextColumn get userId => text()();
+
+  /// The Action text. Named `text` to match the backend column, but the getter
+  /// is `actionText` because a getter literally named `text` would clash with
+  /// Drift's `text()` column builder.
+  TextColumn get actionText => text().named('text')();
+
+  /// `planned` | `current` | `done` | `superseded`. The CHECK lives here (the
+  /// Drift column), mirroring [Todos.intent]; the backend has no Postgres CHECK.
+  TextColumn get role => text().customConstraint(
+        "NOT NULL CHECK (\"role\" IN ('planned','current','done','superseded'))",
+      )();
+
+  /// Planned-queue order; NULL for non-planned roles.
+  IntColumn get position => integer().nullable()();
+
+  /// Per-action metadata: low | medium | high (nullable).
+  TextColumn get energyLevel => text().nullable()();
+
+  /// Estimated effort in minutes (nullable).
+  IntColumn get timeEstimate => integer().nullable()();
+
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// Client-stamped; a superseded row's timestamp is read from here (ADR-0018).
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+
+  /// Completion timestamp; non-null once the Action is `done`.
+  DateTimeColumn get doneAt => dateTime().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}

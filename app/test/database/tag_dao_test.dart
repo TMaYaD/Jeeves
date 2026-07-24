@@ -76,7 +76,7 @@ void main() {
 
     test('assignTag creates a junction row', () async {
       final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
+      await db.into(db.todos).insert(TodosCompanion(
         id: const Value('todo1'),
         title: const Value('Test task'),
         userId: const Value(_userId),
@@ -102,7 +102,7 @@ void main() {
 
     test('assignTag is idempotent — re-assigning keeps a single row', () async {
       final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
+      await db.into(db.todos).insert(TodosCompanion(
         id: const Value('todo-idem'),
         title: const Value('Idempotency task'),
         userId: const Value(_userId),
@@ -191,7 +191,7 @@ void main() {
     test('enforceSingleProject removes old project and assigns new one',
         () async {
       final now = DateTime.now();
-      await db.inboxDao.insertTodo(TodosCompanion(
+      await db.into(db.todos).insert(TodosCompanion(
         id: const Value('todo2'),
         title: const Value('Multi-project task'),
         userId: const Value(_userId),

@@ -122,5 +122,39 @@ void main() {
           .getLastClosedSessionRolloverTaskIds();
       expect(rolloverIds, unorderedEquals(['tB']));
     });
+
+    test(
+        'process death: an open session persists across a fresh DAO/query '
+        'layer over the same DB — never lost, nothing carried over (issue #460)',
+        () async {
+      await _insertTodo(db, id: 'p1', title: 'Planned 1');
+      await _insertTodo(db, id: 'p2', title: 'Planned 2');
+
+      // Morning planning opens a session (near the 08:00 anchor).
+      await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['p1', 'p2'],
+        now: DateTime(2026, 5, 20, 7, 55),
+      );
+
+      // Simulate process death + relaunch: build a brand-new DAO-backed query
+      // surface over the SAME database. There is no in-memory completion flag
+      // to reset — planning-done is derived purely from this persistent state.
+      final active = await db.focusSessionDao.getActiveSession();
+      expect(active, isNotNull, reason: 'the session is still open after idle');
+      expect(active!.endedAt, isNull, reason: 'nothing auto-closed it');
+
+      final planTasks =
+          await db.focusSessionDao.watchActiveSessionTasks().first;
+      expect(planTasks.map((t) => t.id), unorderedEquals(['p1', 'p2']),
+          reason: 'today\'s picked-up tasks are on the open plan');
+
+      // The tasks are today's plan, NOT carried over: an open (never closed)
+      // session contributes no rollover source.
+      final rollover =
+          await db.focusSessionDao.getLastClosedSessionRolloverTaskIds();
+      expect(rollover, isEmpty,
+          reason: 'no closed session ⇒ nothing shows as carried over');
+    });
   });
 }

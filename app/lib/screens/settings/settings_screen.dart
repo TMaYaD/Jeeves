@@ -309,8 +309,56 @@ class _FocusSessionPlanningSettings extends ConsumerWidget {
           value: settings.bannerEnabled,
           onChanged: (v) => notifier.setBannerEnabled(v),
         ),
+        ListTile(
+          key: const Key('planning_default_estimate_tile'),
+          leading: const Icon(Icons.timer_outlined, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Default time estimate',
+            style:
+                TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: Text(
+            '${settings.defaultTimeEstimate} min',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () => _pickDefaultTimeEstimate(context, ref, settings),
+        ),
       ],
     );
+  }
+
+  static const _defaultEstimateOptions = [5, 10, 15, 20, 30, 45, 60];
+
+  Future<void> _pickDefaultTimeEstimate(
+    BuildContext context,
+    WidgetRef ref,
+    FocusSessionPlanningSettings settings,
+  ) async {
+    final current = settings.defaultTimeEstimate;
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Default time estimate'),
+        children: _defaultEstimateOptions
+            .map((m) => SimpleDialogOption(
+                  key: Key('planning_default_estimate_option_$m'),
+                  onPressed: () => Navigator.pop(ctx, m),
+                  child: Text(
+                    '$m min',
+                    style: TextStyle(
+                      fontWeight:
+                          m == current ? FontWeight.w700 : FontWeight.normal,
+                    ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked != null) {
+      await ref
+          .read(focusSessionPlanningSettingsProvider.notifier)
+          .setDefaultTimeEstimate(picked);
+    }
   }
 
   String _snoozeLabel(int minutes) {

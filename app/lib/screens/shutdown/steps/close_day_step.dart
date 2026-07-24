@@ -7,8 +7,11 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
+import '../../../providers/focus_session_planning_provider.dart'
+    show focusSessionPlanningProvider, shutdownThenPlanProvider;
 import '../../../services/platform_helper.dart'
     if (dart.library.io) '../../../services/platform_helper_io.dart';
 
@@ -67,8 +70,19 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
   Future<void> _onCloseDay() async {
     if (_closing) return;
     setState(() => _closing = true);
+    // Read the sequenced-entry intent before closeDay resets ceremony state.
+    final thenPlan = ref.read(shutdownThenPlanProvider);
     await ref.read(eveningShutdownProvider.notifier).closeDay();
     if (!mounted) return;
+    if (thenPlan) {
+      // Sequenced Shutdown → Daily Planning (ADR-0020, ruling 4): route into
+      // planning with a fresh performance instead of exiting the app.
+      ref.read(shutdownThenPlanProvider.notifier).set(false);
+      await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
+      if (!mounted) return;
+      context.go('/focus-session-planning');
+      return;
+    }
     setState(() => _fadingOut = true);
   }
 

@@ -88,7 +88,6 @@ void main() {
     setUp(() => db = GtdDatabase(NativeDatabase.memory()));
     tearDown(() async {
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     testWidgets(
