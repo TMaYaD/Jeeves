@@ -22,12 +22,17 @@ class SomedayMaybeStep extends ConsumerWidget {
         periodicReviewProvider.select((s) => s.somedayLoadError));
     final routings = ref.watch(
         periodicReviewProvider.select((s) => s.somedayRoutings));
+    final actionTexts = ref.watch(
+        periodicReviewProvider.select((s) => s.actionTexts));
     final notifier = ref.read(periodicReviewProvider.notifier);
 
     return ListReviewStep<Todo>(
       nav: nav,
       loadError: loadError,
       routings: routings,
+      // Prefills the "Update next action" dialog from the Outcome's current
+      // Action (ADR-0001 story 3).
+      currentActionTextFor: (todo) => actionTexts[todo.id],
       headline: 'Worth pursuing now?',
       // The user can Keep on Someday, Re-clarify…, promote to Next Actions,
       // mark Done, or Trash. Waiting For / Someday stay excluded because they

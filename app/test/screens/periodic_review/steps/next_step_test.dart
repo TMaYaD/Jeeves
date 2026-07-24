@@ -32,6 +32,7 @@ Future<String> _insertNextActionTodo(
   required String id,
   String title = 'Plain next action',
   String? nextActionText,
+  String? currentActionText,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
@@ -45,6 +46,20 @@ Future<String> _insertNextActionTodo(
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
+  // The Action row is what the step reads (ADR-0001 story 3); it defaults to
+  // agreeing with the cursor, as the dual-write choke points guarantee, and a
+  // test can set [currentActionText] separately to prove which one is read.
+  final actionText = currentActionText ?? nextActionText;
+  if (actionText != null && actionText.trim().isNotEmpty) {
+    await db.into(db.actions).insert(ActionsCompanion(
+          id: Value('action-$id'),
+          outcomeId: Value(id),
+          userId: const Value(_userId),
+          actionText: Value(actionText.trim()),
+          role: const Value('current'),
+          createdAt: Value(now),
+        ));
+  }
   return id;
 }
 
@@ -94,6 +109,35 @@ Future<ProviderContainer> _enterStep(
 
 void main() {
   setUpAll(configureSqliteForTests);
+
+  group('NextStep — current Action subtext (#473)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('the subtext is the current Action, not the cursor column',
+        (tester) async {
+      await _insertNextActionTodo(
+        db,
+        id: 'na1',
+        title: 'Repaint the fence',
+        nextActionText: 'stale cursor phrase',
+        currentActionText: 'Buy the primer',
+      );
+      await _enterStep(tester, db);
+
+      expect(find.text('Buy the primer'), findsOneWidget);
+      expect(find.text('stale cursor phrase'), findsNothing);
+    });
+
+    testWidgets('an Actionless Outcome renders no subtext', (tester) async {
+      await _insertNextActionTodo(db, id: 'na1', title: 'Repaint the fence');
+      await _enterStep(tester, db);
+
+      expect(find.text('Repaint the fence'), findsOneWidget);
+    });
+  });
 
   group('NextStep — Re-clarify… sub-flow (#294)', () {
     late GtdDatabase db;

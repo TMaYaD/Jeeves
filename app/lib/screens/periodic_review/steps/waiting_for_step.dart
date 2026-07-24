@@ -21,6 +21,8 @@ class WaitingForStep extends ConsumerWidget {
         periodicReviewProvider.select((s) => s.waitingForLoadError));
     final routings = ref.watch(
         periodicReviewProvider.select((s) => s.waitingForRoutings));
+    final actionTexts = ref.watch(
+        periodicReviewProvider.select((s) => s.actionTexts));
     final personTags = ref.watch(
         periodicReviewProvider.select((s) => s.waitingForPersonTags));
     final notifier = ref.read(periodicReviewProvider.notifier);
@@ -29,6 +31,9 @@ class WaitingForStep extends ConsumerWidget {
       nav: nav,
       loadError: loadError,
       routings: routings,
+      // Prefills the "Update next action" dialog from the Outcome's current
+      // Action (ADR-0001 story 3).
+      currentActionTextFor: (todo) => actionTexts[todo.id],
       headline: 'Still waiting on this?',
       // Hide Waiting For — re-confirming is the Keep button. Keep gets a
       // callsite-specific label so the user knows what state is being

@@ -33,6 +33,21 @@ String _driftStorageType(GeneratedColumn<Object> col) {
 /// Maps a PowerSync [ps.ColumnType] to the same canonical storage-type string.
 String _psStorageType(ps.ColumnType type) => type.sqlite.toLowerCase();
 
+/// Mirror of `_indexes` in `lib/tool/builders/powersync_schema_builder.dart`:
+/// the local-only indexes the generated schema must declare, keyed by table.
+///
+/// Column parity alone would not catch a dropped index — the schema would still
+/// be *consistent*, just quietly full-scanning. `actions(outcome_id, role)`
+/// backs the "has a current Action" EXISTS predicate behind the Next List and
+/// the re-clarification queue (ADR-0001 story 3), which runs once per candidate
+/// Outcome on every re-emission, so its absence is a performance regression no
+/// other assertion would notice.
+const _requiredIndexes = <String, List<List<String>>>{
+  'actions': [
+    ['outcome_id', 'role'],
+  ],
+};
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -133,6 +148,53 @@ void main() {
             if (typeMismatches.isNotEmpty) 'type mismatch: $typeMismatches',
           ].join('; ');
           failures.add('$tableName: column mismatch — $detail');
+        }
+      }
+
+      // --------------------------------------------------------------------
+      // Check D — declared PowerSync indexes are present and well-formed
+      // --------------------------------------------------------------------
+      for (final entry in _requiredIndexes.entries) {
+        final psTable = psByName[entry.key];
+        if (psTable == null) {
+          failures.add(
+            '${entry.key}: required index declared for a table missing from '
+            'the generated PowerSync schema',
+          );
+          continue;
+        }
+        final declared = {
+          for (final idx in psTable.indexes)
+            idx.columns.map((c) => c.column).toList().join(','),
+        };
+        for (final wanted in entry.value) {
+          if (!declared.contains(wanted.join(','))) {
+            failures.add(
+              '${entry.key}: missing PowerSync index on (${wanted.join(', ')}) '
+              '— declared: ${declared.isEmpty ? '(none)' : declared.join(' | ')}',
+            );
+          }
+        }
+      }
+
+      // Every declared index must name real Drift columns, so a column rename
+      // fails here rather than at `powersync_replace_schema` time on a device.
+      for (final psTable in powersyncSchema.tables) {
+        final driftTable = db.allTables.firstWhere(
+          (t) => t.actualTableName == psTable.name,
+          orElse: () => throw StateError(
+            'PowerSync table ${psTable.name} has no Drift counterpart',
+          ),
+        );
+        for (final idx in psTable.indexes) {
+          for (final col in idx.columns) {
+            if (!driftTable.columnsByName.containsKey(col.column)) {
+              failures.add(
+                '${psTable.name}: index ${idx.name} references unknown column '
+                '${col.column}',
+              );
+            }
+          }
         }
       }
 

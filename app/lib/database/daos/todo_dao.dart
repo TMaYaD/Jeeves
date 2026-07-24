@@ -33,18 +33,27 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // GTD list watchers
   // ---------------------------------------------------------------------------
 
+  /// SQL fragment matching Outcomes that have a current Action — the entity,
+  /// not the `next_action_text` cursor (ADR-0001 story 3). Only `role =
+  /// 'current'` counts: a `planned` Action is not engageable (ADR-0004) and a
+  /// `superseded` one is history.
+  ///
+  /// No `TRIM` guard: the Action entity's existence *is* the evidence, and
+  /// blank Action text is unrepresentable — [ActionDao.applySetCurrentAction]
+  /// rejects it and the backfills never mint it.
+  static const _hasCurrentActionClause = '''
+EXISTS (
+  SELECT 1 FROM actions
+  WHERE actions.outcome_id = todos.id AND actions.role = 'current'
+)''';
+
   /// SQL fragment excluding the actionless+PersonBlocked quadrant from the
   /// Next List. See [watchNext] for the precise rule; pulled out as a
   /// constant so the predicate is named and shared with any future caller
   /// that needs the same exclusion shape.
-  ///
-  /// Mirrors the actionless-treatment of `_needsReviewWhere`: a whitespace-
-  /// only `next_action_text` is treated as actionless, matching the
-  /// `setNextActionText` normalisation that already coerces such writes to
-  /// NULL.
   static const _excludeActionlessPersonBlockedClause = '''
 (
-  (todos.next_action_text IS NOT NULL AND TRIM(todos.next_action_text) != '')
+  $_hasCurrentActionClause
   OR NOT EXISTS (
     SELECT 1 FROM todo_tags tt
     JOIN tags tg ON tg.id = tt.tag_id
@@ -68,8 +77,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   ///
   /// Watches `todos` always and `todo_tags` when a tag filter is supplied, so
   /// the stream re-emits when either side changes. The exclusion clause also
-  /// reads `tags` (for `tg.type = 'person'`); it is added to `readsFrom` when
-  /// active.
+  /// reads `tags` (for `tg.type = 'person'`) and `actions` (for the current
+  /// Action); both are added to `readsFrom` when active, so an Action written
+  /// here or synced in from another device re-emits the list.
   Stream<List<Todo>> _watchByIntentAndTags({
     required Intent intent,
     Set<String> tagIds = const {},
@@ -87,7 +97,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         'ORDER BY created_at',
         variables: [intentVar],
         readsFrom: excludeActionlessPersonBlocked
-            ? {todos, todoTags, tags}
+            ? {todos, todoTags, tags, actions}
             : {todos},
       ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
     }
@@ -105,7 +115,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       'ORDER BY todos.created_at',
       variables: [intentVar, ...tagIds.map(Variable.new)],
       readsFrom: excludeActionlessPersonBlocked
-          ? {todos, todoTags, tags}
+          ? {todos, todoTags, tags, actions}
           : {todos, todoTags},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
@@ -116,13 +126,18 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   ///
   /// ```text
   /// Next = intent='next' ∧ clarified ∧ done_at IS NULL ∧
-  ///        (next_action_text IS NOT NULL ∨ no PersonBlocker on the Outcome)
+  ///        (has a current Action ∨ no PersonBlocker on the Outcome)
   /// ```
   ///
-  /// The single excluded quadrant is **actionless** (`next_action_text` null
-  /// or whitespace) **AND** PersonBlocked (carries any `Tag(type='person')`)
+  /// "Has a current Action" is answered from the `actions` table — an
+  /// `actions` row for this Outcome with `role='current'` (ADR-0001 story 3).
+  /// The List still *contains* Outcomes; only the predicate's evidence source
+  /// is the Action entity.
+  ///
+  /// The single excluded quadrant is **actionless** (no current Action row)
+  /// **AND** PersonBlocked (carries any `Tag(type='person')`)
   /// — that combination is a pure wait and surfaces only on Waiting For. An
-  /// Outcome with a current Action (`next_action_text IS NOT NULL`) belongs
+  /// Outcome with a current Action belongs
   /// on Next regardless of any PersonBlocker: `"call Trixy for a follow up"`
   /// is doable and eligible for engagement; it also surfaces under Waiting
   /// For. This overlap is by design — see CONTEXT.md § Next / Waiting For.
@@ -428,9 +443,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// Used by inbox-clarify (to record the task title as the default action) and
   /// by the review step's "Update next action" action.
   ///
-  /// The cursor column stays authoritative for reads (reads move in story 3);
-  /// this method keeps its cursor write byte-identical and, in the same
-  /// transaction with the same timestamp, drives [ActionDao]: a non-blank text
+  /// The cursor column is **write-only** compatibility as of story 3 — nothing
+  /// in the app reads it for current-Action existence or text any more (it is
+  /// retired outright in story 9). This method keeps its cursor write
+  /// byte-identical so an older client still syncing against it keeps working,
+  /// and, in the same transaction with the same timestamp, drives [ActionDao],
+  /// which is what every read now consults: a non-blank text
   /// sets/edits the `current` Action, a blank text clears it (the existing
   /// blank→NULL normalisation, mirrored on the Action side as a supersede with
   /// no replacement). Both sides therefore agree after every call.
@@ -472,7 +490,7 @@ AND (
    AND (last_clarified_at IS NULL
         OR last_clarified_at < last_next_action_completion_at))
   OR (
-    (next_action_text IS NULL OR TRIM(next_action_text) = '')
+    NOT $_hasCurrentActionClause
     AND NOT EXISTS (
       SELECT 1 FROM todo_tags tt
       JOIN tags tg ON tg.id = tt.tag_id
@@ -483,8 +501,12 @@ AND (
 
   /// Stream of tasks needing re-clarification: Stale or Actionless per spec.
   ///
-  /// Stale: worked on in a session more recently than last clarified.
-  /// Actionless: no next action defined AND not delegated. Delegated tasks
+  /// Stale: worked on in a session more recently than last clarified — read
+  /// from `last_next_action_completion_at`, which the Review surface stamps at
+  /// session close. It means "worked on in a session", not "an Action
+  /// terminated"; widening it over Action-termination timestamps waits for
+  /// those timestamps to exist (story 4).
+  /// Actionless: no current Action row AND not delegated. Delegated tasks
   /// (carrying any person-typed tag) are excluded from the actionless branch —
   /// their cadence belongs to the weekly Waiting For review, not the daily
   /// re-clarification surface.
@@ -492,7 +514,7 @@ AND (
     return customSelect(
       'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
       variables: [],
-      readsFrom: {todos, todoTags, tags},
+      readsFrom: {todos, todoTags, tags, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -550,7 +572,7 @@ AND (
     return customSelect(
       'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
       variables: [],
-      readsFrom: {todos, todoTags, tags},
+      readsFrom: {todos, todoTags, tags, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -560,7 +582,7 @@ AND (
     final rows = await customSelect(
       'SELECT COUNT(*) AS cnt FROM todos WHERE $_needsReviewWhere',
       variables: [],
-      readsFrom: {todos, todoTags, tags},
+      readsFrom: {todos, todoTags, tags, actions},
     ).get();
     return rows.first.read<int>('cnt');
   }
@@ -633,7 +655,7 @@ AND (
     final rows = await customSelect(
       'SELECT 1 FROM todos WHERE id = ? AND $_needsReviewWhere',
       variables: [Variable(todoId)],
-      readsFrom: {todos, todoTags, tags},
+      readsFrom: {todos, todoTags, tags, actions},
     ).get();
     return rows.isNotEmpty;
   }

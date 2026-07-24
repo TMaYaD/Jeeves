@@ -10,6 +10,11 @@ const _userId = 'test-user';
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 /// Inserts a clarified, non-done next-action task and returns its id.
+///
+/// A non-blank [nextActionText] seeds **both** sides of the dual write: the
+/// cursor column *and* the matching `current` Action row, which is what the
+/// Actionless predicate actually reads (ADR-0001 story 3). Blank / whitespace
+/// text mints no Action row, mirroring the blank→NULL normalisation.
 Future<String> _insertClarifiedTask(
   GtdDatabase db, {
   String? nextActionText,
@@ -34,6 +39,16 @@ Future<String> _insertClarifiedTask(
     lastClarifiedAt:
         lastClarifiedAt != null ? Value(lastClarifiedAt) : const Value.absent(),
   ));
+  if (nextActionText != null && nextActionText.trim().isNotEmpty) {
+    await db.into(db.actions).insert(ActionsCompanion(
+          id: Value('action-$id'),
+          outcomeId: Value(id),
+          userId: Value(_userId),
+          actionText: Value(nextActionText.trim()),
+          role: const Value('current'),
+          createdAt: Value(now),
+        ));
+  }
   return id;
 }
 

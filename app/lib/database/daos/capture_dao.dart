@@ -15,6 +15,7 @@ import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../gtd_database.dart';
+import 'action_dao.dart' show ActionDao;
 
 part 'capture_dao.g.dart';
 
@@ -45,10 +46,17 @@ class CarvedOutcome {
     required this.outcome,
     required this.captureCount,
     this.contexts = const [],
+    this.currentActionText,
   });
 
   final Todo outcome;
   final int captureCount;
+
+  /// Text of the Outcome's current Action, or null when it is Actionless.
+  ///
+  /// Joined in rather than read off [outcome]: the Action entity — not the
+  /// `next_action_text` cursor — is what the app believes (ADR-0001 story 3).
+  final String? currentActionText;
 
   /// Names of the Outcome's Context tags, alphabetical.
   ///
@@ -69,8 +77,15 @@ List<String> _splitContexts(String? concatenated) {
   return concatenated.split(',')..sort();
 }
 
-@DriftAccessor(
-    tables: [Captures, CaptureOutcomes, CaptureTags, Tags, Todos, TodoTags])
+@DriftAccessor(tables: [
+  Captures,
+  CaptureOutcomes,
+  CaptureTags,
+  Tags,
+  Todos,
+  TodoTags,
+  Actions,
+])
 class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   CaptureDao(super.db);
 
@@ -291,13 +306,19 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
         '  SELECT GROUP_CONCAT(tags.name) FROM tags '
         '  INNER JOIN todo_tags ON todo_tags.tag_id = tags.id '
         "  WHERE todo_tags.todo_id = todos.id AND tags.type = 'context'"
-        ') AS context_names '
+        ') AS context_names, ('
+        // The current Action's text, winner-first so a multi-current race
+        // renders the same row everywhere (ActionDao.winnerFirstOrderSql).
+        '  SELECT actions.text FROM actions '
+        "  WHERE actions.outcome_id = todos.id AND actions.role = 'current' "
+        '  ${ActionDao.winnerFirstOrderSql} LIMIT 1'
+        ') AS current_action_text '
         'FROM todos '
         'INNER JOIN capture_outcomes ON capture_outcomes.outcome_id = todos.id '
         'WHERE capture_outcomes.capture_id = ? '
         'ORDER BY capture_outcomes.created_at ASC',
         variables: [Variable<String>(captureId)],
-        readsFrom: {todos, captureOutcomes, todoTags, tags},
+        readsFrom: {todos, captureOutcomes, todoTags, tags, actions},
       ).watch().map(
             (rows) => [
               for (final row in rows)
@@ -307,6 +328,8 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
                   contexts: _splitContexts(
                     row.read<String?>('context_names'),
                   ),
+                  currentActionText:
+                      row.read<String?>('current_action_text'),
                 ),
             ],
           );

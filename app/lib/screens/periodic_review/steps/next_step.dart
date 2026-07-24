@@ -26,6 +26,8 @@ class NextStep extends ConsumerWidget {
         periodicReviewProvider.select((s) => s.nextLoadError));
     final routings = ref.watch(
         periodicReviewProvider.select((s) => s.nextRoutings));
+    final actionTexts = ref.watch(
+        periodicReviewProvider.select((s) => s.actionTexts));
     final notifier = ref.read(periodicReviewProvider.notifier);
 
     return ListReviewStep<Todo>(
@@ -49,9 +51,10 @@ class NextStep extends ConsumerWidget {
         subtitle: 'Tap Next to continue.',
       ),
       loadErrorTitle: "Couldn't load Next Actions",
-      // Surface the persisted next-action text so the reviewer sees the
-      // concrete commitment they made, not just the task title.
-      subtextFor: (todo) => todo.nextActionText,
+      // Surface the current Action's text so the reviewer sees the concrete
+      // commitment they made, not just the Outcome title.
+      subtextFor: (todo) => actionTexts[todo.id],
+      currentActionTextFor: (todo) => actionTexts[todo.id],
       onRetry: () => notifier.loadNextSnapshot(),
       onRecordRouting: notifier.recordNextRouting,
       onAdvance: notifier.advanceNext,

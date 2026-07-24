@@ -810,6 +810,16 @@ void main() {
         lastClarifiedAt: Value(clarifiedAt),
         lastNextActionCompletionAt: Value(completedAt),
       ));
+      // Dual-write invariant: the phrase is an Action row too — the grain the
+      // re-clarify predicate reads (ADR-0001 story 3).
+      await db.into(db.actions).insert(ActionsCompanion(
+            id: Value('action-$id'),
+            outcomeId: Value(id),
+            userId: const Value(userId),
+            actionText: const Value('Do the thing'),
+            role: const Value('current'),
+            createdAt: Value(now),
+          ));
       return id;
     }
 

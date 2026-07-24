@@ -148,14 +148,20 @@ sealed class ClarifySubject {
   /// Current title, for dialog copy and (on a Capture) the new Outcome.
   String get title;
 
-  /// The phrase already recorded as this subject's next action, if any. Always
-  /// null for a Capture: no Outcome exists yet to carry one.
-  String? get nextActionText;
+  /// Text of the subject's current Action, if any. Always null for a Capture:
+  /// no Outcome exists yet to carry one.
+  String? get currentActionText;
 }
 
 /// An existing Outcome being re-clarified — the review surfaces.
+///
+/// [currentActionText] is supplied by the callsite rather than derived from
+/// [todo]: the current Action is an entity in `actions`, not a column on the
+/// Outcome (ADR-0001 story 3), and each surface already has it in the snapshot
+/// it loaded. Pass null when the Outcome is Actionless (or when the callsite
+/// genuinely has nothing to prefill).
 final class OutcomeSubject extends ClarifySubject {
-  const OutcomeSubject(this.todo);
+  const OutcomeSubject(this.todo, {this.currentActionText});
 
   final Todo todo;
 
@@ -166,7 +172,7 @@ final class OutcomeSubject extends ClarifySubject {
   String get title => todo.title;
 
   @override
-  String? get nextActionText => todo.nextActionText;
+  final String? currentActionText;
 }
 
 /// An Inbox Capture being clarified for the first time.
@@ -207,7 +213,7 @@ final class CaptureSubject extends ClarifySubject {
   String get title => draft().title;
 
   @override
-  String? get nextActionText => null;
+  String? get currentActionText => null;
 }
 
 /// Default actions (and modifiers) active when neither
@@ -675,10 +681,10 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   }
 
   Future<void> _nextWithDialog() async {
-    // Edit-existing semantics: prefer the row's stored value so the user
+    // Edit-existing semantics: prefer the current Action's text so the user
     // sees what's currently saved. A Capture has none — its Outcome does not
     // exist yet — so the dialog opens empty.
-    final initial = widget.subject.nextActionText ?? '';
+    final initial = widget.subject.currentActionText ?? '';
     final result = await showNextActionDialog(
       context,
       initial: initial,

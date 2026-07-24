@@ -110,6 +110,7 @@ Widget _harness(
   Future<void> Function(ProcessAction)? onAfterRoute,
   List<Tag> personTags = const [],
   ClarificationService? clarificationService,
+  String? currentActionText,
 }) {
   return ProviderScope(
     overrides: [
@@ -133,7 +134,10 @@ Widget _harness(
         body: ListView(
           children: [
             ProcessToHandlers(
-              subject: OutcomeSubject(todo),
+              subject: OutcomeSubject(
+                todo,
+                currentActionText: currentActionText,
+              ),
               include: include,
               except: except,
               disabled: disabled,
@@ -688,9 +692,13 @@ void main() {
     testWidgets(
         'Next opens the prefilled dialog by default; cancel = no write',
         (tester) async {
-      final todo = await _insertTodo(db, id: 'nd2', nextActionText: 'old');
+      // The cursor deliberately disagrees with the Action: the dialog must
+      // prefill from the current Action (ADR-0001 story 3), not the column.
+      final todo =
+          await _insertTodo(db, id: 'nd2', nextActionText: 'stale cursor');
       // No include needed — the dialog modifier is on by default.
-      await tester.pumpWidget(_harness(db, todo: todo));
+      await tester
+          .pumpWidget(_harness(db, todo: todo, currentActionText: 'old'));
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();

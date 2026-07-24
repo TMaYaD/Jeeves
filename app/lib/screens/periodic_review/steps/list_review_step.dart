@@ -75,6 +75,7 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
     required this.onRecordRouting,
     required this.onAdvance,
     this.subtextFor,
+    this.currentActionTextFor,
     this.personTagsFor,
   });
 
@@ -129,8 +130,13 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
   final VoidCallback onAdvance;
 
   /// Optional per-item subtext rendered between the title and the notes
-  /// (e.g. Next Actions step surfaces the persisted `next_action_text`).
+  /// (e.g. the Next Actions step surfaces the current Action's text).
   final String? Function(T todo)? subtextFor;
+
+  /// Optional per-item current-Action text, from the step's snapshot of
+  /// `actions` (ADR-0001 story 3). Prefills the "Update next action" dialog
+  /// with what is actually recorded; null leaves the dialog empty.
+  final String? Function(T todo)? currentActionTextFor;
 
   /// Optional person-tag lookup keyed by todo. Returns the delegate chip
   /// list the Waiting For card renders; non-tagged steps leave this null and
@@ -169,7 +175,10 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
       subtext: subtextFor?.call(todo),
       personTags: personTagsFor?.call(todo) ?? const [],
       process: ProcessToHandlers(
-        subject: OutcomeSubject(todo),
+        subject: OutcomeSubject(
+          todo,
+          currentActionText: currentActionTextFor?.call(todo),
+        ),
         include: processInclude,
         except: processExcept,
         labels: processLabels,
@@ -181,14 +190,15 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
           }
           if (action == ProcessAction.nextActionDialog) {
             // A blank save does not route (the widget skips the write), so
-            // the row's `next_action_text` is unchanged. Stay on the item
+            // the Outcome's current Action is unchanged. Stay on the item
             // rather than recording a routing or advancing the cursor —
             // the user's intent to promote was not followed through with a
             // concrete action phrase (#293).
-            final updated =
-                await ref.read(databaseProvider).todoDao.getTodo(todo.id);
-            final txt = updated?.nextActionText?.trim() ?? '';
-            if (txt.isEmpty) return;
+            final current = await ref
+                .read(databaseProvider)
+                .actionDao
+                .getCurrentAction(todo.id);
+            if (current == null) return;
             onRecordRouting(index, RoutingKind.nextAction);
             onAdvance();
             return;
