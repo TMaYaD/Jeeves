@@ -22,6 +22,8 @@
 /// registered below — see [_FakeNotificationsPlatform].
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -94,6 +96,25 @@ class _IdleSprintTimerNotifier extends SprintTimerNotifier {
   Future<void> stopSprint() async {}
 }
 
+/// Sprint timer whose [stopSprint] blocks on a caller-controlled gate, so a
+/// test can observe whether `_onComplete` *awaits* the stop (the sheet must not
+/// float, and the Action must not yet be completed, until the gate opens).
+class _GatedSprintTimerNotifier extends SprintTimerNotifier {
+  _GatedSprintTimerNotifier(this._gate);
+  final Completer<void> _gate;
+
+  @override
+  SprintTimerState build() => const SprintTimerState();
+
+  @override
+  Future<void> startSprint(Todo task) async {}
+
+  @override
+  Future<void> stopSprint() async {
+    await _gate.future;
+  }
+}
+
 Future<Todo> _insertTodo(
   GtdDatabase db, {
   required String id,
@@ -114,7 +135,11 @@ Future<Todo> _insertTodo(
 
 /// Builds the router harness rendering [ActiveFocusScreen] at `/active`, with a
 /// placeholder `focus-home` at `/focus`.
-Widget _harness(GtdDatabase db, {required Todo todo}) {
+Widget _harness(
+  GtdDatabase db, {
+  required Todo todo,
+  SprintTimerNotifier Function()? sprintTimer,
+}) {
   final router = GoRouter(
     initialLocation: '/active',
     routes: [
@@ -130,7 +155,8 @@ Widget _harness(GtdDatabase db, {required Todo todo}) {
     overrides: [
       databaseProvider.overrideWithValue(db),
       focusModeProvider.overrideWith(() => _ActiveFocusModeNotifier(todo.id)),
-      sprintTimerProvider.overrideWith(_IdleSprintTimerNotifier.new),
+      sprintTimerProvider
+          .overrideWith(sprintTimer ?? _IdleSprintTimerNotifier.new),
       taskDetailTodoProvider(todo.id).overrideWith((_) => Stream.value(todo)),
       activeSessionTasksProvider.overrideWith((_) => Stream.value([todo])),
     ],
@@ -213,6 +239,40 @@ void main() {
       // Outcome simply stays here for review (AC4).
       final needsReview = await db.todoDao.getNeedsReview();
       expect(needsReview.map((t) => t.id), contains('o1'));
+    });
+
+    // Guards the ordering that the `.ignore()` → `await` fix restores:
+    // stopSprint() persists sprint history before it returns, so `_onComplete`
+    // must await it. With a fire-and-forget stop, the Action completion and the
+    // sheet would race ahead of the persistence; with the await, neither the
+    // Action-completion write nor the sheet may appear until the stop resolves.
+    testWidgets(
+        'Done awaits stopSprint before completing the Action and floating '
+        'the prompt', (tester) async {
+      final todo = await _insertTodo(db, id: 'o2');
+      await seedCurrentAction(db, outcomeId: 'o2', text: 'do it', userId: _userId);
+
+      final gate = Completer<void>();
+      await tester.pumpWidget(
+        _harness(db, todo: todo, sprintTimer: () => _GatedSprintTimerNotifier(gate)),
+      );
+      await _pumpFrames(tester);
+      await _tapDone(tester);
+
+      // stopSprint is still blocked: the Action is NOT yet completed and the
+      // sheet has NOT floated — proof that `_onComplete` awaits the stop.
+      expect(await db.actionDao.getCurrentAction('o2'), isNotNull,
+          reason: 'completeCurrentAction must not run before stopSprint resolves');
+      expect(find.byType(ReclarifyPromptSheet), findsNothing);
+
+      // Release the stop; the flow resumes in order — Action completes, then the
+      // sheet floats.
+      gate.complete();
+      await _pumpFrames(tester);
+
+      expect(await db.actionDao.getCurrentAction('o2'), isNull);
+      expect(find.byType(ReclarifyPromptSheet), findsOneWidget);
+      expect(find.text('focus-home'), findsNothing);
     });
   });
 

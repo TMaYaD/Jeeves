@@ -112,6 +112,11 @@ class ReclarifyPromptSheet extends StatelessWidget {
                   ProcessAction.someday: 'Defer to Someday',
                 },
                 onAfterRoute: (action) async {
+                  // onAfterRoute runs after the routing write is awaited, so
+                  // the sheet's context may already be deactivated. Guard
+                  // before touching the Navigator — an unmounted context leaves
+                  // the sheet gone and nothing left to pop.
+                  if (!context.mounted) return;
                   if (Navigator.of(context).canPop()) {
                     Navigator.of(context).pop(action);
                   }

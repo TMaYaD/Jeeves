@@ -104,7 +104,15 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     final todoId = todo.id;
     _notificationTimer?.cancel();
     NotificationService.instance.cancelFocusNotification();
-    ref.read(sprintTimerProvider.notifier).stopSprint().ignore();
+    // Await the stop: stopSprint() persists sprint history (via _clearPrefs)
+    // before returning, so discarding the future would swallow storage errors
+    // and race the cleanup against completeCurrentAction. The first context use
+    // below (the re-clarify sheet) is already guarded by `if (!mounted)`, and
+    // the sheet still floats *before* endFocus() — this await adds no gap ahead
+    // of an unguarded context access. No `mounted` guard follows: the
+    // Action-completion write below must land even if the widget unmounts
+    // mid-stop (the Done must never be lost), and it touches no context.
+    await ref.read(sprintTimerProvider.notifier).stopSprint();
 
     // Done completes the current *Action* — an engagement signal, not a
     // declaration that the *Outcome* is achieved (CONTEXT.md § GTD Core). This
