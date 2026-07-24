@@ -72,11 +72,6 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     // the initial load `hasValue` stays true and this list is never unmounted
     // again — Select, Skip, Undo, and multi-select all reorganise in place
     // instead of flashing a spinner that would reset the scroll offset (#459).
-    // Gate the spinner on "no data yet", not "a reload is in flight". Riverpod
-    // retains the previous value while a watched stream re-executes, so after
-    // the initial load `hasValue` stays true and this list is never unmounted
-    // again — Select, Skip, Undo, and multi-select all reorganise in place
-    // instead of flashing a spinner that would reset the scroll offset (#459).
     if (!asyncSelected.hasValue ||
         !asyncPending.hasValue ||
         !asyncSkipped.hasValue) {
