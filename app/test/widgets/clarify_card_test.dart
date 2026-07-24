@@ -885,41 +885,4 @@ void main() {
     });
   });
 
-  // docs/DESIGN.md § Roundedness: prompt banner is a surface (6px), the
-  // title/notes fields are inputs (4px). Guards the inline radii against the
-  // legacy 10/8px values (#456).
-  group('ClarifyCard — inline radii on the canonical scale (#456)', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    double inputRadius(WidgetTester tester, Key key) {
-      final field = tester.widget<TextField>(find.byKey(key));
-      final border = field.decoration!.border as OutlineInputBorder;
-      return border.borderRadius.topLeft.x;
-    }
-
-    testWidgets('prompt banner is a 6px surface, inputs are 4px',
-        (tester) async {
-      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
-
-      await tester.pumpWidget(_harness(db, todo: todo));
-      await tester.pumpAndSettle();
-
-      final banner = tester
-          .widgetList<Container>(find.byType(Container))
-          .firstWhere((c) =>
-              c.decoration is BoxDecoration &&
-              (c.decoration as BoxDecoration).color == const Color(0xFFEFF6FF));
-      final bannerRadius =
-          ((banner.decoration as BoxDecoration).borderRadius as BorderRadius)
-              .topLeft
-              .x;
-      expect(bannerRadius, 6);
-
-      expect(inputRadius(tester, const Key('clarify_title')), 4);
-      expect(inputRadius(tester, const Key('clarify_notes')), 4);
-    });
-  });
 }

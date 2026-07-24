@@ -30,6 +30,7 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 ## Core Testing Principles
 
 - **Test Real Behavior Only**: Avoid mocking system components whenever possible. Test code as it would run in production. If a component is too complex to test without excessive mocking, it should be redesigned.
+- **Tests verify behaviour, not styling choices.** Never assert on visual styling — corner radii, colors, fonts, sizes, spacing, or exact copy. A styling assert either restates a shared design token (proves nothing) or hardcodes a value that fires on every deliberate design tweak (a change-detector, not a guard). Design decisions live in `docs/DESIGN.md` and are enforced by construction — shared widgets and tokens — not by tests. Asserting on a widget's *presence*, *state*, or *wiring* is behaviour; asserting on how it is painted is not.
 - **Automation First**: Linter, analyzer, and the full test suite must pass locally before any commits are pushed.
 - **No Unverified Work**: Code is considered incomplete until it has corresponding automated tests demonstrating its correctness.
 
