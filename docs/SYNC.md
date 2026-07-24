@@ -165,3 +165,21 @@ Column ownership — every column is client-owned except `user_id` (server-deriv
 | `capture_tags` | `id`, `capture_id`, `tag_id` | `user_id` |
 
 The standing tripwires are in `backend/tests/test_captures.py` — connector-shaped roundtrip tests per table (alongside `test_connector_shaped_payload_roundtrips_client_state` for `todos`) plus junction `user_id`-denormalization and ownership-`404` tests. On the client, `app/test/services/backend_connector_test.dart` pins the upload routing, and `app/test/database/capture_view_notify_test.dart` pins the ADR-0010 view-notify invariant for the Capture views. When adding a column to a Drift Capture table, add it to the matching Create/Update/Out schemas and to the roundtrip test — or record it here as server-owned.
+
+## The `actions` upload contract
+
+`actions` (issue #471, ADR-0001 story 1) replicates like every other bucket and uploads through `POST`/`PATCH`/`DELETE` routes in `backend/app/todos/action_routes.py`. **Story 1 is pure plumbing** — no DAO writes `actions` yet — but the route contract is complete so story 2 can start writing rows, and so the rows a device backfills locally during the Drift v26 migration have somewhere to converge. It mirrors the `captures` owned-entity contract:
+
+- **Every column is client-owned except `user_id`**, server-derived from the JWT. `actions` is an owned entity (client-declared `id`, like `captures`), not a junction; `outcome_id` is the FK to its Outcome.
+- **`text`, `role`, and `created_at` are NOT NULL** — an explicit `null` for any of them `422`s rather than surfacing as a commit-time `500`. `role` is validated against `planned` / `current` / `done` / `superseded`. `position`, `energy_level`, `time_estimate`, `updated_at`, `done_at` are nullable and round-trip verbatim. Per ADR-0018 there is no `superseded_at` / `superseded_by_id` column.
+- **Create dedupes on the client `id`** per the create-dedupe contract above: a same-user replay upserts the submitted columns and converges (`2xx`); a cross-user id collision is a `409`. This is the exact path the dual-origin backfill relies on to collapse the server-minted and client-minted rows (they share a deterministic id — ADR-0019).
+- **Outcome ownership is a route-level `404`** — `POST`/`PATCH` require the `outcome_id` Outcome to belong to the JWT user, never left to the FK (a Postgres FK violation would be a `500` → infinite retry).
+- **No partial unique index on `(outcome_id) WHERE role = 'current'`** ships: a unique violation would `500` → infinite retry, and catching it to `4xx` would dead-letter a legitimate replay (the create-dedupe contract forbids that). The 0..1-current invariant is application-enforced from story 2 on.
+
+Column ownership — every column is client-owned except `user_id` (server-derived from the JWT):
+
+| Table | Client-owned columns | Server-owned |
+|---|---|---|
+| `actions` | `id`, `outcome_id`, `text`, `role`, `position`, `energy_level`, `time_estimate`, `created_at`, `updated_at`, `done_at` | `user_id` |
+
+The standing tripwires are in `backend/tests/test_actions.py` (connector-shaped roundtrip, upsert-on-replay, cross-user `409`, Outcome-ownership `404`) and `backend/tests/test_actions_migration.py` (Alembic 0028 backfill idempotency + the cross-language uuid5 golden vector). On the client, `app/test/services/backend_connector_test.dart` pins the `actions` upload routing, `app/test/database/action_backfill_migration_test.dart` pins the Drift v26 backfill, and `app/test/database/action_backfill_id_test.dart` pins the golden vector from the Dart side. `GtdDatabase.notifyActionsViewWrite` is wired for the ADR-0010 view-notify discipline story 2's DAO will need. When adding a column to the Drift `Actions` table, add it to the matching Create/Update/Out schemas and to the roundtrip test — or record it here as server-owned.

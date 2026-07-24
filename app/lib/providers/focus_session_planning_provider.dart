@@ -682,15 +682,34 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Task mutations (Step 2 — Next Actions review) -------------------------
 
-  /// Adds [id] to the pending day's plan (in-memory; committed by [startDay]).
-  void selectTask(String id) {
-    if (state.pendingSelectedTaskIds.contains(id)) return;
+  /// Adds [ids] to the pending day's plan in a single state publish
+  /// (in-memory; committed by [startDay]).
+  ///
+  /// Ids already selected — and any duplicates within [ids] — are skipped, so
+  /// the pending list never gains a repeat. Each newly added id is removed from
+  /// the reviewed/skipped list (picking up a task un-skips it). If nothing new
+  /// is added the state is left untouched (no rebuild), preserving the
+  /// early-return semantics [selectTask] relied on.
+  void selectTasks(List<String> ids) {
+    final existing = state.pendingSelectedTaskIds.toSet();
+    final toAdd = <String>[];
+    for (final id in ids) {
+      // Set.add returns false when the id is already present, covering both
+      // already-selected ids and repeats within [ids].
+      if (existing.add(id)) toAdd.add(id);
+    }
+    if (toAdd.isEmpty) return;
+    final addedSet = toAdd.toSet();
     state = state.copyWith(
-      pendingSelectedTaskIds: [...state.pendingSelectedTaskIds, id],
-      // Remove from skipped list if the user previously skipped this task.
-      reviewedTaskIds: state.reviewedTaskIds.where((t) => t != id).toList(),
+      pendingSelectedTaskIds: [...state.pendingSelectedTaskIds, ...toAdd],
+      // Remove any newly selected task from the skipped list.
+      reviewedTaskIds:
+          state.reviewedTaskIds.where((t) => !addedSet.contains(t)).toList(),
     );
   }
+
+  /// Adds [id] to the pending day's plan (in-memory; committed by [startDay]).
+  void selectTask(String id) => selectTasks([id]);
 
   /// Records [id] as skipped (reviewed but not selected).
   void skipTask(String id) {

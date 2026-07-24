@@ -55,9 +55,9 @@ A physical, visible activity that moves an Outcome forward. A first-class entity
 - `planned` — captured as part of the user's externalised thinking about the Outcome, but not yet eligible to be acted on. Multiple `planned` Actions may exist for one Outcome.
 - `current` — the single Action eligible for engagement right now. Surfaced to the user as the GTD "Next Action."
 - `done` — completed by the user (stamps `done_at`).
-- `superseded` — replaced before completion (stamps `superseded_at`, optionally links to its replacement via `superseded_by_id`).
+- `superseded` — replaced before completion. Carries **no** linkage metadata (ADR-0018): no `superseded_by_id` and no dedicated `superseded_at` — its termination time is read from `updated_at`. Editing the current Action's text is an in-place edit (a refinement of the same Action), not a supersession; supersession happens only through explicit affordances (Abandon, or re-clarifying to a new or promoted Action without completing the old one).
 
-Terminated Actions (`done` or `superseded`) stay attached to their Outcome — the chain of Actions over time is the Outcome's history.
+Terminated Actions (`done` or `superseded`) stay attached to their Outcome — the time-ordered chain of terminated Action rows is the Outcome's history.
 _Avoid_: Task (when referring to the action), Step, TodoStep, Subtask, Cursor, NextAction (provisional code name — see ambiguities)
 
 **Intent**:
@@ -449,8 +449,8 @@ _Avoid_: Push, Alert, Reminder (Reminder is a separate concept — see ambiguiti
 The replication engine used by Jeeves — a self-hosted `journeyapps/powersync-service` instance providing bidirectional sync between the Flutter SQLite store and the PostgreSQL backend. PowerSync uses Postgres for its internal bucket storage; no separate sync database is required. The engine is replaceable in principle — Sync's discipline rule (Sync types don't leak into other contexts) is what protects the rest of the app from a hypothetical engine swap.
 _Avoid_: (none — PowerSync is the canonical name for the current engine)
 
-**Sync Shape** *(one of the ten replicated data subsets)*:
-The schema definition of a subset of model data that replicates per user — specifies which rows belong in the user's replication stream and how they are filtered. The current ten Sync Shapes: `todos`, `tags`, `todo_tags`, `time_logs`, `focus_sessions`, `focus_session_tasks`, `user_preferences`, `captures`, `capture_outcomes`, `capture_tags`. All ten are filtered by `user_id` directly; the junction tables (`todo_tags`, `focus_session_tasks`, `capture_outcomes`, `capture_tags`) carry a denormalized `user_id` for this purpose, since PowerSync forbids JOINs in bucket data queries.
+**Sync Shape** *(one of the twelve replicated data subsets)*:
+The schema definition of a subset of model data that replicates per user — specifies which rows belong in the user's replication stream and how they are filtered. The current twelve Sync Shapes: `todos`, `tags`, `todo_tags`, `time_logs`, `focus_sessions`, `focus_session_tasks`, `focus_session_dispositions`, `user_preferences`, `captures`, `capture_outcomes`, `capture_tags`, `actions`. All twelve are filtered by `user_id` directly; the junction tables (`todo_tags`, `focus_session_tasks`, `focus_session_dispositions`, `capture_outcomes`, `capture_tags`) carry a denormalized `user_id` for this purpose, since PowerSync forbids JOINs in bucket data queries. `actions` is an owned entity (client-declared `id`, like `captures`), not a junction.
 _Avoid_: Sync rule (PowerSync's internal term), Replication shape, Sync schema
 
 **Bucket** *(the runtime replication unit)*:
