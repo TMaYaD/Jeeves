@@ -5,7 +5,13 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from app.todos.models import DISPOSITION_VALUES, ENERGY_LEVELS, INTENT_VALUES, TAG_TYPES
+from app.todos.models import (
+    ACTION_ROLES,
+    DISPOSITION_VALUES,
+    ENERGY_LEVELS,
+    INTENT_VALUES,
+    TAG_TYPES,
+)
 
 STATE_VALUES = ("next_action",)
 
@@ -560,6 +566,106 @@ class CaptureTagOut(BaseModel):
     id: str | None
     capture_id: str
     tag_id: str
+    user_id: str
+
+    model_config = {"from_attributes": True}
+
+
+# ── Action upload schemas ────────────────────────────────────────────────────
+# Consumed by the connector upload routes (action_routes.py).  Same contract as
+# the capture schemas: every client-owned column round-trips through create *and*
+# update, and `user_id` is server-owned (derived from the JWT) so it is
+# deliberately absent from every Create/Update schema.  Story 1 (issue #471) is
+# pure plumbing — no DAO writes these yet — but the routes exist so the sync
+# upload path is complete the moment story 2 starts writing Action rows.
+
+
+class ActionCreate(BaseModel):
+    id: str | None = None  # Client-side UUID for idempotency
+    outcome_id: str
+    text: str
+    role: str
+    position: int | None = None
+    energy_level: str | None = None  # 'low' | 'medium' | 'high'
+    time_estimate: int | None = None  # minutes
+    # Client-stamped write timestamps: the server never invents updated_at;
+    # created_at falls back to the server default only when omitted, so an
+    # offline-minted Action keeps its true definition time.
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    done_at: datetime | None = None
+
+    _normalise_datetimes = field_validator("created_at", "updated_at", "done_at", mode="before")(
+        _normalise_drift_iso
+    )
+
+    # created_at / text / role are NOT NULL; an explicit null must 422 rather
+    # than surface as a commit-time IntegrityError (500 → infinite retry).
+    # Omission of created_at is preserved (falls back to the server default).
+    _reject_nulls = field_validator("created_at", "text", "role", mode="before")(
+        _reject_explicit_null
+    )
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        if v not in ACTION_ROLES:
+            raise ValueError(f"role must be one of {sorted(ACTION_ROLES)}")
+        return v
+
+    @field_validator("energy_level")
+    @classmethod
+    def validate_energy_level(cls, v: str | None) -> str | None:
+        if v is not None and v not in ENERGY_LEVELS:
+            raise ValueError(f"energy_level must be one of {sorted(ENERGY_LEVELS)}")
+        return v
+
+
+class ActionUpdate(BaseModel):
+    outcome_id: str | None = None
+    text: str | None = None
+    role: str | None = None
+    position: int | None = None
+    energy_level: str | None = None
+    time_estimate: int | None = None
+    updated_at: datetime | None = None
+    done_at: datetime | None = None
+
+    _normalise_datetimes = field_validator("updated_at", "done_at", mode="before")(
+        _normalise_drift_iso
+    )
+
+    # outcome_id / text / role are NOT NULL; explicit null must 422, not 500.
+    _reject_nulls = field_validator("outcome_id", "text", "role", mode="before")(
+        _reject_explicit_null
+    )
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str | None) -> str | None:
+        if v is not None and v not in ACTION_ROLES:
+            raise ValueError(f"role must be one of {sorted(ACTION_ROLES)}")
+        return v
+
+    @field_validator("energy_level")
+    @classmethod
+    def validate_energy_level(cls, v: str | None) -> str | None:
+        if v is not None and v not in ENERGY_LEVELS:
+            raise ValueError(f"energy_level must be one of {sorted(ENERGY_LEVELS)}")
+        return v
+
+
+class ActionOut(BaseModel):
+    id: str
+    outcome_id: str
+    text: str
+    role: str
+    position: int | None
+    energy_level: str | None
+    time_estimate: int | None
+    created_at: datetime
+    updated_at: datetime | None
+    done_at: datetime | None
     user_id: str
 
     model_config = {"from_attributes": True}
