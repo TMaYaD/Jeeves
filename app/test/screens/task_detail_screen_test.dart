@@ -18,8 +18,10 @@ import 'package:jeeves/providers/sprint_timer_provider.dart'
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../helpers/app_title_bar_test_helpers.dart';
 import '../test_helpers.dart';
 
 const _userId = 'local';
@@ -114,7 +116,9 @@ Future<void> _showTaskDetail(
   await tester.pump();
   router.push('/task/$todoId');
   await tester.pump();
-  await tester.pump(const Duration(milliseconds: 100));
+  // Past the end of the push transition: mid-transition the page is still
+  // transformed, so a tap on a title-bar action lands off the surface.
+  await tester.pump(const Duration(milliseconds: 400));
 }
 
 void main() {
@@ -136,7 +140,9 @@ void main() {
       final (widget, router) = _buildScreen(db, 'task1', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'task1');
 
-      expect(find.text('Fix the bug'), findsOneWidget);
+      // Twice over: the title bar carries the Outcome's read-only identity
+      // (ADR-0021) and the body keeps the editable field.
+      expect(find.text('Fix the bug'), findsNWidgets(2));
     });
 
     testWidgets('hides the Captured from section when there are no links',
@@ -263,6 +269,57 @@ void main() {
       await _showTaskDetail(tester, widget, router, 'engage1');
 
       expect(find.byKey(const Key('task_detail_start_focus')), findsOneWidget);
+    });
+
+    testWidgets(
+        'Start focus is an icon action in the title bar, keeping the primary '
+        'blue', (tester) async {
+      final todo = await _insertAt(db, id: 'engage0', title: 'Engageable');
+      final (widget, router) = _buildScreen(db, 'engage0', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'engage0');
+
+      final action = await findBarAction(
+          tester, const Key('task_detail_start_focus'));
+      final button = tester.widget<IconButton>(action);
+      expect(button.tooltip, 'Start focus',
+          reason: 'the label survives as the tooltip');
+      expect((button.icon as Icon).color, const Color(0xFF2667B7),
+          reason: 'demoted to an icon, but it keeps its call-to-action colour');
+      expect(find.byType(FilledButton), findsNothing,
+          reason: 'no labelled button left in the chrome');
+    });
+
+    testWidgets('the title bar shows the project as the overline',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'proj1', title: 'Draft the spec');
+      final (widget, router) = _buildScreen(
+        db,
+        'proj1',
+        initialTodo: todo,
+        initialTags: [
+          Tag(
+            id: 'tag1',
+            name: 'Kitchen remodel',
+            type: 'project',
+            userId: _userId,
+          ),
+        ],
+      );
+      await _showTaskDetail(tester, widget, router, 'proj1');
+
+      final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+      expect(bar.title, 'Draft the spec');
+      expect(bar.overline?.label, 'Kitchen remodel');
+      expect(bar.overline?.icon, Icons.folder_outlined);
+    });
+
+    testWidgets('no project means no overline', (tester) async {
+      final todo = await _insertAt(db, id: 'proj0', title: 'Unfiled');
+      final (widget, router) = _buildScreen(db, 'proj0', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'proj0');
+
+      final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+      expect(bar.overline, isNull);
     });
 
     testWidgets('does not render Start focus on a completed task',
@@ -598,7 +655,8 @@ void main() {
       await _showTaskDetail(tester, widget, router, 'gone');
       feed.add(todo);
       await tester.pumpAndSettle();
-      expect(find.text('Buy milk'), findsOneWidget);
+      // Title bar and editable field both carry the title (ADR-0021).
+      expect(find.text('Buy milk'), findsNWidgets(2));
 
       // The row leaves local storage. That is the whole signal the screen has.
       await db.todoDao.deleteOutcome('gone');
