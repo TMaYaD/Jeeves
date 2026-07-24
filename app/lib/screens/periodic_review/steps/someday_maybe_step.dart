@@ -29,17 +29,20 @@ class SomedayMaybeStep extends ConsumerWidget {
       loadError: loadError,
       routings: routings,
       headline: 'Worth pursuing now?',
-      // The user can Keep on Someday, promote to Next Actions, or Trash.
-      // Waiting For / Someday / Done don't appear because the item is
-      // already on Someday and these routes wouldn't change much. Promoting
-      // to Next uses the default-on `nextActionDialog` modifier (left
-      // active by omitting it from `processExcept`) so the item lands on
-      // the Next list with a defined action — the ellipsis label signals it.
+      // The user can Keep on Someday, Re-clarify…, promote to Next Actions,
+      // mark Done, or Trash. Waiting For / Someday stay excluded because they
+      // change little for an item already on Someday. Done stays offered
+      // because a deferred Outcome that turns out to be achieved belongs on
+      // the Done List: routing to Done stamps the Outcome's Completion and
+      // moves it off Someday/Maybe (Completion ⊥ Intent, so intent stays
+      // `maybe`). Promoting to Next uses the default-on `nextActionDialog`
+      // modifier (left active by omitting it from `processExcept`) so the
+      // item lands on the Next list with a defined action — the ellipsis
+      // label signals it.
       processInclude: const {ProcessAction.keep, ProcessAction.reclarify},
       processExcept: const {
         ProcessAction.waitingFor,
         ProcessAction.someday,
-        ProcessAction.done,
       },
       processLabels: const {
         ProcessAction.keep: 'Keep on Someday',
