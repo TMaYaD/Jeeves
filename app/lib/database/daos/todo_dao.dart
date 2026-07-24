@@ -10,7 +10,7 @@ import 'tag_dao.dart' show todoTagIdFor;
 
 part 'todo_dao.g.dart';
 
-@DriftAccessor(tables: [Todos, Tags, TodoTags])
+@DriftAccessor(tables: [Todos, Tags, TodoTags, Actions])
 class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   TodoDao(super.db);
 
@@ -422,23 +422,41 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     attachedDatabase.notifyTodosViewWrite();
   }
 
-  /// Sets [next_action_text] and stamps [last_clarified_at] atomically.
+  /// Sets [next_action_text] and stamps [last_clarified_at] atomically, and
+  /// dual-writes the matching `current` Action row (ADR-0001 story 2).
   ///
   /// Used by inbox-clarify (to record the task title as the default action) and
   /// by the review step's "Update next action" action.
+  ///
+  /// The cursor column stays authoritative for reads (reads move in story 3);
+  /// this method keeps its cursor write byte-identical and, in the same
+  /// transaction with the same timestamp, drives [ActionDao]: a non-blank text
+  /// sets/edits the `current` Action, a blank text clears it (the existing
+  /// blank→NULL normalisation, mirrored on the Action side as a supersede with
+  /// no replacement). Both sides therefore agree after every call.
   Future<void> setNextActionText(
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final normalized = text.trim();
-    await (update(todos)..where((t) => t.id.equals(todoId)))
-        .write(TodosCompanion(
-      nextActionText: Value(normalized.isEmpty ? null : normalized),
-      lastClarifiedAt: Value(ts),
-      updatedAt: Value(ts),
-    ));
-    // View write reports changes()==0 in production; notify Drift explicitly so
-    // watchers refresh without relying solely on the async bridge (#342).
+    await transaction(() async {
+      await (update(todos)..where((t) => t.id.equals(todoId)))
+          .write(TodosCompanion(
+        nextActionText: Value(normalized.isEmpty ? null : normalized),
+        lastClarifiedAt: Value(ts),
+        updatedAt: Value(ts),
+      ));
+      if (normalized.isEmpty) {
+        await attachedDatabase.actionDao.applySupersedeCurrentAction(todoId, ts: ts);
+      } else {
+        await attachedDatabase.actionDao
+            .applySetCurrentAction(todoId, normalized, ts: ts);
+      }
+    });
+    // Both `todos` and `actions` are PowerSync views in production, so the
+    // writes report changes()==0; notify Drift explicitly so watchers refresh
+    // without relying solely on the async bridge (#342, ADR-0010).
     attachedDatabase.notifyTodosViewWrite();
+    attachedDatabase.notifyActionsViewWrite();
   }
 
   // ---------------------------------------------------------------------------
@@ -739,6 +757,13 @@ AND (
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final tsIso = ts.toIso8601String();
+    // Only the Next / Waiting For arms touch the next-action cursor, and only
+    // when the caller passes a phrase; those are the arms that dual-write the
+    // Action row (ADR-0001 story 2). An absent [nextActionText] leaves both the
+    // cursor and the Action untouched.
+    final touchesAction = (to == RoutingKind.nextAction ||
+            to == RoutingKind.waitingFor) &&
+        nextActionText != null;
     await transaction(() async {
       final companion = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
@@ -773,6 +798,17 @@ AND (
       };
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
 
+      if (touchesAction) {
+        final normalised = _normaliseText(nextActionText);
+        if (normalised == null) {
+          await attachedDatabase.actionDao
+              .applySupersedeCurrentAction(todoId, ts: ts);
+        } else {
+          await attachedDatabase.actionDao
+              .applySetCurrentAction(todoId, normalised, ts: ts);
+        }
+      }
+
       if (personTagIds != null) {
         if (userId == null) {
           throw ArgumentError(
@@ -789,6 +825,7 @@ AND (
     // without depending solely on the async update bridge (#342). Person-tag
     // edits also touch the `todo_tags` view, so refresh those watchers too.
     attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
+    if (touchesAction) attachedDatabase.notifyActionsViewWrite();
   }
 
   static String? _normaliseText(String text) {
@@ -927,8 +964,18 @@ AND (
       final existed = await (select(todos)..where((t) => t.id.equals(id)))
               .getSingleOrNull() !=
           null;
+      // Cascade the Outcome's Action rows explicitly (ADR-0001 story 2): the
+      // local PowerSync `actions` view enforces no FK cascade, so carve-undo
+      // must remove them itself to leave no orphans — mirroring the
+      // `capture_outcomes` cascade convention. Deleted before the Outcome so
+      // the delete never trips FK enforcement on the real-table test path. The
+      // queued `DELETE /actions/{id}` uploads may 404 if the server's
+      // `ON DELETE CASCADE` already removed the row; the connector's fatal-4xx
+      // path skips those harmlessly (docs/SYNC.md).
+      await (delete(actions)..where((a) => a.outcomeId.equals(id))).go();
       await (delete(todos)..where((t) => t.id.equals(id))).go();
       attachedDatabase.notifyTodosViewWrite();
+      attachedDatabase.notifyActionsViewWrite();
       return existed ? 1 : 0;
     });
   }
