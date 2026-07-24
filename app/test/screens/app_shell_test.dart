@@ -158,7 +158,6 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    focusSessionPlanningCompletionNotifier.value = false;
   });
 
   testWidgets('AppShell renders CustomDrawer that can be opened', (tester) async {

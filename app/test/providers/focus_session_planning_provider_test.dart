@@ -5,10 +5,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/services/notification_service.dart';
 import '../test_helpers.dart';
+
+/// No-ops the platform-channel notification calls made by `startDay` /
+/// `closeDay` so unit tests never touch a real plugin.
+class _StubNotificationService extends NotificationService {
+  _StubNotificationService() : super.forTesting();
+
+  @override
+  Future<void> skipTodayRitualReminder(RitualId ritual) async {}
+}
 
 /// Pumps the event loop until [predicate] holds or [timeout] elapses. Async
 /// preloads scheduled from a notifier's build() (the rollover pre-selection DAO
@@ -43,6 +54,8 @@ class _StubFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
 ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(_StubNotificationService()),
         focusSessionPlanningProvider
             .overrideWith(() => _StubFocusSessionPlanningNotifier()),
       ],
@@ -92,7 +105,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('startDay preserves energyLevel and availableMinutes', () async {
@@ -164,7 +176,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('processInboxItem twice concurrently updates DB only once',
@@ -288,7 +299,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test('loadInboxSnapshot populates state from DB in FIFO order', () async {
@@ -677,7 +687,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     test(
@@ -794,7 +803,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     Future<String> insertStaleTask() async {
@@ -1099,7 +1107,6 @@ void main() {
     tearDown(() async {
       container.dispose();
       await db.close();
-      focusSessionPlanningCompletionNotifier.value = false;
     });
 
     Future<String> insertInboxTask(String title) async {

@@ -167,7 +167,10 @@ void main() {
       expect(c.read(nudgeQueueHeadProvider), isNull);
     });
 
-    test('orders visible Rituals by priority — WR > DPR > ES', () {
+    test('orders visible Rituals by priority — WR > ES > DPR', () {
+      // Evening Shutdown outranks Daily Planning: "Shutdown wins" while a
+      // session is open (ADR-0020). The two only fire together on a stale open
+      // session, where the ES nudge must lead.
       final c = makeContainer({
         RitualId.eveningShutdown,
         RitualId.weeklyReview,
@@ -176,19 +179,22 @@ void main() {
       addTearDown(c.dispose);
       expect(c.read(nudgeQueueProvider), [
         RitualId.weeklyReview,
-        RitualId.dailyPlanning,
         RitualId.eveningShutdown,
+        RitualId.dailyPlanning,
       ]);
       expect(c.read(nudgeQueueHeadProvider), RitualId.weeklyReview);
     });
 
-    test('head is the highest-priority visible Ritual', () {
+    test('Evening Shutdown leads Daily Planning when both fire (Shutdown wins)',
+        () {
       final c = makeContainer({
         RitualId.dailyPlanning,
         RitualId.eveningShutdown,
       });
       addTearDown(c.dispose);
-      expect(c.read(nudgeQueueHeadProvider), RitualId.dailyPlanning);
+      expect(c.read(nudgeQueueProvider),
+          [RitualId.eveningShutdown, RitualId.dailyPlanning]);
+      expect(c.read(nudgeQueueHeadProvider), RitualId.eveningShutdown);
     });
   });
 }

@@ -10,8 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
+import 'package:jeeves/services/notification_service.dart';
 import '../test_helpers.dart';
 
 // Must match currentUserIdProvider.build() default so the notifier finds tasks.
@@ -32,9 +34,19 @@ class _StubShutdownNotifier extends EveningShutdownNotifier {
   }
 }
 
+// No-ops the platform-channel notification skip `closeDay` performs on close.
+class _StubNotificationService extends NotificationService {
+  _StubNotificationService() : super.forTesting();
+
+  @override
+  Future<void> skipTodayRitualReminder(RitualId ritual) async {}
+}
+
 ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(_StubNotificationService()),
         eveningShutdownProvider.overrideWith(() => _StubShutdownNotifier()),
       ],
     );

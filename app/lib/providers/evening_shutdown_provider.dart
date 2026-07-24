@@ -343,6 +343,11 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
         dispositions: state.dispositions,
         now: now,
       );
+      // No open session remains — today's Evening Shutdown fire is moot.
+      // Best-effort reconciliation of the OS-scheduled notification.
+      await ref
+          .read(notificationServiceProvider)
+          .skipTodayRitualReminder(RitualId.eveningShutdown);
     }
 
     final today = planningToday();
