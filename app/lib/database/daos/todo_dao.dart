@@ -2,7 +2,6 @@
 library;
 
 import 'package:drift/drift.dart';
-import 'package:meta/meta.dart';
 
 import '../../models/todo.dart' show Intent, RoutingKind;
 import '../gtd_database.dart';
@@ -256,32 +255,6 @@ EXISTS (
   /// (AND semantics).
   Stream<List<Todo>> watchMaybe({Set<String> tagIds = const {}}) {
     return _watchByIntentAndTags(intent: Intent.maybe, tagIds: tagIds);
-  }
-
-  /// Stream of todos associated with a specific project tag [projectTagId].
-  ///
-  /// Returns all todos for the project (including done and inbox items) so the
-  /// project detail view can show full history.
-  Stream<List<Todo>> watchByProject(String projectTagId) {
-    final query = select(todos).join([
-      innerJoin(todoTags, todoTags.todoId.equalsExp(todos.id)),
-    ])
-      ..where(todoTags.tagId.equals(projectTagId))
-      ..orderBy([OrderingTerm.asc(todos.createdAt)]);
-    return query.map((row) => row.readTable(todos)).watch();
-  }
-
-  /// Stream of todos associated with a specific area tag [areaTagId].
-  ///
-  /// Returns all todos for the area (including done and inbox items) so the
-  /// area detail view can show full history.
-  Stream<List<Todo>> watchByArea(String areaTagId) {
-    final query = select(todos).join([
-      innerJoin(todoTags, todoTags.todoId.equalsExp(todos.id)),
-    ])
-      ..where(todoTags.tagId.equals(areaTagId))
-      ..orderBy([OrderingTerm.asc(todos.createdAt)]);
-    return query.map((row) => row.readTable(todos)).watch();
   }
 
   // ---------------------------------------------------------------------------
@@ -539,26 +512,6 @@ AND (
   )
 )''';
 
-  /// Stream of tasks needing re-clarification: Stale or Actionless per spec.
-  ///
-  /// Stale: engaged with more recently than last clarified, read from two
-  /// independent signals. `last_next_action_completion_at` means "worked on in
-  /// a session" and is stamped once, at session close, by the Review surface;
-  /// [_latestActionTerminationClause] means "an Action was completed" and comes
-  /// from the Action rows themselves (ADR-0001 story 4), so completing the
-  /// current Action surfaces the Outcome even when no session ever closed.
-  /// Actionless: no current Action row AND not delegated. Delegated tasks
-  /// (carrying any person-typed tag) are excluded from the actionless branch —
-  /// their cadence belongs to the weekly Waiting For review, not the daily
-  /// re-clarification surface.
-  Stream<List<Todo>> watchNeedsReview() {
-    return customSelect(
-      'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
-      variables: [],
-      readsFrom: {todos, todoTags, tags, actions},
-    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
-  }
-
   /// One-shot snapshot of active next-action todos that carry **no** person-
   /// typed tag. Used by the Weekly Review wizard's Next Actions step; the
   /// person-tag exclusion keeps it disjoint from Waiting For's snapshot so
@@ -608,41 +561,25 @@ AND (
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
-  /// One-shot snapshot of tasks needing re-clarification.
+  /// One-shot snapshot of tasks needing re-clarification: Stale or Actionless
+  /// per spec.
+  ///
+  /// Stale: engaged with more recently than last clarified, read from two
+  /// independent signals. `last_next_action_completion_at` means "worked on in
+  /// a session" and is stamped once, at session close, by the Review surface;
+  /// [_latestActionTerminationClause] means "an Action was completed" and comes
+  /// from the Action rows themselves (ADR-0001 story 4), so completing the
+  /// current Action surfaces the Outcome even when no session ever closed.
+  /// Actionless: no current Action row AND not delegated. Delegated tasks
+  /// (carrying any person-typed tag) are excluded from the actionless branch —
+  /// their cadence belongs to the weekly Waiting For review, not the daily
+  /// re-clarification surface.
   Future<List<Todo>> getNeedsReview() {
     return customSelect(
       'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
       variables: [],
       readsFrom: {todos, todoTags, tags, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
-  }
-
-  /// One-shot count of tasks needing re-clarification.
-  @visibleForTesting
-  Future<int> getNeedsReviewCount() async {
-    final rows = await customSelect(
-      'SELECT COUNT(*) AS cnt FROM todos WHERE $_needsReviewWhere',
-      variables: [],
-      readsFrom: {todos, todoTags, tags, actions},
-    ).get();
-    return rows.first.read<int>('cnt');
-  }
-
-  /// Clears [done_at], returning the task to an undone state without touching
-  /// any other fields. Called when a "mark done" review action is replaced by a
-  /// different resolution.
-  ///
-  /// Stamps [last_clarified_at]: reverting an Outcome's completion is a
-  /// structural decision about the Outcome, the dual of marking it done —
-  /// both ends of the Completion axis are clarifying micro-acts per CONTEXT.md.
-  Future<void> clearDoneAt(String id) async {
-    final ts = DateTime.now().toUtc();
-    await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
-      doneAt: const Value(null),
-      lastClarifiedAt: Value(ts),
-      updatedAt: Value(ts),
-    ));
-    attachedDatabase.notifyTodosViewWrite();
   }
 
   /// Returns the IDs of person-typed tags assigned to [todoId].
@@ -688,17 +625,6 @@ AND (
       (result[row.read<String>('todo_id')] ??= <Tag>[]).add(tag);
     }
     return result;
-  }
-
-  /// One-shot check: is [todoId] currently in the re-clarification queue?
-  @visibleForTesting
-  Future<bool> isNeedsReview(String todoId) async {
-    final rows = await customSelect(
-      'SELECT 1 FROM todos WHERE id = ? AND $_needsReviewWhere',
-      variables: [Variable(todoId)],
-      readsFrom: {todos, todoTags, tags, actions},
-    ).get();
-    return rows.isNotEmpty;
   }
 
   /// Sets the person-typed tag associations for [todoId] to exactly

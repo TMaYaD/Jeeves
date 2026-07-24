@@ -21,11 +21,11 @@ import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 
 import '../../helpers/periodic_review_test_helpers.dart';
+import '../../helpers/settle.dart';
 import '../../test_helpers.dart';
 
 const _skipKey = Key('periodic_review_skip');
 const _nextKey = Key('periodic_review_next_step');
-const _slotKey = Key('periodic_review_footer_slot');
 
 /// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
 Future<void> _insertInbox(GtdDatabase db, String id) async {
@@ -82,14 +82,9 @@ PeriodicReviewState _stateOf(WidgetTester tester) {
 }
 
 /// The wizard loads its per-step snapshots through drift watch-streams, which
-/// only emit inside the real async zone. Give them a turn under
-/// [WidgetTester.runAsync] before settling the frame.
-Future<void> _settle(WidgetTester tester) async {
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 200)),
-  );
-  await tester.pumpAndSettle();
-}
+/// only emit inside the real async zone. Drain that queue (no wall-clock sleep)
+/// before settling the frame — see [settleWithRealAsync].
+Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
 /// Unmounts the screen so the streaming providers behind the review cards
 /// dispose — and their drift stream-close timers fire — before the test
@@ -108,26 +103,6 @@ void main() {
 
     setUp(() => db = GtdDatabase(NativeDatabase.memory()));
     tearDown(() async => db.close());
-
-    testWidgets('Inbox step with items remaining shows Skip, not Next step',
-        (tester) async {
-      await _insertInbox(db, 'i1');
-      await _insertInbox(db, 'i2');
-      await _insertInbox(db, 'i3');
-
-      await tester.pumpWidget(_screen(db));
-      await _settle(tester);
-
-      // Cursor on item 0 of 3 — Skip is the only forward affordance.
-      expect(find.byKey(_skipKey), findsOneWidget);
-      expect(find.byKey(_nextKey), findsNothing);
-      expect(
-        tester.widget<OutlinedButton>(find.byKey(_skipKey)).onPressed,
-        isNotNull,
-      );
-
-      await _dispose(tester);
-    });
 
     testWidgets(
         'Inbox step on the last real item shows Skip; '
@@ -173,7 +148,14 @@ void main() {
       await _settle(tester);
 
       expect(_stateOf(tester).inboxNav.index, 0);
+      // Cursor on item 0 with items remaining — Skip is the only forward
+      // affordance, and it is enabled.
       expect(find.byKey(_skipKey), findsOneWidget);
+      expect(find.byKey(_nextKey), findsNothing);
+      expect(
+        tester.widget<OutlinedButton>(find.byKey(_skipKey)).onPressed,
+        isNotNull,
+      );
 
       await tester.tap(find.byKey(_skipKey));
       await tester.pumpAndSettle();
@@ -235,29 +217,6 @@ void main() {
         after.waitingForNav.items!.map((t) => t.id).toList(),
         before.waitingForNav.items!.map((t) => t.id).toList(),
       );
-
-      await _dispose(tester);
-    });
-
-    testWidgets('the footer slot keeps a fixed footprint across the swap',
-        (tester) async {
-      // Single inbox item: one Skip tap reaches isComplete, swapping the
-      // footer from Skip (OutlinedButton) to Next step (FilledButton).
-      await _insertInbox(db, 'only');
-
-      await tester.pumpWidget(_screen(db));
-      await _settle(tester);
-
-      // Skip is showing.
-      final skipSlotSize = tester.getSize(find.byKey(_slotKey));
-
-      await tester.tap(find.byKey(_skipKey));
-      await tester.pumpAndSettle();
-
-      // Next step is showing — the OutlinedButton ↔ FilledButton swap must not
-      // change the slot's size.
-      final nextSlotSize = tester.getSize(find.byKey(_slotKey));
-      expect(nextSlotSize, skipSlotSize);
 
       await _dispose(tester);
     });

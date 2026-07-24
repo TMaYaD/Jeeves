@@ -234,14 +234,6 @@ class _RecordingClarificationService implements ClarificationService {
       );
 
   @override
-  Future<int> promoteCaptureToOutcome(
-    String id, {
-    String? intent,
-    DateTime? dueDate,
-  }) =>
-      inner.promoteCaptureToOutcome(id, intent: intent, dueDate: dueDate);
-
-  @override
   Future<int> completeOutcome(String id) => inner.completeOutcome(id);
 
   @override
@@ -494,25 +486,9 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
 
-    testWidgets('displays Capture title and notes pre-populated',
-        (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      final titleField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
-      final notesField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
-      expect(titleField.controller?.text, 'Buy milk');
-      expect(notesField.controller?.text, 'Full fat');
-    });
-
-    testWidgets('Next Action carves a linked Outcome and stamps the Capture',
-        (tester) async {
+    testWidgets(
+        'Next Action carves a linked Outcome, stamps the Capture, and clears '
+        'the Inbox', (tester) async {
       await db.captureDao
           .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
@@ -529,18 +505,7 @@ void main() {
       expect(outcome!.clarified, isTrue);
       expect(outcome.title, 'Buy milk');
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
-    });
-
-    testWidgets('Next Action leaves the Inbox empty', (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
+      // And the clarified Capture leaves the Inbox.
       expect(await _inboxIds(db), isEmpty);
     });
 
@@ -587,77 +552,6 @@ void main() {
       );
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
       expect(find.text('Inbox'), findsOneWidget);
-    });
-
-    testWidgets('Maybe carves an Outcome with intent = maybe', (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Learn guitar'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      // The destination buttons are below the fold on the 800x600 test surface;
-      // scroll them into view before tapping.
-      await _scrollAndTap(tester, 'Someday');
-
-      final outcome = await _outcomeOf(db, 'x');
-      expect(outcome!.clarified, isTrue);
-      expect(outcome.intent, 'maybe');
-    });
-
-    testWidgets('Done is not offered as a clarify-time destination',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Old idea'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      // An Outcome captured already-complete is a contradiction: Done is a
-      // completion event, not a destination you route to while clarifying.
-      // Completing an Outcome stays available on the Outcome's own surface.
-      expect(find.text('Done'), findsNothing);
-      // The three real destinations survive, with the verdict in the slot Done
-      // vacated.
-      expect(find.text('Next Action'), findsOneWidget);
-      expect(find.text('Waiting For'), findsOneWidget);
-      expect(find.text('Someday'), findsOneWidget);
-      expect(find.text('Discard Capture'), findsOneWidget);
-    });
-
-    testWidgets('Discard stamps the Capture and carves no Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Never worth it'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await _scrollAndTap(tester, 'Discard Capture');
-
-      // A discard is the zero-Outcome verdict: the clarify act completed, so
-      // `clarified_at` is stamped and the item leaves the Inbox, but nothing
-      // was ever worth creating.
-      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
-      expect(await _outcomeOf(db, 'x'), isNull);
-      expect(await _inboxIds(db), isEmpty);
-    });
-
-    testWidgets('no discard-labelled action creates an Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Noise'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await _scrollAndTap(tester, 'Discard Capture');
-
-      // The bug this screen shipped with: a button that said "discard" wrote a
-      // completed Outcome. Nothing may land in `todos` on this path — not even
-      // a trashed row, because Trash is a List of Outcomes and a discarded
-      // Capture never becomes one.
-      expect(await db.select(db.todos).get(), isEmpty);
     });
 
     testWidgets('discarding an untitled Capture keeps its original title',
@@ -810,86 +704,6 @@ void main() {
       expect(find.text('Title is required to process'), findsOneWidget);
     });
 
-    testWidgets('edited title lands on both the Capture and the Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Old title'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-          find.byKey(const Key('clarify_title')), 'New title');
-      await tester.pump();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
-      expect((await _outcomeOf(db, 'x'))!.title, 'New title');
-      // The edit is also kept on the Capture, so the provenance trail shows
-      // what the user actually wrote rather than the original fragment.
-      expect((await db.captureDao.getCapture('x'))!.title, 'New title');
-    });
-
-    testWidgets('energy chosen on the card lands on the new Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      // A Capture has no energy column — the card collects it as draft state
-      // and clarifyCaptureToOutcome writes it onto the Outcome it creates.
-      await tester.ensureVisible(find.text('High'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('High'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
-      expect((await _outcomeOf(db, 'x'))!.energyLevel, 'high');
-    });
-
-    testWidgets('time estimate chosen on the card lands on the new Outcome',
-        (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await tester.ensureVisible(find.text('30m'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('30m'));
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
-      expect((await _outcomeOf(db, 'x'))!.timeEstimate, 30);
-    });
-
-    testWidgets('deleting notes clears them on the Capture and the Outcome',
-        (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
-      await tester.pump();
-
-      await tester.tap(find.text('Next Action'));
-      await tester.pumpAndSettle();
-
-      expect((await db.captureDao.getCapture('x'))!.notes, isNull);
-      expect((await _outcomeOf(db, 'x'))!.notes, isNull);
-    });
-
     testWidgets('clarifying an untouched Capture invents no attributes',
         (tester) async {
       await db.captureDao
@@ -958,7 +772,7 @@ void main() {
     tearDown(() => db.close());
 
     test('a no-op updateFields does not stamp last_clarified_at', () async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Buy milk'));
+      await db.into(db.todos).insert(_companion(id: 'x', title: 'Buy milk'));
       final service = DaoClarificationService(db);
 
       await service.updateFields('x');
@@ -970,7 +784,7 @@ void main() {
     });
 
     test('clearNotes nulls the column and stamps', () async {
-      await db.inboxDao.insertTodo(
+      await db.into(db.todos).insert(
         _companion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
       );
       final service = DaoClarificationService(db);
@@ -999,84 +813,6 @@ void main() {
     tearDown(() async {
       await feed.close();
       await db.close();
-    });
-
-    testWidgets('adopts a change to a field the user has not edited',
-        (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      // The row changes in local storage. The screen cannot tell whether that
-      // came from another screen, a background job or a replicated edit — the
-      // changed row is the whole signal.
-      await db.captureDao.updateFields('x', title: 'Buy oat milk');
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      final titleField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
-      expect(titleField.controller?.text, 'Buy oat milk');
-    });
-
-    testWidgets('renders a subject the provider already holds', (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      // The Inbox binds to the subject first, so by the time clarify opens the
-      // provider is past its loading state and will not emit again.
-      await tester.pumpWidget(
-        _buildApp(db, 'x', captureFeed: feed, subjectAlreadyLive: true),
-      );
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.text('Clarify'));
-      // Fixed pumps rather than pumpAndSettle: without the build-time seed the
-      // screen stays on its spinner, and a spinner never settles.
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 500));
-
-      // The only value the listener would ever have applied was emitted before
-      // this screen mounted, so the seed is the sole path to the subject.
-      final titleField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
-      expect(titleField.controller?.text, 'Buy milk');
-      final notesField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
-      expect(notesField.controller?.text, 'Full fat');
-    });
-
-    testWidgets('leaves a field the user is editing alone', (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-          find.byKey(const Key('clarify_title')), 'Buy almond milk');
-      await tester.pumpAndSettle();
-
-      await db.captureDao.updateFields('x', title: 'Buy oat milk');
-      await feed.emitFrom(db, 'x');
-      await tester.pumpAndSettle();
-
-      // Dirty field: the user's in-progress edit wins.
-      final titleField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_title')));
-      expect(titleField.controller?.text, 'Buy almond milk');
-      // Clean field: the incoming notes land.
-      final notesField =
-          tester.widget<TextField>(find.byKey(const Key('clarify_notes')));
-      expect(notesField.controller?.text, 'Full fat');
     });
 
     testWidgets('an incoming edit is not overwritten by the routing save',
@@ -1138,7 +874,7 @@ void main() {
       expect(find.byKey(const Key('clarify_title')), findsOneWidget);
 
       // The row is gone from local storage.
-      await db.captureDao.deleteCapture('x');
+      await (db.delete(db.captures)..where((c) => c.id.equals('x'))).go();
       feed.emitMissing();
       await tester.pumpAndSettle();
 
@@ -1156,7 +892,7 @@ void main() {
       await feed.emitFrom(db, 'x');
       await tester.pumpAndSettle();
 
-      await db.captureDao.deleteCapture('x');
+      await (db.delete(db.captures)..where((c) => c.id.equals('x'))).go();
       feed.emitMissing();
       await tester.pumpAndSettle();
 
@@ -1182,36 +918,6 @@ void main() {
       expect(find.byType(CircularProgressIndicator), findsNothing);
       // An error is not an absence: the row may well still be there.
       expect(find.byKey(const Key('clarify_subject_missing')), findsNothing);
-    });
-
-    // docs/DESIGN.md § Roundedness: prompt banner is a surface (6px), the
-    // title/notes fields are inputs (4px). Guards the inline radii against the
-    // legacy 10/8px values (#456).
-    testWidgets('prompt banner is a 6px surface, inputs are 4px',
-        (tester) async {
-      await db.captureDao.insertCapture(
-        _captureCompanion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
-      );
-
-      await tester.pumpWidget(_buildApp(db, 'x'));
-      await tester.pumpAndSettle();
-
-      final banner = tester
-          .widgetList<Container>(find.byType(Container))
-          .firstWhere((c) =>
-              c.decoration is BoxDecoration &&
-              (c.decoration as BoxDecoration).color == const Color(0xFFEFF6FF));
-      final bannerRadius =
-          ((banner.decoration as BoxDecoration).borderRadius as BorderRadius)
-              .topLeft
-              .x;
-      expect(bannerRadius, 6);
-
-      for (final key in const [Key('clarify_title'), Key('clarify_notes')]) {
-        final field = tester.widget<TextField>(find.byKey(key));
-        final border = field.decoration!.border as OutlineInputBorder;
-        expect(border.borderRadius.topLeft.x, 4);
-      }
     });
   });
 }

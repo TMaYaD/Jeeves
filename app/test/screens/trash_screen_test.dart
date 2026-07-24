@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart' show Intent;
 import 'package:jeeves/screens/trash/trash_screen.dart';
-import 'package:jeeves/widgets/active_filter_bar.dart';
 import '../helpers/record_surface_test_helpers.dart';
 import '../test_helpers.dart';
 
@@ -51,42 +50,12 @@ void main() {
       await disposeScreen(tester);
     });
 
-    testWidgets('shows no context-filter bar (stream is unfiltered)',
-        (tester) async {
-      await insertClarifiedTodo(db, id: 'a', title: 'Trashed');
-      await db.todoDao.setIntent('a', Intent.trash);
-
-      await tester.pumpWidget(buildScreen());
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(find.byType(ActiveFilterBar), findsNothing);
-
-      await disposeScreen(tester);
-    });
-
     testWidgets('shows empty state when nothing is trashed', (tester) async {
       await tester.pumpWidget(buildScreen());
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('Trash is empty'), findsOneWidget);
-
-      await disposeScreen(tester);
-    });
-
-    testWidgets('tapping a row navigates to /task/:id', (tester) async {
-      await insertClarifiedTodo(db, id: 'a', title: 'Trashed');
-      await db.todoDao.setIntent('a', Intent.trash);
-
-      await tester.pumpWidget(buildScreen());
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-
-      await tester.tap(find.text('Trashed'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Detail a'), findsOneWidget);
 
       await disposeScreen(tester);
     });

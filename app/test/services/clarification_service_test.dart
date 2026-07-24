@@ -26,6 +26,10 @@ TodosCompanion _capture({required String id, required String title}) {
   return TodosCompanion(
     id: Value(id),
     title: Value(title),
+    // Unclarified: the pre-split Inbox shape these service tests seed. The
+    // stampClarified test depends on it — a stamp-only write must leave
+    // `clarified` false.
+    clarified: const Value(false),
     userId: Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -64,14 +68,14 @@ void main() {
 
   group('DaoClarificationService', () {
     test('exists reflects row presence', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
       expect(await service.exists('a'), isTrue);
       expect(await service.exists('missing'), isFalse);
     });
 
     test('clarifyToOutcome to nextAction routes and stamps', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
       await service.clarifyToOutcome(
         'a',
@@ -88,7 +92,7 @@ void main() {
     });
 
     test('clarifyToOutcome to maybe sets intent without done_at', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
       await service.clarifyToOutcome('a', to: RoutingKind.maybe);
 
@@ -99,7 +103,7 @@ void main() {
     });
 
     test('clarifyToOutcome to done stamps Completion', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
       await service.clarifyToOutcome('a', to: RoutingKind.done);
 
@@ -109,7 +113,7 @@ void main() {
     });
 
     test('clarifyToOutcome to trash sets intent=trash', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
       await service.clarifyToOutcome('a', to: RoutingKind.trash);
 
@@ -118,7 +122,7 @@ void main() {
     });
 
     test('clarifyToOutcome to waitingFor replaces person tags', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
       await db.tagDao.upsertTag(const TagsCompanion(
         id: Value('alice-tag'),
         name: Value('Alice'),
@@ -149,34 +153,8 @@ void main() {
       expect(await service.getPersonTagIds('a'), {'alice-tag'});
     });
 
-    test('promoteCaptureToOutcome flips clarified and guards re-processing',
-        () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
-
-      expect(await service.promoteCaptureToOutcome('a'), 1);
-
-      final row = await _row(db, 'a');
-      expect(row.clarified, isTrue);
-      expect(row.lastClarifiedAt, isNotNull);
-
-      // Already-clarified rows are not double-processed.
-      expect(await service.promoteCaptureToOutcome('a'), 0);
-    });
-
-    test('promoteCaptureToOutcome passes intent and dueDate through',
-        () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
-      final due = DateTime.utc(2026, 8, 1);
-
-      await service.promoteCaptureToOutcome('a', intent: 'maybe', dueDate: due);
-
-      final row = await _row(db, 'a');
-      expect(row.intent, 'maybe');
-      expect(row.dueDate?.toUtc(), due);
-    });
-
     test('completeOutcome stamps done_at and last_clarified_at', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
       await service.completeOutcome('a');
 
@@ -187,7 +165,7 @@ void main() {
 
     test('completeCurrentAction ends the Action without completing or '
         'stamping the Outcome', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
       await db.todoDao.setNextActionText('a', 'call the plumber');
       final clarifiedAt = (await _row(db, 'a')).lastClarifiedAt;
 
@@ -202,7 +180,7 @@ void main() {
     });
 
     test('stampClarified touches only the clarification timestamp', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
       await service.stampClarified('a');
 
@@ -213,7 +191,7 @@ void main() {
     });
 
     test('updateFields writes edits and honors clear flags', () async {
-      await db.inboxDao.insertTodo(_capture(id: 'a', title: 'Item'));
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
       await service.updateFields(
         'a',

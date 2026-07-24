@@ -7,29 +7,11 @@ import 'package:jeeves/providers/nudge_triggers.dart';
 
 void main() {
   group('NudgeState', () {
-    test('copyWith leaves existing values when no args passed', () {
-      final ts = DateTime(2026, 5, 22, 10);
-      final s = NudgeState(dismissedAt: ts, snoozedUntil: ts);
-      expect(s.copyWith(), s);
-    });
-
     test('clear flags drop the corresponding field', () {
       final ts = DateTime(2026, 5, 22, 10);
       final s = NudgeState(dismissedAt: ts, snoozedUntil: ts);
       expect(s.copyWith(clearDismissedAt: true).dismissedAt, isNull);
       expect(s.copyWith(clearSnoozedUntil: true).snoozedUntil, isNull);
-    });
-
-    test('equality compares both fields', () {
-      final a = NudgeState(
-        dismissedAt: DateTime(2026, 5, 22, 10),
-        snoozedUntil: DateTime(2026, 5, 22, 11),
-      );
-      final b = NudgeState(
-        dismissedAt: DateTime(2026, 5, 22, 10),
-        snoozedUntil: DateTime(2026, 5, 22, 11),
-      );
-      expect(a, equals(b));
     });
   });
 

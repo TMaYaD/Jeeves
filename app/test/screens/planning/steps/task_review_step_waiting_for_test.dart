@@ -51,17 +51,13 @@ Future<String> _insertClarifiedTask(
   ));
   // Dual-write invariant: a non-blank phrase is an Action row too, which is
   // what the Actionless predicate and the hint now read (ADR-0001 story 3).
-  final actionText = currentActionText ?? nextActionText;
-  if (actionText != null && actionText.trim().isNotEmpty) {
-    await db.into(db.actions).insert(ActionsCompanion(
-          id: Value('action-$id'),
-          outcomeId: Value(id),
-          userId: const Value(_userId),
-          actionText: Value(actionText.trim()),
-          role: const Value('current'),
-          createdAt: Value(now),
-        ));
-  }
+  await seedCurrentAction(
+    db,
+    outcomeId: id,
+    text: currentActionText ?? nextActionText,
+    userId: _userId,
+    createdAt: now,
+  );
   return id;
 }
 

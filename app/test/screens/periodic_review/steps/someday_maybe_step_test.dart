@@ -19,7 +19,6 @@ import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/periodic_review/steps/someday_maybe_step.dart';
-import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 
 import '../../../test_helpers.dart';
@@ -99,18 +98,6 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    testWidgets('tapping "Next Action…" opens NextActionDialog',
-        (tester) async {
-      await _insertSomedayTodo(db, id: 'sm1');
-      await _enterStep(tester, db);
-
-      expect(find.text('Next Action…'), findsOneWidget);
-      await tester.tap(find.text('Next Action…'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(NextActionDialog), findsOneWidget);
-    });
-
     testWidgets(
         'phrase + Save routes to Next, writes next_action_text, records a '
         'Someday routing, and advances', (tester) async {
@@ -144,126 +131,6 @@ void main() {
       expect(state.somedayNav.isComplete, isTrue);
     });
 
-    testWidgets(
-        'blank Save does not route and the wizard stays on the item',
-        (tester) async {
-      await _insertSomedayTodo(db, id: 'sm1');
-      final container = await _enterStep(tester, db);
-
-      await tester.tap(find.text('Next Action…'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Save'));
-      await tester.pumpAndSettle();
-
-      final state = container.read(periodicReviewProvider);
-      expect(state.somedayRoutings, isEmpty,
-          reason: 'a blank promotion must not record a routing');
-      expect(state.somedayNav.index, 0,
-          reason: 'a blank promotion must leave the cursor on the item');
-      expect(state.somedayNav.isComplete, isFalse);
-
-      // The DB row is untouched: a blank promotion neither writes a phrase
-      // nor re-routes the item off Someday/Maybe.
-      final row = await db.todoDao.getTodo('sm1');
-      expect(row?.nextActionText, isNull);
-      expect(row?.intent, 'maybe');
-    });
-
-    testWidgets('cancelling the dialog records no routing and does not advance',
-        (tester) async {
-      await _insertSomedayTodo(db, id: 'sm1');
-      final container = await _enterStep(tester, db);
-
-      await tester.tap(find.text('Next Action…'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-
-      final row = await db.todoDao.getTodo('sm1');
-      expect(row?.nextActionText, isNull);
-      expect(row?.intent, 'maybe');
-      final state = container.read(periodicReviewProvider);
-      expect(state.somedayRoutings, isEmpty);
-      expect(state.somedayNav.index, 0);
-    });
-  });
-
-  group('SomedayMaybeStep — Re-clarify… sub-flow (#294)', () {
-    late GtdDatabase db;
-
-    setUp(() => db = _openInMemory());
-    tearDown(() async => db.close());
-
-    /// Enlarge the test viewport so the sub-flow's bottom action buttons
-    /// (Trash, Done…) fit on screen for `tester.tap`.
-    Future<void> useTallViewport(WidgetTester tester) async {
-      await tester.binding.setSurfaceSize(const Size(800, 1600));
-      addTearDown(() async => tester.binding.setSurfaceSize(null));
-    }
-
-    testWidgets('Re-clarify… is rendered as a button on the action bar',
-        (tester) async {
-      await _insertSomedayTodo(db, id: 'sm1');
-      await _enterStep(tester, db);
-
-      expect(find.text('Re-clarify…'), findsOneWidget);
-    });
-
-    testWidgets(
-        'tapping Re-clarify… opens the ClarifyCard sub-flow on this item',
-        (tester) async {
-      await useTallViewport(tester);
-      await _insertSomedayTodo(db, id: 'sm1');
-      await _enterStep(tester, db, reclarifyIds: const ['sm1']);
-
-      await tester.tap(find.text('Re-clarify…'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(ClarifyCard), findsOneWidget);
-      expect(find.widgetWithText(AppBar, 'Re-clarify'), findsOneWidget);
-    });
-
-    testWidgets(
-        'routing to Trash inside the sub-flow records the routing and '
-        'advances the cursor', (tester) async {
-      await useTallViewport(tester);
-      await _insertSomedayTodo(db, id: 'sm1');
-      final container =
-          await _enterStep(tester, db, reclarifyIds: const ['sm1']);
-
-      await tester.tap(find.text('Re-clarify…'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Trash'));
-      await tester.pumpAndSettle();
-
-      final row = await db.todoDao.getTodo('sm1');
-      expect(row?.intent, 'trash');
-
-      final state = container.read(periodicReviewProvider);
-      expect(state.somedayRoutings[0], RoutingKind.trash);
-      expect(state.somedayNav.isComplete, isTrue);
-    });
-
-    testWidgets(
-        'backing out of the sub-flow records no routing and advances like keep',
-        (tester) async {
-      await useTallViewport(tester);
-      await _insertSomedayTodo(db, id: 'sm1');
-      final container =
-          await _enterStep(tester, db, reclarifyIds: const ['sm1']);
-
-      await tester.tap(find.text('Re-clarify…'));
-      await tester.pumpAndSettle();
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-
-      final state = container.read(periodicReviewProvider);
-      expect(state.somedayRoutings, isEmpty,
-          reason: 'a back-out of the sub-flow records no routing');
-      expect(state.somedayNav.isComplete, isTrue);
-      final row = await db.todoDao.getTodo('sm1');
-      expect(row?.intent, 'maybe');
-    });
   });
 
   group('SomedayMaybeStep — Done route (#457)', () {

@@ -1,72 +1,15 @@
-"""Integration tests for the SWS auth routes (POST /auth/sws/challenge and POST /auth/sws)."""
+"""Integration tests for the SWS auth routes (POST /auth/sws/challenge and POST /auth/sws).
+
+The `client` and `signing_key` fixtures live in tests/auth/conftest.py.
+"""
 
 import base64
-import os
-from collections.abc import AsyncIterator
 
-import fakeredis.aioredis
 import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from nacl.signing import SigningKey
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app.auth.providers.sws_strategy import SIWS_TEMPLATE
-from app.database import Base, get_db
-from app.main import app
-from app.redis import get_redis
-
-TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
-
-
-@pytest_asyncio.fixture
-async def engine() -> AsyncIterator[AsyncEngine]:
-    _engine = create_async_engine(TEST_DB_URL, echo=False)
-    async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield _engine
-    await _engine.dispose()
-
-
-@pytest_asyncio.fixture
-async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
-    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    async with factory() as session:
-        yield session
-        await session.rollback()
-
-
-@pytest_asyncio.fixture
-async def fake_redis() -> Redis:
-    return fakeredis.aioredis.FakeRedis(decode_responses=True)
-
-
-@pytest_asyncio.fixture
-async def client(db: AsyncSession, fake_redis: Redis) -> AsyncIterator[AsyncClient]:
-    async def override_get_db() -> AsyncIterator[AsyncSession]:
-        yield db
-
-    async def override_get_redis() -> AsyncIterator[Redis]:
-        yield fake_redis
-
-    app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[get_redis] = override_get_redis
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        yield c
-    app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def signing_key() -> SigningKey:
-    return SigningKey.generate()
 
 
 def _b58encode(data: bytes) -> str:

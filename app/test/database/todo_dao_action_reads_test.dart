@@ -58,6 +58,13 @@ AND (
   )
 )''';
 
+/// Is [id] currently in the re-clarification queue? Asked through the one
+/// surviving production entry point, [TodoDao.getNeedsReview] — the
+/// `isNeedsReview` / `getNeedsReviewCount` wrappers were dead surface and were
+/// removed in #494.
+Future<bool> _isNeedsReview(GtdDatabase db, String id) async =>
+    (await db.todoDao.getNeedsReview()).any((t) => t.id == id);
+
 Future<List<String>> _idsMatching(GtdDatabase db, String where) async {
   final rows = await db
       .customSelect('SELECT id FROM todos WHERE $where ORDER BY created_at')
@@ -324,13 +331,10 @@ void main() {
     test('the re-clarify queue matches the frozen cursor clause', () async {
       final expected = await _idsMatching(db, _frozenNeedsReviewWhere);
 
-      expect((await db.todoDao.watchNeedsReview().first).map((t) => t.id),
-          expected);
       expect((await db.todoDao.getNeedsReview()).map((t) => t.id), expected);
-      expect(await db.todoDao.getNeedsReviewCount(), expected.length);
       for (final id in ['actionless', 'stale', 'cleared', 'actioned', 'done']) {
-        expect(await db.todoDao.isNeedsReview(id), expected.contains(id),
-            reason: 'isNeedsReview disagrees for $id');
+        expect(await _isNeedsReview(db, id), expected.contains(id),
+            reason: 'the re-clarify queue disagrees for $id');
       }
       expect(expected, isNotEmpty);
     });
@@ -363,7 +367,7 @@ void main() {
           outcomeId: 'planned-unblocked',
           text: 'Later',
           role: 'planned');
-      expect(await db.todoDao.isNeedsReview('planned-unblocked'), isTrue);
+      expect(await _isNeedsReview(db, 'planned-unblocked'), isTrue);
     });
 
     test('a superseded-only Outcome is Actionless', () async {
@@ -373,7 +377,7 @@ void main() {
           outcomeId: 'retired',
           text: 'Done with this',
           role: 'superseded');
-      expect(await db.todoDao.isNeedsReview('retired'), isTrue);
+      expect(await _isNeedsReview(db, 'retired'), isTrue);
       expect(await db.actionDao.getCurrentAction('retired'), isNull);
     });
 
@@ -387,7 +391,7 @@ void main() {
 
       expect((await db.todoDao.watchNext().first).map((t) => t.id),
           isNot(contains('skewed')));
-      expect(await db.todoDao.isNeedsReview('skewed'), isFalse,
+      expect(await _isNeedsReview(db, 'skewed'), isFalse,
           reason: 'PersonBlocked Outcomes never enter the Actionless branch');
 
       // …and the converse: an Action row with a NULL cursor is engageable.
@@ -405,31 +409,26 @@ void main() {
   // ---------------------------------------------------------------------------
 
   group('watcher wiring', () {
-    test('an ActionDao write re-emits watchNext and watchNeedsReview',
-        () async {
+    // Only `watchNext` is asserted here: the re-clarify predicate has no
+    // watcher in production (#494 removed the dead `watchNeedsReview`), so
+    // `getNeedsReview` is a one-shot and there is no stream to invalidate.
+    test('an ActionDao write re-emits watchNext', () async {
       await _seedOutcome(db, 'o1');
       await _attachPersonTag(db, 'o1');
 
       final nextEmissions = <List<String>>[];
-      final reviewEmissions = <List<String>>[];
       final s1 = db.todoDao
           .watchNext()
           .listen((rows) => nextEmissions.add(rows.map((t) => t.id).toList()));
-      final s2 = db.todoDao.watchNeedsReview().listen(
-          (rows) => reviewEmissions.add(rows.map((t) => t.id).toList()));
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
       await db.actionDao.setCurrentAction('o1', 'Ring them back');
       await Future<void>.delayed(const Duration(milliseconds: 40));
 
       await s1.cancel();
-      await s2.cancel();
 
       expect(nextEmissions.first, isEmpty);
       expect(nextEmissions.last, ['o1']);
-      // PersonBlocked, so it was never in the queue — but the stream must have
-      // re-run against `actions` rather than staying stale.
-      expect(reviewEmissions.length, greaterThan(1));
     });
 
     test('a raw actions-view write plus notifyActionsViewWrite re-emits',
@@ -470,10 +469,7 @@ void main() {
     await db.actionDao.getCurrentActionTexts({'o1'});
     await db.actionDao.watchCurrentAction('o1').first;
     await db.todoDao.watchNext().first;
-    await db.todoDao.watchNeedsReview().first;
     await db.todoDao.getNeedsReview();
-    await db.todoDao.getNeedsReviewCount();
-    await db.todoDao.isNeedsReview('o1');
     await db.captureDao.watchCarvedOutcomes('no-such-capture').first;
 
     final outcome =

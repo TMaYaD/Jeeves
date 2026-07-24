@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Auth
     secret_key: str = "insecure-dev-key"
 
+    # bcrypt work factor for password hashing.  Default 12 is the production
+    # value; the test suite lowers it (via BCRYPT_ROUNDS) so its ~150 register()
+    # calls don't dominate the run — the real hashing code path is still used.
+    bcrypt_rounds: int = 12
+
     @model_validator(mode="after")
     def _normalize_database_url(self) -> "Settings":
         scheme, _, rest = self.database_url.partition("://")
@@ -44,6 +49,20 @@ class Settings(BaseSettings):
             _logger.warning(
                 "Using insecure default secret_key — this is only acceptable in development/test"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_bcrypt_rounds(self) -> "Settings":
+        # bcrypt.gensalt() only accepts 4–31 and raises ValueError otherwise;
+        # validate here so a misconfiguration fails at startup rather than on
+        # the first password hash. Production must not run below the default 12.
+        if not 4 <= self.bcrypt_rounds <= 31:
+            raise ValueError(
+                f"BCRYPT_ROUNDS must be between 4 and 31 (bcrypt's valid range); "
+                f"got {self.bcrypt_rounds}"
+            )
+        if self.env == "production" and self.bcrypt_rounds < 12:
+            raise ValueError(f"BCRYPT_ROUNDS must be >= 12 in production; got {self.bcrypt_rounds}")
         return self
 
     algorithm: str = "HS256"

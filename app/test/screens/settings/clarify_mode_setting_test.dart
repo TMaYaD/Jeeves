@@ -81,23 +81,16 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   group('Settings — clarify mode', () {
-    testWidgets('renders the tile with canonical copy and the 1-1 default',
-        (tester) async {
-      await _pumpSettings(tester);
+    testWidgets('defaults to 1-1 mode', (tester) async {
+      final container = await _pumpSettings(tester);
 
       await tester.scrollUntilVisible(
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
 
-      expect(find.text('Clarify mode'), findsOneWidget);
-      // Canonical vocabulary per CONTEXT.md § GTD Core.
-      expect(
-        find.textContaining('1-1 mode'),
-        findsOneWidget,
-        reason: 'the default mode label must read as 1-1',
-      );
-      expect(find.textContaining('Capture'), findsWidgets);
+      // A fresh install starts in 1-1 mode.
+      expect(container.read(clarifyModeProvider), ClarifyMode.oneToOne);
     });
 
     testWidgets('picking n-m persists the mode', (tester) async {

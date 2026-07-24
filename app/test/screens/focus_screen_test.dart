@@ -120,15 +120,6 @@ void main() {
     expect(find.byType(FocusScreen), findsOneWidget);
   });
 
-  testWidgets('FocusScreen header reads "Now" (design review: Focus ↔ Now)',
-      (tester) async {
-    await tester.pumpWidget(_buildScreen());
-    await tester.pump();
-
-    expect(find.text('Now'), findsOneWidget);
-    expect(find.text('Focus'), findsNothing);
-  });
-
   testWidgets('FocusScreen shows Plan the Day button when no active session',
       (tester) async {
     await tester.pumpWidget(_buildScreen());

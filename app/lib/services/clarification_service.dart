@@ -9,10 +9,10 @@
 /// Vocabulary is CONTEXT.md's: methods speak Capture and Outcome. The
 /// interface carries two write families:
 ///
-/// - **Outcome routing** — [clarifyToOutcome], [promoteCaptureToOutcome],
-///   [completeOutcome], [completeCurrentAction], [stampClarified],
-///   [updateFields] (+ the [exists] / [getPersonTagIds] guards). These operate
-///   on the conflated `todos` row and back today's review + Inbox surfaces.
+/// - **Outcome routing** — [clarifyToOutcome], [completeOutcome],
+///   [completeCurrentAction], [stampClarified], [updateFields] (+ the
+///   [exists] / [getPersonTagIds] guards). These operate on the conflated
+///   `todos` row and back today's review + Inbox surfaces.
 /// - **Capture clarification** (ADR-0006, the split model) —
 ///   [clarifyCaptureToOutcome], [discardCapture], [captureExists]. Clarifying a
 ///   Capture creates a *new* Outcome, links it (`capture_outcomes` provenance),
@@ -207,19 +207,6 @@ abstract class ClarificationService {
     String? userId,
   });
 
-  /// The in-place 1:1 clarify act used by the standalone inbox clarify
-  /// screen: promotes the Capture at [id] to a clarified Outcome
-  /// (promotion IS Outcome creation per ADR-0006), optionally setting
-  /// [intent] / [dueDate]. Stamps `last_clarified_at`.
-  ///
-  /// Returns the number of affected rows (0 if already clarified or not
-  /// found) so callers can guard against double-processing.
-  Future<int> promoteCaptureToOutcome(
-    String id, {
-    String? intent,
-    DateTime? dueDate,
-  });
-
   /// Marks the Outcome achieved — stamps Completion (`done_at`) and
   /// `last_clarified_at`. Returns the number of affected rows.
   Future<int> completeOutcome(String id);
@@ -260,7 +247,7 @@ abstract class ClarificationService {
 }
 
 /// Concrete [ClarificationService] over the conflated `todos` schema:
-/// every method delegates 1:1 to the existing [InboxDao] / [TodoDao]
+/// every method delegates 1:1 to the existing [CaptureDao] / [TodoDao]
 /// writes, so behavior is byte-identical to the pre-service callsites.
 class DaoClarificationService implements ClarificationService {
   DaoClarificationService(this._db);
@@ -513,14 +500,6 @@ class DaoClarificationService implements ClarificationService {
         personTagIds: personTagIds,
         userId: userId,
       );
-
-  @override
-  Future<int> promoteCaptureToOutcome(
-    String id, {
-    String? intent,
-    DateTime? dueDate,
-  }) =>
-      _db.inboxDao.processInboxItem(id, intent: intent, dueDate: dueDate);
 
   @override
   Future<int> completeOutcome(String id) => _db.todoDao.markDone(id);

@@ -16,6 +16,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/screens/periodic_review/steps/_review_card.dart';
 import 'package:jeeves/screens/periodic_review/steps/next_step.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 
@@ -49,17 +50,13 @@ Future<String> _insertNextActionTodo(
   // The Action row is what the step reads (ADR-0001 story 3); it defaults to
   // agreeing with the cursor, as the dual-write choke points guarantee, and a
   // test can set [currentActionText] separately to prove which one is read.
-  final actionText = currentActionText ?? nextActionText;
-  if (actionText != null && actionText.trim().isNotEmpty) {
-    await db.into(db.actions).insert(ActionsCompanion(
-          id: Value('action-$id'),
-          outcomeId: Value(id),
-          userId: const Value(_userId),
-          actionText: Value(actionText.trim()),
-          role: const Value('current'),
-          createdAt: Value(now),
-        ));
-  }
+  await seedCurrentAction(
+    db,
+    outcomeId: id,
+    text: currentActionText ?? nextActionText,
+    userId: _userId,
+    createdAt: now,
+  );
   return id;
 }
 
@@ -136,6 +133,10 @@ void main() {
       await _enterStep(tester, db);
 
       expect(find.text('Repaint the fence'), findsOneWidget);
+      // The card must be handed no subtext at all — asserting only the title
+      // would pass just as happily with a stale phrase rendered beneath it.
+      final card = tester.widget<ReviewItemCard>(find.byType(ReviewItemCard));
+      expect(card.subtext, isNull);
     });
   });
 
