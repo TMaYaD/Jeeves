@@ -954,7 +954,7 @@ void main() {
     tearDown(() => db.close());
 
     test('a no-op updateFields does not stamp last_clarified_at', () async {
-      await db.inboxDao.insertTodo(_companion(id: 'x', title: 'Buy milk'));
+      await db.into(db.todos).insert(_companion(id: 'x', title: 'Buy milk'));
       final service = DaoClarificationService(db);
 
       await service.updateFields('x');
@@ -966,7 +966,7 @@ void main() {
     });
 
     test('clearNotes nulls the column and stamps', () async {
-      await db.inboxDao.insertTodo(
+      await db.into(db.todos).insert(
         _companion(id: 'x', title: 'Buy milk', notes: 'Full fat'),
       );
       final service = DaoClarificationService(db);

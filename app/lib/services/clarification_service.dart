@@ -248,7 +248,7 @@ abstract class ClarificationService {
 }
 
 /// Concrete [ClarificationService] over the conflated `todos` schema:
-/// every method delegates 1:1 to the existing [InboxDao] / [TodoDao]
+/// every method delegates 1:1 to the existing [CaptureDao] / [TodoDao]
 /// writes, so behavior is byte-identical to the pre-service callsites.
 class DaoClarificationService implements ClarificationService {
   DaoClarificationService(this._db);
@@ -508,7 +508,7 @@ class DaoClarificationService implements ClarificationService {
     String? intent,
     DateTime? dueDate,
   }) =>
-      _db.inboxDao.processInboxItem(id, intent: intent, dueDate: dueDate);
+      _db.todoDao.processInboxItem(id, intent: intent, dueDate: dueDate);
 
   @override
   Future<int> completeOutcome(String id) => _db.todoDao.markDone(id);

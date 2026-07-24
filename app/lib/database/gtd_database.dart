@@ -20,7 +20,6 @@ import 'package:powersync/powersync.dart' show uuid;
 import 'daos/action_ids.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
-import 'daos/inbox_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
 import 'daos/time_log_dao.dart';
@@ -34,7 +33,7 @@ part 'gtd_database.g.dart';
 
 @DriftDatabase(
   tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, SyncDeadLetters, Captures, CaptureOutcomes, CaptureTags, Actions],
-  daos: [InboxDao, TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao],
+  daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor);
@@ -624,7 +623,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// the initial-sync window (#342) — the Inbox / Next Actions lists and their
   /// badges freeze until the app is restarted.
   ///
-  /// Every `TodoDao` / `InboxDao` method that writes the `todos` view directly
+  /// Every `TodoDao` method that writes the `todos` view directly
   /// (via `update(todos)…write(…)` / `delete(todos)…go()`) must call this right
   /// after the write, giving Drift a second, in-process invalidation path so the
   /// live lists never depend solely on the bridge. It is a harmless idempotent
@@ -637,7 +636,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// The emitted [TableUpdate]s carry no [UpdateKind]: a null kind matches every
   /// registered stream query regardless of insert/update/delete, so the same
   /// call correctly serves update callers (`applyRouting`) and delete callers
-  /// (`InboxDao.deleteTodo`) without the caller having to thread the kind
+  /// (`deleteOutcome`) without the caller having to thread the kind
   /// through. Over-notifying a kind-filtered watcher would at worst cause a
   /// redundant re-query; under-notifying is the bug we are fixing.
   void notifyTodosViewWrite({bool includeTodoTags = false}) => notifyUpdates({

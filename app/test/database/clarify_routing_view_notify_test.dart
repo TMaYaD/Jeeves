@@ -15,9 +15,14 @@
 /// triggers, wired to Drift through the same `SqliteAsyncDriftConnection` used
 /// in production. Because the bridge's update notifications name the backing
 /// table (`todos_data`), not the `todos` view, they never invalidate the
-/// view-backed watchers — so the only way `watchInbox` / `watchNext` can refresh
-/// after `applyRouting` is Drift's own in-process notification, which the fix
+/// view-backed watchers — so the only way `watchNext` can refresh after
+/// `applyRouting` is Drift's own in-process notification, which the fix
 /// restores. No mocks; the write really persists through the trigger.
+///
+/// The guarded regression is the `todos`-view invalidation mechanism itself, so
+/// any live `todos` watcher exercises it; `watchNext` stands in for the Inbox /
+/// Next Actions lists that froze in #342 (the Inbox now reads `captures`, a
+/// separate view — see ADR-0006).
 @TestOn('!browser')
 library;
 
@@ -112,28 +117,25 @@ void main() {
   });
 
   test(
-    'clarify-routing an inbox item refreshes the Inbox and Next Actions '
-    'watchers even when the async update bridge never names the todos view',
+    'clarify-routing a todos row refreshes the Next Actions watcher '
+    'even when the async update bridge never names the todos view',
     () async {
-      await db.inboxDao.insertTodo(TodosCompanion(
+      // Seed an unclarified row directly (the pre-split Inbox shape); it is
+      // absent from Next until routing flips clarified + intent.
+      await db.into(db.todos).insert(TodosCompanion(
         id: const Value('t1'),
         title: const Value('Draft the quarterly plan'),
+        clarified: const Value(false),
         createdAt: Value(DateTime.now()),
         userId: const Value('user-1'),
       ));
 
-      final inbox = <List<Todo>>[];
       final next = <List<Todo>>[];
-      final subInbox = db.inboxDao.watchInbox().listen(inbox.add);
       final subNext = db.todoDao.watchNext().listen(next.add);
-      addTearDown(() async {
-        await subInbox.cancel();
-        await subNext.cancel();
-      });
+      addTearDown(() => subNext.cancel());
 
-      // Initial state: the item is in the Inbox, nothing on Next.
-      await _waitUntil(() => inbox.isNotEmpty && next.isNotEmpty);
-      expect(inbox.last.map((t) => t.id), ['t1']);
+      // Initial state: nothing on Next (the row is still unclarified).
+      await _waitUntil(() => next.isNotEmpty);
       expect(next.last, isEmpty);
 
       // PROCESS TO → Next Action from the Clarify card.
@@ -145,12 +147,9 @@ void main() {
 
       // The write persisted (trigger wrote todos_data), but on `main` the view
       // UPDATE reports changes()==0 and the bridge only names `todos_data`, so
-      // without the fix these waits time out — the stale condition from #342.
+      // without the fix this wait times out — the stale condition from #342.
       await _waitUntil(() => next.last.length == 1);
       expect(next.last.map((t) => t.id), ['t1']);
-
-      await _waitUntil(() => inbox.last.isEmpty);
-      expect(inbox.last, isEmpty);
     },
   );
 }

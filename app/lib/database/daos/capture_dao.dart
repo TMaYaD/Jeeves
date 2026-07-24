@@ -1,5 +1,5 @@
 /// DAO for Captures — the Inbox is `captures` with `clarified_at IS NULL`
-/// (ADR-0006). Absorbs the reads the old [InboxDao] performed against
+/// (ADR-0006). Owns the Inbox reads that once ran against
 /// `todos WHERE clarified = false`, plus the Capture↔Outcome provenance links
 /// and Capture tag-hint reads/writes.
 ///
@@ -78,7 +78,7 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
 
   /// Stream of Inbox captures (`clarified_at IS NULL`), newest first. When
   /// [tagIds] is non-empty only captures carrying **all** those tag hints are
-  /// returned (AND semantics), mirroring the old [InboxDao] tag filter.
+  /// returned (AND semantics).
   Stream<List<Capture>> watchInbox({Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return (select(captures)
@@ -104,7 +104,7 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   }
 
   /// Emits true as soon as any capture exists (Inbox or clarified). Feeds the
-  /// onboarding first-launch collapse alongside `InboxDao.watchHasTodos`.
+  /// onboarding first-launch collapse (see also [watchHasAnyItem]).
   Stream<bool> watchHasCaptures() =>
       (select(captures)..limit(1)).watch().map((rows) => rows.isNotEmpty);
 
