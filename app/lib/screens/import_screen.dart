@@ -95,7 +95,9 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
       backgroundColor: const Color(0xFFF9FAFB),
       floatingActionButton: const CaptureFab(),
       body: ListView(
-        padding: const EdgeInsets.all(24),
+        // bottom: 96 clears the global capture FAB (#458) so the import
+        // summary/error tail scrolls clear of it rather than under it.
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 96),
         children: [
           _FormatInfoCard(
             icon: Icons.table_chart_outlined,

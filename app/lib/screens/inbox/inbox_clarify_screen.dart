@@ -298,7 +298,9 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   Widget _buildNToM(Capture capture) {
     return ListView(
       physics: const ClampingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+      // bottom: 96 clears the global capture FAB (#458) floating over the
+      // bottom-right of this scroll view.
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
       children: [
         CaptureOutcomesSection(
           capture: capture,
@@ -324,7 +326,9 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   Widget _buildOneToOne(Capture capture) {
     return ListView(
               physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              // bottom: 96 clears the global capture FAB (#458) floating over
+              // the bottom-right of this scroll view.
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
               children: [
                 // Clarifying question prompt
                 Container(

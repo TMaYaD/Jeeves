@@ -211,7 +211,8 @@ class _Results extends ConsumerWidget {
       // error still use the shared visuals while the hint stays put.
       emptyBuilder: (context) => _SearchEmptyState(queryText: queryText),
       dataBuilder: (_, results) => ListView(
-        padding: const EdgeInsets.only(bottom: 24),
+        // bottom: 96 clears the global capture FAB (#458).
+        padding: const EdgeInsets.only(bottom: 96),
         children: results.map((r) => SearchResultTile(result: r)).toList(),
       ),
     );

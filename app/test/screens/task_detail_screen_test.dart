@@ -161,6 +161,25 @@ void main() {
       expect(find.byType(CaptureFab), findsOneWidget);
     });
 
+    testWidgets('tail content clears the capture FAB at maximum scroll',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'task2c', title: 'My task');
+      final (widget, router) = _buildScreen(db, 'task2c', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'task2c');
+
+      // Drive the body scroll view to its end, so the footer sits as low as
+      // the layout ever lets it.
+      await tester.drag(find.text('NOTES'), const Offset(0, -600));
+      await tester.pump();
+
+      // The FAB floats over the bottom-right of the footer; DUE DATE is the
+      // last row in it, and must scroll clear rather than sit under the FAB.
+      expect(
+        tester.getRect(find.text('DUE DATE')).bottom,
+        lessThan(tester.getRect(find.byType(CaptureFab)).top),
+      );
+    });
+
     testWidgets('hides the Captured from section when there are no links',
         (tester) async {
       final todo = await _insertAt(db, id: 'prov0', title: 'Lone outcome');

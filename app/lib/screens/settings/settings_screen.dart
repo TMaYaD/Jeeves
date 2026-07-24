@@ -39,6 +39,9 @@ class SettingsScreen extends ConsumerWidget {
       body: ValueListenableBuilder<bool>(
         valueListenable: authStateNotifier,
         builder: (context, isAuthenticated, _) => ListView(
+        // bottom: 96 clears the global capture FAB (#458) so the last settings
+        // row scrolls clear of it rather than under it.
+        padding: const EdgeInsets.only(bottom: 96),
         children: [
           _sectionHeader('SYNC'),
           if (!isAuthenticated) ...[

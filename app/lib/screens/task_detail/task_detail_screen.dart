@@ -358,8 +358,13 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                 ),
                               ),
                               // Reminders, Due Date (at the literal bottom of the viewport or content)
+                              // bottom: 96 is the global capture FAB's (#458)
+                              // clearance: the FAB floats over the bottom-right
+                              // of this footer, so DUE DATE and the
+                              // "Captured from…" provenance below it need room
+                              // to sit clear of it rather than under it.
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                                padding: const EdgeInsets.fromLTRB(24, 20, 24, 96),
                                 decoration: const BoxDecoration(
                                   color: Color(0xFFF9FAFB),
                                   border: Border(top: BorderSide(color: Color(0xFFF3F4F6))),
