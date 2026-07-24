@@ -207,6 +207,9 @@ Lists that surface batchable actions enter a multi-select mode on **long-press**
 
 This pattern is used on Step 3 (Review Next Actions) of the Daily Planning ritual to add several Pending Review tasks to today's plan in one gesture; the bar there exposes "Add to Today" as the commit button.
 
+### Capacity bar — two-tone fill
+The Plan Summary capacity bar fills in two segments. Minutes from Outcomes with a real time estimate render in the load-status tone — green (`#16A34A`) at or below 0.8 of available time, amber (`#F59E0B`) up to 1.0, red (`#DC2626`) over — keyed off the *combined* ratio so the warn/over thresholds are unchanged. Minutes contributed by selected Outcomes that carry **no** estimate (counted at the configurable default, see REQUIREMENTS Daily Planning Step 5) render immediately after them as a lighter-blue segment (`#93C5FD`, Tailwind blue-300 — same family as the Daily Planning accent `#2563EB`). The lighter blue marks that provenance; the estimate-less cards themselves look exactly like any other card (no chip). When nothing is counted at the default the bar is a single status-tone fill, unchanged. The bar keeps its 10px height, 4px corner radius, and `#E5E7EB` track.
+
 ### Outcome peek sheet
 On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Pending Review, or Skipped) opens the **Outcome peek** — a read-only bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) surfacing the Outcome's fuller context: title, notes, energy, time estimate, due date, and time logged. It is read-only by construction (Text/icon rows only — no fields, pickers, or edit navigation) and writes nothing, so opening or dismissing it never selects, skips, or otherwise mutates the plan; the modal sits over the never-unmounted list, so scroll and selection are preserved on dismiss. Time logged is summed from the `time_logs` table, not the `time_spent_minutes` cursor.
 

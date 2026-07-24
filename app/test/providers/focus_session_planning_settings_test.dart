@@ -77,6 +77,25 @@ void main() {
       expect(settings.notificationEnabled, isTrue);
       expect(settings.bannerEnabled, isTrue);
       expect(settings.defaultSnoozeDuration, equals(60));
+      expect(settings.defaultTimeEstimate, equals(10));
+    });
+
+    test('setDefaultTimeEstimate persists and updates state', () async {
+      await container.read(syncedPreferencesProvider.future);
+      final notifier =
+          container.read(focusSessionPlanningSettingsProvider.notifier);
+      await notifier.setDefaultTimeEstimate(25);
+
+      expect(
+          container
+              .read(focusSessionPlanningSettingsProvider)
+              .defaultTimeEstimate,
+          equals(25));
+      expect(
+        container.read(syncedPreferencesProvider).asData!.value
+            .get<int>('focus_session_planning_settings_default_time_estimate'),
+        equals(25),
+      );
     });
 
     test('setBannerEnabled persists and updates state', () async {
