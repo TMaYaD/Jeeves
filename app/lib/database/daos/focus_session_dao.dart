@@ -7,6 +7,7 @@ import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../gtd_database.dart';
+import 'time_log_dao.dart';
 
 part 'focus_session_dao.g.dart';
 
@@ -480,6 +481,17 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
+  /// Explicit `todos` projection (alias `t`) shared by every Review-surface
+  /// query, with `time_spent_minutes` derived live from `SUM(time_logs)` —
+  /// the raw column is a dead cache and must not be surfaced (issue #480).
+  static final String _todoColumnsSql =
+      't.id, t.title, t.notes, t.priority, t.due_date, '
+      't.created_at, t.updated_at, t.done_at, t.clarified, t.intent, '
+      't.time_estimate, t.energy_level, t.capture_source, t.location_id, '
+      't.user_id, t.last_clarified_at, t.next_action_text, '
+      't.last_next_action_completion_at, '
+      '${TimeLogDao.totalMinutesSubquery('t.id')} AS time_spent_minutes';
+
   /// Reactive Review surface for the currently open session — the union of
   ///
   /// 1. Outcomes on the session's Plan (rows in [focus_session_tasks]), and
@@ -494,16 +506,20 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// Plan members are ordered by their [focus_session_tasks.position]; off-Plan
   /// engaged Outcomes follow, ordered by the start time of their earliest
   /// TimeLog for the session. Returns an empty list when no session is open.
+  ///
+  /// [Todo.timeSpentMinutes] on the surfaced rows is derived live from
+  /// `SUM(time_logs)` — the `todos.time_spent_minutes` column is a dead cache
+  /// with no write path and must not be surfaced (issue #480).
   Stream<List<Todo>> watchActiveSessionReviewSurface() {
     return customSelect(
-      'SELECT t.*, 0 AS surface_order, fst.position AS sort_key '
+      'SELECT $_todoColumnsSql, 0 AS surface_order, fst.position AS sort_key '
       'FROM todos t '
       'JOIN focus_session_tasks fst ON fst.task_id = t.id '
       'WHERE fst.focus_session_id = ('
       '  SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
       ') '
       'UNION ALL '
-      'SELECT t.*, 1 AS surface_order, '
+      'SELECT $_todoColumnsSql, 1 AS surface_order, '
       '       CAST(strftime(\'%s\', MIN(tl.started_at)) AS INTEGER) AS sort_key '
       'FROM todos t '
       'JOIN time_logs tl ON tl.task_id = t.id '
@@ -537,6 +553,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// Plan members are ordered by their [focus_session_tasks.position];
   /// off-Plan engaged Outcomes follow, ordered by the start time of their
   /// earliest TimeLog for the session. The list contains no duplicates.
+  /// [Todo.timeSpentMinutes] is derived live from `SUM(time_logs)`.
   Future<List<Todo>> getReviewSurface(String sessionId) async {
     final rows = await customSelect(
       // Plan members first (ordered by position), then off-Plan engaged
@@ -544,12 +561,12 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // GROUP BY on the engaged side de-duplicates Todos that have multiple
       // TimeLogs for the session.  The NOT EXISTS clause keeps Plan members
       // from appearing a second time in the engaged half of the UNION.
-      'SELECT t.*, 0 AS surface_order, fst.position AS sort_key '
+      'SELECT $_todoColumnsSql, 0 AS surface_order, fst.position AS sort_key '
       'FROM todos t '
       'JOIN focus_session_tasks fst ON fst.task_id = t.id '
       'WHERE fst.focus_session_id = ? '
       'UNION ALL '
-      'SELECT t.*, 1 AS surface_order, '
+      'SELECT $_todoColumnsSql, 1 AS surface_order, '
       '       CAST(strftime(\'%s\', MIN(tl.started_at)) AS INTEGER) AS sort_key '
       'FROM todos t '
       'JOIN time_logs tl ON tl.task_id = t.id '

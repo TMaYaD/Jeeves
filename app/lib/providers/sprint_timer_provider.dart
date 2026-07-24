@@ -269,7 +269,9 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
-  /// Records a completed sprint, logs time to the task, then starts the break.
+  /// Cancels the sprint's notifications and transitions the timer to the
+  /// break phase. Writes no record: time tracking is handled by TimeLog rows
+  /// (opened/closed on focus switches), not here.
   Future<void> completeSprint() async {
     if (state.isProcessing) return;
     state = state.copyWith(isProcessing: true);

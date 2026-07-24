@@ -494,6 +494,90 @@ void main() {
       expect(surface.length, 3, reason: 'X must not appear twice.');
     });
 
+    test(
+        'derives timeSpentMinutes from time_logs, ignoring the stale '
+        'todos.time_spent_minutes column (issue #480)', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      // Poison the column with a stale value: nothing has maintained it since
+      // transitionState was retired, so the query must not surface it.
+      await db.customStatement(
+          'UPDATE todos SET time_spent_minutes = 999 WHERE id = ?', ['X']);
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['X'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      // Two closed stints: 25 minutes + 10 minutes.
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('tl-X-1'),
+            userId: const Value(_userId),
+            taskId: const Value('X'),
+            startedAt:
+                Value(DateTime.utc(2026, 5, 1, 9, 30).toIso8601String()),
+            endedAt: Value(DateTime.utc(2026, 5, 1, 9, 55).toIso8601String()),
+            focusSessionId: Value(sessionId),
+          ));
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('tl-X-2'),
+            userId: const Value(_userId),
+            taskId: const Value('X'),
+            startedAt:
+                Value(DateTime.utc(2026, 5, 1, 10, 0).toIso8601String()),
+            endedAt: Value(DateTime.utc(2026, 5, 1, 10, 10).toIso8601String()),
+            focusSessionId: Value(sessionId),
+          ));
+
+      final surface =
+          await db.focusSessionDao.watchActiveSessionReviewSurface().first;
+      expect(surface.single.id, 'X');
+      expect(surface.single.timeSpentMinutes, 35,
+          reason: 'must be SUM(time_logs), not the dead cache column');
+    });
+
+    test(
+        'derived timeSpentMinutes spans all sessions, not just the open one '
+        '(cumulative, matching TimeLogDao.totalMinutesForTask)', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+
+      final priorId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['X'],
+        now: DateTime(2026, 4, 30, 9, 0),
+      );
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('tl-X-prior'),
+            userId: const Value(_userId),
+            taskId: const Value('X'),
+            startedAt:
+                Value(DateTime.utc(2026, 4, 30, 9, 30).toIso8601String()),
+            endedAt: Value(DateTime.utc(2026, 4, 30, 9, 50).toIso8601String()),
+            focusSessionId: Value(priorId),
+          ));
+      await db.focusSessionDao
+          .closeSession(sessionId: priorId, now: DateTime(2026, 4, 30, 17, 0));
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['X'],
+        now: DateTime(2026, 5, 1, 9, 0),
+      );
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('tl-X-today'),
+            userId: const Value(_userId),
+            taskId: const Value('X'),
+            startedAt:
+                Value(DateTime.utc(2026, 5, 1, 9, 30).toIso8601String()),
+            endedAt: Value(DateTime.utc(2026, 5, 1, 9, 45).toIso8601String()),
+            focusSessionId: Value(sessionId),
+          ));
+
+      final surface =
+          await db.focusSessionDao.watchActiveSessionReviewSurface().first;
+      expect(surface.single.timeSpentMinutes, 35,
+          reason: '20m from the prior session + 15m today');
+    });
+
     test('does not leak off-Plan engagement from a different (closed) session',
         () async {
       await _insertTodo(db, id: 'X', title: 'X');

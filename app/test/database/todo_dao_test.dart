@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +9,19 @@ import 'package:jeeves/models/todo.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
+
+Future<void> _waitUntil(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 8),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('condition not met within $timeout', timeout);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+}
 
 const _userId = 'test-user';
 
@@ -140,6 +155,46 @@ void main() {
 
       final items = await db.todoDao.watchPersonTagged().first;
       expect(items.any((t) => t.id == 'wn1'), isFalse);
+    });
+
+    test(
+        'watchPersonTaggedGrouped derives timeSpentMinutes from time_logs and '
+        're-emits when a log lands, ignoring the stale '
+        'todos.time_spent_minutes column (issue #480)', () async {
+      await _insertTodo(db, id: 'wg1', title: 'Grouped waiting');
+      await _insertPersonTag(db, id: 'pg1', name: 'Dave');
+      await db.tagDao.assignTag('wg1', 'pg1', _userId);
+      // Poison the dead cache column; the query must not surface it.
+      await db.customStatement(
+          'UPDATE todos SET time_spent_minutes = 999 WHERE id = ?', ['wg1']);
+
+      // Subscribe BEFORE inserting the log, so the second emission proves
+      // time_logs is in the watcher's readsFrom set — not just that the
+      // initial projection derives correctly.
+      final timeSpentMinutesEmissions = <int>[];
+      final subscription = db.todoDao
+          .watchPersonTaggedGrouped()
+          .map((grouped) => grouped.values.single.single.timeSpentMinutes)
+          .listen(timeSpentMinutesEmissions.add);
+      addTearDown(subscription.cancel);
+
+      await _waitUntil(() => timeSpentMinutesEmissions.isNotEmpty);
+      expect(timeSpentMinutesEmissions.last, 0,
+          reason: 'no logs yet — the poisoned cache column (999) must be '
+              'ignored');
+
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('tl-wg1'),
+            userId: const Value(_userId),
+            taskId: const Value('wg1'),
+            startedAt:
+                Value(DateTime.utc(2026, 5, 1, 9, 0).toIso8601String()),
+            endedAt: Value(DateTime.utc(2026, 5, 1, 9, 25).toIso8601String()),
+          ));
+
+      await _waitUntil(() => timeSpentMinutesEmissions.last == 25);
+      expect(timeSpentMinutesEmissions.last, 25,
+          reason: 'must be SUM(time_logs), not the dead cache column');
     });
 
     test('watchMaybe returns only intent=maybe todos (not done)', () async {

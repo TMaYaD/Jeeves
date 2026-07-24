@@ -6,6 +6,7 @@ import 'package:drift/drift.dart';
 import '../../models/todo.dart' show Intent, RoutingKind;
 import '../gtd_database.dart';
 import 'tag_dao.dart' show todoTagIdFor;
+import 'time_log_dao.dart' show TimeLogDao;
 
 part 'todo_dao.g.dart';
 
@@ -216,7 +217,10 @@ EXISTS (
       '  todos.done_at, todos.clarified, todos.intent, '
       '  todos.time_estimate, todos.energy_level, todos.capture_source, '
       '  todos.location_id, todos.user_id, '
-      '  todos.last_clarified_at, todos.time_spent_minutes, '
+      '  todos.last_clarified_at, '
+      // Derived live from SUM(time_logs); the raw column is a dead cache
+      // (issue #480).
+      '  ${TimeLogDao.totalMinutesSubquery('todos.id')} AS time_spent_minutes, '
       '  todos.next_action_text, todos.last_next_action_completion_at, '
       '  tg.id AS ptag_id, tg.name AS ptag_name, '
       '  tg.color AS ptag_color, tg.user_id AS ptag_user_id '
@@ -231,7 +235,7 @@ EXISTS (
         Variable('person'),
         Variable('next'),
       ],
-      readsFrom: {todos, todoTags, tags},
+      readsFrom: {todos, todoTags, tags, attachedDatabase.timeLogs},
     ).watch().map((rows) {
       final result = <Tag, List<Todo>>{};
       for (final row in rows) {
