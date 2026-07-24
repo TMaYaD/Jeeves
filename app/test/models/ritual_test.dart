@@ -3,7 +3,8 @@ import 'package:jeeves/models/ritual.dart';
 
 void main() {
   group('RitualPriority', () {
-    test('weeklyReview outranks dailyPlanning outranks eveningShutdown', () {
+    test('ritualsByPriority ranks weeklyReview > dailyPlanning > eveningShutdown, '
+        'sorted descending', () {
       expect(
         RitualId.weeklyReview.priority,
         greaterThan(RitualId.dailyPlanning.priority),
@@ -12,14 +13,8 @@ void main() {
         RitualId.dailyPlanning.priority,
         greaterThan(RitualId.eveningShutdown.priority),
       );
-    });
-
-    test('priorities are unique', () {
-      final priorities = RitualId.values.map((r) => r.priority).toSet();
-      expect(priorities.length, RitualId.values.length);
-    });
-
-    test('ritualsByPriority is sorted descending', () {
+      // The derived list reflects that ranking, sorted descending (strict
+      // ordering also proves the priorities are all distinct).
       for (var i = 0; i < ritualsByPriority.length - 1; i++) {
         expect(
           ritualsByPriority[i].priority,

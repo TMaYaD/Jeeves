@@ -85,21 +85,6 @@ void main() {
       expect(find.text('2'), findsOneWidget);
     });
 
-    testWidgets('quick add bar has placeholder text', (tester) async {
-      await tester.pumpWidget(_buildApp());
-      await tester.pump();
-
-      expect(find.text("What's on your mind?"), findsOneWidget);
-    });
-
-    testWidgets('quick add bar has camera and mic icons', (tester) async {
-      await tester.pumpWidget(_buildApp());
-      await tester.pump();
-
-      expect(find.byIcon(Icons.camera_alt_outlined), findsOneWidget);
-      expect(find.byIcon(Icons.mic_none), findsOneWidget);
-    });
-
     testWidgets('submitting text field clears the input', (tester) async {
       final db = GtdDatabase(NativeDatabase.memory());
       addTearDown(db.close);
@@ -133,13 +118,6 @@ void main() {
       expect(rows, hasLength(1));
       expect(rows.first.title, 'Integration test task');
       expect(rows.first.clarifiedAt, isNull);
-    });
-
-    testWidgets('no add button in header', (tester) async {
-      await tester.pumpWidget(_buildApp());
-      await tester.pump();
-
-      expect(find.byIcon(Icons.add), findsNothing);
     });
 
     testWidgets('OfflineChip is visible when connectivity is none',

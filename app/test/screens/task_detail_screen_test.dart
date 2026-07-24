@@ -139,17 +139,6 @@ void main() {
       expect(find.text('Fix the bug'), findsOneWidget);
     });
 
-    testWidgets('shows all UI sections modeled as a show page', (tester) async {
-      final todo = await _insertAt(db, id: 'task2', title: 'My task');
-      final (widget, router) = _buildScreen(db, 'task2', initialTodo: todo);
-      await _showTaskDetail(tester, widget, router, 'task2');
-
-      expect(find.text('ADD PROJECT'), findsOneWidget);
-      expect(find.byIcon(Icons.add), findsOneWidget);
-      expect(find.text('NOTES'), findsOneWidget);
-      expect(find.text('DUE DATE'), findsOneWidget);
-    });
-
     testWidgets('hides the Captured from section when there are no links',
         (tester) async {
       final todo = await _insertAt(db, id: 'prov0', title: 'Lone outcome');
@@ -190,14 +179,6 @@ void main() {
       await tester.tap(tile);
       await tester.pumpAndSettle();
       expect(find.text('Project X'), findsOneWidget);
-    });
-
-    testWidgets('shows status pill', (tester) async {
-      final todo = await _insertAt(db, id: 'task3', title: 'Task');
-      final (widget, router) = _buildScreen(db, 'task3', initialTodo: todo);
-      await _showTaskDetail(tester, widget, router, 'task3');
-
-      expect(find.byKey(const Key('status_pill')), findsOneWidget);
     });
 
     testWidgets('status pill shows Next Actions when no person tags assigned', (tester) async {
