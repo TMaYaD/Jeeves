@@ -11,10 +11,13 @@ GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 /// Inserts a clarified, non-done next-action task and returns its id.
 ///
-/// A non-blank [nextActionText] seeds **both** sides of the dual write: the
-/// cursor column *and* the matching `current` Action row, which is what the
-/// Actionless predicate actually reads (ADR-0001 story 3). Blank / whitespace
-/// text mints no Action row, mirroring the blank→NULL normalisation.
+/// A non-blank [nextActionText] also stamps the retired `next_action_text`
+/// cursor column, but that write is inert fixture noise — the column is
+/// neither read nor written by the app (ADR-0022). What the assertions below
+/// actually depend on is the matching `current` Action row this helper seeds
+/// alongside it, which is what the Actionless predicate reads (ADR-0001
+/// story 3). Blank / whitespace text mints no Action row, mirroring the
+/// blank→NULL normalisation.
 Future<String> _insertClarifiedTask(
   GtdDatabase db, {
   String? nextActionText,

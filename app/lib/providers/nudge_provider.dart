@@ -143,8 +143,7 @@ final nudgeVisibleProvider =
 
 /// Persists user actions on a Ritual's Nudge. Surfaces call into the
 /// notifier rather than mutating synced-prefs directly so all Nudge writes
-/// flow through one place — keeping the dual-write story (when added) and
-/// any future analytics in one location.
+/// flow through one place — keeping any future analytics in one location.
 class NudgeActions {
   NudgeActions(this._ref);
 

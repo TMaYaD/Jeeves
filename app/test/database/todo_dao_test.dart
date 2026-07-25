@@ -737,7 +737,7 @@ void main() {
     tearDown(() async => db.close());
 
     test('nextAction: clarified=true, intent=next, done_at=null, '
-        'next_action_text set when provided', () async {
+        'current Action set when provided', () async {
       // Start with an unclarified row to confirm clarified=true is enforced.
       await _insertTodo(db, id: 'r1', title: 'Task', clarified: false);
       await db.todoDao.applyRouting(
@@ -750,12 +750,13 @@ void main() {
       expect(row?.clarified, isTrue);
       expect(row?.intent, 'next');
       expect(row?.doneAt, isNull);
-      expect(row?.nextActionText, 'Buy milk');
+      expect((await db.actionDao.getCurrentAction('r1'))?.actionText,
+          'Buy milk');
       expect(row?.lastClarifiedAt, isNotNull);
     });
 
     test('waitingFor: clarified=true, intent=next, done_at=null, '
-        'next_action_text set when provided', () async {
+        'current Action set when provided', () async {
       await _insertTodo(db, id: 'r2', title: 'Task', clarified: false);
       await db.todoDao.applyRouting(
         'r2',
@@ -767,15 +768,13 @@ void main() {
       expect(row?.clarified, isTrue);
       expect(row?.intent, 'next');
       expect(row?.doneAt, isNull);
-      expect(row?.nextActionText, 'Wait for Alice');
+      expect((await db.actionDao.getCurrentAction('r2'))?.actionText,
+          'Wait for Alice');
     });
 
     test('maybe: clarified=true, intent=maybe, done_at=null, '
-        'next_action_text untouched', () async {
+        'current Action untouched', () async {
       await _insertTodo(db, id: 'r3', title: 'Task', clarified: false);
-      // Pre-set the next action through the live write path so "leave"
-      // semantics are confirmed at the Action grain too — the cursor column
-      // alone would prove nothing once it stops being read.
       await db.todoDao.setNextActionText('r3', 'preserved');
 
       await db.todoDao.applyRouting(
@@ -787,27 +786,25 @@ void main() {
       expect(row?.clarified, isTrue);
       expect(row?.intent, 'maybe');
       expect(row?.doneAt, isNull);
-      expect(row?.nextActionText, 'preserved');
       expect((await db.actionDao.getCurrentAction('r3'))?.actionText,
           'preserved',
           reason: 'routing to maybe leaves the current Action standing');
     });
 
-    test('done: clarified=true, done_at=now, intent left as-is, '
-        'next_action_text untouched', () async {
+    test('done: clarified=true, done_at=now, intent left as-is, and the '
+        'completion cascade never touches the legacy cursor', () async {
       await _insertTodo(db, id: 'r4', title: 'Task', clarified: false);
-      // Seed intent and next_action_text so we can confirm "leave". Deliberately
-      // an Actionless Outcome: this asserts what the *routing companion* writes,
-      // and `done` on an Outcome that has a current Action additionally runs the
-      // completion cascade (which flips the Action to `done` and clears the
-      // cursor) — that is `action_completion_test.dart`'s subject, not this
-      // matrix's.
+      // Seed a legacy cursor value as a pre-retirement client would have left
+      // it, plus a **real current Action** so `done` actually runs the
+      // completion cascade. With an Actionless Outcome the "cursor untouched"
+      // claim would hold for the wrong reason — no cascade would run at all.
       await (db.update(db.todos)..where((t) => t.id.equals('r4'))).write(
         const TodosCompanion(
           intent: Value('maybe'),
           nextActionText: Value('preserved'),
         ),
       );
+      await db.actionDao.setCurrentAction('r4', 'finish it');
 
       await db.todoDao.applyRouting(
         'r4',
@@ -818,7 +815,10 @@ void main() {
       expect(row?.clarified, isTrue);
       expect(row?.intent, 'maybe', reason: 'done leaves intent untouched');
       expect(row?.doneAt, isNotNull);
-      expect(row?.nextActionText, 'preserved');
+      expect(await db.actionDao.getCurrentAction('r4'), isNull,
+          reason: 'the cascade completed the current Action');
+      expect(row?.nextActionText, 'preserved',
+          reason: 'the retired cursor is neither read nor written (ADR-0022)');
     });
 
     test('trash: clarified=true, intent=trash, done_at=null', () async {
@@ -992,7 +992,7 @@ void main() {
 
       final row = await db.todoDao.getTodo('t3');
       expect(row?.intent, 'next');
-      expect(row?.nextActionText, 'Do it');
+      expect((await db.actionDao.getCurrentAction('t3'))?.actionText, 'Do it');
     });
 
     test('waitingFor → nextAction preserves person tags (orthogonality)',
@@ -1040,8 +1040,8 @@ void main() {
 
       final tagIds = await db.todoDao.getPersonTagIdsForTodo('t5');
       expect(tagIds, equals({'bob'}));
-      final row = await db.todoDao.getTodo('t5');
-      expect(row?.nextActionText, 'Ping Bob');
+      expect(
+          (await db.actionDao.getCurrentAction('t5'))?.actionText, 'Ping Bob');
     });
 
     test('non-waitingFor transitions leave person tags untouched', () async {

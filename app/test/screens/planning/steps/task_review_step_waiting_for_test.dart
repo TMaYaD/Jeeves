@@ -49,8 +49,9 @@ Future<String> _insertClarifiedTask(
     lastClarifiedAt:
         lastClarifiedAt != null ? Value(lastClarifiedAt) : const Value.absent(),
   ));
-  // Dual-write invariant: a non-blank phrase is an Action row too, which is
-  // what the Actionless predicate and the hint now read (ADR-0001 story 3).
+  // The cursor column above is retired by abandonment (ADR-0022) and inert;
+  // a non-blank phrase is an Action row too, which is what the Actionless
+  // predicate and the hint actually read (ADR-0001 story 3).
   await seedCurrentAction(
     db,
     outcomeId: id,

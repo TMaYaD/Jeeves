@@ -3,7 +3,7 @@
 ///
 /// Drives the real DAOs against an in-memory SQLite database (`actions` a real
 /// table). Covers the write path (the [TodoDao.updateFields] metadata
-/// dual-write, D3 Actionless-draft seeding of a birth Action, and the D4
+/// mirror, D3 Actionless-draft seeding of a birth Action, and the D4
 /// supersession mirror that keeps the sweep from resurrecting stale metadata)
 /// and the read path (the D2 COALESCE hydration: current Action's value, else
 /// the Outcome column — so Actionless and legacy stores fall through
@@ -92,7 +92,7 @@ void main() {
   });
   tearDown(() => db.close());
 
-  group('updateFields metadata dual-write (D1)', () {
+  group('updateFields metadata mirror (D1)', () {
     test('writes the current Action AND mirrors the Outcome columns; the '
         'hydrated read reflects the Action grain', () async {
       await _seedOutcome(db);
@@ -181,7 +181,7 @@ void main() {
         'Outcome column', () async {
       await _seedOutcome(db, energyLevel: 'low', timeEstimate: 10);
       // Insert a current Action whose metadata differs, bypassing the
-      // dual-write, to prove the read consults the Action first.
+      // mirror, to prove the read consults the Action first.
       await db.into(db.actions).insert(ActionsCompanion(
             id: const Value('a1'),
             outcomeId: const Value('o1'),

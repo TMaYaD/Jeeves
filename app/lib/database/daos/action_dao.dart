@@ -18,9 +18,9 @@
 /// (ADR-0001 story 4): finishing the current Action is an *engagement* signal,
 /// not a clarifying act (CONTEXT.md § Clarification), so it must leave
 /// `last_clarified_at` where it is — that is exactly what makes the Outcome owe
-/// a re-clarification the moment its Action is done. It still writes `todos`
-/// (the cursor clear), so its `todos` notification is unconditional rather than
-/// gated on `stamped`.
+/// a re-clarification the moment its Action is done. It writes nothing to
+/// `todos` at all, so its `todos` notification cannot be gated on `stamped`
+/// (always false here) and is issued unconditionally instead.
 ///
 /// Per **ADR-0018** supersession carries no linkage metadata: a superseded
 /// row's terminal timestamp is its `updated_at`, there is no `superseded_by_id`
@@ -52,31 +52,23 @@
 /// reorder / remove among the stamping micro-acts), except a no-op reorder
 /// (unchanged order writes nothing and does not stamp).
 ///
-/// **Cursor dual-write on every role transition is mandatory, not defensive**
-/// (until story 9 retires `next_action_text`). The startup sweep
-/// (`reconcileActionsWithCursorSteps`) treats the cursor as authoritative, so
-/// the invariant every primitive upholds is **blank cursor ⟺ no `current`
-/// row**, with a non-blank cursor holding exactly the current row's text:
-/// * a **promote** MUST set `todos.next_action_text` to the promoted text and
-///   mirror the promoted row's `energy_level` / `time_estimate` onto the cursor
-///   in the same transaction — else Pass B retires the new current as a phantom
-///   at next launch, and Pass A mode-1 would clobber the Action's metadata back
-///   from the stale cursor;
-/// * a **demote** MUST clear `todos.next_action_text` — else Pass A mode-3
-///   resurrects the demoted text as a fresh deterministic current row;
-/// * a **supersession** MUST write the cursor either way — the replacement's
-///   text when one is minted, NULL when the Action is abandoned outright. A
-///   surviving cursor over an abandoned Action is the same mode-3 drift the
-///   demote clear avoids, and here mode 3 can resurrect the very row that was
-///   just retired (its `superseded`-only guard explicitly permits that);
-/// * a **completion** MUST clear it too (see [completeCurrentAction]).
+/// **The `actions` table is the only grain.** No primitive here writes the
+/// legacy `todos.next_action_text` cursor, which is retired by abandonment —
+/// still declared and still replicated, but neither read nor written
+/// (ADR-0022, issue #479). A future contributor who "restores" a cursor write
+/// to keep the two sides agreeing would be re-introducing the second source of
+/// truth this model exists to remove.
 ///
-/// The dual-write choke points in [TodoDao] compose the current-Action
-/// primitives through the `apply*` transaction-body variants (package-internal),
-/// which run inside the caller's transaction and defer notification to the
-/// caller (so watchers never re-read pre-commit state) — see
-/// `TodoDao.setNextActionText` / `setNextActionTextIfActionless` /
-/// `applyRouting` / `deleteOutcome`.
+/// What primitives *do* still mirror onto `todos` is Action **metadata**
+/// (`energy_level` / `time_estimate`), which is a separate mechanism with a
+/// live reader: the per-field D2 COALESCE fallback. See
+/// [applySupersedeCurrentAction] and [_promoteRow].
+///
+/// The legacy one-field surfaces in [TodoDao] compose these primitives through
+/// the `apply*` transaction-body variants (package-internal), which run inside
+/// the caller's transaction and defer notification to the caller (so watchers
+/// never re-read pre-commit state) — see `TodoDao.setNextActionText` /
+/// `setNextActionTextIfActionless` / `applyRouting` / `deleteOutcome`.
 library;
 
 import 'package:drift/drift.dart';
@@ -118,8 +110,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// supersession; ADR-0018). Identical text with no differing metadata is a
   /// no-op (no write, no stamp, no notify).
   ///
-  /// Blank [text] is a caller error here — the dual-write shims route a blank
-  /// write through [clearCurrentAction] instead.
+  /// Blank [text] is a caller error here — the legacy one-field shims route a
+  /// blank write through [clearCurrentAction] instead.
   Future<void> setCurrentAction(
     String outcomeId,
     String text, {
@@ -147,7 +139,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   ///
   /// A `null` typed argument is "no change"; pass the matching `clear*` flag to
   /// null a nullable metadata column (same convention as [TodoDao.updateFields],
-  /// which drives this in the same transaction for the metadata dual-write).
+  /// which drives this in the same transaction for the metadata mirror).
   Future<void> editAction(
     String actionId, {
     String? text,
@@ -202,10 +194,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   }
 
   /// Make the Outcome Actionless: [supersedeCurrentAction] with no replacement.
-  /// Retires the current Action and clears `todos.next_action_text` in the same
-  /// transaction, so the Outcome is Actionless on both sides. No current row →
-  /// no-op (no stamp). This is the Action side of today's
-  /// `setNextActionText('')` blank→NULL normalisation.
+  /// Retires the current Action, so the Outcome carries none. No current row →
+  /// no-op (no stamp). This is the Action side of `setNextActionText('')`'s
+  /// blank→Actionless normalisation.
   Future<void> clearCurrentAction(String outcomeId, {DateTime? now}) =>
       supersedeCurrentAction(outcomeId, now: now);
 
@@ -215,11 +206,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   ///
   /// Deliberately does **not** stamp `Outcome.last_clarified_at`: completion is
   /// the engagement signal, not clarification, so the Outcome immediately
-  /// satisfies the re-clarify predicate. It does clear
-  /// `todos.next_action_text` in the same transaction — mandatory, not
-  /// defensive, because the startup sweep reads a non-blank cursor with no
-  /// current row as drift and would mint a fresh `current` Action, resurrecting
-  /// the Action the user just finished.
+  /// satisfies the re-clarify predicate. It writes nothing to `todos` at all.
   ///
   /// No-op on an Actionless Outcome, and idempotent: a replay finds no current
   /// row and writes nothing, so a completion can never produce two terminal
@@ -231,8 +218,12 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     );
     if (effect.changed) {
       attachedDatabase.notifyActionsViewWrite();
-      // The cursor clear writes `todos` without stamping, so this notification
-      // cannot ride on [ActionWriteEffect.stamped] — which is always false here.
+      // Deliberately notify the `todos` view even though this transaction no
+      // longer writes `todos` (the cursor clear is gone): the Outcome's own
+      // list membership changes when its Action completes, and two watchers
+      // list only `{todoTags, tags}` in `readsFrom`, so they would never see an
+      // `actions`-only notification. This cannot ride on
+      // [ActionWriteEffect.stamped], which is always false here (ADR-0010).
       attachedDatabase.notifyTodosViewWrite();
     }
     // Completing the Action closes its open TimeLog (issue #476); the `time_logs`
@@ -293,8 +284,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// Outcome already has a current Action — the caller must use
   /// [supersedeAndPromote] for the replacing variant, so no code path silently
   /// replaces a current (ADR-0004). No-op if the row is gone, is not `planned`,
-  /// or is already `current` (idempotent under double-tap / replay). Sets the
-  /// cursor per the promote dual-write rule and stamps.
+  /// or is already `current` (idempotent under double-tap / replay). Stamps.
   Future<void> promotePlannedAction(String actionId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final effect = await transaction(
@@ -306,8 +296,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// The "Replace current action" gesture: in one transaction retire the
   /// Outcome's current Action (`role='superseded'`, ADR-0018 — terminal time is
   /// `updated_at`, no linkage) and flip the `planned` [actionId] up to
-  /// `current`, writing the cursor per the promote dual-write rule. No-op if the
-  /// row is gone, already `current`, or not `planned`. Stamps once.
+  /// `current`. No-op if the row is gone, already `current`, or not `planned`.
+  /// Stamps once.
   Future<void> supersedeAndPromote(String actionId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final effect = await transaction(
@@ -319,8 +309,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// Demote the current Action [actionId] back into the planned queue at
   /// [position] (default 0 — front of the queue, the just-committed thought
   /// stays the most-likely next candidate), shifting the existing planned rows
-  /// down. Clears the cursor text per the demote dual-write rule. No-op if the
-  /// row is gone or is not `current`. Stamps.
+  /// down. No-op if the row is gone or is not `current`. Stamps.
   Future<void> demoteCurrentAction(
     String actionId, {
     int? position,
@@ -571,7 +560,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   // ---------------------------------------------------------------------------
   // Transaction-body variants — run inside the caller's transaction, never
   // notify (the caller notifies after its own commit). Used by the public
-  // wrappers above and by TodoDao's dual-write choke points.
+  // wrappers above and by TodoDao's writers, for which the `actions` table is
+  // the only grain — the `todos.next_action_text` cursor is retired by
+  // abandonment (ADR-0022) and is neither read nor written here.
   // ---------------------------------------------------------------------------
 
   Future<ActionWriteEffect> applySetCurrentAction(
@@ -721,18 +712,16 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         timeEstimate: newTimeEstimate,
         ts: ts,
       );
-      // Cursor dual-write (ADR-0001 story 7, D4): mirror the *replacement's*
-      // text + metadata onto the Outcome columns in this same transaction —
-      // not the superseded row's. This is mandatory, not defensive: the
-      // startup sweep repairs strictly cursor → actions, so a cursor still
-      // holding the retired Action's mirrored `energy_level` / `time_estimate`
-      // would let mode 1 copy that stale metadata back onto the fresh
-      // replacement at the next launch — exactly the inheritance the story
-      // forbids. Mirroring makes the subsequent sweep a no-op. The superseded
-      // row keeps its own frozen values (history is truthful).
+      // Metadata mirror (ADR-0001 story 7, D4): mirror the *replacement's*
+      // `energy_level` / `time_estimate` onto the Outcome columns in this same
+      // transaction — not the superseded row's. This is not cursor
+      // bookkeeping: the D2 read fallback is a per-field COALESCE over these
+      // columns, so leaving the retired Action's estimates behind would let
+      // them resurface against the fresh replacement — exactly the inheritance
+      // the story forbids. The superseded row keeps its own frozen values
+      // (history is truthful).
       await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
         TodosCompanion(
-          nextActionText: Value(newText),
           energyLevel: Value(newEnergyLevel),
           timeEstimate: Value(newTimeEstimate),
           updatedAt: Value(ts),
@@ -747,24 +736,13 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // A pure convergence with nothing to supersede and no replacement is repair,
     // not clarification — it must not stamp. Retiring a real current row or
     // minting a replacement is a clarifying act and stamps.
+    // The *abandon* arm — a retirement with nothing to succeed it — writes
+    // nothing to `todos` beyond the stamp below. It used to clear the cursor to
+    // stop the startup sweep resurrecting the retired Action; the sweep's
+    // adoption pass now mints only into an Outcome with **no `actions` rows at
+    // all**, and the `superseded` row this leaves behind is itself the guard
+    // (ADR-0022).
     final didMutate = current != null || hasReplacement;
-    if (didMutate && !hasReplacement) {
-      // Cursor dual-write: the replacement branch above already pointed the
-      // cursor at the new text, so this arm covers the *abandon* — a retirement
-      // with nothing to succeed it. Clearing is mandatory, not defensive: the
-      // startup sweep repairs strictly cursor → actions, so a cursor still
-      // holding the retired Action's text with no `current` row is drift it
-      // would "fix" by resurrecting the deterministic row (Pass A mode-3's
-      // `superseded` branch) or minting a fresh current — silently undoing the
-      // abandon at the next launch. Idempotent for the [TodoDao] choke points,
-      // which write the same NULL at the same `ts` before calling in.
-      await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
-        TodosCompanion(
-          nextActionText: const Value(null),
-          updatedAt: Value(ts),
-        ),
-      );
-    }
     if (didMutate) await _stampOutcome(outcomeId, ts);
     // A `time_logs` row was written iff the retired Action had an open log to
     // close (a non-null closedLog); the reopen, when it fires, rides on that.
@@ -796,15 +774,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // (issue #476), not at a later endFocus(). No reopen: a finished Action has
     // no successor to continue against (CONTEXT.md § Switching Actions).
     final closedLog = await _closeOpenLogFor(current.id, ts);
-    // Cursor dual-write: keep the cursor in agreement with the Action side
-    // (blank cursor ⟺ no current row) without stamping — see
-    // [completeCurrentAction].
-    await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
-      TodosCompanion(
-        nextActionText: const Value(null),
-        updatedAt: Value(ts),
-      ),
-    );
+    // Nothing is written to `todos`: completion must not stamp, and the cursor
+    // is retired (ADR-0022). The `done` row left behind is what stops the
+    // sweep's adoption pass minting a replacement. The caller still fires the
+    // `todos` view notification — see [completeCurrentAction].
     return (changed: true, stamped: false, logChanged: closedLog != null);
   }
 
@@ -971,14 +944,6 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
-    // Cursor dual-write: clearing the text keeps the sweep from resurrecting the
-    // demoted Action as a fresh deterministic current (Pass A mode-3).
-    await (update(todos)..where((t) => t.id.equals(row.outcomeId))).write(
-      TodosCompanion(
-        nextActionText: const Value(null),
-        updatedAt: Value(ts),
-      ),
-    );
     await _stampOutcome(row.outcomeId, ts);
     return (changed: true, stamped: true, logChanged: false);
   }
@@ -1039,9 +1004,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     }
   }
 
-  /// Flip [row] to `role='current'` (clearing `position`) and write the cursor
-  /// per the promote dual-write rule: text plus a mirror of the promoted row's
-  /// `energy_level` / `time_estimate`. Shared by [applyPromotePlannedAction] and
+  /// Flip [row] to `role='current'` (clearing `position`) and mirror the
+  /// promoted row's `energy_level` / `time_estimate` onto the Outcome so the D2
+  /// read fallback resolves to the newly-current Action rather than the one it
+  /// replaced. Shared by [applyPromotePlannedAction] and
   /// [applySupersedeAndPromote]; the caller stamps.
   Future<void> _promoteRow(Action row, DateTime ts) async {
     await (update(actions)..where((a) => a.id.equals(row.id))).write(
@@ -1053,7 +1019,6 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     );
     await (update(todos)..where((t) => t.id.equals(row.outcomeId))).write(
       TodosCompanion(
-        nextActionText: Value(row.actionText),
         energyLevel: Value(row.energyLevel),
         timeEstimate: Value(row.timeEstimate),
         updatedAt: Value(ts),

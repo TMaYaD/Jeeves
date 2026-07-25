@@ -878,10 +878,12 @@ void main() {
       final promoted = await currentRow();
       expect(promoted, isNotNull);
       expect(promoted!.actionText, 'second (edited)');
-      // Cursor dual-write landed.
+      // The legacy cursor is retired (ADR-0022): a promote writes the Action
+      // and nothing else. Nothing ever set the column on this Outcome.
       final todoAfterPromote =
           await tester.runAsync(() => db.todoDao.getTodo('plan1'));
-      expect(todoAfterPromote!.nextActionText, 'second (edited)');
+      expect(todoAfterPromote!.nextActionText, isNull,
+          reason: 'promote must not write the retired cursor');
       expect(find.byKey(const Key('plan_current_action')), findsOneWidget);
       expect((await stamp())!.isAfter(beforePromote!), isTrue,
           reason: 'promote stamps');
@@ -894,7 +896,8 @@ void main() {
       final todoAfterDemote =
           await tester.runAsync(() => db.todoDao.getTodo('plan1'));
       expect(todoAfterDemote!.nextActionText, isNull,
-          reason: 'demote clears the cursor');
+          reason: 'demote must not write the retired cursor either — the '
+              'demoted `planned` row is what stops the sweep resurrecting it');
 
       // Promote 'first' directly so a current exists for the replace path.
       rows = await plannedRows();
@@ -1047,8 +1050,8 @@ void main() {
       final todoAfterAbandon =
           await tester.runAsync(() => db.todoDao.getTodo('hist1'));
       expect(todoAfterAbandon!.nextActionText, isNull,
-          reason: 'abandon clears the cursor (PR #515) — the sweep must not '
-              'resurrect the abandoned Action');
+          reason: 'abandon writes no cursor (ADR-0022) — the `superseded` row '
+              'it leaves behind is what stops the sweep resurrecting it');
       expect((await stamp())!.isAfter(beforeAbandon ?? DateTime(2000)), isTrue,
           reason: 'abandon is a clarifying act and stamps');
 

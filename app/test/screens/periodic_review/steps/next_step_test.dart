@@ -47,9 +47,11 @@ Future<String> _insertNextActionTodo(
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
-  // The Action row is what the step reads (ADR-0001 story 3); it defaults to
-  // agreeing with the cursor, as the dual-write choke points guarantee, and a
-  // test can set [currentActionText] separately to prove which one is read.
+  // The Action row is what the step reads (ADR-0001 story 3); the cursor
+  // column is retired by abandonment (ADR-0022) and neither read nor written
+  // by the app, so this helper defaults the Action text to match it here as
+  // fixture setup only. A test can set [currentActionText] separately to
+  // prove which one is read.
   await seedCurrentAction(
     db,
     outcomeId: id,

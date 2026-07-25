@@ -52,13 +52,13 @@ final FutureProvider<ps.PowerSyncDatabase> powerSyncInstanceProvider =
   // and insert-before-delete, so it is safe on every launch.
   await migrateLocalInboxToCaptures(db);
 
-  // Reconcile Action rows against the authoritative next-action cursor before
-  // anything reads them (ADR-0001 story 2, issue #472). The #471 backfill was a
-  // one-time snapshot and old app versions keep editing cursors during the
-  // dual-write rollout, so the two can drift; this guarded, idempotent,
-  // cursor→actions sweep repairs the drift (stale text, phantom current rows,
-  // missing rows) without ever stamping `last_clarified_at`. Like the migration
-  // above it runs before any watcher exists, so it needs no view-notify.
+  // Repair the Action grain before anything reads it (ADR-0001 story 9, issue
+  // #479). Two narrow, monotone passes: converge an accidental multi-`current`
+  // set, and adopt a legacy `next_action_text` cursor into an Action **only**
+  // for an Outcome that has no `actions` rows at all — the #471 backfill's
+  // stragglers and rows written by a pre-retirement client. It never overwrites
+  // or retires an Action, and never stamps `last_clarified_at` (ADR-0012). Like
+  // the migration above it runs before any watcher exists, so no view-notify.
   await reconcileActionsWithCursor(db);
 
   // Bridge the current auth state to PowerSync's connection lifecycle.

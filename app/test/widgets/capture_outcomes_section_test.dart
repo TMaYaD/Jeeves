@@ -281,8 +281,9 @@ void main() {
         to: RoutingKind.nextAction,
         nextActionText: 'Clear the bench',
       );
-      // Skew the cursor the way a pre-dual-write client would: the Action row
-      // is untouched and stays the evidence the row renders (ADR-0001 story 3).
+      // Skew the retired cursor column directly (ADR-0022 — it is neither
+      // read nor written by the app): the Action row is untouched and stays
+      // the evidence the row renders (ADR-0001 story 3).
       await (db.update(db.todos)..where((t) => t.id.equals('o1'))).write(
         const TodosCompanion(nextActionText: Value('stale cursor phrase')),
       );

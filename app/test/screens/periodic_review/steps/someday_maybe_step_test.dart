@@ -118,7 +118,8 @@ void main() {
 
       final row = await db.todoDao.getTodo('sm1');
       expect(row?.intent, 'next');
-      expect(row?.nextActionText, 'Sketch the first draft');
+      expect((await db.actionDao.getCurrentAction('sm1'))?.actionText,
+          'Sketch the first draft');
 
       // The whole point of #293: a phrase-backed promotion does not land
       // the task actionless on the Next list, so it stays out of the daily

@@ -4,9 +4,10 @@
 /// Outcome have a current Action?" from the `actions` table, not from the
 /// `todos.next_action_text` cursor. These tests pin three things:
 ///
-/// * **Parity** — on a store seeded through the public (dual-writing) write
-///   paths, the new Action-grain predicates return exactly what the frozen
-///   cursor-grain clauses return.
+/// * **Parity** — on a store seeded through the public write paths (which
+///   write only the `actions` table; the cursor is retired by abandonment,
+///   ADR-0022), the new Action-grain predicates return exactly what the
+///   frozen cursor-grain clauses return.
 /// * **Entity grain** — only `role='current'` counts (a `planned` row is not
 ///   engageable, ADR-0004; a `superseded`-only Outcome is Actionless), and a
 ///   multi-current race resolves to the deterministic winner *in the read*
@@ -260,13 +261,24 @@ void main() {
   // Parity with the frozen cursor-grain clauses
   // ---------------------------------------------------------------------------
 
-  group('predicate parity on a dual-written store', () {
+  group('predicate parity with the legacy cursor semantics', () {
+    /// Writes the legacy cursor value the pre-retirement dual-write *would*
+    /// have left on [id]. Production no longer writes `next_action_text` at all
+    /// (ADR-0022), so the fixture has to supply it: without it the frozen
+    /// clauses below would read NULL everywhere and the comparison would be
+    /// vacuous rather than a parity check.
+    Future<void> mirrorLegacyCursor(String id, String? text) =>
+        (db.update(db.todos)..where((t) => t.id.equals(id)))
+            .write(TodosCompanion(nextActionText: Value(text)));
+
     /// Seeds one Outcome per interesting quadrant **through the public write
-    /// paths**, so the cursor column and the Action rows agree by construction.
+    /// paths** for the Action grain, with the legacy cursor mirrored alongside
+    /// so both grains describe the same store.
     Future<void> seedRepresentativeStore() async {
       // Actioned.
       await _seedOutcome(db, 'actioned', createdAt: _t0);
       await db.todoDao.setNextActionText('actioned', 'Book the venue');
+      await mirrorLegacyCursor('actioned', 'Book the venue');
 
       // Actionless.
       await _seedOutcome(db, 'actionless', createdAt: _t0);
@@ -279,11 +291,13 @@ void main() {
       await _seedOutcome(db, 'actioned-blocked', createdAt: _t0);
       await _attachPersonTag(db, 'actioned-blocked');
       await db.todoDao.setNextActionText('actioned-blocked', 'Chase Trixy');
+      await mirrorLegacyCursor('actioned-blocked', 'Chase Trixy');
 
-      // Whitespace-cleared — the blank→NULL normalisation on both sides.
+      // Whitespace-cleared — the blank→Actionless normalisation.
       await _seedOutcome(db, 'cleared', createdAt: _t0);
       await db.todoDao.setNextActionText('cleared', 'Temporary');
       await db.todoDao.setNextActionText('cleared', '   ');
+      await mirrorLegacyCursor('cleared', null);
 
       // Stale (worked on in a session after the last clarification).
       await _seedOutcome(db, 'stale',
@@ -291,6 +305,7 @@ void main() {
           lastClarifiedAt: _t0,
           lastNextActionCompletionAt: _t2);
       await db.todoDao.setNextActionText('stale', 'Keep going');
+      await mirrorLegacyCursor('stale', 'Keep going');
       await (db.update(db.todos)..where((t) => t.id.equals('stale'))).write(
         TodosCompanion(lastClarifiedAt: Value(_t0)),
       );

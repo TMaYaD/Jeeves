@@ -120,9 +120,9 @@ The contract: **every client-owned column must round-trip verbatim** through the
 | `title`, `notes`, `done_at`, `intent`, `priority`, `due_date`, `time_estimate`, `energy_level`, `capture_source` | client | round-trip via both schemas |
 | `clarified` | client | `false` = still in the Inbox; REST default `true` when omitted |
 | `last_clarified_at` | client | stamped per clarifying micro-act; drives the Stale predicate |
-| `next_action_text` | client | the next-action cursor; NULL = Actionless |
+| `next_action_text` | client | legacy next-action cursor. Retained and still replicated for old-client compatibility; the app neither reads nor writes it (ADR-0001 story 9, ADR-0022). Current-Action truth lives in `actions` |
 | `last_next_action_completion_at` | client | stamped when a focus session closes with the task non-done |
-| `time_spent_minutes` | client | dead denormalized cache — no live write path since PR I retired the `transitionState` recompute; time-spent is derived from `SUM(time_logs)` at read time (issue #480); still round-trips until retired (#470 story 9) |
+| `time_spent_minutes` | client | dead denormalized cache — no live write path since PR I retired the `transitionState` recompute; time-spent is derived from `SUM(time_logs)` at read time (issue #480). Retired on the same terms as `next_action_text`: retained and still round-tripped, never read or written |
 | `created_at` | client, server default when omitted | offline captures keep their true capture time |
 | `updated_at` | client | the server never stamps it |
 | `user_id` | **server** | derived from the JWT; any client-sent value is ignored by design |

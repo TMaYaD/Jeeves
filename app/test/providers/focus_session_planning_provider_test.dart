@@ -363,7 +363,8 @@ void main() {
 
       final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
-      expect(row.nextActionText, 'Test item',
+      expect((await db.actionDao.getCurrentAction(row.id))?.actionText,
+          'Test item',
           reason: 'the routed title becomes the Outcome next action');
     });
 
@@ -752,7 +753,9 @@ void main() {
       expect(state.currentStep, 2);
 
       final clarifiedOutcome = (await _outcomeOf(db, 'cap-1'))!;
-      expect(clarifiedOutcome.nextActionText, 'Draft the proposal',
+      expect(
+          (await db.actionDao.getCurrentAction(clarifiedOutcome.id))?.actionText,
+          'Draft the proposal',
           reason: 'sanity check: the capture really was clarified with a '
               'next action before Review Tasks was entered');
 
@@ -822,8 +825,9 @@ void main() {
         lastClarifiedAt: Value(clarifiedAt),
         lastNextActionCompletionAt: Value(completedAt),
       ));
-      // Dual-write invariant: the phrase is an Action row too — the grain the
-      // re-clarify predicate reads (ADR-0001 story 3).
+      // The cursor column above is inert (retired by abandonment, ADR-0022);
+      // the phrase is an Action row too — the grain the re-clarify predicate
+      // actually reads (ADR-0001 story 3).
       await seedCurrentAction(
         db,
         outcomeId: id,
@@ -877,8 +881,8 @@ void main() {
       expect(
           await db.todoDao.getNeedsReview(), isEmpty);
 
-      final todo = await db.todoDao.getTodo(id);
-      expect(todo?.nextActionText, 'Draft the proposal');
+      expect((await db.actionDao.getCurrentAction(id))?.actionText,
+          'Draft the proposal');
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
@@ -979,9 +983,8 @@ void main() {
 
       await notifier.markReviewItemWaitingFor(id);
 
-      final todo = await db.todoDao.getTodo(id);
-      expect(todo?.nextActionText, isNull,
-          reason: 'orthogonality: routing must not write next_action_text');
+      expect(await db.actionDao.getCurrentAction(id), isNull,
+          reason: 'orthogonality: routing must not mint a current Action');
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
@@ -1100,8 +1103,9 @@ void main() {
 
       final task = await db.todoDao.getTodo(id);
       expect(task?.intent, 'maybe');
-      expect(task?.nextActionText, 'Draft the brief',
-          reason: 'next_action_text must not be reverted when going to someday');
+      expect((await db.actionDao.getCurrentAction(id))?.actionText,
+          'Draft the brief',
+          reason: 'the current Action must not be reverted going to someday');
     });
   });
 
