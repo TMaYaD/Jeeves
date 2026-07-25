@@ -163,6 +163,31 @@ under the user's finger mid-transition — a double-tap must advance exactly
 one step. This absorption is part of the Wizard contract, owned by the
 `Wizard` widget itself.
 
+### Ceremony intro step — the duration-estimate briefing
+The Daily Planning and Weekly Review wizards open on a shared intro step
+(`app/lib/widgets/ceremony/intro_step.dart`) that sets expectations before the
+numbered steps. It is a real first `PageView` step but is **excluded from the
+progress-segment count** via `Wizard.leadingNonProgressSteps`: on the intro the
+segmented bar renders empty and the "Step N of M" narration is suppressed
+(the step passes an explicit empty subtitle), so the working steps still read
+"1 of 5" / "1 of 4". Its title is neutral UI ("Before we begin"); the persona
+lives in the body.
+
+The body is a single Jeeves-speak sentence (§ Voice) with the time estimate
+rendered **inline** as a bold, larger, accent-coloured run — the scannable
+focal point sits inside the sentence, not stacked above it. The estimate is an
+approximation: 2 minutes per item to be walked, plus a flat 5 for Daily
+Planning's Energy/Time check-ins and selection (Weekly Review adds no flat),
+rounded up to the nearest 5 and floored at 5 so a zero-item ceremony reads
+"about 5 minutes", never "0". At zero items the copy switches to a shared
+light-day pool. Copy is drawn once per performance from a seedable pool (the
+`elapsed_timer_widget.dart` / `onboarding_card.dart` idiom). The proceed
+control rides the standard footer's fixed slot but carries a **Bertie-speak**
+label (`WizardFooter.nextLabel`, e.g. "Right ho", "Tinkerty-tonk") — the user
+answering Jeeves — and is always enabled; the label shrinks-to-fit rather than
+truncate. System back on the intro exits the ceremony (it is the first step);
+back from the first item of the following step returns to the intro.
+
 ### Terminal verdicts share the slot the destinations vacate
 Where a surface collects routing destinations *and* one terminal verdict, the
 verdict occupies the slot a withheld destination leaves behind, laid out by
