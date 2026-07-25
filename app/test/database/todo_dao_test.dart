@@ -339,12 +339,14 @@ void main() {
           reason: 'actionless+PersonBlocked excluded from filtered Next too');
     });
 
-    test('empty next_action_text (whitespace) counts as actionless', () async {
-      // Defensive: a Todo whose next_action_text is whitespace-only is
-      // effectively actionless; setNextActionText normalises to NULL but
-      // a direct write could leak in. The predicate should treat
-      // TRIM(next_action_text) = '' the same as NULL, mirroring the
-      // actionless branch in _needsReviewWhere.
+    test('a whitespace-only cursor leaked in by a direct write mints no Action, '
+        'so the Outcome stays actionless', () async {
+      // A straggler client can still PATCH todos.next_action_text directly.
+      // Membership of Next is decided at the Action grain (an `actions` row
+      // with role='current'), so a leaked whitespace cursor must leave the
+      // Outcome actionless — blank text is unrepresentable as an Action
+      // (ActionDao rejects it), which is the same normalisation
+      // setNextActionText applies.
       final now = DateTime.now();
       await db.into(db.todos).insert(TodosCompanion(
         id: const Value('q4w'),
@@ -358,10 +360,21 @@ void main() {
       await _insertPersonTag(db, id: 'q4w-eve', name: 'Eve');
       await db.tagDao.assignTag('q4w', 'q4w-eve', _userId);
 
-      final items = await db.todoDao.watchNext().first;
-      expect(items.any((t) => t.id == 'q4w'), isFalse,
-          reason:
-              'whitespace next_action_text + person-tag treated as actionless');
+      // Positive control, so the exclusion below cannot pass vacuously: the
+      // same shape with a real current Action *is* on Next.
+      await _insertTodo(db, id: 'q2w', title: 'Real action, person-blocked');
+      await db.todoDao.setNextActionText('q2w', 'Call Eve');
+      await _insertPersonTag(db, id: 'q2w-eve', name: 'Eve-2');
+      await db.tagDao.assignTag('q2w', 'q2w-eve', _userId);
+
+      expect(await db.actionDao.getCurrentAction('q4w'), isNull,
+          reason: 'a whitespace cursor mints no Action');
+
+      final ids = (await db.todoDao.watchNext().first).map((t) => t.id).toSet();
+      expect(ids, isNot(contains('q4w')),
+          reason: 'whitespace cursor + person-tag stays actionless');
+      expect(ids, contains('q2w'),
+          reason: 'the control proves the exclusion is not vacuous');
     });
   });
 
@@ -760,9 +773,10 @@ void main() {
     test('maybe: clarified=true, intent=maybe, done_at=null, '
         'next_action_text untouched', () async {
       await _insertTodo(db, id: 'r3', title: 'Task', clarified: false);
-      // Pre-set next_action_text so we can confirm "leave" semantics.
-      await (db.update(db.todos)..where((t) => t.id.equals('r3')))
-          .write(const TodosCompanion(nextActionText: Value('preserved')));
+      // Pre-set the next action through the live write path so "leave"
+      // semantics are confirmed at the Action grain too — the cursor column
+      // alone would prove nothing once it stops being read.
+      await db.todoDao.setNextActionText('r3', 'preserved');
 
       await db.todoDao.applyRouting(
         'r3',
@@ -774,12 +788,20 @@ void main() {
       expect(row?.intent, 'maybe');
       expect(row?.doneAt, isNull);
       expect(row?.nextActionText, 'preserved');
+      expect((await db.actionDao.getCurrentAction('r3'))?.actionText,
+          'preserved',
+          reason: 'routing to maybe leaves the current Action standing');
     });
 
     test('done: clarified=true, done_at=now, intent left as-is, '
         'next_action_text untouched', () async {
       await _insertTodo(db, id: 'r4', title: 'Task', clarified: false);
-      // Seed intent and next_action_text so we can confirm "leave".
+      // Seed intent and next_action_text so we can confirm "leave". Deliberately
+      // an Actionless Outcome: this asserts what the *routing companion* writes,
+      // and `done` on an Outcome that has a current Action additionally runs the
+      // completion cascade (which flips the Action to `done` and clears the
+      // cursor) — that is `action_completion_test.dart`'s subject, not this
+      // matrix's.
       await (db.update(db.todos)..where((t) => t.id.equals('r4'))).write(
         const TodosCompanion(
           intent: Value('maybe'),

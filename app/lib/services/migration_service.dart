@@ -306,21 +306,50 @@ Future<int> carveOutLocalInbox({
   return pending.length;
 }
 
-/// Reconcile the `actions` table against the authoritative next-action cursor
-/// (`todos.next_action_text` + the `energy_level` / `time_estimate` cursor
-/// fields), discharging the #471 backfill drift obligation and repairing the
-/// ongoing old-client replay window (ADR-0001 story 2, issue #472).
+/// Repair the `actions` table at startup, in the only two ways that can never
+/// destroy Action-grain truth (ADR-0001 story 9, issue #479).
 ///
-/// The #471 backfill was a one-time snapshot: every cursor edit after it — and
-/// every `PATCH todos.next_action_text` an old app version replays during the
-/// dual-write rollout — strands the Action row in one of three drift modes.
-/// This sweep repairs them, always in the direction **cursor → actions** (the
-/// cursor stays authoritative for reads until story 3). It is a
-/// clarification-neutral repair: it **never** stamps `last_clarified_at`
-/// (ADR-0012 spirit — never auto-stamp on drift), and it is idempotent and safe
-/// on every launch. Runs from [powerSyncInstanceProvider] right after
-/// [migrateLocalInboxToCaptures], before any watcher exists, so — like the v26
-/// backfill — it needs no view-notify.
+/// The sweep is deliberately **monotone**: across a run, `COUNT(*) FROM
+/// actions` never decreases and no existing row's `text` is ever rewritten. It
+/// does exactly two things, in order:
+///
+/// 1. [convergeMultiCurrentActions] — **cursor-free and permanent.** The
+///    0..1-`current`-per-Outcome invariant is app-enforced, not indexed, so a
+///    cross-device race can sync in two `current` rows. This pass retires the
+///    losers by the same deterministic winner rule the writers use
+///    (`ActionDao._winnerFirst`), so every device collapses to the same row.
+/// 2. [adoptCursorsWithoutActions] — **cursor-dependent, mint-only.** Mints the
+///    deterministic-id `current` Action (ADR-0019) for a **live** Outcome
+///    (`done_at IS NULL` — completion is the one transition that terminates
+///    Actions) carrying a non-blank legacy
+///    `todos.next_action_text` cursor **and no `actions` rows
+///    at all**. This is the last thing the cursor is still good for: adopting
+///    an Outcome that a pre-Action client created and this device has never
+///    seen an Action for. It dies with the columns.
+///
+/// **Two earlier arms were deleted, and must not come back.** The sweep used to
+/// treat the cursor as authoritative: one arm overwrote a `current` Action's
+/// text and metadata from the cursor, and another retired *every* `current`
+/// Action whose Outcome had a blank cursor. Both were consistent only for as
+/// long as every write path dual-wrote the cursor; the moment the cursor stops
+/// being written they become weapons — the first reverts every Action edit at
+/// the next launch, the second retires every current Action on the device.
+/// Reviving either would also re-introduce the hazard that a sweep-retired
+/// Action strands its open `time_logs` row (the sweep runs no termination hook).
+///
+/// The adoption pass never overwrites and never retires, which is what makes it
+/// safe to keep: it cannot resurrect an Action the user abandoned, and it cannot
+/// revert an edit. The deliberate cost is that a cursor edit arriving from a
+/// pre-retirement client is silently ignored on an Outcome that already has
+/// Action rows — losing a stale client's edit is preferred to letting it clobber
+/// Action-grain history.
+///
+/// Both passes are clarification-neutral: they **never** stamp
+/// `last_clarified_at` (ADR-0012 — never auto-stamp on drift). The whole sweep
+/// is idempotent, so the steady state is two reads and no writes at all. It runs
+/// from [powerSyncInstanceProvider] right after [migrateLocalInboxToCaptures],
+/// before any watcher exists, so — like the v26 backfill — it needs no
+/// view-notify.
 Future<int> reconcileActionsWithCursor(ps.PowerSyncDatabase db) async {
   var repaired = 0;
   await db.writeTransaction((tx) async {
@@ -332,192 +361,295 @@ Future<int> reconcileActionsWithCursor(ps.PowerSyncDatabase db) async {
   return repaired;
 }
 
-/// The reconciliation itself, expressed over a transaction's read/write pair so
-/// the exact SQL can be driven against a real SQLite database in tests (see
-/// `reconcile_actions_sweep_test.dart`) — PowerSync only supplies the
-/// transaction. Callers must already be inside a write transaction.
-///
-/// Returns the number of Action rows written (minted, updated, resurrected, or
-/// retired) — used only as a signal in tests.
-/// How many ids the sweep binds into a single `IN (...)` lookup — well under
-/// SQLite's most conservative `SQLITE_MAX_VARIABLE_NUMBER` (999).
-const _sweepIdChunk = 500;
+/// A transaction's read/write pair, the seam every sweep pass is expressed over
+/// so the exact SQL that runs in production can also be driven against a real
+/// SQLite database in tests (see `reconcile_actions_sweep_test.dart`) —
+/// PowerSync only supplies the transaction.
+typedef SweepQuery = Future<List<Map<String, Object?>>> Function(
+    String, List<Object?>);
+typedef SweepExec = Future<void> Function(String, List<Object?>);
 
+/// Both passes, in order. Callers must already be inside a write transaction.
+///
+/// Returns the number of Action rows written (minted or retired) — used only as
+/// a signal in tests. A steady-state store returns 0.
 Future<int> reconcileActionsWithCursorSteps({
-  required Future<List<Map<String, Object?>>> Function(String, List<Object?>)
-      query,
-  required Future<void> Function(String, List<Object?>) exec,
+  required SweepQuery query,
+  required SweepExec exec,
   DateTime? now,
 }) async {
   final ts = (now ?? DateTime.now()).toUtc();
-  final tsIso = ts.toIso8601String();
+  // Convergence first: adoption only mints into an Outcome with no `actions`
+  // rows at all, so the order is not load-bearing — but leaving a multi-current
+  // set standing while another pass runs would make the run's reported count
+  // depend on interleaving.
+  return await convergeMultiCurrentActions(
+        query: query,
+        exec: exec,
+        now: ts,
+      ) +
+      await adoptCursorsWithoutActions(query: query, exec: exec, now: ts);
+}
+
+/// **Cursor-free, permanent.** Retire the losers of any accidental
+/// multi-`current` set, keeping the winner by greatest `COALESCE(updated_at,
+/// created_at)`, tie-break smallest `id` — the same rule `ActionDao._winnerFirst`
+/// applies on every write and every read, so all devices converge on one row.
+///
+/// This is a genuine Action-grain repair and has nothing to do with the legacy
+/// cursor: it visits **any** Outcome holding more than one `current` row,
+/// whatever `todos.next_action_text` says (it used to ride the cursor join, so
+/// a cursorless Outcome's race went unrepaired forever). Retire, never delete —
+/// the ADR-0018 history chain is the point.
+///
+/// Convergence is repair, not clarification: it never stamps.
+///
+/// One read in the steady state: the `HAVING COUNT(*) > 1` subquery returns
+/// nothing, so the outer query returns no rows and no write fires.
+Future<int> convergeMultiCurrentActions({
+  required SweepQuery query,
+  required SweepExec exec,
+  DateTime? now,
+}) async {
+  final tsIso = (now ?? DateTime.now()).toUtc().toIso8601String();
   var repaired = 0;
 
-  // Pass A — outcomes with a live cursor: mint / update / resurrect so exactly
-  // one `current` Action matches the cursor.
+  // Winner-first *within* each Outcome, so per Outcome the first row is the
+  // keeper and every further row is a loser. Rows for an Outcome arrive
+  // contiguous, and insertion order into the grouping below is the convergence
+  // order.
   //
-  // The pass reads the whole set in two statements, not two per Outcome: it
-  // runs inside the startup write transaction that blocks initialization, so
-  // read cost must not scale with the number of actionable Outcomes. The join
-  // below pairs every cursor-bearing Outcome with its `current` Actions,
-  // winner-first *within* each Outcome (greatest COALESCE(updated_at,
-  // created_at), tie-break smallest id) — so per Outcome the first row is the
-  // keeper, any further rows are multi-current losers, and a lone row with a
-  // NULL action id is the mode-3 "missing row" case. Writes stay per-row
-  // because they only fire on genuine drift: the steady state — every launch
-  // after the repairing one — is two reads and no writes at all.
-  final joined = await query(
+  // `outcome_id IS NOT NULL` is belt-and-braces, and deliberately kept.
+  // On-device `actions` is a PowerSync view over JSON and carries none of
+  // Drift's NOT NULL constraints, so a **legacy locally-written** row can hold
+  // a NULL `outcome_id`: an app version whose PowerSync schema predated the
+  // column stores no such key, and `json_extract` yields NULL for it. A *peer*
+  // cannot deliver one — `actions.outcome_id` is `nullable=False` on the
+  // backend (`backend/app/todos/models.py`) and the bucket is
+  // `SELECT * FROM actions WHERE user_id = bucket.user_id`, so the server
+  // rejects the row before it could ever replicate. The `as String` read below
+  // would throw on a NULL, inside the startup write transaction. Today the
+  // `IN` subquery already excludes those rows for free (`NULL IN (...)` is
+  // NULL, never true), so the clause changes no behaviour; it is here so the
+  // guarantee survives a future rewrite of the subquery into a JOIN, where
+  // three-valued logic would no longer save us.
+  final contested = await query(
+    '''
+    SELECT a.outcome_id AS outcome_id, a.id AS action_id
+    FROM actions a
+    WHERE a.role = 'current'
+      AND a.outcome_id IS NOT NULL
+      AND a.outcome_id IN (
+        SELECT outcome_id FROM actions
+        WHERE role = 'current'
+        GROUP BY outcome_id
+        HAVING COUNT(*) > 1
+      )
+    ORDER BY a.outcome_id ASC,
+             COALESCE(a.updated_at, a.created_at) DESC,
+             a.id ASC
+    ''',
+    [],
+  );
+
+  final byOutcome = <String, List<Object?>>{};
+  for (final row in contested) {
+    (byOutcome[row['outcome_id'] as String] ??= []).add(row['action_id']);
+  }
+
+  for (final ids in byOutcome.values) {
+    for (final loserId in ids.skip(1)) {
+      await exec(
+        "UPDATE actions SET role = 'superseded', updated_at = ? WHERE id = ?",
+        [tsIso, loserId],
+      );
+      repaired++;
+    }
+  }
+
+  return repaired;
+}
+
+/// **Cursor-dependent, mint-only, monotone.** Mint the deterministic-id
+/// `current` Action for every **live** Outcome that carries a non-blank legacy
+/// `todos.next_action_text` **and has no `actions` rows at all**.
+///
+/// "Live" is `done_at IS NULL`, and nothing more. Completion is the only
+/// lifecycle transition that *terminates* Actions, so it is the only one that
+/// makes minting incoherent:
+///
+/// * **Completed** Outcomes are excluded because completion *terminates* the
+///   current Action (ADR-0001 story 4 — `applyCompleteCurrentAction`), so a
+///   `current` row on a `done_at`-bearing Outcome is a state no write path can
+///   produce. Pre-Action clients cleared `done_at` and the cursor
+///   independently, so without the filter every task the user ever finished
+///   with a next-action phrase still on it would grow a live Action at launch.
+/// * **Trashed** Outcomes (`intent = 'trash'`) are deliberately **kept**, and
+///   the asymmetry with Completed is the whole reason: trashing is *not* an
+///   Action-terminating transition. `TodoDao.applyRouting`'s `trash` arm leaves
+///   the Outcome's Action rows exactly as they were, so a trashed Outcome
+///   legitimately carries a `current` Action here. Skipping one would not be
+///   neutral either — adoption is a one-shot rescue that dies with the cursor
+///   columns, trash has no expiry (`TodoDao.watchTrash` is unbounded, and
+///   there is deliberately no purge affordance), and restore is a one-tap flow,
+///   so a skipped Outcome would come back Actionless where it used to come back
+///   carrying the next action the user wrote. Nor is minting a resurrection:
+///   every GTD list surface gates on `intent IN ('next', 'maybe')`, so the row
+///   changes no list, no count and no badge until the user restores the
+///   Outcome themselves. The v26 / Alembic 0028 backfills this pass continues
+///   filter neither `intent` nor `done_at`, so a migrated store already holds
+///   exactly these rows; excluding trash here would only make a never-migrated
+///   device diverge from a migrated one at the same deterministic id.
+/// * **Someday/Maybe** (`intent = 'maybe'`) is deliberately **kept**.
+///   `TodoDao.applyRouting`'s `maybe` arm leaves both the cursor and any
+///   existing Action rows untouched, so a maybe Outcome legitimately carries a
+///   `current` Action here; and adoption is a one-shot legacy rescue that dies
+///   with the columns, so skipping deferred Outcomes would silently lose their
+///   next-action text when the cursor is dropped.
+/// * **Waiting For** is likewise kept, and needs no clause of its own: in this
+///   codebase Waiting For *is* `intent = 'next'` plus a `Tag(type='person')`
+///   (`TodoDao.watchPersonTagged`), not a fourth intent.
+/// * **Unclarified** rows are kept for the same data-preservation reason. A
+///   minted row puts the Outcome on no list — the GTD surfaces gate on
+///   `clarified` and `intent`, not on Actions — but it is not invisible:
+///   `CaptureDao.watchCarvedOutcomes` projects the current Action's text with
+///   no lifecycle gate at all (its only predicate is
+///   `capture_outcomes.capture_id = ?`), so a capture-linked Outcome does show
+///   it on the carve-review screen. That is benign, and the reason the pass is
+///   safe rather than the reason it is hidden: the row renders exactly the text
+///   the cursor already held.
+///
+/// The `NOT EXISTS` guard is over *all* roles, not just `current`: an Outcome
+/// holding a `superseded`, `done` or `planned` row has already been spoken for
+/// at the Action grain, and the cursor has nothing to add. That guard is the
+/// whole safety property — it means this pass can never resurrect an abandoned
+/// Action, never revive a completed one, and never overwrite or retire anything.
+/// The cost is deliberate: an Outcome whose only Action was completed on another
+/// device will not regrow one here from a stale cursor.
+///
+/// The id is `backfillActionIdFor(outcomeId)` (ADR-0019), the same value the
+/// server's Alembic 0028 and every client's Drift v26 backfill compute, so two
+/// devices adopting the same Outcome independently upsert onto one row
+/// (ADR-0015) instead of minting divergent random-id `current` rows that would
+/// break the 0..1-current invariant on sync.
+///
+/// Energy / time come from the Outcome's draft columns, matching what
+/// `ActionDao.applySetCurrentAction` seeds into a birth Action (D3). Never
+/// stamps `last_clarified_at` — adopting a straggler's cursor is not a
+/// clarifying act (ADR-0012).
+/// How many candidate ids the adoption pass probes per `IN (...)` read. Well
+/// under SQLite's `SQLITE_MAX_VARIABLE_NUMBER` on every build the app ships
+/// against, so a large legacy store costs a handful of reads instead of a
+/// "too many SQL variables" throw at launch.
+const int _mintIdProbeChunkSize = 500;
+
+Future<int> adoptCursorsWithoutActions({
+  required SweepQuery query,
+  required SweepExec exec,
+  DateTime? now,
+}) async {
+  final tsIso = (now ?? DateTime.now()).toUtc().toIso8601String();
+  var repaired = 0;
+
+  // One statement: every live Outcome whose cursor still says something and
+  // whose Action-grain history is entirely empty. The `NOT EXISTS` over *all*
+  // roles is the safety guard (see the doc comment). Blank / whitespace-only
+  // cursors are Actionless by the app's own normalisation and mint nothing. In
+  // the steady state this is one read and no writes.
+  //
+  // `user_id IS NOT NULL` is a skip-don't-explode guard rather than a domain
+  // filter: on-device `todos` is a PowerSync view over JSON and carries none of
+  // Drift's NOT NULL constraints, so a **legacy locally-written** row can hold
+  // a NULL `user_id` — written by an app version whose PowerSync schema
+  // predated the column, where `json_extract` yields NULL. A *peer* cannot
+  // deliver one: `todos.user_id` is `nullable=False` on the backend
+  // (`backend/app/todos/models.py`) and the bucket is
+  // `SELECT * FROM todos WHERE user_id = bucket.user_id`, which a NULL could
+  // never match. Reading it back as a non-null `String` below would throw
+  // inside the startup write transaction and take the whole launch down;
+  // skipping the row leaves it exactly as it was, for a later launch to adopt
+  // once its `user_id` arrives.
+  final orphanCursors = await query(
     '''
     SELECT t.id AS outcome_id, t.user_id AS user_id,
            t.next_action_text AS cursor_text,
            t.energy_level AS cursor_energy,
-           t.time_estimate AS cursor_time,
-           a.id AS action_id, a.text AS action_text,
-           a.energy_level AS action_energy,
-           a.time_estimate AS action_time
+           t.time_estimate AS cursor_time
     FROM todos t
-    LEFT JOIN actions a ON a.outcome_id = t.id AND a.role = 'current'
-    WHERE t.next_action_text IS NOT NULL AND TRIM(t.next_action_text) != ''
-    ORDER BY t.id ASC, COALESCE(a.updated_at, a.created_at) DESC, a.id ASC
+    WHERE t.next_action_text IS NOT NULL
+      AND TRIM(t.next_action_text) != ''
+      AND t.user_id IS NOT NULL
+      AND t.done_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM actions a WHERE a.outcome_id = t.id
+      )
+    ORDER BY t.id ASC
     ''',
     [],
   );
+  if (orphanCursors.isEmpty) return 0;
 
-  // Regroup the join into one entry per Outcome. Rows for an Outcome arrive
-  // contiguous and winner-first, so insertion order is the convergence order.
-  final byOutcome = <String, List<Map<String, Object?>>>{};
-  for (final row in joined) {
-    (byOutcome[row['outcome_id'] as String] ??= []).add(row);
-  }
-
-  // Outcomes with no `current` Action at all — resolved against the
-  // deterministic backfill slot in one batched lookup below.
-  final missing = <Map<String, Object?>>[];
-
-  for (final rows in byOutcome.values) {
-    final keeper = rows.first;
-    if (keeper['action_id'] == null) {
-      missing.add(keeper);
-      continue;
-    }
-
-    // Converge any accidental multi-current set: retire all but the winner.
-    for (final loser in rows.skip(1)) {
-      await exec(
-        "UPDATE actions SET role = 'superseded', updated_at = ? WHERE id = ?",
-        [tsIso, loser['action_id']],
-      );
-      repaired++;
-    }
-
-    // Mode 1 — stale row: bring text + metadata in line with the cursor.
-    final differs = keeper['action_text'] != keeper['cursor_text'] ||
-        keeper['action_energy'] != keeper['cursor_energy'] ||
-        keeper['action_time'] != keeper['cursor_time'];
-    if (differs) {
-      await exec(
-        "UPDATE actions "
-        "SET text = ?, energy_level = ?, time_estimate = ?, updated_at = ? "
-        "WHERE id = ?",
-        [
-          keeper['cursor_text'],
-          keeper['cursor_energy'],
-          keeper['cursor_time'],
-          tsIso,
-          keeper['action_id'],
-        ],
-      );
-      repaired++;
-    }
-  }
-
-  // Mode 3 — missing row: mint or resurrect via the deterministic backfill id
-  // so independent devices converge on one row (ADR-0019 + ADR-0015 upsert).
-  // The occupancy of every deterministic slot is read in one chunked lookup
-  // rather than a `SELECT role FROM actions WHERE id = ?` per Outcome.
-  final detIdFor = {
-    for (final row in missing)
-      row['outcome_id'] as String: backfillActionIdFor(row['outcome_id'] as String),
+  // The id this pass would mint is `backfillActionIdFor(outcome_id)`, a uuid5
+  // computed in Dart (ADR-0019) — so the SELECT above cannot exclude a row
+  // whose *id* is already occupied, only one whose `outcome_id` matches. Those
+  // are different sets: an `actions` row with a NULL `outcome_id` (reachable on
+  // a legacy store, see the note above) satisfies the `NOT EXISTS` guard while
+  // still sitting on that primary key. A bare INSERT on top of it raises
+  // `SqliteException(1555): UNIQUE constraint failed: actions.id` inside the
+  // startup write transaction — the same launch-down failure class the
+  // `user_id` guard exists for. So read back which of the candidate ids are
+  // already present and skip those Outcomes.
+  //
+  // Skipping is the right resolution, not a fallback: this pass is mint-only
+  // and monotone, and the id is a pure function of the Outcome, so whatever
+  // already sits at that key *is* this Outcome's adoption. Overwriting it would
+  // be exactly the cursor-authoritative behaviour the sweep deleted.
+  //
+  // Not `INSERT OR IGNORE`: on-device `actions` is a view with an
+  // `INSTEAD OF INSERT` trigger, and an outer conflict clause's interaction
+  // with the trigger body is not something to rely on.
+  final mintIdByOutcomeId = {
+    for (final row in orphanCursors)
+      row['outcome_id'] as String:
+          backfillActionIdFor(row['outcome_id'] as String),
   };
-  final detRole = <String, Object?>{};
-  final detIds = detIdFor.values.toList();
-  for (var i = 0; i < detIds.length; i += _sweepIdChunk) {
-    final end = i + _sweepIdChunk;
-    final slice = detIds.sublist(i, end > detIds.length ? detIds.length : end);
-    final placeholders = List.filled(slice.length, '?').join(', ');
-    final rows = await query(
-      'SELECT id, role FROM actions WHERE id IN ($placeholders)',
-      slice,
+  final occupiedMintIds = <Object?>{};
+  final candidateMintIds = mintIdByOutcomeId.values.toList();
+  // Chunked so a legacy store with thousands of unadopted cursors cannot trip
+  // SQLITE_MAX_VARIABLE_NUMBER and throw at startup for a different reason.
+  for (var i = 0; i < candidateMintIds.length; i += _mintIdProbeChunkSize) {
+    final end = i + _mintIdProbeChunkSize < candidateMintIds.length
+        ? i + _mintIdProbeChunkSize
+        : candidateMintIds.length;
+    final chunk = candidateMintIds.sublist(i, end);
+    final present = await query(
+      'SELECT id FROM actions WHERE id IN (${List.filled(chunk.length, '?').join(', ')})',
+      chunk,
     );
-    for (final r in rows) {
-      detRole[r['id'] as String] = r['role'];
+    for (final row in present) {
+      occupiedMintIds.add(row['id']);
     }
   }
 
-  for (final row in missing) {
+  for (final row in orphanCursors) {
     final outcomeId = row['outcome_id'] as String;
-    final cursorText = row['cursor_text'];
-    final energy = row['cursor_energy'];
-    final time = row['cursor_time'];
-    final userId = row['user_id'] as String;
-    final detId = detIdFor[outcomeId]!;
-
-    if (!detRole.containsKey(detId)) {
-      await exec(
-        "INSERT INTO actions "
-        "(id, outcome_id, user_id, text, role, energy_level, time_estimate, "
-        "created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, 'current', ?, ?, ?, ?)",
-        [detId, outcomeId, userId, cursorText, energy, time, tsIso, tsIso],
-      );
-      repaired++;
-    } else if (detRole[detId] == 'superseded') {
-      // Resurrect the deterministic row — guarded on `superseded` so a future
-      // `done` row can never be revived. This also self-heals the transient
-      // both-superseded convergence race (two devices mutually retire under
-      // sync lag, leaving the outcome currentless while the cursor still holds
-      // text): the next startup sweep flips the deterministic row back.
-      await exec(
-        "UPDATE actions "
-        "SET role = 'current', text = ?, energy_level = ?, time_estimate = ?, "
-        "updated_at = ? "
-        "WHERE id = ? AND role = 'superseded'",
-        [cursorText, energy, time, tsIso, detId],
-      );
-      repaired++;
-    } else {
-      // The deterministic slot is held by a non-superseded (`done`) row —
-      // completion semantics are story 4. Honour the cursor with a fresh-id
-      // current row; cross-device convergence collapses any duplicates later
-      // via the winner rule. (Unreachable in story 2: nothing writes `done`.)
-      await exec(
-        "INSERT INTO actions "
-        "(id, outcome_id, user_id, text, role, energy_level, time_estimate, "
-        "created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, 'current', ?, ?, ?, ?)",
-        [ps.uuid.v4(), outcomeId, userId, cursorText, energy, time, tsIso, tsIso],
-      );
-      repaired++;
-    }
-  }
-
-  // Pass B — mode 2 phantom rows: cursor blank/NULL but a `current` Action
-  // survives. Retire (not delete): preserve the ADR-0018 history chain — a
-  // clear was semantically an abandon.
-  final phantoms = await query(
-    '''
-    SELECT a.id AS action_id
-    FROM actions a
-    JOIN todos t ON t.id = a.outcome_id
-    WHERE a.role = 'current'
-      AND (t.next_action_text IS NULL OR TRIM(t.next_action_text) = '')
-    ''',
-    [],
-  );
-  for (final p in phantoms) {
+    final mintId = mintIdByOutcomeId[outcomeId]!;
+    if (occupiedMintIds.contains(mintId)) continue;
     await exec(
-      "UPDATE actions SET role = 'superseded', updated_at = ? WHERE id = ?",
-      [tsIso, p['action_id']],
+      "INSERT INTO actions "
+      "(id, outcome_id, user_id, text, role, energy_level, time_estimate, "
+      "created_at, updated_at) "
+      "VALUES (?, ?, ?, ?, 'current', ?, ?, ?, ?)",
+      [
+        mintId,
+        outcomeId,
+        row['user_id'] as String,
+        row['cursor_text'],
+        row['cursor_energy'],
+        row['cursor_time'],
+        tsIso,
+        tsIso,
+      ],
     );
     repaired++;
   }
