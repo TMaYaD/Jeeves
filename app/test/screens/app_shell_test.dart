@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -58,6 +60,7 @@ class _MockAuthNotifier extends AuthNotifier {
 
 Widget _buildShellOnly({
   List<Capture> items = const [],
+  Stream<List<Capture>>? inboxStream,
   VoidCallback? onLogout,
   String initialLocation = '/inbox',
   FocusSessionPlanningSettings planningSettings =
@@ -66,7 +69,8 @@ Widget _buildShellOnly({
   return ProviderScope(
     overrides: [
       authTokenProvider.overrideWith(() => _MockAuthNotifier(onLogout: onLogout)),
-      inboxItemsProvider.overrideWith((_) => Stream.value(items)),
+      inboxItemsProvider
+          .overrideWith((_) => inboxStream ?? Stream.value(items)),
       nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
       maybeProvider.overrideWith((_) => Stream.value([])),
@@ -362,6 +366,59 @@ void main() {
       await tester.pump();
 
       expect(find.byKey(appTitleBarBadgeKey), findsNothing);
+    });
+
+    testWidgets(
+        'retains the last count across a transient stream error instead of '
+        'dropping the badge (AsyncValue.value, not .asData?.value)',
+        (tester) async {
+      final controller = StreamController<List<Capture>>.broadcast();
+      addTearDown(controller.close);
+
+      await tester.pumpWidget(
+          _buildShellOnly(inboxStream: controller.stream));
+      await tester.pumpAndSettle();
+
+      // No emission yet: no previous data to retain, no badge.
+      expect(find.byKey(appTitleBarBadgeKey), findsNothing);
+
+      controller.add([
+        Capture(
+          id: 'a',
+          title: 'Buy milk',
+          notes: null,
+          captureSource: 'manual',
+          createdAt: DateTime(2024, 1, 1),
+          clarifiedAt: null,
+          updatedAt: null,
+          userId: 'local',
+        ),
+      ]);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(appTitleBarBadgeKey), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(appTitleBarBadgeKey),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
+
+      // A transient error (e.g. a brief hiccup during re-subscription) must
+      // not blank the badge: `.value` retains the last-rendered count across
+      // AsyncError, unlike `.asData?.value` which drops to null/0.
+      controller.addError('transient re-subscription error');
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(appTitleBarBadgeKey), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(appTitleBarBadgeKey),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
     });
   });
 }

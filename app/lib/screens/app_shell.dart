@@ -51,8 +51,10 @@ class AppShell extends ConsumerWidget {
 
     // The Inbox route carries the unprocessed-capture count as a typed badge;
     // every other shell route shows none. Null at zero preserves the prior
-    // "only when > 0" behaviour.
-    final inboxCount = ref.watch(inboxItemsProvider).asData?.value.length ?? 0;
+    // "only when > 0" behaviour. `.value` (not `.asData?.value`) retains the
+    // last-rendered count across a transient loading/error state (e.g. a
+    // brief error during re-subscription), so the badge doesn't flicker away.
+    final inboxCount = ref.watch(inboxItemsProvider).value?.length ?? 0;
     final badge = location == '/inbox' && inboxCount > 0
         ? AppTitleBarBadge(
             count: inboxCount,

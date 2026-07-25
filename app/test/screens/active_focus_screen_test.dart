@@ -42,6 +42,7 @@ import 'package:jeeves/providers/focus_session_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/active_focus_screen.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart' show ProcessAction;
 import 'package:jeeves/widgets/reclarify_prompt_sheet.dart';
 
@@ -273,6 +274,53 @@ void main() {
       expect(await db.actionDao.getCurrentAction('o2'), isNull);
       expect(find.byType(ReclarifyPromptSheet), findsOneWidget);
       expect(find.text('focus-home'), findsNothing);
+    });
+  });
+
+  group('ActiveFocusScreen — title bar (ADR-0021)', () {
+    late GtdDatabase db;
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      FlutterLocalNotificationsPlatform.instance = _FakeNotificationsPlatform();
+      TestWidgetsFlutterBinding.ensureInitialized()
+          .defaultBinaryMessenger
+          .setMockMethodCallHandler(_notificationsChannel, (_) async => null);
+      db = _openInMemory();
+    });
+    tearDown(() async {
+      TestWidgetsFlutterBinding.ensureInitialized()
+          .defaultBinaryMessenger
+          .setMockMethodCallHandler(_notificationsChannel, null);
+      await db.close();
+    });
+
+    // The bar's title is a pure function of the active task (ADR-0021) — the
+    // screen no longer hand-rolls its own header. And leaving focus is a
+    // router `go` back to the execution home, not a `Navigator.pop` (this
+    // route was reached by `go`, so a pop would have nothing productive to
+    // pop): the screen overrides the bar's default back behaviour with
+    // `onLeadingPressed: () => context.go('/focus')`. Both are reachable at
+    // pump time — this test does not touch the never-resolving Done tail
+    // (see the file doc comment).
+    testWidgets(
+        "the bar's title is the active task's title, and the leading action "
+        'routes to /focus via context.go (not Navigator.pop)', (tester) async {
+      final todo = await _insertTodo(db, id: 'o3', title: 'Write the ADR');
+      await seedCurrentAction(db, outcomeId: 'o3', text: 'do it', userId: _userId);
+
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester);
+
+      final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+      expect(bar.title, 'Write the ADR');
+
+      await tester.tap(find.byKey(appTitleBarLeadingKey));
+      await _pumpFrames(tester);
+
+      // Landed on the /focus route registered in the harness — proof the
+      // leading action is a `context.go('/focus')`, not a pop (there is
+      // nothing above '/active' in this harness's Navigator to pop to).
+      expect(find.text('focus-home'), findsOneWidget);
     });
   });
 
