@@ -36,7 +36,7 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
       // concurrent supersede between resolve and insert cannot mis-attribute,
       // and so attributing to a planned/terminated row is impossible by
       // construction — the resolver filters `role = 'current'` (issue #476).
-      final actionId = await _currentActionId(taskId);
+      final actionId = await ActionDao.currentActionIdFor(this, taskId);
       // Close any pre-existing open log.
       await (update(timeLogs)..where((t) => t.endedAt.isNull()))
           .write(TimeLogsCompanion(endedAt: Value(ts.toIso8601String())));
@@ -51,20 +51,6 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         focusSessionId: Value(focusSessionId),
       ));
     });
-  }
-
-  /// The id of [outcomeId]'s winning `current` Action, or null when it is
-  /// Actionless. Uses the blessed winner-first ordering ([ActionDao.
-  /// winnerFirstOrderSql]) so a transient multi-current race attributes to the
-  /// same row every reader would display. Runs inside the caller's transaction.
-  Future<String?> _currentActionId(String outcomeId) async {
-    final row = await customSelect(
-      "SELECT id FROM actions WHERE outcome_id = ? AND role = 'current' "
-      "${ActionDao.winnerFirstOrderSql} LIMIT 1",
-      variables: [Variable<String>(outcomeId)],
-      readsFrom: {actions},
-    ).getSingleOrNull();
-    return row?.read<String?>('id');
   }
 
   /// Closes the open log for [taskId], if any.

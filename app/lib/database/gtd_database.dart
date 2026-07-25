@@ -683,6 +683,20 @@ class GtdDatabase extends _$GtdDatabase {
         const TableUpdate('actions'),
       });
 
+  /// The [notifyTodosViewWrite] analogue for the `time_logs` view (issue #476).
+  ///
+  /// In production `time_logs` is a PowerSync view with INSTEAD OF triggers, so
+  /// a direct Drift write reports `changes() == 0` and Drift's stream
+  /// invalidation never fires (ADR-0010). The terminal-transition hook in
+  /// [ActionDao] (close-on-Done / close-and-reopen-on-supersede) writes
+  /// `time_logs` inside the Action transaction, so its callers fire this right
+  /// after commit — gated on [ActionWriteEffect.logChanged], so an Action
+  /// mutation that touched no log never over-notifies the active-log and
+  /// time-spent watchers.
+  void notifyTimeLogsViewWrite() => notifyUpdates({
+        const TableUpdate('time_logs'),
+      });
+
   /// Runs [Migrator.addColumn] only when [table] is a real SQLite table.
   ///
   /// On production `todos` / `tags` / `todo_tags` are PowerSync-managed views

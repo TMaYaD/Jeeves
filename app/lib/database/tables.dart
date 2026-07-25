@@ -101,11 +101,18 @@ class TimeLogs extends Table with Synced {
 
   /// The Action engaged when this stint ran (ADR-0001 story 6, issue #476).
   ///
-  /// NULL means "no Action attribution available" — a pre-Action-era log, or a
+  /// NULL means "no Action attribution available" — a pre-Action-era log, a
   /// defensive Actionless edge where the Outcome had no `current` Action at open
-  /// time. The row still carries [taskId] (Outcome-grain) attribution, so every
-  /// time-spent total (which aggregates by `task_id`) is unaffected either way.
-  TextColumn get actionId => text().nullable().references(Actions, #id)();
+  /// time, or a log whose Action was later deleted (`ON DELETE SET NULL`, so a
+  /// deleted Action detaches its logs rather than deleting them). The row still
+  /// carries [taskId] (Outcome-grain) attribution, so every time-spent total
+  /// (which aggregates by `task_id`) is unaffected either way.
+  ///
+  /// `onDelete: setNull` matches the backend FK (Alembic 0029): a nullable FK
+  /// whose parent-delete rule is SET NULL, never CASCADE (which would destroy
+  /// time data) or RESTRICT (which would block the delete).
+  TextColumn get actionId =>
+      text().nullable().references(Actions, #id, onDelete: KeyAction.setNull)();
 
   /// ISO-8601 UTC string: when the stint started.
   TextColumn get startedAt => text()();

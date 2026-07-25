@@ -334,6 +334,55 @@ void main() {
       expect(reopened.focusSessionId, closed.focusSessionId);
     });
 
+    test('supersedeAndPromote closes the old log and reopens against the '
+        'promoted planned Action, not the retired one', () async {
+      await _seedClarifiedOutcome(db, lastClarifiedAt: _t1);
+      await openLogAgainstCurrent('o1');
+      // A planned successor for the "Replace current action" gesture.
+      await db.actionDao.addPlannedAction('o1', 'the planned step', now: _t1);
+      final planned = (await db.actionDao.getPlannedActions('o1')).single;
+
+      await db.actionDao.supersedeAndPromote(planned.id, now: _t2);
+
+      // The promoted row is now the Outcome's current Action.
+      final successor = await db.actionDao.getCurrentAction('o1');
+      expect(successor, isNotNull);
+      expect(successor!.id, planned.id);
+
+      final rows = await logs(db);
+      expect(rows, hasLength(2), reason: 'close-and-reopen');
+      final closed = rows.firstWhere((r) => r.id == 'log-1');
+      final reopened = rows.firstWhere((r) => r.id != 'log-1');
+      expect(closed.endedAt, _t2.toIso8601String());
+      expect(closed.actionId, 'action-o1',
+          reason: 'the closed log stays on the retired Action');
+      // Continuity: closed.ended_at == reopened.started_at == ts, zero lost.
+      expect(reopened.startedAt, _t2.toIso8601String());
+      expect(reopened.endedAt, isNull);
+      expect(reopened.actionId, planned.id,
+          reason: 'continuation attaches to the successor, not the retired '
+              'Action');
+      // The reopened row copies task_id, user_id AND focus_session_id.
+      expect(reopened.taskId, 'o1');
+      expect(reopened.userId, closed.userId);
+      expect(reopened.focusSessionId, closed.focusSessionId);
+    });
+
+    test('supersedeAndPromote with no open log promotes without a reopen',
+        () async {
+      await _seedClarifiedOutcome(db, lastClarifiedAt: _t1);
+      // No open log this time.
+      await db.actionDao.addPlannedAction('o1', 'the planned step', now: _t1);
+      final planned = (await db.actionDao.getPlannedActions('o1')).single;
+
+      await db.actionDao.supersedeAndPromote(planned.id, now: _t2);
+
+      final rows = await logs(db);
+      expect(rows, isEmpty, reason: 'nothing to close, nothing to reopen');
+      final successor = await db.actionDao.getCurrentAction('o1');
+      expect(successor!.id, planned.id);
+    });
+
     test('clear (supersede without replacement) closes the log, no reopen',
         () async {
       await _seedClarifiedOutcome(db, lastClarifiedAt: _t1);

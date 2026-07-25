@@ -172,7 +172,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // `role = 'current'`; an Actionless Outcome yields NULL, still
       // task-attributed.
       if (taskId != null) {
-        final actionId = await _currentActionId(taskId);
+        final actionId = await ActionDao.currentActionIdFor(this, taskId);
         await into(timeLogs).insert(TimeLogsCompanion(
           id: Value(uuid.v4()),
           userId: Value(session.userId),
@@ -188,20 +188,6 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       await (update(focusSessions)..where((s) => s.id.equals(sessionId)))
           .write(FocusSessionsCompanion(currentTaskId: Value(taskId)));
     });
-  }
-
-  /// The id of [outcomeId]'s winning `current` Action, or null when it is
-  /// Actionless. Uses the blessed winner-first ordering ([ActionDao.
-  /// winnerFirstOrderSql]) so a transient multi-current race attributes to the
-  /// same row every reader would display. Runs inside the caller's transaction.
-  Future<String?> _currentActionId(String outcomeId) async {
-    final row = await customSelect(
-      "SELECT id FROM actions WHERE outcome_id = ? AND role = 'current' "
-      "${ActionDao.winnerFirstOrderSql} LIMIT 1",
-      variables: [Variable<String>(outcomeId)],
-      readsFrom: {actions},
-    ).getSingleOrNull();
-    return row?.read<String?>('id');
   }
 
   /// Stream that emits the currently open session, or null.
