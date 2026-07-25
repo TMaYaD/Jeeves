@@ -423,10 +423,19 @@ void main() {
       await _tapNextAction(tester);
       await tester.pumpAndSettle();
 
-      final row = await db.todoDao.getTodo('rc-mirror-1');
-      expect(row?.nextActionText, 'Email guest list',
+      // The Action grain is what the mirror guard consults and what every read
+      // surface renders, so it is the assertion that actually pins the
+      // behaviour: without it the test passes even if re-clarify overwrites the
+      // current Action with the title, because the frozen cursor would sit
+      // there unchanged either way (ADR-0022).
+      final action = await db.actionDao.getCurrentAction('rc-mirror-1');
+      expect(action?.actionText, 'Email guest list',
           reason: 're-clarify must not overwrite a deliberate phrase with the '
               'title');
+
+      final row = await db.todoDao.getTodo('rc-mirror-1');
+      expect(row?.nextActionText, 'Email guest list',
+          reason: 'the legacy cursor is frozen, not rewritten');
       expect(row?.intent, 'next');
     });
 

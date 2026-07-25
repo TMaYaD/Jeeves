@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:powersync/powersync.dart' as ps;
 
-import '../database/daos/action_ids.dart';
 import '../providers/powersync_provider.dart';
 import '../providers/user_constants.dart' show kLocalUserId;
 
@@ -306,54 +305,58 @@ Future<int> carveOutLocalInbox({
   return pending.length;
 }
 
-/// Repair the `actions` table at startup, in the only two ways that can never
-/// destroy Action-grain truth (ADR-0001 story 9, issue #479).
+/// Repair the `actions` table at startup, in the one way that can never destroy
+/// Action-grain truth (ADR-0001 story 9, issue #479; ADR-0022).
 ///
-/// The sweep is deliberately **monotone**: across a run, `COUNT(*) FROM
-/// actions` never decreases and no existing row's `text` is ever rewritten. It
-/// does exactly two things, in order:
+/// A single pass, [convergeMultiCurrentActions]: the
+/// 0..1-`current`-per-Outcome invariant is app-enforced, not indexed, so a
+/// cross-device race can sync in two `current` rows, and this retires the losers
+/// by the same deterministic winner rule the writers use
+/// (`ActionDao._winnerFirst`) so every device collapses to the same row. It
+/// reads `actions` and nothing else.
 ///
-/// 1. [convergeMultiCurrentActions] — **cursor-free and permanent.** The
-///    0..1-`current`-per-Outcome invariant is app-enforced, not indexed, so a
-///    cross-device race can sync in two `current` rows. This pass retires the
-///    losers by the same deterministic winner rule the writers use
-///    (`ActionDao._winnerFirst`), so every device collapses to the same row.
-/// 2. [adoptCursorsWithoutActions] — **cursor-dependent, mint-only.** Mints the
-///    deterministic-id `current` Action (ADR-0019) for a **live** Outcome
-///    (`done_at IS NULL` — completion is the one transition that terminates
-///    Actions) carrying a non-blank legacy
-///    `todos.next_action_text` cursor **and no `actions` rows
-///    at all**. This is the last thing the cursor is still good for: adopting
-///    an Outcome that a pre-Action client created and this device has never
-///    seen an Action for. It dies with the columns.
+/// **The sweep does not read `todos.next_action_text`, and must never read it
+/// again.** Three cursor-driven arms have been deleted over the course of #479,
+/// and reviving any of them re-arms a way to destroy the user's Actions:
 ///
-/// **Two earlier arms were deleted, and must not come back.** The sweep used to
-/// treat the cursor as authoritative: one arm overwrote a `current` Action's
-/// text and metadata from the cursor, and another retired *every* `current`
-/// Action whose Outcome had a blank cursor. Both were consistent only for as
-/// long as every write path dual-wrote the cursor; the moment the cursor stops
-/// being written they become weapons — the first reverts every Action edit at
-/// the next launch, the second retires every current Action on the device.
-/// Reviving either would also re-introduce the hazard that a sweep-retired
-/// Action strands its open `time_logs` row (the sweep runs no termination hook).
+/// * One overwrote a `current` Action's text and metadata from the cursor — it
+///   reverts every Action-grain edit at the next launch.
+/// * One retired *every* `current` Action whose Outcome had a blank cursor —
+///   with the cursor no longer written, that retires every current Action on the
+///   device. (Either would also strand a retired Action's open `time_logs` row:
+///   the sweep runs no termination hook.)
+/// * The last, **cursor adoption**, minted the deterministic-id `current` Action
+///   for a live Outcome carrying a non-blank cursor and no `actions` rows at
+///   all. It looked safe — mint-only, monotone, guarded on the Outcome having no
+///   Action rows whatsoever — and it was not. `ActionDao.applyRemovePlannedAction`
+///   is a hard `DELETE` (the Remove-vs-Abandon distinction #478 shipped), and it
+///   is the only mutation that drives an Outcome's Action count to zero while
+///   the `todos` row survives. So on any store whose cursor was populated during
+///   the dual-write era, *demote the current Action, then remove the planned
+///   row* leaves a live cursor over zero Action rows — and the next launch minted
+///   the Action the user had just deleted, back as `current`, and synced it to
+///   every device. Two taps.
 ///
-/// The adoption pass never overwrites and never retires, which is what makes it
-/// safe to keep: it cannot resurrect an Action the user abandoned, and it cannot
-/// revert an edit. The deliberate cost is that a cursor edit arriving from a
-/// pre-retirement client is silently ignored on an Outcome that already has
-/// Action rows — losing a stale client's edit is preferred to letting it clobber
-/// Action-grain history.
+/// Deleting adoption makes that resurrection impossible by construction rather
+/// than patching around it, and leaves `applyRemovePlannedAction` a hard delete.
+/// The accepted cost: an Outcome created on a pre-Action client and synced in
+/// renders Actionless. Its text is not lost — `next_action_text` still holds it
+/// and still replicates — merely unsurfaced. The one-time Drift v26 backfill
+/// (`gtd_database.dart`) remains the **only** consumer of the cursor: it runs
+/// once at schema upgrade, before any watcher exists, and is why the column
+/// stays declared in `tables.dart`.
 ///
-/// Both passes are clarification-neutral: they **never** stamp
-/// `last_clarified_at` (ADR-0012 — never auto-stamp on drift). The whole sweep
-/// is idempotent, so the steady state is two reads and no writes at all. It runs
-/// from [powerSyncInstanceProvider] right after [migrateLocalInboxToCaptures],
-/// before any watcher exists, so — like the v26 backfill — it needs no
-/// view-notify.
-Future<int> reconcileActionsWithCursor(ps.PowerSyncDatabase db) async {
+/// The pass is clarification-neutral: it **never** stamps `last_clarified_at`
+/// (ADR-0012 — never auto-stamp on drift). It is idempotent, so the steady state
+/// is one read and no writes at all. It runs from [powerSyncInstanceProvider]
+/// right after [migrateLocalInboxToCaptures], before any watcher exists, so —
+/// like the v26 backfill — it needs no view-notify.
+///
+/// Returns the number of Action rows retired. A steady-state store returns 0.
+Future<int> reconcileActionsAtStartup(ps.PowerSyncDatabase db) async {
   var repaired = 0;
   await db.writeTransaction((tx) async {
-    repaired = await reconcileActionsWithCursorSteps(
+    repaired = await convergeMultiCurrentActions(
       query: (sql, args) => tx.getAll(sql, args),
       exec: (sql, args) => tx.execute(sql, args).then((_) {}),
     );
@@ -361,35 +364,13 @@ Future<int> reconcileActionsWithCursor(ps.PowerSyncDatabase db) async {
   return repaired;
 }
 
-/// A transaction's read/write pair, the seam every sweep pass is expressed over
-/// so the exact SQL that runs in production can also be driven against a real
-/// SQLite database in tests (see `reconcile_actions_sweep_test.dart`) —
-/// PowerSync only supplies the transaction.
+/// A transaction's read/write pair, the seam the sweep is expressed over so the
+/// exact SQL that runs in production can also be driven against a real SQLite
+/// database in tests (see `reconcile_actions_sweep_test.dart`) — PowerSync only
+/// supplies the transaction.
 typedef SweepQuery = Future<List<Map<String, Object?>>> Function(
     String, List<Object?>);
 typedef SweepExec = Future<void> Function(String, List<Object?>);
-
-/// Both passes, in order. Callers must already be inside a write transaction.
-///
-/// Returns the number of Action rows written (minted or retired) — used only as
-/// a signal in tests. A steady-state store returns 0.
-Future<int> reconcileActionsWithCursorSteps({
-  required SweepQuery query,
-  required SweepExec exec,
-  DateTime? now,
-}) async {
-  final ts = (now ?? DateTime.now()).toUtc();
-  // Convergence first: adoption only mints into an Outcome with no `actions`
-  // rows at all, so the order is not load-bearing — but leaving a multi-current
-  // set standing while another pass runs would make the run's reported count
-  // depend on interleaving.
-  return await convergeMultiCurrentActions(
-        query: query,
-        exec: exec,
-        now: ts,
-      ) +
-      await adoptCursorsWithoutActions(query: query, exec: exec, now: ts);
-}
 
 /// **Cursor-free, permanent.** Retire the losers of any accidental
 /// multi-`current` set, keeping the winner by greatest `COALESCE(updated_at,
@@ -465,193 +446,6 @@ Future<int> convergeMultiCurrentActions({
       );
       repaired++;
     }
-  }
-
-  return repaired;
-}
-
-/// **Cursor-dependent, mint-only, monotone.** Mint the deterministic-id
-/// `current` Action for every **live** Outcome that carries a non-blank legacy
-/// `todos.next_action_text` **and has no `actions` rows at all**.
-///
-/// "Live" is `done_at IS NULL`, and nothing more. Completion is the only
-/// lifecycle transition that *terminates* Actions, so it is the only one that
-/// makes minting incoherent:
-///
-/// * **Completed** Outcomes are excluded because completion *terminates* the
-///   current Action (ADR-0001 story 4 — `applyCompleteCurrentAction`), so a
-///   `current` row on a `done_at`-bearing Outcome is a state no write path can
-///   produce. Pre-Action clients cleared `done_at` and the cursor
-///   independently, so without the filter every task the user ever finished
-///   with a next-action phrase still on it would grow a live Action at launch.
-/// * **Trashed** Outcomes (`intent = 'trash'`) are deliberately **kept**, and
-///   the asymmetry with Completed is the whole reason: trashing is *not* an
-///   Action-terminating transition. `TodoDao.applyRouting`'s `trash` arm leaves
-///   the Outcome's Action rows exactly as they were, so a trashed Outcome
-///   legitimately carries a `current` Action here. Skipping one would not be
-///   neutral either — adoption is a one-shot rescue that dies with the cursor
-///   columns, trash has no expiry (`TodoDao.watchTrash` is unbounded, and
-///   there is deliberately no purge affordance), and restore is a one-tap flow,
-///   so a skipped Outcome would come back Actionless where it used to come back
-///   carrying the next action the user wrote. Nor is minting a resurrection:
-///   every GTD list surface gates on `intent IN ('next', 'maybe')`, so the row
-///   changes no list, no count and no badge until the user restores the
-///   Outcome themselves. The v26 / Alembic 0028 backfills this pass continues
-///   filter neither `intent` nor `done_at`, so a migrated store already holds
-///   exactly these rows; excluding trash here would only make a never-migrated
-///   device diverge from a migrated one at the same deterministic id.
-/// * **Someday/Maybe** (`intent = 'maybe'`) is deliberately **kept**.
-///   `TodoDao.applyRouting`'s `maybe` arm leaves both the cursor and any
-///   existing Action rows untouched, so a maybe Outcome legitimately carries a
-///   `current` Action here; and adoption is a one-shot legacy rescue that dies
-///   with the columns, so skipping deferred Outcomes would silently lose their
-///   next-action text when the cursor is dropped.
-/// * **Waiting For** is likewise kept, and needs no clause of its own: in this
-///   codebase Waiting For *is* `intent = 'next'` plus a `Tag(type='person')`
-///   (`TodoDao.watchPersonTagged`), not a fourth intent.
-/// * **Unclarified** rows are kept for the same data-preservation reason. A
-///   minted row puts the Outcome on no list — the GTD surfaces gate on
-///   `clarified` and `intent`, not on Actions — but it is not invisible:
-///   `CaptureDao.watchCarvedOutcomes` projects the current Action's text with
-///   no lifecycle gate at all (its only predicate is
-///   `capture_outcomes.capture_id = ?`), so a capture-linked Outcome does show
-///   it on the carve-review screen. That is benign, and the reason the pass is
-///   safe rather than the reason it is hidden: the row renders exactly the text
-///   the cursor already held.
-///
-/// The `NOT EXISTS` guard is over *all* roles, not just `current`: an Outcome
-/// holding a `superseded`, `done` or `planned` row has already been spoken for
-/// at the Action grain, and the cursor has nothing to add. That guard is the
-/// whole safety property — it means this pass can never resurrect an abandoned
-/// Action, never revive a completed one, and never overwrite or retire anything.
-/// The cost is deliberate: an Outcome whose only Action was completed on another
-/// device will not regrow one here from a stale cursor.
-///
-/// The id is `backfillActionIdFor(outcomeId)` (ADR-0019), the same value the
-/// server's Alembic 0028 and every client's Drift v26 backfill compute, so two
-/// devices adopting the same Outcome independently upsert onto one row
-/// (ADR-0015) instead of minting divergent random-id `current` rows that would
-/// break the 0..1-current invariant on sync.
-///
-/// Energy / time come from the Outcome's draft columns, matching what
-/// `ActionDao.applySetCurrentAction` seeds into a birth Action (D3). Never
-/// stamps `last_clarified_at` — adopting a straggler's cursor is not a
-/// clarifying act (ADR-0012).
-/// How many candidate ids the adoption pass probes per `IN (...)` read. Well
-/// under SQLite's `SQLITE_MAX_VARIABLE_NUMBER` on every build the app ships
-/// against, so a large legacy store costs a handful of reads instead of a
-/// "too many SQL variables" throw at launch.
-const int _mintIdProbeChunkSize = 500;
-
-Future<int> adoptCursorsWithoutActions({
-  required SweepQuery query,
-  required SweepExec exec,
-  DateTime? now,
-}) async {
-  final tsIso = (now ?? DateTime.now()).toUtc().toIso8601String();
-  var repaired = 0;
-
-  // One statement: every live Outcome whose cursor still says something and
-  // whose Action-grain history is entirely empty. The `NOT EXISTS` over *all*
-  // roles is the safety guard (see the doc comment). Blank / whitespace-only
-  // cursors are Actionless by the app's own normalisation and mint nothing. In
-  // the steady state this is one read and no writes.
-  //
-  // `user_id IS NOT NULL` is a skip-don't-explode guard rather than a domain
-  // filter: on-device `todos` is a PowerSync view over JSON and carries none of
-  // Drift's NOT NULL constraints, so a **legacy locally-written** row can hold
-  // a NULL `user_id` — written by an app version whose PowerSync schema
-  // predated the column, where `json_extract` yields NULL. A *peer* cannot
-  // deliver one: `todos.user_id` is `nullable=False` on the backend
-  // (`backend/app/todos/models.py`) and the bucket is
-  // `SELECT * FROM todos WHERE user_id = bucket.user_id`, which a NULL could
-  // never match. Reading it back as a non-null `String` below would throw
-  // inside the startup write transaction and take the whole launch down;
-  // skipping the row leaves it exactly as it was, for a later launch to adopt
-  // once its `user_id` arrives.
-  final orphanCursors = await query(
-    '''
-    SELECT t.id AS outcome_id, t.user_id AS user_id,
-           t.next_action_text AS cursor_text,
-           t.energy_level AS cursor_energy,
-           t.time_estimate AS cursor_time
-    FROM todos t
-    WHERE t.next_action_text IS NOT NULL
-      AND TRIM(t.next_action_text) != ''
-      AND t.user_id IS NOT NULL
-      AND t.done_at IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM actions a WHERE a.outcome_id = t.id
-      )
-    ORDER BY t.id ASC
-    ''',
-    [],
-  );
-  if (orphanCursors.isEmpty) return 0;
-
-  // The id this pass would mint is `backfillActionIdFor(outcome_id)`, a uuid5
-  // computed in Dart (ADR-0019) — so the SELECT above cannot exclude a row
-  // whose *id* is already occupied, only one whose `outcome_id` matches. Those
-  // are different sets: an `actions` row with a NULL `outcome_id` (reachable on
-  // a legacy store, see the note above) satisfies the `NOT EXISTS` guard while
-  // still sitting on that primary key. A bare INSERT on top of it raises
-  // `SqliteException(1555): UNIQUE constraint failed: actions.id` inside the
-  // startup write transaction — the same launch-down failure class the
-  // `user_id` guard exists for. So read back which of the candidate ids are
-  // already present and skip those Outcomes.
-  //
-  // Skipping is the right resolution, not a fallback: this pass is mint-only
-  // and monotone, and the id is a pure function of the Outcome, so whatever
-  // already sits at that key *is* this Outcome's adoption. Overwriting it would
-  // be exactly the cursor-authoritative behaviour the sweep deleted.
-  //
-  // Not `INSERT OR IGNORE`: on-device `actions` is a view with an
-  // `INSTEAD OF INSERT` trigger, and an outer conflict clause's interaction
-  // with the trigger body is not something to rely on.
-  final mintIdByOutcomeId = {
-    for (final row in orphanCursors)
-      row['outcome_id'] as String:
-          backfillActionIdFor(row['outcome_id'] as String),
-  };
-  final occupiedMintIds = <Object?>{};
-  final candidateMintIds = mintIdByOutcomeId.values.toList();
-  // Chunked so a legacy store with thousands of unadopted cursors cannot trip
-  // SQLITE_MAX_VARIABLE_NUMBER and throw at startup for a different reason.
-  for (var i = 0; i < candidateMintIds.length; i += _mintIdProbeChunkSize) {
-    final end = i + _mintIdProbeChunkSize < candidateMintIds.length
-        ? i + _mintIdProbeChunkSize
-        : candidateMintIds.length;
-    final chunk = candidateMintIds.sublist(i, end);
-    final present = await query(
-      'SELECT id FROM actions WHERE id IN (${List.filled(chunk.length, '?').join(', ')})',
-      chunk,
-    );
-    for (final row in present) {
-      occupiedMintIds.add(row['id']);
-    }
-  }
-
-  for (final row in orphanCursors) {
-    final outcomeId = row['outcome_id'] as String;
-    final mintId = mintIdByOutcomeId[outcomeId]!;
-    if (occupiedMintIds.contains(mintId)) continue;
-    await exec(
-      "INSERT INTO actions "
-      "(id, outcome_id, user_id, text, role, energy_level, time_estimate, "
-      "created_at, updated_at) "
-      "VALUES (?, ?, ?, ?, 'current', ?, ?, ?, ?)",
-      [
-        mintId,
-        outcomeId,
-        row['user_id'] as String,
-        row['cursor_text'],
-        row['cursor_energy'],
-        row['cursor_time'],
-        tsIso,
-        tsIso,
-      ],
-    );
-    repaired++;
   }
 
   return repaired;

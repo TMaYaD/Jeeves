@@ -29,7 +29,6 @@ Future<Todo> _insertTodo(
   GtdDatabase db, {
   required String id,
   String title = 'Task',
-  String? nextActionText,
   bool clarified = true,
   String intent = 'next',
   String? doneAt,
@@ -40,8 +39,6 @@ Future<Todo> _insertTodo(
         title: Value(title),
         clarified: Value(clarified),
         intent: Value(intent),
-        nextActionText:
-            nextActionText != null ? Value(nextActionText) : const Value.absent(),
         doneAt: doneAt != null ? Value(doneAt) : const Value.absent(),
         userId: const Value(_userId),
         createdAt: Value(now),
@@ -648,14 +645,19 @@ void main() {
     testWidgets(
         'Next opens the prefilled dialog by default; cancel = no write',
         (tester) async {
-      // A real `current` Action carrying a different phrase from the one the
-      // dialog will show, so the prefill is proven to come from the Action
-      // grain (ADR-0001 story 3) rather than from the widget's own argument.
+      // The prefill comes from the caller-supplied `currentActionText`, which
+      // is the caller's projection of the Action grain (ADR-0001 story 3 —
+      // `getCurrentActionTexts`, plumbed through `OutcomeSubject`). The widget
+      // itself does no DB read, so the seeded Action row and the argument are
+      // deliberately given *different* text: that is what discriminates the
+      // three candidate sources apart. With every value set to the same string
+      // the assertion could not tell the argument from the store, the title, or
+      // the retired cursor.
       final todo = await _insertTodo(db, id: 'nd2');
       await seedCurrentAction(
         db,
         outcomeId: 'nd2',
-        text: 'old',
+        text: 'a row the widget never reads',
         userId: _userId,
       );
       // No include needed — the dialog modifier is on by default.
@@ -673,7 +675,10 @@ void main() {
           matching: find.byType(TextField),
         ),
       );
-      expect(field.controller?.text, 'old');
+      expect(field.controller?.text, 'old',
+          reason: 'the prefill is the caller-supplied Action-grain projection — '
+              'not the Outcome title, not the retired cursor, and not a direct '
+              'read of the seeded `actions` row');
 
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();

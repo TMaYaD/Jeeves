@@ -83,8 +83,9 @@ Future<List<Map<String, Object?>>> _currents(GtdDatabase db, String id) =>
     _actions(db, id, role: 'current');
 
 /// The startup sweep, driven over the same query/exec seam production uses.
+/// `reconcileActionsAtStartup` supplies nothing but the write transaction.
 Future<int> _sweep(GtdDatabase db) => db.transaction(
-      () => reconcileActionsWithCursorSteps(
+      () => convergeMultiCurrentActions(
         query: (sql, args) async {
           final rows = await db
               .customSelect(sql, variables: [for (final a in args) Variable(a)])
@@ -411,7 +412,15 @@ void main() {
       await _expectCursorFrozen(db);
     });
 
-    test('removePlannedAction leaves the cursor frozen', () async {
+    test('★ removePlannedAction leaves the cursor frozen — and the sweep does '
+        'not mint the deleted Action back', () async {
+      // `applyRemovePlannedAction` is a hard DELETE (the Remove-vs-Abandon
+      // distinction #478 shipped) and it is the ONLY mutation that drives an
+      // Outcome to zero `actions` rows while the `todos` row — and its frozen
+      // cursor — survives. The deleted cursor-adoption pass minted a `current`
+      // Action for exactly that shape, so the launch after this sequence used to
+      // resurrect the row the user had just removed, and sync it everywhere.
+      // Nothing reads the cursor at runtime any more, so relaunching is inert.
       await db.actionDao.addPlannedAction('o1', 'later thing', now: _t1);
       final plannedId =
           (await _actions(db, 'o1', role: 'planned')).single['id']! as String;
@@ -420,6 +429,32 @@ void main() {
 
       expect(await _actions(db, 'o1'), isEmpty);
       await _expectCursorFrozen(db);
+
+      // Relaunch. Restoring the adoption pass makes this mint a `current` row.
+      expect(await _sweep(db), 0);
+      expect(await _actions(db, 'o1'), isEmpty,
+          reason: 'a live cursor over zero Action rows must mint nothing');
+      await _expectCursorFrozen(db);
+    });
+
+    test('★ the two-tap resurrection: demote then remove, then relaunch, mints '
+        'nothing', () async {
+      // The same hole reached through the affordances a user actually taps: the
+      // current Action is demoted (which no longer clears the cursor) and the
+      // planned row it became is then removed outright.
+      await db.todoDao.setNextActionText('o1', 'the thing', now: _t1);
+      final currentId = (await _currents(db, 'o1')).single['id']! as String;
+
+      await db.actionDao.demoteCurrentAction(currentId, now: _t2);
+      await db.actionDao.removePlannedAction(currentId, now: _t2);
+
+      expect(await _actions(db, 'o1'), isEmpty, reason: 'precondition');
+      await _expectCursorFrozen(db);
+
+      expect(await _sweep(db), 0);
+      expect(await _currents(db, 'o1'), isEmpty,
+          reason: 'the removed Action must not come back as current');
+      expect(await _actions(db, 'o1'), isEmpty);
     });
 
     test('editAction on a planned row leaves the cursor frozen', () async {
@@ -497,10 +532,12 @@ void main() {
 
   // ---------------------------------------------------------------------------
   // The keystone. Freezing the cursor is only safe because the startup sweep
-  // can no longer act on the divergence that freezing creates. This test is
-  // what would have caught the deleted Pass B: it drives a realistic lifecycle
-  // — leaving a stale sentinel cursor beside every terminal Action state — and
-  // then relaunches.
+  // can no longer act on the divergence that freezing creates — it does not
+  // read `todos.next_action_text` at all. This test is what would have caught
+  // the deleted Pass B: it drives a realistic lifecycle — leaving a stale
+  // sentinel cursor beside every terminal Action state — and then relaunches.
+  // The zero-`actions` shape that defeated the deleted adoption pass is pinned
+  // by the two removePlannedAction tests above.
   // ---------------------------------------------------------------------------
   group('restart idempotency', () {
     test('a full plan lifecycle survives the startup sweep byte-identically',
