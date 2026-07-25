@@ -350,7 +350,7 @@ class FocusSessionPlanningState {
   /// User's self-reported energy level for today: 'low' | 'medium' | 'high'.
   final String? energyLevel;
 
-  /// Fixed snapshot of inbox item **IDs** loaded at the start of Step 0
+  /// Fixed snapshot of inbox item **IDs** loaded at the start of Step 1
   /// plus the current navigation cursor. items == null until loaded;
   /// ordered oldest-first (FIFO).
   ///
@@ -376,8 +376,8 @@ class FocusSessionPlanningState {
   final List<String> reviewedTaskIds;
 
   /// Snapshot of tasks needing re-clarification plus the navigation cursor.
-  /// Loaded once when Step 1 is entered; the DB is never queried for "next".
-  /// items == null until step 1 is entered; an empty list short-circuits the
+  /// Loaded once when Step 2 is entered; the DB is never queried for "next".
+  /// items == null until step 2 is entered; an empty list short-circuits the
   /// step entirely.
   final SnapshotNav<Todo> reviewNav;
 
@@ -587,7 +587,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = state.copyWith(energyLevel: level);
   }
 
-  // ---- Inbox clarification (Step 0) — snapshot navigation -------------------
+  // ---- Inbox clarification (Step 1) — snapshot navigation -------------------
 
   /// Loads the inbox snapshot once. Idempotent: subsequent calls are no-ops.
   ///
@@ -830,7 +830,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> setTimeEstimate(String id, int minutes) =>
       _db.todoDao.updateFields(id, timeEstimate: minutes);
 
-  // ---- Task Review (Step 1) --------------------------------------------------
+  // ---- Task Review (Step 2) --------------------------------------------------
 
   /// "Still relevant" — only available for Stale tasks. Routes through
   /// [ClarificationService.clarifyToOutcome] so a prior in-session
@@ -1023,7 +1023,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   ///
   /// Task selections are **cleared** so the user can re-plan from scratch.
   /// Energy level and available time are preserved. Inbox snapshot resets so
-  /// it is re-loaded fresh on the next visit to Step 0. Called on the sequenced
+  /// it is re-loaded fresh on the next visit to Step 1. Called on the sequenced
   /// Shutdown → Planning path (a completed performance), not on a direct
   /// "Plan the Day" with no session (which resumes the in-memory draft as
   /// today — issue #180 behaviour preserved).

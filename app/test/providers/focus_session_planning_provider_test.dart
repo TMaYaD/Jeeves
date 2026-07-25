@@ -719,6 +719,54 @@ void main() {
       expect(state.reviewNav.index, 0);
     });
 
+    test(
+        'Review Tasks (step 2) snapshot excludes an inbox item clarified '
+        'with a next action during Clarify Inbox (step 1), but still '
+        'surfaces a genuinely actionless task — the snapshot is loaded on '
+        'entry into step 2, never earlier', () async {
+      final now = DateTime.now();
+      // Genuinely needs-review: Actionless (no current Action, no person
+      // tag). Never touched during Clarify Inbox — must still surface, so
+      // this test cannot pass vacuously.
+      await db.into(db.todos).insert(TodosCompanion(
+        id: const Value('actionless-1'),
+        title: const Value('Actionless task'),
+        userId: const Value('local'),
+        clarified: const Value(true),
+        createdAt: Value(now),
+        // nextActionText absent → NULL → Actionless
+      ));
+      // An inbox Capture that, clarified without a next action, would also
+      // land in needs-review (Actionless). It is clarified *with* a next
+      // action below, during Clarify Inbox — it must never surface here.
+      await _insertInboxItem(db, id: 'cap-1', createdAt: now);
+
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+
+      await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
+      await notifier.loadInboxSnapshot();
+      await notifier.processInboxItem('cap-1', title: 'Draft the proposal');
+      await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.currentStep, 2);
+
+      final clarifiedOutcome = (await _outcomeOf(db, 'cap-1'))!;
+      expect(clarifiedOutcome.nextActionText, 'Draft the proposal',
+          reason: 'sanity check: the capture really was clarified with a '
+              'next action before Review Tasks was entered');
+
+      final reviewIds =
+          state.reviewNav.items!.map((todo) => todo.id).toSet();
+      expect(reviewIds, contains('actionless-1'),
+          reason: 'a genuinely actionless task not touched during Clarify '
+              'Inbox must still surface in the Review Tasks snapshot');
+      expect(reviewIds, isNot(contains(clarifiedOutcome.id)),
+          reason: 'an item clarified with a next action during Clarify '
+              'Inbox must not appear in the Review Tasks snapshot, which is '
+              'taken on entry into that step, not earlier');
+    });
+
     test('advanceStep from Review Tasks (step 2) lands on Energy (step 3)',
         () async {
       final now = DateTime.now();

@@ -1,4 +1,4 @@
-/// Step 0 of the daily planning ritual: Clarify Inbox.
+/// Step 1 of the daily planning ritual: Clarify Inbox.
 ///
 /// Delegates the per-item / loading / completion branching to the shared
 /// [ClarifyStep] widget, passing:

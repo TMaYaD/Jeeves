@@ -1,4 +1,4 @@
-/// Step 1 of the daily planning ritual: Task Review (re-clarification surface).
+/// Step 2 of the daily planning ritual: Task Review (re-clarification surface).
 ///
 /// Surfaces tasks needing re-clarification one at a time:
 /// - Stale tasks: worked on in a session more recently than last clarified.
