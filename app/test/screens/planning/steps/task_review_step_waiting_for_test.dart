@@ -100,7 +100,11 @@ Future<void> _enterReviewStep(WidgetTester tester, GtdDatabase db) async {
   final container = ProviderScope.containerOf(
     tester.element(find.byType(TaskReviewStep)),
   );
-  await container.read(focusSessionPlanningProvider.notifier).advanceStep();
+  final notifier = container.read(focusSessionPlanningProvider.notifier);
+  // The review snapshot loads on entry into Review Tasks (step 2): intro (0)
+  // → Clarify Inbox (1) → Review Tasks (2) — two advances (#486).
+  await notifier.advanceStep();
+  await notifier.advanceStep();
   await tester.pumpAndSettle();
 }
 

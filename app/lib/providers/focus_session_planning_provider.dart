@@ -46,8 +46,11 @@ String planningToday() {
 const _kNotificationSkippedDateKey = 'planning_notification_skipped_date';
 const _kNotificationSnoozedUntilKey = 'planning_notification_snoozed_until';
 
-/// Total number of planning ritual steps (0-indexed max).
-const int _maxStepIndex = 5;
+/// Highest 0-indexed step the planning ritual reaches. Step 0 is the
+/// duration-estimate intro (#486), steps 1–5 are the working steps (Clarify
+/// Inbox, Review Tasks, Energy, Time, Plan Summary), step 6 is the Today's
+/// Schedule completion screen (rendered outside the wizard).
+const int _maxStepIndex = 6;
 
 // ---------------------------------------------------------------------------
 // Sequenced Shutdown → Daily Planning intent (issue #460, ADR-0020, ruling 4)
@@ -269,6 +272,25 @@ final skippedNextForFocusSessionPlanningProvider =
   return db.todoDao.watchTodosById(skippedIds);
 });
 
+/// Item counts feeding the Daily Planning duration-estimate intro (#486).
+///
+/// Count-only reads that touch no snapshot lifecycle — the inbox and review
+/// snapshots keep loading lazily on their own step entry. Moving them here
+/// would change semantics: items clarified in Clarify Inbox must not surface
+/// in the Review Tasks snapshot, which is taken on entry into that step.
+/// `autoDispose` gives run-to-run freshness — each fresh performance
+/// recomputes from the current lists. The counts may drift slightly from the
+/// snapshots taken later (an inbox item clarified in step 1 removes a
+/// would-be review item); acceptable — the estimate is an approximation.
+final focusSessionPlanningIntroCountsProvider =
+    FutureProvider.autoDispose<({int inboxCount, int reviewCount})>(
+        (ref) async {
+  final db = ref.watch(databaseProvider);
+  final inbox = await db.captureDao.watchInbox().first;
+  final review = await db.todoDao.getNeedsReview();
+  return (inboxCount: inbox.length, reviewCount: review.length);
+});
+
 // ---------------------------------------------------------------------------
 // Review action tracking — used to show affordances when going back
 // ---------------------------------------------------------------------------
@@ -328,7 +350,7 @@ class FocusSessionPlanningState {
   /// User's self-reported energy level for today: 'low' | 'medium' | 'high'.
   final String? energyLevel;
 
-  /// Fixed snapshot of inbox item **IDs** loaded at the start of Step 0
+  /// Fixed snapshot of inbox item **IDs** loaded at the start of Step 1
   /// plus the current navigation cursor. items == null until loaded;
   /// ordered oldest-first (FIFO).
   ///
@@ -354,8 +376,8 @@ class FocusSessionPlanningState {
   final List<String> reviewedTaskIds;
 
   /// Snapshot of tasks needing re-clarification plus the navigation cursor.
-  /// Loaded once when Step 1 is entered; the DB is never queried for "next".
-  /// items == null until step 1 is entered; an empty list short-circuits the
+  /// Loaded once when Step 2 is entered; the DB is never queried for "next".
+  /// items == null until step 2 is entered; an empty list short-circuits the
   /// step entirely.
   final SnapshotNav<Todo> reviewNav;
 
@@ -500,10 +522,13 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     _advancing = true;
     try {
       final next = state.currentStep + 1;
-      if (next == 1) {
-        // Load the review snapshot. The step always renders — an empty
-        // snapshot shows the empty-state view and the user clicks Next to
-        // advance (CONTEXT.md § Wizard: steps do not auto-skip).
+      if (next == 2) {
+        // Crossing into Review Tasks (step 2 — step 1 is Clarify Inbox, step 0
+        // the intro). Load the review snapshot on entry, never earlier: items
+        // clarified during Clarify Inbox get a next_action_text and must not
+        // surface here. The step always renders — an empty snapshot shows the
+        // empty-state view and the user clicks Next to advance (CONTEXT.md
+        // § Wizard: steps do not auto-skip).
         final items = await _db.todoDao.getNeedsReview();
         if (!ref.mounted) return;
         // Batched person-tag lookup so the stale waiting-for card variant
@@ -562,7 +587,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = state.copyWith(energyLevel: level);
   }
 
-  // ---- Inbox clarification (Step 0) — snapshot navigation -------------------
+  // ---- Inbox clarification (Step 1) — snapshot navigation -------------------
 
   /// Loads the inbox snapshot once. Idempotent: subsequent calls are no-ops.
   ///
@@ -805,7 +830,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> setTimeEstimate(String id, int minutes) =>
       _db.todoDao.updateFields(id, timeEstimate: minutes);
 
-  // ---- Task Review (Step 1) --------------------------------------------------
+  // ---- Task Review (Step 2) --------------------------------------------------
 
   /// "Still relevant" — only available for Stale tasks. Routes through
   /// [ClarificationService.clarifyToOutcome] so a prior in-session
@@ -998,7 +1023,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   ///
   /// Task selections are **cleared** so the user can re-plan from scratch.
   /// Energy level and available time are preserved. Inbox snapshot resets so
-  /// it is re-loaded fresh on the next visit to Step 0. Called on the sequenced
+  /// it is re-loaded fresh on the next visit to Step 1. Called on the sequenced
   /// Shutdown → Planning path (a completed performance), not on a direct
   /// "Plan the Day" with no session (which resumes the in-memory draft as
   /// today — issue #180 behaviour preserved).
