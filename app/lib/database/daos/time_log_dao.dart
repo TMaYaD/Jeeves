@@ -88,6 +88,30 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
       '  AS INTEGER)'
       '), 0) FROM time_logs dtl WHERE dtl.task_id = $taskIdRef)';
 
+  /// Correlated SQL subquery: ceiling-rounded total minutes across all
+  /// `time_logs` rows whose `action_id` equals [actionIdRef] (a SQL expression,
+  /// e.g. `'actions.id'` or a bound `'?'`) — the Action-grain counterpart of
+  /// [totalMinutesSubquery], with identical arithmetic.
+  ///
+  /// Embedded by `ActionDao.watchTerminatedActions` so an Outcome's history
+  /// renders what each Action cost in one joined query rather than one lookup
+  /// per row (issue #478). Legacy rows with a NULL `action_id` are counted at
+  /// the Outcome grain by [totalMinutesSubquery] and belong to no Action, so
+  /// they are absent here — the two derivations do not have to agree row-wise.
+  ///
+  /// The open-row (`ended_at IS NULL`) branch is defensive: every terminal
+  /// Action transition closes that Action's open log first (issue #476), so a
+  /// terminated Action should have none. The inner alias `dtla` avoids
+  /// colliding with [totalMinutesSubquery]'s `dtl` when both appear in one
+  /// query.
+  static String totalMinutesSubqueryForAction(String actionIdRef) =>
+      '(SELECT COALESCE(SUM('
+      '  CAST('
+      '    ((julianday(COALESCE(dtla.ended_at, datetime(\'now\'))) - julianday(dtla.started_at))'
+      '     * 86400 / 60 + 0.9999)'
+      '  AS INTEGER)'
+      '), 0) FROM time_logs dtla WHERE dtla.action_id = $actionIdRef)';
+
   /// Ceiling-rounded sum of minutes spent on [taskId] across all log rows.
   ///
   /// See [totalMinutesSubquery] for the derivation semantics.

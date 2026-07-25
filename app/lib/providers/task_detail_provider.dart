@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:drift/drift.dart';
 
+import '../database/daos/action_dao.dart' show TerminatedAction;
 import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show Intent, RoutingKind;
@@ -30,6 +31,21 @@ final plannedActionsProvider =
   final db = ref.watch(databaseProvider);
   return db.actionDao.watchPlannedActions(outcomeId);
 });
+
+/// Watches the Outcome's history — its terminated Actions (`done` and
+/// `superseded`) newest-first, each with the minutes logged against it
+/// (ADR-0001 story 8, issue #478).
+///
+/// Empty for an Outcome that has never terminated an Action (including every
+/// pre-epic Outcome backfilled by the `actions` migration); the detail screen
+/// hides the history section entirely in that case.
+final terminatedActionsProvider =
+    StreamProvider.autoDispose.family<List<TerminatedAction>, String>(
+  (ref, outcomeId) {
+    final db = ref.watch(databaseProvider);
+    return db.actionDao.watchTerminatedActions(outcomeId);
+  },
+);
 
 /// Watches the Captures an Outcome was clarified from — its provenance
 /// (`capture_outcomes`), newest link first (ADR-0006, issue #184 Phase 4).
@@ -287,6 +303,23 @@ class TaskDetailNotifier {
   /// Remove (hard-delete) a planned Action.
   Future<void> removePlannedAction(String actionId) =>
       _db.actionDao.removePlannedAction(actionId);
+
+  /// **Abandon** the current Action: drop it into the Outcome's history with no
+  /// replacement, leaving the Outcome Actionless (ADR-0001 story 8, #478).
+  ///
+  /// The copy↔model mapping, in one place: the user-facing verb is **Abandon**
+  /// (past tense "Abandoned" on a history row), the model role is
+  /// `superseded`, and the primitive is [ActionDao.clearCurrentAction] — a
+  /// supersession with no successor, which ADR-0018 gives no linkage metadata,
+  /// so its terminal timestamp is the row's `updated_at`.
+  ///
+  /// Distinct from **Remove**, which hard-deletes an unengaged `planned` row.
+  /// Abandon retires; nothing is deleted and the row is never re-promotable.
+  /// Unlike completion this *is* a clarifying act, so it stamps
+  /// `last_clarified_at`, and it clears `todos.next_action_text` in the same
+  /// transaction so the startup sweep cannot resurrect the abandoned Action.
+  Future<void> abandonCurrentAction() =>
+      _db.actionDao.clearCurrentAction(_todoId);
 
   Future<void> markDone() => _db.todoDao.markDone(_todoId);
 

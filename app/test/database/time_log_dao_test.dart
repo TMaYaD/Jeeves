@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/database/daos/time_log_dao.dart' show TimeLogDao;
 import 'package:jeeves/database/gtd_database.dart';
 import '../test_helpers.dart';
 
@@ -321,6 +322,57 @@ void main() {
       // The task-grain total counts both rows regardless of action attribution.
       final total = await db.timeLogDao.totalMinutesForTask('task1');
       expect(total, 7); // 3 (legacy) + 4 (attributed)
+    });
+
+    // -------------------------------------------------------------------------
+    // Action-grain derivation (issue #478): the same arithmetic on
+    // `action_id`, so a history row can show what that one Action cost.
+    // -------------------------------------------------------------------------
+
+    group('totalMinutesSubqueryForAction', () {
+      Future<int> minutesFor(GtdDatabase db, String actionId) async {
+        final row = await db.customSelect(
+          'SELECT ${TimeLogDao.totalMinutesSubqueryForAction('?')} AS m',
+          variables: [Variable<String>(actionId)],
+          readsFrom: {db.timeLogs},
+        ).getSingle();
+        return row.read<int>('m');
+      }
+
+      test('sums closed logs for one Action and excludes every other row',
+          () async {
+        await _insertTodo(db, id: 'task1', title: 'Task 1');
+        final base = DateTime(2024, 1, 1, 10, 0, 0).toUtc();
+
+        Future<void> log(String id, String? actionId, int minutes,
+            {int offsetMinutes = 0}) async {
+          final started = base.add(Duration(minutes: offsetMinutes));
+          await db.into(db.timeLogs).insert(TimeLogsCompanion(
+                id: Value(id),
+                userId: const Value(_userId),
+                taskId: const Value('task1'),
+                actionId: Value(actionId),
+                startedAt: Value(started.toIso8601String()),
+                endedAt: Value(started
+                    .add(Duration(minutes: minutes))
+                    .toIso8601String()),
+              ));
+        }
+
+        await log('mine-a', 'act-1', 3);
+        await log('mine-b', 'act-1', 4, offsetMinutes: 10);
+        await log('foreign', 'act-2', 50, offsetMinutes: 30);
+        await log('legacy', null, 99, offsetMinutes: 90);
+
+        expect(await minutesFor(db, 'act-1'), 7,
+            reason: 'only this Action\'s own stints count');
+        expect(await minutesFor(db, 'act-2'), 50);
+      });
+
+      test('is 0 for an Action with no logs', () async {
+        await _insertTodo(db, id: 'task1', title: 'Task 1');
+        expect(await minutesFor(db, 'act-none'), 0);
+      });
     });
   });
 }
