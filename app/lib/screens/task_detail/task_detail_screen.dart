@@ -1,4 +1,7 @@
-import 'package:flutter/material.dart';
+// The Drift `Action` row type (issue #475) collides with Material's
+// `Action<Intent>` widget class; this screen uses no Material `Action`, so hide
+// it and keep the domain type.
+import 'package:flutter/material.dart' hide Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -242,9 +245,18 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              // Notes Area
-                              Padding(
-                                padding: const EdgeInsets.all(24),
+                              // Plan + Notes grouped so spaceBetween still pins
+                              // Reminders / Due to the bottom of the viewport.
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  // Plan section (planned queue) above Notes —
+                                  // the Outcome's "what's next" (ADR-0004)
+                                  // outranks free-text notes.
+                                  _PlanSection(outcomeId: widget.todoId),
+                                  // Notes Area
+                                  Padding(
+                                    padding: const EdgeInsets.all(24),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
@@ -353,6 +365,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                           ),
                                   ],
                                 ),
+                              ),
+                                ],
                               ),
                               // Reminders, Due Date (at the literal bottom of the viewport or content)
                               Container(
@@ -764,5 +778,374 @@ class _CapturedFromSection extends ConsumerWidget {
     final m = local.month.toString().padLeft(2, '0');
     final d = local.day.toString().padLeft(2, '0');
     return 'Captured $y-$m-$d';
+  }
+}
+
+/// The Outcome's **Plan** (ADR-0004 story 5, issue #475): the current Action as
+/// an anchor row (with a demote affordance), the ordered planned queue, and an
+/// inline add affordance. Planned Actions are only ever shown here — they are
+/// not engageable (CONTEXT.md § Action).
+///
+/// Promotion is an explicit clarifying act: with no current Action the up-arrow
+/// promotes directly; with a current Action it opens the "Replace current
+/// action" confirm sheet (supersede-and-promote), never a silent replace. No
+/// SnackBars — every affordance is inline, per the screen's idiom.
+class _PlanSection extends ConsumerStatefulWidget {
+  const _PlanSection({required this.outcomeId});
+
+  final String outcomeId;
+
+  @override
+  ConsumerState<_PlanSection> createState() => _PlanSectionState();
+}
+
+class _PlanSectionState extends ConsumerState<_PlanSection> {
+  static const _muted = Color(0xFF9CA3AF);
+  static const _ink = Color(0xFF1F2937);
+
+  bool _adding = false;
+  late final TextEditingController _addController;
+  late final FocusNode _addFocus;
+
+  String? _editingId;
+  late final TextEditingController _editController;
+  late final FocusNode _editFocus;
+
+  @override
+  void initState() {
+    super.initState();
+    _addController = TextEditingController();
+    _addFocus = FocusNode();
+    _editController = TextEditingController();
+    _editFocus = FocusNode();
+    _editFocus.addListener(() {
+      if (!_editFocus.hasFocus && _editingId != null) _commitEdit();
+    });
+  }
+
+  @override
+  void dispose() {
+    _addController.dispose();
+    _addFocus.dispose();
+    _editController.dispose();
+    _editFocus.dispose();
+    super.dispose();
+  }
+
+  TaskDetailNotifier get _notifier =>
+      ref.read(taskDetailNotifierProvider(widget.outcomeId));
+
+  void _submitAdd() {
+    final text = _addController.text.trim();
+    if (text.isNotEmpty) _notifier.addPlannedAction(text).ignore();
+    _addController.clear();
+    setState(() => _adding = false);
+  }
+
+  void _startEdit(Action row) {
+    setState(() {
+      _editingId = row.id;
+      _editController.text = row.actionText;
+    });
+    Future.delayed(const Duration(milliseconds: 50), () {
+      // The row can be disposed within the delay (navigate away, or the row
+      // disappears via a sync) — requesting focus on a dead node would throw.
+      if (!mounted) return;
+      _editFocus.requestFocus();
+    });
+  }
+
+  void _commitEdit() {
+    final id = _editingId;
+    if (id == null) return;
+    final text = _editController.text.trim();
+    if (text.isNotEmpty) _notifier.editAction(id, text: text).ignore();
+    setState(() => _editingId = null);
+  }
+
+  void _onPromote(Action row, Action? current) {
+    if (current == null) {
+      _notifier.promotePlannedAction(row.id).ignore();
+    } else {
+      _confirmReplace(current: current, planned: row);
+    }
+  }
+
+  Future<void> _confirmReplace({
+    required Action current,
+    required Action planned,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Replace current action?',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              _sheetLine('Current', current.actionText, _muted),
+              const SizedBox(height: 8),
+              _sheetLine('New', planned.actionText, _ink),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  key: const Key('plan_replace_confirm'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                  ),
+                  onPressed: () {
+                    _notifier.supersedeAndPromote(planned.id).ignore();
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Replace current action'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetLine(String label, String text, Color color) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+              color: _muted,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(text, style: TextStyle(fontSize: 15, color: color)),
+        ],
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    // AsyncValue.value retains the last data across a transient loading/error
+    // (Riverpod stream refresh/re-subscribe), where .asData?.value would go
+    // null. Keeping the Plan visible matters, and the retained `current` keeps
+    // the promote decision routing through the 'Replace current action' confirm
+    // instead of mis-firing a direct promote.
+    final current = ref.watch(currentActionProvider(widget.outcomeId)).value;
+    final planned =
+        ref.watch(plannedActionsProvider(widget.outcomeId)).value ??
+            const <Action>[];
+
+    return Padding(
+      key: const Key('plan_section'),
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.checklist_rounded, size: 16, color: _muted),
+              const SizedBox(width: 8),
+              const Text(
+                'PLAN',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                  color: _muted,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildCurrentRow(current),
+          if (planned.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            _buildPlannedQueue(planned, current),
+          ] else if (current == null) ...[
+            const SizedBox(height: 8),
+            const Text(
+              "No plan yet — add the actions you're thinking of.",
+              style: TextStyle(fontSize: 14, color: Color(0xFFD1D5DB)),
+            ),
+          ],
+          const SizedBox(height: 8),
+          _buildAddAffordance(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCurrentRow(Action? current) {
+    if (current == null) {
+      return const Padding(
+        key: Key('plan_current_action'),
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text(
+          'No current action',
+          style: TextStyle(fontSize: 15, color: _muted),
+        ),
+      );
+    }
+    return Container(
+      key: const Key('plan_current_action'),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          const Icon(Icons.radio_button_checked, size: 18,
+              color: Color(0xFF2563EB)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              current.actionText,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: _ink,
+              ),
+            ),
+          ),
+          IconButton(
+            key: const Key('plan_demote_button'),
+            icon: const Icon(Icons.arrow_downward, size: 18, color: _muted),
+            tooltip: 'Move to plan',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _notifier.demoteCurrentAction(current.id).ignore(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlannedQueue(List<Action> planned, Action? current) {
+    return ReorderableListView(
+      shrinkWrap: true,
+      buildDefaultDragHandles: false,
+      physics: const NeverScrollableScrollPhysics(),
+      // onReorderItem already accounts for the removed item, so no manual
+      // `newIndex -= 1` adjustment (unlike the deprecated onReorder).
+      onReorderItem: (oldIndex, newIndex) {
+        final ids = planned.map((a) => a.id).toList();
+        final moved = ids.removeAt(oldIndex);
+        ids.insert(newIndex, moved);
+        _notifier.reorderPlannedActions(ids).ignore();
+      },
+      children: [
+        for (var i = 0; i < planned.length; i++)
+          _buildPlannedRow(planned[i], i, current),
+      ],
+    );
+  }
+
+  Widget _buildPlannedRow(Action row, int index, Action? current) {
+    final editing = _editingId == row.id;
+    return Padding(
+      key: Key('planned_action_${row.id}'),
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          ReorderableDragStartListener(
+            index: index,
+            child: const Padding(
+              key: Key('plan_drag_handle'),
+              padding: EdgeInsets.only(right: 8),
+              child: Icon(Icons.drag_indicator, size: 18, color: _muted),
+            ),
+          ),
+          Expanded(
+            child: editing
+                ? TextField(
+                    key: const Key('plan_edit_field'),
+                    controller: _editController,
+                    focusNode: _editFocus,
+                    style: const TextStyle(fontSize: 15, color: _ink),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      contentPadding: EdgeInsets.zero,
+                      border: InputBorder.none,
+                    ),
+                    onSubmitted: (_) => _commitEdit(),
+                  )
+                : GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _startEdit(row),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Text(
+                        row.actionText,
+                        style: const TextStyle(fontSize: 15, color: _ink),
+                      ),
+                    ),
+                  ),
+          ),
+          IconButton(
+            key: Key('plan_promote_${row.id}'),
+            icon: const Icon(Icons.arrow_upward, size: 18, color: _muted),
+            tooltip: 'Make current',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _onPromote(row, current),
+          ),
+          IconButton(
+            key: Key('plan_remove_${row.id}'),
+            icon: const Icon(Icons.close, size: 18, color: _muted),
+            tooltip: 'Remove',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _notifier.removePlannedAction(row.id).ignore(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAddAffordance() {
+    if (_adding) {
+      return TextField(
+        key: const Key('plan_add_field'),
+        controller: _addController,
+        focusNode: _addFocus,
+        autofocus: true,
+        style: const TextStyle(fontSize: 15, color: _ink),
+        decoration: const InputDecoration(
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(vertical: 6),
+          border: InputBorder.none,
+          hintText: 'Add planned action',
+          hintStyle: TextStyle(color: Color(0xFFD1D5DB)),
+        ),
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _submitAdd(),
+        onTapOutside: (_) => _submitAdd(),
+      );
+    }
+    return InkWell(
+      key: const Key('plan_add_trigger'),
+      onTap: () => setState(() => _adding = true),
+      borderRadius: BorderRadius.circular(8),
+      child: const Padding(
+        padding: EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Icon(Icons.add, size: 18, color: Color(0xFF2563EB)),
+            SizedBox(width: 8),
+            Text(
+              'Add planned action',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF2563EB),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
