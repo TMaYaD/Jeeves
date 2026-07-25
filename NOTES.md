@@ -37,4 +37,7 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 - Instinct: a modal takes an `onConfirm` callback, runs it, then pops itself. Here: modals pop with their result and the caller acts afterwards — a callback firing under an open sheet makes the caller's `pop()` close the sheet instead of its own route, and any write the sheet did before the callback lands even when the callback then bails.
 
 ## 2026-07-25 (cursor-clear on supersession)
-- Instinct: a supersede primitive that stamps and retires is complete. Here: it must also clear `todos.next_action_text` — the startup sweep treats the cursor as authoritative and will resurrect the Action at the next launch.
+- Instinct: a supersede primitive that stamps and retires is complete. Here: it must also clear `todos.next_action_text` — a client that predates the Actions table reads the cursor, and a stale one keeps offering an Action the user abandoned.
+
+## 2026-07-26 (retiring the next-action cursor)
+- Instinct: removing the dual-write is a cleanup that can follow the read cutover. Here: the startup sweep's Pass B retires every current Action with a blank cursor — the sweep must be made safe and fully released before any write is removed.
