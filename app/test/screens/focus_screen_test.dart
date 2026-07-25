@@ -203,4 +203,20 @@ void main() {
     expect(find.text('End Session'), findsOneWidget);
     expect(find.text('Plan the Day'), findsNothing);
   });
+
+  testWidgets(
+      'FocusScreen no longer renders its own Re-plan ⋮ menu — Re-plan moved '
+      'to the shared title bar (issue #499)', (tester) async {
+    // Even in the shutdown-callout state (open session + tasks), the screen
+    // itself carries no bespoke overflow menu or Re-plan affordance; the
+    // Re-plan action is supplied by AppShell to the shared title bar.
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [_todo('t1', 'Planned task')],
+    ));
+    await tester.pump();
+
+    expect(find.byIcon(Icons.more_vert), findsNothing);
+    expect(find.text('Re-plan'), findsNothing);
+  });
 }

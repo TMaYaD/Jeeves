@@ -17,6 +17,7 @@ import 'package:jeeves/screens/app_shell.dart';
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/nudge_banner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../helpers/app_title_bar_test_helpers.dart';
 import '../test_helpers.dart';
 
 // ---------------------------------------------------------------------------
@@ -63,6 +64,8 @@ Widget _buildShellOnly({
   Stream<List<Capture>>? inboxStream,
   VoidCallback? onLogout,
   String initialLocation = '/inbox',
+  FocusSession? activeSession,
+  List<Todo> sessionTasks = const [],
   FocusSessionPlanningSettings planningSettings =
       const FocusSessionPlanningSettings(bannerEnabled: false),
 }) {
@@ -76,6 +79,12 @@ Widget _buildShellOnly({
       maybeProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
+      // The Now route's Re-plan page action derives from these two providers
+      // (via hasOpenSessionWithTasksProvider). Default them so the derived
+      // provider never reaches the un-overridden databaseProvider — the
+      // route-title iteration test mounts every shell route, /focus included.
+      activeSessionProvider.overrideWith((_) => Stream.value(activeSession)),
+      activeSessionTasksProvider.overrideWith((_) => Stream.value(sessionTasks)),
       focusSessionPlanningSelectedTasksProvider.overrideWith((_) => Stream.value([])),
       focusSessionPlanningProvider
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
@@ -143,6 +152,27 @@ Widget _buildShellOnly({
     ),
   );
 }
+
+FocusSession _openSession() => FocusSession(
+      id: 'test-session',
+      userId: 'test-user',
+      startedAt: DateTime.now().toIso8601String(),
+      endedAt: null,
+      currentTaskId: null,
+    );
+
+Todo _todo(String id, String title) => Todo(
+      id: id,
+      title: title,
+      createdAt: DateTime.now(),
+      doneAt: null,
+      clarified: true,
+      intent: 'next',
+      userId: 'test-user',
+      timeSpentMinutes: 0,
+    );
+
+const _replanKey = Key('focus_replan');
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -419,6 +449,97 @@ void main() {
         ),
         findsOneWidget,
       );
+    });
+  });
+
+  group('Now-route Re-plan page action (#499)', () {
+    testWidgets(
+        'shows Re-plan in the shared bar on /focus with an open session '
+        'carrying tasks', (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        activeSession: _openSession(),
+        sessionTasks: [_todo('t1', 'Planned task')],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(await findBarAction(tester, _replanKey), findsOneWidget);
+    });
+
+    testWidgets('is absent in each negative gate state on /focus',
+        (tester) async {
+      // The gate is "open session AND >= 1 task". Its three negatives all
+      // withhold the action: no session (with tasks), a session with no tasks,
+      // and neither.
+      const cases = <({FocusSession? session, bool withTask, String desc})>[
+        (session: null, withTask: true, desc: 'no session, tasks present'),
+        (session: null, withTask: false, desc: 'no session, no tasks'),
+      ];
+
+      for (final c in cases) {
+        await tester.pumpWidget(_buildShellOnly(
+          initialLocation: '/focus',
+          activeSession: c.session,
+          sessionTasks: c.withTask ? [_todo('t1', 'Task')] : const [],
+        ));
+        await tester.pumpAndSettle();
+        expect(find.byKey(_replanKey), findsNothing, reason: c.desc);
+      }
+
+      // Open session but zero tasks — the third negative.
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        activeSession: _openSession(),
+        sessionTasks: const [],
+      ));
+      await tester.pumpAndSettle();
+      expect(find.byKey(_replanKey), findsNothing,
+          reason: 'open session, no tasks');
+    });
+
+    testWidgets('is absent on non-Now routes even with an open session+tasks',
+        (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/next-actions',
+        activeSession: _openSession(),
+        sessionTasks: [_todo('t1', 'Planned task')],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_replanKey), findsNothing);
+    });
+
+    testWidgets('tapping Re-plan navigates to /focus-session-planning',
+        (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        activeSession: _openSession(),
+        sessionTasks: [_todo('t1', 'Planned task')],
+      ));
+      await tester.pumpAndSettle();
+
+      await tapBarAction(tester, _replanKey);
+
+      expect(find.text('Planning body'), findsOneWidget);
+    });
+
+    testWidgets(
+        'at phone width Re-plan renders in the bar with no ⋮ overflow '
+        '(sole action, no pinned action fits the budget)', (tester) async {
+      tester.view.physicalSize = const Size(375, 812);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        activeSession: _openSession(),
+        sessionTasks: [_todo('t1', 'Planned task')],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_replanKey), findsOneWidget);
+      expect(find.byKey(appTitleBarOverflowKey), findsNothing);
     });
   });
 }
