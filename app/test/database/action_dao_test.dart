@@ -63,6 +63,24 @@ Future<DateTime?> _lastClarified(GtdDatabase db, String outcomeId) async {
   return row.lastClarifiedAt;
 }
 
+Future<String?> _nextText(GtdDatabase db, String outcomeId) async {
+  final row = await (db.select(db.todos)..where((t) => t.id.equals(outcomeId)))
+      .getSingle();
+  return row.nextActionText;
+}
+
+/// Planned rows for an Outcome, in the DAO's queue order (position, created_at,
+/// id), as (id, text, position) records.
+Future<List<(String, String, int?)>> _planned(
+  GtdDatabase db,
+  String outcomeId,
+) async {
+  final rows = await db.actionDao.getPlannedActions(outcomeId);
+  return [for (final r in rows) (r.id, r.actionText, r.position)];
+}
+
+final _t4 = DateTime.parse('2026-07-01T13:00:00.000Z');
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -219,6 +237,295 @@ void main() {
       expect(a.data['role'], 'superseded');
       expect(await _lastClarified(db, 'oc'), _t0,
           reason: 'convergence is repair, not clarification — no stamp');
+    });
+  });
+
+  group('editAction', () {
+    test('renames a planned row in place and stamps', () async {
+      await db.actionDao.addPlannedAction('o1', 'draft', now: _t1);
+      final id = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.editAction(id, text: 'draft the outline', now: _t2);
+
+      expect((await _planned(db, 'o1')).single.$2, 'draft the outline');
+      expect(await _lastClarified(db, 'o1'), _t2);
+    });
+  });
+
+  group('addPlannedAction', () {
+    test('appends dense positions 0,1,2 and stamps each time', () async {
+      await db.actionDao.addPlannedAction('o1', 'a', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'b', now: _t2);
+      await db.actionDao.addPlannedAction('o1', 'c', now: _t3);
+
+      final planned = await _planned(db, 'o1');
+      expect(planned.map((p) => p.$2), ['a', 'b', 'c']);
+      expect(planned.map((p) => p.$3), [0, 1, 2]);
+      expect(await _lastClarified(db, 'o1'), _t3);
+    });
+
+    test('blank text throws and does not stamp', () async {
+      await _seedOutcome(db, id: 'o2', lastClarifiedAt: _t0);
+      expect(
+        () => db.actionDao.addPlannedAction('o2', '   ', now: _t1),
+        throwsArgumentError,
+      );
+      expect(await _lastClarified(db, 'o2'), _t0);
+    });
+
+    test('explicit position inserts and shifts the rest down', () async {
+      await db.actionDao.addPlannedAction('o1', 'a', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'b', now: _t2);
+      await db.actionDao.addPlannedAction('o1', 'inserted', position: 1, now: _t3);
+
+      final planned = await _planned(db, 'o1');
+      expect(planned.map((p) => p.$2), ['a', 'inserted', 'b']);
+      expect(planned.map((p) => p.$3), [0, 1, 2]);
+    });
+
+    test('a planned row never surfaces as the current Action', () async {
+      await db.actionDao.addPlannedAction('o1', 'planned only', now: _t1);
+      expect(await _current(db, 'o1'), isNull,
+          reason: 'planned rows are not engageable');
+      expect(await db.actionDao.getCurrentActionTexts({'o1'}), isEmpty);
+    });
+  });
+
+  group('reorderPlannedActions', () {
+    Future<List<String>> ids(String outcomeId) async =>
+        [for (final p in await _planned(db, outcomeId)) p.$1];
+
+    test('rewrites dense positions in the given order and stamps once',
+        () async {
+      await db.actionDao.addPlannedAction('o1', 'a', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'b', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'c', now: _t1);
+      final order = await ids('o1');
+
+      await db.actionDao.reorderPlannedActions(
+        'o1',
+        [order[2], order[0], order[1]],
+        now: _t4,
+      );
+
+      final planned = await _planned(db, 'o1');
+      expect(planned.map((p) => p.$2), ['c', 'a', 'b']);
+      expect(planned.map((p) => p.$3), [0, 1, 2]);
+      expect(await _lastClarified(db, 'o1'), _t4);
+    });
+
+    test('an unchanged order is a no-op: no write, no stamp', () async {
+      await db.actionDao.addPlannedAction('o1', 'a', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'b', now: _t2);
+      final order = await ids('o1');
+
+      await db.actionDao.reorderPlannedActions('o1', order, now: _t4);
+
+      expect(await _lastClarified(db, 'o1'), _t2,
+          reason: 'no-op reorder must not stamp');
+    });
+
+    test('drift tolerance: unknown ids are ignored and a missing planned row is '
+        'appended in prior relative order', () async {
+      await db.actionDao.addPlannedAction('o1', 'a', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'b', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'c', now: _t1);
+      final order = await ids('o1');
+
+      // Reorder names only b and a (c omitted) plus a stranger id.
+      await db.actionDao.reorderPlannedActions(
+        'o1',
+        [order[1], 'ghost', order[0]],
+        now: _t4,
+      );
+
+      final planned = await _planned(db, 'o1');
+      // b, a as named; c appended keeping its prior relative order.
+      expect(planned.map((p) => p.$2), ['b', 'a', 'c']);
+      expect(planned.map((p) => p.$3), [0, 1, 2]);
+    });
+  });
+
+  group('promotePlannedAction', () {
+    test('flips role to current, clears position, sets the cursor text and '
+        'mirrors metadata, and stamps', () async {
+      await db.actionDao.addPlannedAction('o1', 'do the thing',
+          energyLevel: 'high', timeEstimate: 30, now: _t1);
+      final id = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.promotePlannedAction(id, now: _t2);
+
+      final cur = await _current(db, 'o1');
+      expect(cur!['id'], id, reason: 'same row, flipped role');
+      expect(cur['role'], 'current');
+      expect(cur['position'], isNull);
+      expect(await _planned(db, 'o1'), isEmpty);
+      // Cursor dual-write (mandatory for sweep stability).
+      expect(await _nextText(db, 'o1'), 'do the thing');
+      final todo = await db.todoDao.getTodo('o1');
+      expect(todo!.energyLevel, 'high');
+      expect(todo.timeEstimate, 30);
+      expect(await _lastClarified(db, 'o1'), _t2);
+    });
+
+    test('refuses with StateError when a current Action already exists',
+        () async {
+      await db.actionDao.setCurrentAction('o1', 'current one', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'planned one', now: _t2);
+      final plannedId = (await _planned(db, 'o1')).single.$1;
+
+      expect(
+        () => db.actionDao.promotePlannedAction(plannedId, now: _t3),
+        throwsStateError,
+      );
+      // Nothing changed: still one current + one planned.
+      expect((await _current(db, 'o1'))!['text'], 'current one');
+      expect((await _planned(db, 'o1')).single.$2, 'planned one');
+    });
+
+    test('is a no-op on a missing row and on an already-current row', () async {
+      await db.actionDao.setCurrentAction('o1', 'live', now: _t1);
+      final curId = (await _current(db, 'o1'))!['id'] as String;
+
+      await db.actionDao.promotePlannedAction('nope', now: _t2);
+      await db.actionDao.promotePlannedAction(curId, now: _t2);
+
+      expect((await _current(db, 'o1'))!['text'], 'live');
+      expect(await _lastClarified(db, 'o1'), _t1, reason: 'no-op → no stamp');
+    });
+  });
+
+  group('supersedeAndPromote', () {
+    test('retires the current (ADR-0018 terminal time = updated_at) and flips '
+        'the planned row up, cursor rewritten, one stamp', () async {
+      await db.actionDao.setCurrentAction('o1', 'old current', now: _t1);
+      final oldId = (await _current(db, 'o1'))!['id'] as String;
+      await db.actionDao.addPlannedAction('o1', 'new current',
+          energyLevel: 'low', now: _t2);
+      final plannedId = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.supersedeAndPromote(plannedId, now: _t3);
+
+      final old = (await _actions(db, 'o1')).firstWhere((r) => r['id'] == oldId);
+      expect(old['role'], 'superseded');
+      expect(old['updated_at'], _t3.toIso8601String());
+      final cur = await _current(db, 'o1');
+      expect(cur!['id'], plannedId);
+      expect(cur['text'], 'new current');
+      expect(await _nextText(db, 'o1'), 'new current');
+      expect((await db.todoDao.getTodo('o1'))!.energyLevel, 'low');
+      expect(await _planned(db, 'o1'), isEmpty);
+      expect(await _lastClarified(db, 'o1'), _t3);
+    });
+
+    test('idempotent replay: a second call on the now-current row is a no-op',
+        () async {
+      await db.actionDao.setCurrentAction('o1', 'old', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'new', now: _t2);
+      final plannedId = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.supersedeAndPromote(plannedId, now: _t3);
+      await db.actionDao.supersedeAndPromote(plannedId, now: _t4);
+
+      expect((await _current(db, 'o1'))!['id'], plannedId);
+      expect(await _lastClarified(db, 'o1'), _t3,
+          reason: 'the replay finds a current row → no-op, no fresh stamp');
+    });
+  });
+
+  group('demoteCurrentAction', () {
+    test('flips the current back to planned at position 0 (shifting), clears '
+        'the cursor text, and stamps', () async {
+      await db.actionDao.addPlannedAction('o1', 'kept', now: _t1);
+      await db.actionDao.setCurrentAction('o1', 'demote me', now: _t2);
+      final curId = (await _current(db, 'o1'))!['id'] as String;
+
+      await db.actionDao.demoteCurrentAction(curId, now: _t3);
+
+      expect(await _current(db, 'o1'), isNull);
+      final planned = await _planned(db, 'o1');
+      expect(planned.map((p) => p.$2), ['demote me', 'kept']);
+      expect(planned.map((p) => p.$3), [0, 1]);
+      expect(await _nextText(db, 'o1'), isNull,
+          reason: 'demote must clear the cursor (Mode 3 resurrect guard)');
+      expect(await _lastClarified(db, 'o1'), _t3);
+    });
+
+    test('honours an explicit position', () async {
+      await db.actionDao.addPlannedAction('o1', 'first', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'second', now: _t1);
+      await db.actionDao.setCurrentAction('o1', 'demoted', now: _t2);
+      final curId = (await _current(db, 'o1'))!['id'] as String;
+
+      await db.actionDao.demoteCurrentAction(curId, position: 1, now: _t3);
+
+      expect((await _planned(db, 'o1')).map((p) => p.$2),
+          ['first', 'demoted', 'second']);
+    });
+
+    test('no-op on a missing or non-current row', () async {
+      await db.actionDao.addPlannedAction('o1', 'planned', now: _t1);
+      final plannedId = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.demoteCurrentAction(plannedId, now: _t2);
+
+      expect((await _planned(db, 'o1')).single.$2, 'planned',
+          reason: 'a planned row is never demoted');
+      expect(await _lastClarified(db, 'o1'), _t1);
+    });
+  });
+
+  group('removePlannedAction', () {
+    test('hard-deletes the planned row, leaves the others, and stamps',
+        () async {
+      await db.actionDao.addPlannedAction('o1', 'a', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'b', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'c', now: _t1);
+      final planned = await _planned(db, 'o1');
+      final bId = planned[1].$1;
+
+      await db.actionDao.removePlannedAction(bId, now: _t4);
+
+      final rows = await _actions(db, 'o1');
+      expect(rows, hasLength(2), reason: 'b is gone, no tombstone');
+      expect(rows.map((r) => r['text']), containsAll(['a', 'c']));
+      expect(rows.map((r) => r['text']), isNot(contains('b')));
+      // Positions untouched (0 and 2) — the read tie-break covers the gap.
+      expect((await _planned(db, 'o1')).map((p) => p.$2), ['a', 'c']);
+      expect(await _lastClarified(db, 'o1'), _t4);
+    });
+
+    test('never deletes a current row', () async {
+      await db.actionDao.setCurrentAction('o1', 'live', now: _t1);
+      final curId = (await _current(db, 'o1'))!['id'] as String;
+
+      await db.actionDao.removePlannedAction(curId, now: _t2);
+
+      expect((await _current(db, 'o1'))!['text'], 'live');
+      expect(await _lastClarified(db, 'o1'), _t1, reason: 'no-op → no stamp');
+    });
+  });
+
+  group('watchPlannedActions ordering', () {
+    test('duplicate positions tie-break on created_at then id', () async {
+      // Two rows sharing position 0 (a cross-device collision) must still order
+      // deterministically.
+      await db.customStatement(
+        "INSERT INTO actions (id, outcome_id, user_id, text, role, position, "
+        "created_at) VALUES "
+        "('zzz', 'o1', ?, 'later', 'planned', 0, ?), "
+        "('aaa', 'o1', ?, 'earlier', 'planned', 0, ?)",
+        [
+          _userId,
+          _t2.toIso8601String(),
+          _userId,
+          _t1.toIso8601String(),
+        ],
+      );
+
+      final planned = await _planned(db, 'o1');
+      // Same position → earlier created_at wins.
+      expect(planned.map((p) => p.$2), ['earlier', 'later']);
     });
   });
 }

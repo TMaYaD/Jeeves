@@ -361,4 +361,67 @@ void main() {
     expect(await _actions(db, 'mint'), afterFirst['mint']);
     expect(await _actions(db, 'phantom'), afterFirst['phantom']);
   });
+
+  // ---------------------------------------------------------------------------
+  // Planned queue (ADR-0004 story 5, issue #475): the sweep filters both passes
+  // on role='current', so planned rows are invisible to it, and the promote /
+  // demote cursor dual-writes keep the swept-for invariant intact.
+  // ---------------------------------------------------------------------------
+
+  test('planned rows survive both passes untouched', () async {
+    await _seedOutcome(db,
+        id: 'o1', nextActionText: 'live', lastClarifiedAt: _clarified);
+    await _insertAction(db,
+        id: backfillActionIdFor('o1'),
+        outcomeId: 'o1',
+        text: 'live',
+        role: 'current');
+    await db.customStatement(
+      "INSERT INTO actions (id, outcome_id, user_id, text, role, position, "
+      "created_at) VALUES ('p1', 'o1', ?, 'planned later', 'planned', 0, ?)",
+      [_userId, _t0.toIso8601String()],
+    );
+
+    final repaired = await _sweep(db);
+
+    expect(repaired, 0, reason: 'nothing drifted');
+    final planned = (await _actions(db, 'o1'))
+        .firstWhere((r) => r['id'] == 'p1');
+    expect(planned['role'], 'planned');
+    expect(planned['position'], 0);
+    expect(planned['text'], 'planned later');
+  });
+
+  test('a promoted Action is sweep-stable: the cursor dual-write keeps Pass B '
+      'from retiring it as a phantom', () async {
+    await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
+    await db.actionDao.addPlannedAction('o1', 'ship it',
+        energyLevel: 'high', timeEstimate: 30, now: _t0);
+    final id = (await db.actionDao.getPlannedActions('o1')).single.id;
+    await db.actionDao.promotePlannedAction(id, now: _clarified);
+
+    final repaired = await _sweep(db);
+
+    expect(repaired, 0, reason: 'promote wrote the cursor, so no drift');
+    final cur = await _current(db, 'o1');
+    expect(cur!['id'], id, reason: 'the promoted row is still the current');
+    expect(cur['text'], 'ship it');
+  });
+
+  test('a demoted Action stays demoted: the cleared cursor keeps Pass A mode-3 '
+      'from resurrecting it', () async {
+    await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
+    await db.actionDao.setCurrentAction('o1', 'ship it', now: _t0);
+    final id = (await _current(db, 'o1'))!['id'] as String;
+    await db.actionDao.demoteCurrentAction(id, now: _clarified);
+
+    final repaired = await _sweep(db);
+
+    expect(repaired, 0, reason: 'demote cleared the cursor, so no drift');
+    expect(await _current(db, 'o1'), isNull,
+        reason: 'no fresh current resurrected from a blank cursor');
+    final planned = (await _actions(db, 'o1')).single;
+    expect(planned['role'], 'planned');
+    expect(planned['text'], 'ship it');
+  });
 }

@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
-import 'package:flutter/material.dart' hide Intent;
+// Hide Material's `Intent` (clashes with the domain Intent) and `Action`
+// (clashes with the Drift Action row type, issue #475).
+import 'package:flutter/material.dart' hide Intent, Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -60,6 +62,11 @@ Future<Todo> _insertAt(
   // screen own a controller here, exactly as a live Drift watch would emit,
   // without leaving a pending timer behind on dispose.
   Stream<Todo?>? todoStream,
+  // Plan-section feeds (issue #475). Stubbed like the other row streams so a
+  // live Drift watch's zero-duration close timer never outlives the test; the
+  // journey test owns controllers here and drives them off real DAO reads.
+  Stream<Action?>? currentActionStream,
+  Stream<List<Action>>? plannedActionsStream,
 }) {
   final router = GoRouter(
     initialLocation: '/inbox',
@@ -95,6 +102,10 @@ Future<Todo> _insertAt(
       // is covered by capture_dao_test; this file covers the rendering.
       capturesForOutcomeProvider(todoId)
           .overrideWith((_) => Stream.value(capturedFrom)),
+      currentActionProvider(todoId)
+          .overrideWith((_) => currentActionStream ?? Stream.value(null)),
+      plannedActionsProvider(todoId)
+          .overrideWith((_) => plannedActionsStream ?? Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
     ],
@@ -731,6 +742,176 @@ void main() {
       await tester.tap(find.byIcon(Icons.arrow_back_ios_new));
       await tester.pumpAndSettle();
       expect(find.text('Inbox'), findsOneWidget);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // The Plan section (planned queue, issue #475). The UI drives the real
+  // TaskDetailNotifier → real ActionDao against the in-memory db; the two
+  // plan-section streams are hand-cranked off real DAO reads after each gesture
+  // (the same pattern the other row streams use, so no live Drift close-timer
+  // outlives the test).
+  // ---------------------------------------------------------------------------
+  group('TaskDetailScreen — Plan section (issue #475)', () {
+    late GtdDatabase db;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      db = _openInMemory();
+    });
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'journey: add → reorder → edit → promote (Actionless) → demote → '
+        'replace via confirm sheet → remove', (tester) async {
+      final todo = await _insertAt(db, id: 'plan1', title: 'Plan outcome');
+      final curCtrl = StreamController<Action?>.broadcast();
+      final plnCtrl = StreamController<List<Action>>.broadcast();
+      addTearDown(curCtrl.close);
+      addTearDown(plnCtrl.close);
+
+      Future<List<Action>> plannedRows() async =>
+          (await tester.runAsync(() => db.actionDao.getPlannedActions('plan1')))!;
+      Future<Action?> currentRow() async => await tester
+          .runAsync<Action?>(() => db.actionDao.getCurrentAction('plan1'));
+      Future<DateTime?> stamp() async =>
+          (await tester.runAsync(() => db.todoDao.getTodo('plan1')))!
+              .lastClarifiedAt;
+
+      Future<void> refresh() async {
+        curCtrl.add(await currentRow());
+        plnCtrl.add(await plannedRows());
+        await tester.pump();
+        await tester.pump();
+      }
+
+      Future<void> settleWrite() =>
+          tester.runAsync(() => Future<void>.delayed(
+                const Duration(milliseconds: 20),
+              ));
+
+      final (widget, router) = _buildScreen(
+        db,
+        'plan1',
+        initialTodo: todo,
+        currentActionStream: curCtrl.stream,
+        plannedActionsStream: plnCtrl.stream,
+      );
+      await _showTaskDetail(tester, widget, router, 'plan1');
+      await refresh();
+
+      // Planless: the anchor placeholder and the empty-plan copy render.
+      expect(find.byKey(const Key('plan_section')), findsOneWidget);
+      expect(find.text('No current action'), findsOneWidget);
+      expect(
+        find.text("No plan yet — add the actions you're thinking of."),
+        findsOneWidget,
+      );
+
+      Future<void> addPlanned(String text) async {
+        await tester.tap(find.byKey(const Key('plan_add_trigger')));
+        await tester.pump();
+        await tester.enterText(find.byKey(const Key('plan_add_field')), text);
+        await tester.testTextInput.receiveAction(TextInputAction.done);
+        await settleWrite();
+        await refresh();
+      }
+
+      // --- Add two planned actions ---
+      await addPlanned('first');
+      await addPlanned('second');
+      var rows = await plannedRows();
+      expect(rows.map((a) => a.actionText), ['first', 'second']);
+      expect(find.text('first'), findsOneWidget);
+      expect(find.text('second'), findsOneWidget);
+
+      // --- Reorder (invoke the ReorderableListView callback: drag is flaky in
+      // widget tests; the DAO reorder is covered deterministically in
+      // action_dao_test) ---
+      final rlv =
+          tester.widget<ReorderableListView>(find.byType(ReorderableListView));
+      rlv.onReorderItem!(1, 0); // move 'second' to the front
+      await settleWrite();
+      await refresh();
+      rows = await plannedRows();
+      expect(rows.map((a) => a.actionText), ['second', 'first']);
+
+      // --- Inline edit the front row ---
+      await tester.tap(find.text('second'));
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.enterText(
+          find.byKey(const Key('plan_edit_field')), 'second (edited)');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await settleWrite();
+      await refresh();
+      rows = await plannedRows();
+      expect(rows.first.actionText, 'second (edited)');
+
+      final beforePromote = await stamp();
+
+      // --- Promote the front row while Actionless (direct promote) ---
+      await tester.tap(find.byKey(Key('plan_promote_${rows.first.id}')));
+      await settleWrite();
+      await refresh();
+      final promoted = await currentRow();
+      expect(promoted, isNotNull);
+      expect(promoted!.actionText, 'second (edited)');
+      // Cursor dual-write landed.
+      final todoAfterPromote =
+          await tester.runAsync(() => db.todoDao.getTodo('plan1'));
+      expect(todoAfterPromote!.nextActionText, 'second (edited)');
+      expect(find.byKey(const Key('plan_current_action')), findsOneWidget);
+      expect((await stamp())!.isAfter(beforePromote!), isTrue,
+          reason: 'promote stamps');
+
+      // --- Demote it back to the plan ---
+      await tester.tap(find.byKey(const Key('plan_demote_button')));
+      await settleWrite();
+      await refresh();
+      expect(await currentRow(), isNull);
+      final todoAfterDemote =
+          await tester.runAsync(() => db.todoDao.getTodo('plan1'));
+      expect(todoAfterDemote!.nextActionText, isNull,
+          reason: 'demote clears the cursor');
+
+      // Promote 'first' directly so a current exists for the replace path.
+      rows = await plannedRows();
+      final firstRow = rows.firstWhere((a) => a.actionText == 'first');
+      await tester.tap(find.byKey(Key('plan_promote_${firstRow.id}')));
+      await settleWrite();
+      await refresh();
+      expect((await currentRow())!.actionText, 'first');
+
+      // --- Replace the current via the confirm sheet (supersede-and-promote) ---
+      rows = await plannedRows();
+      final replacement = rows.firstWhere(
+          (a) => a.actionText == 'second (edited)');
+      await tester.tap(find.byKey(Key('plan_promote_${replacement.id}')));
+      await tester.pumpAndSettle();
+      expect(find.text('Replace current action?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('plan_replace_confirm')));
+      await tester.pumpAndSettle();
+      await settleWrite();
+      await refresh();
+      expect((await currentRow())!.actionText, 'second (edited)');
+      // The replaced Action is superseded, not deleted.
+      final all = await tester.runAsync(() => db.actionDao
+          .watchPlannedActions('plan1')
+          .first);
+      expect(all!.map((a) => a.actionText), isNot(contains('first')),
+          reason: 'first was superseded (retired), not a planned row');
+
+      // --- Remove the remaining planned row ---
+      // After the replace, 'first' is superseded and nothing is planned; add a
+      // throwaway planned row and remove it to exercise the remove affordance.
+      await addPlanned('scratch');
+      rows = await plannedRows();
+      final scratch = rows.firstWhere((a) => a.actionText == 'scratch');
+      await tester.tap(find.byKey(Key('plan_remove_${scratch.id}')));
+      await settleWrite();
+      await refresh();
+      expect((await plannedRows()).map((a) => a.actionText),
+          isNot(contains('scratch')));
     });
   });
 }

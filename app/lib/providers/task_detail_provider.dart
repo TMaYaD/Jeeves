@@ -15,6 +15,22 @@ final taskDetailTodoProvider =
   return db.todoDao.watchTodo(todoId);
 });
 
+/// Watches the Outcome's current Action (or null when Actionless) — the anchor
+/// of the Plan section (ADR-0004 story 5, issue #475).
+final currentActionProvider =
+    StreamProvider.autoDispose.family<Action?, String>((ref, outcomeId) {
+  final db = ref.watch(databaseProvider);
+  return db.actionDao.watchCurrentAction(outcomeId);
+});
+
+/// Watches the Outcome's ordered planned queue — the planned rows shown only in
+/// the Outcome's detail view (never engageable; ADR-0004 story 5, issue #475).
+final plannedActionsProvider =
+    StreamProvider.autoDispose.family<List<Action>, String>((ref, outcomeId) {
+  final db = ref.watch(databaseProvider);
+  return db.actionDao.watchPlannedActions(outcomeId);
+});
+
 /// Watches the Captures an Outcome was clarified from — its provenance
 /// (`capture_outcomes`), newest link first (ADR-0006, issue #184 Phase 4).
 ///
@@ -218,6 +234,59 @@ class TaskDetailNotifier {
         .go();
     await _db.todoDao.stampLastClarifiedAt(_todoId);
   }
+
+  // --- Planned queue (ADR-0004 story 5, issue #475) ---
+
+  /// Append a `planned` Action to this Outcome's queue.
+  Future<void> addPlannedAction(
+    String text, {
+    String? energyLevel,
+    int? timeEstimate,
+  }) =>
+      _db.actionDao.addPlannedAction(
+        _todoId,
+        text,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+      );
+
+  /// In-place edit of any Action on this Outcome (the planned queue's inline
+  /// rename; role-agnostic).
+  Future<void> editAction(
+    String actionId, {
+    String? text,
+    String? energyLevel,
+    int? timeEstimate,
+  }) =>
+      _db.actionDao.editAction(
+        actionId,
+        text: text,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+      );
+
+  /// Rewrite the planned queue order to [orderedIds].
+  Future<void> reorderPlannedActions(List<String> orderedIds) =>
+      _db.actionDao.reorderPlannedActions(_todoId, orderedIds);
+
+  /// Promote a planned Action to current (throws if a current already exists —
+  /// the UI routes that case through [supersedeAndPromote]).
+  Future<void> promotePlannedAction(String actionId) =>
+      _db.actionDao.promotePlannedAction(actionId);
+
+  /// Replace the current Action with the planned [actionId] (retire-and-promote
+  /// in one act).
+  Future<void> supersedeAndPromote(String actionId) =>
+      _db.actionDao.supersedeAndPromote(actionId);
+
+  /// Demote the current Action [actionId] back to the front of the planned
+  /// queue.
+  Future<void> demoteCurrentAction(String actionId) =>
+      _db.actionDao.demoteCurrentAction(actionId);
+
+  /// Remove (hard-delete) a planned Action.
+  Future<void> removePlannedAction(String actionId) =>
+      _db.actionDao.removePlannedAction(actionId);
 
   Future<void> markDone() => _db.todoDao.markDone(_todoId);
 

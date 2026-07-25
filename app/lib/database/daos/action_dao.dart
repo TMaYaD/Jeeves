@@ -24,16 +24,43 @@
 ///
 /// Per **ADR-0018** supersession carries no linkage metadata: a superseded
 /// row's terminal timestamp is its `updated_at`, there is no `superseded_by_id`
-/// / `superseded_at`. A text edit of the current Action is an *in-place* edit
-/// of the same row (a refinement of the same Action); supersession is an
-/// explicit affordance that flips `role` and is exercised only by tests in this
-/// story (no UI calls it yet — stories 5/8).
+/// / `superseded_at`. A text edit of an Action is an *in-place* edit of the
+/// same row (a refinement of the same Action); supersession is an explicit
+/// affordance that flips `role`. It is now UI-reachable through
+/// [supersedeAndPromote] — the "Replace current action" gesture of the planned
+/// queue (ADR-0004 story 5) — so it is no longer test-only.
 ///
-/// The dual-write choke points in [TodoDao] compose these primitives through
-/// the `apply*` transaction-body variants (package-internal), which run inside
-/// the caller's transaction and defer notification to the caller (so watchers
-/// never re-read pre-commit state) — see `TodoDao.setNextActionText` /
-/// `setNextActionTextIfActionless` / `applyRouting` / `deleteOutcome`.
+/// **The planned queue (ADR-0004 story 5, issue #475).** Beyond the 0..1
+/// `current` Action, an Outcome carries an ordered list of `planned` Actions —
+/// externalised "what's next" thinking that is *not* engageable (it never
+/// surfaces on Next / Focus / Today's Plan; every current-Action read filters
+/// `role='current'`, so planned rows cannot leak). Ordering is a dense
+/// `position` 0..n-1 per Outcome; reads tie-break `position, created_at, id` so
+/// a cross-device duplicate/gap still renders deterministically, and the next
+/// planned-queue write re-densifies. The primitives are [addPlannedAction] /
+/// [reorderPlannedActions] / [promotePlannedAction] / [supersedeAndPromote] /
+/// [demoteCurrentAction] / [removePlannedAction]; each stamps
+/// `last_clarified_at` (CONTEXT.md § Clarification lists promote / demote /
+/// reorder / remove among the stamping micro-acts), except a no-op reorder
+/// (unchanged order writes nothing and does not stamp).
+///
+/// **Cursor dual-write on promotion/demotion is mandatory, not defensive**
+/// (until story 9 retires `next_action_text`). The startup sweep
+/// (`reconcileActionsWithCursorSteps`) treats the cursor as authoritative:
+/// * a **promote** MUST set `todos.next_action_text` to the promoted text and
+///   mirror the promoted row's `energy_level` / `time_estimate` onto the cursor
+///   in the same transaction — else Pass B retires the new current as a phantom
+///   at next launch, and Pass A mode-1 would clobber the Action's metadata back
+///   from the stale cursor;
+/// * a **demote** MUST clear `todos.next_action_text` — else Pass A mode-3
+///   resurrects the demoted text as a fresh deterministic current row.
+///
+/// The dual-write choke points in [TodoDao] compose the current-Action
+/// primitives through the `apply*` transaction-body variants (package-internal),
+/// which run inside the caller's transaction and defer notification to the
+/// caller (so watchers never re-read pre-commit state) — see
+/// `TodoDao.setNextActionText` / `setNextActionTextIfActionless` /
+/// `applyRouting` / `deleteOutcome`.
 library;
 
 import 'package:drift/drift.dart';
@@ -86,10 +113,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     _notify(effect);
   }
 
-  /// In-place field edit of an Action by its id (story 7 uses this for
-  /// metadata). Same UPDATE primitive [setCurrentAction] uses for text. No-op
-  /// if the row is gone or nothing differs.
-  Future<void> editCurrentAction(
+  /// In-place field edit of an Action by its id — role-agnostic, so it edits a
+  /// `current` row (story 7 metadata) or a `planned` row (the planned queue's
+  /// inline edit, story 5) with the same UPDATE [setCurrentAction] uses for
+  /// text. No-op if the row is gone or nothing differs.
+  Future<void> editAction(
     String actionId, {
     String? text,
     String? energyLevel,
@@ -112,8 +140,12 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// The explicit-affordance primitive (ADR-0018): flip the Outcome's current
   /// Action to `role='superseded'` (no linkage columns — the terminal time is
   /// `updated_at`), then, if [newActionText] is non-blank, mint a fresh
-  /// `current` row. No UI calls this in this story (Abandon / re-clarify-to-new
-  /// are stories 5/8); it is exercised by tests, and by [clearCurrentAction].
+  /// `current` row. Its retire-then-mint transaction is the shape supersession
+  /// takes everywhere; the planned queue's "Replace current action" gesture
+  /// reaches supersession through the sibling [supersedeAndPromote] (which
+  /// retires the current and flips an existing planned row up), while this
+  /// text-taking variant backs [clearCurrentAction] and the re-clarify-to-new
+  /// path (story 8).
   Future<void> supersedeCurrentAction(
     String outcomeId, {
     String? newActionText,
@@ -162,6 +194,111 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       // cannot ride on [ActionWriteEffect.stamped] — which is always false here.
       attachedDatabase.notifyTodosViewWrite();
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Planned-queue primitives (ADR-0004 story 5, issue #475). Each opens a
+  // transaction, stamps, and notifies after commit.
+  // ---------------------------------------------------------------------------
+
+  /// Append (or insert at [position]) a `planned` Action on the Outcome. Blank
+  /// [text] is a caller error (mirrors [setCurrentAction]). With no [position]
+  /// the row lands after the last planned row; an explicit [position] inserts
+  /// there and shifts the rest down. Stamps.
+  Future<void> addPlannedAction(
+    String outcomeId,
+    String text, {
+    String? energyLevel,
+    int? timeEstimate,
+    int? position,
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await transaction(
+      () => applyAddPlannedAction(
+        outcomeId,
+        text,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+        position: position,
+        ts: ts,
+      ),
+    );
+    _notify(effect);
+  }
+
+  /// Rewrite the Outcome's planned queue to dense positions `0..n-1` in
+  /// [orderedIds] order. Drift-tolerant: ids not among the Outcome's planned
+  /// rows are ignored, and any planned row missing from [orderedIds] is appended
+  /// keeping its prior relative order (a row synced mid-drag is never lost).
+  /// A no-op — the effective order is already what the store holds — writes
+  /// nothing and does not stamp; otherwise stamps once for the whole gesture.
+  Future<void> reorderPlannedActions(
+    String outcomeId,
+    List<String> orderedIds, {
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await transaction(
+      () => applyReorderPlannedActions(outcomeId, orderedIds, ts: ts),
+    );
+    _notify(effect);
+  }
+
+  /// Promote a `planned` Action to `current`. Refuses (`StateError`) when the
+  /// Outcome already has a current Action — the caller must use
+  /// [supersedeAndPromote] for the replacing variant, so no code path silently
+  /// replaces a current (ADR-0004). No-op if the row is gone, is not `planned`,
+  /// or is already `current` (idempotent under double-tap / replay). Sets the
+  /// cursor per the promote dual-write rule and stamps.
+  Future<void> promotePlannedAction(String actionId, {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await transaction(
+      () => applyPromotePlannedAction(actionId, ts: ts),
+    );
+    _notify(effect);
+  }
+
+  /// The "Replace current action" gesture: in one transaction retire the
+  /// Outcome's current Action (`role='superseded'`, ADR-0018 — terminal time is
+  /// `updated_at`, no linkage) and flip the `planned` [actionId] up to
+  /// `current`, writing the cursor per the promote dual-write rule. No-op if the
+  /// row is gone, already `current`, or not `planned`. Stamps once.
+  Future<void> supersedeAndPromote(String actionId, {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await transaction(
+      () => applySupersedeAndPromote(actionId, ts: ts),
+    );
+    _notify(effect);
+  }
+
+  /// Demote the current Action [actionId] back into the planned queue at
+  /// [position] (default 0 — front of the queue, the just-committed thought
+  /// stays the most-likely next candidate), shifting the existing planned rows
+  /// down. Clears the cursor text per the demote dual-write rule. No-op if the
+  /// row is gone or is not `current`. Stamps.
+  Future<void> demoteCurrentAction(
+    String actionId, {
+    int? position,
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await transaction(
+      () => applyDemoteCurrentAction(actionId, position: position, ts: ts),
+    );
+    _notify(effect);
+  }
+
+  /// Hard-delete a `planned` Action (user-intent removal of an unengaged note —
+  /// a planned row carries no engagement or history worth a `superseded`
+  /// tombstone, ADR-0004 story 5). No-op — and never a delete — if the row is
+  /// gone or is not `planned`. Stamps.
+  Future<void> removePlannedAction(String actionId, {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await transaction(
+      () => applyRemovePlannedAction(actionId, ts: ts),
+    );
+    _notify(effect);
   }
 
   void _notify(ActionWriteEffect effect) {
@@ -238,6 +375,28 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// Chunk width for `IN (…)` id lookups, well inside SQLite's default
   /// bound-variable ceiling.
   static const _idChunkSize = 500;
+
+  /// Live view of the Outcome's planned queue, ordered `position, created_at,
+  /// id` — the tie-break renders a cross-device duplicate/gap deterministically
+  /// without repairing it (writers re-densify; a read never writes).
+  Stream<List<Action>> watchPlannedActions(String outcomeId) =>
+      _plannedQuery(outcomeId).watch();
+
+  /// One-shot read of the Outcome's planned queue, same ordering as
+  /// [watchPlannedActions].
+  Future<List<Action>> getPlannedActions(String outcomeId) =>
+      _plannedQuery(outcomeId).get();
+
+  SimpleSelectStatement<$ActionsTable, Action> _plannedQuery(
+    String outcomeId,
+  ) =>
+      select(actions)
+        ..where((a) => a.outcomeId.equals(outcomeId) & a.role.equals('planned'))
+        ..orderBy([
+          (a) => OrderingTerm(expression: a.position),
+          (a) => OrderingTerm(expression: a.createdAt),
+          (a) => OrderingTerm(expression: a.id),
+        ]);
 
   /// Read-side application of the winner rule — deterministic display of an
   /// accidental multi-current set, with nothing written.
@@ -398,6 +557,183 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   }
 
   // ---------------------------------------------------------------------------
+  // Planned-queue transaction bodies.
+  // ---------------------------------------------------------------------------
+
+  Future<ActionWriteEffect> applyAddPlannedAction(
+    String outcomeId,
+    String text, {
+    String? energyLevel,
+    int? timeEstimate,
+    int? position,
+    required DateTime ts,
+  }) async {
+    final normalized = text.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(
+        text,
+        'text',
+        'addPlannedAction requires non-blank text',
+      );
+    }
+    final planned = await _plannedActionsFor(outcomeId);
+    final int insertAt;
+    if (position == null) {
+      // Append after the last planned row: COALESCE(MAX(position)+1, 0).
+      insertAt = planned.isEmpty
+          ? 0
+          : planned
+                  .map((a) => a.position ?? 0)
+                  .reduce((a, b) => a > b ? a : b) +
+              1;
+    } else {
+      insertAt = position.clamp(0, planned.length);
+      await _shiftPlannedFrom(planned, insertAt, ts);
+    }
+    final userId = await _userIdForOutcome(outcomeId);
+    await into(actions).insert(
+      ActionsCompanion(
+        id: Value(uuid.v4()),
+        outcomeId: Value(outcomeId),
+        userId: Value(userId),
+        actionText: Value(normalized),
+        role: const Value('planned'),
+        position: Value(insertAt),
+        energyLevel: Value(energyLevel),
+        timeEstimate: Value(timeEstimate),
+        createdAt: Value(ts),
+        updatedAt: Value(ts),
+      ),
+    );
+    await _stampOutcome(outcomeId, ts);
+    return (changed: true, stamped: true);
+  }
+
+  Future<ActionWriteEffect> applyReorderPlannedActions(
+    String outcomeId,
+    List<String> orderedIds, {
+    required DateTime ts,
+  }) async {
+    final planned = await _plannedActionsFor(outcomeId);
+    if (planned.isEmpty) return _noEffect;
+
+    final byId = {for (final row in planned) row.id: row};
+    final seen = <String>{};
+    final target = <Action>[];
+    for (final id in orderedIds) {
+      final row = byId[id];
+      if (row != null && seen.add(id)) target.add(row);
+    }
+    // Any planned row absent from orderedIds keeps its prior relative order.
+    for (final row in planned) {
+      if (seen.add(row.id)) target.add(row);
+    }
+
+    // No-op when every row already sits at its target dense index; a row at the
+    // wrong index means the order changed *or* positions had drifted (gap /
+    // duplicate) — either way this write re-densifies.
+    var changed = false;
+    for (var i = 0; i < target.length; i++) {
+      if (target[i].position != i) {
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return _noEffect;
+
+    for (var i = 0; i < target.length; i++) {
+      if (target[i].position != i) {
+        await (update(actions)..where((a) => a.id.equals(target[i].id))).write(
+          ActionsCompanion(position: Value(i), updatedAt: Value(ts)),
+        );
+      }
+    }
+    await _stampOutcome(outcomeId, ts);
+    return (changed: true, stamped: true);
+  }
+
+  Future<ActionWriteEffect> applyPromotePlannedAction(
+    String actionId, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null || row.role != 'planned') return _noEffect;
+
+    final resolved = await _resolveCurrentAction(row.outcomeId, ts);
+    if (resolved.current != null) {
+      throw StateError(
+        'promotePlannedAction: Outcome ${row.outcomeId} already has a current '
+        'Action; use supersedeAndPromote to replace it',
+      );
+    }
+    await _promoteRow(row, ts);
+    await _stampOutcome(row.outcomeId, ts);
+    return (changed: true, stamped: true);
+  }
+
+  Future<ActionWriteEffect> applySupersedeAndPromote(
+    String actionId, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null || row.role != 'planned') return _noEffect;
+
+    final resolved = await _resolveCurrentAction(row.outcomeId, ts);
+    if (resolved.current != null) await _retire(resolved.current!.id, ts);
+    await _promoteRow(row, ts);
+    await _stampOutcome(row.outcomeId, ts);
+    return (changed: true, stamped: true);
+  }
+
+  Future<ActionWriteEffect> applyDemoteCurrentAction(
+    String actionId, {
+    int? position,
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null || row.role != 'current') return _noEffect;
+
+    final planned = await _plannedActionsFor(row.outcomeId);
+    final insertAt = (position ?? 0).clamp(0, planned.length);
+    await _shiftPlannedFrom(planned, insertAt, ts);
+    await (update(actions)..where((a) => a.id.equals(row.id))).write(
+      ActionsCompanion(
+        role: const Value('planned'),
+        position: Value(insertAt),
+        updatedAt: Value(ts),
+      ),
+    );
+    // Cursor dual-write: clearing the text keeps the sweep from resurrecting the
+    // demoted Action as a fresh deterministic current (Pass A mode-3).
+    await (update(todos)..where((t) => t.id.equals(row.outcomeId))).write(
+      TodosCompanion(
+        nextActionText: const Value(null),
+        updatedAt: Value(ts),
+      ),
+    );
+    await _stampOutcome(row.outcomeId, ts);
+    return (changed: true, stamped: true);
+  }
+
+  Future<ActionWriteEffect> applyRemovePlannedAction(
+    String actionId, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null || row.role != 'planned') return _noEffect;
+
+    await (delete(actions)..where((a) => a.id.equals(actionId))).go();
+    // The gap the delete leaves in `position` is display-only: the read
+    // tie-break covers it and the next reorder re-densifies.
+    await _stampOutcome(row.outcomeId, ts);
+    return (changed: true, stamped: true);
+  }
+
+  // ---------------------------------------------------------------------------
   // Shared internals.
   // ---------------------------------------------------------------------------
 
@@ -405,6 +741,51 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return (select(actions)
           ..where((a) => a.outcomeId.equals(outcomeId) & a.role.equals('current')))
         .get();
+  }
+
+  /// The Outcome's planned rows, in queue order (shared by the planned-queue
+  /// transaction bodies, which read then rewrite positions).
+  Future<List<Action>> _plannedActionsFor(String outcomeId) =>
+      _plannedQuery(outcomeId).get();
+
+  /// Shift every planned row at or after [from] down by one, so a fresh row can
+  /// take slot [from]. Callers pass the pre-read [planned] list to avoid a
+  /// re-query inside the transaction.
+  Future<void> _shiftPlannedFrom(
+    List<Action> planned,
+    int from,
+    DateTime ts,
+  ) async {
+    for (final row in planned) {
+      final pos = row.position ?? 0;
+      if (pos >= from) {
+        await (update(actions)..where((a) => a.id.equals(row.id))).write(
+          ActionsCompanion(position: Value(pos + 1), updatedAt: Value(ts)),
+        );
+      }
+    }
+  }
+
+  /// Flip [row] to `role='current'` (clearing `position`) and write the cursor
+  /// per the promote dual-write rule: text plus a mirror of the promoted row's
+  /// `energy_level` / `time_estimate`. Shared by [applyPromotePlannedAction] and
+  /// [applySupersedeAndPromote]; the caller stamps.
+  Future<void> _promoteRow(Action row, DateTime ts) async {
+    await (update(actions)..where((a) => a.id.equals(row.id))).write(
+      ActionsCompanion(
+        role: const Value('current'),
+        position: const Value(null),
+        updatedAt: Value(ts),
+      ),
+    );
+    await (update(todos)..where((t) => t.id.equals(row.outcomeId))).write(
+      TodosCompanion(
+        nextActionText: Value(row.actionText),
+        energyLevel: Value(row.energyLevel),
+        timeEstimate: Value(row.timeEstimate),
+        updatedAt: Value(ts),
+      ),
+    );
   }
 
   /// The single surviving `current` Action for [outcomeId], converging an
