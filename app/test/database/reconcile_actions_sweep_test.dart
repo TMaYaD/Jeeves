@@ -34,6 +34,7 @@ library;
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 
 import 'package:jeeves/database/daos/action_ids.dart';
 import 'package:jeeves/database/gtd_database.dart';
@@ -90,6 +91,9 @@ Future<void> _seedOutcome(
   String? energyLevel,
   int? timeEstimate,
   DateTime? lastClarifiedAt,
+  String? doneAt,
+  String intent = 'next',
+  bool clarified = true,
 }) async {
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
@@ -100,6 +104,33 @@ Future<void> _seedOutcome(
         energyLevel: Value(energyLevel),
         timeEstimate: Value(timeEstimate),
         lastClarifiedAt: Value(lastClarifiedAt),
+        doneAt: Value(doneAt),
+        intent: Value(intent),
+        clarified: Value(clarified),
+      ));
+}
+
+/// Attaches a `Tag(type='person')` to [outcomeId] — the only thing that makes a
+/// `intent='next'` Outcome a *Waiting For* one (`TodoDao.watchPersonTagged`).
+Future<void> _attachPersonTag(
+  GtdDatabase db, {
+  required String outcomeId,
+  required String tagId,
+}) async {
+  await db.into(db.tags).insert(
+        TagsCompanion(
+          id: Value(tagId),
+          name: Value('person-$tagId'),
+          type: const Value('person'),
+          userId: const Value(_userId),
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
+  await db.into(db.todoTags).insert(TodoTagsCompanion(
+        id: Value('$outcomeId:$tagId'),
+        todoId: Value(outcomeId),
+        tagId: Value(tagId),
+        userId: const Value(_userId),
       ));
 }
 
@@ -410,6 +441,125 @@ void main() {
 
       expect(await _sweep(db), 0);
       expect(await _actions(db, 'o1'), isEmpty);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Adoption is scoped to *live* Outcomes: `done_at IS NULL AND intent !=
+  // 'trash'` — the lifecycle states in which an app write path can hold a
+  // `current` Action. The narrowing tests and the over-narrowing tests belong
+  // together: the pass has to reject completed / trashed Outcomes *and* still
+  // adopt every shape the user can still act on.
+  // ---------------------------------------------------------------------------
+
+  group('adoption is scoped to live Outcomes', () {
+    test('a completed Outcome with a cursor and no actions mints nothing — '
+        'completion terminates the current Action (story 4), so a current row '
+        'on a done Outcome is a state no write path produces', () async {
+      await _seedOutcome(db,
+          id: 'finished-legacy',
+          nextActionText: 'a phrase left on a task the user finished',
+          doneAt: '2026-06-15T09:00:00.000Z',
+          lastClarifiedAt: _clarified);
+
+      final repaired = await _sweep(db);
+
+      expect(repaired, 0);
+      expect(await _actions(db, 'finished-legacy'), isEmpty);
+    });
+
+    test('a trashed Outcome with a cursor and no actions mints nothing — '
+        'trashing is the user\'s explicit discard', () async {
+      await _seedOutcome(db,
+          id: 'discarded',
+          nextActionText: 'a phrase left on a task the user threw away',
+          intent: 'trash',
+          lastClarifiedAt: _clarified);
+
+      final repaired = await _sweep(db);
+
+      expect(repaired, 0);
+      expect(await _actions(db, 'discarded'), isEmpty);
+    });
+
+    test('a completed AND trashed Outcome mints nothing', () async {
+      await _seedOutcome(db,
+          id: 'both',
+          nextActionText: 'finished then binned',
+          doneAt: '2026-06-15T09:00:00.000Z',
+          intent: 'trash',
+          lastClarifiedAt: _clarified);
+
+      expect(await _sweep(db), 0);
+      expect(await _actions(db, 'both'), isEmpty);
+    });
+
+    test('★ a Waiting For Outcome is STILL adopted — Waiting For is '
+        'intent=next plus a person tag, not a fourth intent', () async {
+      await _seedOutcome(db,
+          id: 'delegated',
+          nextActionText: 'chase Trixy for the estimate',
+          lastClarifiedAt: _clarified);
+      await _attachPersonTag(db, outcomeId: 'delegated', tagId: 'trixy');
+
+      final repaired = await _sweep(db);
+
+      expect(repaired, 1);
+      final row = await _current(db, 'delegated');
+      expect(row, isNotNull);
+      expect(row!['id'], backfillActionIdFor('delegated'));
+      expect(row['text'], 'chase Trixy for the estimate');
+    });
+
+    test('★ a Next Outcome is still adopted', () async {
+      await _seedOutcome(db,
+          id: 'live-next',
+          nextActionText: 'draft the reply',
+          lastClarifiedAt: _clarified);
+
+      expect(await _sweep(db), 1);
+      expect((await _current(db, 'live-next'))!['text'], 'draft the reply');
+    });
+
+    test('★ a Someday/Maybe Outcome is still adopted — applyRouting\'s maybe '
+        'arm leaves cursor and Action rows alone, and adoption is a one-shot '
+        'rescue that dies with the columns', () async {
+      await _seedOutcome(db,
+          id: 'deferred',
+          nextActionText: 'price up the loft conversion',
+          intent: 'maybe',
+          lastClarifiedAt: _clarified);
+
+      expect(await _sweep(db), 1);
+      expect((await _current(db, 'deferred'))!['text'],
+          'price up the loft conversion');
+    });
+
+    test('★ an unclarified Outcome is still adopted', () async {
+      await _seedOutcome(db,
+          id: 'unprocessed',
+          nextActionText: 'ring the dentist',
+          clarified: false,
+          lastClarifiedAt: _clarified);
+
+      expect(await _sweep(db), 1);
+      expect((await _current(db, 'unprocessed'))!['text'], 'ring the dentist');
+    });
+
+    test('a mixed store adopts exactly the live Outcomes in one run', () async {
+      await _seedOutcome(db, id: 'live', nextActionText: 'do this');
+      await _seedOutcome(db,
+          id: 'done', nextActionText: 'was doing this', doneAt: '2026-06-15T09:00:00.000Z');
+      await _seedOutcome(db,
+          id: 'binned', nextActionText: 'was doing this', intent: 'trash');
+      await _seedOutcome(db,
+          id: 'someday', nextActionText: 'might do this', intent: 'maybe');
+
+      expect(await _sweep(db), 2);
+      expect(await _actions(db, 'live'), hasLength(1));
+      expect(await _actions(db, 'someday'), hasLength(1));
+      expect(await _actions(db, 'done'), isEmpty);
+      expect(await _actions(db, 'binned'), isEmpty);
     });
   });
 
@@ -910,6 +1060,162 @@ void main() {
       expect(await _sweep(db, now: DateTime.parse('2026-08-01T00:00:00.000Z')),
           0);
       expect(await _allActions(db), beforeRestart);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // NULL columns. Every group above drives the sweep against the Drift schema,
+  // whose `todos.user_id` and `actions.outcome_id` are NOT NULL — a constraint
+  // production does NOT have. On-device both tables are PowerSync views over
+  // `ps_data__*(id, data)` with `json_extract`, so every column is unconstrained
+  // and a legacy or peer-written row can carry a NULL anywhere. The sweep runs
+  // inside the startup write transaction, so a failed cast there is not a
+  // dropped row — it is a launch that never completes.
+  //
+  // These tests therefore build the *view-shaped* store: the same table names
+  // and columns, no constraints at all.
+  // ---------------------------------------------------------------------------
+
+  group('NULL columns in a view-shaped store', () {
+    late sqlite.Database raw;
+
+    setUp(() {
+      raw = sqlite.sqlite3.openInMemory();
+      raw.execute('''
+        CREATE TABLE todos (
+          id TEXT PRIMARY KEY, title TEXT, user_id TEXT, created_at TEXT,
+          done_at TEXT, intent TEXT, clarified INTEGER, next_action_text TEXT,
+          energy_level TEXT, time_estimate INTEGER, last_clarified_at TEXT
+        )
+      ''');
+      raw.execute('''
+        CREATE TABLE actions (
+          id TEXT PRIMARY KEY, outcome_id TEXT, user_id TEXT, text TEXT,
+          role TEXT, position INTEGER, energy_level TEXT, time_estimate INTEGER,
+          created_at TEXT, updated_at TEXT, done_at TEXT
+        )
+      ''');
+    });
+
+    tearDown(() => raw.close());
+
+    Future<int> sweepRaw() => reconcileActionsWithCursorSteps(
+          query: (sql, args) async =>
+              [for (final r in raw.select(sql, args)) {...r}],
+          exec: (sql, args) async => raw.execute(sql, args),
+          now: _sweepAt,
+        );
+
+    List<Map<String, Object?>> rawActions() =>
+        [for (final r in raw.select('SELECT * FROM actions ORDER BY id')) {...r}];
+
+    test('★ a todos row with a NULL user_id is skipped, not cast — the sweep '
+        'completes instead of taking the launch down', () async {
+      raw.execute(
+        "INSERT INTO todos (id, title, user_id, intent, clarified, "
+        "next_action_text) VALUES ('orphan', 'no owner', NULL, 'next', 1, "
+        "'adopt me if you can')",
+      );
+
+      // Without `AND t.user_id IS NOT NULL` in the adoption query this throws a
+      // TypeError (`null` is not a `String`) mid-transaction, at startup.
+      final repaired = await sweepRaw();
+
+      expect(repaired, 0);
+      expect(rawActions(), isEmpty,
+          reason: 'the row is skipped, and left exactly as it was');
+      expect(
+        raw.select("SELECT next_action_text FROM todos WHERE id = 'orphan'"),
+        hasLength(1),
+        reason: 'skipping is not deleting — a later launch can still adopt it',
+      );
+    });
+
+    test('a NULL user_id row does not stop its healthy siblings being adopted',
+        () async {
+      raw.execute(
+        "INSERT INTO todos (id, title, user_id, intent, clarified, "
+        "next_action_text) VALUES "
+        "('a-orphan', 'no owner', NULL, 'next', 1, 'skip me'), "
+        "('b-owned', 'owned', 'test-user', 'next', 1, 'adopt me')",
+      );
+
+      expect(await sweepRaw(), 1);
+      final rows = rawActions();
+      expect(rows, hasLength(1));
+      expect(rows.single['id'], backfillActionIdFor('b-owned'));
+      expect(rows.single['outcome_id'], 'b-owned');
+      expect(rows.single['user_id'], 'test-user');
+      expect(rows.single['text'], 'adopt me');
+    });
+
+    test('actions rows with a NULL outcome_id are left alone by the '
+        'convergence pass', () async {
+      // Characterization, not a regression guard: `GROUP BY` buckets NULLs
+      // together, so two such rows *look* like a contested multi-current set,
+      // but `NULL IN (...)` is NULL rather than true so the outer query never
+      // returns them and the `as String` read is never reached. The explicit
+      // `outcome_id IS NOT NULL` clause in the pass makes that independent of
+      // the subquery shape; this test pins the outcome either way.
+      raw.execute(
+        "INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) "
+        "VALUES ('a1', NULL, 'test-user', 'orphan one', 'current', "
+        "'2026-06-01T09:00:00.000Z'), "
+        "('a2', NULL, 'test-user', 'orphan two', 'current', "
+        "'2026-06-02T09:00:00.000Z')",
+      );
+
+      expect(await sweepRaw(), 0);
+      expect([for (final r in rawActions()) r['role']], ['current', 'current'],
+          reason: 'unattributable rows are left alone, not retired');
+    });
+
+    test('a NULL outcome_id row does not stop a real multi-current set '
+        'converging', () async {
+      raw.execute(
+        "INSERT INTO actions (id, outcome_id, user_id, text, role, created_at, "
+        "updated_at) VALUES "
+        "('a0', NULL, 'test-user', 'orphan', 'current', "
+        "'2026-06-01T09:00:00.000Z', NULL), "
+        "('b1', 'o1', 'test-user', 'loser', 'current', "
+        "'2026-06-01T09:00:00.000Z', '2026-06-20T09:00:00.000Z'), "
+        "('b2', 'o1', 'test-user', 'winner', 'current', "
+        "'2026-06-01T09:00:00.000Z', '2026-06-25T09:00:00.000Z')",
+      );
+
+      expect(await sweepRaw(), 1);
+      expect(
+        {for (final r in rawActions()) r['id']: r['role']},
+        {'a0': 'current', 'b1': 'superseded', 'b2': 'current'},
+      );
+    });
+
+    test('a fully-populated view-shaped store behaves exactly as the Drift one',
+        () async {
+      raw.execute(
+        "INSERT INTO todos (id, title, user_id, intent, clarified, "
+        "next_action_text, energy_level, time_estimate) VALUES "
+        "('o1', 'live', 'test-user', 'next', 1, 'mint me', 'medium', 12)",
+      );
+
+      expect(await sweepRaw(), 1);
+      final row = rawActions().single;
+      expect(row['id'], backfillActionIdFor('o1'));
+      expect(row['role'], 'current');
+      expect(row['text'], 'mint me');
+      expect(row['energy_level'], 'medium');
+      expect(row['time_estimate'], 12);
+    });
+
+    test('a NULL intent is treated as live, not silently skipped', () async {
+      // `intent != 'trash'` alone evaluates to NULL here and would drop the row.
+      raw.execute(
+        "INSERT INTO todos (id, title, user_id, intent, next_action_text) "
+        "VALUES ('o1', 'no intent', 'test-user', NULL, 'mint me')",
+      );
+
+      expect(await sweepRaw(), 1);
+      expect(rawActions().single['text'], 'mint me');
     });
   });
 }

@@ -319,8 +319,9 @@ Future<int> carveOutLocalInbox({
 ///    losers by the same deterministic winner rule the writers use
 ///    (`ActionDao._winnerFirst`), so every device collapses to the same row.
 /// 2. [adoptCursorsWithoutActions] — **cursor-dependent, mint-only.** Mints the
-///    deterministic-id `current` Action (ADR-0019) for an Outcome carrying a
-///    non-blank legacy `todos.next_action_text` cursor **and no `actions` rows
+///    deterministic-id `current` Action (ADR-0019) for a **live** Outcome
+///    (not completed, not trashed) carrying a non-blank legacy
+///    `todos.next_action_text` cursor **and no `actions` rows
 ///    at all**. This is the last thing the cursor is still good for: adopting
 ///    an Outcome that a pre-Action client created and this device has never
 ///    seen an Action for. It dies with the columns.
@@ -416,11 +417,21 @@ Future<int> convergeMultiCurrentActions({
   // keeper and every further row is a loser. Rows for an Outcome arrive
   // contiguous, and insertion order into the grouping below is the convergence
   // order.
+  //
+  // `outcome_id IS NOT NULL` is belt-and-braces, and deliberately kept.
+  // On-device `actions` is a PowerSync view over JSON and carries none of
+  // Drift's NOT NULL constraints, so a peer-written row can hold a NULL
+  // `outcome_id` — which the `as String` read below would throw on, inside the
+  // startup write transaction. Today the `IN` subquery already excludes those
+  // rows for free (`NULL IN (...)` is NULL, never true), so the clause changes
+  // no behaviour; it is here so the guarantee survives a future rewrite of the
+  // subquery into a JOIN, where three-valued logic would no longer save us.
   final contested = await query(
     '''
     SELECT a.outcome_id AS outcome_id, a.id AS action_id
     FROM actions a
     WHERE a.role = 'current'
+      AND a.outcome_id IS NOT NULL
       AND a.outcome_id IN (
         SELECT outcome_id FROM actions
         WHERE role = 'current'
@@ -453,8 +464,37 @@ Future<int> convergeMultiCurrentActions({
 }
 
 /// **Cursor-dependent, mint-only, monotone.** Mint the deterministic-id
-/// `current` Action for every Outcome that carries a non-blank legacy
+/// `current` Action for every **live** Outcome that carries a non-blank legacy
 /// `todos.next_action_text` **and has no `actions` rows at all**.
+///
+/// "Live" is `done_at IS NULL AND intent != 'trash'` — the lifecycle states in
+/// which this app's own writers can hold a `current` Action:
+///
+/// * **Completed** Outcomes are excluded because completion *terminates* the
+///   current Action (ADR-0001 story 4 — `applyCompleteCurrentAction`), so a
+///   `current` row on a `done_at`-bearing Outcome is a state no write path can
+///   produce. Pre-Action clients cleared `done_at` and the cursor
+///   independently, so without the filter every task the user ever finished
+///   with a next-action phrase still on it would grow a live Action at launch.
+/// * **Trashed** Outcomes are excluded because trashing is the user's explicit
+///   discard; minting there is the one shape of this pass that could be read as
+///   resurrecting something thrown away.
+/// * **Someday/Maybe** (`intent = 'maybe'`) is deliberately **kept**.
+///   `TodoDao.applyRouting`'s `maybe` arm leaves both the cursor and any
+///   existing Action rows untouched, so a maybe Outcome legitimately carries a
+///   `current` Action here; and adoption is a one-shot legacy rescue that dies
+///   with the columns, so skipping deferred Outcomes would silently lose their
+///   next-action text when the cursor is dropped.
+/// * **Waiting For** is likewise kept, and needs no clause of its own: in this
+///   codebase Waiting For *is* `intent = 'next'` plus a `Tag(type='person')`
+///   (`TodoDao.watchPersonTagged`), not a fourth intent.
+/// * **Unclarified** rows are kept for the same data-preservation reason. A
+///   minted row is inert on the Inbox surfaces, which gate on `clarified`, not
+///   on Actions.
+///
+/// `intent` is read through `COALESCE(intent, 'next')` because the on-device
+/// `todos` view is JSON-backed and carries no NOT NULL default; a bare
+/// `intent != 'trash'` would evaluate to NULL and silently skip such a row.
 ///
 /// The `NOT EXISTS` guard is over *all* roles, not just `current`: an Outcome
 /// holding a `superseded`, `done` or `planned` row has already been spoken for
@@ -482,11 +522,19 @@ Future<int> adoptCursorsWithoutActions({
   final tsIso = (now ?? DateTime.now()).toUtc().toIso8601String();
   var repaired = 0;
 
-  // One statement: every Outcome whose cursor still says something and whose
-  // Action-grain history is entirely empty. The `NOT EXISTS` over *all* roles is
-  // the safety guard (see the doc comment). Blank / whitespace-only cursors are
-  // Actionless by the app's own normalisation and mint nothing. In the steady
-  // state this is one read and no writes.
+  // One statement: every live Outcome whose cursor still says something and
+  // whose Action-grain history is entirely empty. The `NOT EXISTS` over *all*
+  // roles is the safety guard (see the doc comment). Blank / whitespace-only
+  // cursors are Actionless by the app's own normalisation and mint nothing. In
+  // the steady state this is one read and no writes.
+  //
+  // `user_id IS NOT NULL` is a skip-don't-explode guard rather than a domain
+  // filter: on-device `todos` is a PowerSync view over JSON and carries none of
+  // Drift's NOT NULL constraints, so a legacy or peer-written row can hold a
+  // NULL `user_id`. Reading it back as a non-null `String` below would throw
+  // inside the startup write transaction and take the whole launch down;
+  // skipping the row leaves it exactly as it was, for a later launch to adopt
+  // once its `user_id` arrives.
   final orphanCursors = await query(
     '''
     SELECT t.id AS outcome_id, t.user_id AS user_id,
@@ -496,6 +544,9 @@ Future<int> adoptCursorsWithoutActions({
     FROM todos t
     WHERE t.next_action_text IS NOT NULL
       AND TRIM(t.next_action_text) != ''
+      AND t.user_id IS NOT NULL
+      AND t.done_at IS NULL
+      AND COALESCE(t.intent, 'next') != 'trash'
       AND NOT EXISTS (
         SELECT 1 FROM actions a WHERE a.outcome_id = t.id
       )

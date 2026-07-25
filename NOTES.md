@@ -40,4 +40,4 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 - Instinct: a supersede primitive that stamps and retires is complete. Here: it must also clear `todos.next_action_text` — a client that predates the Actions table reads the cursor, and a stale one keeps offering an Action the user abandoned.
 
 ## 2026-07-26 (retiring the next-action cursor)
-- Instinct: removing the dual-write is a cleanup that can follow the read cutover. Here: the startup sweep's Pass B retires every current Action with a blank cursor — the sweep must be made safe and fully released before any write is removed.
+- Instinct: removing the dual-write is a cleanup that can follow the read cutover. Here: the startup sweep treated the cursor as authoritative — it rewrote current Actions from the cursor and retired every current Action whose Outcome had a blank cursor — so the first launch after the writes stopped would have wiped the Action grain. Narrow the sweep to its monotone passes and fully release that before removing any cursor write.
