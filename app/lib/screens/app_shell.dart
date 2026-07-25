@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../providers/focus_session_planning_provider.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
@@ -62,6 +63,24 @@ class AppShell extends ConsumerWidget {
           )
         : null;
 
+    // The Now route offers Re-plan as a shared-title-bar page action while the
+    // user is in an open session carrying tasks (the shutdown-callout state,
+    // #499) — mirroring the Inbox badge: the same route-derived condition,
+    // supplied top-down to the bar rather than hand-rolled inside the screen.
+    // Every other shell route supplies none.
+    final showReplan =
+        location == '/focus' && ref.watch(hasOpenSessionWithTasksProvider);
+    final pageActions = showReplan
+        ? [
+            AppTitleBarAction(
+              key: const Key('focus_replan'),
+              icon: Icons.wb_sunny_outlined,
+              label: 'Re-plan',
+              onPressed: () => context.go('/focus-session-planning'),
+            ),
+          ]
+        : const <AppTitleBarAction>[];
+
     return Shortcuts(
       shortcuts: {
         LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyK):
@@ -85,6 +104,7 @@ class AppShell extends ConsumerWidget {
           appBar: AppTitleBar(
             title: title,
             badge: badge,
+            pageActions: pageActions,
             leading: AppTitleBarLeading.drawer,
           ),
           body: Column(

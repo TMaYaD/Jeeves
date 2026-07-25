@@ -230,7 +230,10 @@ Left to right:
     highest-priority action sits nearest the pinned slot. Each carries a stable
     `Key` and a label, used as its tooltip in the bar and its row text in the ⋮
     menu. An action may override its foreground colour to stay a call to action
-    (task detail's Start focus keeps the primary blue `#2667B7`).
+    (task detail's Start focus keeps the primary blue `#2667B7`). A shell list
+    route can supply page actions too, derived from route state and passed down
+    by `AppShell` — the Now route's Re-plan action (shown only while an open
+    session carries tasks) is the precedent.
 *   **pinned capture** — the fixed rightmost action slot, reserved for capture.
     Identical position on every screen; never overflows.
 *   **⋮ overflow** — renders **only** when something overflowed, rightmost of

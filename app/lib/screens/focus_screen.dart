@@ -11,8 +11,6 @@ import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
 import '../services/notification_service.dart' show notificationServiceProvider;
 
-enum _FocusMenuAction { planDay }
-
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
 
@@ -51,8 +49,10 @@ class FocusScreen extends ConsumerWidget {
                   final planningDone = activeSession != null;
                   // The "Begin Evening Shutdown" entry is shown once the user
                   // is in an open focus session with at least one task on it.
+                  // Derived from the shared provider so the shutdown callout
+                  // and the title bar's Re-plan action can't drift (#499).
                   final showShutdownEntry =
-                      planningDone && sortedTasks.isNotEmpty;
+                      ref.watch(hasOpenSessionWithTasksProvider);
                   // Tasks carried over ('rollover') from the last closed
                   // session — only while no session is open.
                   final carriedOver = planningDone
@@ -92,44 +92,15 @@ class FocusScreen extends ConsumerWidget {
                           const SizedBox(height: 36),
                           const Divider(height: 1, color: Color(0xFFF3F4F6)),
                           const SizedBox(height: 36),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              const Text(
-                                "Today's Tasks",
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1A1A2E),
-                                ),
-                              ),
-                              if (showShutdownEntry) ...[
-                                const Spacer(),
-                                PopupMenuButton<_FocusMenuAction>(
-                                  icon: const Icon(Icons.more_vert,
-                                      color: Color(0xFF6B7280)),
-                                  onSelected: (action) {
-                                    if (action == _FocusMenuAction.planDay) {
-                                      _replanDay(context, ref);
-                                    }
-                                  },
-                                  itemBuilder: (_) => const [
-                                    PopupMenuItem(
-                                      value: _FocusMenuAction.planDay,
-                                      child: Row(
-                                        children: [
-                                          Icon(Icons.wb_sunny_outlined,
-                                              size: 18,
-                                              color: Color(0xFF6B7280)),
-                                          SizedBox(width: 8),
-                                          Text('Re-plan'),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ],
+                          // Re-plan lives in the shared title bar's page-action
+                          // slot now (AppShell, #499), not in a bespoke ⋮ here.
+                          const Text(
+                            "Today's Tasks",
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1A1A2E),
+                            ),
                           ),
                           const SizedBox(height: 8),
                           // Batching suggestion banner.
@@ -159,9 +130,16 @@ class FocusScreen extends ConsumerWidget {
                               ),
                             ),
                           const SizedBox(height: 48),
-                          // showShutdownEntry ⇒ planningDone ⇒ activeSession is
-                          // non-null (flow analysis promotes it inside here).
-                          if (showShutdownEntry)
+                          // showShutdownEntry now comes from an opaque provider
+                          // bool, so it no longer promotes [activeSession] to
+                          // non-null here the way the old `planningDone && …`
+                          // local derivation did. The explicit null-check
+                          // restores promotion for [_beginShutdown] (which
+                          // needs a non-null FocusSession); a transient null
+                          // (AsyncLoading during re-subscription, when the
+                          // provider's retained `.value` still reads true)
+                          // harmlessly falls through to the Plan-the-Day CTA.
+                          if (showShutdownEntry && activeSession != null)
                             _PrimaryCallout(
                               kind: tasks.every((t) => t.doneAt != null)
                                   ? _CalloutKind.endSession
