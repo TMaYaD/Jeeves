@@ -793,6 +793,194 @@ async def test_delete_time_log_then_repeat_is_404(client: AsyncClient) -> None:
     assert repeat.status_code == 404
 
 
+# ── time_logs.action_id (Action-grain attribution, issue #476) ────────────────
+
+
+async def _make_action(client: AsyncClient, token: str, outcome_id: str) -> str:
+    action_id = str(uuid4())
+    resp = await client.post(
+        "/actions/",
+        json={
+            "id": action_id,
+            "outcome_id": outcome_id,
+            "text": "do the thing",
+            "role": "current",
+            "created_at": "2026-07-12T09:00:00.000Z",
+        },
+        headers=auth_header(token),
+    )
+    assert resp.status_code == 201, resp.text
+    return action_id
+
+
+@pytest.mark.asyncio
+async def test_create_time_log_persists_and_echoes_action_id(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    token = await register(client, "tl-action-create@example.com")
+    todo_id = await _make_todo(client, token)
+    action_id = await _make_action(client, token, todo_id)
+    log_id = str(uuid4())
+
+    create = await client.post(
+        "/time_logs/",
+        json={
+            "id": log_id,
+            "task_id": todo_id,
+            "action_id": action_id,
+            "started_at": "2026-07-12T09:05:00.000Z",
+        },
+        headers=auth_header(token),
+    )
+    assert create.status_code == 201, create.text
+    assert create.json()["action_id"] == action_id
+
+    row = (await db.execute(select(TimeLog).where(TimeLog.id == log_id))).scalar_one()
+    assert row.action_id == action_id
+
+
+@pytest.mark.asyncio
+async def test_create_time_log_without_action_id_is_null(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    # A legacy/actionless create omits action_id — it persists NULL, still
+    # task-attributed (the pre-Action-era shape stays valid).
+    token = await register(client, "tl-action-null@example.com")
+    todo_id = await _make_todo(client, token)
+    log_id = str(uuid4())
+
+    create = await client.post(
+        "/time_logs/",
+        json={"id": log_id, "task_id": todo_id, "started_at": "2026-07-12T09:05:00.000Z"},
+        headers=auth_header(token),
+    )
+    assert create.status_code == 201, create.text
+    assert create.json()["action_id"] is None
+
+    row = (await db.execute(select(TimeLog).where(TimeLog.id == log_id))).scalar_one()
+    assert row.action_id is None
+
+
+@pytest.mark.asyncio
+async def test_create_time_log_replay_converges_action_id(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    # ADR-0015 upsert-on-replay: a consolidated replay carrying action_id
+    # converges the stored row that was first created without it.
+    token = await register(client, "tl-action-replay@example.com")
+    todo_id = await _make_todo(client, token)
+    action_id = await _make_action(client, token, todo_id)
+    log_id = str(uuid4())
+    base = {"id": log_id, "task_id": todo_id, "started_at": "2026-07-12T09:05:00.000Z"}
+
+    first = await client.post("/time_logs/", json=base, headers=auth_header(token))
+    assert first.status_code == 201
+    assert first.json()["action_id"] is None
+
+    converge = await client.post(
+        "/time_logs/",
+        json={**base, "action_id": action_id},
+        headers=auth_header(token),
+    )
+    assert converge.status_code == 201
+    assert converge.json()["action_id"] == action_id
+
+    rows = (await db.execute(select(TimeLog).where(TimeLog.id == log_id))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].action_id == action_id
+
+
+@pytest.mark.asyncio
+async def test_create_time_log_unowned_action_is_404(client: AsyncClient) -> None:
+    token = await register(client, "tl-action-owner@example.com")
+    other = await register(client, "tl-action-other@example.com")
+    my_todo = await _make_todo(client, token)
+    other_todo = await _make_todo(client, other)
+    other_action = await _make_action(client, other, other_todo)
+
+    unknown = await client.post(
+        "/time_logs/",
+        json={
+            "id": str(uuid4()),
+            "task_id": my_todo,
+            "action_id": str(uuid4()),
+            "started_at": "2026-07-12T09:05:00Z",
+        },
+        headers=auth_header(token),
+    )
+    assert unknown.status_code == 404
+
+    foreign = await client.post(
+        "/time_logs/",
+        json={
+            "id": str(uuid4()),
+            "task_id": my_todo,
+            "action_id": other_action,
+            "started_at": "2026-07-12T09:05:00Z",
+        },
+        headers=auth_header(token),
+    )
+    assert foreign.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_patch_time_log_sets_and_clears_action_id(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    token = await register(client, "tl-action-patch@example.com")
+    headers = auth_header(token)
+    todo_id = await _make_todo(client, token)
+    action_id = await _make_action(client, token, todo_id)
+    log_id = str(uuid4())
+
+    create = await client.post(
+        "/time_logs/",
+        json={"id": log_id, "task_id": todo_id, "started_at": "2026-07-12T09:05:00.000Z"},
+        headers=headers,
+    )
+    assert create.status_code == 201
+
+    set_action = await client.patch(
+        f"/time_logs/{log_id}", json={"action_id": action_id}, headers=headers
+    )
+    assert set_action.status_code == 200, set_action.text
+    assert set_action.json()["action_id"] == action_id
+
+    # action_id is genuinely nullable — an explicit null clears attribution.
+    clear_action = await client.patch(
+        f"/time_logs/{log_id}", json={"action_id": None}, headers=headers
+    )
+    assert clear_action.status_code == 200, clear_action.text
+    assert clear_action.json()["action_id"] is None
+
+    row = (await db.execute(select(TimeLog).where(TimeLog.id == log_id))).scalar_one()
+    assert row.action_id is None
+
+
+@pytest.mark.asyncio
+async def test_patch_time_log_unowned_action_is_404(client: AsyncClient) -> None:
+    token = await register(client, "tl-action-patch-owner@example.com")
+    other = await register(client, "tl-action-patch-other@example.com")
+    my_todo = await _make_todo(client, token)
+    other_todo = await _make_todo(client, other)
+    other_action = await _make_action(client, other, other_todo)
+    log_id = str(uuid4())
+
+    create = await client.post(
+        "/time_logs/",
+        json={"id": log_id, "task_id": my_todo, "started_at": "2026-07-12T09:05:00.000Z"},
+        headers=auth_header(token),
+    )
+    assert create.status_code == 201
+
+    patch = await client.patch(
+        f"/time_logs/{log_id}",
+        json={"action_id": other_action},
+        headers=auth_header(token),
+    )
+    assert patch.status_code == 404
+
+
 # ── focus_session_dispositions (issue #418, ADR-0016) ─────────────────────────
 
 

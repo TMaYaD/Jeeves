@@ -292,6 +292,62 @@ void main() {
       expect(log.endedAt, isNull);
     });
 
+    test('attributes the opened log to the task\'s current Action (issue #476)',
+        () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      await db.actionDao.setCurrentAction('task1', 'do the thing');
+      final current = await db.actionDao.getCurrentAction('task1');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['task1'],
+      );
+
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'task1', now: DateTime(2026, 4, 28, 9));
+
+      final log = await db.timeLogDao.watchActiveLog().first;
+      expect(log!.actionId, current!.id);
+    });
+
+    test('leaves action_id NULL when the focused task is Actionless (#476)',
+        () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['task1'],
+      );
+
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'task1', now: DateTime(2026, 4, 28, 9));
+
+      final log = await db.timeLogDao.watchActiveLog().first;
+      expect(log!.actionId, isNull);
+    });
+
+    test('switching tasks opens the new log against the new task\'s Action',
+        () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      await _insertTodo(db, id: 'task2', title: 'Task 2');
+      await db.actionDao.setCurrentAction('task1', 'step on one');
+      await db.actionDao.setCurrentAction('task2', 'step on two');
+      final action2 = await db.actionDao.getCurrentAction('task2');
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['task1', 'task2'],
+      );
+      final t1 = DateTime(2026, 4, 28, 9, 0, 0);
+      final t2 = DateTime(2026, 4, 28, 9, 30, 0);
+
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'task1', now: t1);
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'task2', now: t2);
+
+      final active = await db.timeLogDao.watchActiveLog().first;
+      expect(active!.taskId, 'task2');
+      expect(active.actionId, action2!.id);
+    });
+
     test('closes prior time log when switching tasks', () async {
       await _insertTodo(db, id: 'task1', title: 'Task 1');
       await _insertTodo(db, id: 'task2', title: 'Task 2');

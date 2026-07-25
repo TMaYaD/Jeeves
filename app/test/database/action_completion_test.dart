@@ -270,4 +270,109 @@ void main() {
       }
     });
   });
+
+  group('Terminal-transition TimeLog hook (issue #476)', () {
+    // Opens a log against the seeded current Action `action-$outcomeId`.
+    Future<void> openLogAgainstCurrent(
+      String outcomeId, {
+      String logId = 'log-1',
+      String? focusSessionId = 'session-1',
+    }) async {
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: Value(logId),
+            userId: const Value(_userId),
+            taskId: Value(outcomeId),
+            actionId: Value('action-$outcomeId'),
+            startedAt: Value(_t1.toIso8601String()),
+            focusSessionId: Value(focusSessionId),
+          ));
+    }
+
+    Future<List<TimeLog>> logs(GtdDatabase db) =>
+        (db.select(db.timeLogs)
+              ..orderBy([(t) => OrderingTerm(expression: t.startedAt)]))
+            .get();
+
+    test('completeCurrentAction closes the open log on that Action at ts',
+        () async {
+      await _seedClarifiedOutcome(db, lastClarifiedAt: _t1);
+      await openLogAgainstCurrent('o1');
+
+      await db.actionDao.completeCurrentAction('o1', now: _t2);
+
+      final rows = await logs(db);
+      expect(rows, hasLength(1), reason: 'no reopen on Done');
+      expect(rows.single.actionId, 'action-o1');
+      expect(rows.single.endedAt, _t2.toIso8601String(),
+          reason: 'engagement ended at Done');
+    });
+
+    test('supersede-with-replacement closes the old log and reopens against '
+        'the successor, losing no time', () async {
+      await _seedClarifiedOutcome(db, lastClarifiedAt: _t1);
+      await openLogAgainstCurrent('o1');
+
+      await db.actionDao
+          .supersedeCurrentAction('o1', newActionText: 'the next step', now: _t2);
+
+      final successor = await db.actionDao.getCurrentAction('o1');
+      expect(successor, isNotNull);
+      expect(successor!.actionText, 'the next step');
+
+      final rows = await logs(db);
+      expect(rows, hasLength(2), reason: 'close-and-reopen');
+      final closed = rows.firstWhere((r) => r.id == 'log-1');
+      final reopened = rows.firstWhere((r) => r.id != 'log-1');
+      expect(closed.endedAt, _t2.toIso8601String());
+      // Continuity: closed.ended_at == reopened.started_at == ts, zero lost.
+      expect(reopened.startedAt, _t2.toIso8601String());
+      expect(reopened.endedAt, isNull);
+      expect(reopened.actionId, successor.id);
+      // The reopened row copies task_id, user_id AND focus_session_id.
+      expect(reopened.taskId, 'o1');
+      expect(reopened.userId, closed.userId);
+      expect(reopened.focusSessionId, closed.focusSessionId);
+    });
+
+    test('clear (supersede without replacement) closes the log, no reopen',
+        () async {
+      await _seedClarifiedOutcome(db, lastClarifiedAt: _t1);
+      await openLogAgainstCurrent('o1');
+
+      await db.actionDao.clearCurrentAction('o1', now: _t2);
+
+      final rows = await logs(db);
+      expect(rows, hasLength(1));
+      expect(rows.single.endedAt, _t2.toIso8601String());
+    });
+
+    test('in-place edit leaves the open log untouched (same Action id)',
+        () async {
+      await _seedClarifiedOutcome(db, lastClarifiedAt: _t1);
+      await openLogAgainstCurrent('o1');
+
+      await db.actionDao.setCurrentAction('o1', 'refined wording', now: _t2);
+
+      final rows = await logs(db);
+      expect(rows, hasLength(1), reason: 'a text edit is not a transition');
+      expect(rows.single.actionId, 'action-o1');
+      expect(rows.single.endedAt, isNull, reason: 'the stint keeps running');
+    });
+
+    test('supersede leaves a log open against a *different* Action untouched',
+        () async {
+      await _seedClarifiedOutcome(db, id: 'o1', lastClarifiedAt: _t1);
+      await _seedClarifiedOutcome(db, id: 'o2', lastClarifiedAt: _t1);
+      // The user is engaged on o2's Action, not o1's.
+      await openLogAgainstCurrent('o2', logId: 'log-o2');
+
+      await db.actionDao.clearCurrentAction('o1', now: _t2);
+
+      final rows = await logs(db);
+      expect(rows, hasLength(1));
+      expect(rows.single.id, 'log-o2');
+      expect(rows.single.endedAt, isNull,
+          reason: 'only the terminated Action\'s own log is closed');
+    });
+  });
 }

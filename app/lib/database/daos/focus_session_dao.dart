@@ -7,6 +7,7 @@ import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../gtd_database.dart';
+import 'action_dao.dart';
 import 'time_log_dao.dart';
 
 part 'focus_session_dao.g.dart';
@@ -24,8 +25,14 @@ String focusSessionDispositionIdFor(String sessionId, String taskId) => uuid.v5(
       'jeeves://focus_session_disposition/$sessionId/$taskId',
     );
 
-@DriftAccessor(
-    tables: [FocusSessions, FocusSessionTasks, FocusSessionDispositions, TimeLogs, Todos])
+@DriftAccessor(tables: [
+  FocusSessions,
+  FocusSessionTasks,
+  FocusSessionDispositions,
+  TimeLogs,
+  Todos,
+  Actions,
+])
 class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     with _$FocusSessionDaoMixin {
   FocusSessionDao(super.db);
@@ -159,12 +166,18 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       await (update(timeLogs)..where((t) => t.endedAt.isNull()))
           .write(TimeLogsCompanion(endedAt: Value(ts)));
 
-      // Open a new time log if a task is being focused.
+      // Open a new time log if a task is being focused, attributing it to the
+      // Outcome's current Action resolved inside this transaction (issue #476).
+      // A planned/terminated row can never be attributed — the resolver filters
+      // `role = 'current'`; an Actionless Outcome yields NULL, still
+      // task-attributed.
       if (taskId != null) {
+        final actionId = await _currentActionId(taskId);
         await into(timeLogs).insert(TimeLogsCompanion(
           id: Value(uuid.v4()),
           userId: Value(session.userId),
           taskId: Value(taskId),
+          actionId: Value(actionId),
           startedAt: Value(ts),
           endedAt: const Value(null),
           focusSessionId: Value(sessionId),
@@ -175,6 +188,20 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       await (update(focusSessions)..where((s) => s.id.equals(sessionId)))
           .write(FocusSessionsCompanion(currentTaskId: Value(taskId)));
     });
+  }
+
+  /// The id of [outcomeId]'s winning `current` Action, or null when it is
+  /// Actionless. Uses the blessed winner-first ordering ([ActionDao.
+  /// winnerFirstOrderSql]) so a transient multi-current race attributes to the
+  /// same row every reader would display. Runs inside the caller's transaction.
+  Future<String?> _currentActionId(String outcomeId) async {
+    final row = await customSelect(
+      "SELECT id FROM actions WHERE outcome_id = ? AND role = 'current' "
+      "${ActionDao.winnerFirstOrderSql} LIMIT 1",
+      variables: [Variable<String>(outcomeId)],
+      readsFrom: {actions},
+    ).getSingleOrNull();
+    return row?.read<String?>('id');
   }
 
   /// Stream that emits the currently open session, or null.

@@ -99,6 +99,14 @@ class TimeLogs extends Table with Synced {
   TextColumn get userId => text()();
   TextColumn get taskId => text().references(Todos, #id)();
 
+  /// The Action engaged when this stint ran (ADR-0001 story 6, issue #476).
+  ///
+  /// NULL means "no Action attribution available" — a pre-Action-era log, or a
+  /// defensive Actionless edge where the Outcome had no `current` Action at open
+  /// time. The row still carries [taskId] (Outcome-grain) attribution, so every
+  /// time-spent total (which aggregates by `task_id`) is unaffected either way.
+  TextColumn get actionId => text().nullable().references(Actions, #id)();
+
   /// ISO-8601 UTC string: when the stint started.
   TextColumn get startedAt => text()();
 

@@ -77,7 +77,7 @@ typedef ActionWriteEffect = ({bool changed, bool stamped});
 
 const ActionWriteEffect _noEffect = (changed: false, stamped: false);
 
-@DriftAccessor(tables: [Actions, Todos])
+@DriftAccessor(tables: [Actions, Todos, TimeLogs])
 class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   ActionDao(super.db);
 
@@ -509,13 +509,24 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     final hasReplacement = newText != null && newText.isNotEmpty;
 
     var changed = resolved.converged;
+    // Terminal-transition TimeLog hook (issue #476, CONTEXT.md § Switching
+    // Actions: switching closes the current TimeLog and opens a new one).
+    // Close the retired Action's open log; if a replacement is minted in the
+    // same transaction AND a log was closed, reopen a continuation against the
+    // successor so no engagement time is lost. Keep this minimal — #477 also
+    // edits this method (a metadata mirror); the two additions are independent.
+    TimeLog? closedLog;
     if (current != null) {
+      closedLog = await _closeOpenLogFor(current.id, ts);
       await _retire(current.id, ts);
       changed = true;
     }
     if (hasReplacement) {
-      await _insertCurrentAction(outcomeId, newText, ts: ts);
+      final newActionId = await _insertCurrentAction(outcomeId, newText, ts: ts);
       changed = true;
+      if (closedLog != null) {
+        await _reopenLogAgainst(closed: closedLog, newActionId: newActionId, ts: ts);
+      }
     }
 
     // A pure convergence with nothing to supersede and no replacement is repair,
@@ -545,6 +556,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    // Engagement on this Action ended at Done — close its open TimeLog here
+    // (issue #476), not at a later endFocus(). No reopen: a finished Action has
+    // no successor to continue against (CONTEXT.md § Switching Actions).
+    await _closeOpenLogFor(current.id, ts);
     // Keep the cursor in agreement with the Action side (blank cursor ⟺ no
     // current row) without stamping — see [completeCurrentAction].
     await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
@@ -832,7 +847,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return a.id.compareTo(b.id); // ascending: smallest id first
   }
 
-  Future<void> _insertCurrentAction(
+  /// Inserts a fresh `current` Action and returns its generated id (the id lets
+  /// a supersede reopen a continuation TimeLog against the successor — #476).
+  Future<String> _insertCurrentAction(
     String outcomeId,
     String text, {
     String? energyLevel,
@@ -840,9 +857,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     required DateTime ts,
   }) async {
     final userId = await _userIdForOutcome(outcomeId);
+    final id = uuid.v4();
     await into(actions).insert(
       ActionsCompanion(
-        id: Value(uuid.v4()),
+        id: Value(id),
         outcomeId: Value(outcomeId),
         userId: Value(userId),
         actionText: Value(text),
@@ -851,6 +869,48 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         timeEstimate: Value(timeEstimate),
         createdAt: Value(ts),
         updatedAt: Value(ts),
+      ),
+    );
+    return id;
+  }
+
+  /// Close every open TimeLog attributed to [actionId] at [ts], returning the
+  /// most-recently-started row that was closed (or null when none was open) so
+  /// a supersede can reopen a continuation against the successor Action.
+  ///
+  /// Scoped to `action_id` — a stint the user already switched away from (open
+  /// against a *different* Action) is left untouched. All-open closure is
+  /// defensive against a stale multi-open edge; the invariant is one globally.
+  Future<TimeLog?> _closeOpenLogFor(String actionId, DateTime ts) async {
+    final open = await (select(timeLogs)
+          ..where((t) => t.actionId.equals(actionId) & t.endedAt.isNull())
+          ..orderBy([(t) => OrderingTerm.desc(t.startedAt)]))
+        .get();
+    if (open.isEmpty) return null;
+    await (update(timeLogs)
+          ..where((t) => t.actionId.equals(actionId) & t.endedAt.isNull()))
+        .write(TimeLogsCompanion(endedAt: Value(ts.toIso8601String())));
+    return open.first;
+  }
+
+  /// Reopen a continuation TimeLog against [newActionId], copying the closed
+  /// row's `task_id`, `user_id` and `focus_session_id` so engagement continuity
+  /// (and session attribution) is preserved with zero seconds lost — the
+  /// close-and-reopen rule (CONTEXT.md § Switching Actions).
+  Future<void> _reopenLogAgainst({
+    required TimeLog closed,
+    required String newActionId,
+    required DateTime ts,
+  }) async {
+    await into(timeLogs).insert(
+      TimeLogsCompanion(
+        id: Value(uuid.v4()),
+        userId: Value(closed.userId),
+        taskId: Value(closed.taskId),
+        actionId: Value(newActionId),
+        startedAt: Value(ts.toIso8601String()),
+        endedAt: const Value(null),
+        focusSessionId: Value(closed.focusSessionId),
       ),
     );
   }
