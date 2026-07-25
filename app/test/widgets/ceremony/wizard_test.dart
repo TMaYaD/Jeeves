@@ -349,6 +349,20 @@ void main() {
       expect(find.byKey(appTitleBarLeadingKey), findsNothing);
     });
 
+    testWidgets('pins the global capture action in the bar mid-ceremony (#458)',
+        (tester) async {
+      await tester.pumpWidget(_Harness(
+        buildSteps: (_, _) => const [
+          WizardStep(title: 'Process Inbox', body: SizedBox.shrink()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+      expect(bar.pinnedAction?.key, const Key('capture_action'));
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+    });
+
     testWidgets('renders the progress narration below the bar', (tester) async {
       await tester.pumpWidget(_Harness(
         buildSteps: (_, _) => const [

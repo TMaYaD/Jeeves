@@ -22,6 +22,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/shutdown/steps/close_day_step.dart';
 import 'package:jeeves/services/notification_service.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 
 import '../../test_helpers.dart';
 
@@ -61,6 +62,29 @@ Future<void> _revealButton(WidgetTester tester) async {
 void main() {
   setUpAll(configureSqliteForTests);
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets(
+      'Close Day is a structural capture exclusion: it renders no title bar, '
+      'so the pinned capture action is absent (#458)', (tester) async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final (widget, container) = _app(db);
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(widget);
+    await tester.pump();
+
+    // The terminal Close Day screen is rendered standalone (not via the shared
+    // Wizard), so it carries no AppTitleBar — capture is structurally absent,
+    // no suppression logic required.
+    expect(find.byType(AppTitleBar), findsNothing);
+    expect(find.byKey(const Key('capture_action')), findsNothing);
+
+    // Unmount before the entrance animation leaves a pending timer behind.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
 
   testWidgets(
       'and-then-plan intent set: Close Day clears the intent, resets the '

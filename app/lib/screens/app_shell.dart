@@ -9,6 +9,7 @@ import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
 import '../providers/tags_provider.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
+import '../widgets/capture/capture_action.dart';
 import '../widgets/jeeves_logo.dart';
 import '../widgets/nudge_banner.dart';
 import 'common/tag_cloud.dart';
@@ -106,6 +107,11 @@ class AppShell extends ConsumerWidget {
             badge: badge,
             pageActions: pageActions,
             leading: AppTitleBarLeading.drawer,
+            // Capture is pinned on every shell route except the Inbox, whose
+            // QuickAddBar already serves capture — a second affordance would be
+            // redundant (owner ruling, #458). Mirrors the badge/pageActions
+            // top-down pattern: the bar stays a pure function of route state.
+            pinnedAction: location == '/inbox' ? null : captureAction(context),
           ),
           body: Column(
             children: [

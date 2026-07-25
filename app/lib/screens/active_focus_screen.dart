@@ -17,6 +17,7 @@ import '../providers/task_detail_provider.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
+import '../widgets/capture/capture_action.dart';
 import '../widgets/elapsed_timer_widget.dart';
 import '../widgets/process_to_handlers.dart' show ProcessAction;
 import '../widgets/reclarify_prompt_sheet.dart';
@@ -201,6 +202,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       appBar: AppTitleBar(
         title: todoAsync.value?.title ?? '',
         onLeadingPressed: () => context.go('/focus'),
+        pinnedAction: captureAction(context),
       ),
       body: SafeArea(
         child: todoAsync.when(

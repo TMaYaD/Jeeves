@@ -452,6 +452,28 @@ void main() {
     });
   });
 
+  group('pinned capture action (#458)', () {
+    const captureKey = Key('capture_action');
+
+    testWidgets('is pinned on every shell route except the Inbox',
+        (tester) async {
+      for (final path in shellRouteTitles.keys) {
+        await tester.pumpWidget(_buildShellOnly(initialLocation: path));
+        await tester.pump();
+
+        if (path == '/inbox') {
+          // The Inbox keeps its QuickAddBar; the pinned capture is suppressed
+          // so the two do not present competing affordances (owner ruling).
+          expect(find.byKey(captureKey), findsNothing,
+              reason: '$path should suppress the pinned capture action');
+        } else {
+          expect(await findBarAction(tester, captureKey), findsOneWidget,
+              reason: '$path should pin the capture action');
+        }
+      }
+    });
+  });
+
   group('Now-route Re-plan page action (#499)', () {
     testWidgets(
         'shows Re-plan in the shared bar on /focus with an open session '
@@ -524,8 +546,8 @@ void main() {
     });
 
     testWidgets(
-        'at phone width Re-plan renders in the bar with no ⋮ overflow '
-        '(sole action, no pinned action fits the budget)', (tester) async {
+        'at phone width Re-plan and the pinned capture both render in the bar '
+        'with no ⋮ overflow (2 ≤ the phone budget of 3)', (tester) async {
       tester.view.physicalSize = const Size(375, 812);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
