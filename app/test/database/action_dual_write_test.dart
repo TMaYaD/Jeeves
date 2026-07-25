@@ -32,10 +32,11 @@ Future<void> _seedOutcome(GtdDatabase db, {String id = 'o1'}) async {
 }
 
 Future<String?> _cursor(GtdDatabase db, String id) async {
-  final row = await (db.select(db.todos)..where((t) => t.id.equals(id)))
-      .getSingle();
-  return row.nextActionText;
+  return (await _todo(db, id)).nextActionText;
 }
+
+Future<Todo> _todo(GtdDatabase db, String id) =>
+    (db.select(db.todos)..where((t) => t.id.equals(id))).getSingle();
 
 Future<List<Map<String, Object?>>> _currents(GtdDatabase db, String id) async {
   final rows = await db
@@ -102,6 +103,66 @@ void main() {
           .customSelect("SELECT role FROM actions WHERE outcome_id = 'o1'")
           .get();
       expect(all.single.data['role'], 'superseded');
+    });
+  });
+
+  group('setNextActionTextIfActionless', () {
+    test('skips when a current Action is present: no clobber, no stamp',
+        () async {
+      // A synced `current` Action already carries a deliberate phrase.
+      await seedCurrentAction(
+        db,
+        outcomeId: 'o1',
+        text: 'deliberate phrase',
+        userId: _userId,
+        createdAt: _t0,
+      );
+      final before = await _todo(db, 'o1');
+
+      final wrote = await db.todoDao
+          .setNextActionTextIfActionless('o1', 'Mirrored title', now: _t1);
+
+      expect(wrote, isFalse, reason: 'an actioned Outcome is left untouched');
+      final currents = await _currents(db, 'o1');
+      expect(currents.single['text'], 'deliberate phrase',
+          reason: 'the mirror must not overwrite the deliberate Action');
+      final after = await _todo(db, 'o1');
+      expect(after.lastClarifiedAt, before.lastClarifiedAt,
+          reason: 'the skip path stamps nothing');
+      expect(after.updatedAt, before.updatedAt);
+      expect(after.nextActionText, before.nextActionText);
+    });
+
+    test('on an actionless Outcome, equals setNextActionText for the same now',
+        () async {
+      await _seedOutcome(db, id: 'viaPrimitive');
+      await _seedOutcome(db, id: 'viaDirect');
+
+      final wrote = await db.todoDao
+          .setNextActionTextIfActionless('viaPrimitive', 'Book venue', now: _t1);
+      await db.todoDao.setNextActionText('viaDirect', 'Book venue', now: _t1);
+
+      expect(wrote, isTrue);
+      // Cursor.
+      expect(await _cursor(db, 'viaPrimitive'), 'Book venue');
+      expect(await _cursor(db, 'viaPrimitive'), await _cursor(db, 'viaDirect'));
+      // Action row (identity differs — a fresh uuid each — but text agrees).
+      final pc = await _currents(db, 'viaPrimitive');
+      final dc = await _currents(db, 'viaDirect');
+      expect(pc.single['text'], dc.single['text']);
+      // Stamp (last_clarified_at + updated_at), byte-identical for the same now.
+      final pt = await _todo(db, 'viaPrimitive');
+      final dt = await _todo(db, 'viaDirect');
+      expect(pt.lastClarifiedAt, dt.lastClarifiedAt);
+      expect(pt.updatedAt, dt.updatedAt);
+      await _expectEquiv(db, 'viaPrimitive');
+    });
+
+    test('blank text is a caller error', () async {
+      expect(
+        () => db.todoDao.setNextActionTextIfActionless('o1', '   ', now: _t1),
+        throwsArgumentError,
+      );
     });
   });
 
