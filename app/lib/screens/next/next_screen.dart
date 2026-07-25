@@ -9,7 +9,6 @@ class NextScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GtdListScreen(
-      title: 'Next Actions',
       provider: nextProvider,
       emptyIcon: Icons.task_alt,
       emptyTitle: 'No next actions',

@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/widgets/tag_text.dart';
 
 import 'package:jeeves/providers/auth_provider.dart';
-import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
@@ -18,6 +17,7 @@ import 'package:jeeves/models/focus_session_planning_settings.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import '../test_helpers.dart';
 
 // ---------------------------------------------------------------------------
@@ -61,7 +61,6 @@ Widget _buildShell({
   return ProviderScope(
     overrides: [
       authTokenProvider.overrideWith(() => _MockAuthNotifier()),
-      isOnlineProvider.overrideWith((_) => Stream.value(true)),
       inboxItemsProvider.overrideWith((_) => Stream.value([])),
       nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
@@ -115,7 +114,8 @@ Widget _buildShell({
 }
 
 Future<void> _openDrawer(WidgetTester tester) async {
-  await tester.tap(find.byIcon(Icons.menu));
+  // The drawer opens from the shared title bar's leading (drawer) slot.
+  await tester.tap(find.byKey(appTitleBarLeadingKey));
   await tester.pumpAndSettle();
 }
 
@@ -196,7 +196,6 @@ void main() {
       await tester.pumpWidget(ProviderScope(
         overrides: [
           authTokenProvider.overrideWith(() => _MockAuthNotifier()),
-          isOnlineProvider.overrideWith((_) => Stream.value(true)),
           inboxItemsProvider.overrideWith((_) => Stream.value([])),
           nextProvider.overrideWith((_) => Stream.value([])),
           waitingForProvider.overrideWith((_) => Stream.value([])),

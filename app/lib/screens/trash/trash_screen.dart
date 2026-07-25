@@ -15,7 +15,6 @@ class TrashScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GtdListScreen(
-      title: 'Trash',
       provider: trashProvider,
       showFilterBar: false,
       emptyIcon: Icons.delete_outline,

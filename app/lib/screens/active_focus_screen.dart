@@ -16,6 +16,7 @@ import '../providers/sprint_timer_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
+import '../widgets/app_title_bar/app_title_bar.dart';
 import '../widgets/elapsed_timer_widget.dart';
 import '../widgets/process_to_handlers.dart' show ProcessAction;
 import '../widgets/reclarify_prompt_sheet.dart';
@@ -194,6 +195,13 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
     return Scaffold(
       backgroundColor: Colors.white,
+      // Leaving focus is a router `go` back to the execution home, not a
+      // Navigator pop (this route was reached by `go`), so the bar's way out
+      // is overridden. The title single-lines the task (chrome unification).
+      appBar: AppTitleBar(
+        title: todoAsync.value?.title ?? '',
+        onLeadingPressed: () => context.go('/focus'),
+      ),
       body: SafeArea(
         child: todoAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
@@ -281,34 +289,8 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Header: back button + task title
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 12, 24, 4),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              IconButton(
-                tooltip: 'Back',
-                icon: const Icon(Icons.arrow_back, color: Color(0xFF9CA3AF)),
-                onPressed: () => context.go('/focus'),
-              ),
-              Expanded(
-                child: Text(
-                  todo.title,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF1A1A2E),
-                    height: 1.3,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-        // Jeeves banner — sprint and break aware
+        // The back affordance and task title live in the shared title bar
+        // (ADR-0021); the sprint-aware Jeeves banner leads the body.
         const ElapsedTimerWidget(),
         // Carousel: sprint ring (page 0) | notes (page 1)
         Expanded(

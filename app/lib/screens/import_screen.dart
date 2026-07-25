@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/import_provider.dart';
+import '../widgets/app_title_bar/app_title_bar.dart';
 
 class ImportScreen extends ConsumerStatefulWidget {
   const ImportScreen({super.key});
@@ -84,13 +85,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
     final importState = ref.watch(importNotifierProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Import from Nirvana'),
-        backgroundColor: Colors.white,
-        foregroundColor: const Color(0xFF1A1A2E),
-        elevation: 0,
-        centerTitle: false,
-      ),
+      appBar: const AppTitleBar(title: 'Import from Nirvana'),
       backgroundColor: const Color(0xFFF9FAFB),
       body: ListView(
         padding: const EdgeInsets.all(24),

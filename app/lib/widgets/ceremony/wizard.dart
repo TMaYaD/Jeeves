@@ -4,8 +4,11 @@
 /// A [Wizard] composes a list of [WizardStep]s and owns the chrome that the
 /// three Ceremonies previously open-coded in parallel:
 ///
-/// - The header — ceremony icon + label, current step title, segmented
-///   progress bar, and optional subtitle.
+/// - The shared [AppTitleBar] (ADR-0021): the ceremony label + icon render as
+///   the bar's overline, the current step title as the bar title, and the
+///   leading slot is `none` (ceremonies own their own guarded exit).
+/// - The step's segmented progress bar and its narration (subtitle), rendered
+///   in the wizard's content region flush beneath the bar.
 /// - The non-swipeable [PageView] that hosts the step bodies and animates
 ///   between them whenever [currentStep] changes.
 ///
@@ -41,6 +44,8 @@
 library;
 
 import 'package:flutter/material.dart';
+
+import '../app_title_bar/app_title_bar.dart';
 
 /// One step of a [Wizard]. Carries display metadata and the widget tree
 /// for the step body and its footer.
@@ -192,16 +197,27 @@ class _WizardState extends State<Wizard> {
 
     return Scaffold(
       backgroundColor: widget.backgroundColor,
+      // The ceremony label + step title live in the shared bar; the leading
+      // slot is `none` because ceremonies own their own guarded exit
+      // (CeremonyPopScope) — a bar back would be a second, unguarded way out.
+      appBar: AppTitleBar(
+        title: step.title,
+        overline: AppTitleBarOverline(
+          label: widget.ceremonyLabel,
+          icon: widget.ceremonyIcon,
+          iconColor: widget.accentColor,
+        ),
+        leading: AppTitleBarLeading.none,
+      ),
       body: SafeArea(
         child: Column(
           children: [
-            _WizardHeader(
-              step: step,
+            _WizardProgress(
               currentStep: widget.currentStep,
-              ceremonyLabel: widget.ceremonyLabel,
-              ceremonyIcon: widget.ceremonyIcon,
-              accentColor: widget.accentColor,
               segmentCount: segmentCount,
+              activeFraction: step.activeFraction,
+              accentColor: widget.accentColor,
+              subtitle: step.subtitle,
             ),
             Expanded(child: pageView),
             if (step.footer != null)
@@ -223,67 +239,40 @@ class _WizardState extends State<Wizard> {
 }
 
 // ---------------------------------------------------------------------------
-// Header — ritual label, step title, segmented progress, subtitle
+// Progress — segmented progress bar + narration, flush beneath the shared bar
 // ---------------------------------------------------------------------------
 
-class _WizardHeader extends StatelessWidget {
-  const _WizardHeader({
-    required this.step,
+class _WizardProgress extends StatelessWidget {
+  const _WizardProgress({
     required this.currentStep,
-    required this.ceremonyLabel,
-    required this.ceremonyIcon,
-    required this.accentColor,
     required this.segmentCount,
+    required this.activeFraction,
+    required this.accentColor,
+    required this.subtitle,
   });
 
-  final WizardStep step;
   final int currentStep;
-  final String ceremonyLabel;
-  final IconData ceremonyIcon;
-  final Color accentColor;
   final int segmentCount;
+  final double activeFraction;
+  final Color accentColor;
+  final String? subtitle;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(ceremonyIcon, color: accentColor, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                ceremonyLabel,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey[500],
-                  letterSpacing: 0.8,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            step.title,
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF1A1A2E),
-            ),
-          ),
-          const SizedBox(height: 14),
           _SegmentedProgressBar(
             currentStep: currentStep,
             segmentCount: segmentCount,
-            activeFraction: step.activeFraction,
+            activeFraction: activeFraction,
             accent: accentColor,
           ),
           const SizedBox(height: 4),
           Text(
-            step.subtitle ?? 'Step ${currentStep + 1} of $segmentCount',
+            subtitle ?? 'Step ${currentStep + 1} of $segmentCount',
             style: TextStyle(fontSize: 12, color: Colors.grey[400]),
           ),
           const SizedBox(height: 8),

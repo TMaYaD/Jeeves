@@ -9,7 +9,6 @@ import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart' show Intent;
-import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
@@ -21,6 +20,7 @@ import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../helpers/app_title_bar_test_helpers.dart';
 import '../test_helpers.dart';
 
 const _userId = 'local';
@@ -83,7 +83,6 @@ Future<Todo> _insertAt(
 
   final widget = ProviderScope(
     overrides: [
-      isOnlineProvider.overrideWith((_) => Stream.value(true)),
       inboxItemsProvider.overrideWith((_) => Stream.value([])),
       databaseProvider.overrideWithValue(db),
       taskDetailTodoProvider(todoId)
@@ -267,7 +266,9 @@ void main() {
       final (widget, router) = _buildScreen(db, 'engage1', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'engage1');
 
-      expect(find.byKey(const Key('task_detail_start_focus')), findsOneWidget);
+      // Overflow-aware helper: finds the action wherever the breakpoint put it.
+      expect(await findBarAction(tester, const Key('task_detail_start_focus')),
+          findsOneWidget);
     });
 
     testWidgets(
@@ -336,7 +337,11 @@ void main() {
       final (widget, router) = _buildScreen(db, 'done1', initialTodo: done);
       await _showTaskDetail(tester, widget, router, 'done1');
 
+      // Absence: findBarAction can only assert presence (it fails when the
+      // action is nowhere), so a direct find.byKey is the right tool here, plus
+      // an assertion that nothing overflowed into a ⋮ menu either.
       expect(find.byKey(const Key('task_detail_start_focus')), findsNothing);
+      expect(find.byKey(appTitleBarOverflowKey), findsNothing);
     });
 
     testWidgets(
@@ -349,7 +354,7 @@ void main() {
       // No FocusSession is open — the affordance must still engage.
       expect(await db.focusSessionDao.getActiveSession(), isNull);
 
-      await tester.tap(find.byKey(const Key('task_detail_start_focus')));
+      await tapBarAction(tester, const Key('task_detail_start_focus'));
       await tester.runAsync(() => pumpEventQueue());
       await tester.pumpAndSettle();
 
@@ -380,7 +385,7 @@ void main() {
         () => container.read(focusModeProvider.notifier).startFocus('other'),
       );
 
-      await tester.tap(find.byKey(const Key('task_detail_start_focus')));
+      await tapBarAction(tester, const Key('task_detail_start_focus'));
       await tester.pumpAndSettle();
 
       expect(find.text('Active focus'), findsNothing,
@@ -423,7 +428,7 @@ void main() {
       await tester.runAsync(() => pumpEventQueue());
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('task_detail_start_focus')));
+      await tapBarAction(tester, const Key('task_detail_start_focus'));
       await tester.pumpAndSettle();
 
       expect(find.text('Active focus'), findsNothing);
@@ -465,7 +470,7 @@ void main() {
         () => container.read(focusModeProvider.notifier).startFocus('other'),
       );
 
-      await tester.tap(find.byKey(const Key('task_detail_start_focus')));
+      await tapBarAction(tester, const Key('task_detail_start_focus'));
       await tester.pumpAndSettle();
 
       expect(find.text('Active focus'), findsNothing,
@@ -504,7 +509,7 @@ void main() {
             container.read(focusModeProvider.notifier).startFocus('engage6'),
       );
 
-      await tester.tap(find.byKey(const Key('task_detail_start_focus')));
+      await tapBarAction(tester, const Key('task_detail_start_focus'));
       await tester.pumpAndSettle();
 
       expect(find.text('Active focus'), findsNothing,

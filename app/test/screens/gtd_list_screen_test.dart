@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/screens/common/gtd_list_screen.dart';
 import '../test_helpers.dart';
@@ -18,11 +17,10 @@ Widget _buildScreen(Stream<List<Todo>> stream) {
   final provider = StreamProvider<List<Todo>>((_) => stream);
   return ProviderScope(
     overrides: [
-      isOnlineProvider.overrideWith((_) => Stream.value(true)),
       inboxItemsProvider.overrideWith((_) => Stream.value([])),
     ],
     child: MaterialApp(
-      home: GtdListScreen(title: 'Test List', provider: provider),
+      home: GtdListScreen(provider: provider),
     ),
   );
 }
@@ -48,7 +46,9 @@ void main() {
       expect(find.textContaining('Nothing here yet'), findsOneWidget);
     });
 
-    testWidgets('renders the list title and todo titles', (tester) async {
+    testWidgets('renders the todo titles', (tester) async {
+      // The list title lives in the shared AppShell title bar now (ADR-0021);
+      // this screen renders standalone with no header of its own.
       final items = [
         _todo('a', 'Buy coffee'),
         _todo('b', 'Fix bug'),
@@ -56,7 +56,6 @@ void main() {
       await tester.pumpWidget(_buildScreen(Stream.value(items)));
       await tester.pump();
 
-      expect(find.text('Test List'), findsOneWidget);
       expect(find.text('Buy coffee'), findsOneWidget);
       expect(find.text('Fix bug'), findsOneWidget);
     });
@@ -70,7 +69,7 @@ void main() {
             builder: (_, _) {
               final provider =
                   StreamProvider<List<Todo>>((_) => Stream.value([_todo('x', 'Do something')]));
-              return GtdListScreen(title: 'List', provider: provider);
+              return GtdListScreen(provider: provider);
             },
           ),
           GoRoute(
@@ -85,7 +84,6 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            isOnlineProvider.overrideWith((_) => Stream.value(true)),
             inboxItemsProvider.overrideWith((_) => Stream.value([])),
           ],
           child: MaterialApp.router(routerConfig: router),

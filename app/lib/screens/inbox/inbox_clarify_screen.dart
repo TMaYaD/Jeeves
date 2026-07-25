@@ -29,6 +29,7 @@ import '../../providers/clarify_mode_provider.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/task_detail_provider.dart';
 import '../../services/clarification_service.dart';
+import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/async_subject.dart';
 import '../../widgets/capture_outcomes_section.dart';
 import '../../widgets/clarify_shared_widgets.dart';
@@ -258,15 +259,12 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   Widget _buildScaffold(BuildContext context, AsyncValue<Capture?> subject) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: const Text('Clarify'),
-        backgroundColor: Colors.white,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 20),
-          onPressed: _routing ? null : () => context.pop(),
-        ),
+      // The back arrow is gated while a route transition is in flight
+      // (`_routing`) via leadingEnabled — the platform back has its own guard
+      // in the PopScope above.
+      appBar: AppTitleBar(
+        title: 'Clarify',
+        leadingEnabled: !_routing,
       ),
       body: AsyncSubject<Capture>(
         asyncValue: subject,

@@ -12,6 +12,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/ceremony/wizard.dart';
 
 const _ceremonyId = 'test_ritual';
@@ -326,6 +327,43 @@ void main() {
       expect(find.text('Test Ritual'), findsOneWidget);
       expect(find.text('Process Inbox'), findsOneWidget);
       expect(find.text('Step 1 of 2'), findsOneWidget);
+    });
+
+    testWidgets(
+        'carries the ceremony label + icon as the bar overline, step title as '
+        'the bar title, and no leading affordance', (tester) async {
+      await tester.pumpWidget(_Harness(
+        buildSteps: (_, _) => const [
+          WizardStep(title: 'Process Inbox', body: SizedBox.shrink()),
+          WizardStep(title: 'Review Things', body: SizedBox.shrink()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+      expect(bar.title, 'Process Inbox');
+      expect(bar.overline?.label, 'Test Ritual');
+      expect(bar.overline?.icon, Icons.star);
+      expect(bar.leading, AppTitleBarLeading.none);
+      // Ceremonies own their guarded exit — the bar renders no leading button.
+      expect(find.byKey(appTitleBarLeadingKey), findsNothing);
+    });
+
+    testWidgets('renders the progress narration below the bar', (tester) async {
+      await tester.pumpWidget(_Harness(
+        buildSteps: (_, _) => const [
+          WizardStep(title: 'Process Inbox', body: SizedBox.shrink()),
+          WizardStep(title: 'Review Things', body: SizedBox.shrink()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final barBottom =
+          tester.getRect(find.byType(AppTitleBar)).bottom;
+      final narration = tester.getTopLeft(find.text('Step 1 of 2')).dy;
+      expect(narration, greaterThanOrEqualTo(barBottom),
+          reason: 'the progress bar + narration sit in the content region, '
+              'flush beneath the bar');
     });
 
     testWidgets('uses the step.subtitle when provided', (tester) async {

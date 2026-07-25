@@ -4,12 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/providers/connectivity_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_screen.dart';
-import 'package:jeeves/screens/inbox/widgets/offline_chip.dart';
 import '../test_helpers.dart';
 
 // ---------------------------------------------------------------------------
@@ -30,21 +28,16 @@ Capture _capture(String id, String title) => Capture(
     );
 
 /// Build the app with fully controlled provider overrides so no platform
-/// channels (connectivity D-Bus, SQLite watch streams) run inside fakeAsync.
+/// channels (SQLite watch streams) run inside fakeAsync.
 ///
 /// [inboxStream] is what [inboxItemsProvider] emits.
-/// [isOnlineStream] is what [isOnlineProvider] emits.
 /// [db] is needed only when [InboxNotifier.addCapture] must actually write.
 Widget _buildApp({
   Stream<List<Capture>>? inboxStream,
-  Stream<bool>? isOnlineStream,
   GtdDatabase? db,
 }) {
   return ProviderScope(
     overrides: [
-      isOnlineProvider.overrideWith(
-        (ref) => isOnlineStream ?? Stream.value(true),
-      ),
       inboxItemsProvider.overrideWith(
         (ref) => inboxStream ?? Stream.value([]),
       ),
@@ -74,15 +67,16 @@ void main() {
       expect(find.textContaining('No items yet'), findsOneWidget);
     });
 
-    testWidgets('items are rendered in the list with a matching count badge',
-        (tester) async {
+    testWidgets('items are rendered in the list', (tester) async {
+      // The unprocessed-count badge lives in the shared AppShell title bar now
+      // (ADR-0021); it is covered by app_shell_test, not here — this screen
+      // renders standalone with no title bar.
       final items = [_capture('a', 'Buy milk'), _capture('b', 'Call dentist')];
       await tester.pumpWidget(_buildApp(inboxStream: Stream.value(items)));
       await tester.pump();
 
       expect(find.text('Buy milk'), findsOneWidget);
       expect(find.text('Call dentist'), findsOneWidget);
-      expect(find.text('2'), findsOneWidget);
     });
 
     testWidgets('submitting text field clears the input', (tester) async {
@@ -118,26 +112,6 @@ void main() {
       expect(rows, hasLength(1));
       expect(rows.first.title, 'Integration test task');
       expect(rows.first.clarifiedAt, isNull);
-    });
-
-    testWidgets('OfflineChip is visible when connectivity is none',
-        (tester) async {
-      await tester.pumpWidget(
-        _buildApp(isOnlineStream: Stream.value(false)),
-      );
-      await tester.pump();
-
-      expect(find.byType(OfflineChip), findsOneWidget);
-    });
-
-    testWidgets('OfflineChip is hidden when connectivity is online',
-        (tester) async {
-      await tester.pumpWidget(
-        _buildApp(isOnlineStream: Stream.value(true)),
-      );
-      await tester.pump();
-
-      expect(find.byType(OfflineChip), findsNothing);
     });
   });
 }

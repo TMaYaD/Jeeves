@@ -24,32 +24,6 @@ class WaitingForScreen extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 20, 8),
-              child: Row(
-                children: [
-                  Builder(
-                    builder: (ctx) => IconButton(
-                      icon: const Icon(Icons.menu),
-                      onPressed: () {
-                        ctx
-                            .findRootAncestorStateOfType<ScaffoldState>()
-                            ?.openDrawer();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Waiting For',
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1A1A2E),
-                    ),
-                  ),
-                ],
-              ),
-            ),
             const ActiveFilterBar(),
             Expanded(
               child: AsyncList<MapEntry<Tag, List<Todo>>>(
