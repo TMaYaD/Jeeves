@@ -187,6 +187,66 @@ void main() {
     expect(field.focusNode?.hasFocus, isTrue);
   });
 
+  testWidgets(
+      'the sheet mounts on the root navigator: popping the screen that opened '
+      'it does not dismiss the sheet', (tester) async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    // An inner navigator standing in for an app screen's local navigator. The
+    // capture action lives on a route pushed onto it, exactly as a pushed
+    // screen (e.g. Clarify inside a shell) mounts the pinned action.
+    final innerKey = GlobalKey<NavigatorState>();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Navigator(
+            key: innerKey,
+            onGenerateRoute: (_) => MaterialPageRoute<void>(
+              builder: (_) =>
+                  const Scaffold(body: Center(child: Text('under'))),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Push the capture-bearing screen onto the inner navigator.
+    innerKey.currentState!.push(
+      MaterialPageRoute<void>(
+        builder: (context) => Scaffold(
+          appBar: AppTitleBar(
+            title: 'Screen',
+            leading: AppTitleBarLeading.none,
+            pinnedAction: captureAction(context),
+          ),
+          body: const Center(child: Text('screen')),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await tester.tap(find.byKey(const Key('capture_action')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(CaptureSheet), findsOneWidget);
+
+    // Pop the inner navigator — the screen that opened the sheet is torn down.
+    // Because the sheet was pushed with useRootNavigator: true it lives on the
+    // root navigator, above the inner one, so it survives. Without the root
+    // navigator the sheet would sit on the inner navigator and this pop would
+    // dismiss it (or, worse, the underlying route's own pop would).
+    innerKey.currentState!.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byType(CaptureSheet), findsOneWidget);
+  });
+
   testWidgets('opening then dismissing the sheet creates no Capture',
       (tester) async {
     final db = GtdDatabase(NativeDatabase.memory());

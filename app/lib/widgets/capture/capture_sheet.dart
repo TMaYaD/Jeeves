@@ -24,9 +24,20 @@ import '../../providers/inbox_provider.dart';
 /// [isScrollControlled] + the `viewInsets.bottom` padding inside the sheet keep
 /// the input above the keyboard. The 6px top corners are the canonical surface
 /// radius.
+///
+/// `useRootNavigator: true` mounts the sheet on the app's root navigator rather
+/// than the calling screen's local one. Capture is a global action, so its
+/// sheet must sit *above* every route: an underlying screen doing a `pop()` or
+/// `go()` while the sheet is open (e.g. Clarify's `onAfterRoute` popping itself
+/// when a routing write lands) must never pop the sheet instead of its own
+/// route. The sheet still dismisses itself correctly — its own `Navigator.pop`
+/// resolves to the same root navigator it was pushed onto. The provider it
+/// reads (`inboxNotifierProvider`) lives in the `ProviderScope` above the root
+/// navigator, so the builder context still finds it.
 Future<void> showCaptureSheet(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
+    useRootNavigator: true,
     isScrollControlled: true,
     backgroundColor: Colors.white,
     shape: const RoundedRectangleBorder(
