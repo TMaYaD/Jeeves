@@ -117,7 +117,7 @@ void main() {
 
     // Exactly one header from the pool renders...
     final shown = onboardingGreetings
-        .where((g) => find.text(g.header).evaluate().isNotEmpty)
+        .where((greeting) => find.text(greeting.header).evaluate().isNotEmpty)
         .toList();
     expect(shown, hasLength(1),
         reason: 'expected exactly one greeting header from the pool');
@@ -146,8 +146,8 @@ void main() {
 
   test('pickOnboardingGreeting always returns a valid pool pair', () {
     for (var seed = 0; seed < 50; seed++) {
-      final g = pickOnboardingGreeting(seed: seed);
-      expect(onboardingGreetings, contains(g));
+      final greeting = pickOnboardingGreeting(seed: seed);
+      expect(onboardingGreetings, contains(greeting));
     }
   });
 

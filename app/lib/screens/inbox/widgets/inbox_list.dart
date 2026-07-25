@@ -74,7 +74,7 @@ class InboxList extends ConsumerWidget {
 /// display, mirroring the nudge-banner pool pattern
 /// (`lib/widgets/nudge_banner.dart`).
 const inboxEmptyStateLines = <String>[
-  "All quiet, sir. Should a thought arise, you've only to tell me.",
+  "All quiet, sir. Should anything arise, you've only to tell me.",
   "A clear slate, sir. The moment anything surfaces, do let me know.",
   "Nothing wants attention, sir. When something comes to mind, only say the word.",
 ];
@@ -97,7 +97,7 @@ class _InboxEmptyState extends StatefulWidget {
 
 class _InboxEmptyStateState extends State<_InboxEmptyState> {
   // Drawn once per display so the line stays stable across rebuilds.
-  late final String _line =
+  late final String _selectedEmptyStateLine =
       inboxEmptyStateLines[_emptyStateRandom.nextInt(inboxEmptyStateLines.length)];
 
   @override
@@ -110,7 +110,7 @@ class _InboxEmptyStateState extends State<_InboxEmptyState> {
                 padding: const EdgeInsets.fromLTRB(32, 120, 32, 0),
                 child: Center(
                   child: Text(
-                    _line,
+                    _selectedEmptyStateLine,
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: Color(0xFF9CA3AF)),
                   ),

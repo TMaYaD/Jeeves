@@ -40,12 +40,12 @@ const onboardingGreetings = <OnboardingGreeting>[
   ),
 ];
 
-final _random = Random();
+final _greetingRandom = Random();
 
 /// Picks one greeting at random. Pass [seed] in tests for a deterministic draw.
 OnboardingGreeting pickOnboardingGreeting({int? seed}) {
-  final rng = seed == null ? _random : Random(seed);
-  return onboardingGreetings[rng.nextInt(onboardingGreetings.length)];
+  final greetingRandom = seed == null ? _greetingRandom : Random(seed);
+  return onboardingGreetings[greetingRandom.nextInt(onboardingGreetings.length)];
 }
 
 /// First-launch onboarding card shown in the inbox when the database is empty.
