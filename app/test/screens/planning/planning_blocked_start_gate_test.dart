@@ -57,6 +57,13 @@ void main() {
       databaseProvider.overrideWithValue(db),
       activeSessionProvider.overrideWith((ref) => Stream.value(_openSession())),
       focusSessionPlanningProvider.overrideWith(() => _StubPlanningNotifier()),
+      // The transient wizard frame (before the active-session stream resolves)
+      // now opens on the duration-estimate intro (#486), which would otherwise
+      // start real Drift reads that never settle under this fake-async test.
+      // Stub the counts so that frame does no DB work — mirroring the notifier
+      // stub's no-op loadInboxSnapshot.
+      focusSessionPlanningIntroCountsProvider
+          .overrideWith((ref) async => (inboxCount: 0, reviewCount: 0)),
     ]);
     addTearDown(container.dispose);
 
