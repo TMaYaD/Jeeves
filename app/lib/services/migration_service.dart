@@ -320,7 +320,8 @@ Future<int> carveOutLocalInbox({
 ///    (`ActionDao._winnerFirst`), so every device collapses to the same row.
 /// 2. [adoptCursorsWithoutActions] — **cursor-dependent, mint-only.** Mints the
 ///    deterministic-id `current` Action (ADR-0019) for a **live** Outcome
-///    (not completed, not trashed) carrying a non-blank legacy
+///    (`done_at IS NULL` — completion is the one transition that terminates
+///    Actions) carrying a non-blank legacy
 ///    `todos.next_action_text` cursor **and no `actions` rows
 ///    at all**. This is the last thing the cursor is still good for: adopting
 ///    an Outcome that a pre-Action client created and this device has never
@@ -420,12 +421,18 @@ Future<int> convergeMultiCurrentActions({
   //
   // `outcome_id IS NOT NULL` is belt-and-braces, and deliberately kept.
   // On-device `actions` is a PowerSync view over JSON and carries none of
-  // Drift's NOT NULL constraints, so a peer-written row can hold a NULL
-  // `outcome_id` — which the `as String` read below would throw on, inside the
-  // startup write transaction. Today the `IN` subquery already excludes those
-  // rows for free (`NULL IN (...)` is NULL, never true), so the clause changes
-  // no behaviour; it is here so the guarantee survives a future rewrite of the
-  // subquery into a JOIN, where three-valued logic would no longer save us.
+  // Drift's NOT NULL constraints, so a **legacy locally-written** row can hold
+  // a NULL `outcome_id`: an app version whose PowerSync schema predated the
+  // column stores no such key, and `json_extract` yields NULL for it. A *peer*
+  // cannot deliver one — `actions.outcome_id` is `nullable=False` on the
+  // backend (`backend/app/todos/models.py`) and the bucket is
+  // `SELECT * FROM actions WHERE user_id = bucket.user_id`, so the server
+  // rejects the row before it could ever replicate. The `as String` read below
+  // would throw on a NULL, inside the startup write transaction. Today the
+  // `IN` subquery already excludes those rows for free (`NULL IN (...)` is
+  // NULL, never true), so the clause changes no behaviour; it is here so the
+  // guarantee survives a future rewrite of the subquery into a JOIN, where
+  // three-valued logic would no longer save us.
   final contested = await query(
     '''
     SELECT a.outcome_id AS outcome_id, a.id AS action_id
@@ -467,8 +474,9 @@ Future<int> convergeMultiCurrentActions({
 /// `current` Action for every **live** Outcome that carries a non-blank legacy
 /// `todos.next_action_text` **and has no `actions` rows at all**.
 ///
-/// "Live" is `done_at IS NULL AND intent != 'trash'` — the lifecycle states in
-/// which this app's own writers can hold a `current` Action:
+/// "Live" is `done_at IS NULL`, and nothing more. Completion is the only
+/// lifecycle transition that *terminates* Actions, so it is the only one that
+/// makes minting incoherent:
 ///
 /// * **Completed** Outcomes are excluded because completion *terminates* the
 ///   current Action (ADR-0001 story 4 — `applyCompleteCurrentAction`), so a
@@ -476,9 +484,22 @@ Future<int> convergeMultiCurrentActions({
 ///   produce. Pre-Action clients cleared `done_at` and the cursor
 ///   independently, so without the filter every task the user ever finished
 ///   with a next-action phrase still on it would grow a live Action at launch.
-/// * **Trashed** Outcomes are excluded because trashing is the user's explicit
-///   discard; minting there is the one shape of this pass that could be read as
-///   resurrecting something thrown away.
+/// * **Trashed** Outcomes (`intent = 'trash'`) are deliberately **kept**, and
+///   the asymmetry with Completed is the whole reason: trashing is *not* an
+///   Action-terminating transition. `TodoDao.applyRouting`'s `trash` arm leaves
+///   the Outcome's Action rows exactly as they were, so a trashed Outcome
+///   legitimately carries a `current` Action here. Skipping one would not be
+///   neutral either — adoption is a one-shot rescue that dies with the cursor
+///   columns, trash has no expiry (`TodoDao.watchTrash` is unbounded, and
+///   there is deliberately no purge affordance), and restore is a one-tap flow,
+///   so a skipped Outcome would come back Actionless where it used to come back
+///   carrying the next action the user wrote. Nor is minting a resurrection:
+///   every GTD list surface gates on `intent IN ('next', 'maybe')`, so the row
+///   changes no list, no count and no badge until the user restores the
+///   Outcome themselves. The v26 / Alembic 0028 backfills this pass continues
+///   filter neither `intent` nor `done_at`, so a migrated store already holds
+///   exactly these rows; excluding trash here would only make a never-migrated
+///   device diverge from a migrated one at the same deterministic id.
 /// * **Someday/Maybe** (`intent = 'maybe'`) is deliberately **kept**.
 ///   `TodoDao.applyRouting`'s `maybe` arm leaves both the cursor and any
 ///   existing Action rows untouched, so a maybe Outcome legitimately carries a
@@ -489,12 +510,14 @@ Future<int> convergeMultiCurrentActions({
 ///   codebase Waiting For *is* `intent = 'next'` plus a `Tag(type='person')`
 ///   (`TodoDao.watchPersonTagged`), not a fourth intent.
 /// * **Unclarified** rows are kept for the same data-preservation reason. A
-///   minted row is inert on the Inbox surfaces, which gate on `clarified`, not
-///   on Actions.
-///
-/// `intent` is read through `COALESCE(intent, 'next')` because the on-device
-/// `todos` view is JSON-backed and carries no NOT NULL default; a bare
-/// `intent != 'trash'` would evaluate to NULL and silently skip such a row.
+///   minted row puts the Outcome on no list — the GTD surfaces gate on
+///   `clarified` and `intent`, not on Actions — but it is not invisible:
+///   `CaptureDao.watchCarvedOutcomes` projects the current Action's text with
+///   no lifecycle gate at all (its only predicate is
+///   `capture_outcomes.capture_id = ?`), so a capture-linked Outcome does show
+///   it on the carve-review screen. That is benign, and the reason the pass is
+///   safe rather than the reason it is hidden: the row renders exactly the text
+///   the cursor already held.
 ///
 /// The `NOT EXISTS` guard is over *all* roles, not just `current`: an Outcome
 /// holding a `superseded`, `done` or `planned` row has already been spoken for
@@ -514,6 +537,12 @@ Future<int> convergeMultiCurrentActions({
 /// `ActionDao.applySetCurrentAction` seeds into a birth Action (D3). Never
 /// stamps `last_clarified_at` — adopting a straggler's cursor is not a
 /// clarifying act (ADR-0012).
+/// How many candidate ids the adoption pass probes per `IN (...)` read. Well
+/// under SQLite's `SQLITE_MAX_VARIABLE_NUMBER` on every build the app ships
+/// against, so a large legacy store costs a handful of reads instead of a
+/// "too many SQL variables" throw at launch.
+const int _mintIdProbeChunkSize = 500;
+
 Future<int> adoptCursorsWithoutActions({
   required SweepQuery query,
   required SweepExec exec,
@@ -530,8 +559,13 @@ Future<int> adoptCursorsWithoutActions({
   //
   // `user_id IS NOT NULL` is a skip-don't-explode guard rather than a domain
   // filter: on-device `todos` is a PowerSync view over JSON and carries none of
-  // Drift's NOT NULL constraints, so a legacy or peer-written row can hold a
-  // NULL `user_id`. Reading it back as a non-null `String` below would throw
+  // Drift's NOT NULL constraints, so a **legacy locally-written** row can hold
+  // a NULL `user_id` — written by an app version whose PowerSync schema
+  // predated the column, where `json_extract` yields NULL. A *peer* cannot
+  // deliver one: `todos.user_id` is `nullable=False` on the backend
+  // (`backend/app/todos/models.py`) and the bucket is
+  // `SELECT * FROM todos WHERE user_id = bucket.user_id`, which a NULL could
+  // never match. Reading it back as a non-null `String` below would throw
   // inside the startup write transaction and take the whole launch down;
   // skipping the row leaves it exactly as it was, for a later launch to adopt
   // once its `user_id` arrives.
@@ -546,7 +580,6 @@ Future<int> adoptCursorsWithoutActions({
       AND TRIM(t.next_action_text) != ''
       AND t.user_id IS NOT NULL
       AND t.done_at IS NULL
-      AND COALESCE(t.intent, 'next') != 'trash'
       AND NOT EXISTS (
         SELECT 1 FROM actions a WHERE a.outcome_id = t.id
       )
@@ -554,16 +587,61 @@ Future<int> adoptCursorsWithoutActions({
     ''',
     [],
   );
+  if (orphanCursors.isEmpty) return 0;
+
+  // The id this pass would mint is `backfillActionIdFor(outcome_id)`, a uuid5
+  // computed in Dart (ADR-0019) — so the SELECT above cannot exclude a row
+  // whose *id* is already occupied, only one whose `outcome_id` matches. Those
+  // are different sets: an `actions` row with a NULL `outcome_id` (reachable on
+  // a legacy store, see the note above) satisfies the `NOT EXISTS` guard while
+  // still sitting on that primary key. A bare INSERT on top of it raises
+  // `SqliteException(1555): UNIQUE constraint failed: actions.id` inside the
+  // startup write transaction — the same launch-down failure class the
+  // `user_id` guard exists for. So read back which of the candidate ids are
+  // already present and skip those Outcomes.
+  //
+  // Skipping is the right resolution, not a fallback: this pass is mint-only
+  // and monotone, and the id is a pure function of the Outcome, so whatever
+  // already sits at that key *is* this Outcome's adoption. Overwriting it would
+  // be exactly the cursor-authoritative behaviour the sweep deleted.
+  //
+  // Not `INSERT OR IGNORE`: on-device `actions` is a view with an
+  // `INSTEAD OF INSERT` trigger, and an outer conflict clause's interaction
+  // with the trigger body is not something to rely on.
+  final mintIdByOutcomeId = {
+    for (final row in orphanCursors)
+      row['outcome_id'] as String:
+          backfillActionIdFor(row['outcome_id'] as String),
+  };
+  final occupiedMintIds = <Object?>{};
+  final candidateMintIds = mintIdByOutcomeId.values.toList();
+  // Chunked so a legacy store with thousands of unadopted cursors cannot trip
+  // SQLITE_MAX_VARIABLE_NUMBER and throw at startup for a different reason.
+  for (var i = 0; i < candidateMintIds.length; i += _mintIdProbeChunkSize) {
+    final end = i + _mintIdProbeChunkSize < candidateMintIds.length
+        ? i + _mintIdProbeChunkSize
+        : candidateMintIds.length;
+    final chunk = candidateMintIds.sublist(i, end);
+    final present = await query(
+      'SELECT id FROM actions WHERE id IN (${List.filled(chunk.length, '?').join(', ')})',
+      chunk,
+    );
+    for (final row in present) {
+      occupiedMintIds.add(row['id']);
+    }
+  }
 
   for (final row in orphanCursors) {
     final outcomeId = row['outcome_id'] as String;
+    final mintId = mintIdByOutcomeId[outcomeId]!;
+    if (occupiedMintIds.contains(mintId)) continue;
     await exec(
       "INSERT INTO actions "
       "(id, outcome_id, user_id, text, role, energy_level, time_estimate, "
       "created_at, updated_at) "
       "VALUES (?, ?, ?, ?, 'current', ?, ?, ?, ?)",
       [
-        backfillActionIdFor(outcomeId),
+        mintId,
         outcomeId,
         row['user_id'] as String,
         row['cursor_text'],

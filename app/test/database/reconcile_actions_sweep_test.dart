@@ -445,11 +445,13 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Adoption is scoped to *live* Outcomes: `done_at IS NULL AND intent !=
-  // 'trash'` — the lifecycle states in which an app write path can hold a
-  // `current` Action. The narrowing tests and the over-narrowing tests belong
-  // together: the pass has to reject completed / trashed Outcomes *and* still
-  // adopt every shape the user can still act on.
+  // Adoption is scoped to *live* Outcomes: `done_at IS NULL`, and nothing more.
+  // Completion is the only transition that terminates Actions, so it is the
+  // only lifecycle state in which a `current` row is a state no write path can
+  // produce. The narrowing test and the over-narrowing tests belong together:
+  // the pass has to reject completed Outcomes *and* still adopt every other
+  // shape, because the cursor columns are going away and a skipped Outcome
+  // loses its next-action text permanently.
   // ---------------------------------------------------------------------------
 
   group('adoption is scoped to live Outcomes', () {
@@ -468,21 +470,30 @@ void main() {
       expect(await _actions(db, 'finished-legacy'), isEmpty);
     });
 
-    test('a trashed Outcome with a cursor and no actions mints nothing — '
-        'trashing is the user\'s explicit discard', () async {
+    test('★ a trashed Outcome is STILL adopted — trashing does not terminate '
+        'Actions (applyRouting\'s trash arm leaves them alone), trash has no '
+        'expiry, and restore would otherwise bring the Outcome back Actionless',
+        () async {
       await _seedOutcome(db,
           id: 'discarded',
-          nextActionText: 'a phrase left on a task the user threw away',
+          nextActionText: 'a phrase left on a task the user binned',
           intent: 'trash',
           lastClarifiedAt: _clarified);
 
       final repaired = await _sweep(db);
 
-      expect(repaired, 0);
-      expect(await _actions(db, 'discarded'), isEmpty);
+      expect(repaired, 1);
+      final row = await _current(db, 'discarded');
+      expect(row, isNotNull);
+      expect(row!['id'], backfillActionIdFor('discarded'));
+      expect(row['text'], 'a phrase left on a task the user binned',
+          reason: 'the text is preserved for whenever the user restores it; '
+              'every GTD list gates on intent IN (next, maybe), so the row '
+              'changes no list, count or badge while it sits in Trash');
     });
 
-    test('a completed AND trashed Outcome mints nothing', () async {
+    test('a completed AND trashed Outcome mints nothing — done_at is the guard '
+        'that rejects it, and trash does not rescue it', () async {
       await _seedOutcome(db,
           id: 'both',
           nextActionText: 'finished then binned',
@@ -555,11 +566,12 @@ void main() {
       await _seedOutcome(db,
           id: 'someday', nextActionText: 'might do this', intent: 'maybe');
 
-      expect(await _sweep(db), 2);
+      expect(await _sweep(db), 3);
       expect(await _actions(db, 'live'), hasLength(1));
       expect(await _actions(db, 'someday'), hasLength(1));
-      expect(await _actions(db, 'done'), isEmpty);
-      expect(await _actions(db, 'binned'), isEmpty);
+      expect(await _actions(db, 'binned'), hasLength(1));
+      expect(await _actions(db, 'done'), isEmpty,
+          reason: 'completion is the only lifecycle exclusion');
     });
   });
 
@@ -1207,8 +1219,82 @@ void main() {
       expect(row['time_estimate'], 12);
     });
 
-    test('a NULL intent is treated as live, not silently skipped', () async {
-      // `intent != 'trash'` alone evaluates to NULL here and would drop the row.
+    test('★ an actions row already sitting on the deterministic mint id is '
+        'skipped, not collided with — the sweep completes instead of taking '
+        'the launch down', () async {
+      // The `NOT EXISTS` guard in the adoption query is over `outcome_id`, so a
+      // row with a NULL `outcome_id` does not satisfy it — yet it can still
+      // occupy the primary key `backfillActionIdFor('o1')`. Without the
+      // occupied-id probe the bare INSERT raises
+      // `SqliteException(1555): UNIQUE constraint failed: actions.id`
+      // inside the startup write transaction.
+      raw.execute(
+        "INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) "
+        "VALUES (?, NULL, 'test-user', 'squatting on the id', 'current', "
+        "'2026-06-01T09:00:00.000Z')",
+        [backfillActionIdFor('o1')],
+      );
+      raw.execute(
+        "INSERT INTO todos (id, title, user_id, intent, clarified, "
+        "next_action_text) VALUES ('o1', 'cursor bearer', 'test-user', "
+        "'next', 1, 'mint me')",
+      );
+
+      final repaired = await sweepRaw();
+
+      expect(repaired, 0);
+      final rows = rawActions();
+      expect(rows, hasLength(1), reason: 'nothing is minted for o1');
+      expect(rows.single['text'], 'squatting on the id',
+          reason: 'mint-only and monotone: the occupant is never overwritten');
+      expect(
+        raw.select("SELECT next_action_text FROM todos WHERE id = 'o1'").single[
+            'next_action_text'],
+        'mint me',
+        reason: 'skipping is not deleting',
+      );
+    });
+
+    test('an occupied mint id does not stop its healthy siblings being adopted',
+        () async {
+      raw.execute(
+        "INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) "
+        "VALUES (?, NULL, 'test-user', 'squatter', 'current', "
+        "'2026-06-01T09:00:00.000Z')",
+        [backfillActionIdFor('a-blocked')],
+      );
+      raw.execute(
+        "INSERT INTO todos (id, title, user_id, intent, clarified, "
+        "next_action_text) VALUES "
+        "('a-blocked', 'id taken', 'test-user', 'next', 1, 'skip me'), "
+        "('b-free', 'id free', 'test-user', 'next', 1, 'adopt me')",
+      );
+
+      expect(await sweepRaw(), 1);
+      expect(
+        {for (final r in rawActions()) r['id']: r['text']},
+        {
+          backfillActionIdFor('a-blocked'): 'squatter',
+          backfillActionIdFor('b-free'): 'adopt me',
+        },
+      );
+    });
+
+    test('★ a trashed Outcome is adopted in a view-shaped store too', () async {
+      raw.execute(
+        "INSERT INTO todos (id, title, user_id, intent, clarified, "
+        "next_action_text) VALUES ('binned', 'discarded', 'test-user', "
+        "'trash', 1, 'keep this phrase for restore')",
+      );
+
+      expect(await sweepRaw(), 1);
+      expect(rawActions().single['text'], 'keep this phrase for restore');
+    });
+
+    test('a NULL intent is adopted like any other', () async {
+      // Characterization: adoption reads no `intent` at all, so the JSON-backed
+      // view's missing-column NULL cannot silently drop a row the way a bare
+      // `intent != 'trash'` (NULL, never true) once would have.
       raw.execute(
         "INSERT INTO todos (id, title, user_id, intent, next_action_text) "
         "VALUES ('o1', 'no intent', 'test-user', NULL, 'mint me')",
