@@ -180,6 +180,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.byType(CaptureSheet), findsOneWidget);
+    // Autofocus through the title-bar opening path, not just refocus after
+    // submit (the existing focus test above covers that case).
+    final field = tester
+        .widget<TextField>(find.byKey(const Key('capture_sheet_field')));
+    expect(field.focusNode?.hasFocus, isTrue);
   });
 
   testWidgets('opening then dismissing the sheet creates no Capture',

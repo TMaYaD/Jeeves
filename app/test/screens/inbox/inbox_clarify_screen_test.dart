@@ -486,6 +486,18 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
 
+    testWidgets('pins the global capture action in the bar (#458)',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      // Direct find.byKey: the pinned slot never overflows.
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+    });
+
     testWidgets(
         'Next Action carves a linked Outcome, stamps the Capture, and clears '
         'the Inbox', (tester) async {

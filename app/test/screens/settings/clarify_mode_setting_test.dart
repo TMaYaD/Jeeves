@@ -81,6 +81,14 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   group('Settings — clarify mode', () {
+    testWidgets('pins the global capture action in the bar (#458)',
+        (tester) async {
+      await _pumpSettings(tester);
+
+      // Direct find.byKey: the pinned slot never overflows.
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+    });
+
     testWidgets('defaults to 1-1 mode', (tester) async {
       final container = await _pumpSettings(tester);
 

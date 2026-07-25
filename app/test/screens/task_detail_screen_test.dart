@@ -279,8 +279,9 @@ void main() {
 
       // Capture is reachable from this pushed route — the pinned slot, never
       // overflowed (task detail has at most Start focus + capture = 2).
-      expect(await findBarAction(tester, const Key('capture_action')),
-          findsOneWidget);
+      // Direct find.byKey, not findBarAction: proves capture is in the bar
+      // itself, not merely discoverable via the ⋮ overflow menu.
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
     });
 
     testWidgets(

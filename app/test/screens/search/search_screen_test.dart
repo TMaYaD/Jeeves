@@ -102,6 +102,15 @@ void main() {
       expect(find.byKey(appTitleBarLeadingKey), findsOneWidget);
     });
 
+    testWidgets('pins the global capture action in the bar (#458)',
+        (tester) async {
+      await tester.pumpWidget(_buildScreen());
+      await tester.pump();
+
+      // Direct find.byKey: the pinned slot never overflows.
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+    });
+
     testWidgets('query resets after leaving and reopening search', (tester) async {
       // Use a single ProviderScope so the same container persists across
       // navigations. Without autoDispose the provider would survive the pop

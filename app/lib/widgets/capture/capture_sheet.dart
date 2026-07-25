@@ -89,7 +89,11 @@ class _CaptureSheetState extends ConsumerState<CaptureSheet> {
       // Refocus so the next thought can be typed immediately — this stay-open
       // refocus is the QuickAddBar rapid-capture pattern.
       _focusNode.requestFocus();
-    } catch (_) {
+    } catch (e, st) {
+      // Detail goes to the console via debugPrint at the callsite that
+      // catches (widgets/state_surfaces.dart convention); the inline message
+      // below is the user-facing surface — never a raw exception string.
+      debugPrint('CaptureSheet: capture write failed: $e\n$st');
       if (!mounted) return;
       setState(() => _error = 'Could not save — try again');
     } finally {

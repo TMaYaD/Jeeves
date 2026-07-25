@@ -467,7 +467,11 @@ void main() {
           expect(find.byKey(captureKey), findsNothing,
               reason: '$path should suppress the pinned capture action');
         } else {
-          expect(await findBarAction(tester, captureKey), findsOneWidget,
+          // Direct find.byKey, not the overflow-aware findBarAction helper:
+          // the pinned slot never overflows, so this proves capture sits in
+          // the bar itself rather than having regressed into a page action
+          // (which findBarAction would still find via the ⋮ menu).
+          expect(find.byKey(captureKey), findsOneWidget,
               reason: '$path should pin the capture action');
         }
       }
