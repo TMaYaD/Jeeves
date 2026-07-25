@@ -86,6 +86,20 @@ PeriodicReviewState _stateOf(WidgetTester tester) {
 /// before settling the frame — see [settleWithRealAsync].
 Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
+/// Every performance now opens on the duration-estimate intro (#486, step 0).
+/// Cross into Process Inbox (the first working step) before exercising the
+/// list-driven footer. WR preloads every snapshot at mount, so a plain
+/// pumpAndSettle across the transition suffices (no lazy load stalls it).
+Future<void> _advanceToInbox(WidgetTester tester) async {
+  final container = ProviderScope.containerOf(
+    tester.element(find.byType(PeriodicReviewScreen)),
+  );
+  await container
+      .read(periodicReviewProvider.notifier)
+      .goToStep(PeriodicReviewNotifier.kStepInbox);
+  await tester.pumpAndSettle();
+}
+
 /// Unmounts the screen so the streaming providers behind the review cards
 /// dispose — and their drift stream-close timers fire — before the test
 /// framework's end-of-test pending-timer invariant check runs.
@@ -112,6 +126,7 @@ void main() {
 
       await tester.pumpWidget(_screen(db));
       await _settle(tester);
+      await _advanceToInbox(tester);
 
       // Single item: cursor is on the only real item — footer shows Skip,
       // not Next step. "Next step" appears only after all items are processed.
@@ -146,6 +161,7 @@ void main() {
 
       await tester.pumpWidget(_screen(db));
       await _settle(tester);
+      await _advanceToInbox(tester);
 
       expect(_stateOf(tester).inboxNav.index, 0);
       // Cursor on item 0 with items remaining — Skip is the only forward

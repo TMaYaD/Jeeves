@@ -136,11 +136,17 @@ final periodicReviewProvider =
 class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   // Step indices — referenced by the screen and by tests. Capture happens
   // throughout the week (no dedicated brain-dump step in the wizard).
-  static const int kStepInbox = 0;
-  static const int kStepWaitingFor = 1;
-  static const int kStepNext = 2;
-  static const int kStepSomeMaybe = 3;
-  static const int kStepSummary = 4;
+  //
+  // Step 0 is the duration-estimate intro (#486): a real first PageView step
+  // excluded from the progress count, so the four working steps still read
+  // "Step 1 of 4" … "Step 4 of 4". The intro loads no snapshot — the mount's
+  // loadAllSnapshots already covers every step.
+  static const int kStepIntro = 0;
+  static const int kStepInbox = 1;
+  static const int kStepWaitingFor = 2;
+  static const int kStepNext = 3;
+  static const int kStepSomeMaybe = 4;
+  static const int kStepSummary = 5;
 
   static const int _kMaxStep = kStepSummary;
 

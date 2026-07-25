@@ -82,9 +82,12 @@ void main() {
     await bootstrap.customSelect('SELECT 1').get();
     await bootstrap.close();
 
-    // Swap `todos` and `actions` for view + INSTEAD OF triggers (production).
+    // Swap `todos`, `actions` and `time_logs` for view + INSTEAD OF triggers
+    // (production topology): a Drift write reports changes()==0 and a watcher on
+    // the view only refreshes via the DAO's explicit post-commit notify.
     await _convertTableToView(raw, 'todos');
     await _convertTableToView(raw, 'actions');
+    await _convertTableToView(raw, 'time_logs');
 
     db = GtdDatabase(SqliteAsyncDriftConnection(raw));
     // Insert through the Drift API so column defaults (e.g. the NOT NULL
@@ -170,6 +173,41 @@ void main() {
         cursors.last.first == '' && actionRoles.last.contains('done'));
     expect(cursors.last, ['']);
     expect(actionRoles.last, ['done']);
+  });
+
+  test('completeCurrentAction refreshes a time_logs-view watcher when it '
+      'closes the open log (ADR-0010, issue #476)', () async {
+    await db.actionDao.setCurrentAction('o1', 'call the plumber');
+    final current = await db.actionDao.getCurrentAction('o1');
+    // Open a stint against the current Action (through the view's trigger).
+    await db.into(db.timeLogs).insert(TimeLogsCompanion(
+          id: const Value('log-1'),
+          userId: const Value('u1'),
+          taskId: const Value('o1'),
+          actionId: Value(current!.id),
+          startedAt:
+              Value(DateTime.parse('2026-07-01T10:00:00.000Z').toIso8601String()),
+        ));
+
+    final openCounts = <int>[];
+    final sub = db
+        .customSelect(
+          'SELECT COUNT(*) AS c FROM time_logs WHERE ended_at IS NULL',
+          readsFrom: {db.timeLogs},
+        )
+        .watch()
+        .map((rows) => rows.first.read<int>('c'))
+        .listen(openCounts.add);
+    addTearDown(sub.cancel);
+
+    await _waitUntil(() => openCounts.isNotEmpty && openCounts.last == 1);
+
+    // Completing the Action closes the log; the time_logs view write reports
+    // changes()==0, so only notifyTimeLogsViewWrite refreshes this watcher.
+    await db.actionDao.completeCurrentAction('o1');
+
+    await _waitUntil(() => openCounts.last == 0);
+    expect(openCounts.last, 0);
   });
 
   test('a TodoDao dual-write refreshes both the todos- and actions-view '

@@ -331,6 +331,7 @@ EXISTS (
     final tsIso = ts.toIso8601String();
     late final int affected;
     var actionTerminated = false;
+    var logChanged = false;
     await transaction(() async {
       affected = await customUpdate(
         'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
@@ -344,11 +345,15 @@ EXISTS (
         updates: {todos},
         updateKind: UpdateKind.update,
       );
-      actionTerminated = (await attachedDatabase.actionDao
-              .applyCompleteCurrentAction(todoId, ts: ts))
-          .changed;
+      final effect = await attachedDatabase.actionDao
+          .applyCompleteCurrentAction(todoId, ts: ts);
+      actionTerminated = effect.changed;
+      logChanged = effect.logChanged;
     });
     if (actionTerminated) attachedDatabase.notifyActionsViewWrite();
+    // Completing the Outcome closes the current Action's open TimeLog (#476);
+    // the `time_logs` view needs the same explicit post-commit notify (ADR-0010).
+    if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
     return affected;
   }
 
@@ -505,12 +510,16 @@ EXISTS (
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final normalized = text.trim();
-    await transaction(() => _applySetNextActionText(todoId, normalized, ts));
+    final logChanged =
+        await transaction(() => _applySetNextActionText(todoId, normalized, ts));
     // Both `todos` and `actions` are PowerSync views in production, so the
     // writes report changes()==0; notify Drift explicitly so watchers refresh
     // without relying solely on the async bridge (#342, ADR-0010).
     attachedDatabase.notifyTodosViewWrite();
     attachedDatabase.notifyActionsViewWrite();
+    // A blank text supersedes the current Action, closing its open TimeLog
+    // (#476); `time_logs` is a view too, so it needs the same explicit notify.
+    if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
   /// The **atomic** actionless-mirror primitive (issue #501): check whether the
@@ -543,16 +552,19 @@ EXISTS (
         'setNextActionTextIfActionless requires non-blank text',
       );
     }
+    var logChanged = false;
     final wrote = await transaction(() async {
       final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
       if (current != null) return false;
-      await _applySetNextActionText(todoId, normalized, ts);
+      // Non-blank text here, so this never supersedes — logChanged stays false.
+      logChanged = await _applySetNextActionText(todoId, normalized, ts);
       return true;
     });
     if (wrote) {
       // See [setNextActionText]: view writes report changes()==0 (#342, ADR-0010).
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();
+      if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
     }
     return wrote;
   }
@@ -562,7 +574,11 @@ EXISTS (
   /// `last_clarified_at` / `updated_at` stamp, encoded once. Runs inside the
   /// caller's transaction; the caller notifies after commit. [normalized] is
   /// already trimmed — blank clears both sides (the blank→NULL normalisation).
-  Future<void> _applySetNextActionText(
+  ///
+  /// Returns whether a `time_logs` row changed (the blank→supersede path closes
+  /// the current Action's open log, issue #476) so the caller can fire the
+  /// TimeLog view notification after commit (ADR-0010).
+  Future<bool> _applySetNextActionText(
       String todoId, String normalized, DateTime ts) async {
     await (update(todos)..where((t) => t.id.equals(todoId)))
         .write(TodosCompanion(
@@ -571,12 +587,13 @@ EXISTS (
       updatedAt: Value(ts),
     ));
     if (normalized.isEmpty) {
-      await attachedDatabase.actionDao
+      final effect = await attachedDatabase.actionDao
           .applySupersedeCurrentAction(todoId, ts: ts);
-    } else {
-      await attachedDatabase.actionDao
-          .applySetCurrentAction(todoId, normalized, ts: ts);
+      return effect.logChanged;
     }
+    await attachedDatabase.actionDao
+        .applySetCurrentAction(todoId, normalized, ts: ts);
+    return false;
   }
 
   // ---------------------------------------------------------------------------
@@ -869,6 +886,7 @@ AND (
             to == RoutingKind.waitingFor) &&
         nextActionText != null;
     var actionTerminated = false;
+    var logChanged = false;
     await transaction(() async {
       final companion = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
@@ -906,8 +924,10 @@ AND (
       if (touchesAction) {
         final normalised = _normaliseText(nextActionText);
         if (normalised == null) {
-          await attachedDatabase.actionDao
+          // Blank supersedes the current Action, closing its open log (#476).
+          final effect = await attachedDatabase.actionDao
               .applySupersedeCurrentAction(todoId, ts: ts);
+          logChanged = logChanged || effect.logChanged;
         } else {
           await attachedDatabase.actionDao
               .applySetCurrentAction(todoId, normalised, ts: ts);
@@ -917,9 +937,10 @@ AND (
       if (to == RoutingKind.done) {
         // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
         // the same cascade markDone runs, sharing one apply-variant.
-        actionTerminated = (await attachedDatabase.actionDao
-                .applyCompleteCurrentAction(todoId, ts: ts))
-            .changed;
+        final effect = await attachedDatabase.actionDao
+            .applyCompleteCurrentAction(todoId, ts: ts);
+        actionTerminated = effect.changed;
+        logChanged = logChanged || effect.logChanged;
       }
 
       if (personTagIds != null) {
@@ -941,6 +962,9 @@ AND (
     if (touchesAction || actionTerminated) {
       attachedDatabase.notifyActionsViewWrite();
     }
+    // A supersede or completion in the cascade closes the current Action's open
+    // TimeLog (#476); `time_logs` is a view too, so notify its watchers (ADR-0010).
+    if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
   static String? _normaliseText(String text) {

@@ -30,6 +30,7 @@ import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
+import '../../widgets/ceremony/intro_step.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/next_step.dart';
 import 'steps/someday_maybe_step.dart';
@@ -51,17 +52,26 @@ class _PeriodicReviewScreenState
 
   static const _ceremonyId = 'periodic_review';
   static const _accent = Color(0xFF059669);
+
+  /// The intro title uses a neutral UI register (not Jeeves speak) — the
+  /// Jeeves-speak sentence lives in the step body.
   static const _stepTitles = [
+    'Before we begin',
     'Process Inbox',
     'Review Waiting For',
     'Review Next Actions',
     'Review Someday/Maybe',
   ];
 
-  /// Four user-driven steps in the wizard. The "Review Complete" summary
-  /// is rendered outside the wizard once `currentStep == _kSummaryStepIndex`.
+  /// Bertie-speak proceed label for the intro, drawn once per mount so it
+  /// stays stable across rebuilds (DESIGN.md § Voice).
+  final String _introCtaLabel = introCtaLabel();
+
+  /// Four user-driven steps carry the progress bar. Step 0 is the intro
+  /// (excluded via [Wizard.leadingNonProgressSteps]); the "Review Complete"
+  /// summary renders outside the wizard once `currentStep == kStepSummary`.
   static const int _kProgressSegmentCount = 4;
-  static const int _kSummaryStepIndex = 4;
+  static const int _kSummaryStepIndex = PeriodicReviewNotifier.kStepSummary;
 
   @override
   void initState() {
@@ -118,45 +128,46 @@ class _PeriodicReviewScreenState
     }
 
     final steps = <WizardStep>[
+      _introStep(state, notifier),
       _listStep(
-        title: _stepTitles[0],
+        title: _stepTitles[1],
         body: const ZeroInboxStep(),
         nav: state.inboxNav,
         verb: 'processed',
-        stepIndex: 0,
+        stepIndex: PeriodicReviewNotifier.kStepInbox,
         currentStep: step,
         skip: notifier.advanceInbox,
         previous: notifier.previousInbox,
         notifier: notifier,
       ),
       _listStep(
-        title: _stepTitles[1],
+        title: _stepTitles[2],
         body: const WaitingForStep(),
         nav: state.waitingForNav,
         verb: 'reviewed',
-        stepIndex: 1,
+        stepIndex: PeriodicReviewNotifier.kStepWaitingFor,
         currentStep: step,
         skip: notifier.advanceWaitingFor,
         previous: notifier.previousWaitingFor,
         notifier: notifier,
       ),
       _listStep(
-        title: _stepTitles[2],
+        title: _stepTitles[3],
         body: const NextStep(),
         nav: state.nextNav,
         verb: 'reviewed',
-        stepIndex: 2,
+        stepIndex: PeriodicReviewNotifier.kStepNext,
         currentStep: step,
         skip: notifier.advanceNext,
         previous: notifier.previousNext,
         notifier: notifier,
       ),
       _listStep(
-        title: _stepTitles[3],
+        title: _stepTitles[4],
         body: const SomedayMaybeStep(),
         nav: state.somedayNav,
         verb: 'reviewed',
-        stepIndex: 3,
+        stepIndex: PeriodicReviewNotifier.kStepSomeMaybe,
         currentStep: step,
         skip: notifier.advanceSomeday,
         previous: notifier.previousSomeday,
@@ -175,6 +186,48 @@ class _PeriodicReviewScreenState
         currentStep: step,
         steps: steps,
         progressSegmentCount: _kProgressSegmentCount,
+        leadingNonProgressSteps: 1,
+      ),
+    );
+  }
+
+  /// The duration-estimate intro (#486): a real first step excluded from the
+  /// progress count. The estimate is `2 min × (inbox + waiting-for + next +
+  /// someday counts)`, sourced from the four navs the mount preloads —
+  /// loading until all four report `isLoaded`.
+  WizardStep _introStep(
+    PeriodicReviewState state,
+    PeriodicReviewNotifier notifier,
+  ) {
+    final allLoaded = state.inboxNav.isLoaded &&
+        state.waitingForNav.isLoaded &&
+        state.nextNav.isLoaded &&
+        state.somedayNav.isLoaded;
+    final itemCount = state.inboxNav.length +
+        state.waitingForNav.length +
+        state.nextNav.length +
+        state.somedayNav.length;
+    final estimate = allLoaded
+        ? IntroEstimateReady(rawMinutes: 2 * itemCount, itemCount: itemCount)
+        : const IntroEstimateLoading();
+
+    return WizardStep(
+      title: _stepTitles[PeriodicReviewNotifier.kStepIntro],
+      // Explicit empty subtitle: the intro is not a numbered step, so the
+      // wizard suppresses the "Step N of M" fallback here.
+      subtitle: '',
+      body: CeremonyIntroBody(
+        accentColor: _accent,
+        estimate: estimate,
+        bodyPool: wrIntroBodyPool,
+        lightDayPool: introLightDayPool,
+      ),
+      footer: WizardFooter(
+        ceremonyId: _ceremonyId,
+        accentColor: _accent,
+        onBack: null,
+        onNext: () => unawaited(notifier.advanceStep()),
+        nextLabel: _introCtaLabel,
       ),
     );
   }
@@ -187,16 +240,18 @@ class _PeriodicReviewScreenState
     PeriodicReviewNotifier notifier,
   ) {
     final step = state.currentStep;
+    // The intro has no Back — system back exits the ceremony.
+    if (step == PeriodicReviewNotifier.kStepIntro) return null;
     final nav = switch (step) {
-      0 => state.inboxNav,
-      1 => state.waitingForNav,
-      2 => state.nextNav,
+      PeriodicReviewNotifier.kStepInbox => state.inboxNav,
+      PeriodicReviewNotifier.kStepWaitingFor => state.waitingForNav,
+      PeriodicReviewNotifier.kStepNext => state.nextNav,
       _ => state.somedayNav,
     };
     final VoidCallback previous = switch (step) {
-      0 => notifier.previousInbox,
-      1 => notifier.previousWaitingFor,
-      2 => notifier.previousNext,
+      PeriodicReviewNotifier.kStepInbox => notifier.previousInbox,
+      PeriodicReviewNotifier.kStepWaitingFor => notifier.previousWaitingFor,
+      PeriodicReviewNotifier.kStepNext => notifier.previousNext,
       _ => notifier.previousSomeday,
     };
     return _backFor(
@@ -210,8 +265,8 @@ class _PeriodicReviewScreenState
 
   /// Back routing shared by the footers and the system-back handler:
   /// retreat the per-item cursor while past item 0; from item 0 of any
-  /// non-first step, cross to the previous step. Step 0's first item has
-  /// no Back.
+  /// working step, cross to the previous step (Process Inbox's first item
+  /// crosses back to the intro). Only the intro itself has no Back.
   VoidCallback? _backFor({
     required SnapshotNav<dynamic> nav,
     required VoidCallback previous,
@@ -220,7 +275,9 @@ class _PeriodicReviewScreenState
     required PeriodicReviewNotifier notifier,
   }) {
     if (nav.canGoBack) return previous;
-    if (stepIndex == 0) return null;
+    // From the first item of Process Inbox (the first working step) Back
+    // crosses to the intro; only the intro itself has no Back.
+    if (stepIndex == PeriodicReviewNotifier.kStepIntro) return null;
     return () => unawaited(notifier.goToStep(currentStep - 1));
   }
 
@@ -229,8 +286,8 @@ class _PeriodicReviewScreenState
   /// remain; Next step crosses once the cursor is on the last item.
   ///
   /// Back retreats the cursor while past item 0; from item 0 of any
-  /// non-first list-driven step it falls through to `goToStep(currentStep - 1)`.
-  /// Inbox's first item leaves Back null (the footer hides it).
+  /// list-driven step it falls through to `goToStep(currentStep - 1)` —
+  /// Process Inbox's first item crosses back to the intro.
   WizardStep _listStep({
     required String title,
     required Widget body,
@@ -277,7 +334,10 @@ class _PeriodicReviewScreenState
   /// Header subtitle for a list-driven step: "Step N of M · X / Y verb",
   /// or a loading / empty placeholder.
   String _subtitle(SnapshotNav<dynamic> nav, int stepIndex, String verb) {
-    final stepLabel = 'Step ${stepIndex + 1} of $_kProgressSegmentCount';
+    // The intro is excluded from the progress count, so a working step's
+    // 1-based display number *is* its (shifted) step index: kStepInbox == 1
+    // reads "Step 1 of 4".
+    final stepLabel = 'Step $stepIndex of $_kProgressSegmentCount';
     if (!nav.isLoaded) return '$stepLabel · Loading…';
     if (nav.isEmpty) return '$stepLabel · Nothing to review';
     final consumed = nav.index.clamp(0, nav.length);

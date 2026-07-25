@@ -84,6 +84,52 @@ void main() {
       expect(bg, accent);
     });
 
+    testWidgets('renders a custom nextLabel under the same next_step key',
+        (tester) async {
+      await tester.pumpWidget(_wrap(WizardFooter(
+        ceremonyId: _ceremonyId,
+        accentColor: _accent,
+        onBack: null,
+        onNext: () {},
+        nextLabel: 'Right ho',
+      )));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_nextKey), findsOneWidget);
+      expect(find.text('Right ho'), findsOneWidget);
+      expect(find.text('Next step'), findsNothing);
+    });
+
+    testWidgets('renders the longest Bertie label in full, no ellipsis',
+        (tester) async {
+      // "Tinkerty-tonk" is the longest label in the intro CTA pool; it must
+      // fit the fixed 148px slot without truncation (the footer shrinks-to-fit
+      // rather than clipping the word).
+      await tester.pumpWidget(_wrap(WizardFooter(
+        ceremonyId: _ceremonyId,
+        accentColor: _accent,
+        onBack: null,
+        onNext: () {},
+        nextLabel: 'Tinkerty-tonk',
+      )));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Tinkerty-tonk'), findsOneWidget);
+      final textWidget = tester.widget<Text>(find.text('Tinkerty-tonk'));
+      expect(textWidget.overflow, isNot(TextOverflow.ellipsis));
+    });
+
+    testWidgets('defaults nextLabel to "Next step"', (tester) async {
+      await tester.pumpWidget(_wrap(WizardFooter(
+        ceremonyId: _ceremonyId,
+        accentColor: _accent,
+        onBack: null,
+        onNext: () {},
+      )));
+      await tester.pumpAndSettle();
+      expect(find.text('Next step'), findsOneWidget);
+    });
+
     testWidgets('Next step is disabled when onNext is null', (tester) async {
       await tester.pumpWidget(_wrap(const WizardFooter(
         ceremonyId: _ceremonyId,
@@ -511,6 +557,53 @@ void main() {
 
       expect(find.text('Step Alpha'), findsNothing);
       expect(find.text('Step Beta'), findsOneWidget);
+    });
+  });
+
+  group('Wizard — leadingNonProgressSteps (intro step, #486)', () {
+    // A wizard with one leading non-progress step (the intro) and four
+    // numbered working steps behind it. currentStep is fixed per pump.
+    Widget wizardAt(int currentStep) => MaterialApp(
+          home: Wizard(
+            ceremonyLabel: 'Test Ritual',
+            ceremonyIcon: Icons.star,
+            accentColor: _accent,
+            currentStep: currentStep,
+            progressSegmentCount: 4,
+            leadingNonProgressSteps: 1,
+            steps: const [
+              // Intro: explicit empty subtitle suppresses the step counter.
+              WizardStep(title: 'Before we begin', body: SizedBox.shrink(),
+                  subtitle: ''),
+              WizardStep(title: 'Process Inbox', body: SizedBox.shrink()),
+              WizardStep(title: 'Waiting For', body: SizedBox.shrink()),
+              WizardStep(title: 'Next Actions', body: SizedBox.shrink()),
+              WizardStep(title: 'Someday/Maybe', body: SizedBox.shrink()),
+            ],
+          ),
+        );
+
+    testWidgets('on the intro no "Step N of M" counter renders', (tester) async {
+      await tester.pumpWidget(wizardAt(0));
+      await tester.pumpAndSettle();
+
+      // The intro is not a numbered step: neither its own (would-be) counter
+      // nor the first working step's counter appears.
+      expect(find.textContaining('Step 1 of 4'), findsNothing);
+      expect(find.textContaining(RegExp(r'Step \d of 4')), findsNothing);
+      expect(find.text('Before we begin'), findsOneWidget);
+    });
+
+    testWidgets('the first working step reads "Step 1 of 4"', (tester) async {
+      await tester.pumpWidget(wizardAt(1));
+      await tester.pumpAndSettle();
+      expect(find.text('Step 1 of 4'), findsOneWidget);
+    });
+
+    testWidgets('the last working step reads "Step 4 of 4"', (tester) async {
+      await tester.pumpWidget(wizardAt(4));
+      await tester.pumpAndSettle();
+      expect(find.text('Step 4 of 4'), findsOneWidget);
     });
   });
 }

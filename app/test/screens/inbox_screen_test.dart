@@ -8,6 +8,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_screen.dart';
+import 'package:jeeves/screens/inbox/widgets/inbox_list.dart';
 import '../test_helpers.dart';
 
 // ---------------------------------------------------------------------------
@@ -60,11 +61,19 @@ void main() {
     setUp(() => onboardingSeenNotifier.value = true);
     tearDown(() => onboardingSeenNotifier.value = false);
 
-    testWidgets('empty state shows "No items yet" message', (tester) async {
+    testWidgets('empty state shows one Jeeves-speak line from the pool',
+        (tester) async {
       await tester.pumpWidget(_buildApp());
       await tester.pump();
 
-      expect(find.textContaining('No items yet'), findsOneWidget);
+      // Exactly one of the pool lines renders; the old instructional copy is
+      // gone entirely.
+      final matches = inboxEmptyStateLines
+          .where((line) => find.text(line).evaluate().isNotEmpty)
+          .toList();
+      expect(matches, hasLength(1),
+          reason: 'expected exactly one empty-state line from the pool');
+      expect(find.textContaining('No items yet'), findsNothing);
     });
 
     testWidgets('items are rendered in the list', (tester) async {

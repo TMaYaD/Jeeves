@@ -657,9 +657,10 @@ class _PeriodicReviewSettings extends ConsumerWidget {
           ),
           onTap: () {
             context.pop();
-            // Reset the wizard cursor; the screen's initState reloads
-            // every step's snapshot so a manual start sees current state.
-            reviewNotifier.goToStep(PeriodicReviewNotifier.kStepInbox);
+            // Reset the wizard cursor to the intro; the screen's initState
+            // reloads every step's snapshot so a manual start sees current
+            // state (and the intro's estimate).
+            reviewNotifier.goToStep(PeriodicReviewNotifier.kStepIntro);
             context.push('/periodic-review');
           },
         ),

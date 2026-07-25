@@ -163,6 +163,31 @@ under the user's finger mid-transition — a double-tap must advance exactly
 one step. This absorption is part of the Wizard contract, owned by the
 `Wizard` widget itself.
 
+### Ceremony intro step — the duration-estimate briefing
+The Daily Planning and Weekly Review wizards open on a shared intro step
+(`app/lib/widgets/ceremony/intro_step.dart`) that sets expectations before the
+numbered steps. It is a real first `PageView` step but is **excluded from the
+progress-segment count** via `Wizard.leadingNonProgressSteps`: on the intro the
+segmented bar renders empty and the "Step N of M" narration is suppressed
+(the step passes an explicit empty subtitle), so the working steps still read
+"1 of 5" / "1 of 4". Its title is neutral UI ("Before we begin"); the persona
+lives in the body.
+
+The body is a single Jeeves-speak sentence (§ Voice) with the time estimate
+rendered **inline** as a bold, larger, accent-coloured run — the scannable
+focal point sits inside the sentence, not stacked above it. The estimate is an
+approximation: 2 minutes per item to be walked, plus a flat 5 for Daily
+Planning's Energy/Time check-ins and selection (Weekly Review adds no flat),
+rounded up to the nearest 5 and floored at 5 so a zero-item ceremony reads
+"about 5 minutes", never "0". At zero items the copy switches to a shared
+light-day pool. Copy is drawn once per performance from a seedable pool (the
+`elapsed_timer_widget.dart` / `onboarding_card.dart` idiom). The proceed
+control rides the standard footer's fixed slot but carries a **Bertie-speak**
+label (`WizardFooter.nextLabel`, e.g. "Right ho", "Tinkerty-tonk") — the user
+answering Jeeves — and is always enabled; the label shrinks-to-fit rather than
+truncate. System back on the intro exits the ceremony (it is the first step);
+back from the first item of the following step returns to the intro.
+
 ### Terminal verdicts share the slot the destinations vacate
 Where a surface collects routing destinations *and* one terminal verdict, the
 verdict occupies the slot a withheld destination leaves behind, laid out by
@@ -187,6 +212,42 @@ warning. Neither verdict opens a confirmation dialog.
 
 This is the same principle as the wizard footer above — one affordance in one
 slot — applied to a terminal verdict rather than to forward progress.
+
+## Voice
+
+Jeeves is the app's persona — a valet in the mould of P.G. Wodehouse's Jeeves;
+the app speaks as Jeeves would to Bertie Wooster: deferential, unflappable,
+drily witty, a step ahead. The UI is an interface TO Jeeves — the user hands
+him things and he keeps them. Three registers, kept distinct:
+
+- **Jeeves speak** — Jeeves's own utterances (onboarding, empty states, nudges,
+  ceremony sign-offs, timer remarks). First person ("I/me/let me"), addresses
+  the user as "sir", archaic-formal, dry understatement, no exclamation marks,
+  no emoji, short. Authored as what Jeeves RECEIVES ("tell me", "leave it with
+  me"), never as UI instructions ("tap the field above"). Carries a consistent
+  visual treatment — inline weighted text set apart from ordinary copy: a bold
+  header line (15px, w700, ink) over a lighter subtitle (w500, muted), the same
+  treatment the nudge banner (`app/lib/widgets/nudge_banner.dart`) and the
+  elapsed-timer `voiceStyle` (`app/lib/widgets/elapsed_timer_widget.dart`) use.
+  There is no single shared Jeeves-text widget yet; each surface styles inline
+  to this shape. Always written as a POOL of alternatives, one picked at random
+  per occasion, so the app doesn't repeat itself — `nudge_banner.dart` (a pool
+  keyed to the day) and `elapsed_timer_widget.dart` (a seedable `Random` draw)
+  are the reference implementations; the onboarding card and Inbox empty state
+  follow the latter (a `Random` draw, seedable for deterministic tests).
+
+- **Bertie speak** — the USER's voice answering Jeeves: breezy upper-class
+  affirmatives ("Right ho", "Push on", "Very good"). Used ONLY on an affordance
+  that directly replies to a Jeeves utterance (the Daily-Planning and
+  Weekly-Review nudge-banner CTAs answer Jeeves's nudge → Bertie speak). A
+  control that isn't answering Jeeves (Inbox "Add", "Save", "Start fresh") is
+  NOT Bertie speak — it stays neutral.
+
+- **Neutral UI** — plain functional labels for everything that isn't Jeeves
+  talking or the user answering him.
+
+Vocabulary follows CONTEXT.md's domain terms and Avoid lists (a Capture is never
+a "todo", "item", "thought", or "note").
 
 ## App title bar
 

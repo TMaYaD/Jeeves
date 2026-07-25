@@ -1,9 +1,12 @@
 /// Focus session planning ritual — outer container screen (Issue #82).
 ///
-/// Renders a full-screen, drawer-free wizard with five user-driven steps
-/// (Inbox → Review → Energy → Time → Plan Summary). Once the user starts
-/// the day the screen swaps the wizard for the standalone "Today's
-/// Schedule" completion view — completion screens live outside the wizard
+/// Renders a full-screen, drawer-free wizard: a duration-estimate intro
+/// (step 0, #486) followed by five user-driven steps (Inbox → Review →
+/// Energy → Time → Plan Summary). The intro is a real first step excluded
+/// from the progress count via [Wizard.leadingNonProgressSteps], so the bar
+/// still reads "N of 5". Once the user starts the day the screen swaps the
+/// wizard for the standalone "Today's Schedule" completion view —
+/// completion screens live outside the wizard
 /// because they are post-ritual confirmations, not steps the user walks
 /// through. Wizard chrome — header and segmented progress bar — is owned
 /// by the shared [Wizard] widget per issue #322; each [WizardStep] owns
@@ -18,6 +21,7 @@ import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/focus_session_planning_provider.dart';
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
+import '../../widgets/ceremony/intro_step.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/day_checkin_energy_step.dart';
 import 'steps/day_checkin_time_step.dart';
@@ -39,7 +43,11 @@ class _FocusSessionPlanningScreenState
   late final CeremonyInProgressNotifier _ceremonyNotifier;
 
   static const _ceremonyId = 'planning';
+
+  /// The intro title uses a neutral UI register (not Jeeves speak) — the
+  /// Jeeves-speak sentence lives in the step body.
   static const _stepTitles = [
+    'Before we begin',
     'Clarify Inbox',
     'Review Tasks',
     'Energy Check-in',
@@ -47,8 +55,17 @@ class _FocusSessionPlanningScreenState
     'Review Next Actions',
   ];
 
+  /// Bertie-speak proceed label for the intro, drawn once per mount so it
+  /// stays stable across rebuilds (DESIGN.md § Voice).
+  final String _introCtaLabel = introCtaLabel();
+
   static const _accent = Color(0xFF2563EB);
+
+  /// The intro is excluded from the progress count, so the bar renders 5
+  /// segments across the five working steps. The completion screen sits one
+  /// past the last working step (0 = intro, 1–5 = working, 6 = completion).
   static const int _kProgressSegmentCount = 5;
+  static const int _kCompletionStepIndex = 6;
 
   @override
   void initState() {
@@ -102,7 +119,9 @@ class _FocusSessionPlanningScreenState
     // Completion screen lives outside the wizard — it is a post-ritual
     // confirmation, not a step the user walks through. The notifier still
     // owns currentStep so resuming mid-ritual returns to the same place.
-    if (step >= _kProgressSegmentCount) {
+    // The completion index sits one past the last working step; the intro
+    // forces it apart from the (unchanged) progress-segment count.
+    if (step >= _kCompletionStepIndex) {
       return const CeremonyPopScope(
         onBack: null,
         child: Scaffold(
@@ -113,6 +132,7 @@ class _FocusSessionPlanningScreenState
     }
 
     final steps = <WizardStep>[
+      _buildIntroStep(state, notifier),
       _buildInboxStep(state, notifier),
       _buildReviewStep(state, notifier),
       _buildEnergyStep(state, notifier),
@@ -131,6 +151,7 @@ class _FocusSessionPlanningScreenState
         currentStep: step,
         steps: steps,
         progressSegmentCount: _kProgressSegmentCount,
+        leadingNonProgressSteps: 1,
       ),
     );
   }
@@ -138,6 +159,50 @@ class _FocusSessionPlanningScreenState
   // ---------------------------------------------------------------------------
   // Step factories
   // ---------------------------------------------------------------------------
+
+  /// The duration-estimate intro (#486): a real first step excluded from the
+  /// progress count. The estimate is `2 min × (inbox + review counts) + 5 min`
+  /// (the flat covers the Energy/Time check-ins and task selection), sourced
+  /// from [focusSessionPlanningIntroCountsProvider] — count-only reads that
+  /// leave the inbox/review snapshot lifecycles untouched. Loading until the
+  /// counts resolve; the CTA proceeds regardless.
+  WizardStep _buildIntroStep(
+    FocusSessionPlanningState state,
+    FocusSessionPlanningNotifier notifier,
+  ) {
+    final counts = ref.watch(focusSessionPlanningIntroCountsProvider);
+    final estimate = counts.when(
+      data: (c) {
+        final itemCount = c.inboxCount + c.reviewCount;
+        return IntroEstimateReady(
+          rawMinutes: 2 * itemCount + 5,
+          itemCount: itemCount,
+        );
+      },
+      loading: () => const IntroEstimateLoading(),
+      error: (_, _) => const IntroEstimateLoading(),
+    );
+
+    return WizardStep(
+      title: _stepTitles[0],
+      // Explicit empty subtitle: the intro is not a numbered step, so the
+      // wizard suppresses the "Step N of M" fallback here.
+      subtitle: '',
+      body: CeremonyIntroBody(
+        accentColor: _accent,
+        estimate: estimate,
+        bodyPool: dprIntroBodyPool,
+        lightDayPool: introLightDayPool,
+      ),
+      footer: WizardFooter(
+        ceremonyId: _ceremonyId,
+        accentColor: _accent,
+        onBack: null,
+        onNext: notifier.advanceStep,
+        nextLabel: _introCtaLabel,
+      ),
+    );
+  }
 
   VoidCallback? _backToPrevStep(
     FocusSessionPlanningState state,
@@ -157,13 +222,31 @@ class _FocusSessionPlanningScreenState
     FocusSessionPlanningNotifier notifier,
   ) =>
       switch (stepIndex) {
-        0 => state.inboxNav.canGoBack ? notifier.previousInboxItem : null,
-        // At item 0 of the review snapshot Back crosses to Step 0.
-        1 => state.reviewNav.canGoBack
+        // The intro (step 0) has no Back — system back exits the ceremony.
+        0 => null,
+        // Clarify Inbox (step 1): retreat the item cursor first; from the
+        // first item Back crosses to the intro (via _backToPrevStep).
+        1 => state.inboxNav.canGoBack
+            ? notifier.previousInboxItem
+            : _backToPrevStep(state, notifier),
+        // Review Tasks (step 2): at item 0 of the review snapshot Back
+        // crosses to Clarify Inbox.
+        2 => state.reviewNav.canGoBack
             ? notifier.reviewBack
             : _backToPrevStep(state, notifier),
         _ => _backToPrevStep(state, notifier),
       };
+
+  /// Header subtitle for a working step: "Step N of M[ · suffix]". The
+  /// intro is excluded from the progress count, so a working step's
+  /// 1-based display number *is* its PageView index — mirroring how
+  /// [PeriodicReviewScreen]'s `_subtitle` derives its label from a
+  /// passed-in stepIndex, this derives the number from the caller's own
+  /// working-step position instead of re-typing the literal per builder.
+  String _workingStepSubtitle(int stepIndex, [String? suffix]) {
+    final stepLabel = 'Step $stepIndex of $_kProgressSegmentCount';
+    return suffix == null ? stepLabel : '$stepLabel · $suffix';
+  }
 
   WizardStep _buildInboxStep(
     FocusSessionPlanningState state,
@@ -173,7 +256,7 @@ class _FocusSessionPlanningScreenState
     final hasMore = nav.isLoaded && !nav.isComplete;
 
     return WizardStep(
-      title: _stepTitles[0],
+      title: _stepTitles[1],
       body: const InboxClarificationStep(),
       activeFraction: nav.isLoaded && !nav.isEmpty
           ? (nav.index / nav.length).clamp(0.0, 1.0)
@@ -182,7 +265,7 @@ class _FocusSessionPlanningScreenState
       footer: ListItemFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
-        onBack: _backForStep(0, state, notifier),
+        onBack: _backForStep(1, state, notifier),
         onSkip: notifier.skipInboxItem,
         // Next step is disabled until the inbox snapshot has loaded.
         onNext: nav.isLoaded ? notifier.advanceStep : null,
@@ -201,15 +284,15 @@ class _FocusSessionPlanningScreenState
         nav.length > 0 ? (nav.index / nav.length).clamp(0.0, 1.0) : 1.0;
 
     return WizardStep(
-      title: _stepTitles[1],
+      title: _stepTitles[2],
       body: const TaskReviewStep(),
       activeFraction: activeFraction,
-      subtitle: 'Step 2 of $_kProgressSegmentCount · '
-          '${nav.index} / ${nav.length} seen',
+      subtitle:
+          _workingStepSubtitle(2, '${nav.index} / ${nav.length} seen'),
       footer: ListItemFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
-        onBack: _backForStep(1, state, notifier),
+        onBack: _backForStep(2, state, notifier),
         onSkip: notifier.skipReviewItem,
         onNext: notifier.advanceStep,
         hasMoreItems: hasMore,
@@ -225,10 +308,10 @@ class _FocusSessionPlanningScreenState
     // `state.energyLevel` (see `nextForFocusSessionPlanningProvider`);
     // crossing into Time is a plain step advance.
     return WizardStep(
-      title: _stepTitles[2],
+      title: _stepTitles[3],
       body: const DayCheckinEnergyStep(),
       activeFraction: state.energyLevel != null ? 1.0 : 0.0,
-      subtitle: 'Step 3 of $_kProgressSegmentCount',
+      subtitle: _workingStepSubtitle(3),
       footer: WizardFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
@@ -243,10 +326,10 @@ class _FocusSessionPlanningScreenState
     FocusSessionPlanningNotifier notifier,
   ) {
     return WizardStep(
-      title: _stepTitles[3],
+      title: _stepTitles[4],
       body: const DayCheckinTimeStep(),
       activeFraction: state.availableTimeSet ? 1.0 : 0.0,
-      subtitle: 'Step 4 of $_kProgressSegmentCount',
+      subtitle: _workingStepSubtitle(4),
       footer: WizardFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
@@ -261,9 +344,9 @@ class _FocusSessionPlanningScreenState
     FocusSessionPlanningNotifier notifier,
   ) {
     return WizardStep(
-      title: _stepTitles[4],
+      title: _stepTitles[5],
       body: const PlanSummaryStep(),
-      subtitle: 'Step 5 of $_kProgressSegmentCount',
+      subtitle: _workingStepSubtitle(5),
       footer: WizardFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
@@ -276,7 +359,7 @@ class _FocusSessionPlanningScreenState
   String _inboxSubtitle(FocusSessionPlanningState state) {
     final nav = state.inboxNav;
     if (!nav.isLoaded) {
-      return 'Step 1 of $_kProgressSegmentCount · Loading inbox…';
+      return _workingStepSubtitle(1, 'Loading inbox…');
     }
     // Count routings strictly below the cursor: this excludes both items
     // the user skipped (no routing recorded) and the item currently shown
@@ -284,8 +367,8 @@ class _FocusSessionPlanningScreenState
     final processed =
         state.inboxRoutings.keys.where((k) => k < nav.index).length;
     final skipped = nav.index - processed;
-    return 'Step 1 of $_kProgressSegmentCount · '
-        '$processed / ${nav.length} processed (skipped $skipped)';
+    return _workingStepSubtitle(
+        1, '$processed / ${nav.length} processed (skipped $skipped)');
   }
 }
 

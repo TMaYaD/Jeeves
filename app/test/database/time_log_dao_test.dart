@@ -219,5 +219,108 @@ void main() {
       final totalA = await db.timeLogDao.totalMinutesForTask('taskA');
       expect(totalA, 1);
     });
+
+    // -------------------------------------------------------------------------
+    // Action-grain attribution (issue #476)
+    // -------------------------------------------------------------------------
+
+    test('openLog stamps the current Action id', () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      await db.actionDao.setCurrentAction('task1', 'do the thing');
+      final current = await db.actionDao.getCurrentAction('task1');
+
+      await db.timeLogDao
+          .openLog(taskId: 'task1', userId: _userId, now: DateTime.now());
+
+      final logs = await db.select(db.timeLogs).get();
+      expect(logs.length, 1);
+      expect(logs.first.actionId, current!.id);
+    });
+
+    test('openLog on an Actionless Outcome leaves action_id NULL', () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      // No current Action exists.
+      await db.timeLogDao
+          .openLog(taskId: 'task1', userId: _userId, now: DateTime.now());
+
+      final logs = await db.select(db.timeLogs).get();
+      expect(logs.first.actionId, isNull);
+    });
+
+    test('openLog never attributes to a planned or terminated Action',
+        () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      // A planned row and a superseded (terminated) row — but no current.
+      await db.actionDao.addPlannedAction('task1', 'later step');
+      await db.actionDao.setCurrentAction('task1', 'first step');
+      await db.actionDao.clearCurrentAction('task1'); // supersede → no current
+
+      await db.timeLogDao
+          .openLog(taskId: 'task1', userId: _userId, now: DateTime.now());
+
+      final logs = await db.select(db.timeLogs).get();
+      // Resolver filters role='current': planned/terminated can never attach.
+      expect(logs.first.actionId, isNull);
+    });
+
+    test('openLog does not stamp last_clarified_at', () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      await db.actionDao.setCurrentAction('task1', 'do the thing');
+      final before = (await (db.select(db.todos)
+                ..where((t) => t.id.equals('task1')))
+              .getSingle())
+          .lastClarifiedAt;
+
+      await db.timeLogDao.openLog(
+          taskId: 'task1',
+          userId: _userId,
+          now: DateTime.now().add(const Duration(hours: 1)));
+
+      final after = (await (db.select(db.todos)
+                ..where((t) => t.id.equals('task1')))
+              .getSingle())
+          .lastClarifiedAt;
+      expect(after, before);
+    });
+
+    // -------------------------------------------------------------------------
+    // Legacy ∪ new equivalence (issue #476): totals are task-grain, so a store
+    // mixing NULL-action legacy rows and action-attributed rows sums identically
+    // whether or not attribution exists.
+    // -------------------------------------------------------------------------
+
+    test('totalMinutesForTask is identical for legacy and action-attributed rows',
+        () async {
+      await _insertTodo(db, id: 'task1', title: 'Task 1');
+      await db.actionDao.setCurrentAction('task1', 'do the thing');
+      final current = await db.actionDao.getCurrentAction('task1');
+      final base = DateTime(2024, 1, 1, 10, 0, 0).toUtc();
+
+      // Legacy closed stint: 3 minutes, action_id NULL.
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('legacy'),
+            userId: const Value(_userId),
+            taskId: const Value('task1'),
+            startedAt: Value(base.toIso8601String()),
+            endedAt:
+                Value(base.add(const Duration(minutes: 3)).toIso8601String()),
+          ));
+      // New closed stint: 4 minutes, action-attributed. Non-straddling so the
+      // per-row ceil cannot add a stray minute.
+      final gap = base.add(const Duration(minutes: 10));
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('attributed'),
+            userId: const Value(_userId),
+            taskId: const Value('task1'),
+            actionId: Value(current!.id),
+            startedAt: Value(gap.toIso8601String()),
+            endedAt:
+                Value(gap.add(const Duration(minutes: 4)).toIso8601String()),
+          ));
+
+      // The task-grain total counts both rows regardless of action attribution.
+      final total = await db.timeLogDao.totalMinutesForTask('task1');
+      expect(total, 7); // 3 (legacy) + 4 (attributed)
+    });
   });
 }

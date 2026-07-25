@@ -396,6 +396,7 @@ class FocusSessionDispositionOut(BaseModel):
 class TimeLogCreate(BaseModel):
     id: str | None = None  # Client-side UUID for idempotency
     task_id: str
+    action_id: str | None = None  # Action-grain attribution (issue #476); nullable
     started_at: datetime
     ended_at: datetime | None = None
     focus_session_id: str | None = None
@@ -407,6 +408,7 @@ class TimeLogCreate(BaseModel):
 
 class TimeLogUpdate(BaseModel):
     task_id: str | None = None
+    action_id: str | None = None  # Genuinely nullable — no reject_null validator
     started_at: datetime | None = None
     ended_at: datetime | None = None
     focus_session_id: str | None = None
@@ -429,6 +431,7 @@ class TimeLogOut(BaseModel):
     id: str
     user_id: str
     task_id: str
+    action_id: str | None
     started_at: datetime
     ended_at: datetime | None
     focus_session_id: str | None
