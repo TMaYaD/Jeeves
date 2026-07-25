@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 
 import '../../models/todo.dart' show Intent, RoutingKind;
 import '../gtd_database.dart';
+import 'action_dao.dart' show ActionDao;
 import 'tag_dao.dart' show todoTagIdFor;
 import 'time_log_dao.dart' show TimeLogDao;
 
@@ -15,18 +16,72 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   TodoDao(super.db);
 
   // ---------------------------------------------------------------------------
+  // Shared Todo read projection (ADR-0001 story 7 — Action-grain metadata)
+  // ---------------------------------------------------------------------------
+
+  /// D2 read rule for `energy_level`: the current Action's value, else the
+  /// Outcome column. The COALESCE fallback keeps Actionless Outcomes and
+  /// never-migrated legacy stores (no `actions` rows) displaying their stored
+  /// value — no data loss, no blank-out — and, under the write-side mirror
+  /// (D1) + startup sweep, resolves to the current Action's value once one
+  /// exists. [t] is the `todos` table's SQL alias in the enclosing query
+  /// (`'todos'` or `'t'`).
+  static String effectiveEnergyLevelSql(String t) =>
+      'COALESCE('
+      "${ActionDao.currentActionColumnSubquery('energy_level', '$t.id')}, "
+      '$t.energy_level)';
+
+  /// D2 read rule for `time_estimate`; see [effectiveEnergyLevelSql].
+  static String effectiveTimeEstimateSql(String t) =>
+      'COALESCE('
+      "${ActionDao.currentActionColumnSubquery('time_estimate', '$t.id')}, "
+      '$t.time_estimate)';
+
+  /// The full `todos` column projection every Todo-producing query selects, so
+  /// `todos.map(row.data)` hydrates the [Todo] model with **Action-grain**
+  /// `energy_level` / `time_estimate` (D2) and live-derived `time_spent_minutes`
+  /// (issue #480) — leaving UI and providers untouched. The raw
+  /// `todos.energy_level` / `time_estimate` columns are now write-mirror
+  /// compatibility, like `next_action_text`, until story 9 drops them. [t] is
+  /// the `todos` table's SQL alias in the enclosing query.
+  ///
+  /// Queries carrying this projection must list `actions` and `time_logs` in
+  /// `readsFrom` so a synced Action or TimeLog write re-emits their watchers.
+  static String todoProjectionSql(String t) =>
+      '$t.id, $t.title, $t.notes, $t.priority, $t.due_date, $t.created_at, '
+      '$t.updated_at, $t.done_at, $t.clarified, $t.intent, '
+      '${effectiveTimeEstimateSql(t)} AS time_estimate, '
+      '${effectiveEnergyLevelSql(t)} AS energy_level, '
+      '$t.capture_source, $t.location_id, $t.user_id, $t.last_clarified_at, '
+      '${TimeLogDao.totalMinutesSubquery('$t.id')} AS time_spent_minutes, '
+      '$t.next_action_text, $t.last_next_action_completion_at';
+
+  // ---------------------------------------------------------------------------
   // Single-todo helpers
   // ---------------------------------------------------------------------------
 
   /// Returns a single todo by [todoId], or null if not found.
+  ///
+  /// Carries the [todoProjectionSql] so the returned [Todo]'s `energyLevel` /
+  /// `timeEstimate` resolve to the current Action (D2) — the task-detail
+  /// editors read these, and their edits dual-write back through
+  /// [updateFields], so read and write stay on the same grain.
   Future<Todo?> getTodo(String todoId) {
-    return (select(todos)..where((t) => t.id.equals(todoId))).getSingleOrNull();
+    return customSelect(
+      'SELECT ${todoProjectionSql('todos')} FROM todos WHERE todos.id = ?',
+      variables: [Variable(todoId)],
+      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+    ).getSingleOrNull().then((r) => r == null ? null : todos.map(r.data));
   }
 
-  /// Stream that re-emits a single todo whenever it changes.
+  /// Stream that re-emits a single todo whenever it (or its current Action)
+  /// changes; hydrated with Action-grain metadata via [todoProjectionSql].
   Stream<Todo?> watchTodo(String todoId) {
-    return (select(todos)..where((t) => t.id.equals(todoId)))
-        .watchSingleOrNull();
+    return customSelect(
+      'SELECT ${todoProjectionSql('todos')} FROM todos WHERE todos.id = ?',
+      variables: [Variable(todoId)],
+      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+    ).watchSingleOrNull().map((r) => r == null ? null : todos.map(r.data));
   }
 
   // ---------------------------------------------------------------------------
@@ -91,20 +146,20 @@ EXISTS (
         : '';
     if (tagIds.isEmpty) {
       return customSelect(
-        'SELECT * FROM todos '
+        'SELECT ${todoProjectionSql('todos')} FROM todos '
         'WHERE clarified = 1 AND done_at IS NULL AND intent = ?'
         '$extraWhere '
         'ORDER BY created_at',
         variables: [intentVar],
         readsFrom: excludeActionlessPersonBlocked
-            ? {todos, todoTags, tags, actions}
-            : {todos},
+            ? {todos, todoTags, tags, actions, attachedDatabase.timeLogs}
+            : {todos, actions, attachedDatabase.timeLogs},
       ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
     }
     final n = tagIds.length;
     final placeholders = List.filled(n, '?').join(', ');
     return customSelect(
-      'SELECT todos.* FROM todos '
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
       'WHERE todos.clarified = 1 '
       'AND todos.done_at IS NULL '
       'AND todos.intent = ? '
@@ -115,8 +170,8 @@ EXISTS (
       'ORDER BY todos.created_at',
       variables: [intentVar, ...tagIds.map(Variable.new)],
       readsFrom: excludeActionlessPersonBlocked
-          ? {todos, todoTags, tags, actions}
-          : {todos, todoTags},
+          ? {todos, todoTags, tags, actions, attachedDatabase.timeLogs}
+          : {todos, todoTags, actions, attachedDatabase.timeLogs},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -168,7 +223,7 @@ EXISTS (
   Stream<List<Todo>> watchPersonTagged({Set<String> tagIds = const {}}) {
     if (tagIds.isEmpty) {
       return customSelect(
-        'SELECT DISTINCT todos.* FROM todos '
+        'SELECT DISTINCT ${todoProjectionSql('todos')} FROM todos '
         'JOIN todo_tags tt ON tt.todo_id = todos.id '
         'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
         'WHERE todos.clarified = 1 '
@@ -179,13 +234,13 @@ EXISTS (
           Variable('person'),
           Variable('next'),
         ],
-        readsFrom: {todos, todoTags, tags},
+        readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
       ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
     }
     final n = tagIds.length;
     final placeholders = List.filled(n, '?').join(', ');
     return customSelect(
-      'SELECT DISTINCT todos.* FROM todos '
+      'SELECT DISTINCT ${todoProjectionSql('todos')} FROM todos '
       'JOIN todo_tags tt ON tt.todo_id = todos.id '
       'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
       'WHERE todos.clarified = 1 '
@@ -200,7 +255,7 @@ EXISTS (
         Variable('next'),
         ...tagIds.map(Variable.new),
       ],
-      readsFrom: {todos, todoTags, tags},
+      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
@@ -211,17 +266,10 @@ EXISTS (
   /// then todo creation date — insertion order matches the grouped view.
   Stream<Map<Tag, List<Todo>>> watchPersonTaggedGrouped() {
     return customSelect(
-      'SELECT '
-      '  todos.id, todos.title, todos.notes, todos.priority, '
-      '  todos.due_date, todos.created_at, todos.updated_at, '
-      '  todos.done_at, todos.clarified, todos.intent, '
-      '  todos.time_estimate, todos.energy_level, todos.capture_source, '
-      '  todos.location_id, todos.user_id, '
-      '  todos.last_clarified_at, '
-      // Derived live from SUM(time_logs); the raw column is a dead cache
-      // (issue #480).
-      '  ${TimeLogDao.totalMinutesSubquery('todos.id')} AS time_spent_minutes, '
-      '  todos.next_action_text, todos.last_next_action_completion_at, '
+      // Shared Todo projection (Action-grain energy/time via D2, live-derived
+      // time_spent_minutes per #480) plus the person-tag columns this grouped
+      // view needs.
+      'SELECT ${todoProjectionSql('todos')}, '
       '  tg.id AS ptag_id, tg.name AS ptag_name, '
       '  tg.color AS ptag_color, tg.user_id AS ptag_user_id '
       'FROM todos '
@@ -235,7 +283,7 @@ EXISTS (
         Variable('person'),
         Variable('next'),
       ],
-      readsFrom: {todos, todoTags, tags, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
     ).watch().map((rows) {
       final result = <Tag, List<Todo>>{};
       for (final row in rows) {
@@ -316,10 +364,11 @@ EXISTS (
   /// even if a `done_at` timestamp survived the trash transition (#278).
   Stream<List<Todo>> watchDone() {
     return customSelect(
-      "SELECT * FROM todos WHERE done_at IS NOT NULL AND intent != 'trash' "
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
+      "WHERE done_at IS NOT NULL AND intent != 'trash' "
       'ORDER BY done_at DESC',
       variables: [],
-      readsFrom: {todos},
+      readsFrom: {todos, actions, attachedDatabase.timeLogs},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -344,10 +393,11 @@ EXISTS (
   /// lexicographic DESC is chronological.
   Stream<List<Todo>> watchTrash() {
     return customSelect(
-      "SELECT * FROM todos WHERE intent = 'trash' "
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
+      "WHERE intent = 'trash' "
       'ORDER BY COALESCE(last_clarified_at, updated_at, created_at) DESC',
       variables: [],
-      readsFrom: {todos},
+      readsFrom: {todos, actions, attachedDatabase.timeLogs},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -362,10 +412,11 @@ EXISTS (
     if (ids.isEmpty) return Stream.value([]);
     final placeholders = ids.map((_) => '?').join(', ');
     return customSelect(
-      'SELECT * FROM todos WHERE id IN ($placeholders) '
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
+      'WHERE id IN ($placeholders) '
       'ORDER BY created_at',
       variables: [...ids.map(Variable.new)],
-      readsFrom: {todos},
+      readsFrom: {todos, actions, attachedDatabase.timeLogs},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -592,7 +643,7 @@ AND (
   /// each task surfaces in at most one wizard step.
   Future<List<Todo>> getNextExcludingPersonTagged() {
     return customSelect(
-      'SELECT todos.* FROM todos '
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
       'WHERE todos.clarified = 1 '
       'AND todos.done_at IS NULL '
       'AND todos.intent = ? '
@@ -603,7 +654,7 @@ AND (
       ') '
       'ORDER BY todos.created_at',
       variables: [Variable('next'), Variable('person')],
-      readsFrom: {todos, todoTags, tags},
+      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -624,14 +675,14 @@ AND (
     final escaped =
         term.replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
     return customSelect(
-      'SELECT * FROM todos '
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
       "WHERE todos.title LIKE ? ESCAPE '\\' "
       'AND todos.done_at IS NULL '
       "AND (todos.intent IS NULL OR todos.intent != 'trash') "
       'ORDER BY todos.title '
       'LIMIT ?',
       variables: [Variable('%$escaped%'), Variable<int>(limit)],
-      readsFrom: {todos},
+      readsFrom: {todos, actions, attachedDatabase.timeLogs},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -650,9 +701,10 @@ AND (
   /// re-clarification surface.
   Future<List<Todo>> getNeedsReview() {
     return customSelect(
-      'SELECT * FROM todos WHERE $_needsReviewWhere ORDER BY created_at',
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
+      'WHERE $_needsReviewWhere ORDER BY created_at',
       variables: [],
-      readsFrom: {todos, todoTags, tags, actions},
+      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -923,9 +975,20 @@ AND (
   /// Update mutable todo fields (title, notes, energy level, time estimate, due date).
   ///
   /// Every field this method can change is a clarifying micro-act per
-  /// CONTEXT.md (title / notes / due-date edits, and Action cursor-fields
-  /// energy / time-estimate — Actions are first-class per ADR-0001 and their
-  /// mutations stamp). Any non-no-op call therefore stamps [lastClarifiedAt].
+  /// CONTEXT.md (title / notes / due-date edits, and Action metadata energy /
+  /// time-estimate — Actions are first-class per ADR-0001 and their mutations
+  /// stamp). Any non-no-op call therefore stamps [lastClarifiedAt].
+  ///
+  /// **Energy / time-estimate are Action-grain metadata (ADR-0001 story 7).**
+  /// This is the only live writer of them on an existing Outcome, so it
+  /// dual-writes: the `todos.energy_level` / `time_estimate` columns are kept
+  /// mirrored (D1 — write-mirror compatibility until story 9, and the draft
+  /// store while the Outcome is Actionless per D3), and when a `current` Action
+  /// exists the same values are written onto it through
+  /// [ActionDao.applyEditAction] **in one transaction** with the same
+  /// timestamp, so the two sides never drift and the startup sweep stays a
+  /// no-op. Whichever side is the read source (currently the Action, via
+  /// [effectiveEnergyLevelSql]) therefore always reflects the edit.
   ///
   /// To clear a nullable column, pass the matching `clear*` flag (e.g.
   /// `clearTimeEstimate: true`). Passing `null` for the typed parameter is
@@ -956,6 +1019,12 @@ AND (
         clearEnergyLevel ||
         clearTimeEstimate ||
         clearDueDate;
+    // Whether this call touches Action-grain metadata at all — the arm that
+    // must be dual-written to the current Action.
+    final touchesMetadata = energyLevel != null ||
+        timeEstimate != null ||
+        clearEnergyLevel ||
+        clearTimeEstimate;
     final companion = TodosCompanion(
       updatedAt: Value(ts),
       lastClarifiedAt: hasMutation ? Value(ts) : const Value.absent(),
@@ -982,8 +1051,32 @@ AND (
               ? Value(dueDate.toUtc())
               : const Value.absent(),
     );
-    await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
+    var actionTouched = false;
+    await transaction(() async {
+      await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
+      if (touchesMetadata) {
+        // Dual-write onto the current Action, if one exists. Actionless
+        // Outcomes keep the values as draft on the columns above (D3); the
+        // draft seeds the birth Action when the next `current` Action is
+        // created (ActionDao.applySetCurrentAction). Reading the current Action
+        // on the transaction executor cannot race a synced write in mid-edit.
+        final current =
+            await attachedDatabase.actionDao.getCurrentAction(todoId);
+        if (current != null) {
+          final effect = await attachedDatabase.actionDao.applyEditAction(
+            current.id,
+            energyLevel: energyLevel,
+            timeEstimate: timeEstimate,
+            clearEnergyLevel: clearEnergyLevel,
+            clearTimeEstimate: clearTimeEstimate,
+            ts: ts,
+          );
+          actionTouched = effect.changed;
+        }
+      }
+    });
     attachedDatabase.notifyTodosViewWrite();
+    if (actionTouched) attachedDatabase.notifyActionsViewWrite();
   }
 
   // ---------------------------------------------------------------------------

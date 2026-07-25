@@ -121,11 +121,17 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// `current` row (story 7 metadata) or a `planned` row (the planned queue's
   /// inline edit, story 5) with the same UPDATE [setCurrentAction] uses for
   /// text. No-op if the row is gone or nothing differs.
+  ///
+  /// A `null` typed argument is "no change"; pass the matching `clear*` flag to
+  /// null a nullable metadata column (same convention as [TodoDao.updateFields],
+  /// which drives this in the same transaction for the metadata dual-write).
   Future<void> editAction(
     String actionId, {
     String? text,
     String? energyLevel,
     int? timeEstimate,
+    bool clearEnergyLevel = false,
+    bool clearTimeEstimate = false,
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
@@ -135,6 +141,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         text: text,
         energyLevel: energyLevel,
         timeEstimate: timeEstimate,
+        clearEnergyLevel: clearEnergyLevel,
+        clearTimeEstimate: clearTimeEstimate,
         ts: ts,
       ),
     );
@@ -153,6 +161,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   Future<void> supersedeCurrentAction(
     String outcomeId, {
     String? newActionText,
+    String? newEnergyLevel,
+    int? newTimeEstimate,
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
@@ -160,6 +170,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       () => applySupersedeCurrentAction(
         outcomeId,
         newActionText: newActionText,
+        newEnergyLevel: newEnergyLevel,
+        newTimeEstimate: newTimeEstimate,
         ts: ts,
       ),
     );
@@ -337,6 +349,27 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       'ORDER BY COALESCE(actions.updated_at, actions.created_at) DESC, '
       'actions.id ASC';
 
+  /// Correlated subquery: the winning `current` Action's [column] for the
+  /// Outcome referenced by [outcomeIdRef] (a SQL expression, e.g. `'todos.id'`
+  /// or `'t.id'`), or NULL when the Outcome is Actionless. Applies the same
+  /// winner rule reads use ([_winnerFirst]) so a multi-current race resolves
+  /// deterministically. The inner alias `mca` avoids colliding with outer
+  /// table aliases.
+  ///
+  /// This is the single derivation of an Action-grain metadata value from the
+  /// `actions` table (ADR-0001 story 7); the effective-read COALESCE that wraps
+  /// it — current Action's value, else the Outcome column fallback — lives in
+  /// [TodoDao.effectiveEnergyLevelSql] / [TodoDao.effectiveTimeEstimateSql],
+  /// mirroring the `TimeLogDao.totalMinutesSubquery` precedent (issue #480).
+  static String currentActionColumnSubquery(
+    String column,
+    String outcomeIdRef,
+  ) =>
+      '(SELECT mca.$column FROM actions mca '
+      "WHERE mca.outcome_id = $outcomeIdRef AND mca.role = 'current' "
+      'ORDER BY COALESCE(mca.updated_at, mca.created_at) DESC, mca.id ASC '
+      'LIMIT 1)';
+
   /// The id of [outcomeId]'s winning `current` Action, or null when it is
   /// Actionless. Uses the blessed winner-first ordering ([winnerFirstOrderSql])
   /// so a transient multi-current race attributes to the same row every reader
@@ -464,11 +497,28 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     final current = resolved.current;
 
     if (current == null) {
+      // D3 (ADR-0001 story 7): energy / time set on an Actionless Outcome live
+      // on its columns as draft. When its first `current` Action is born and
+      // the caller passes no metadata, seed the birth Action from those draft
+      // columns — so the draft lands on the Action for *every* creation path
+      // (clarify `applyRouting`, `setNextActionText`,
+      // `setNextActionTextIfActionless`) with no signature change. Explicit
+      // args win over the draft. This agrees with the sweep's cursor → actions
+      // direction (it would have converged to exactly this state).
+      var seededEnergy = energyLevel;
+      var seededTime = timeEstimate;
+      if (seededEnergy == null || seededTime == null) {
+        final outcome =
+            await (select(todos)..where((t) => t.id.equals(outcomeId)))
+                .getSingleOrNull();
+        seededEnergy ??= outcome?.energyLevel;
+        seededTime ??= outcome?.timeEstimate;
+      }
       await _insertCurrentAction(
         outcomeId,
         normalized,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
+        energyLevel: seededEnergy,
+        timeEstimate: seededTime,
         ts: ts,
       );
       await _stampOutcome(outcomeId, ts);
@@ -504,6 +554,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     String? text,
     String? energyLevel,
     int? timeEstimate,
+    bool clearEnergyLevel = false,
+    bool clearTimeEstimate = false,
     required DateTime ts,
   }) async {
     final row = await (select(actions)..where((a) => a.id.equals(actionId)))
@@ -512,17 +564,26 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
 
     final normalized = text?.trim();
     final textDiffers = normalized != null && normalized != row.actionText;
-    final energyDiffers = energyLevel != null && energyLevel != row.energyLevel;
-    final timeDiffers = timeEstimate != null && timeEstimate != row.timeEstimate;
+    // A clear differs only when the column currently holds a value; setting a
+    // value differs when it is not already that value. `clear*` wins over the
+    // typed argument, matching [TodoDao.updateFields].
+    final energyDiffers = clearEnergyLevel
+        ? row.energyLevel != null
+        : energyLevel != null && energyLevel != row.energyLevel;
+    final timeDiffers = clearTimeEstimate
+        ? row.timeEstimate != null
+        : timeEstimate != null && timeEstimate != row.timeEstimate;
     if (!textDiffers && !energyDiffers && !timeDiffers) return _noEffect;
 
     await (update(actions)..where((a) => a.id.equals(actionId))).write(
       ActionsCompanion(
         actionText: textDiffers ? Value(normalized) : const Value.absent(),
-        energyLevel:
-            energyDiffers ? Value(energyLevel) : const Value.absent(),
-        timeEstimate:
-            timeDiffers ? Value(timeEstimate) : const Value.absent(),
+        energyLevel: clearEnergyLevel
+            ? const Value(null)
+            : energyDiffers ? Value(energyLevel) : const Value.absent(),
+        timeEstimate: clearTimeEstimate
+            ? const Value(null)
+            : timeDiffers ? Value(timeEstimate) : const Value.absent(),
         updatedAt: Value(ts),
       ),
     );
@@ -533,6 +594,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   Future<ActionWriteEffect> applySupersedeCurrentAction(
     String outcomeId, {
     String? newActionText,
+    String? newEnergyLevel,
+    int? newTimeEstimate,
     required DateTime ts,
   }) async {
     final resolved = await _resolveCurrentAction(outcomeId, ts);
@@ -554,7 +617,30 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       changed = true;
     }
     if (hasReplacement) {
-      final newActionId = await _insertCurrentAction(outcomeId, newText, ts: ts);
+      final newActionId = await _insertCurrentAction(
+        outcomeId,
+        newText,
+        energyLevel: newEnergyLevel,
+        timeEstimate: newTimeEstimate,
+        ts: ts,
+      );
+      // Cursor dual-write (ADR-0001 story 7, D4): mirror the *replacement's*
+      // text + metadata onto the Outcome columns in this same transaction —
+      // not the superseded row's. This is mandatory, not defensive: the
+      // startup sweep repairs strictly cursor → actions, so a cursor still
+      // holding the retired Action's mirrored `energy_level` / `time_estimate`
+      // would let mode 1 copy that stale metadata back onto the fresh
+      // replacement at the next launch — exactly the inheritance the story
+      // forbids. Mirroring makes the subsequent sweep a no-op. The superseded
+      // row keeps its own frozen values (history is truthful).
+      await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
+        TodosCompanion(
+          nextActionText: Value(newText),
+          energyLevel: Value(newEnergyLevel),
+          timeEstimate: Value(newTimeEstimate),
+          updatedAt: Value(ts),
+        ),
+      );
       changed = true;
       if (closedLog != null) {
         await _reopenLogAgainst(closed: closedLog, newActionId: newActionId, ts: ts);
