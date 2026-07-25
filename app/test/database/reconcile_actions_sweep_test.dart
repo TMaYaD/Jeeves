@@ -424,4 +424,36 @@ void main() {
     expect(planned['role'], 'planned');
     expect(planned['text'], 'ship it');
   });
+
+  test('a supersede-with-replacement mirrors the replacement metadata onto the '
+      'cursor, so the sweep is a no-op and never resurrects the superseded '
+      "row's metadata (ADR-0001 story 7, D4)", () async {
+    await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
+    await db.actionDao.setCurrentAction(
+      'o1',
+      'first approach',
+      energyLevel: 'high',
+      timeEstimate: 60,
+      now: _t0,
+    );
+    await db.actionDao.supersedeCurrentAction(
+      'o1',
+      newActionText: 'small pivot',
+      newEnergyLevel: 'low',
+      newTimeEstimate: 15,
+      now: _clarified,
+    );
+
+    final repaired = await _sweep(db);
+
+    expect(repaired, 0,
+        reason: 'the cursor already mirrors the replacement — no drift');
+    final cur = await _current(db, 'o1');
+    expect(cur!['text'], 'small pivot');
+    expect(cur['energy_level'], 'low',
+        reason: 'mode 1 did NOT copy the superseded high/60 back');
+    expect(cur['time_estimate'], 15);
+    expect(await _lastClarified(db, 'o1'), _clarified,
+        reason: 'the sweep never stamps');
+  });
 }

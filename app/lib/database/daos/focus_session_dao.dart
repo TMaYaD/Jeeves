@@ -7,7 +7,7 @@ import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../gtd_database.dart';
-import 'time_log_dao.dart';
+import 'todo_dao.dart' show TodoDao;
 
 part 'focus_session_dao.g.dart';
 
@@ -229,12 +229,12 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// Stream of [Todo] rows that are members of [sessionId], ordered by position.
   Stream<List<Todo>> watchSessionTasks(String sessionId) {
     return customSelect(
-      'SELECT t.* FROM todos t '
+      'SELECT $_todoColumnsSql FROM todos t '
       'JOIN focus_session_tasks fst ON fst.task_id = t.id '
       'WHERE fst.focus_session_id = ? '
       'ORDER BY fst.position',
       variables: [Variable<String>(sessionId)],
-      readsFrom: {focusSessionTasks, todos},
+      readsFrom: {focusSessionTasks, todos, attachedDatabase.actions, timeLogs},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -452,7 +452,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// shows only while no session is open. Re-emits when a session closes.
   Stream<List<Todo>> watchLastClosedSessionRolloverTasks() {
     return customSelect(
-      'SELECT t.* FROM todos t WHERE t.id IN '
+      'SELECT $_todoColumnsSql FROM todos t WHERE t.id IN '
       '($_lastClosedRolloverTaskIdsSql)',
       variables: [Variable('rollover'), Variable('rollover')],
       readsFrom: {
@@ -460,6 +460,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         focusSessionTasks,
         focusSessionDispositions,
         todos,
+        attachedDatabase.actions,
+        timeLogs,
       },
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
@@ -470,27 +472,29 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// call sites. Returns an empty list when no session is open.
   Stream<List<Todo>> watchActiveSessionTasks() {
     return customSelect(
-      'SELECT t.* FROM todos t '
+      'SELECT $_todoColumnsSql FROM todos t '
       'JOIN focus_session_tasks fst ON fst.task_id = t.id '
       'WHERE fst.focus_session_id = ('
       '  SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
       ') '
       'ORDER BY fst.position',
       variables: [],
-      readsFrom: {focusSessionTasks, focusSessions, todos},
+      readsFrom: {
+        focusSessionTasks,
+        focusSessions,
+        todos,
+        attachedDatabase.actions,
+        timeLogs,
+      },
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
   /// Explicit `todos` projection (alias `t`) shared by every Review-surface
-  /// query, with `time_spent_minutes` derived live from `SUM(time_logs)` —
-  /// the raw column is a dead cache and must not be surfaced (issue #480).
-  static final String _todoColumnsSql =
-      't.id, t.title, t.notes, t.priority, t.due_date, '
-      't.created_at, t.updated_at, t.done_at, t.clarified, t.intent, '
-      't.time_estimate, t.energy_level, t.capture_source, t.location_id, '
-      't.user_id, t.last_clarified_at, t.next_action_text, '
-      't.last_next_action_completion_at, '
-      '${TimeLogDao.totalMinutesSubquery('t.id')} AS time_spent_minutes';
+  /// query. `energy_level` / `time_estimate` resolve to the current Action
+  /// (ADR-0001 story 7, D2) and `time_spent_minutes` is derived live from
+  /// `SUM(time_logs)` (issue #480) — both raw columns are write-mirror
+  /// compatibility only. The single source of truth is [TodoDao.todoProjectionSql].
+  static final String _todoColumnsSql = TodoDao.todoProjectionSql('t');
 
   /// Reactive Review surface for the currently open session — the union of
   ///
@@ -535,7 +539,13 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       'GROUP BY t.id '
       'ORDER BY surface_order, sort_key',
       variables: [],
-      readsFrom: {focusSessionTasks, timeLogs, focusSessions, todos},
+      readsFrom: {
+        focusSessionTasks,
+        timeLogs,
+        focusSessions,
+        todos,
+        attachedDatabase.actions,
+      },
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -582,7 +592,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         Variable<String>(sessionId),
         Variable<String>(sessionId),
       ],
-      readsFrom: {focusSessionTasks, timeLogs, todos},
+      readsFrom: {focusSessionTasks, timeLogs, todos, attachedDatabase.actions},
     ).get();
     return rows.map((r) => todos.map(r.data)).toList();
   }

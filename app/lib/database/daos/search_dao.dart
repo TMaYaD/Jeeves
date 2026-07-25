@@ -18,11 +18,30 @@ import 'package:drift/drift.dart';
 import '../../models/search_query.dart';
 import '../../models/search_result.dart';
 import '../gtd_database.dart';
+import 'todo_dao.dart' show TodoDao;
 
 class SearchDao {
   SearchDao(this._db);
 
   final GtdDatabase _db;
+
+  // Effective, Action-grain energy / time-estimate (ADR-0001 story 7, D2):
+  // the current Action's value with the Outcome column as fallback. Structured
+  // filters match on these — and results hydrate through them — so search
+  // ranks and filters an Outcome by the effort of doing its *current* Action,
+  // falling through to the Outcome column for Actionless / legacy rows. The
+  // outer table alias is Drift's default for the main table of a join: the
+  // table's own name, `todos`. `Precedence.primary` marks the COALSECE(...)
+  // as an atomic operand so surrounding `IN` / `<=` / `IS NULL` need no parens.
+  static final Expression<String> _effectiveEnergyLevel =
+      CustomExpression<String>(
+    TodoDao.effectiveEnergyLevelSql('todos'),
+    precedence: Precedence.primary,
+  );
+  static final Expression<int> _effectiveTimeEstimate = CustomExpression<int>(
+    TodoDao.effectiveTimeEstimateSql('todos'),
+    precedence: Precedence.primary,
+  );
 
   /// Returns a reactive stream of search results matching [query].
   ///
@@ -96,6 +115,11 @@ class SearchDao {
       ),
     ]);
 
+    // Hydrate the effective (Action-grain) metadata alongside the row so the
+    // returned Todo carries the current Action's energy/time (see
+    // [_groupAndFilter]).
+    q.addColumns([_effectiveEnergyLevel, _effectiveTimeEstimate]);
+
     // ---- Structured filters applied at the SQL level ----
 
     Expression<bool> where = const Constant(true);
@@ -105,8 +129,7 @@ class SearchDao {
     }
 
     if (query.energyLevels.isNotEmpty) {
-      where = where &
-          _db.todos.energyLevel.isIn(query.energyLevels.toList());
+      where = where & _effectiveEnergyLevel.isIn(query.energyLevels.toList());
     }
 
     if (query.dueDateAfter != null) {
@@ -120,8 +143,8 @@ class SearchDao {
 
     if (query.timeEstimateMaxMinutes != null) {
       where = where &
-          (_db.todos.timeEstimate.isNull() |
-              _db.todos.timeEstimate
+          (_effectiveTimeEstimate.isNull() |
+              _effectiveTimeEstimate
                   .isSmallerOrEqualValue(query.timeEstimateMaxMinutes!));
     }
 
@@ -166,7 +189,7 @@ class SearchDao {
     Expression<bool> where = _db.todos.doneAt.isNotNull();
 
     if (query.energyLevels.isNotEmpty) {
-      where = where & _db.todos.energyLevel.isIn(query.energyLevels.toList());
+      where = where & _effectiveEnergyLevel.isIn(query.energyLevels.toList());
     }
 
     if (query.dueDateAfter != null) {
@@ -180,13 +203,15 @@ class SearchDao {
 
     if (query.timeEstimateMaxMinutes != null) {
       where = where &
-          (_db.todos.timeEstimate.isNull() |
-              _db.todos.timeEstimate
+          (_effectiveTimeEstimate.isNull() |
+              _effectiveTimeEstimate
                   .isSmallerOrEqualValue(query.timeEstimateMaxMinutes!));
     }
 
     q.where(where);
 
+    // Count only — no hydration needed; _groupAndFilter reads the raw todo for
+    // the text/tag filter, which the effective columns don't affect.
     return q.watch().map((rows) => _groupAndFilter(rows, doneQuery).length);
   }
 
@@ -198,13 +223,23 @@ class SearchDao {
   /// filter. Returns [_TodoWithTags] entries that pass all filters.
   List<_TodoWithTags> _groupAndFilter(
     List<TypedResult> rows,
-    SearchQuery query,
-  ) {
+    SearchQuery query, {
+    bool hydrateEffective = false,
+  }) {
     final Map<String, _TodoWithTags> grouped = {};
     final List<String> orderedIds = [];
 
     for (final row in rows) {
-      final todo = row.readTable(_db.todos);
+      var todo = row.readTable(_db.todos);
+      // Overlay the Action-grain energy/time the outcome query selected
+      // (ADR-0001 story 7). Only the outcome-results path adds these columns;
+      // the done-count path does not read the hydrated Todo, so it skips this.
+      if (hydrateEffective) {
+        todo = todo.copyWith(
+          energyLevel: Value(row.read(_effectiveEnergyLevel)),
+          timeEstimate: Value(row.read(_effectiveTimeEstimate)),
+        );
+      }
       final tag = row.readTableOrNull(_db.tags);
 
       if (!grouped.containsKey(todo.id)) {
@@ -250,7 +285,7 @@ class SearchDao {
     List<TypedResult> rows,
     SearchQuery query,
   ) {
-    final entries = _groupAndFilter(rows, query);
+    final entries = _groupAndFilter(rows, query, hydrateEffective: true);
     final term = query.text.toLowerCase().trim();
 
     return entries.map((entry) {
