@@ -71,6 +71,29 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
 /// sleep) before settling the frame — see [settleWithRealAsync].
 Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
+/// Drives a page transition to completion in real time while draining the
+/// drift-stream snapshot load the newly-visible step triggers on entry — a
+/// plain `pumpAndSettle` hangs on Clarify Inbox's spinner (its real-async
+/// `.first` fires only once visible, after the transition). See the twin
+/// helper in `focus_session_planning_footer_test.dart`.
+Future<void> _settleAcrossTransition(WidgetTester tester) async {
+  for (var i = 0; i < 8; i++) {
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 60));
+  }
+}
+
+/// Every performance now opens on the duration-estimate intro (#486, step 0).
+/// Cross into Clarify Inbox (step 1) before exercising the working-step back
+/// contract.
+Future<void> _advancePastIntro(
+  WidgetTester tester,
+  ProviderContainer container,
+) async {
+  await container.read(focusSessionPlanningProvider.notifier).advanceStep();
+  await _settleAcrossTransition(tester);
+}
+
 /// Unmounts the tree so streaming providers dispose before the end-of-test
 /// pending-timer check.
 Future<void> _dispose(WidgetTester tester) async {
@@ -91,7 +114,7 @@ void main() {
     });
 
     testWidgets(
-        'system back at step 0, first item exits to the execution home '
+        'system back on the intro (step 0) exits to the execution home '
         'and abandons the performance', (tester) async {
       await _insertInbox(db, 'i1');
       final (widget, _, container) = _app(db);
@@ -127,6 +150,7 @@ void main() {
       addTearDown(container.dispose);
       await tester.pumpWidget(widget);
       await _settle(tester);
+      await _advancePastIntro(tester, container);
 
       await tester.tap(find.byKey(_skipKey));
       await tester.pumpAndSettle();
@@ -156,13 +180,14 @@ void main() {
       await tester.pumpWidget(widget);
       await _settle(tester);
 
-      container.read(focusSessionPlanningProvider.notifier).goToStep(2);
+      // Energy Check-in (step 3) — a later step with no per-item cursor.
+      container.read(focusSessionPlanningProvider.notifier).goToStep(3);
       await tester.pumpAndSettle();
 
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
 
-      expect(container.read(focusSessionPlanningProvider).currentStep, 1,
+      expect(container.read(focusSessionPlanningProvider).currentStep, 2,
           reason: 'system back mirrors the footer Back step retreat');
       expect(find.byType(FocusSessionPlanningScreen), findsOneWidget);
 
@@ -176,9 +201,9 @@ void main() {
       await tester.pumpWidget(widget);
       await _settle(tester);
 
-      // Step 5 is Today's Schedule — the post-ceremony confirmation rendered
-      // outside the wizard.
-      container.read(focusSessionPlanningProvider.notifier).goToStep(5);
+      // Step 6 is Today's Schedule — the post-ceremony confirmation rendered
+      // outside the wizard (step 0 is the intro; 1–5 the working steps).
+      container.read(focusSessionPlanningProvider.notifier).goToStep(6);
       await _settle(tester);
 
       await tester.binding.handlePopRoute();
@@ -198,6 +223,7 @@ void main() {
       addTearDown(container.dispose);
       await tester.pumpWidget(widget);
       await _settle(tester);
+      await _advancePastIntro(tester, container);
 
       await tester.tap(find.byKey(_skipKey));
       await tester.pumpAndSettle();
@@ -212,12 +238,13 @@ void main() {
         isNot(contains(RitualId.dailyPlanning)),
       );
 
-      // Re-enter: a new performance starts, seeded from the draft.
+      // Re-enter: the draft survives, so the performance resumes mid-ritual on
+      // Clarify Inbox (step 1) — the intro shows only on a fresh performance.
       router.go('/focus-session-planning');
       await _settle(tester);
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.currentStep, 0);
+      expect(state.currentStep, 1);
       expect(state.inboxNav.index, 1,
           reason: 'the draft restores the user\'s place in the snapshot');
       expect(

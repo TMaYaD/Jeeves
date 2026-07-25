@@ -106,6 +106,7 @@ class Wizard extends StatefulWidget {
     required this.currentStep,
     required this.steps,
     this.progressSegmentCount,
+    this.leadingNonProgressSteps = 0,
     this.backgroundColor = Colors.white,
   });
 
@@ -130,6 +131,16 @@ class Wizard extends StatefulWidget {
   /// Number of segments to render in the progress bar. Defaults to the
   /// total step count.
   final int? progressSegmentCount;
+
+  /// Number of leading steps that sit *outside* the progress count — an
+  /// informational intro (Daily Planning / Weekly Review's duration-estimate
+  /// briefing) is a real first [PageView] step but is not one of the numbered
+  /// working steps. The wizard derives `progressStep = currentStep -
+  /// leadingNonProgressSteps` and drives the segmented bar + "Step N of M"
+  /// narration from *that*. While `progressStep < 0` (on a leading step) the
+  /// bar renders every segment empty and the "Step N of M" fallback is
+  /// suppressed — such a step supplies its own body copy, not a step counter.
+  final int leadingNonProgressSteps;
 
   /// Background colour of the scaffold.
   final Color backgroundColor;
@@ -196,6 +207,13 @@ class _WizardState extends State<Wizard> {
 
     final segmentCount = widget.progressSegmentCount ?? widget.steps.length;
 
+    // Leading non-progress steps (an intro briefing) sit before the numbered
+    // working steps: shift the step index the progress machinery sees so the
+    // first working step reads as segment 0 / "Step 1 of M". A negative
+    // progressStep marks a leading step — the bar renders empty and the
+    // step-counter fallback is suppressed.
+    final progressStep = widget.currentStep - widget.leadingNonProgressSteps;
+
     return Scaffold(
       backgroundColor: widget.backgroundColor,
       // The ceremony label + step title live in the shared bar; the leading
@@ -217,7 +235,7 @@ class _WizardState extends State<Wizard> {
         child: Column(
           children: [
             _WizardProgress(
-              currentStep: widget.currentStep,
+              progressStep: progressStep,
               segmentCount: segmentCount,
               activeFraction: step.activeFraction,
               accentColor: widget.accentColor,
@@ -248,14 +266,17 @@ class _WizardState extends State<Wizard> {
 
 class _WizardProgress extends StatelessWidget {
   const _WizardProgress({
-    required this.currentStep,
+    required this.progressStep,
     required this.segmentCount,
     required this.activeFraction,
     required this.accentColor,
     required this.subtitle,
   });
 
-  final int currentStep;
+  /// The current step's index *within the numbered working steps* — negative
+  /// while the wizard is on a leading non-progress step (see
+  /// [Wizard.leadingNonProgressSteps]).
+  final int progressStep;
   final int segmentCount;
   final double activeFraction;
   final Color accentColor;
@@ -263,22 +284,34 @@ class _WizardProgress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // On a leading non-progress step the "Step N of M" fallback is meaningless
+    // (the intro is not a numbered step). The intro passes an explicit empty
+    // subtitle to signal "no step counter"; render nothing at all rather than
+    // an awkward blank line. Working steps keep the fallback.
+    final String? line;
+    if (progressStep < 0) {
+      line = (subtitle == null || subtitle!.isEmpty) ? null : subtitle;
+    } else {
+      line = subtitle ?? 'Step ${progressStep + 1} of $segmentCount';
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _SegmentedProgressBar(
-            currentStep: currentStep,
+            currentStep: progressStep,
             segmentCount: segmentCount,
             activeFraction: activeFraction,
             accent: accentColor,
           ),
           const SizedBox(height: 4),
-          Text(
-            subtitle ?? 'Step ${currentStep + 1} of $segmentCount',
-            style: TextStyle(fontSize: 12, color: Colors.grey[400]),
-          ),
+          if (line != null)
+            Text(
+              line,
+              style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+            ),
           const SizedBox(height: 8),
         ],
       ),
@@ -412,6 +445,7 @@ class WizardFooter extends StatelessWidget {
     required this.accentColor,
     required this.onBack,
     required this.onNext,
+    this.nextLabel = 'Next step',
   });
 
   /// Stable per-Ceremony slug used to namespace widget keys ("planning",
@@ -428,6 +462,14 @@ class WizardFooter extends StatelessWidget {
   /// Forward handler. Null renders a disabled `Next step` (typically
   /// while a list-driven step's snapshot is still loading).
   final VoidCallback? onNext;
+
+  /// Label on the primary forward button. Defaults to the neutral
+  /// `Next step`; the intro briefing overrides it with a Bertie-speak
+  /// affirmative (DESIGN.md § Voice). The label sits in the same fixed
+  /// 148×48 slot — [CeremonyIntroBody.introCtaLabel] is drawn from a pool
+  /// constrained to fit, and shrinks-to-fit via [FittedBox] if a longer
+  /// phrase is ever supplied.
+  final String nextLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -453,7 +495,13 @@ class WizardFooter extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 32, vertical: 14),
               ),
-              child: const Text('Next step'),
+              // Shrink-to-fit guards a longer Bertie label (the pool's
+              // "Tinkerty-tonk") against overflowing the fixed slot without
+              // truncating the word — scaleDown never enlarges the default.
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(nextLabel),
+              ),
             ),
           ),
         ],

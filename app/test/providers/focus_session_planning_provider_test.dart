@@ -639,14 +639,16 @@ void main() {
     });
 
     test(
-        'advanceStep lands on step 1 with an empty snapshot when no items '
-        'need review (steps do not auto-skip, CONTEXT.md § Wizard)', () async {
+        'advanceStep lands on Review Tasks (step 2) with an empty snapshot '
+        'when no items need review (steps do not auto-skip, CONTEXT.md '
+        '§ Wizard)', () async {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      await notifier.advanceStep(); // from step 0
+      await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
+      await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.currentStep, 1,
+      expect(state.currentStep, 2,
           reason: 'the step always renders; an empty snapshot shows the '
               'empty-state view and the user clicks Next to advance');
       expect(state.reviewNav.isLoaded, isTrue);
@@ -694,7 +696,8 @@ void main() {
           reason: 'intentional sequential advances are not debounced');
     });
 
-    test('advanceStep lands on step 1 when review items exist', () async {
+    test('advanceStep lands on Review Tasks (step 2) when review items exist',
+        () async {
       final now = DateTime.now();
       await db.into(db.todos).insert(TodosCompanion(
         id: const Value('actionless-1'),
@@ -706,16 +709,18 @@ void main() {
       ));
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      await notifier.advanceStep(); // from step 0
+      await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
+      await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.currentStep, 1,
-          reason: 'step 1 (review) should not be skipped when items exist');
+      expect(state.currentStep, 2,
+          reason: 'Review Tasks should not be skipped when items exist');
       expect(state.reviewNav.items, hasLength(1));
       expect(state.reviewNav.index, 0);
     });
 
-    test('advanceStep from step 1 lands on step 2', () async {
+    test('advanceStep from Review Tasks (step 2) lands on Energy (step 3)',
+        () async {
       final now = DateTime.now();
       await db.into(db.todos).insert(TodosCompanion(
         id: const Value('actionless-2'),
@@ -726,11 +731,11 @@ void main() {
       ));
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      notifier.goToStep(1);
-      await notifier.advanceStep(); // from step 1 → step 2
+      notifier.goToStep(2);
+      await notifier.advanceStep(); // from Review Tasks (2) → Energy (3)
 
       final state = container.read(focusSessionPlanningProvider);
-      expect(state.currentStep, 2);
+      expect(state.currentStep, 3);
     });
   });
 
@@ -940,7 +945,9 @@ void main() {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      // Load review items so the prior-action lookup can resolve the task.
+      // Load review items so the prior-action lookup can resolve the task
+      // (intro → Clarify Inbox → Review Tasks).
+      await notifier.advanceStep();
       await notifier.advanceStep();
       expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
@@ -968,7 +975,8 @@ void main() {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       // Load review items the same way the UI does.
-      await notifier.advanceStep(); // step 0 → step 1, loads reviewItems
+      await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
+      await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
       expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
       await notifier.markReviewItemDone(id);
@@ -990,7 +998,8 @@ void main() {
       final id = await insertStaleTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      await notifier.advanceStep();
+      await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
+      await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
       expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
 
       await notifier.trashReviewItem(id);
@@ -1012,7 +1021,8 @@ void main() {
       final id = await insertStaleTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      await notifier.advanceStep();
+      await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
+      await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
 
       await notifier.trashReviewItem(id);
 
@@ -1031,7 +1041,8 @@ void main() {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      await notifier.advanceStep();
+      await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
+      await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
 
       await notifier.updateReviewItemNextAction(id, 'Draft the brief');
 

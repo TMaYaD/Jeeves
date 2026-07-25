@@ -46,8 +46,11 @@ String planningToday() {
 const _kNotificationSkippedDateKey = 'planning_notification_skipped_date';
 const _kNotificationSnoozedUntilKey = 'planning_notification_snoozed_until';
 
-/// Total number of planning ritual steps (0-indexed max).
-const int _maxStepIndex = 5;
+/// Highest 0-indexed step the planning ritual reaches. Step 0 is the
+/// duration-estimate intro (#486), steps 1–5 are the working steps (Clarify
+/// Inbox, Review Tasks, Energy, Time, Plan Summary), step 6 is the Today's
+/// Schedule completion screen (rendered outside the wizard).
+const int _maxStepIndex = 6;
 
 // ---------------------------------------------------------------------------
 // Sequenced Shutdown → Daily Planning intent (issue #460, ADR-0020, ruling 4)
@@ -267,6 +270,25 @@ final skippedNextForFocusSessionPlanningProvider =
       .where((id) => !planningState.pendingSelectedTaskIds.contains(id))
       .toList();
   return db.todoDao.watchTodosById(skippedIds);
+});
+
+/// Item counts feeding the Daily Planning duration-estimate intro (#486).
+///
+/// Count-only reads that touch no snapshot lifecycle — the inbox and review
+/// snapshots keep loading lazily on their own step entry. Moving them here
+/// would change semantics: items clarified in Clarify Inbox must not surface
+/// in the Review Tasks snapshot, which is taken on entry into that step.
+/// `autoDispose` gives run-to-run freshness — each fresh performance
+/// recomputes from the current lists. The counts may drift slightly from the
+/// snapshots taken later (an inbox item clarified in step 1 removes a
+/// would-be review item); acceptable — the estimate is an approximation.
+final focusSessionPlanningIntroCountsProvider =
+    FutureProvider.autoDispose<({int inboxCount, int reviewCount})>(
+        (ref) async {
+  final db = ref.watch(databaseProvider);
+  final inbox = await db.captureDao.watchInbox().first;
+  final review = await db.todoDao.getNeedsReview();
+  return (inboxCount: inbox.length, reviewCount: review.length);
 });
 
 // ---------------------------------------------------------------------------
@@ -500,10 +522,13 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     _advancing = true;
     try {
       final next = state.currentStep + 1;
-      if (next == 1) {
-        // Load the review snapshot. The step always renders — an empty
-        // snapshot shows the empty-state view and the user clicks Next to
-        // advance (CONTEXT.md § Wizard: steps do not auto-skip).
+      if (next == 2) {
+        // Crossing into Review Tasks (step 2 — step 1 is Clarify Inbox, step 0
+        // the intro). Load the review snapshot on entry, never earlier: items
+        // clarified during Clarify Inbox get a next_action_text and must not
+        // surface here. The step always renders — an empty snapshot shows the
+        // empty-state view and the user clicks Next to advance (CONTEXT.md
+        // § Wizard: steps do not auto-skip).
         final items = await _db.todoDao.getNeedsReview();
         if (!ref.mounted) return;
         // Batched person-tag lookup so the stale waiting-for card variant
