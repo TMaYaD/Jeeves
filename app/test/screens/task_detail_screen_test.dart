@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:jeeves/database/daos/action_dao.dart' show TerminatedAction;
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart' show Intent;
 import 'package:jeeves/providers/database_provider.dart';
@@ -67,6 +68,12 @@ Future<Todo> _insertAt(
   // journey test owns controllers here and drives them off real DAO reads.
   Stream<Action?>? currentActionStream,
   Stream<List<Action>>? plannedActionsStream,
+  // History feed (issue #478) — same stubbing rule as the two above. Render-only
+  // tests pass `terminatedActions` (a fresh `Stream.value` is built per provider
+  // build, so a re-subscribe cannot hit "already listened to"); the journey
+  // tests own a broadcast controller and pass `terminatedActionsStream`.
+  List<TerminatedAction> terminatedActions = const [],
+  Stream<List<TerminatedAction>>? terminatedActionsStream,
 }) {
   final router = GoRouter(
     initialLocation: '/inbox',
@@ -106,6 +113,8 @@ Future<Todo> _insertAt(
           .overrideWith((_) => currentActionStream ?? Stream.value(null)),
       plannedActionsProvider(todoId)
           .overrideWith((_) => plannedActionsStream ?? Stream.value([])),
+      terminatedActionsProvider(todoId).overrideWith(
+          (_) => terminatedActionsStream ?? Stream.value(terminatedActions)),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
     ],
@@ -936,4 +945,367 @@ void main() {
           isNot(contains('scratch')));
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Action history + Abandon (ADR-0001 story 8, issue #478). Same hand-cranked
+  // pattern as the Plan-section journey above: the UI drives the real
+  // TaskDetailNotifier → real ActionDao against the in-memory db, and the three
+  // Action streams are re-read from the DAO after each gesture.
+  // ---------------------------------------------------------------------------
+  group('TaskDetailScreen — Action history (issue #478)', () {
+    late GtdDatabase db;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      db = _openInMemory();
+    });
+    tearDown(() async => db.close());
+
+    testWidgets('no terminated Actions renders no history section',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'hist0', title: 'Fresh outcome');
+      final (widget, router) = _buildScreen(db, 'hist0', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'hist0');
+
+      expect(find.byKey(const Key('action_history_section')), findsNothing);
+      expect(find.byKey(const Key('plan_section')), findsOneWidget,
+          reason: 'the Plan section still renders — only history is hidden');
+    });
+
+    testWidgets(
+        'journey: abandon → history row → complete → history newest-first',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'hist1', title: 'History outcome');
+      final curCtrl = StreamController<Action?>.broadcast();
+      final plnCtrl = StreamController<List<Action>>.broadcast();
+      final hisCtrl = StreamController<List<TerminatedAction>>.broadcast();
+      addTearDown(curCtrl.close);
+      addTearDown(plnCtrl.close);
+      addTearDown(hisCtrl.close);
+
+      Future<Action?> currentRow() async => await tester
+          .runAsync<Action?>(() => db.actionDao.getCurrentAction('hist1'));
+      Future<List<TerminatedAction>> historyRows() async =>
+          (await tester.runAsync(
+              () => db.actionDao.getTerminatedActions('hist1')))!;
+      Future<DateTime?> stamp() async =>
+          (await tester.runAsync(() => db.todoDao.getTodo('hist1')))!
+              .lastClarifiedAt;
+
+      Future<void> refresh() async {
+        curCtrl.add(await currentRow());
+        plnCtrl.add(
+            (await tester.runAsync(() => db.actionDao.getPlannedActions('hist1')))!);
+        hisCtrl.add(await historyRows());
+        await tester.pump();
+        await tester.pump();
+      }
+
+      Future<void> settleWrite() =>
+          tester.runAsync(() => Future<void>.delayed(
+                const Duration(milliseconds: 20),
+              ));
+
+      final (widget, router) = _buildScreen(
+        db,
+        'hist1',
+        initialTodo: todo,
+        currentActionStream: curCtrl.stream,
+        plannedActionsStream: plnCtrl.stream,
+        terminatedActionsStream: hisCtrl.stream,
+      );
+      await _showTaskDetail(tester, widget, router, 'hist1');
+      await refresh();
+
+      // No current Action → no Abandon affordance to fire.
+      expect(find.byKey(const Key('plan_abandon_button')), findsNothing);
+      expect(find.byKey(const Key('action_history_section')), findsNothing);
+
+      // --- Give the Outcome a current Action ---
+      await tester.runAsync(
+          () => db.actionDao.setCurrentAction('hist1', 'write the draft'));
+      await refresh();
+      expect(find.byKey(const Key('plan_abandon_button')), findsOneWidget);
+      final beforeAbandon = await stamp();
+
+      // --- Abandon it through the confirm sheet ---
+      await tester.tap(find.byKey(const Key('plan_abandon_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Abandon this action?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('plan_abandon_confirm')));
+      await tester.pumpAndSettle();
+      await settleWrite();
+      await refresh();
+
+      expect(await currentRow(), isNull,
+          reason: 'abandon mints no replacement current row');
+      expect(find.text('No current action'), findsOneWidget);
+      final afterAbandon = await historyRows();
+      expect(afterAbandon.length, 1);
+      expect(afterAbandon.single.action.role, 'superseded');
+      expect(afterAbandon.single.action.actionText, 'write the draft');
+      final todoAfterAbandon =
+          await tester.runAsync(() => db.todoDao.getTodo('hist1'));
+      expect(todoAfterAbandon!.nextActionText, isNull,
+          reason: 'abandon clears the cursor (PR #515) — the sweep must not '
+              'resurrect the abandoned Action');
+      expect((await stamp())!.isAfter(beforeAbandon ?? DateTime(2000)), isTrue,
+          reason: 'abandon is a clarifying act and stamps');
+
+      // The history section is now visible; expand it and read the row.
+      expect(find.byKey(const Key('action_history_section')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('action_history_section')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(Key('history_action_${afterAbandon.single.action.id}')),
+        findsOneWidget,
+      );
+      expect(find.text('write the draft'), findsOneWidget);
+      expect(find.textContaining('Abandoned '), findsOneWidget);
+
+      // --- A second Action, completed — the newer terminal row sorts first ---
+      await tester.runAsync(() => db.actionDao
+          .setCurrentAction('hist1', 'send the draft',
+              now: DateTime.now().add(const Duration(seconds: 10))));
+      await refresh();
+      await tester.runAsync(() => db.actionDao.completeCurrentAction('hist1',
+          now: DateTime.now().add(const Duration(seconds: 20))));
+      await refresh();
+      await tester.pumpAndSettle();
+
+      final both = await historyRows();
+      expect(both.map((h) => h.action.actionText),
+          ['send the draft', 'write the draft'],
+          reason: 'newest terminal timestamp first');
+      expect(both.first.action.role, 'done');
+      expect(find.textContaining('Done '), findsOneWidget);
+    });
+
+    testWidgets('history rows are read-only', (tester) async {
+      final todo = await _insertAt(db, id: 'hist2', title: 'Read-only outcome');
+      final terminated = <TerminatedAction>[
+        (
+          action: _historyAction(id: 'h-done', text: 'shipped it', role: 'done'),
+          loggedMinutes: 25,
+        ),
+        (
+          action: _historyAction(
+              id: 'h-super', text: 'dropped it', role: 'superseded'),
+          loggedMinutes: 0,
+        ),
+      ];
+      final (widget, router) = _buildScreen(
+        db,
+        'hist2',
+        initialTodo: todo,
+        terminatedActions: terminated,
+      );
+      await _showTaskDetail(tester, widget, router, 'hist2');
+      // One more frame: the stubbed stream's first value lands after the push
+      // pumps, and Riverpod schedules the dependent rebuild for the next frame.
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('action_history_section')));
+      await tester.pumpAndSettle();
+
+      final section = find.byKey(const Key('action_history_section'));
+      final rows = find.byKey(const Key('action_history_rows'));
+      expect(find.byKey(const Key('history_action_h-done')), findsOneWidget);
+      expect(find.byKey(const Key('history_action_h-super')), findsOneWidget);
+
+      // The invariant a future refactor would silently break: reusing
+      // `_buildPlannedRow` for history would inherit promote / remove / inline
+      // edit. History is read-only *by construction* — Text and icons only.
+      //
+      // GestureDetector is scoped to the rows container because the
+      // ExpansionTile header legitimately owns exactly one tap target (the
+      // expander, which navigates rather than mutates); IconButton and
+      // TextField must be absent from the *whole* section — the expander needs
+      // neither, so either one appearing means an affordance crept in.
+      for (final interactive in <Type>[IconButton, TextField]) {
+        expect(
+          find.descendant(of: section, matching: find.byType(interactive)),
+          findsNothing,
+          reason: 'the history section must expose no $interactive',
+        );
+      }
+      for (final interactive in <Type>[
+        IconButton,
+        TextField,
+        GestureDetector,
+      ]) {
+        expect(
+          find.descendant(of: rows, matching: find.byType(interactive)),
+          findsNothing,
+          reason: 'a history row must expose no $interactive',
+        );
+      }
+    });
+
+    testWidgets('rows show the terminal label and logged minutes',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'hist3', title: 'Labels outcome');
+      final done = _historyAction(
+        id: 'h-done',
+        text: 'shipped it',
+        role: 'done',
+        doneAt: DateTime.utc(2026, 3, 4, 12),
+      );
+      final abandoned = _historyAction(
+        id: 'h-super',
+        text: 'dropped it',
+        role: 'superseded',
+        updatedAt: DateTime.utc(2026, 3, 2, 12),
+      );
+      final (widget, router) = _buildScreen(
+        db,
+        'hist3',
+        initialTodo: todo,
+        terminatedActions: <TerminatedAction>[
+          (action: done, loggedMinutes: 25),
+          (action: abandoned, loggedMinutes: 0),
+        ],
+      );
+      await _showTaskDetail(tester, widget, router, 'hist3');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('action_history_section')));
+      await tester.pumpAndSettle();
+
+      final doneLabel = _localDateLabel(DateTime.utc(2026, 3, 4, 12));
+      final abandonedLabel = _localDateLabel(DateTime.utc(2026, 3, 2, 12));
+      expect(find.text('Done $doneLabel · 25m'), findsOneWidget);
+      expect(find.text('Abandoned $abandonedLabel'), findsOneWidget,
+          reason: 'zero logged minutes are omitted, not rendered as 0m');
+    });
+
+    testWidgets('the replace path lands the retired Action in history',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'hist4', title: 'Replace outcome');
+      final curCtrl = StreamController<Action?>.broadcast();
+      final plnCtrl = StreamController<List<Action>>.broadcast();
+      final hisCtrl = StreamController<List<TerminatedAction>>.broadcast();
+      addTearDown(curCtrl.close);
+      addTearDown(plnCtrl.close);
+      addTearDown(hisCtrl.close);
+
+      Future<void> refresh() async {
+        curCtrl.add(await tester
+            .runAsync<Action?>(() => db.actionDao.getCurrentAction('hist4')));
+        plnCtrl.add((await tester
+            .runAsync(() => db.actionDao.getPlannedActions('hist4')))!);
+        hisCtrl.add((await tester
+            .runAsync(() => db.actionDao.getTerminatedActions('hist4')))!);
+        await tester.pump();
+        await tester.pump();
+      }
+
+      await tester.runAsync(() async {
+        await db.actionDao.setCurrentAction('hist4', 'the incumbent');
+        await db.actionDao.addPlannedAction('hist4', 'the challenger');
+      });
+
+      final (widget, router) = _buildScreen(
+        db,
+        'hist4',
+        initialTodo: todo,
+        currentActionStream: curCtrl.stream,
+        plannedActionsStream: plnCtrl.stream,
+        terminatedActionsStream: hisCtrl.stream,
+      );
+      await _showTaskDetail(tester, widget, router, 'hist4');
+      await refresh();
+
+      final planned = (await tester
+          .runAsync(() => db.actionDao.getPlannedActions('hist4')))!;
+      await tester.tap(find.byKey(Key('plan_promote_${planned.single.id}')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('plan_replace_confirm')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await refresh();
+      await tester.pumpAndSettle();
+
+      final history = (await tester
+          .runAsync(() => db.actionDao.getTerminatedActions('hist4')))!;
+      expect(history.map((h) => h.action.actionText), ['the incumbent'],
+          reason: 'the replaced Action is history, not a deletion');
+      await tester.tap(find.byKey(const Key('action_history_section')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(Key('history_action_${history.single.action.id}')),
+          findsOneWidget);
+      expect((await tester
+              .runAsync(() => db.actionDao.getPlannedActions('hist4')))!,
+          isEmpty,
+          reason: 'a superseded row never leaks back into the planned queue');
+    });
+
+    testWidgets('the anchor row lays out at 320dp with the Abandon control',
+        (tester) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final todo = await _insertAt(db, id: 'hist5', title: 'Narrow outcome');
+      final current = _historyAction(
+        id: 'cur',
+        text: 'a deliberately long current action text that must wrap',
+        role: 'current',
+      );
+      final (widget, router) = _buildScreen(
+        db,
+        'hist5',
+        initialTodo: todo,
+        currentActionStream: Stream.value(current),
+      );
+      await _showTaskDetail(tester, widget, router, 'hist5');
+      await tester.pump();
+
+      expect(find.byKey(const Key('plan_current_action')), findsOneWidget);
+      expect(find.byKey(const Key('plan_demote_button')), findsOneWidget);
+      expect(find.byKey(const Key('plan_abandon_button')), findsOneWidget);
+
+      // A third trailing control is the overflow risk. Measured rather than
+      // inferred from `takeException`: the Plan section's unrelated
+      // "Add planned action" row overflows at this width under the test font
+      // (Ahem renders every glyph as a full em square), which would mask the
+      // anchor row's own result either way.
+      final anchor = tester.getRect(find.byKey(const Key('plan_current_action')));
+      final abandon =
+          tester.getRect(find.byKey(const Key('plan_abandon_button')));
+      expect(anchor.width, lessThanOrEqualTo(320.0));
+      expect(abandon.right, lessThanOrEqualTo(anchor.right),
+          reason: 'the Abandon control stays inside the anchor row at 320dp');
+      expect(abandon.width, greaterThan(0.0),
+          reason: 'and is not squeezed to nothing');
+      tester.takeException();
+    });
+  });
+}
+
+/// An in-memory [Action] row for render-only history tests — the DAO reads are
+/// covered in `test/database/action_history_test.dart`.
+Action _historyAction({
+  required String id,
+  required String text,
+  required String role,
+  DateTime? doneAt,
+  DateTime? updatedAt,
+}) =>
+    Action(
+      id: id,
+      outcomeId: 'outcome',
+      userId: _userId,
+      actionText: text,
+      role: role,
+      createdAt: DateTime.utc(2026, 1, 1),
+      updatedAt: updatedAt,
+      doneAt: doneAt,
+    );
+
+String _localDateLabel(DateTime utc) {
+  final local = utc.toLocal();
+  return '${local.year.toString().padLeft(4, '0')}-'
+      '${local.month.toString().padLeft(2, '0')}-'
+      '${local.day.toString().padLeft(2, '0')}';
 }

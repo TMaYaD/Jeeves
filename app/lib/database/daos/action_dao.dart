@@ -28,7 +28,15 @@
 /// same row (a refinement of the same Action); supersession is an explicit
 /// affordance that flips `role`. It is now UI-reachable through
 /// [supersedeAndPromote] — the "Replace current action" gesture of the planned
-/// queue (ADR-0004 story 5) — so it is no longer test-only.
+/// queue (ADR-0004 story 5) and through [clearCurrentAction], which backs the
+/// **Abandon** affordance of the Outcome detail view (story 8, issue #478) — so
+/// it is no longer test-only.
+///
+/// **History (story 8, issue #478).** Terminated Actions stay attached to their
+/// Outcome and are read back newest-first by [watchTerminatedActions]. A
+/// terminated row is a record: nothing re-promotes it, edits it, or deletes it
+/// (ADR-0018 + ADR-0004 — the promote primitive refuses any role but
+/// `planned`), and no successor link exists to render.
 ///
 /// **The planned queue (ADR-0004 story 5, issue #475).** Beyond the 0..1
 /// `current` Action, an Outcome carries an ordered list of `planned` Actions —
@@ -75,6 +83,7 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
 import '../gtd_database.dart';
+import 'time_log_dao.dart' show TimeLogDao;
 
 part 'action_dao.g.dart';
 
@@ -88,6 +97,12 @@ typedef ActionWriteEffect = ({bool changed, bool stamped, bool logChanged});
 
 const ActionWriteEffect _noEffect =
     (changed: false, stamped: false, logChanged: false);
+
+/// One row of an Outcome's history (ADR-0001 story 8, issue #478): a terminated
+/// [Action] with the minutes logged against *that* Action, derived at read time
+/// from `time_logs` ([TimeLogDao.totalMinutesSubqueryForAction]) rather than
+/// stored anywhere.
+typedef TerminatedAction = ({Action action, int loggedMinutes});
 
 @DriftAccessor(tables: [Actions, Todos, TimeLogs])
 class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
@@ -472,6 +487,78 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
           (a) => OrderingTerm(expression: a.createdAt),
           (a) => OrderingTerm(expression: a.id),
         ]);
+
+  /// The Outcome's **history** (ADR-0001 story 8, issue #478): its terminated
+  /// Actions — `done` and `superseded` alike — newest-first, each carrying the
+  /// minutes logged against it.
+  ///
+  /// The terminal timestamp is `COALESCE(done_at, updated_at, created_at)`: a
+  /// `done` row's is `done_at`, a `superseded` row's is `updated_at` (ADR-0018
+  /// gives supersession no dedicated column), and `created_at` catches a row
+  /// that carries neither. Ties break on `id ASC`, mirroring
+  /// [winnerFirstOrderSql], so two devices render the same order.
+  ///
+  /// Deliberately *not* shared with `TodoDao`'s Stale predicate, which uses the
+  /// same COALESCE over a different role set — Stale excludes `superseded`
+  /// (an abandoned Action owes nothing), history includes it. The expressions
+  /// look alike and mean different things; unifying them would be a bug.
+  ///
+  /// Pure SELECT: no transaction, no stamp, no convergence, no notify —
+  /// reading history is not clarification. Drift tracks `actions` for
+  /// re-emission; the joined `time_logs` subquery is *not* tracked, which is
+  /// sound because every terminal transition closes that Action's log inside
+  /// the same transaction (issue #476) and nothing ever opens a log against a
+  /// non-`current` row, so a terminated Action's minutes are frozen.
+  Stream<List<TerminatedAction>> watchTerminatedActions(String outcomeId) {
+    final (query, loggedMinutes) = _terminatedQuery(outcomeId);
+    return query.watch().map((rows) => _readTerminated(rows, loggedMinutes));
+  }
+
+  /// One-shot read of the Outcome's history, same shape and ordering as
+  /// [watchTerminatedActions].
+  Future<List<TerminatedAction>> getTerminatedActions(String outcomeId) async {
+    final (query, loggedMinutes) = _terminatedQuery(outcomeId);
+    return _readTerminated(await query.get(), loggedMinutes);
+  }
+
+  /// The two terminal roles. A `planned` row is unengaged thinking and a
+  /// `current` row is the live Action; neither is history.
+  static const _terminalRoles = ['done', 'superseded'];
+
+  // Drift's `join` erases the row type (its return is the raw
+  // `JoinedSelectStatement`), so the added column travels back alongside the
+  // statement — reading it needs the very same expression instance.
+  (JoinedSelectStatement, Expression<int>) _terminatedQuery(String outcomeId) {
+    // Single joined query with an added column, not one lookup per row: an
+    // Outcome with a long history would otherwise cost N round-trips.
+    final loggedMinutes = CustomExpression<int>(
+      TimeLogDao.totalMinutesSubqueryForAction('actions.id'),
+    );
+    final query = select(actions).join(<Join>[])
+      ..addColumns([loggedMinutes])
+      ..where(actions.outcomeId.equals(outcomeId) &
+          actions.role.isIn(_terminalRoles))
+      ..orderBy([
+        OrderingTerm(
+          expression: coalesce([actions.doneAt, actions.updatedAt, actions.createdAt]),
+          mode: OrderingMode.desc,
+        ),
+        OrderingTerm(expression: actions.id),
+      ]);
+    return (query, loggedMinutes);
+  }
+
+  List<TerminatedAction> _readTerminated(
+    List<TypedResult> rows,
+    Expression<int> loggedMinutes,
+  ) =>
+      [
+        for (final row in rows)
+          (
+            action: row.readTable(actions),
+            loggedMinutes: row.read(loggedMinutes) ?? 0,
+          ),
+      ];
 
   /// Read-side application of the winner rule — deterministic display of an
   /// accidental multi-current set, with nothing written.

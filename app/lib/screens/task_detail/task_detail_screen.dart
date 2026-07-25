@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../database/daos/action_dao.dart' show TerminatedAction;
 import '../../database/gtd_database.dart';
 import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
@@ -254,6 +255,11 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                   // the Outcome's "what's next" (ADR-0004)
                                   // outranks free-text notes.
                                   _PlanSection(outcomeId: widget.todoId),
+                                  // History sits directly under the Plan so
+                                  // the whole Action chain — what's next, and
+                                  // what came before — reads in one place.
+                                  _ActionHistorySection(
+                                      outcomeId: widget.todoId),
                                   // Notes Area
                                   Padding(
                                     padding: const EdgeInsets.all(24),
@@ -1020,7 +1026,66 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
             visualDensity: VisualDensity.compact,
             onPressed: () => _notifier.demoteCurrentAction(current.id).ignore(),
           ),
+          // Abandon (issue #478): retire the current Action into history with
+          // no replacement. Deliberately *not* the planned row's × — that one
+          // hard-deletes an unengaged note, this one files an engaged Action
+          // into the Outcome's record. Only rendered when a current exists.
+          IconButton(
+            key: const Key('plan_abandon_button'),
+            icon: const Icon(Icons.archive_outlined, size: 18, color: _muted),
+            tooltip: 'Abandon',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _confirmAbandon(current),
+          ),
         ],
+      ),
+    );
+  }
+
+  /// Abandoning is irreversible — a terminated Action is a record with no
+  /// un-abandon (ADR-0018) — so it goes through the same confirm-sheet idiom as
+  /// "Replace current action", never a bare tap.
+  Future<void> _confirmAbandon(Action current) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Abandon this action?',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              _sheetLine('Current', current.actionText, _ink),
+              const SizedBox(height: 8),
+              const Text(
+                'It moves into this outcome\'s history. Nothing takes its '
+                'place — the outcome is left without a current action.',
+                style: TextStyle(fontSize: 13, color: _muted),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  key: const Key('plan_abandon_confirm'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                  ),
+                  onPressed: () {
+                    _notifier.abandonCurrentAction().ignore();
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Abandon'),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1147,5 +1212,125 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
         ),
       ),
     );
+  }
+}
+
+/// The Outcome's **history** (ADR-0001 story 8, issue #478): the chain of its
+/// terminated Actions — what the user finished (`done` → "Done") and what they
+/// abandoned before finishing (`superseded` → "Abandoned") — newest-first, with
+/// the minutes logged against each.
+///
+/// Collapsed by default and hidden entirely when the Outcome has terminated no
+/// Action (mirroring [_CapturedFromSection]), so a fresh or pre-epic Outcome
+/// shows no empty shell.
+///
+/// **Read-only by construction.** A terminated Action is a record: it cannot be
+/// edited, re-promoted, or deleted (ADR-0018 + ADR-0004). The rows are `Text`
+/// and nothing else — no `IconButton`, no `GestureDetector`, no `TextField` —
+/// so the guarantee is structural rather than a matter of remembering to leave
+/// the affordances off. No successor link is rendered between a superseded
+/// Action and whatever replaced it, because the model stores none.
+class _ActionHistorySection extends ConsumerWidget {
+  const _ActionHistorySection({required this.outcomeId});
+
+  final String outcomeId;
+
+  static const _muted = Color(0xFF9CA3AF);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final history = ref.watch(terminatedActionsProvider(outcomeId)).value ??
+        const <TerminatedAction>[];
+    if (history.isEmpty) return const SizedBox.shrink();
+
+    final count = history.length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+      child: Theme(
+        // Strip the default divider lines, matching the flat section styling.
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        // ExpansionTile renders a ListTile, which paints its ink splash on the
+        // nearest Material ancestor; a transparency Material gives the tile its
+        // own ink surface without painting over anything behind it.
+        child: Material(
+          type: MaterialType.transparency,
+          child: ExpansionTile(
+            key: const Key('action_history_section'),
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(left: 8, bottom: 8),
+            leading: const Icon(Icons.history, size: 18, color: _muted),
+            title: Text(
+              count == 1 ? 'History (1 action)' : 'History ($count actions)',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5,
+                color: Color(0xFF6B7280),
+              ),
+            ),
+            children: [
+              // Every interactive-descendant assertion is scoped to this
+              // container: the tile header above owns one tap target (the
+              // expander), which navigates rather than mutates.
+              Column(
+                key: const Key('action_history_rows'),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final entry in history) _historyRow(entry),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _historyRow(TerminatedAction entry) {
+    final action = entry.action;
+    return Padding(
+      key: Key('history_action_${action.id}'),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            action.actionText,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF374151),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            _terminalLabel(entry),
+            style: const TextStyle(fontSize: 12, color: _muted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// `Done 2026-03-04` / `Abandoned 2026-03-02`, with ` · 25m` appended when the
+  /// Action earned logged time.
+  ///
+  /// The verb is the user-facing half of the copy↔model mapping recorded in
+  /// CONTEXT.md § Action: "Done" ↔ `role='done'`, "Abandoned" ↔
+  /// `role='superseded'`. The date is the terminal timestamp — `done_at` for a
+  /// completion, `updated_at` for a supersession (ADR-0018 gives it no column
+  /// of its own), `created_at` for a row carrying neither — rendered local, the
+  /// same shape the "Captured from…" section uses.
+  static String _terminalLabel(TerminatedAction entry) {
+    final action = entry.action;
+    final verb = action.role == 'done' ? 'Done' : 'Abandoned';
+    final at =
+        (action.doneAt ?? action.updatedAt ?? action.createdAt).toLocal();
+    final y = at.year.toString().padLeft(4, '0');
+    final m = at.month.toString().padLeft(2, '0');
+    final d = at.day.toString().padLeft(2, '0');
+    final minutes =
+        entry.loggedMinutes > 0 ? ' · ${entry.loggedMinutes}m' : '';
+    return '$verb $y-$m-$d$minutes';
   }
 }
