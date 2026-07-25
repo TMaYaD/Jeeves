@@ -271,6 +271,19 @@ void main() {
           findsOneWidget);
     });
 
+    testWidgets('pins the global capture action in the bar (#458)',
+        (tester) async {
+      final todo = await _insertAt(db, id: 'cap1', title: 'Anything');
+      final (widget, router) = _buildScreen(db, 'cap1', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'cap1');
+
+      // Capture is reachable from this pushed route — the pinned slot, never
+      // overflowed (task detail has at most Start focus + capture = 2).
+      // Direct find.byKey, not findBarAction: proves capture is in the bar
+      // itself, not merely discoverable via the ⋮ overflow menu.
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+    });
+
     testWidgets(
         'Start focus is an icon action in the title bar, keeping the primary '
         'blue', (tester) async {

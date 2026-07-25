@@ -46,6 +46,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../app_title_bar/app_title_bar.dart';
+import '../capture/capture_action.dart';
 
 /// One step of a [Wizard]. Carries display metadata and the widget tree
 /// for the step body and its footer.
@@ -208,6 +209,9 @@ class _WizardState extends State<Wizard> {
           iconColor: widget.accentColor,
         ),
         leading: AppTitleBarLeading.none,
+        // Capture is reachable mid-ceremony (#458): the Capture waits in the
+        // Inbox, ceremony state and snapshot cursors untouched (ADR-0009).
+        pinnedAction: captureAction(context),
       ),
       body: SafeArea(
         child: Column(

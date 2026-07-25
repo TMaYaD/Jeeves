@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/search_result.dart';
 import '../../providers/search_provider.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
+import '../../widgets/capture/capture_action.dart';
 import '../../widgets/async_list.dart';
 import 'widgets/recent_searches_list.dart';
 import 'widgets/search_filter_bar.dart';
@@ -83,7 +84,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final recentSearches = ref.watch(recentSearchesProvider);
 
     return Scaffold(
-      appBar: const AppTitleBar(title: 'Search'),
+      appBar: AppTitleBar(
+        title: 'Search',
+        pinnedAction: captureAction(context),
+      ),
       body: SafeArea(
         child: Column(
           children: [

@@ -486,6 +486,18 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
 
+    testWidgets('pins the global capture action in the bar (#458)',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      // Direct find.byKey: the pinned slot never overflows.
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+    });
+
     testWidgets(
         'Next Action carves a linked Outcome, stamps the Capture, and clears '
         'the Inbox', (tester) async {
@@ -622,6 +634,43 @@ void main() {
       // in-flight disabling. Left live, it would pop the screen mid-write and
       // skip the post-route text flush.
       expect(_skipEnabled(tester), isFalse);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(await _outcomeOf(db, 'x'), isNotNull);
+    });
+
+    testWidgets(
+        'the pinned capture action is suppressed while a write is in flight',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      final gate = Completer<void>();
+      await tester.pumpWidget(_buildApp(
+        db,
+        'x',
+        clarificationService: _BlockingClarificationService(
+          DaoClarificationService(db),
+          gate.future,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Present before routing starts — the capture action lives in the bar, so
+      // it needs no scrolling.
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+
+      await tester.ensureVisible(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next Action'));
+      await tester.pump();
+
+      // Capture opens a modal from this route; leaving it live mid-write is the
+      // same exposure the back arrow and Skip are gated against. Suppress it
+      // alongside them so no Capture sheet can be opened over an
+      // already-clarified subject during the guarded window.
+      expect(find.byKey(const Key('capture_action')), findsNothing);
 
       gate.complete();
       await tester.pumpAndSettle();

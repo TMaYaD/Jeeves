@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
+import 'package:jeeves/widgets/capture/capture_sheet.dart';
 import 'package:jeeves/widgets/ceremony/wizard.dart';
 
 const _ceremonyId = 'test_ritual';
@@ -347,6 +348,52 @@ void main() {
       expect(bar.leading, AppTitleBarLeading.none);
       // Ceremonies own their guarded exit — the bar renders no leading button.
       expect(find.byKey(appTitleBarLeadingKey), findsNothing);
+    });
+
+    testWidgets('pins the global capture action in the bar mid-ceremony (#458)',
+        (tester) async {
+      await tester.pumpWidget(_Harness(
+        buildSteps: (_, _) => const [
+          WizardStep(title: 'Process Inbox', body: SizedBox.shrink()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final bar = tester.widget<AppTitleBar>(find.byType(AppTitleBar));
+      expect(bar.pinnedAction?.key, const Key('capture_action'));
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+    });
+
+    testWidgets(
+        'capturing mid-ceremony via the pinned action leaves currentStep and '
+        'the route untouched (#458 hygiene)', (tester) async {
+      await tester.pumpWidget(_Harness(
+        buildSteps: (_, _) => const [
+          WizardStep(title: 'Process Inbox', body: SizedBox.shrink()),
+          WizardStep(title: 'Review Things', body: SizedBox.shrink()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Process Inbox'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('capture_action')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(CaptureSheet), findsOneWidget);
+
+      // Dismiss by tapping the modal scrim above the sheet — no submit, no
+      // navigation.
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(CaptureSheet), findsNothing);
+
+      // Opening/dismissing capture is a modal overlay, never a route push or
+      // step-cursor advance (ADR-0009 hygiene): the wizard is still mounted
+      // on the same step it started on.
+      expect(find.byType(Wizard), findsOneWidget);
+      expect(find.text('Process Inbox'), findsOneWidget);
     });
 
     testWidgets('renders the progress narration below the bar', (tester) async {

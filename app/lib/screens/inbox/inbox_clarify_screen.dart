@@ -30,6 +30,7 @@ import '../../providers/database_provider.dart';
 import '../../providers/task_detail_provider.dart';
 import '../../services/clarification_service.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
+import '../../widgets/capture/capture_action.dart';
 import '../../widgets/async_subject.dart';
 import '../../widgets/capture_outcomes_section.dart';
 import '../../widgets/clarify_shared_widgets.dart';
@@ -265,6 +266,12 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       appBar: AppTitleBar(
         title: 'Clarify',
         leadingEnabled: !_routing,
+        // Suppress capture while a route is in flight, alongside the back arrow
+        // (`leadingEnabled`) and Skip (`enabled: !_routing`). Belt-and-braces:
+        // the sheet mounts on the root navigator so `onAfterRoute`'s pop can no
+        // longer strand a user on top of it, but a Capture opened mid-route is
+        // still an interaction this guarded window should not offer.
+        pinnedAction: _routing ? null : captureAction(context),
       ),
       body: AsyncSubject<Capture>(
         asyncValue: subject,

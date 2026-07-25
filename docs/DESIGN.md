@@ -199,7 +199,10 @@ transition would race between the outgoing and incoming screen. Every screen
 adopts it: the shell list routes (via `AppShell`, one bar keyed off route
 state), task detail, clarify, settings, import, search, active focus, and the
 three ceremonies (via the shared `Wizard`). The auth routes keep their own
-minimal chrome. Capture is the one slot still to fill (`pinnedAction`, #458).
+minimal chrome. Capture rides the bar's pinned slot (`pinnedAction`, #458) on
+every bar-adopting screen except the Inbox, whose `QuickAddBar` already serves
+capture — the bar suppresses the pinned action there rather than present a
+second, competing affordance.
 
 ### Anatomy
 
@@ -235,7 +238,8 @@ Left to right:
     by `AppShell` — the Now route's Re-plan action (shown only while an open
     session carries tasks) is the precedent.
 *   **pinned capture** — the fixed rightmost action slot, reserved for capture.
-    Identical position on every screen; never overflows.
+    Identical position on every screen that pins it; never overflows. The Inbox
+    is the one screen that suppresses it — its `QuickAddBar` already captures.
 *   **⋮ overflow** — renders **only** when something overflowed, rightmost of
     all.
 

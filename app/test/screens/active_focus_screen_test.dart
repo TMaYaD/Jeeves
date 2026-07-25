@@ -201,6 +201,18 @@ void main() {
       await db.close();
     });
 
+    testWidgets('pins the global capture action in the bar (#458)',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'o1');
+      await seedCurrentAction(db, outcomeId: 'o1', text: 'do it', userId: _userId);
+
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester);
+
+      // Direct find.byKey: the pinned slot never overflows.
+      expect(find.byKey(const Key('capture_action')), findsOneWidget);
+    });
+
     // This test covers the screen-specific wiring: Done runs
     // completeCurrentAction and floats the sheet without a premature redirect.
     // The four verdicts' own writes (achieved → Completion, defer → maybe,

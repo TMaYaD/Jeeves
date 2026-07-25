@@ -9,6 +9,7 @@ import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
+import '../../widgets/capture/capture_action.dart';
 import '../../widgets/async_subject.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/project_picker.dart';
@@ -101,7 +102,11 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         // the same chrome around them — not least the app bar's back arrow.
         surfaceWrapper: (context, surface) => Scaffold(
           backgroundColor: Colors.white,
-          appBar: AppTitleBar(title: '', onLeadingPressed: _back),
+          appBar: AppTitleBar(
+            title: '',
+            onLeadingPressed: _back,
+            pinnedAction: captureAction(context),
+          ),
           body: surface,
         ),
         dataBuilder: (context, todo) {
@@ -440,6 +445,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
               iconColor: const Color(0xFF2563EB),
             ),
       onLeadingPressed: _back,
+      pinnedAction: captureAction(context),
       pageActions: [
         // Ad-hoc engagement entry point (issue #180): works with or without
         // an open FocusSession — engagement is independent of the session
