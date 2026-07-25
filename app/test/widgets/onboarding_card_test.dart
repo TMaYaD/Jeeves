@@ -13,13 +13,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../test_helpers.dart';
 
-Widget _buildCard(Stream<bool> hasTodosStream) {
+Widget _buildCard(Stream<bool> hasTodosStream, {int? greetingSeed}) {
   final router = GoRouter(
     initialLocation: '/',
     routes: [
       GoRoute(
         path: '/',
-        builder: (_, _) => const Scaffold(body: SingleChildScrollView(child: OnboardingCard())),
+        builder: (_, _) => Scaffold(
+          body: SingleChildScrollView(
+            child: OnboardingCard(greetingSeed: greetingSeed),
+          ),
+        ),
       ),
       GoRoute(
         path: '/import',
@@ -104,6 +108,47 @@ void main() {
 
     expect(onboardingSeenNotifier.value, isTrue);
     expect(find.text('login screen'), findsOneWidget);
+  });
+
+  testWidgets('renders one greeting pair — header with its own subtitle',
+      (tester) async {
+    await tester.pumpWidget(_buildCard(Stream.value(false)));
+    await tester.pump();
+
+    // Exactly one header from the pool renders...
+    final shown = onboardingGreetings
+        .where((g) => find.text(g.header).evaluate().isNotEmpty)
+        .toList();
+    expect(shown, hasLength(1),
+        reason: 'expected exactly one greeting header from the pool');
+
+    // ...and its paired subtitle renders with it — never a crossed pair.
+    final greeting = shown.single;
+    expect(find.text(greeting.subtitle), findsOneWidget);
+    for (final other in onboardingGreetings) {
+      if (other == greeting) continue;
+      expect(find.text(other.subtitle), findsNothing,
+          reason: 'no other subtitle should render alongside ${greeting.header}');
+    }
+
+    // The old single-line copy is gone.
+    expect(find.text('Your GTD inbox, sir. Shall we stock it?'), findsNothing);
+  });
+
+  testWidgets('seeded greeting is deterministic', (tester) async {
+    final expected = pickOnboardingGreeting(seed: 7);
+    await tester.pumpWidget(_buildCard(Stream.value(false), greetingSeed: 7));
+    await tester.pump();
+
+    expect(find.text(expected.header), findsOneWidget);
+    expect(find.text(expected.subtitle), findsOneWidget);
+  });
+
+  test('pickOnboardingGreeting always returns a valid pool pair', () {
+    for (var seed = 0; seed < 50; seed++) {
+      final g = pickOnboardingGreeting(seed: seed);
+      expect(onboardingGreetings, contains(g));
+    }
   });
 
   testWidgets('card disappears when hasAnyItemProvider emits true', (tester) async {

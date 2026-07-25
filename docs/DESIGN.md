@@ -188,6 +188,42 @@ warning. Neither verdict opens a confirmation dialog.
 This is the same principle as the wizard footer above — one affordance in one
 slot — applied to a terminal verdict rather than to forward progress.
 
+## Voice
+
+Jeeves is the app's persona — a valet in the mould of P.G. Wodehouse's Jeeves;
+the app speaks as Jeeves would to Bertie Wooster: deferential, unflappable,
+drily witty, a step ahead. The UI is an interface TO Jeeves — the user hands
+him things and he keeps them. Three registers, kept distinct:
+
+- **Jeeves speak** — Jeeves's own utterances (onboarding, empty states, nudges,
+  ceremony sign-offs, timer remarks). First person ("I/me/let me"), addresses
+  the user as "sir", archaic-formal, dry understatement, no exclamation marks,
+  no emoji, short. Authored as what Jeeves RECEIVES ("tell me", "leave it with
+  me"), never as UI instructions ("tap the field above"). Carries a consistent
+  visual treatment — inline weighted text set apart from ordinary copy: a bold
+  header line (15px, w700, ink) over a lighter subtitle (w500, muted), the same
+  treatment the nudge banner (`app/lib/widgets/nudge_banner.dart`) and the
+  elapsed-timer `voiceStyle` (`app/lib/widgets/elapsed_timer_widget.dart`) use.
+  There is no single shared Jeeves-text widget yet; each surface styles inline
+  to this shape. Always written as a POOL of alternatives, one picked at random
+  per occasion, so the app doesn't repeat itself — `nudge_banner.dart` (a pool
+  keyed to the day) and `elapsed_timer_widget.dart` (a seedable `Random` draw)
+  are the reference implementations; the onboarding card and Inbox empty state
+  follow the latter (a `Random` draw, seedable for deterministic tests).
+
+- **Bertie speak** — the USER's voice answering Jeeves: breezy upper-class
+  affirmatives ("Right ho", "Push on", "Very good"). Used ONLY on an affordance
+  that directly replies to a Jeeves utterance (the Daily-Planning and
+  Weekly-Review nudge-banner CTAs answer Jeeves's nudge → Bertie speak). A
+  control that isn't answering Jeeves (Inbox "Add", "Save", "Start fresh") is
+  NOT Bertie speak — it stays neutral.
+
+- **Neutral UI** — plain functional labels for everything that isn't Jeeves
+  talking or the user answering him.
+
+Vocabulary follows CONTEXT.md's domain terms and Avoid lists (a Capture is never
+a "todo", "item", "thought", or "note").
+
 ## App title bar
 
 One shared bar carries every screen's chrome (`AppTitleBar`,
