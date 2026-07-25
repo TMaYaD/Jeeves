@@ -425,6 +425,44 @@ void main() {
     expect(planned['text'], 'ship it');
   });
 
+  test('an abandoned Action stays abandoned: the cleared cursor keeps Pass A '
+      'mode-3 from minting a fresh current', () async {
+    await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
+    await db.todoDao.setNextActionText('o1', 'ship it', now: _t0);
+    await db.actionDao.clearCurrentAction('o1', now: _clarified);
+
+    final repaired = await _sweep(db);
+
+    expect(repaired, 0, reason: 'abandon cleared the cursor, so no drift');
+    expect(await _current(db, 'o1'), isNull,
+        reason: 'no fresh current minted from a stale cursor');
+    expect((await _actions(db, 'o1')).single['role'], 'superseded');
+  });
+
+  test('an abandoned Action holding the deterministic backfill slot is not '
+      "resurrected: mode-3's superseded branch cannot fire on a blank cursor",
+      () async {
+    // The post-#471-backfill shape: the Outcome's only Action *is* the
+    // deterministic row, so the resurrect branch is the one mode 3 would take.
+    await _seedOutcome(db,
+        id: 'o1', nextActionText: 'ship it', lastClarifiedAt: _clarified);
+    await _insertAction(db,
+        id: backfillActionIdFor('o1'),
+        outcomeId: 'o1',
+        text: 'ship it',
+        role: 'current');
+
+    await db.actionDao.clearCurrentAction('o1', now: _clarified);
+    final repaired = await _sweep(db);
+
+    expect(repaired, 0);
+    expect(await _current(db, 'o1'), isNull);
+    final rows = await _actions(db, 'o1');
+    expect(rows.single['id'], backfillActionIdFor('o1'));
+    expect(rows.single['role'], 'superseded',
+        reason: 'the deterministic slot must not be flipped back to current');
+  });
+
   test('a supersede-with-replacement mirrors the replacement metadata onto the '
       'cursor, so the sweep is a no-op and never resurrects the superseded '
       "row's metadata (ADR-0001 story 7, D4)", () async {

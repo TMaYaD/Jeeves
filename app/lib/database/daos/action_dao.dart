@@ -44,16 +44,24 @@
 /// reorder / remove among the stamping micro-acts), except a no-op reorder
 /// (unchanged order writes nothing and does not stamp).
 ///
-/// **Cursor dual-write on promotion/demotion is mandatory, not defensive**
+/// **Cursor dual-write on every role transition is mandatory, not defensive**
 /// (until story 9 retires `next_action_text`). The startup sweep
-/// (`reconcileActionsWithCursorSteps`) treats the cursor as authoritative:
+/// (`reconcileActionsWithCursorSteps`) treats the cursor as authoritative, so
+/// the invariant every primitive upholds is **blank cursor ⟺ no `current`
+/// row**, with a non-blank cursor holding exactly the current row's text:
 /// * a **promote** MUST set `todos.next_action_text` to the promoted text and
 ///   mirror the promoted row's `energy_level` / `time_estimate` onto the cursor
 ///   in the same transaction — else Pass B retires the new current as a phantom
 ///   at next launch, and Pass A mode-1 would clobber the Action's metadata back
 ///   from the stale cursor;
 /// * a **demote** MUST clear `todos.next_action_text` — else Pass A mode-3
-///   resurrects the demoted text as a fresh deterministic current row.
+///   resurrects the demoted text as a fresh deterministic current row;
+/// * a **supersession** MUST write the cursor either way — the replacement's
+///   text when one is minted, NULL when the Action is abandoned outright. A
+///   surviving cursor over an abandoned Action is the same mode-3 drift the
+///   demote clear avoids, and here mode 3 can resurrect the very row that was
+///   just retired (its `superseded`-only guard explicitly permits that);
+/// * a **completion** MUST clear it too (see [completeCurrentAction]).
 ///
 /// The dual-write choke points in [TodoDao] compose the current-Action
 /// primitives through the `apply*` transaction-body variants (package-internal),
@@ -179,7 +187,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   }
 
   /// Make the Outcome Actionless: [supersedeCurrentAction] with no replacement.
-  /// No current row → no-op (no stamp). This is the Action side of today's
+  /// Retires the current Action and clears `todos.next_action_text` in the same
+  /// transaction, so the Outcome is Actionless on both sides. No current row →
+  /// no-op (no stamp). This is the Action side of today's
   /// `setNextActionText('')` blank→NULL normalisation.
   Future<void> clearCurrentAction(String outcomeId, {DateTime? now}) =>
       supersedeCurrentAction(outcomeId, now: now);
@@ -651,6 +661,23 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // not clarification — it must not stamp. Retiring a real current row or
     // minting a replacement is a clarifying act and stamps.
     final didMutate = current != null || hasReplacement;
+    if (didMutate && !hasReplacement) {
+      // Cursor dual-write: the replacement branch above already pointed the
+      // cursor at the new text, so this arm covers the *abandon* — a retirement
+      // with nothing to succeed it. Clearing is mandatory, not defensive: the
+      // startup sweep repairs strictly cursor → actions, so a cursor still
+      // holding the retired Action's text with no `current` row is drift it
+      // would "fix" by resurrecting the deterministic row (Pass A mode-3's
+      // `superseded` branch) or minting a fresh current — silently undoing the
+      // abandon at the next launch. Idempotent for the [TodoDao] choke points,
+      // which write the same NULL at the same `ts` before calling in.
+      await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
+        TodosCompanion(
+          nextActionText: const Value(null),
+          updatedAt: Value(ts),
+        ),
+      );
+    }
     if (didMutate) await _stampOutcome(outcomeId, ts);
     // A `time_logs` row was written iff the retired Action had an open log to
     // close (a non-null closedLog); the reopen, when it fires, rides on that.
@@ -682,8 +709,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // (issue #476), not at a later endFocus(). No reopen: a finished Action has
     // no successor to continue against (CONTEXT.md § Switching Actions).
     final closedLog = await _closeOpenLogFor(current.id, ts);
-    // Keep the cursor in agreement with the Action side (blank cursor ⟺ no
-    // current row) without stamping — see [completeCurrentAction].
+    // Cursor dual-write: keep the cursor in agreement with the Action side
+    // (blank cursor ⟺ no current row) without stamping — see
+    // [completeCurrentAction].
     await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
       TodosCompanion(
         nextActionText: const Value(null),

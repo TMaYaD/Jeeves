@@ -35,3 +35,6 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 ## 2026-07-18 (issue #429 — PersonTagPickerSheet returns its selection)
 - Instinct: a modal takes an `onConfirm` callback, runs it, then pops itself. Here: modals pop with their result and the caller acts afterwards — a callback firing under an open sheet makes the caller's `pop()` close the sheet instead of its own route, and any write the sheet did before the callback lands even when the callback then bails.
+
+## 2026-07-25 (cursor-clear on supersession)
+- Instinct: a supersede primitive that stamps and retires is complete. Here: it must also clear `todos.next_action_text` — the startup sweep treats the cursor as authoritative and will resurrect the Action at the next launch.
