@@ -349,11 +349,20 @@ class TimeLog(Base):
     __table_args__ = (
         Index("ix_time_logs_user_id", "user_id"),
         Index("ix_time_logs_task_id", "task_id"),
+        Index("ix_time_logs_action_id", "action_id"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     task_id: Mapped[str] = mapped_column(ForeignKey("todos.id", ondelete="CASCADE"), nullable=False)
+    # The Action being engaged when this stint ran (ADR-0001 story 6, issue
+    # #476).  NULL = pre-Action-era log or a defensive Actionless edge — the row
+    # still carries task_id (Outcome-grain) attribution.  SET NULL, not CASCADE:
+    # a TimeLog is the user's time data and is never deleted when its Action is
+    # (SYNC.md); RESTRICT would 500 a legitimate Action-delete replay.
+    action_id: Mapped[str | None] = mapped_column(
+        ForeignKey("actions.id", ondelete="SET NULL"), nullable=True
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     focus_session_id: Mapped[str | None] = mapped_column(

@@ -721,6 +721,47 @@ void main() {
       expect(rows.length, 1);
       expect(rows.first.read<String>('disposition'), 'rollover');
     });
+
+    test(
+        'v26→v27 migration: time_logs.action_id added (issue #476), existing '
+        'rows preserved with NULL (no backfill)', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a pre-v27 time_logs: no action_id column yet.
+      await db.customStatement('ALTER TABLE time_logs RENAME TO _time_logs_v26');
+      await db.customStatement(
+        'CREATE TABLE time_logs ('
+        '  id TEXT NOT NULL PRIMARY KEY,'
+        '  user_id TEXT NOT NULL,'
+        '  task_id TEXT NOT NULL,'
+        '  started_at TEXT NOT NULL,'
+        '  ended_at TEXT,'
+        '  focus_session_id TEXT'
+        ')',
+      );
+      await db.customStatement(
+        "INSERT INTO time_logs (id, user_id, task_id, started_at, ended_at) "
+        "VALUES ('legacy-1', '$_userId', 'task1', "
+        "'2026-07-01T09:00:00.000Z', '2026-07-01T09:30:00.000Z')",
+      );
+
+      // Drive the real v27 migration path.
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 26, 27);
+
+      // action_id column must have been added.
+      final cols = await db.customSelect('PRAGMA table_info(time_logs)').get();
+      final colNames = cols.map((r) => r.read<String>('name')).toSet();
+      expect(colNames, contains('action_id'));
+
+      // The legacy row survived with a NULL action_id (no backfill).
+      final legacy = await db
+          .customSelect("SELECT * FROM time_logs WHERE id = 'legacy-1'")
+          .getSingle();
+      expect(legacy.read<String>('task_id'), 'task1');
+      expect(legacy.read<String?>('action_id'), isNull);
+    });
   });
 
   group('MigrationService — user_preferences LWW reassignment', () {

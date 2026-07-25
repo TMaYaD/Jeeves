@@ -7,6 +7,7 @@ import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../gtd_database.dart';
+import 'action_dao.dart';
 import 'time_log_dao.dart';
 
 part 'focus_session_dao.g.dart';
@@ -24,8 +25,14 @@ String focusSessionDispositionIdFor(String sessionId, String taskId) => uuid.v5(
       'jeeves://focus_session_disposition/$sessionId/$taskId',
     );
 
-@DriftAccessor(
-    tables: [FocusSessions, FocusSessionTasks, FocusSessionDispositions, TimeLogs, Todos])
+@DriftAccessor(tables: [
+  FocusSessions,
+  FocusSessionTasks,
+  FocusSessionDispositions,
+  TimeLogs,
+  Todos,
+  Actions,
+])
 class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     with _$FocusSessionDaoMixin {
   FocusSessionDao(super.db);
@@ -159,12 +166,18 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       await (update(timeLogs)..where((t) => t.endedAt.isNull()))
           .write(TimeLogsCompanion(endedAt: Value(ts)));
 
-      // Open a new time log if a task is being focused.
+      // Open a new time log if a task is being focused, attributing it to the
+      // Outcome's current Action resolved inside this transaction (issue #476).
+      // A planned/terminated row can never be attributed — the resolver filters
+      // `role = 'current'`; an Actionless Outcome yields NULL, still
+      // task-attributed.
       if (taskId != null) {
+        final actionId = await ActionDao.currentActionIdFor(this, taskId);
         await into(timeLogs).insert(TimeLogsCompanion(
           id: Value(uuid.v4()),
           userId: Value(session.userId),
           taskId: Value(taskId),
+          actionId: Value(actionId),
           startedAt: Value(ts),
           endedAt: const Value(null),
           focusSessionId: Value(sessionId),

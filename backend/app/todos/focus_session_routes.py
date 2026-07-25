@@ -27,6 +27,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.database import get_db
 from app.todos.models import (
+    Action,
     FocusSession,
     FocusSessionDisposition,
     FocusSessionTask,
@@ -64,6 +65,15 @@ async def _require_owned_session(
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="FocusSession not found")
     return session
+
+
+async def _require_owned_action(db: AsyncSession, action_id: str, current_user: User) -> None:
+    # Ownership only — no server-side action.outcome_id == task_id consistency
+    # check: the client is authoritative for its own attribution (matches the
+    # existing parent-validation posture on these connector routes).
+    action = await db.get(Action, action_id)
+    if not action or action.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Action not found")
 
 
 # ── FocusSessions ─────────────────────────────────────────────────────────────
@@ -386,6 +396,8 @@ async def create_time_log(
             await _require_owned_todo(db, body.task_id, current_user)
             if body.focus_session_id is not None:
                 await _require_owned_session(db, body.focus_session_id, current_user)
+            if body.action_id is not None:
+                await _require_owned_action(db, body.action_id, current_user)
             data = body.model_dump(exclude_unset=True)
             data.pop("id", None)
             for field, value in data.items():
@@ -397,11 +409,14 @@ async def create_time_log(
     await _require_owned_todo(db, body.task_id, current_user)
     if body.focus_session_id is not None:
         await _require_owned_session(db, body.focus_session_id, current_user)
+    if body.action_id is not None:
+        await _require_owned_action(db, body.action_id, current_user)
 
     log = TimeLog(
         **({"id": body.id} if body.id is not None else {}),
         user_id=current_user.id,
         task_id=body.task_id,
+        action_id=body.action_id,
         started_at=body.started_at,
         ended_at=body.ended_at,
         focus_session_id=body.focus_session_id,
@@ -427,6 +442,10 @@ async def update_time_log(
         await _require_owned_todo(db, data["task_id"], current_user)
     if data.get("focus_session_id") is not None:
         await _require_owned_session(db, data["focus_session_id"], current_user)
+    # action_id is genuinely nullable — validate ownership only when setting it
+    # to a non-null value; an explicit null (clearing attribution) is allowed.
+    if data.get("action_id") is not None:
+        await _require_owned_action(db, data["action_id"], current_user)
     for field, value in data.items():
         setattr(log, field, value)
     await db.commit()

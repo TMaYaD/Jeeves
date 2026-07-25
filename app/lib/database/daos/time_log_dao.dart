@@ -5,10 +5,11 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
 import '../gtd_database.dart';
+import 'action_dao.dart';
 
 part 'time_log_dao.g.dart';
 
-@DriftAccessor(tables: [TimeLogs, Todos])
+@DriftAccessor(tables: [TimeLogs, Todos, Actions])
 class TimeLogDao extends DatabaseAccessor<GtdDatabase>
     with _$TimeLogDaoMixin {
   TimeLogDao(super.db);
@@ -31,6 +32,11 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
     await transaction(() async {
+      // Resolve the Outcome's current Action *inside* the transaction so a
+      // concurrent supersede between resolve and insert cannot mis-attribute,
+      // and so attributing to a planned/terminated row is impossible by
+      // construction — the resolver filters `role = 'current'` (issue #476).
+      final actionId = await ActionDao.currentActionIdFor(this, taskId);
       // Close any pre-existing open log.
       await (update(timeLogs)..where((t) => t.endedAt.isNull()))
           .write(TimeLogsCompanion(endedAt: Value(ts.toIso8601String())));
@@ -39,6 +45,7 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         id: Value(uuid.v4()),
         userId: Value(userId),
         taskId: Value(taskId),
+        actionId: Value(actionId),
         startedAt: Value(ts.toIso8601String()),
         endedAt: const Value(null),
         focusSessionId: Value(focusSessionId),

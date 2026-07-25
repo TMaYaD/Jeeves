@@ -46,7 +46,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 26;
+  int get schemaVersion => 27;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -534,6 +534,17 @@ class GtdDatabase extends _$GtdDatabase {
               }
             }
           }
+          if (from < 27) {
+            // Action-grain TimeLog attribution (issue #476, ADR-0001 story 6):
+            // a nullable `action_id` on time_logs. Additive and guarded by the
+            // same view-safe pattern as focus_session_id (from < 14): a no-op on
+            // the production PowerSync view, a real ADD COLUMN on the
+            // NativeDatabase test path. Legacy rows keep action_id NULL — no
+            // backfill (which Action was current when a historical stint ran is
+            // unreconstructable), and totals are unaffected because every
+            // time-spent derivation aggregates by task_id.
+            await _addColumnIfTable(m, timeLogs, timeLogs.actionId);
+          }
         },
       );
 
@@ -670,6 +681,20 @@ class GtdDatabase extends _$GtdDatabase {
   /// Action-writing DAO in story 2 has the self-notify path ready.
   void notifyActionsViewWrite() => notifyUpdates({
         const TableUpdate('actions'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for the `time_logs` view (issue #476).
+  ///
+  /// In production `time_logs` is a PowerSync view with INSTEAD OF triggers, so
+  /// a direct Drift write reports `changes() == 0` and Drift's stream
+  /// invalidation never fires (ADR-0010). The terminal-transition hook in
+  /// [ActionDao] (close-on-Done / close-and-reopen-on-supersede) writes
+  /// `time_logs` inside the Action transaction, so its callers fire this right
+  /// after commit — gated on [ActionWriteEffect.logChanged], so an Action
+  /// mutation that touched no log never over-notifies the active-log and
+  /// time-spent watchers.
+  void notifyTimeLogsViewWrite() => notifyUpdates({
+        const TableUpdate('time_logs'),
       });
 
   /// Runs [Migrator.addColumn] only when [table] is a real SQLite table.

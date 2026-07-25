@@ -253,7 +253,8 @@ _Avoid_: Doing, Execution (Execution is FocusSession's middle phase, not the ver
 **TimeLog**:
 A record of one continuous interval of engagement with a specific Action. Each TimeLog carries:
 
-- A reference to the engaged Action (required)
+- A reference to the engaged Action (conceptually required; the stored column is nullable only to admit pre-Action-era logs, whose current-Action is unreconstructable, and logs whose Action was later deleted — the backend detaches with `ON DELETE SET NULL` rather than deleting the log — so a null there means "no Action attribution available", never a TimeLog that conceptually lacks an Action)
+- A reference to the engaged Outcome (the Action's Outcome — retained so pre-Action-era logs and any Actionless edge still attribute at the Outcome grain; every time-spent total sums at this grain)
 - A start time (required)
 - An end time (null while open / in-progress; set when the engagement ends)
 - Optional attribution to the open FocusSession at start time (null for ad-hoc engagement)
