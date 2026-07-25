@@ -14,6 +14,8 @@
 /// deltas would pin nothing.
 library;
 
+import 'dart:async' show TimeoutException;
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -204,6 +206,34 @@ void main() {
       expect(emitted.map((h) => h.action.id),
           (await db.actionDao.getTerminatedActions('o1')).map((h) => h.action.id));
       expect(emitted, isA<List<TerminatedAction>>());
+    });
+
+    test('watchTerminatedActions re-emits when an Action terminates',
+        () async {
+      // Subscribe — and start waiting on a later emission — before performing
+      // any mutation, so there is no race between the listen and the writes.
+      // The initial emission is the empty list (nothing seeded yet); waiting
+      // for a row with role 'superseded' only resolves once Drift's stream
+      // actually re-runs the query after the abandon below, which is the
+      // re-emission this test exists to pin (Drift table streams don't
+      // deduplicate write bursts by content, so this also holds regardless of
+      // whether the intermediate setCurrentAction write surfaces its own
+      // emission).
+      final superseded = db.actionDao
+          .watchTerminatedActions('o1')
+          .firstWhere((rows) => rows.any((h) => h.action.role == 'superseded'))
+          .timeout(const Duration(seconds: 5),
+              onTimeout: () => throw TimeoutException(
+                  'watchTerminatedActions never re-emitted a superseded row'));
+
+      await db.actionDao.setCurrentAction('o1', 'the thing',
+          now: _t0.add(const Duration(seconds: 10)));
+      await db.actionDao.clearCurrentAction('o1',
+          now: _t0.add(const Duration(seconds: 20)));
+
+      final history = await superseded;
+      expect(history.single.action.actionText, 'the thing');
+      expect(history.single.action.role, 'superseded');
     });
 
     test('history is empty for an Outcome that never terminated an Action',
