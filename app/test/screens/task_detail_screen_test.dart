@@ -894,12 +894,21 @@ void main() {
       await settleWrite();
       await refresh();
       expect((await currentRow())!.actionText, 'second (edited)');
-      // The replaced Action is superseded, not deleted.
-      final all = await tester.runAsync(() => db.actionDao
-          .watchPlannedActions('plan1')
-          .first);
-      expect(all!.map((a) => a.actionText), isNot(contains('first')),
-          reason: 'first was superseded (retired), not a planned row');
+      // The replaced Action is superseded (retired), not hard-deleted. Watching
+      // the planned queue can't tell the two apart — it omits the old current
+      // either way — so read the row directly and assert its role flipped to
+      // 'superseded'.
+      final firstAfterReplace = await tester.runAsync(() => (db.select(db.actions)
+            ..where((a) =>
+                a.outcomeId.equals('plan1') & a.actionText.equals('first')))
+          .getSingleOrNull());
+      expect(firstAfterReplace, isNotNull,
+          reason: 'supersede retires the old current row, it is not deleted');
+      expect(firstAfterReplace!.role, 'superseded',
+          reason: 'replacing the current supersedes the old current Action');
+      expect((await plannedRows()).map((a) => a.actionText),
+          isNot(contains('first')),
+          reason: 'a superseded row never leaks back into the planned queue');
 
       // --- Remove the remaining planned row ---
       // After the replace, 'first' is superseded and nothing is planned; add a

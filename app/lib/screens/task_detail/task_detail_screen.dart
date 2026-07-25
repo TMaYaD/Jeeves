@@ -841,7 +841,12 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
       _editingId = row.id;
       _editController.text = row.actionText;
     });
-    Future.delayed(const Duration(milliseconds: 50), _editFocus.requestFocus);
+    Future.delayed(const Duration(milliseconds: 50), () {
+      // The row can be disposed within the delay (navigate away, or the row
+      // disappears via a sync) — requesting focus on a dead node would throw.
+      if (!mounted) return;
+      _editFocus.requestFocus();
+    });
   }
 
   void _commitEdit() {
@@ -923,10 +928,14 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
 
   @override
   Widget build(BuildContext context) {
-    final current = ref.watch(currentActionProvider(widget.outcomeId)).asData
-        ?.value;
+    // AsyncValue.value retains the last data across a transient loading/error
+    // (Riverpod stream refresh/re-subscribe), where .asData?.value would go
+    // null. Keeping the Plan visible matters, and the retained `current` keeps
+    // the promote decision routing through the 'Replace current action' confirm
+    // instead of mis-firing a direct promote.
+    final current = ref.watch(currentActionProvider(widget.outcomeId)).value;
     final planned =
-        ref.watch(plannedActionsProvider(widget.outcomeId)).asData?.value ??
+        ref.watch(plannedActionsProvider(widget.outcomeId)).value ??
             const <Action>[];
 
     return Padding(

@@ -748,19 +748,27 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   Future<List<Action>> _plannedActionsFor(String outcomeId) =>
       _plannedQuery(outcomeId).get();
 
-  /// Shift every planned row at or after [from] down by one, so a fresh row can
-  /// take slot [from]. Callers pass the pre-read [planned] list to avoid a
-  /// re-query inside the transaction.
+  /// Re-densify the planned queue and open slot [from] for a fresh row. Each
+  /// ordered row lands at its dense index, with rows at or after [from] pushed
+  /// one slot down; the caller then writes the incoming row at [from].
+  ///
+  /// [from] is a queue *index* (into the ordered [planned] list), not a raw
+  /// stored `position`. Comparing index against index — rather than index
+  /// against stored `position` — keeps placement correct even when stored
+  /// positions have gaps or don't start at 0 (a remove leaves a gap; a
+  /// cross-device sync can duplicate). Callers pass the pre-read [planned] list
+  /// in queue order to avoid a re-query inside the transaction.
   Future<void> _shiftPlannedFrom(
     List<Action> planned,
     int from,
     DateTime ts,
   ) async {
-    for (final row in planned) {
-      final pos = row.position ?? 0;
-      if (pos >= from) {
+    for (var i = 0; i < planned.length; i++) {
+      final row = planned[i];
+      final desired = i >= from ? i + 1 : i;
+      if (row.position != desired) {
         await (update(actions)..where((a) => a.id.equals(row.id))).write(
-          ActionsCompanion(position: Value(pos + 1), updatedAt: Value(ts)),
+          ActionsCompanion(position: Value(desired), updatedAt: Value(ts)),
         );
       }
     }

@@ -283,6 +283,29 @@ void main() {
       expect(planned.map((p) => p.$3), [0, 1, 2]);
     });
 
+    test('explicit position lands correctly when stored positions have a gap',
+        () async {
+      // Seed a, b, c at dense 0,1,2 then remove the head — removePlannedAction
+      // leaves the gap in `position` intact, so stored positions become [1, 2]
+      // (no row at 0). A fresh insert at queue index 1 must land between the
+      // survivors, comparing ordered index rather than the raw stored position.
+      await db.actionDao.addPlannedAction('o1', 'a', now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'b', now: _t2);
+      await db.actionDao.addPlannedAction('o1', 'c', now: _t3);
+      final head = (await _planned(db, 'o1')).first;
+      await db.actionDao.removePlannedAction(head.$1, now: _t3);
+      expect((await _planned(db, 'o1')).map((p) => p.$3), [1, 2],
+          reason: 'remove leaves a gap at position 0');
+
+      await db.actionDao
+          .addPlannedAction('o1', 'inserted', position: 1, now: _t4);
+
+      final planned = await _planned(db, 'o1');
+      expect(planned.map((p) => p.$2), ['b', 'inserted', 'c']);
+      expect(planned.map((p) => p.$3), [0, 1, 2],
+          reason: 'the insert re-densifies around the opened slot');
+    });
+
     test('a planned row never surfaces as the current Action', () async {
       await db.actionDao.addPlannedAction('o1', 'planned only', now: _t1);
       expect(await _current(db, 'o1'), isNull,
