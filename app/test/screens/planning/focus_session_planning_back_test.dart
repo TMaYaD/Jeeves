@@ -240,8 +240,11 @@ void main() {
 
       // Re-enter: the draft survives, so the performance resumes mid-ritual on
       // Clarify Inbox (step 1) — the intro shows only on a fresh performance.
+      // The route push animates and Clarify Inbox reloads once visible, so
+      // drain across the transition rather than pumpAndSettle (which hangs on
+      // the in-flight load).
       router.go('/focus-session-planning');
-      await _settle(tester);
+      await _settleAcrossTransition(tester);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.currentStep, 1);

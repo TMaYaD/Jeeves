@@ -87,6 +87,12 @@ void main() {
       await _settle(tester);
 
       final notifier = container.read(periodicReviewProvider.notifier);
+      // Every performance now opens on the intro (#486, step 0). Cross into
+      // Process Inbox before exercising the item-cursor back contract; the
+      // mount preloaded every snapshot, so no lazy load stalls the transition.
+      await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
+      await tester.pumpAndSettle();
+
       notifier.advanceInbox();
       await tester.pumpAndSettle();
       expect(container.read(periodicReviewProvider).inboxNav.index, 1);
@@ -97,7 +103,7 @@ void main() {
       final state = container.read(periodicReviewProvider);
       expect(state.inboxNav.index, 0,
           reason: 'system back retreats the per-item cursor like footer Back');
-      expect(state.currentStep, 0,
+      expect(state.currentStep, PeriodicReviewNotifier.kStepInbox,
           reason: 'no step change while the cursor can retreat');
       expect(find.byType(PeriodicReviewScreen), findsOneWidget,
           reason: 'the ceremony stays open — no route change');
