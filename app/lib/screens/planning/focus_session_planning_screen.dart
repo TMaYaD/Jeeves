@@ -237,6 +237,17 @@ class _FocusSessionPlanningScreenState
         _ => _backToPrevStep(state, notifier),
       };
 
+  /// Header subtitle for a working step: "Step N of M[ · suffix]". The
+  /// intro is excluded from the progress count, so a working step's
+  /// 1-based display number *is* its PageView index — mirroring how
+  /// [PeriodicReviewScreen]'s `_subtitle` derives its label from a
+  /// passed-in stepIndex, this derives the number from the caller's own
+  /// working-step position instead of re-typing the literal per builder.
+  String _workingStepSubtitle(int stepIndex, [String? suffix]) {
+    final stepLabel = 'Step $stepIndex of $_kProgressSegmentCount';
+    return suffix == null ? stepLabel : '$stepLabel · $suffix';
+  }
+
   WizardStep _buildInboxStep(
     FocusSessionPlanningState state,
     FocusSessionPlanningNotifier notifier,
@@ -276,8 +287,8 @@ class _FocusSessionPlanningScreenState
       title: _stepTitles[2],
       body: const TaskReviewStep(),
       activeFraction: activeFraction,
-      subtitle: 'Step 2 of $_kProgressSegmentCount · '
-          '${nav.index} / ${nav.length} seen',
+      subtitle:
+          _workingStepSubtitle(2, '${nav.index} / ${nav.length} seen'),
       footer: ListItemFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
@@ -300,7 +311,7 @@ class _FocusSessionPlanningScreenState
       title: _stepTitles[3],
       body: const DayCheckinEnergyStep(),
       activeFraction: state.energyLevel != null ? 1.0 : 0.0,
-      subtitle: 'Step 3 of $_kProgressSegmentCount',
+      subtitle: _workingStepSubtitle(3),
       footer: WizardFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
@@ -318,7 +329,7 @@ class _FocusSessionPlanningScreenState
       title: _stepTitles[4],
       body: const DayCheckinTimeStep(),
       activeFraction: state.availableTimeSet ? 1.0 : 0.0,
-      subtitle: 'Step 4 of $_kProgressSegmentCount',
+      subtitle: _workingStepSubtitle(4),
       footer: WizardFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
@@ -335,7 +346,7 @@ class _FocusSessionPlanningScreenState
     return WizardStep(
       title: _stepTitles[5],
       body: const PlanSummaryStep(),
-      subtitle: 'Step 5 of $_kProgressSegmentCount',
+      subtitle: _workingStepSubtitle(5),
       footer: WizardFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
@@ -348,7 +359,7 @@ class _FocusSessionPlanningScreenState
   String _inboxSubtitle(FocusSessionPlanningState state) {
     final nav = state.inboxNav;
     if (!nav.isLoaded) {
-      return 'Step 1 of $_kProgressSegmentCount · Loading inbox…';
+      return _workingStepSubtitle(1, 'Loading inbox…');
     }
     // Count routings strictly below the cursor: this excludes both items
     // the user skipped (no routing recorded) and the item currently shown
@@ -356,8 +367,8 @@ class _FocusSessionPlanningScreenState
     final processed =
         state.inboxRoutings.keys.where((k) => k < nav.index).length;
     final skipped = nav.index - processed;
-    return 'Step 1 of $_kProgressSegmentCount · '
-        '$processed / ${nav.length} processed (skipped $skipped)';
+    return _workingStepSubtitle(
+        1, '$processed / ${nav.length} processed (skipped $skipped)');
   }
 }
 

@@ -26,6 +26,7 @@ import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 
 import '../../helpers/settle.dart';
+import '../../support/planning_ceremony_test_helpers.dart';
 import '../../test_helpers.dart';
 
 const _skipKey = Key('planning_skip');
@@ -61,31 +62,20 @@ FocusSessionPlanningState _stateOf(WidgetTester tester) {
 /// sleep) before settling the frame — see [settleWithRealAsync].
 Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
-/// Drives the page transition to completion in real time while draining the
-/// drift-stream snapshot load the newly-visible step triggers on entry.
-///
-/// A plain `pumpAndSettle` hangs here: Clarify Inbox loads its snapshot via a
-/// real-async drift `.first` that only fires once the step is visible (after
-/// the 300 ms transition), and fake-async `pumpAndSettle` cannot complete that
-/// real-async read — its loading spinner would spin forever. So advance the
-/// clock in real steps, draining the real event queue between each.
-Future<void> _settleAcrossTransition(WidgetTester tester) async {
-  for (var i = 0; i < 8; i++) {
-    await tester.runAsync(() => pumpEventQueue());
-    await tester.pump(const Duration(milliseconds: 60));
-  }
-}
-
 /// Every performance now opens on the duration-estimate intro (#486, step 0).
 /// These footer tests exercise the working steps, so cross from the intro into
 /// Clarify Inbox (step 1) first.
-Future<void> _advancePastIntro(WidgetTester tester) async {
-  final container = ProviderScope.containerOf(
-    tester.element(find.byType(FocusSessionPlanningScreen)),
-  );
-  await container.read(focusSessionPlanningProvider.notifier).advanceStep();
-  await _settleAcrossTransition(tester);
-}
+///
+/// Thin wrapper over the shared [advancePastIntro]: this file uses
+/// `ProviderScope` (not `UncontrolledProviderScope`), so it has no standing
+/// `container` variable at each call site — resolve one the same way
+/// [_stateOf] does.
+Future<void> _advancePastIntro(WidgetTester tester) => advancePastIntro(
+      tester,
+      ProviderScope.containerOf(
+        tester.element(find.byType(FocusSessionPlanningScreen)),
+      ),
+    );
 
 /// Unmounts the screen so the streaming providers behind the step cards
 /// dispose — and their drift stream-close timers fire — before the test
@@ -181,7 +171,7 @@ void main() {
         isNull,
       );
 
-      await _settleAcrossTransition(tester);
+      await settleAcrossTransition(tester);
       await _dispose(tester);
     });
 

@@ -26,6 +26,7 @@ import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 
 import '../../helpers/settle.dart';
+import '../../support/planning_ceremony_test_helpers.dart';
 import '../../test_helpers.dart';
 
 const _skipKey = Key('planning_skip');
@@ -70,29 +71,6 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
 /// only emits inside the real async zone. Drain that queue (no wall-clock
 /// sleep) before settling the frame — see [settleWithRealAsync].
 Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
-
-/// Drives a page transition to completion in real time while draining the
-/// drift-stream snapshot load the newly-visible step triggers on entry — a
-/// plain `pumpAndSettle` hangs on Clarify Inbox's spinner (its real-async
-/// `.first` fires only once visible, after the transition). See the twin
-/// helper in `focus_session_planning_footer_test.dart`.
-Future<void> _settleAcrossTransition(WidgetTester tester) async {
-  for (var i = 0; i < 8; i++) {
-    await tester.runAsync(() => pumpEventQueue());
-    await tester.pump(const Duration(milliseconds: 60));
-  }
-}
-
-/// Every performance now opens on the duration-estimate intro (#486, step 0).
-/// Cross into Clarify Inbox (step 1) before exercising the working-step back
-/// contract.
-Future<void> _advancePastIntro(
-  WidgetTester tester,
-  ProviderContainer container,
-) async {
-  await container.read(focusSessionPlanningProvider.notifier).advanceStep();
-  await _settleAcrossTransition(tester);
-}
 
 /// Unmounts the tree so streaming providers dispose before the end-of-test
 /// pending-timer check.
@@ -150,7 +128,7 @@ void main() {
       addTearDown(container.dispose);
       await tester.pumpWidget(widget);
       await _settle(tester);
-      await _advancePastIntro(tester, container);
+      await advancePastIntro(tester, container);
 
       await tester.tap(find.byKey(_skipKey));
       await tester.pumpAndSettle();
@@ -223,7 +201,7 @@ void main() {
       addTearDown(container.dispose);
       await tester.pumpWidget(widget);
       await _settle(tester);
-      await _advancePastIntro(tester, container);
+      await advancePastIntro(tester, container);
 
       await tester.tap(find.byKey(_skipKey));
       await tester.pumpAndSettle();
@@ -244,7 +222,7 @@ void main() {
       // drain across the transition rather than pumpAndSettle (which hangs on
       // the in-flight load).
       router.go('/focus-session-planning');
-      await _settleAcrossTransition(tester);
+      await settleAcrossTransition(tester);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.currentStep, 1);
