@@ -175,6 +175,46 @@ void main() {
     expect(actionRoles.last, ['done']);
   });
 
+  test('clearCurrentAction refreshes both view watchers — its cursor clear '
+      'rides on the stamp, which an abandon always moves', () async {
+    await db.todoDao.setNextActionText('o1', 'call the plumber');
+
+    final cursors = <List<String>>[];
+    final actionRoles = <List<String>>[];
+    final subTodo = db
+        .customSelect(
+          "SELECT next_action_text FROM todos WHERE id = 'o1'",
+          readsFrom: {db.todos},
+        )
+        .watch()
+        .map((rows) =>
+            rows.map((r) => r.read<String?>('next_action_text') ?? '').toList())
+        .listen(cursors.add);
+    final subAction = db
+        .customSelect(
+          "SELECT role FROM actions WHERE outcome_id = 'o1'",
+          readsFrom: {db.actions},
+        )
+        .watch()
+        .map((rows) => rows.map((r) => r.read<String>('role')).toList())
+        .listen(actionRoles.add);
+    addTearDown(subTodo.cancel);
+    addTearDown(subAction.cancel);
+
+    await _waitUntil(() =>
+        cursors.isNotEmpty &&
+        cursors.last.first == 'call the plumber' &&
+        actionRoles.isNotEmpty &&
+        actionRoles.last.contains('current'));
+
+    await db.actionDao.clearCurrentAction('o1');
+
+    await _waitUntil(() =>
+        cursors.last.first == '' && actionRoles.last.contains('superseded'));
+    expect(cursors.last, ['']);
+    expect(actionRoles.last, ['superseded']);
+  });
+
   test('completeCurrentAction refreshes a time_logs-view watcher when it '
       'closes the open log (ADR-0010, issue #476)', () async {
     await db.actionDao.setCurrentAction('o1', 'call the plumber');

@@ -177,6 +177,17 @@ void main() {
       expect((await _actions(db, 'o1')).single['role'], 'superseded');
       expect(await _lastClarified(db, 'o1'), _t2);
     });
+
+    test('with a replacement points the cursor at the new text', () async {
+      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+
+      await db.actionDao
+          .supersedeCurrentAction('o1', newActionText: 'new', now: _t2);
+
+      expect(await _nextText(db, 'o1'), 'new');
+      expect((await _current(db, 'o1'))!['text'], 'new',
+          reason: 'cursor and Action agree on the replacement');
+    });
   });
 
   group('clearCurrentAction', () {
@@ -197,6 +208,37 @@ void main() {
       expect(await _actions(db, 'o2'), isEmpty);
       expect(await _lastClarified(db, 'o2'), _t0,
           reason: 'no current row → no stamp');
+      expect(await _nextText(db, 'o2'), isNull);
+    });
+
+    test('clears the cursor — blank next_action_text ⟺ no current row',
+        () async {
+      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+      expect(await _nextText(db, 'o1'), 'old', reason: 'precondition');
+
+      await db.actionDao.clearCurrentAction('o1', now: _t2);
+
+      expect(await _current(db, 'o1'), isNull);
+      expect(await _nextText(db, 'o1'), isNull,
+          reason: 'a surviving cursor would let the startup sweep resurrect '
+              'the abandoned Action at the next launch');
+    });
+
+    test('abandon stamps where completion does not — both clear the cursor',
+        () async {
+      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+      await db.actionDao.clearCurrentAction('o1', now: _t2);
+
+      expect(await _lastClarified(db, 'o1'), _t2,
+          reason: 'abandoning is a clarifying act');
+      expect(await _nextText(db, 'o1'), isNull);
+
+      await db.todoDao.setNextActionText('o1', 'another', now: _t3);
+      await db.actionDao.completeCurrentAction('o1', now: _t4);
+
+      expect(await _lastClarified(db, 'o1'), _t3,
+          reason: 'completion is engagement, not clarification');
+      expect(await _nextText(db, 'o1'), isNull);
     });
   });
 
