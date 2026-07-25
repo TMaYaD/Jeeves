@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,13 +7,58 @@ import 'package:go_router/go_router.dart';
 import '../providers/onboarding_provider.dart';
 import 'jeeves_logo.dart';
 
+/// A paired (header, subtitle) greeting for the onboarding card. Kept as a
+/// pair so the header line and its subtitle are never shown mismatched.
+class OnboardingGreeting {
+  const OnboardingGreeting({required this.header, required this.subtitle});
+
+  final String header;
+  final String subtitle;
+}
+
+/// Jeeves-speak greetings for the empty-Inbox onboarding card — first person,
+/// addressed to "sir", framing the Inbox as how you hand Jeeves what's on your
+/// mind (see DESIGN.md § Voice). One pair is drawn at random per display, so
+/// the app does not repeat itself; the paired shape stops a header ever pairing
+/// with the wrong subtitle. Mirrors the nudge-banner pool pattern
+/// (`lib/widgets/nudge_banner.dart`).
+const onboardingGreetings = <OnboardingGreeting>[
+  OnboardingGreeting(
+    header: "You've a great deal on your mind, I expect, sir.",
+    subtitle:
+        "Unburden it all here — tasks, errands, half-formed plans. I'll hold them; you needn't.",
+  ),
+  OnboardingGreeting(
+    header: "You've rather a lot rattling about, I fancy, sir.",
+    subtitle:
+        "Set it all down here — tasks, errands, half-formed schemes. I'll keep them; you needn't.",
+  ),
+  OnboardingGreeting(
+    header: "A full head today, I gather, sir.",
+    subtitle:
+        "Let it all out here — tasks, errands, stray notions. I'll see them safe; you needn't.",
+  ),
+];
+
+final _greetingRandom = Random();
+
+/// Picks one greeting at random. Pass [seed] in tests for a deterministic draw.
+OnboardingGreeting pickOnboardingGreeting({int? seed}) {
+  final greetingRandom = seed == null ? _greetingRandom : Random(seed);
+  return onboardingGreetings[greetingRandom.nextInt(onboardingGreetings.length)];
+}
+
 /// First-launch onboarding card shown in the inbox when the database is empty.
 ///
 /// Self-hiding: collapses to [SizedBox.shrink] once the user has permanently
 /// dismissed it (via [onboardingSeenNotifier]) or once any todo exists in the
 /// database (via [hasAnyItemProvider]).
 class OnboardingCard extends ConsumerWidget {
-  const OnboardingCard({super.key});
+  const OnboardingCard({super.key, this.greetingSeed});
+
+  /// Optional deterministic seed for the greeting draw, used by tests. Null in
+  /// production so each display draws afresh.
+  final int? greetingSeed;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -32,6 +79,7 @@ class OnboardingCard extends ConsumerWidget {
 
         return _OnboardingCardContent(
           key: const Key('onboarding_card'),
+          greetingSeed: greetingSeed,
           onStartFresh: () => markOnboardingSeen(),
           onImportFromNirvana: () {
             markOnboardingSeen();
@@ -47,19 +95,31 @@ class OnboardingCard extends ConsumerWidget {
   }
 }
 
-class _OnboardingCardContent extends StatelessWidget {
+class _OnboardingCardContent extends StatefulWidget {
   const _OnboardingCardContent({
     super.key,
     required this.onStartFresh,
     required this.onImportFromNirvana,
     required this.onSignIn,
+    this.greetingSeed,
   });
 
   final VoidCallback onStartFresh;
   final VoidCallback onImportFromNirvana;
   final VoidCallback onSignIn;
+  final int? greetingSeed;
 
+  @override
+  State<_OnboardingCardContent> createState() => _OnboardingCardContentState();
+}
+
+class _OnboardingCardContentState extends State<_OnboardingCardContent> {
   static const _ink = Color(0xFF1A1A2E);
+  static const _inkMuted = Color(0xFF6B7280);
+
+  // Drawn once per display so the greeting stays stable across rebuilds.
+  late final OnboardingGreeting _greeting =
+      pickOnboardingGreeting(seed: widget.greetingSeed);
 
   @override
   Widget build(BuildContext context) {
@@ -69,30 +129,46 @@ class _OnboardingCardContent extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header: logo + dismiss button
+          // Header: logo + Jeeves greeting (header line + subtitle).
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 8, 0),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const JeevesLogo(size: 32, variant: JeevesLogoVariant.signature),
-                const SizedBox(width: 4),
-                const Expanded(
-                  child: Text(
-                    'Your GTD inbox, sir. Shall we stock it?',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: _ink,
-                      height: 1.3,
-                    ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _greeting.header,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: _ink,
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _greeting.subtitle,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: _inkMuted,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
           const Padding(
-            padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
+            padding: EdgeInsets.fromLTRB(20, 12, 20, 0),
             child: Divider(height: 1, color: Color(0xFFBFDBFE)),
           ),
           // Action rows
@@ -101,19 +177,19 @@ class _OnboardingCardContent extends StatelessWidget {
             icon: Icons.inbox_outlined,
             label: 'Start fresh',
             isPrimary: true,
-            onTap: onStartFresh,
+            onTap: widget.onStartFresh,
           ),
           _ActionRow(
             key: const Key('onboarding_import'),
             icon: Icons.upload_file_outlined,
             label: 'Import from Nirvana export',
-            onTap: onImportFromNirvana,
+            onTap: widget.onImportFromNirvana,
           ),
           _ActionRow(
             key: const Key('onboarding_sign_in'),
             icon: Icons.cloud_outlined,
             label: 'Sign in to sync',
-            onTap: onSignIn,
+            onTap: widget.onSignIn,
           ),
           const SizedBox(height: 4),
         ],

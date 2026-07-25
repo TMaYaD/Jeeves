@@ -48,7 +48,9 @@ class InboxList extends ConsumerWidget {
       onRefresh: onRefresh,
       child: AsyncList<Capture>(
         asyncValue: asyncItems,
-        emptyTitle: 'No items yet — add something above',
+        // Dead fallback — the emptyBuilder below always supplies the surface —
+        // but kept in Jeeves's voice for hygiene.
+        emptyTitle: inboxEmptyStateLines.first,
         emptyBuilder: (_) => const _InboxEmptyState(),
         dataBuilder: (context, items) => ListView.builder(
           physics: const _TightBouncingScrollPhysics(
@@ -66,15 +68,37 @@ class InboxList extends ConsumerWidget {
   }
 }
 
+/// Jeeves-speak lines for the empty Inbox once onboarding is dismissed — first
+/// person, addressed to "sir", framing the input as how you tell Jeeves rather
+/// than as UI instruction (see DESIGN.md § Voice). One is drawn at random per
+/// display, mirroring the nudge-banner pool pattern
+/// (`lib/widgets/nudge_banner.dart`).
+const inboxEmptyStateLines = <String>[
+  "All quiet, sir. Should anything arise, you've only to tell me.",
+  "A clear slate, sir. The moment anything surfaces, do let me know.",
+  "Nothing wants attention, sir. When something comes to mind, only say the word.",
+];
+
+final _emptyStateRandom = math.Random();
+
 /// Inbox's empty surface: shows the OnboardingCard CTA until the user has
-/// seen it, then a simple text prompt pointing at the QuickAddBar above.
+/// seen it, then a Jeeves-speak reassurance drawn at random.
 ///
 /// Wraps itself in a single-child [ListView] so the enclosing
 /// [RefreshIndicator] still fires when there's nothing to scroll — the
 /// inbox owns its physics (tight bouncing) rather than delegating to
 /// [AsyncList].
-class _InboxEmptyState extends StatelessWidget {
+class _InboxEmptyState extends StatefulWidget {
   const _InboxEmptyState();
+
+  @override
+  State<_InboxEmptyState> createState() => _InboxEmptyStateState();
+}
+
+class _InboxEmptyStateState extends State<_InboxEmptyState> {
+  // Drawn once per display so the line stays stable across rebuilds.
+  late final String _selectedEmptyStateLine =
+      inboxEmptyStateLines[_emptyStateRandom.nextInt(inboxEmptyStateLines.length)];
 
   @override
   Widget build(BuildContext context) {
@@ -82,12 +106,13 @@ class _InboxEmptyState extends StatelessWidget {
       valueListenable: onboardingSeenNotifier,
       builder: (context, seen, _) {
         final child = seen
-            ? const Padding(
-                padding: EdgeInsets.only(top: 120),
+            ? Padding(
+                padding: const EdgeInsets.fromLTRB(32, 120, 32, 0),
                 child: Center(
                   child: Text(
-                    'No items yet — add something above',
-                    style: TextStyle(color: Color(0xFF9CA3AF)),
+                    _selectedEmptyStateLine,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Color(0xFF9CA3AF)),
                   ),
                 ),
               )
