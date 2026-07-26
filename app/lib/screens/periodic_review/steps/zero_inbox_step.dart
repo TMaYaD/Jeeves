@@ -26,6 +26,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../providers/clarify_retention_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/ceremony/clarify_step.dart';
 import '../../../widgets/process_to_handlers.dart';
@@ -67,6 +68,7 @@ class ZeroInboxStep extends ConsumerWidget {
           ref.read(periodicReviewProvider.notifier).advanceInbox(),
       onLoad: () =>
           ref.read(periodicReviewProvider.notifier).loadInboxSnapshot(),
+      retention: ref.read(clarifyRetentionProvider),
     );
   }
 }

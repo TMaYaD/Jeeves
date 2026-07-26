@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../utils/snapshot_nav.dart';
+import 'clarify_retention_provider.dart';
 import 'database_provider.dart';
 import 'periodic_review_settings_provider.dart';
 
@@ -391,5 +392,8 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     _loadingNextSnapshot = false;
     _loadingSomedaySnapshot = false;
     state = const PeriodicReviewState();
+    // Retained clarify drafts are in-session working memory too — a draft that
+    // outlived the review would seed a card in the next one.
+    ref.read(clarifyRetentionProvider).clearAll();
   }
 }

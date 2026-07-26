@@ -672,7 +672,10 @@ void main() {
           ],
           child: MaterialApp(
             home: Scaffold(
-              body: ClarifyCard.forCapture(captureId: capture.id),
+              body: ClarifyCard.forCapture(
+                captureId: capture.id,
+                tagSection: ClarifyTagSection.editablePickers,
+              ),
             ),
           ),
         );
