@@ -124,6 +124,67 @@ class ClarifyDraft {
     this.action,
   });
 
+  /// The one assembly rule every clarify surface applies to its own field
+  /// state, extracted so it is provable without pumping a widget.
+  ///
+  /// Three policies live here and nowhere else:
+  ///
+  /// - **Blank title nulls the whole [action].** A blank phrase beside live
+  ///   effort values would claim an Action exists when none does.
+  /// - **Person tags never travel.** Delegation is the orthogonal axis and the
+  ///   Waiting For picker is the only thing that writes it, so a person *hint*
+  ///   on the Capture is dropped rather than seeded onto the Outcome.
+  /// - **[dueDate] is truncated to a calendar day.** The picker collects a
+  ///   day; carrying its time component would make "due today" depend on the
+  ///   moment the picker happened to open.
+  ///
+  /// [hintTags] are the Capture's tag hints — the source of both the person
+  /// exclusion set and, when [draftTagIds] is null, the tags themselves.
+  /// [draftTagIds] is the synchronously maintained draft a surface with
+  /// editable pickers keeps (the DAO writes those pickers fire are
+  /// `unawaited`, so the hint stream is a frame behind a user who taps a
+  /// destination immediately after touching a tag). A surface that renders no
+  /// pickers has no such draft and passes null.
+  static ClarifyDraft assemble({
+    required String title,
+    required String notes,
+    required DateTime? dueDate,
+    required List<Tag> hintTags,
+    required Set<String>? draftTagIds,
+    required String? energyLevel,
+    required int? timeEstimateMinutes,
+  }) {
+    final trimmedTitle = title.trim();
+    final trimmedNotes = notes.trim();
+    final personHintIds = {
+      for (final t in hintTags)
+        if (t.type == 'person') t.id,
+    };
+    return ClarifyDraft(
+      title: trimmedTitle,
+      notes: trimmedNotes.isEmpty ? null : trimmedNotes,
+      dueDate: dueDate != null
+          ? DateTime(dueDate.year, dueDate.month, dueDate.day)
+          : null,
+      tagIds: {
+        for (final id in draftTagIds ?? {for (final t in hintTags) t.id})
+          if (!personHintIds.contains(id)) id,
+      },
+      // Title-as-action coupling: a Capture is by definition a first
+      // clarification, so there is no deliberate phrase to clobber and the
+      // title always mirrors. applyRouting consumes the phrase only for Next
+      // and Waiting For, so the other destinations are unaffected — but the
+      // effort values travel to the Outcome columns either way (D3).
+      action: trimmedTitle.isEmpty
+          ? null
+          : ActionDraft(
+              text: trimmedTitle,
+              energyLevel: energyLevel,
+              timeEstimateMinutes: timeEstimateMinutes,
+            ),
+    );
+  }
+
   final String title;
   final String? notes;
   final DateTime? dueDate;

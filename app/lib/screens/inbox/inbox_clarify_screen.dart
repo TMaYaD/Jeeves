@@ -24,7 +24,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
-import '../../models/action_draft.dart';
 import '../../models/clarify_mode.dart';
 import '../../providers/clarify_mode_provider.dart';
 import '../../providers/database_provider.dart';
@@ -83,14 +82,15 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// skipped and the Capture keeps a title the Outcome no longer has.
   bool _routing = false;
 
-  /// Non-person tag hints on this Capture, read once alongside it.
+  /// Tag hints on this Capture, read once alongside it.
   ///
-  /// They seed the new Outcome's tags via the draft. A one-shot read (not a
-  /// watch) because this screen renders no tag pickers — there is nothing on
-  /// screen for a live stream to keep in step, and subscribing to a live drift
-  /// query from a widget leaves a pending timer that hangs `pumpAndSettle`
+  /// They seed the new Outcome's tags via the draft — minus the person hints,
+  /// which [ClarifyDraft.assemble] drops. A one-shot read (not a watch)
+  /// because this screen renders no tag pickers — there is nothing on screen
+  /// for a live stream to keep in step, and subscribing to a live drift query
+  /// from a widget leaves a pending timer that hangs `pumpAndSettle`
   /// (docs/TESTING.md).
-  Set<String> _hintTagIds = const <String>{};
+  List<Tag> _hintTags = const <Tag>[];
 
   @override
   void initState() {
@@ -116,14 +116,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       return;
     }
     if (!mounted) return;
-    setState(() {
-      // Person hints are excluded: delegation is the orthogonal axis and the
-      // Waiting For picker is the only thing that writes it.
-      _hintTagIds = {
-        for (final t in hints)
-          if (t.type != 'person') t.id,
-      };
-    });
+    setState(() => _hintTags = hints);
   }
 
   /// Reconciles the screen with the subject as local storage now holds it.
@@ -164,34 +157,23 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     super.dispose();
   }
 
-  /// Snapshot of the card's state, read at tap time by [CaptureSubject.draft]
-  /// and applied by [ClarificationService.clarifyCaptureToOutcome] to the
-  /// Outcome it mints. Reading it at tap time (rather than at build time) is
-  /// what lets the live controller text win over the last-saved Capture row.
-  ClarifyDraft _draft() {
-    final title = _titleCtrl.text.trim();
-    final notes = _notesCtrl.text.trim();
-    return ClarifyDraft(
-      title: title,
-      notes: notes.isEmpty ? null : notes,
-      // Strip the time component: the picker collects a calendar day.
-      dueDate: _dueDate != null
-          ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
-          : null,
-      tagIds: _hintTagIds,
-      // Title-as-action: a Capture is always a first clarification, so there
-      // is no deliberate phrase to clobber. The phrase is consumed only for
-      // Next and Waiting For; the effort values land on the Outcome columns
-      // whatever the destination (D3).
-      action: title.isEmpty
-          ? null
-          : ActionDraft(
-              text: title,
-              energyLevel: _energyLevel,
-              timeEstimateMinutes: _timeEstimate,
-            ),
-    );
-  }
+  /// Snapshot of the screen's state, read at tap time by
+  /// [CaptureSubject.draft] and applied by
+  /// [ClarificationService.clarifyCaptureToOutcome] to the Outcome it mints.
+  /// Reading it at tap time (rather than at build time) is what lets the live
+  /// controller text win over the last-saved Capture row. The assembly rules
+  /// themselves live in [ClarifyDraft.assemble].
+  ClarifyDraft _draft() => ClarifyDraft.assemble(
+        title: _titleCtrl.text,
+        notes: _notesCtrl.text,
+        dueDate: _dueDate,
+        hintTags: _hintTags,
+        // No tag pickers on this screen, so there is no synchronous draft to
+        // keep — the hints are the tags.
+        draftTagIds: null,
+        energyLevel: _energyLevel,
+        timeEstimateMinutes: _timeEstimate,
+      );
 
   /// Persists the Capture's text edits, keeping the provenance record in step
   /// with what the user actually wrote.
@@ -310,7 +292,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       children: [
         CaptureOutcomesSection(
           capture: capture,
-          tagIds: _hintTagIds,
+          tagIds: _draft().tagIds,
           onCompleted: () async {
             if (mounted) context.pop();
           },

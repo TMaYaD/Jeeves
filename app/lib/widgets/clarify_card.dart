@@ -37,7 +37,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
-import '../models/action_draft.dart';
 import '../models/clarify_mode.dart';
 import '../providers/auth_provider.dart';
 import '../providers/clarify_mode_provider.dart';
@@ -554,44 +553,19 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   /// Snapshot of the card's current state, read at tap time by
-  /// [CaptureSubject.draft].
-  ClarifyDraft _draft(List<Tag> hints) {
-    final title = (_titleCtrl?.text ?? '').trim();
-    final notes = (_notesCtrl?.text ?? '').trim();
-    final personHintIds = {
-      for (final t in hints)
-        if (t.type == 'person') t.id,
-    };
-    return ClarifyDraft(
-      title: title,
-      notes: notes.isEmpty ? null : notes,
-      // Strip the time component: the picker collects a calendar day.
-      dueDate: _dueDate != null
-          ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
-          : null,
-      // The synchronous draft set once seeded, else whatever hints have
-      // loaded. Person tags never travel this way — the Waiting For picker
-      // supplies those, on the orthogonal delegation axis.
-      tagIds: {
-        for (final id in _draftTagsSeeded
-            ? _draftTagIds ?? const <String>{}
-            : {for (final t in hints) t.id})
-          if (!personHintIds.contains(id)) id,
-      },
-      // Title-as-action coupling: a Capture is by definition a first
-      // clarification, so there is no deliberate phrase to clobber and the
-      // title always mirrors. applyRouting consumes the phrase only for Next
-      // and Waiting For, so the other destinations are unaffected — but the
-      // effort values travel to the Outcome columns either way (D3).
-      action: title.isEmpty
-          ? null
-          : ActionDraft(
-              text: title,
-              energyLevel: _energyLevel,
-              timeEstimateMinutes: _timeEstimate,
-            ),
-    );
-  }
+  /// [CaptureSubject.draft]. The assembly rules themselves live in
+  /// [ClarifyDraft.assemble]; this method only supplies the field state.
+  ClarifyDraft _draft(List<Tag> hints) => ClarifyDraft.assemble(
+        title: _titleCtrl?.text ?? '',
+        notes: _notesCtrl?.text ?? '',
+        dueDate: _dueDate,
+        hintTags: hints,
+        // The synchronous draft once seeded, else null so the loaded hints
+        // stand in for it.
+        draftTagIds: _draftTagsSeeded ? _draftTagIds ?? const <String>{} : null,
+        energyLevel: _energyLevel,
+        timeEstimateMinutes: _timeEstimate,
+      );
 
   Widget _buildBody(
     BuildContext context, {
