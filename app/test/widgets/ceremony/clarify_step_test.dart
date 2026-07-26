@@ -13,12 +13,21 @@
 ///    loaded.
 library;
 
+import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/tags_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/utils/snapshot_nav.dart';
 import 'package:jeeves/widgets/ceremony/clarify_step.dart';
+import 'package:jeeves/widgets/clarify_retention.dart';
+
+import '../../test_helpers.dart';
 
 /// Minimal provider scope so the widget tree can build without crashing
 /// on providers that ClarifyCard might read inside ProviderScope.
@@ -27,6 +36,8 @@ Widget _wrap(Widget child) => ProviderScope(
     );
 
 void main() {
+  setUpAll(configureSqliteForTests);
+
   group('ClarifyStep — loading branch', () {
     testWidgets('shows CircularProgressIndicator while nav is not loaded',
         (tester) async {
@@ -87,6 +98,128 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Inbox is clear'), findsOneWidget);
+    });
+  });
+
+  // The cursor-retreat path, which no card-level test reaches: ClarifyStep
+  // keys each ClarifyCard by Capture id, so stepping back to the previous item
+  // builds a *different* card and disposes the one that held the typing. A
+  // retention store that looked healthy in every card test could still be dead
+  // here.
+  group('ClarifyStep \u2014 retention across the item cursor', () {
+    late GtdDatabase db;
+
+    setUp(() async {
+      db = GtdDatabase(NativeDatabase.memory());
+      for (final (id, title) in [('c1', 'Buy milk'), ('c2', 'Call Bob')]) {
+        await db.captureDao.insertCapture(CapturesCompanion(
+          id: Value(id),
+          title: Value(title),
+          captureSource: const Value('manual'),
+          userId: const Value('local'),
+          createdAt: Value(DateTime.now()),
+          updatedAt: Value(DateTime.now()),
+        ));
+      }
+    });
+    tearDown(() async => db.close());
+
+    /// The step at [index] of a two-item inbox snapshot.
+    ///
+    /// Every provider the inner card reads is fed a single-value stream:
+    /// a real drift `watch()` leaves a pending timer behind and hangs
+    /// `pumpAndSettle` (docs/TESTING.md).
+    Widget stepAt(int index, ClarifyRetention retention) => ProviderScope(
+          overrides: [
+            databaseProvider.overrideWithValue(db),
+            for (final id in ['c1', 'c2'])
+              captureProvider(id).overrideWith(
+                (_) => Stream.fromFuture(db.captureDao.getCapture(id)),
+              ),
+            for (final id in ['c1', 'c2'])
+              captureTagHintsProvider(id)
+                  .overrideWith((_) => Stream.value(const <Tag>[])),
+            personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+            contextTagsProvider
+                .overrideWith((_) => Stream.value(const <Tag>[])),
+            projectTagsProvider
+                .overrideWith((_) => Stream.value(const <Tag>[])),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: ClarifyStep(
+                nav: SnapshotNav<String>(items: const ['c1', 'c2'],
+                    index: index),
+                routings: const {},
+                onAfterRoute: (_) async {},
+                retention: retention,
+              ),
+            ),
+          ),
+        );
+
+    Future<void> pumpFrames(WidgetTester tester) async {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    String titleText(WidgetTester tester) =>
+        tester
+            .widget<TextField>(find.byKey(const Key('clarify_title')))
+            .controller
+            ?.text ??
+        '';
+
+    testWidgets('typing on the first item survives advancing and retreating',
+        (tester) async {
+      final retention = ClarifyRetention();
+
+      await tester.pumpWidget(stepAt(0, retention));
+      await pumpFrames(tester);
+      expect(titleText(tester), 'Buy milk');
+
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await tester.pump();
+
+      // Advance: a new ValueKey, so the first card is disposed outright.
+      await tester.pumpWidget(stepAt(1, retention));
+      await pumpFrames(tester);
+      expect(titleText(tester), 'Call Bob',
+          reason: 'the second item must render its own Capture, or the '
+              'retreat below proves nothing');
+
+      await tester.pumpWidget(stepAt(0, retention));
+      await pumpFrames(tester);
+
+      expect(titleText(tester), 'Buy oat milk');
+      // …and the Capture itself is still untouched (ADR-0023).
+      expect((await db.captureDao.getCapture('c1'))!.title, 'Buy milk');
+    });
+
+    testWidgets('each item keeps its own draft', (tester) async {
+      final retention = ClarifyRetention();
+
+      await tester.pumpWidget(stepAt(0, retention));
+      await pumpFrames(tester);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await tester.pump();
+
+      await tester.pumpWidget(stepAt(1, retention));
+      await pumpFrames(tester);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Call Bob back');
+      await tester.pump();
+
+      await tester.pumpWidget(stepAt(0, retention));
+      await pumpFrames(tester);
+      expect(titleText(tester), 'Buy oat milk');
+
+      await tester.pumpWidget(stepAt(1, retention));
+      await pumpFrames(tester);
+      expect(titleText(tester), 'Call Bob back');
     });
   });
 }

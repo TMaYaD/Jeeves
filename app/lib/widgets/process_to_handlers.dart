@@ -62,6 +62,53 @@ enum ProcessAction {
   reclarify,
 }
 
+/// Whether an action reported through [ProcessToHandlers.onAfterRoute] means a
+/// **Capture** reached a verdict — the decision that ends its clarify act and
+/// spends anything a surface was holding on its behalf (ADR-0023).
+///
+/// Read by [ClarifyCard] to decide whether the retained draft may be dropped.
+/// `onAfterRoute` fires for every action the bar handles, including ones that
+/// deliberately leave the Capture in the Inbox, so "the hook ran" is not the
+/// same question as "the Capture is done with".
+///
+/// Where each answer comes from, in this file:
+///
+/// - `next`, `waitingFor`, `someday`, `done`, `trash` all reach [_commit]
+///   unconditionally once the subject still exists, and its [CaptureSubject]
+///   branch either mints an Outcome and stamps `clarified_at` or discards the
+///   Capture outright. Verdicts. (`done` is excepted on a Capture card, but it
+///   is a verdict wherever it is offered.)
+/// - `completeCapture` stamps `clarified_at` and creates nothing. A verdict.
+/// - `keep` is an explicit no-op on a [CaptureSubject] in [_keep] — "leave it
+///   in the Inbox", `clarified_at` stays NULL. **Not** a verdict.
+/// - `reclarify` throws on a [CaptureSubject]; it can never report one.
+/// - `nextActionDialog` notifies even when the dialog came back blank and no
+///   write was made ([_nextWithDialog]), so it cannot promise a verdict.
+///
+/// Deliberately conservative on the last two: a false negative leaks a store
+/// entry that a ceremony reset collects, while a false positive throws away
+/// what the user typed. Only one of those is a bug ADR-0023 exists to prevent.
+///
+/// Says nothing about the n-m carve, where the same destinations leave the
+/// Capture in the Inbox ([CaptureSubject.completesClarification]): that surface
+/// reports through `CaptureOutcomesSection` rather than the clarify card's own
+/// bar, and the card is given only its two genuine verdicts.
+extension ProcessActionEndsCaptureClarification on ProcessAction {
+  bool get endsCaptureClarification => switch (this) {
+        ProcessAction.next ||
+        ProcessAction.waitingFor ||
+        ProcessAction.someday ||
+        ProcessAction.done ||
+        ProcessAction.trash ||
+        ProcessAction.completeCapture =>
+          true,
+        ProcessAction.keep ||
+        ProcessAction.reclarify ||
+        ProcessAction.nextActionDialog =>
+          false,
+      };
+}
+
 /// Co-located translation: callsites holding a [RoutingKind] from a session
 /// record convert at the read site so the widget never sees [RoutingKind].
 extension RoutingKindToProcessAction on RoutingKind {
@@ -123,6 +170,67 @@ class ClarifyDraft {
     this.tagIds = const <String>{},
     this.action,
   });
+
+  /// The one assembly rule every clarify surface applies to its own field
+  /// state, extracted so it is provable without pumping a widget.
+  ///
+  /// Three policies live here and nowhere else:
+  ///
+  /// - **Blank title nulls the whole [action].** A blank phrase beside live
+  ///   effort values would claim an Action exists when none does.
+  /// - **Person tags never travel.** Delegation is the orthogonal axis and the
+  ///   Waiting For picker is the only thing that writes it, so a person *hint*
+  ///   on the Capture is dropped rather than seeded onto the Outcome.
+  /// - **[dueDate] is truncated to a calendar day.** The picker collects a
+  ///   day; carrying its time component would make "due today" depend on the
+  ///   moment the picker happened to open.
+  ///
+  /// [hintTags] are the Capture's tag hints — the source of both the person
+  /// exclusion set and, when [draftTagIds] is null, the tags themselves.
+  /// [draftTagIds] is the synchronously maintained draft a surface with
+  /// editable pickers keeps (the DAO writes those pickers fire are
+  /// `unawaited`, so the hint stream is a frame behind a user who taps a
+  /// destination immediately after touching a tag). A surface that renders no
+  /// pickers has no such draft and passes null.
+  static ClarifyDraft assemble({
+    required String title,
+    required String notes,
+    required DateTime? dueDate,
+    required List<Tag> hintTags,
+    required Set<String>? draftTagIds,
+    required String? energyLevel,
+    required int? timeEstimateMinutes,
+  }) {
+    final trimmedTitle = title.trim();
+    final trimmedNotes = notes.trim();
+    final personHintIds = {
+      for (final t in hintTags)
+        if (t.type == 'person') t.id,
+    };
+    return ClarifyDraft(
+      title: trimmedTitle,
+      notes: trimmedNotes.isEmpty ? null : trimmedNotes,
+      dueDate: dueDate != null
+          ? DateTime(dueDate.year, dueDate.month, dueDate.day)
+          : null,
+      tagIds: {
+        for (final id in draftTagIds ?? {for (final t in hintTags) t.id})
+          if (!personHintIds.contains(id)) id,
+      },
+      // Title-as-action coupling: a Capture is by definition a first
+      // clarification, so there is no deliberate phrase to clobber and the
+      // title always mirrors. applyRouting consumes the phrase only for Next
+      // and Waiting For, so the other destinations are unaffected — but the
+      // effort values travel to the Outcome columns either way (D3).
+      action: trimmedTitle.isEmpty
+          ? null
+          : ActionDraft(
+              text: trimmedTitle,
+              energyLevel: energyLevel,
+              timeEstimateMinutes: timeEstimateMinutes,
+            ),
+    );
+  }
 
   final String title;
   final String? notes;
@@ -647,20 +755,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     if (!mounted) return;
     final routed = await Navigator.of(context).push<ProcessAction>(
       MaterialPageRoute<ProcessAction>(
-        builder: (routeContext) => Scaffold(
-          appBar: AppTitleBar(
-            title: 'Re-clarify',
-            pinnedAction: captureAction(routeContext),
-          ),
-          body: ClarifyCard.forOutcome(
-            todoId: subject.todo.id,
-            onAfterRoute: (action) async {
-              if (Navigator.of(routeContext).canPop()) {
-                Navigator.of(routeContext).pop(action);
-              }
-            },
-          ),
-        ),
+        builder: (_) => ReclarifyRoute(todoId: subject.todo.id),
       ),
     );
     if (!mounted) return;
@@ -859,6 +954,54 @@ class _ActionButton extends StatelessWidget {
         minimumSize: const Size.fromHeight(44),
         padding: const EdgeInsets.symmetric(horizontal: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
+      ),
+    );
+  }
+}
+
+/// The third clarify host: a full-page route wrapping [ClarifyCard.forOutcome].
+///
+/// Named rather than inlined into `_ProcessToHandlersState._reclarify` so all
+/// three clarify hosts read alike — a ceremony step, [InboxClarifyScreen] and
+/// this — and so the chrome one of them owns is visible as chrome rather than
+/// as a builder nested inside a navigation call.
+///
+/// It pops with the [ProcessAction] the inner card routed, or with null when
+/// the user backs out without routing; the caller maps that to
+/// [ProcessAction.keep] so a review step advances without recording a routing.
+///
+/// Deliberately thinner than [InboxClarifyScreen]: no `PopScope`, no
+/// missing-state CTA. Backing out mid-write is not the same hazard here — the
+/// subject already exists and the write edits it in place, so there is no
+/// create-link-stamp sequence to interrupt — and the app bar's back arrow is a
+/// way out the missing state can rely on. Neither guard was present in the
+/// inline version this replaces, so neither absence is a regression; adding
+/// them would be a change rather than a move.
+class ReclarifyRoute extends StatelessWidget {
+  const ReclarifyRoute({super.key, required this.todoId});
+
+  /// The Outcome being re-clarified.
+  final String todoId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppTitleBar(
+        title: 'Re-clarify',
+        pinnedAction: captureAction(context),
+      ),
+      body: ClarifyCard.forOutcome(
+        todoId: todoId,
+        onAfterRoute: (action) async {
+          // The card awaits its own post-route bookkeeping before calling
+          // this, so the route can be gone by the time it runs — pop the
+          // screen from underneath (platform back, a deep link) and
+          // `Navigator.of` on a defunct element throws.
+          if (!context.mounted) return;
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop(action);
+          }
+        },
       ),
     );
   }

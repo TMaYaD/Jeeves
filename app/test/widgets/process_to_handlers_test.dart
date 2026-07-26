@@ -386,6 +386,52 @@ void main() {
     });
   });
 
+  // `onAfterRoute` fires for every action this bar handles, including the ones
+  // that deliberately leave a Capture in the Inbox. A surface holding
+  // something on the Capture's behalf — [ClarifyCard]'s retained draft
+  // (ADR-0023) — reads this to tell the two apart, so getting an entry wrong
+  // here is the difference between a spent draft lingering and the user's
+  // typing being thrown away on an item they have not finished clarifying.
+  group('ProcessActionEndsCaptureClarification extension', () {
+    test('the routing destinations and the n-m verdict end the clarify act',
+        () {
+      // Each of these reaches `_commit` (or `completeCaptureClarification`)
+      // unconditionally once the Capture still exists, so the row is either
+      // stamped or discarded by the time the hook runs.
+      for (final action in const [
+        ProcessAction.next,
+        ProcessAction.waitingFor,
+        ProcessAction.someday,
+        ProcessAction.done,
+        ProcessAction.trash,
+        ProcessAction.completeCapture,
+      ]) {
+        expect(action.endsCaptureClarification, isTrue, reason: '$action');
+      }
+    });
+
+    test('keep, reclarify and the dialog modifier do not', () {
+      // `keep` on a Capture is an explicit no-op — the whole point is that the
+      // item stays in the Inbox with `clarified_at` NULL. `reclarify` throws
+      // on a Capture, so it can never report one. `nextActionDialog` notifies
+      // even when the dialog came back blank and nothing was written.
+      for (final action in const [
+        ProcessAction.keep,
+        ProcessAction.reclarify,
+        ProcessAction.nextActionDialog,
+      ]) {
+        expect(action.endsCaptureClarification, isFalse, reason: '$action');
+      }
+    });
+
+    test('every ProcessAction is classified', () {
+      // The switch is exhaustive, so a new action fails to compile rather than
+      // defaulting into either answer — this pins that the enum and the two
+      // lists above stay in step.
+      expect(ProcessAction.values.length, 9);
+    });
+  });
+
   group('ProcessToHandlers — keep', () {
     late GtdDatabase db;
 

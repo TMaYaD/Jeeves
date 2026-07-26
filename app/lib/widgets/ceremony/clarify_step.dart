@@ -32,6 +32,7 @@ import 'package:flutter/material.dart';
 
 import '../../utils/snapshot_nav.dart';
 import '../../widgets/clarify_card.dart';
+import '../../widgets/clarify_retention.dart';
 import '../../widgets/process_to_handlers.dart';
 
 /// Shared "Clarify Inbox" step body widget.
@@ -47,6 +48,7 @@ class ClarifyStep extends StatefulWidget {
     required this.onAfterRoute,
     this.onAfterComplete,
     this.onLoad,
+    this.retention,
   });
 
   /// The inbox snapshot cursor for this ceremony.
@@ -71,6 +73,15 @@ class ClarifyStep extends StatefulWidget {
   /// Called once on the first frame when [nav] is not yet loaded, so the
   /// caller can kick the snapshot load.
   final VoidCallback? onLoad;
+
+  /// Where an in-progress clarify draft is held across navigation.
+  ///
+  /// Retreating the item cursor changes the card's [ValueKey], and crossing a
+  /// step boundary unmounts the whole page once the fields are not holding
+  /// focus, so the card's own State cannot carry it. Nothing persists a
+  /// Capture's text either (ADR-0023), which is what makes the store the only
+  /// thing standing between Back and lost typing.
+  final ClarifyRetention? retention;
 
   @override
   State<ClarifyStep> createState() => _ClarifyStepState();
@@ -128,12 +139,16 @@ class _ClarifyStepState extends State<ClarifyStep> {
     return ClarifyCard.forCapture(
       key: ValueKey(captureId),
       captureId: captureId,
+      // The ceremony surfaces let the user categorise as they clarify: the
+      // pickers write tag hints, which seed the Outcome the item becomes.
+      tagSection: ClarifyTagSection.editablePickers,
       // The RoutingKindToProcessAction extension lives in
       // process_to_handlers.dart and is imported transitively via
       // clarify_card.dart → process_to_handlers.dart.
       lastAction: widget.routings[index]?.toProcessAction(),
       onAfterRoute: widget.onAfterRoute,
       onCaptureCompleted: widget.onAfterComplete,
+      retention: widget.retention,
     );
   }
 }
