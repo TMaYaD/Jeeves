@@ -1364,9 +1364,13 @@ void main() {
       await _pumpFrames(tester, frames: 5);
       expect(titleText(tester), 'Buy almond milk');
 
-      // The stale baseline is what keeps it dirty for the rest of the card's
-      // life: a *further* incoming change must still leave it alone. Advancing
-      // the baseline on re-seed would let this push overwrite the typing.
+      // A *further* incoming change must still leave the field alone: the
+      // card's live listener is not a one-shot. This says nothing about the
+      // stale-baseline rule inside `seedFrom` — the card measures dirty as
+      // "controller text ≠ baseline", so an advanced baseline would still read
+      // dirty here and the push would still be ignored. That rule is provable
+      // only where the baseline itself is observable, in
+      // clarify_retention_test.dart.
       await db.captureDao.updateFields('x', title: 'Buy soy milk');
       feed.add(await db.captureDao.getCapture('x'));
       await _pumpFrames(tester, frames: 5);
@@ -1375,6 +1379,14 @@ void main() {
     });
 
     testWidgets('the verdict discards the draft', (tester) async {
+      // The card only stashes from `dispose()`, so a test that types and
+      // routes without ever unmounting asserts against a store that has never
+      // held an entry — `isNull` before, during and after, whatever the
+      // production code does. The unmount/remount below is what makes the
+      // discard falsifiable, and it is also the real scenario: type on a
+      // Capture, step Back (stashing it), step forward, then route. Without
+      // the discard that entry outlives its own verdict and seeds the card
+      // again on any later visit, in either ceremony — the store is shared.
       final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
       final retention = ClarifyRetention();
 
@@ -1386,11 +1398,26 @@ void main() {
           find.byKey(const Key('clarify_title')), 'Buy oat milk');
       await tester.pump();
 
+      // Back: the draft lands in the store.
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+      expect(retention.read('x')?.title, 'Buy oat milk',
+          reason: 'the entry the verdict has to clear must exist first');
+
+      // Forward again, onto the same Capture, and route it.
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
       await _scrollAndTap(tester, 'Next Action');
       await _pumpFrames(tester);
 
-      // The dispose that follows the verdict must not put it back — the
-      // interpretation is on the Outcome now.
+      expect(retention.read('x'), isNull,
+          reason: 'the verdict spends the draft: the interpretation is on the '
+              'Outcome now');
+
+      // …and the dispose that follows the verdict — the host advances its
+      // cursor moments later — must not put it straight back.
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() => pumpEventQueue());
 
