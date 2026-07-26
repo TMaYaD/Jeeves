@@ -138,6 +138,18 @@ Future<void> _pumpFrames(WidgetTester tester, {int frames = 40}) async {
   }
 }
 
+/// Drops focus from whichever field currently holds it, then lets the
+/// resulting write reach the database.
+///
+/// On the Outcome shape this is the *only* thing that saves title and notes
+/// while the card is open (ADR-0023) — `tester.enterText` leaves the field
+/// focused, so a test that types and asserts without this is asserting on the
+/// pre-edit row.
+Future<void> _loseFocus(WidgetTester tester) async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  await _pumpFrames(tester, frames: 5);
+}
+
 /// The text the card currently holds in its title field.
 String titleText(WidgetTester tester) =>
     tester
@@ -827,12 +839,6 @@ void main() {
       // Dirty field keeps the user's edit; the clean one takes the change.
       expect(titleText(tester), 'Buy almond milk');
       expect(notesText(tester), 'Barista');
-
-      // Let the autosave debounce fire before the card is torn down, so this
-      // test pins the live binding and nothing else. Disposing with an
-      // unflushed edit takes the card's fire-and-forget flush path, which is
-      // exercised deliberately by the `#529` group at the end of this file.
-      await _pumpFrames(tester, frames: 15);
     });
 
     testWidgets('Capture card stops being editable once the row is gone',
@@ -996,26 +1002,6 @@ void main() {
       );
     });
 
-    testWidgets('clearing notes on a Capture nulls the column, not empty '
-        'string', (tester) async {
-      final capture =
-          await _insertCapture(db, id: 'x', notes: 'Ask the barista');
-      final feed = StreamController<Capture?>.broadcast();
-      addTearDown(feed.close);
-
-      await tester.pumpWidget(
-        _captureHarness(db, capture: capture, captureStream: feed.stream),
-      );
-      feed.add(capture);
-      await _pumpFrames(tester, frames: 5);
-
-      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
-      // Well past the 400ms autosave debounce.
-      await _pumpFrames(tester);
-
-      expect((await _rawCaptureRow(db, 'x')).notes, isNull);
-    });
-
     testWidgets('clearing notes on an Outcome nulls the column, not empty '
         'string', (tester) async {
       final todo =
@@ -1028,64 +1014,71 @@ void main() {
       );
       feed.add(todo);
       await _pumpFrames(tester, frames: 5);
+      expect(notesText(tester), 'Ask the barista',
+          reason: 'the seeded notes must reach the field, or clearing it '
+              'below is not a clear');
 
       await tester.enterText(find.byKey(const Key('clarify_notes')), '');
-      await _pumpFrames(tester);
+      await _loseFocus(tester);
 
       expect((await _rawTodoRow(db, 't')).notes, isNull);
     });
   });
 
-  // `dispose()`'s flush is the last line of defence for an edit made inside the
-  // 400 ms autosave debounce: leave the card that fast and nothing else will
-  // ever write it.
+  // A Capture is the raw record of what the user captured. Clarification
+  // produces structure from it; it never edits it (ADR-0023). These tests are
+  // the pin for that: whatever is typed, and however the card is left, the
+  // `captures` row must still hold what was seeded.
   //
-  // It used to open by reading `databaseProvider` off `ref`. That never worked:
-  // `StatefulElement.unmount()` calls `Element.unmount()` — which marks the
-  // element defunct, so `context.mounted` goes false — *before* it calls
-  // `state.dispose()`, and Riverpod asserts on exactly that. The flush threw on
-  // its first line, the `unawaited` write was never issued, and the edit was
-  // lost with only an uncaught teardown error to show for it (#529).
-  //
-  // Each test below unmounts without advancing the clock past the debounce, so
-  // the dispose flush is the only thing that could have done the write. Notes
-  // are seeded non-null so the `isNull` assertions are falsifiable.
-  group('ClarifyCard — the dispose flush persists a pending edit (#529)', () {
+  // `updated_at` is the sharpest available signal — CaptureDao.updateFields
+  // always stamps it on any write — so an unchanged value means no write of
+  // any kind reached the row, not merely that the columns happened to match.
+  group('ClarifyCard \u2014 a Capture is never written (ADR-0023)', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    /// Tears the card down and lets its fire-and-forget flush reach the
-    /// database.
-    ///
-    /// `pumpWidget` does not advance the fake clock, so the 400 ms debounce
-    /// still has not fired when `dispose()` runs — no other write path is in
-    /// play. The flush is `unawaited`, so it needs a turn of the *real* event
-    /// loop to land; `pumpAndSettle` is not an option on the Capture path
-    /// (see [_pumpFrames]).
-    Future<void> unmountBeforeDebounce(WidgetTester tester) async {
+    /// Tears the card down and gives any fire-and-forget write a turn of the
+    /// *real* event loop to land, so "nothing was written" is a claim about
+    /// the write never being issued rather than about the test not waiting.
+    Future<void> unmountAndDrain(WidgetTester tester) async {
       await tester.pumpWidget(const SizedBox());
       await tester.runAsync(() => pumpEventQueue());
     }
 
-    testWidgets('Capture card writes a title edited inside the debounce window',
-        (tester) async {
+    testWidgets('typing a new title never reaches the row \u2014 not on a timer, '
+        'not on dispose', (tester) async {
       final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final seededUpdatedAt = capture.updatedAt;
       await tester.pumpWidget(_captureHarness(db, capture: capture));
       await _pumpFrames(tester, frames: 5);
 
       await tester.enterText(
           find.byKey(const Key('clarify_title')), 'Buy oat milk');
-      await unmountBeforeDebounce(tester);
+      // Past a focus loss and well past the debounce the card used to arm \u2014
+      // the two triggers that used to write.
+      await _loseFocus(tester);
+      await _pumpFrames(tester);
 
-      expect((await _rawCaptureRow(db, 'x')).title, 'Buy oat milk');
+      final beforeUnmount = await _rawCaptureRow(db, 'x');
+      expect(beforeUnmount.title, 'Buy milk');
+      expect(beforeUnmount.updatedAt, seededUpdatedAt);
+
+      // Asserted before *and* after the unmount: a single post-unmount check
+      // could not tell a live debounce from a dispose flush.
+      await unmountAndDrain(tester);
+
+      final afterUnmount = await _rawCaptureRow(db, 'x');
+      expect(afterUnmount.title, 'Buy milk',
+          reason: 'the Inbox shows what was captured, not the working copy');
+      expect(afterUnmount.updatedAt, seededUpdatedAt);
     });
 
-    testWidgets('Capture card nulls notes cleared inside the debounce window',
-        (tester) async {
+    testWidgets('clearing notes never reaches the row', (tester) async {
       final capture =
           await _insertCapture(db, id: 'x', notes: 'Ask the barista');
+      final seededUpdatedAt = capture.updatedAt;
       await tester.pumpWidget(_captureHarness(db, capture: capture));
       await _pumpFrames(tester, frames: 5);
       expect(notesText(tester), 'Ask the barista',
@@ -1093,14 +1086,64 @@ void main() {
               'below is not a clear');
 
       await tester.enterText(find.byKey(const Key('clarify_notes')), '');
-      await unmountBeforeDebounce(tester);
+      await _loseFocus(tester);
+      await unmountAndDrain(tester);
 
-      // `clearNotes` (#528) only becomes reachable once the flush stops
-      // throwing: without the flag an emptied field would store `''`.
-      expect((await _rawCaptureRow(db, 'x')).notes, isNull);
+      final row = await _rawCaptureRow(db, 'x');
+      expect(row.notes, 'Ask the barista');
+      expect(row.updatedAt, seededUpdatedAt);
     });
 
-    testWidgets('Outcome card writes a title edited inside the debounce window',
+    testWidgets('the edit still reaches the Outcome the Capture is routed to',
+        (tester) async {
+      // The other half of the rule, and why it is not simply data loss: what
+      // the user typed is the *interpretation*, and the interpretation is what
+      // the Outcome is made of.
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await tester.pump();
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      final outcomeId = (await db.captureDao.outcomeIdsForCapture('x')).single;
+      expect((await _rawTodoRow(db, outcomeId)).title, 'Buy oat milk');
+      expect((await _rawCaptureRow(db, 'x')).title, 'Buy milk',
+          reason: 'routing is the moment the Capture is most tempting to '
+              'rewrite, and the one where provenance matters most');
+    });
+  });
+
+  // An Outcome is not provenance \u2014 editing one is ordinary editing, so
+  // re-clarify saves title and notes the way `task_detail_screen` and
+  // `active_focus_screen` do: on focus loss (ADR-0023).
+  //
+  // `dispose()` backs that up for the case focus loss cannot cover: a route
+  // popped while a field still holds focus tears the focus scope down without
+  // notifying the listener first. It used to open by reading `databaseProvider`
+  // off `ref`, which never worked \u2014 `StatefulElement.unmount()` marks the
+  // element defunct before calling `state.dispose()`, and Riverpod asserts on
+  // exactly that, so the write was never issued and the edit was lost with only
+  // an uncaught teardown error to show for it (#529).
+  group('ClarifyCard \u2014 an Outcome saves its text on focus loss', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    /// Tears the card down and lets its fire-and-forget flush reach the
+    /// database. The flush is `unawaited`, so it needs a turn of the *real*
+    /// event loop to land.
+    Future<void> unmountWhileFocused(WidgetTester tester) async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+    }
+
+    testWidgets('a title edit saves when the field loses focus',
         (tester) async {
       final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
       await tester.pumpWidget(_harness(db, todo: todo));
@@ -1108,12 +1151,28 @@ void main() {
 
       await tester.enterText(
           find.byKey(const Key('clarify_title')), 'Buy oat milk');
-      await unmountBeforeDebounce(tester);
+      // Asserted *before* any unmount, or the dispose flush below would be
+      // indistinguishable from the focus-loss save.
+      await _loseFocus(tester);
 
       expect((await _rawTodoRow(db, 't')).title, 'Buy oat milk');
     });
 
-    testWidgets('Outcome card nulls notes cleared inside the debounce window',
+    testWidgets('a title edit still saves when the card is torn down with the '
+        'field focused', (tester) async {
+      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+
+      // No focus loss \u2014 straight to teardown, which is what a route pop does.
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await unmountWhileFocused(tester);
+
+      expect((await _rawTodoRow(db, 't')).title, 'Buy oat milk');
+    });
+
+    testWidgets('notes cleared with the field focused still null the column',
         (tester) async {
       final todo =
           await _insertInboxTodo(db, id: 't', notes: 'Ask the barista');
@@ -1124,45 +1183,25 @@ void main() {
               'below is not a clear');
 
       await tester.enterText(find.byKey(const Key('clarify_notes')), '');
-      await unmountBeforeDebounce(tester);
+      await unmountWhileFocused(tester);
 
+      // `clearNotes` (#528): without the flag an emptied field stores `''`,
+      // which every `notes == null` read treats as "has notes".
       expect((await _rawTodoRow(db, 't')).notes, isNull);
     });
 
-    // The flush above is gated on `hasPendingWrite` — trimmed title
-    // non-empty and (title or notes actually differs from what was last
-    // saved). Nothing pins the other side of that guard: a clean unmount,
+    // Nothing else pins the other side of the dispose guard: a clean unmount,
     // with no edit at all, must issue no write. If the guard were ever made
     // unconditional, every unmount would bump `updated_at` on a row the user
-    // never touched — which feeds sync arbitration and the trash list's
+    // never touched \u2014 which feeds sync arbitration and the trash list's
     // `ORDER BY COALESCE(last_clarified_at, updated_at, created_at)`.
-    // `updated_at` is the sharpest signal available: both DAOs'
-    // `updateFields` always stamp it on any write, so an unchanged value
-    // means the dispose flush never ran.
-    testWidgets(
-        'Capture card issues no write on a clean dispose (no pending edit)',
-        (tester) async {
-      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
-      final seededUpdatedAt = capture.updatedAt;
-      await tester.pumpWidget(_captureHarness(db, capture: capture));
-      await _pumpFrames(tester, frames: 5);
-
-      // No edit made — unmount straight away, still inside the debounce.
-      await unmountBeforeDebounce(tester);
-
-      expect((await _rawCaptureRow(db, 'x')).updatedAt, seededUpdatedAt);
-    });
-
-    testWidgets(
-        'Outcome card issues no write on a clean dispose (no pending edit)',
-        (tester) async {
+    testWidgets('a clean dispose issues no write', (tester) async {
       final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
       final seededUpdatedAt = todo.updatedAt;
       await tester.pumpWidget(_harness(db, todo: todo));
       await _pumpFrames(tester, frames: 5);
 
-      // No edit made — unmount straight away, still inside the debounce.
-      await unmountBeforeDebounce(tester);
+      await unmountWhileFocused(tester);
 
       expect((await _rawTodoRow(db, 't')).updatedAt, seededUpdatedAt);
     });

@@ -7,10 +7,12 @@
 /// renders, so the destinations, their copy and the writes behind them cannot
 /// drift from those surfaces.
 ///
-/// Title and notes are saved onto the Capture after a successful route.
-/// Energy, time estimate and due date have no column on a Capture (ADR-0006) —
-/// they are held as draft state here and ride the [ClarifyDraft] into the
-/// Outcome that [ClarificationService.clarifyCaptureToOutcome] creates.
+/// Nothing typed here is written back to the Capture (ADR-0023): the Capture
+/// is the raw record of what was captured, and clarification produces
+/// structure from it rather than editing it. Title and notes seed from the row
+/// and — along with energy, time estimate and due date, which have no column
+/// on a Capture (ADR-0006) — ride the [ClarifyDraft] into the Outcome that
+/// [ClarificationService.clarifyCaptureToOutcome] creates.
 ///
 /// The subject comes from [captureProvider], so a row that changes — or
 /// disappears — while the screen is open re-renders it. That is local-storage
@@ -52,7 +54,6 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   String? _energyLevel;
   int? _timeEstimate;
   DateTime? _dueDate;
-  Capture? _capture;
 
   /// True once the subject has been reconciled at least once, from either the
   /// build-time seed or the listener. Gates the seed so it runs exactly once.
@@ -77,9 +78,9 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// leaves this screen — Skip, the app-bar back button, platform back —
   /// shuts alongside the bar's own buttons.
   ///
-  /// Popping mid-write is not merely cosmetic: the routing verdict lands, but
-  /// the widget unmounts before `onAfterRoute` runs, so [_saveCaptureText] is
-  /// skipped and the Capture keeps a title the Outcome no longer has.
+  /// Popping mid-write is not merely cosmetic: the routing verdict lands
+  /// against a screen the user has already left, so the tap that started it
+  /// gives no feedback and a failure has nowhere to report.
   bool _routing = false;
 
   /// Tag hints on this Capture, read once alongside it.
@@ -133,11 +134,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// the build-time seed calls it bare, because a build is already in flight.
   void _reconcile(Capture? capture) {
     _seeded = true;
-    if (capture == null) {
-      _capture = null;
-      return;
-    }
-    _capture = capture;
+    if (capture == null) return;
     if (_appliedTitle == null || _titleCtrl.text.trim() == _appliedTitle) {
       if (_titleCtrl.text != capture.title) _titleCtrl.text = capture.title;
       _appliedTitle = capture.title.trim();
@@ -174,37 +171,6 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
         energyLevel: _energyLevel,
         timeEstimateMinutes: _timeEstimate,
       );
-
-  /// Persists the Capture's text edits, keeping the provenance record in step
-  /// with what the user actually wrote.
-  ///
-  /// Skipped entirely for a blank title. The only route that survives a blank
-  /// title is Discard (every other button is disabled), and writing `title:
-  /// ''` onto a Capture whose `clarified_at` was just stamped would destroy
-  /// the record of *what* was discarded — the original fragment is the
-  /// correct history. Notes are skipped with it: a blank-titled discard has no
-  /// edit worth keeping.
-  ///
-  /// `clearNotes` is driven by the field alone: clearing an already-null
-  /// column is a no-op, so there is no need to know what the row held — and
-  /// no load-time snapshot to get it wrong.
-  Future<void> _saveCaptureText() async {
-    final title = _titleCtrl.text.trim();
-    if (title.isEmpty) return;
-    if (_capture == null) return;
-    final notes = _notesCtrl.text.trim();
-    await ref.read(databaseProvider).captureDao.updateFields(
-          widget.captureId,
-          title: title,
-          notes: notes.isNotEmpty ? notes : null,
-          clearNotes: notes.isEmpty,
-        );
-    // What we just wrote is now what the row holds, so the fields are clean
-    // again and a later incoming change may be applied to them.
-    if (!mounted) return;
-    _appliedTitle = title;
-    _appliedNotes = notes;
-  }
 
   Future<DateTime?> _pickDate() {
     final now = DateTime.now();
@@ -491,18 +457,11 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                   onProcessingChanged: (busy) {
                     if (mounted) setState(() => _routing = busy);
                   },
+                  // The routing verdict is already committed and nothing on
+                  // this screen writes the Capture (ADR-0023), so leaving is
+                  // the whole of the post-verdict work.
                   onAfterRoute: (_) async {
-                    if (!mounted) return;
-                    // The routing verdict is already committed. Persisting the
-                    // text is best-effort bookkeeping on top of it, so a
-                    // failure must not strand the user on a screen whose
-                    // buttons would re-route an item that is already clarified
-                    // — leave regardless, and let ProcessToHandlers report it.
-                    try {
-                      await _saveCaptureText();
-                    } finally {
-                      if (mounted) context.pop();
-                    }
+                    if (mounted) context.pop();
                   },
                 ),
                 const SizedBox(height: 20),

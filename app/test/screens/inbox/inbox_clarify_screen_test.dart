@@ -698,9 +698,9 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Edit the title so there is a pending Capture write to lose: the
-      // routing verdict carries the new title into the Outcome, but the
-      // Capture only catches up in `onAfterRoute`.
+      // Edit the title so the write in flight is carrying something: the
+      // routing verdict reads the draft at tap time and mints the Outcome
+      // from it.
       await tester.enterText(
           find.byKey(const Key('clarify_title')), 'New title');
       await tester.pump();
@@ -712,8 +712,9 @@ void main() {
       await tester.pump();
 
       // The app-bar button and platform back are separate escapes from Skip;
-      // either one popping here unmounts the screen before the text flush,
-      // leaving the Capture's title behind the Outcome's.
+      // either one popping here leaves the routing verdict landing against a
+      // screen the user has already left — the tap gives no feedback and a
+      // failure has nowhere to report.
       expect(_backEnabled(tester), isFalse);
 
       // Platform back is the escape no widget owns, so drive it for real
@@ -731,10 +732,10 @@ void main() {
       gate.complete();
       await tester.pumpAndSettle();
 
-      // Both writes landed, so the provenance record matches what the user
-      // actually wrote.
+      // The edit lands on the Outcome — that is what clarification produces.
       expect((await _outcomeOf(db, 'x'))!.title, 'New title');
-      expect((await db.captureDao.getCapture('x'))!.title, 'New title');
+      // …and not on the Capture, which keeps the raw fragment (ADR-0023).
+      expect((await db.captureDao.getCapture('x'))!.title, 'Buy milk');
     });
 
     testWidgets('empty title does not clarify the Capture', (tester) async {
@@ -931,7 +932,7 @@ void main() {
       expect((await _outcomeOf(db, 'x'))!.title, 'Buy oat milk');
     });
 
-    testWidgets('clearing notes persists after an intermediate save',
+    testWidgets('notes cleared after an incoming edit reach the Outcome as null',
         (tester) async {
       await db.captureDao
           .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
@@ -940,13 +941,22 @@ void main() {
       await feed.emitFrom(db, 'x');
       await tester.pumpAndSettle();
 
-      // The intermediate save: notes reach the row while the screen is open.
-      // Before #427 the screen's load-time snapshot still said "no notes", so
-      // the subsequent clear computed `clearNotes: false` and the stale notes
-      // survived as Capture provenance.
+      // Notes reach the row while the screen is open. Before #427 the screen
+      // held a load-time snapshot that still said "no notes", so it never put
+      // them in the field and the clear below would have been a no-op on an
+      // already-empty box rather than a real clear.
       await db.captureDao.updateFields('x', notes: 'Full fat');
       await feed.emitFrom(db, 'x');
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('clarify_notes')))
+            .controller
+            ?.text,
+        'Full fat',
+        reason: 'the incoming notes must reach the clean field, or clearing '
+            'it below is not a clear',
+      );
 
       await tester.enterText(find.byKey(const Key('clarify_notes')), '');
       await tester.pumpAndSettle();
@@ -954,7 +964,10 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      expect((await db.captureDao.getCapture('x'))!.notes, isNull);
+      // The user's clear is an interpretation, so it lands on the Outcome…
+      expect((await _outcomeOf(db, 'x'))!.notes, isNull);
+      // …while the Capture keeps the fragment as it was (ADR-0023).
+      expect((await db.captureDao.getCapture('x'))!.notes, 'Full fat');
     });
 
     testWidgets('a subject that disappears stops being editable',
