@@ -357,11 +357,17 @@ class FocusSessionPlanningState {
   /// plus the current navigation cursor. items == null until loaded;
   /// ordered oldest-first (FIFO).
   ///
-  /// Storing only IDs (not full [Todo] rows) keeps the snapshot's role
-  /// narrow — it pins the order the user is walking through, while the
-  /// authoritative attributes are read live from Drift via
-  /// [taskDetailTodoProvider]. Edits autosave on change, so there is no
-  /// "draft vs. snapshot vs. DB" divergence to reconcile.
+  /// Storing only IDs (not full rows) keeps the snapshot's role narrow — it
+  /// pins the order the user is walking through, while the authoritative
+  /// attributes are read live from Drift by the clarify card's own subject
+  /// binding (`captureProvider`).
+  ///
+  /// The in-progress clarify draft *is* a third state, and deliberately not
+  /// this one's business: a Capture's title and notes are never written while
+  /// it is being clarified (ADR-0023), so the typing lives only in the
+  /// `ClarifyRetention` store until a verdict lands it on an Outcome. That
+  /// store is keyed by Capture id and held outside planning state, so the
+  /// snapshot still carries order and nothing else.
   final SnapshotNav<String> inboxNav;
 
   /// Maps [inboxNav.items] index → the [RoutingKind] last applied at that
@@ -698,23 +704,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
     nextInboxItem();
   }
-
-  /// Persists text edits on the Capture at [id]. Attribute persistence is
-  /// decoupled from any Process-to routing decision, so edits survive Skip /
-  /// Back even without a routing call.
-  ///
-  /// Only title and notes: energy, time estimate and due date are Outcome
-  /// attributes with no column on a Capture (ADR-0006). The clarify card holds
-  /// those as draft state and they are written onto the Outcome at
-  /// clarification.
-  Future<void> updateInboxItemFields(
-    String id, {
-    String? title,
-    String? notes,
-    bool clearNotes = false,
-  }) =>
-      _db.captureDao
-          .updateFields(id, title: title, notes: notes, clearNotes: clearNotes);
 
   /// Clarifies the current Capture into a Next Action, recording [title] as
   /// the new Outcome's next-action text.
