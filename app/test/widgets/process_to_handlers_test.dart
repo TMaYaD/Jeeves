@@ -16,9 +16,12 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
+
+import '../helpers/app_title_bar_test_helpers.dart';
 
 import '../test_helpers.dart';
 
@@ -1076,7 +1079,8 @@ void main() {
     }
 
     testWidgets(
-        'tapping Re-clarify… opens the ClarifyCard sub-flow on this item',
+        'tapping Re-clarify… opens the ClarifyCard sub-flow on this item, '
+        'scaffolded with the shared AppTitleBar and pinned capture (#519)',
         (tester) async {
       await useTallViewport(tester);
       final todo = await _insertTodo(db, id: 'rc1', title: 'Pick a topic');
@@ -1089,9 +1093,16 @@ void main() {
       await tester.tap(find.text('Re-clarify…'));
       await tester.pumpAndSettle();
 
-      // Sub-flow card is on screen, scaffolded with the Re-clarify app bar.
+      // Sub-flow card is on screen, scaffolded with the shared AppTitleBar —
+      // no bespoke AppBar remains in this pushed route (#519).
       expect(find.byType(ClarifyCard), findsOneWidget);
-      expect(find.widgetWithText(AppBar, 'Re-clarify'), findsOneWidget);
+      expect(find.widgetWithText(AppTitleBar, 'Re-clarify'), findsOneWidget);
+      expect(find.byType(AppBar), findsNothing);
+      // Capture stays available on this surface like every other adopter —
+      // never a raw find.byKey (docs/TESTING.md), since the budgeted
+      // overflow can move the action into the ⋮ menu.
+      expect(await findBarAction(tester, const Key('capture_action')),
+          findsOneWidget);
     });
 
     testWidgets(

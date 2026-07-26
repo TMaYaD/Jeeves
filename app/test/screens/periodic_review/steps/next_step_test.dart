@@ -18,6 +18,7 @@ import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/periodic_review/steps/_review_card.dart';
 import 'package:jeeves/screens/periodic_review/steps/next_step.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 
 import '../../../test_helpers.dart';
@@ -174,7 +175,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(ClarifyCard), findsOneWidget);
-      expect(find.widgetWithText(AppBar, 'Re-clarify'), findsOneWidget);
+      // Shared AppTitleBar (#519), not a bespoke AppBar.
+      expect(find.widgetWithText(AppTitleBar, 'Re-clarify'), findsOneWidget);
     });
 
     testWidgets(
