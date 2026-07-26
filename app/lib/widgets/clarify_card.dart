@@ -46,6 +46,7 @@ import '../providers/task_detail_provider.dart';
 import 'async_subject.dart';
 import 'capture_outcomes_section.dart';
 import 'clarify_shared_widgets.dart';
+import 'meta_chip.dart' show formatMinutesLabel;
 import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
 import 'project_picker.dart';
@@ -149,7 +150,6 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   String? _lastSavedEnergy;
   int? _lastSavedTimeEstimate;
   DateTime? _lastSavedDueDate;
-
 
   /// True when this card is clarifying a Capture rather than re-clarifying an
   /// Outcome. Selects every save path below.
@@ -685,11 +685,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           children: kEstimateOptionsMinutes.map((m) {
             final selected = _timeEstimate == m;
             return ClarifyEstimateChip(
-              label: m < 60
-                  ? '${m}m'
-                  : m % 60 == 0
-                      ? '${m ~/ 60}h'
-                      : '${m ~/ 60}h ${m % 60}m',
+              label: formatMinutesLabel(m),
               selected: selected,
               onTap: () {
                 final newValue = selected ? null : m;

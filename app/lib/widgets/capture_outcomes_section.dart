@@ -58,6 +58,7 @@ import '../providers/task_detail_provider.dart';
 import '../services/clarification_service.dart';
 import 'async_list.dart';
 import 'clarify_shared_widgets.dart';
+import 'meta_chip.dart' show formatMinutesLabel;
 import 'process_to_handlers.dart';
 
 const _labelGray = Color(0xFF9CA3AF);
@@ -78,8 +79,6 @@ const _radiusSurface = BorderRadius.all(Radius.circular(6));
 /// [ProcessToHandlers] owns those taps and reports them itself, so repeating
 /// the message would show two banners for one failure.
 const _kWriteFailedMessage = 'Operation failed. Please try again.';
-
-/// Time-estimate options, matching the 1-1 clarify surfaces.
 
 class CaptureOutcomesSection extends ConsumerStatefulWidget {
   const CaptureOutcomesSection({
@@ -714,11 +713,7 @@ class _NewOutcomeForm extends StatelessWidget {
           children: kEstimateOptionsMinutes.map((m) {
             final selected = timeEstimate == m;
             return ClarifyEstimateChip(
-              label: m < 60
-                  ? '${m}m'
-                  : m % 60 == 0
-                      ? '${m ~/ 60}h'
-                      : '${m ~/ 60}h ${m % 60}m',
+              label: formatMinutesLabel(m),
               selected: selected,
               onTap: () => onEstimate(selected ? null : m),
             );

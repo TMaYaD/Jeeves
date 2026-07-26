@@ -74,6 +74,22 @@ Future<Todo?> _outcomeOf(GtdDatabase db, String captureId) async {
   return db.todoDao.getTodo(ids.single);
 }
 
+/// An Outcome's **raw** `energy_level` / `time_estimate` columns.
+///
+/// Deliberately a raw `select(db.todos)` and never [_outcomeOf] / `getTodo`:
+/// those carry the D2 projection, which COALESCEs the *current Action's* value
+/// over the column. A claim about what the column holds, read through the
+/// projection, would resolve on the Action's own value and pass whether or not
+/// the column was ever written — unfalsifiable.
+Future<({String? energy, int? time})> _rawEffortColumns(
+  GtdDatabase db,
+  String outcomeId,
+) async {
+  final row = await (db.select(db.todos)..where((t) => t.id.equals(outcomeId)))
+      .getSingle();
+  return (energy: row.energyLevel, time: row.timeEstimate);
+}
+
 /// Scrolls [label] into view and taps it.
 ///
 /// The destination buttons sit below the fold on the 800x600 test surface, and
@@ -798,10 +814,11 @@ void main() {
       expect(recorder.lastEnergyLevel, 'high');
       expect(recorder.lastTimeEstimate, 30);
 
-      // The columns carry them (D1/D3 draft store) …
+      // The raw columns carry them (D1/D3 draft store) — read raw, because a
+      // current Action exists on this route and the projection's COALESCE
+      // would resolve on *its* values no matter what the columns hold.
       final outcome = (await _outcomeOf(db, 'x'))!;
-      expect(outcome.energyLevel, 'high');
-      expect(outcome.timeEstimate, 30);
+      expect(await _rawEffortColumns(db, outcome.id), (energy: 'high', time: 30));
       // … and the birth Action seeded from them, which only holds because
       // insertOutcome still runs before applyRouting.
       final action = await db.actionDao.getCurrentAction(outcome.id);

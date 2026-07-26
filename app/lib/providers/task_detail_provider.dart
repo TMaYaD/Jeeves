@@ -277,11 +277,12 @@ class TaskDetailNotifier {
   /// its `clear*` flags here; without that, deselecting a chip would silently
   /// fail to clear.
   ///
-  /// The patch-shaped sibling is [TodoDao.updateFields], on the Outcome grain —
-  /// it is also the only writer that upholds the D1 mirror, which is why this
-  /// one is for `planned` rows. Editing a `current` row through here would
-  /// change the Action without the mirror (risk noted in `docs/ARCHITECTURE.md`);
-  /// the Plan section only ever routes planned rows to it.
+  /// The patch-shaped sibling is [TodoDao.updateFields], on the Outcome grain.
+  /// The Plan section routes only `planned` rows here, but that is a division
+  /// of labour rather than a safety requirement: `ActionDao.applyEditAction`
+  /// mirrors onto the Outcome columns itself when the row it loads is
+  /// `current`, so a row promoted between this sheet opening and its Save
+  /// still leaves D1 intact (`docs/ARCHITECTURE.md`).
   Future<void> editAction(String actionId, ActionDraft draft) =>
       _db.actionDao.editAction(
         actionId,

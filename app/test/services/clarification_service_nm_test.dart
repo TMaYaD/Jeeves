@@ -152,9 +152,15 @@ void main() {
 
       final outcome = await db.todoDao.getTodo(outcomeId);
       expect(outcome!.notes, 'Aim for a morning departure');
-      expect(outcome.energyLevel, 'high');
-      expect(outcome.timeEstimate, 45);
       expect(outcome.dueDate!.toLocal(), due);
+      // Raw columns, not the projection: `getTodo` COALESCEs a current
+      // Action's effort over these. It happens to be benign here (`to: null`
+      // means no Action exists to resolve on), but reading raw is what keeps
+      // this a test of D3's draft store if that ever changes.
+      final row = await (db.select(db.todos)..where((t) => t.id.equals(outcomeId)))
+          .getSingle();
+      expect(row.energyLevel, 'high');
+      expect(row.timeEstimate, 45);
     });
 
     test('applies the routing destination the New Outcome form chose', () async {

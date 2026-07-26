@@ -223,7 +223,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                           const SizedBox(width: 8),
                           Expanded(flex: 1, child: _buildAttributeItem(
                             icon: Icons.schedule,
-                            text: todo.timeEstimate != null ? '${todo.timeEstimate}m' : 'Time',
+                            text: todo.timeEstimate != null ? formatMinutesLabel(todo.timeEstimate!) : 'Time',
                             onTap: () => _showTimeEstimateSheet(context, todo.timeEstimate),
                           )),
                           const SizedBox(width: 8),
@@ -623,7 +623,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   Future<void> _showTimeEstimateSheet(BuildContext context, int? current) async {
-    final times = [5, 10, 15, 30, 45, 60, 90, 120, null];
+    // The shared ladder plus a `null` "None" row — the same options and the
+    // same labels the clarify surfaces and the planned-action sheet offer, so
+    // an estimate reads identically wherever it is set or shown.
+    final times = <int?>[...kEstimateOptionsMinutes, null];
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
@@ -644,7 +647,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                   shrinkWrap: true,
                   children: times.map((val) => ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                    title: Text(val == null ? 'None' : '${val}m', style: const TextStyle(color: Color(0xFF374151))),
+                    title: Text(val == null ? 'None' : formatMinutesLabel(val), style: const TextStyle(color: Color(0xFF374151))),
                     trailing: val == current ? const Icon(Icons.check, color: Color(0xFF2563EB)) : null,
                     onTap: () {
                       if (val == null) {

@@ -35,6 +35,7 @@ import '../../widgets/capture/capture_action.dart';
 import '../../widgets/async_subject.dart';
 import '../../widgets/capture_outcomes_section.dart';
 import '../../widgets/clarify_shared_widgets.dart';
+import '../../widgets/meta_chip.dart' show formatMinutesLabel;
 import '../../widgets/process_to_handlers.dart';
 
 class InboxClarifyScreen extends ConsumerStatefulWidget {
@@ -90,7 +91,6 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// query from a widget leaves a pending timer that hangs `pumpAndSettle`
   /// (docs/TESTING.md).
   Set<String> _hintTagIds = const <String>{};
-
 
   @override
   void initState() {
@@ -423,11 +423,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                   children: kEstimateOptionsMinutes.map((m) {
                     final selected = _timeEstimate == m;
                     return ClarifyEstimateChip(
-                      label: m < 60
-                          ? '${m}m'
-                          : m % 60 == 0
-                              ? '${m ~/ 60}h'
-                              : '${m ~/ 60}h ${m % 60}m',
+                      label: formatMinutesLabel(m),
                       selected: selected,
                       onTap: () =>
                           setState(() => _timeEstimate = selected ? null : m),

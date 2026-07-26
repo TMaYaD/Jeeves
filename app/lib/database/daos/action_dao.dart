@@ -62,7 +62,9 @@
 /// What primitives *do* still mirror onto `todos` is Action **metadata**
 /// (`energy_level` / `time_estimate`), which is a separate mechanism with a
 /// live reader: the per-field D2 COALESCE fallback. See
-/// [applySupersedeCurrentAction] and [_promoteRow].
+/// [applySupersedeCurrentAction], [_promoteRow] and [applyEditAction] — the
+/// last of which mirrors whenever the row it edits is `current`, so no caller
+/// has to know a row's role to keep D1.
 ///
 /// The legacy one-field surfaces in [TodoDao] compose these primitives through
 /// the `apply*` transaction-body variants (package-internal), which run inside
@@ -140,6 +142,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// A `null` typed argument is "no change"; pass the matching `clear*` flag to
   /// null a nullable metadata column (same convention as [TodoDao.updateFields],
   /// which drives this in the same transaction for the metadata mirror).
+  ///
+  /// Editing a `current` row is safe: [applyEditAction] mirrors the resulting
+  /// effort values onto the Outcome columns itself, so D1 holds whatever the
+  /// row's role turns out to be at write time.
   Future<void> editAction(
     String actionId, {
     String? text,
@@ -637,6 +643,18 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return (changed: true, stamped: true, logChanged: false);
   }
 
+  /// **Upholds D1 for `current` rows by construction.** When the row it loaded
+  /// is `role='current'`, the post-write effort values are mirrored onto
+  /// `todos.energy_level` / `time_estimate` in the same transaction — the same
+  /// mirror [_promoteRow] writes, for the same D2 reason. That makes D1 a
+  /// property of this method rather than of caller discipline: a `planned` row
+  /// that became `current` between a sheet opening and its Save (a synced write
+  /// from another device, or a promote the UI has not re-emitted yet) can no
+  /// longer land effort on the Action while the columns keep the old values,
+  /// which would resurface as the Outcome's effective effort the moment the
+  /// Action is abandoned. It is idempotent with respect to
+  /// [TodoDao.updateFields], which writes the same columns first inside the
+  /// same transaction.
   Future<ActionWriteEffect> applyEditAction(
     String actionId, {
     String? text,
@@ -675,6 +693,24 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    if (row.role == 'current') {
+      // D1, by construction rather than by caller discipline. Mirror the
+      // *post-write* effort values (not the diffs) so the columns cannot be
+      // left holding a value the current Action no longer carries — exactly
+      // what [_promoteRow] writes, and idempotent when [TodoDao.updateFields]
+      // has already written them earlier in this transaction.
+      await (update(todos)..where((t) => t.id.equals(row.outcomeId))).write(
+        TodosCompanion(
+          energyLevel: Value(
+            clearEnergyLevel ? null : energyLevel ?? row.energyLevel,
+          ),
+          timeEstimate: Value(
+            clearTimeEstimate ? null : timeEstimate ?? row.timeEstimate,
+          ),
+          updatedAt: Value(ts),
+        ),
+      );
+    }
     await _stampOutcome(row.outcomeId, ts);
     return (changed: true, stamped: true, logChanged: false);
   }

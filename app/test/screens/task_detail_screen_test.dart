@@ -1236,19 +1236,24 @@ void main() {
         await db.actionDao.addPlannedAction('eff6', 'beta');
       });
       await h.refresh();
-      expect((await h.plannedRows()).map((a) => a.actionText),
-          ['alpha', 'beta']);
+      final before = await h.plannedRows();
+      expect(before.map((a) => a.actionText), ['alpha', 'beta']);
+      final alphaId = before[0].id;
+      final betaId = before[1].id;
 
       final rlv =
           tester.widget<ReorderableListView>(find.byType(ReorderableListView));
       rlv.onReorderItem!(1, 0); // 'beta' to the front
       await h.settleWrite();
-      await h.refresh();
       expect((await h.plannedRows()).map((a) => a.actionText),
-          ['beta', 'alpha']);
+          ['beta', 'alpha'],
+          reason: 'the reorder landed in the db');
 
-      // Tap the row now sitting at index 0. A handler closing over `index`
-      // rather than the row would open 'alpha' here.
+      // Deliberately **not** refreshed here. The tree still holds the
+      // pre-reorder list, so 'beta' is at tree index 1 while the db has it at
+      // position 0 — and that disagreement is the whole point. Refreshing
+      // first would realign index and row, and the test could not fail for its
+      // stated reason.
       await tester.tap(find.text('beta'));
       await tester.pumpAndSettle();
       expect(
@@ -1258,6 +1263,21 @@ void main() {
             .text,
         'beta',
       );
+
+      // The Save lands on 'beta' itself, not on whatever occupies the slot it
+      // was tapped in: a handler resolving a captured `index` against the
+      // reordered queue would rewrite 'alpha'.
+      await tester.enterText(
+          find.byKey(const Key('plan_action_text')), 'beta, revised');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('plan_action_confirm')));
+      await tester.pumpAndSettle();
+      await h.settleWrite();
+
+      final after = await h.plannedRows();
+      expect(after.firstWhere((a) => a.id == betaId).actionText,
+          'beta, revised');
+      expect(after.firstWhere((a) => a.id == alphaId).actionText, 'alpha');
     });
 
     testWidgets('the planned row and its sheet lay out at 320dp',
@@ -1268,19 +1288,25 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       final h = await mountPlan(tester, 'eff7');
+      // Drain the screen chrome's own overflow before measuring anything the
+      // Plan section owns. The header attribute row (Status / Time / Energy in
+      // fixed-flex Expandeds) overflows by 29px at 320dp under the test font —
+      // Ahem renders every glyph as a full em square — with no planned row
+      // mounted at all. That is pre-existing and out of this feature's scope;
+      // draining it here is what lets the assertions below be `isNull` rather
+      // than a blanket swallow that would hide a real overflow in the row or
+      // the sheet.
+      expect(tester.takeException(), isNotNull,
+          reason: 'the pre-existing header-row overflow at 320dp');
+
       await tester.runAsync(() => db.actionDao.addPlannedAction(
           'eff7', 'a deliberately long planned action phrase that wraps',
           energyLevel: 'medium', timeEstimate: 90));
       await h.refresh();
       final rowId = (await h.plannedRows()).single.id;
 
-      // Measured rects, not takeException(): the section's unrelated
-      // "Add planned action" row overflows at this width under the test font
-      // (Ahem renders every glyph as a full em square), which would mask this
-      // row's own result either way.
       final row = tester.getRect(find.byKey(Key('planned_action_$rowId')));
       final remove = tester.getRect(find.byKey(Key('plan_remove_$rowId')));
-      expect(row.width, lessThanOrEqualTo(320.0));
       expect(remove.right, lessThanOrEqualTo(row.right),
           reason: 'the trailing controls stay inside the row at 320dp');
       expect(remove.width, greaterThan(0.0));
@@ -1291,7 +1317,8 @@ void main() {
       final time = tester.getRect(find.byKey(Key('planned_time_$rowId')));
       expect(energy.left, greaterThanOrEqualTo(row.left));
       expect(time.right, lessThanOrEqualTo(row.right));
-      tester.takeException();
+      expect(tester.takeException(), isNull,
+          reason: 'the planned row itself adds no overflow at 320dp');
 
       // The sheet itself at the same width.
       await tester.tap(find.text('a deliberately long planned action phrase '
@@ -1302,7 +1329,8 @@ void main() {
       expect(confirm.left, greaterThanOrEqualTo(0.0));
       expect(confirm.right, lessThanOrEqualTo(320.0));
       expect(confirm.width, greaterThan(0.0));
-      tester.takeException();
+      expect(tester.takeException(), isNull,
+          reason: 'no RenderFlex overflow laying out the sheet at 320dp');
     });
   });
 

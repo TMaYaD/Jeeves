@@ -23,10 +23,17 @@ class ActionDraft {
     this.timeEstimateMinutes,
   });
 
-  /// The Action's phrase. Non-blank by contract: every producer nulls the
-  /// whole draft rather than carrying a blank phrase, and every write path
-  /// beneath rejects or normalises blank text. "Is there an Action here at
-  /// all?" is answered one level up, by the *draft* being null.
+  /// The Action's phrase.
+  ///
+  /// Normally non-blank: "is there an Action here at all?" is answered one
+  /// level up, by the *draft* being null, and the clarify surfaces and the
+  /// Plan sheet null the whole draft rather than carry a blank phrase beside
+  /// live effort values. It is not an enforced invariant, though — a caller
+  /// that already holds a non-null phrase can pass an empty one
+  /// (`FocusSessionPlanningNotifier` does, when the inbox row's text is
+  /// empty). That is safe rather than merely tolerated: every write path
+  /// beneath normalises blank text, `TodoDao.applyRouting` turning it into a
+  /// supersede-to-Actionless.
   final String text;
 
   /// `'low' | 'medium' | 'high'`, or null when unset.
