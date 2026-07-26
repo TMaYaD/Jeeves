@@ -397,8 +397,8 @@ class FocusSessionPlanningState {
   /// Absent means the Outcome is Actionless — the state the review step's
   /// "No next action defined" hint names.
   ///
-  /// Read from `actions` alongside the snapshot: the Action entity, not the
-  /// `next_action_text` cursor, is what the app believes (ADR-0001 story 3).
+  /// Read from `actions` alongside the snapshot: the Action entity is the only
+  /// next-action grain (ADR-0001 story 3).
   final Map<String, String> reviewActionTexts;
 
   FocusSessionPlanningState copyWith({
@@ -527,7 +527,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       if (next == 2) {
         // Crossing into Review Tasks (step 2 — step 1 is Clarify Inbox, step 0
         // the intro). Load the review snapshot on entry, never earlier: items
-        // clarified during Clarify Inbox get a next_action_text and must not
+        // clarified during Clarify Inbox get a current Action and must not
         // surface here. The step always renders — an empty snapshot shows the
         // empty-state view and the user clicks Next to advance (CONTEXT.md
         // § Wizard: steps do not auto-skip).
@@ -718,8 +718,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Clarifies the current Capture into a Next Action, recording [title] as
   /// the new Outcome's next-action text.
   ///
-  /// Setting `next_action_text` prevents the task from immediately surfacing
-  /// as Actionless in the re-clarification surface after inbox-clarify.
+  /// Giving the new Outcome a current Action prevents it from immediately
+  /// surfacing as Actionless in the re-clarification surface after
+  /// inbox-clarify.
   Future<void> processInboxItem(String id, {required String title}) =>
       _routeInboxItem(
         id,
@@ -858,7 +859,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// through `ProcessToHandlers` and reports via
   /// [recordReviewActionAndAdvance] instead.
   ///
-  /// Routing is intent-only; `next_action_text` is on an orthogonal
+  /// Routing is intent-only; the Outcome's current Action is on an orthogonal
   /// axis and is not touched here. The (now-removed) "Waiting for…"
   /// placeholder for actionless tasks belonged to the user-action axis,
   /// not the routing axis — the next-action dialog is the user-facing
@@ -879,9 +880,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     ));
   }
 
-  /// "Update next action" — sets next_action_text and stamps last_clarified_at.
-  /// Blank text normalises the column to NULL; the task stays Actionless and
-  /// the cursor does not advance.
+  /// "Update next action" — sets the Outcome's current Action and stamps
+  /// last_clarified_at. Blank text clears the Action; the task stays Actionless
+  /// and the review cursor does not advance.
   Future<void> updateReviewItemNextAction(String id, String text) async {
     final idx = state.reviewNav.index;
     final trimmed = text.trim();
@@ -963,9 +964,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       _recordAndAdvance(record);
 
   /// Removes the action record at the current review index without
-  /// advancing the cursor. Used when the user saves a blank
-  /// `next_action_text` via the [nextActionDialog] modifier — the task
-  /// stays Actionless and the cursor does not move.
+  /// advancing the cursor. Used when the user saves a blank next-action text
+  /// via the [nextActionDialog] modifier — the task stays Actionless and the
+  /// review cursor does not move.
   void clearCurrentReviewAction() {
     final index = state.reviewNav.index;
     if (!state.reviewActions.containsKey(index)) return;

@@ -315,16 +315,20 @@ Future<int> carveOutLocalInbox({
 /// (`ActionDao._winnerFirst`) so every device collapses to the same row. It
 /// reads `actions` and nothing else.
 ///
-/// **The sweep does not read `todos.next_action_text`, and must never read it
-/// again.** Three cursor-driven arms have been deleted over the course of #479,
-/// and reviving any of them re-arms a way to destroy the user's Actions:
+/// **The sweep reads no next-action cursor on `todos`, and must never read one
+/// again.** The `next_action_text` column itself is gone (ADR-0024, issue
+/// #525), so today the warning is enforced by the schema — but it is recorded
+/// here because the hazard is the *shape*, not the column name: any Outcome-grain
+/// mirror of the current Action's text, re-added under any name, re-arms it.
+/// Three cursor-driven arms were deleted over the course of #479, and reviving
+/// any of them re-arms a way to destroy the user's Actions:
 ///
 /// * One overwrote a `current` Action's text and metadata from the cursor — it
 ///   reverts every Action-grain edit at the next launch.
 /// * One retired *every* `current` Action whose Outcome had a blank cursor —
-///   with the cursor no longer written, that retires every current Action on the
-///   device. (Either would also strand a retired Action's open `time_logs` row:
-///   the sweep runs no termination hook.)
+///   with no cursor written, that retires every current Action on the device,
+///   and syncs the deletions everywhere. (Either would also strand a retired
+///   Action's open `time_logs` row: the sweep runs no termination hook.)
 /// * The last, **cursor adoption**, minted the deterministic-id `current` Action
 ///   for a live Outcome carrying a non-blank cursor and no `actions` rows at
 ///   all. It looked safe — mint-only, monotone, guarded on the Outcome having no
@@ -340,17 +344,16 @@ Future<int> carveOutLocalInbox({
 /// Deleting adoption makes that resurrection impossible by construction rather
 /// than patching around it, and leaves `applyRemovePlannedAction` a hard delete.
 /// The accepted cost: an Outcome created on a pre-Action client and synced in
-/// renders Actionless. Its text is not lost — `next_action_text` still holds it
-/// and still replicates — merely unsurfaced. The one-time Drift v26 backfill
-/// (`gtd_database.dart`) remains the **only** consumer of the cursor: it runs
-/// once at schema upgrade, before any watcher exists, and is why the column
-/// stays declared in `tables.dart`.
+/// renders Actionless until the user gives it an Action. Every such Outcome that
+/// carried a cursor already has its `current` Action from the server backfill
+/// (Alembic 0028) — so what is unsurfaced is an Outcome nobody ever clarified,
+/// not lost text.
 ///
 /// The pass is clarification-neutral: it **never** stamps `last_clarified_at`
 /// (ADR-0012 — never auto-stamp on drift). It is idempotent, so the steady state
 /// is one read and no writes at all. It runs from [powerSyncInstanceProvider]
-/// right after [migrateLocalInboxToCaptures], before any watcher exists, so —
-/// like the v26 backfill — it needs no view-notify.
+/// right after [migrateLocalInboxToCaptures], before any watcher exists, so it
+/// needs no view-notify.
 ///
 /// Returns the number of Action rows retired. A steady-state store returns 0.
 Future<int> reconcileActionsAtStartup(ps.PowerSyncDatabase db) async {
@@ -378,10 +381,10 @@ typedef SweepExec = Future<void> Function(String, List<Object?>);
 /// applies on every write and every read, so all devices converge on one row.
 ///
 /// This is a genuine Action-grain repair and has nothing to do with the legacy
-/// cursor: it visits **any** Outcome holding more than one `current` row,
-/// whatever `todos.next_action_text` says (it used to ride the cursor join, so
-/// a cursorless Outcome's race went unrepaired forever). Retire, never delete —
-/// the ADR-0018 history chain is the point.
+/// cursor: it visits **any** Outcome holding more than one `current` row. It
+/// used to ride a join against the cursor column, so a cursorless Outcome's race
+/// went unrepaired forever; it now touches no `todos` column at all. Retire,
+/// never delete — the ADR-0018 history chain is the point.
 ///
 /// Convergence is repair, not clarification: it never stamps.
 ///

@@ -821,8 +821,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             await _flushTextSave();
             // Title-as-action coupling: when the user routes to Next or
             // Waiting For from a clarify card, mirror the current title
-            // into `next_action_text` so the row leaves with a defined
-            // action. The controller's live value wins over the (possibly
+            // into the Outcome's current Action so the row leaves with a
+            // defined action. The controller's live value wins over the (possibly
             // debounced) todos.title column so a fast typer's edit isn't
             // lost. With the dialog modifier excepted, Next reports plain
             // `next`.

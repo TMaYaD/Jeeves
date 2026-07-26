@@ -42,9 +42,10 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// `energy_level` / `time_estimate` (D2) and live-derived `time_spent_minutes`
   /// (issue #480) — leaving UI and providers untouched. The raw
   /// `todos.energy_level` / `time_estimate` columns remain the write mirror and
-  /// the Actionless draft store (D1/D3). `next_action_text` is projected only
-  /// for column parity — it is the retired cursor (ADR-0022), neither read nor
-  /// written. [t] is the `todos` table's SQL alias in the enclosing query.
+  /// the Actionless draft store (D1/D3). `last_next_action_completion_at` is
+  /// live — stamped by the focus-session close and read by the
+  /// re-clarification predicate. [t] is the `todos` table's SQL alias in the
+  /// enclosing query.
   ///
   /// Queries carrying this projection must list `actions` and `time_logs` in
   /// `readsFrom` so a synced Action or TimeLog write re-emits their watchers.
@@ -55,7 +56,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
       '${effectiveEnergyLevelSql(t)} AS energy_level, '
       '$t.capture_source, $t.location_id, $t.user_id, $t.last_clarified_at, '
       '${TimeLogDao.totalMinutesSubquery('$t.id')} AS time_spent_minutes, '
-      '$t.next_action_text, $t.last_next_action_completion_at';
+      '$t.last_next_action_completion_at';
 
   // ---------------------------------------------------------------------------
   // Single-todo helpers
@@ -89,8 +90,8 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // GTD list watchers
   // ---------------------------------------------------------------------------
 
-  /// SQL fragment matching Outcomes that have a current Action — the entity,
-  /// not the `next_action_text` cursor (ADR-0001 story 3). Only `role =
+  /// SQL fragment matching Outcomes that have a current Action — the entity is
+  /// the only next-action grain (ADR-0001 story 3). Only `role =
   /// 'current'` counts: a `planned` Action is not engageable (ADR-0004) and a
   /// `superseded` one is history.
   ///
@@ -498,8 +499,9 @@ EXISTS (
   /// Used by inbox-clarify (to record the task title as the default action) and
   /// by the review step's "Update next action" action.
   ///
-  /// The name is the legacy one-field surface's, not the storage's: nothing
-  /// here touches `todos.next_action_text`, which is retired (ADR-0022). A
+  /// The name is the legacy one-field surface's, not the storage's: the
+  /// `todos.next_action_text` column it was named for no longer exists
+  /// (ADR-0022, ADR-0024) and this writes only `actions`. A
   /// non-blank text sets/edits the `current` Action; a blank text clears it
   /// (the blank→Actionless normalisation, expressed on the Action side as a
   /// supersession with no replacement).
@@ -984,8 +986,8 @@ AND (
   /// fallback ([effectiveEnergyLevelSql]) from resurfacing a retired Action's
   /// estimate, so both sides always reflect the edit.
   ///
-  /// This metadata mirror is unrelated to the retired `next_action_text`
-  /// cursor (ADR-0022) and deliberately outlives it.
+  /// This metadata mirror is unrelated to the dropped `next_action_text`
+  /// cursor (ADR-0022, ADR-0024) and deliberately outlives it.
   ///
   /// To clear a nullable column, pass the matching `clear*` flag (e.g.
   /// `clearTimeEstimate: true`). Passing `null` for the typed parameter is

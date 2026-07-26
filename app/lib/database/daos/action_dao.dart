@@ -52,12 +52,12 @@
 /// reorder / remove among the stamping micro-acts), except a no-op reorder
 /// (unchanged order writes nothing and does not stamp).
 ///
-/// **The `actions` table is the only grain.** No primitive here writes the
-/// legacy `todos.next_action_text` cursor, which is retired by abandonment —
-/// still declared and still replicated, but neither read nor written
-/// (ADR-0022, issue #479). A future contributor who "restores" a cursor write
-/// to keep the two sides agreeing would be re-introducing the second source of
-/// truth this model exists to remove.
+/// **The `actions` table is the only grain.** The legacy
+/// `todos.next_action_text` cursor was retired by abandonment (ADR-0022, issue
+/// #479) and then dropped from the schema outright (ADR-0024, issue #525). A
+/// future contributor who re-adds an Outcome-column mirror of the current
+/// Action's text, to keep two sides agreeing, would be re-introducing the
+/// second source of truth this model exists to remove.
 ///
 /// What primitives *do* still mirror onto `todos` is Action **metadata**
 /// (`energy_level` / `time_estimate`), which is a separate mechanism with a
@@ -567,8 +567,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   // Transaction-body variants — run inside the caller's transaction, never
   // notify (the caller notifies after its own commit). Used by the public
   // wrappers above and by TodoDao's writers, for which the `actions` table is
-  // the only grain — the `todos.next_action_text` cursor is retired by
-  // abandonment (ADR-0022) and is neither read nor written here.
+  // the only grain — the `todos.next_action_text` cursor is retired and no
+  // longer exists (ADR-0022, ADR-0024).
   // ---------------------------------------------------------------------------
 
   Future<ActionWriteEffect> applySetCurrentAction(
