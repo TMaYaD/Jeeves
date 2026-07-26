@@ -1,7 +1,8 @@
-/// Modal dialog for capturing or editing a Todo's `next_action_text`.
+/// Modal dialog for capturing or editing an Outcome's current Action text.
 ///
 /// Returns the trimmed text via `Navigator.pop`; the caller decides what to do
-/// with it (write to the DB, leave the cursor, etc.). Returns `null` on cancel.
+/// with it (write it as the `current` Action, leave the Outcome Actionless,
+/// etc.). Returns `null` on cancel.
 library;
 
 import 'package:flutter/material.dart';
