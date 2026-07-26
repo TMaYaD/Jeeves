@@ -24,6 +24,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
+import '../../models/action_draft.dart';
 import '../../models/clarify_mode.dart';
 import '../../providers/clarify_mode_provider.dart';
 import '../../providers/database_provider.dart';
@@ -174,17 +175,22 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     return ClarifyDraft(
       title: title,
       notes: notes.isEmpty ? null : notes,
-      energyLevel: _energyLevel,
-      timeEstimate: _timeEstimate,
       // Strip the time component: the picker collects a calendar day.
       dueDate: _dueDate != null
           ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
           : null,
       tagIds: _hintTagIds,
       // Title-as-action: a Capture is always a first clarification, so there
-      // is no deliberate phrase to clobber. Consumed only for Next and
-      // Waiting For.
-      nextActionText: title.isEmpty ? null : title,
+      // is no deliberate phrase to clobber. The phrase is consumed only for
+      // Next and Waiting For; the effort values land on the Outcome columns
+      // whatever the destination (D3).
+      action: title.isEmpty
+          ? null
+          : ActionDraft(
+              text: title,
+              energyLevel: _energyLevel,
+              timeEstimateMinutes: _timeEstimate,
+            ),
     );
   }
 

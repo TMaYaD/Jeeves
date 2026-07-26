@@ -259,7 +259,7 @@ void main() {
       await db.todoDao.applyRouting(
         'o1',
         to: RoutingKind.nextAction,
-        nextActionText: 'Clear the bench',
+        actionText: 'Clear the bench',
       );
       await db.tagDao.assignTag('o1', 't1', _userId);
       await db.captureDao.linkOutcome('c1', 'o1', _userId);
@@ -279,7 +279,7 @@ void main() {
       await db.todoDao.applyRouting(
         'o1',
         to: RoutingKind.nextAction,
-        nextActionText: 'Clear the bench',
+        actionText: 'Clear the bench',
       );
       // Skew the retired cursor column directly (ADR-0022 — it is neither
       // read nor written by the app): the Action row is untouched and stays

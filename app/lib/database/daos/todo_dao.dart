@@ -843,8 +843,8 @@ AND (
   ///
   /// | `to`         | clarified | intent  | done_at | current Action           |
   /// |--------------|-----------|---------|---------|--------------------------|
-  /// | `nextAction` | true      | 'next'  | clear   | set if `nextActionText`  |
-  /// | `waitingFor` | true      | 'next'  | clear   | set if `nextActionText`  |
+  /// | `nextAction` | true      | 'next'  | clear   | set if `actionText`      |
+  /// | `waitingFor` | true      | 'next'  | clear   | set if `actionText`      |
   /// | `maybe`      | true      | 'maybe' | clear   | leave                    |
   /// | `done`       | true      | leave   | now     | completed                |
   /// | `trash`      | true      | 'trash' | leave   | leave                    |
@@ -870,7 +870,7 @@ AND (
   Future<void> applyRouting(
     String todoId, {
     required RoutingKind to,
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
     String? userId,
     DateTime? now,
@@ -879,10 +879,10 @@ AND (
     final tsIso = ts.toIso8601String();
     // Only the Next / Waiting For arms carry a next-action phrase, and only
     // when the caller passes one; those are the arms that write the Action row.
-    // An absent [nextActionText] leaves the Action untouched.
+    // An absent [actionText] leaves the Action untouched.
     final touchesAction = (to == RoutingKind.nextAction ||
             to == RoutingKind.waitingFor) &&
-        nextActionText != null;
+        actionText != null;
     var actionTerminated = false;
     var logChanged = false;
     await transaction(() async {
@@ -917,7 +917,7 @@ AND (
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
 
       if (touchesAction) {
-        final normalised = _normaliseText(nextActionText);
+        final normalised = _normaliseText(actionText);
         if (normalised == null) {
           // Blank supersedes the current Action, closing its open log (#476).
           final effect = await attachedDatabase.actionDao

@@ -51,6 +51,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
+import '../models/action_draft.dart';
 import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
@@ -263,16 +264,21 @@ class _CaptureOutcomesSectionState
     return ClarifyDraft(
       title: title,
       notes: notes.isEmpty ? null : notes,
-      energyLevel: _energyLevel,
-      timeEstimate: _timeEstimate,
       // Strip the time component: the picker collects a calendar day.
       dueDate: _dueDate != null
           ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
           : null,
       tagIds: widget.tagIds,
       // Title-as-action: a freshly carved Outcome must not land on the Next
-      // list actionless.
-      nextActionText: title.isEmpty ? null : title,
+      // list actionless. The effort values ride along on the same draft and
+      // land on the Outcome columns whatever the destination (D3).
+      action: title.isEmpty
+          ? null
+          : ActionDraft(
+              text: title,
+              energyLevel: _energyLevel,
+              timeEstimateMinutes: _timeEstimate,
+            ),
     );
   }
 

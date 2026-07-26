@@ -142,7 +142,7 @@ void main() {
       await db.todoDao.applyRouting(
         't1',
         to: RoutingKind.nextAction,
-        nextActionText: 'Outline the three sections',
+        actionText: 'Outline the three sections',
       );
 
       // The write persisted (trigger wrote todos_data), but on `main` the view

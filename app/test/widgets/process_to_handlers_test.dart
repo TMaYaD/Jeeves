@@ -69,7 +69,7 @@ class _FailingClarificationService extends DaoClarificationService {
   Future<void> clarifyToOutcome(
     String id, {
     required RoutingKind to,
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
     String? userId,
   }) =>

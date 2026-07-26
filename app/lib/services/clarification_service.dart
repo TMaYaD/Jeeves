@@ -26,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
 import '../database/gtd_database.dart';
+import '../models/action_draft.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../providers/database_provider.dart';
 
@@ -46,7 +47,8 @@ abstract class ClarificationService {
   /// promotion is Outcome creation, not an in-place flip). In one transaction:
   ///
   /// 1. Creates a clarified `todos` Outcome from the clarify-card draft
-  ///    (title / notes / energy / estimate / due), routed to [to].
+  ///    (title / notes / due), routed to [to], carrying [action]'s effort
+  ///    values on its columns so the birth Action seeds from them (D3).
   /// 2. Attaches the non-person [tagIds] the card carried into the draft (its
   ///    seeded tag hints plus any context/project edits) and, when [to] is
   ///    Waiting For, the [personTagIds] delegate set.
@@ -69,6 +71,12 @@ abstract class ClarificationService {
   /// Outcomes the user once cared about) and record a provenance link to work
   /// that was never done. Passing `trash` throws [ArgumentError].
   ///
+  /// [action] describes the Action the card collected, or is null when it
+  /// collected none. Its effort values are written to the Outcome's columns
+  /// regardless of destination (draft storage, D3); its phrase reaches an
+  /// Action row only on the Next / Waiting For arms, where
+  /// [TodoDao.applyRouting] mints one that seeds from those columns.
+  ///
   /// [userId] denormalises onto the Outcome, the provenance link, and any tag
   /// rows. [outcomeId] / [now] are injectable for deterministic testing.
   /// Returns the new Outcome id.
@@ -78,10 +86,8 @@ abstract class ClarificationService {
     required String userId,
     required String title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -108,8 +114,8 @@ abstract class ClarificationService {
   /// separates it from [clarifyCaptureToOutcome], which is the 1-1 mode's
   /// create-link-stamp path and overwrites.
   ///
-  /// [notes], [energyLevel], [timeEstimate] and [dueDate] are Outcome
-  /// attributes with no column on a Capture (ADR-0006). The n-m New Outcome
+  /// [notes] and [dueDate] are Outcome attributes with no column on a Capture
+  /// (ADR-0006), and [action] carries the Action grain. The n-m New Outcome
   /// form collects them exactly as the 1-1 card does, so they are written here
   /// or they are lost.
   ///
@@ -120,10 +126,8 @@ abstract class ClarificationService {
     required String title,
     RoutingKind? to,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -202,7 +206,7 @@ abstract class ClarificationService {
   Future<void> clarifyToOutcome(
     String id, {
     required RoutingKind to,
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
     String? userId,
   });
@@ -265,10 +269,8 @@ class DaoClarificationService implements ClarificationService {
     required String userId,
     required String title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -300,13 +302,16 @@ class DaoClarificationService implements ClarificationService {
       // (Ceremony Back → re-tap).
       await _dropOwnOutcomes(captureId);
 
+      // Order is load-bearing: the effort values land on the Outcome columns
+      // first, so the Action `applyRouting` may mint seeds itself from them
+      // (D3). Reversed, the birth Action would seed from empty columns.
       await _db.todoDao.insertOutcome(
         id: id,
         title: title,
         userId: userId,
         notes: notes,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
+        energyLevel: action?.energyLevel,
+        timeEstimate: action?.timeEstimateMinutes,
         dueDate: dueDate,
         now: now,
       );
@@ -316,7 +321,7 @@ class DaoClarificationService implements ClarificationService {
       await _db.todoDao.applyRouting(
         id,
         to: to,
-        nextActionText: nextActionText,
+        actionText: action?.text,
         personTagIds: personTagIds,
         userId: personTagIds != null ? userId : null,
         now: now,
@@ -388,10 +393,8 @@ class DaoClarificationService implements ClarificationService {
     required String title,
     RoutingKind? to,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -405,13 +408,15 @@ class DaoClarificationService implements ClarificationService {
       if (await _db.captureDao.getCapture(captureId) == null) {
         throw StateError('Capture $captureId not found');
       }
+      // Same load-bearing order as clarifyCaptureToOutcome: columns first so
+      // the birth Action can seed from them (D3).
       await _db.todoDao.insertOutcome(
         id: id,
         title: title,
         userId: userId,
         notes: notes,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
+        energyLevel: action?.energyLevel,
+        timeEstimate: action?.timeEstimateMinutes,
         dueDate: dueDate,
         now: now,
       );
@@ -422,7 +427,7 @@ class DaoClarificationService implements ClarificationService {
         await _db.todoDao.applyRouting(
           id,
           to: to,
-          nextActionText: nextActionText,
+          actionText: action?.text,
           personTagIds: personTagIds,
           userId: personTagIds != null ? userId : null,
           now: now,
@@ -489,14 +494,14 @@ class DaoClarificationService implements ClarificationService {
   Future<void> clarifyToOutcome(
     String id, {
     required RoutingKind to,
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
     String? userId,
   }) =>
       _db.todoDao.applyRouting(
         id,
         to: to,
-        nextActionText: nextActionText,
+        actionText: actionText,
         personTagIds: personTagIds,
         userId: userId,
       );

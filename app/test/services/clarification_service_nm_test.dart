@@ -14,6 +14,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/services/clarification_service.dart';
 
@@ -139,8 +140,13 @@ void main() {
         userId: _userId,
         title: 'Book the flights',
         notes: 'Aim for a morning departure',
-        energyLevel: 'high',
-        timeEstimate: 45,
+        // No routing is applied here, so the phrase reaches no Action row —
+        // the effort values land on the Outcome columns as draft (D3).
+        action: const ActionDraft(
+          text: 'Book the flights',
+          energyLevel: 'high',
+          timeEstimateMinutes: 45,
+        ),
         dueDate: due,
       );
 
@@ -176,7 +182,7 @@ void main() {
         userId: _userId,
         title: 'Book the flights',
         to: RoutingKind.nextAction,
-        nextActionText: 'Compare fares',
+        action: const ActionDraft(text: 'Compare fares'),
       );
 
       final outcome = await db.todoDao.getTodo(outcomeId);

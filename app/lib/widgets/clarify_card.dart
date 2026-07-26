@@ -37,6 +37,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/action_draft.dart';
 import '../models/clarify_mode.dart';
 import '../providers/auth_provider.dart';
 import '../providers/clarify_mode_provider.dart';
@@ -515,8 +516,6 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     return ClarifyDraft(
       title: title,
       notes: notes.isEmpty ? null : notes,
-      energyLevel: _energyLevel,
-      timeEstimate: _timeEstimate,
       // Strip the time component: the picker collects a calendar day.
       dueDate: _dueDate != null
           ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
@@ -532,9 +531,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       },
       // Title-as-action coupling: a Capture is by definition a first
       // clarification, so there is no deliberate phrase to clobber and the
-      // title always mirrors. applyRouting consumes this only for Next and
-      // Waiting For, so the other destinations are unaffected.
-      nextActionText: title.isEmpty ? null : title,
+      // title always mirrors. applyRouting consumes the phrase only for Next
+      // and Waiting For, so the other destinations are unaffected — but the
+      // effort values travel to the Outcome columns either way (D3).
+      action: title.isEmpty
+          ? null
+          : ActionDraft(
+              text: title,
+              energyLevel: _energyLevel,
+              timeEstimateMinutes: _timeEstimate,
+            ),
     );
   }
 

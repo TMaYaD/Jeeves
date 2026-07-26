@@ -190,7 +190,7 @@ void main() {
   group('TodoDao.applyRouting', () {
     test('nextAction with a phrase mints the Action, cursor frozen', () async {
       await db.todoDao.applyRouting('o1',
-          to: RoutingKind.nextAction, nextActionText: 'do the thing', now: _t1);
+          to: RoutingKind.nextAction, actionText: 'do the thing', now: _t1);
 
       expect((await _currents(db, 'o1')).single['text'], 'do the thing');
       expect((await _todo(db, 'o1')).intent, 'next');
@@ -200,7 +200,7 @@ void main() {
     test('waitingFor with a phrase mints the Action, cursor frozen', () async {
       await db.todoDao.applyRouting('o1',
           to: RoutingKind.waitingFor,
-          nextActionText: 'follow up with Trixy',
+          actionText: 'follow up with Trixy',
           now: _t1);
 
       expect((await _currents(db, 'o1')).single['text'], 'follow up with Trixy');
@@ -210,9 +210,9 @@ void main() {
     test('nextAction with a blank phrase retires the Action, cursor frozen',
         () async {
       await db.todoDao.applyRouting('o1',
-          to: RoutingKind.nextAction, nextActionText: 'x', now: _t1);
+          to: RoutingKind.nextAction, actionText: 'x', now: _t1);
       await db.todoDao.applyRouting('o1',
-          to: RoutingKind.nextAction, nextActionText: '   ', now: _t2);
+          to: RoutingKind.nextAction, actionText: '   ', now: _t2);
 
       expect(await _currents(db, 'o1'), isEmpty);
       await _expectCursorFrozen(db);
@@ -220,7 +220,7 @@ void main() {
 
     test('an absent phrase touches no Action row, cursor frozen', () async {
       await db.todoDao.applyRouting('o1',
-          to: RoutingKind.nextAction, nextActionText: 'keep me', now: _t1);
+          to: RoutingKind.nextAction, actionText: 'keep me', now: _t1);
       await db.todoDao.applyRouting('o1', to: RoutingKind.nextAction, now: _t2);
 
       expect((await _currents(db, 'o1')).single['text'], 'keep me');

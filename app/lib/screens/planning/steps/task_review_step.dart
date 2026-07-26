@@ -270,7 +270,7 @@ class _ReviewCard extends ConsumerWidget {
               }
               notifier.recordReviewActionAndAdvance(ReviewActionRecord(
                 kind: ReviewActionKind.updateNextAction,
-                nextActionText: txt,
+                actionText: txt,
               ));
               return;
             }

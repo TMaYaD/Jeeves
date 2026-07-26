@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
@@ -165,10 +166,8 @@ class _RecordingClarificationService implements ClarificationService {
     required String title,
     RoutingKind? to,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -180,10 +179,8 @@ class _RecordingClarificationService implements ClarificationService {
         title: title,
         to: to,
         notes: notes,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
         dueDate: dueDate,
-        nextActionText: nextActionText,
+        action: action,
         personTagIds: personTagIds,
         tagIds: tagIds,
         outcomeId: outcomeId,
@@ -222,14 +219,14 @@ class _RecordingClarificationService implements ClarificationService {
   Future<void> clarifyToOutcome(
     String id, {
     required RoutingKind to,
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
     String? userId,
   }) =>
       inner.clarifyToOutcome(
         id,
         to: to,
-        nextActionText: nextActionText,
+        actionText: actionText,
         personTagIds: personTagIds,
         userId: userId,
       );
@@ -255,18 +252,16 @@ class _RecordingClarificationService implements ClarificationService {
     required String userId,
     required String title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
   }) {
     lastNotes = notes;
-    lastEnergyLevel = energyLevel;
-    lastTimeEstimate = timeEstimate;
+    lastEnergyLevel = action?.energyLevel;
+    lastTimeEstimate = action?.timeEstimateMinutes;
     lastDueDate = dueDate;
     return inner.clarifyCaptureToOutcome(
         captureId,
@@ -274,10 +269,8 @@ class _RecordingClarificationService implements ClarificationService {
         userId: userId,
         title: title,
         notes: notes,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
         dueDate: dueDate,
-        nextActionText: nextActionText,
+        action: action,
         personTagIds: personTagIds,
         tagIds: tagIds,
         outcomeId: outcomeId,
@@ -303,10 +296,8 @@ class _FailingClarificationService extends _RecordingClarificationService {
     required String userId,
     required String title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -329,10 +320,8 @@ class _BlockingClarificationService extends _RecordingClarificationService {
     required String userId,
     required String title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -345,10 +334,8 @@ class _BlockingClarificationService extends _RecordingClarificationService {
       userId: userId,
       title: title,
       notes: notes,
-      energyLevel: energyLevel,
-      timeEstimate: timeEstimate,
       dueDate: dueDate,
-      nextActionText: nextActionText,
+      action: action,
       personTagIds: personTagIds,
       tagIds: tagIds,
       outcomeId: outcomeId,
