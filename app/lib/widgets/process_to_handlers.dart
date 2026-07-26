@@ -708,20 +708,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     if (!mounted) return;
     final routed = await Navigator.of(context).push<ProcessAction>(
       MaterialPageRoute<ProcessAction>(
-        builder: (routeContext) => Scaffold(
-          appBar: AppTitleBar(
-            title: 'Re-clarify',
-            pinnedAction: captureAction(routeContext),
-          ),
-          body: ClarifyCard.forOutcome(
-            todoId: subject.todo.id,
-            onAfterRoute: (action) async {
-              if (Navigator.of(routeContext).canPop()) {
-                Navigator.of(routeContext).pop(action);
-              }
-            },
-          ),
-        ),
+        builder: (_) => ReclarifyRoute(todoId: subject.todo.id),
       ),
     );
     if (!mounted) return;
@@ -920,6 +907,49 @@ class _ActionButton extends StatelessWidget {
         minimumSize: const Size.fromHeight(44),
         padding: const EdgeInsets.symmetric(horizontal: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
+      ),
+    );
+  }
+}
+
+/// The third clarify host: a full-page route wrapping [ClarifyCard.forOutcome].
+///
+/// Named rather than inlined into `_ProcessToHandlersState._reclarify` so all
+/// three clarify hosts read alike — a ceremony step, [InboxClarifyScreen] and
+/// this — and so the chrome one of them owns is visible as chrome rather than
+/// as a builder nested inside a navigation call.
+///
+/// It pops with the [ProcessAction] the inner card routed, or with null when
+/// the user backs out without routing; the caller maps that to
+/// [ProcessAction.keep] so a review step advances without recording a routing.
+///
+/// Deliberately thinner than [InboxClarifyScreen]: no `PopScope`, no
+/// missing-state CTA. Backing out mid-write is not the same hazard here — the
+/// subject already exists and the write edits it in place, so there is no
+/// create-link-stamp sequence to interrupt — and the app bar's back arrow is a
+/// way out the missing state can rely on. Neither guard was present in the
+/// inline version this replaces, so neither absence is a regression; adding
+/// them would be a change rather than a move.
+class ReclarifyRoute extends StatelessWidget {
+  const ReclarifyRoute({super.key, required this.todoId});
+
+  /// The Outcome being re-clarified.
+  final String todoId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppTitleBar(
+        title: 'Re-clarify',
+        pinnedAction: captureAction(context),
+      ),
+      body: ClarifyCard.forOutcome(
+        todoId: todoId,
+        onAfterRoute: (action) async {
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop(action);
+          }
+        },
       ),
     );
   }
