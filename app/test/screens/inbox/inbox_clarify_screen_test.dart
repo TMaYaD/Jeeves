@@ -14,6 +14,7 @@ import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/services/clarification_service.dart';
+import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 import '../../test_helpers.dart';
 
@@ -967,6 +968,38 @@ void main() {
       expect(find.byType(CircularProgressIndicator), findsNothing);
       // An error is not an absence: the row may well still be there.
       expect(find.byKey(const Key('clarify_subject_missing')), findsNothing);
+    });
+
+    testWidgets(
+        'the energy picker chips stay inside the screen at 320dp (#477 '
+        'pre-existing overflow)', (tester) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x'));
+      await tester.pumpAndSettle();
+
+      final picker = tester.getRect(find.byType(ClarifyEnergyPicker));
+      // Measured rather than inferred from `takeException()` — see
+      // task_detail_screen_test.dart's note on why that is unreliable here.
+      for (final label in ['Low', 'Medium', 'High']) {
+        final chip = tester.getRect(find.ancestor(
+          of: find.text(label),
+          matching: find.byType(AnimatedContainer),
+        ));
+        expect(chip.left, greaterThanOrEqualTo(picker.left),
+            reason: '$label chip starts inside the picker');
+        expect(chip.right, lessThanOrEqualTo(picker.right),
+            reason:
+                '$label chip must not overflow the picker at 320dp width');
+        expect(chip.width, greaterThan(0.0),
+            reason: '$label chip is not squeezed to nothing');
+      }
     });
   });
 }
