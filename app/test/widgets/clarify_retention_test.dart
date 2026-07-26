@@ -101,6 +101,32 @@ void main() {
       expect(seeded.titleIsDirty, isTrue);
     });
 
+    test('the same holds for notes, with the title clean', () {
+      // The rule is stated once and applied to both fields, so it has to be
+      // proved on both: every other dirty-branch case above pins a dirty
+      // *title*, and advancing `baselineNotes` on the dirty branch would
+      // survive all of them.
+      final retained = RetainedClarifyDraft(
+        title: 'seeded title',
+        baselineTitle: 'seeded title',
+        notes: 'typed notes',
+        baselineNotes: 'seeded notes',
+      );
+
+      final seeded = RetainedClarifyDraft.seedFrom(
+        retained,
+        incomingTitle: 'seeded title',
+        incomingNotes: 'incoming notes',
+      );
+
+      expect(seeded.notes, 'typed notes', reason: 'an edit in progress wins');
+      expect(seeded.baselineNotes, 'seeded notes',
+          reason: 'the stale baseline restores the field\'s dirty state; '
+              'advancing it to the incoming value would make the notes read '
+              'clean and let the next incoming change overwrite the typing');
+      expect(seeded.notesIsDirty, isTrue);
+    });
+
     test('re-seeding twice against the same row still keeps the typing', () {
       // The trap a hand-cranked stream hides: a reconciler that ran on every
       // emission would survive one push and lose the typing on the second.
