@@ -743,7 +743,7 @@ void main() {
       await db.todoDao.applyRouting(
         'r1',
         to: RoutingKind.nextAction,
-        nextActionText: 'Buy milk',
+        actionText: 'Buy milk',
       );
 
       final row = await db.todoDao.getTodo('r1');
@@ -761,7 +761,7 @@ void main() {
       await db.todoDao.applyRouting(
         'r2',
         to: RoutingKind.waitingFor,
-        nextActionText: 'Wait for Alice',
+        actionText: 'Wait for Alice',
       );
 
       final row = await db.todoDao.getTodo('r2');
@@ -987,7 +987,7 @@ void main() {
       await db.todoDao.applyRouting(
         't3',
         to: RoutingKind.nextAction,
-        nextActionText: 'Do it',
+        actionText: 'Do it',
       );
 
       final row = await db.todoDao.getTodo('t3');
@@ -1033,7 +1033,7 @@ void main() {
       await db.todoDao.applyRouting(
         't5',
         to: RoutingKind.waitingFor,
-        nextActionText: 'Ping Bob',
+        actionText: 'Ping Bob',
         personTagIds: {'bob'},
         userId: _userId,
       );

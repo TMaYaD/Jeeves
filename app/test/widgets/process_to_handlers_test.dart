@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
@@ -72,7 +73,7 @@ class _FailingClarificationService extends DaoClarificationService {
   Future<void> clarifyToOutcome(
     String id, {
     required RoutingKind to,
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
     String? userId,
   }) =>
@@ -714,6 +715,60 @@ void main() {
       expect(row?.intent, 'next');
       expect((await db.actionDao.getCurrentAction('nd3'))?.actionText,
           'Draft proposal');
+    });
+
+    testWidgets(
+        "the dialog's phrase wins over the card's, but the card's effort "
+        'values survive', (tester) async {
+      // The merge of dialog phrase and card draft. A bare
+      // `dialogPhrase ?? draft.action?.text` would take the phrase and drop
+      // the energy and estimate the user had already set on the card.
+      final capture = await _insertCapture(db, id: 'md1', title: 'Fragment');
+      await tester.pumpWidget(ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [
+                ProcessToHandlers(
+                  subject: CaptureSubject(
+                    capture: capture,
+                    draft: () => const ClarifyDraft(
+                      title: 'Fragment',
+                      action: ActionDraft(
+                        text: 'Fragment',
+                        energyLevel: 'high',
+                        timeEstimateMinutes: 45,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+        'Draft the proposal',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final outcomeIds = await db.captureDao.outcomeIdsForCapture('md1');
+      final outcomeId = outcomeIds.single;
+      final action = await db.actionDao.getCurrentAction(outcomeId);
+      expect(action?.actionText, 'Draft the proposal',
+          reason: "the dialog's phrase wins");
+      expect(action?.energyLevel, 'high',
+          reason: "the card's effort is not dropped by the override");
+      expect(action?.timeEstimate, 45);
     });
   });
 

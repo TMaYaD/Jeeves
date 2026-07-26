@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
@@ -80,7 +81,7 @@ void main() {
       await service.clarifyToOutcome(
         'a',
         to: RoutingKind.nextAction,
-        nextActionText: 'Call Alice',
+        actionText: 'Call Alice',
       );
 
       final row = await _row(db, 'a');
@@ -235,7 +236,7 @@ void main() {
         to: RoutingKind.nextAction,
         userId: _userId,
         title: 'Draft outline',
-        nextActionText: 'Draft outline',
+        action: const ActionDraft(text: 'Draft outline'),
       );
 
       // A distinct Outcome row exists — the Capture is not flipped in place.
@@ -266,8 +267,14 @@ void main() {
         userId: _userId,
         title: 'Renamed',
         notes: 'Context',
-        energyLevel: 'high',
-        timeEstimate: 30,
+        // Effort travels on the Action grain now; on this Next route the
+        // phrase mints the birth Action, which seeds from the columns
+        // insertOutcome just wrote (D3).
+        action: const ActionDraft(
+          text: 'Renamed',
+          energyLevel: 'high',
+          timeEstimateMinutes: 30,
+        ),
         dueDate: DateTime.utc(2026, 8, 1),
         tagIds: {work},
       );

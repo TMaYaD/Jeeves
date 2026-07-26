@@ -51,12 +51,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
+import '../models/action_draft.dart';
 import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../services/clarification_service.dart';
 import 'async_list.dart';
 import 'clarify_shared_widgets.dart';
+import 'meta_chip.dart' show formatMinutesLabel;
 import 'process_to_handlers.dart';
 
 const _labelGray = Color(0xFF9CA3AF);
@@ -77,9 +79,6 @@ const _radiusSurface = BorderRadius.all(Radius.circular(6));
 /// [ProcessToHandlers] owns those taps and reports them itself, so repeating
 /// the message would show two banners for one failure.
 const _kWriteFailedMessage = 'Operation failed. Please try again.';
-
-/// Time-estimate options, matching the 1-1 clarify surfaces.
-const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
 class CaptureOutcomesSection extends ConsumerStatefulWidget {
   const CaptureOutcomesSection({
@@ -263,16 +262,21 @@ class _CaptureOutcomesSectionState
     return ClarifyDraft(
       title: title,
       notes: notes.isEmpty ? null : notes,
-      energyLevel: _energyLevel,
-      timeEstimate: _timeEstimate,
       // Strip the time component: the picker collects a calendar day.
       dueDate: _dueDate != null
           ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
           : null,
       tagIds: widget.tagIds,
       // Title-as-action: a freshly carved Outcome must not land on the Next
-      // list actionless.
-      nextActionText: title.isEmpty ? null : title,
+      // list actionless. The effort values ride along on the same draft and
+      // land on the Outcome columns whatever the destination (D3).
+      action: title.isEmpty
+          ? null
+          : ActionDraft(
+              text: title,
+              energyLevel: _energyLevel,
+              timeEstimateMinutes: _timeEstimate,
+            ),
     );
   }
 
@@ -706,14 +710,10 @@ class _NewOutcomeForm extends StatelessWidget {
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: _estimateOptions.map((m) {
+          children: kEstimateOptionsMinutes.map((m) {
             final selected = timeEstimate == m;
             return ClarifyEstimateChip(
-              label: m < 60
-                  ? '${m}m'
-                  : m % 60 == 0
-                      ? '${m ~/ 60}h'
-                      : '${m ~/ 60}h ${m % 60}m',
+              label: formatMinutesLabel(m),
               selected: selected,
               onTap: () => onEstimate(selected ? null : m),
             );

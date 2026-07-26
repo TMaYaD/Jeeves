@@ -21,6 +21,7 @@ import 'package:intl/intl.dart';
 
 import '../database/gtd_database.dart';
 import '../providers/database_provider.dart';
+import 'meta_chip.dart';
 
 /// One-shot read of the ceiling-rounded minutes logged against [taskId],
 /// summed from the `time_logs` rows. Resolved fresh each time the sheet
@@ -119,20 +120,20 @@ class OutcomePeekSheet extends ConsumerWidget {
                 runSpacing: 8,
                 children: [
                   if (energyLevel != null)
-                    _MetaChip(
+                    MetaChip(
                       icon: Icons.bolt_outlined,
-                      label: _energyLabel(energyLevel),
+                      label: energyLevelLabel(energyLevel),
                       color: const Color(0xFF7C3AED),
                     ),
                   if (timeEstimate != null)
-                    _MetaChip(
+                    MetaChip(
                       icon: Icons.timer_outlined,
-                      label: _formatMinutes(timeEstimate),
+                      label: formatMinutesLabel(timeEstimate),
                       color: const Color(0xFF2563EB),
                     ),
                   _TimeLoggedChip(value: timeLogged),
                   if (dueDate != null)
-                    _MetaChip(
+                    MetaChip(
                       icon: Icons.event_outlined,
                       label: DateFormat('MMM d, y').format(dueDate),
                       color: const Color(0xFFDC2626),
@@ -178,53 +179,14 @@ class _TimeLoggedChip extends StatelessWidget {
     const color = Color(0xFF16A34A);
     final label = value.when(
       data: (minutes) =>
-          minutes <= 0 ? 'No time logged yet' : _formatMinutes(minutes),
+          minutes <= 0 ? 'No time logged yet' : formatMinutesLabel(minutes),
       loading: () => '…',
       error: (_, _) => '—',
     );
-    return _MetaChip(
+    return MetaChip(
       icon: Icons.history_toggle_off_outlined,
       label: label,
       color: color,
-    );
-  }
-}
-
-class _MetaChip extends StatelessWidget {
-  const _MetaChip({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        // Chips sit at 4px on the canonical 2/4/6 scale (DESIGN.md §Roundedness).
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              color: color,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -245,19 +207,4 @@ class _FieldLabel extends StatelessWidget {
       ),
     );
   }
-}
-
-String _energyLabel(String level) => switch (level) {
-      'low' => 'Low',
-      'medium' => 'Medium',
-      'high' => 'High',
-      _ => level,
-    };
-
-String _formatMinutes(int minutes) {
-  final h = minutes ~/ 60;
-  final m = minutes % 60;
-  if (h == 0) return '${m}m';
-  if (m == 0) return '${h}h';
-  return '${h}h ${m}m';
 }

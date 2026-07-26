@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/action_draft.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../providers/auth_provider.dart';
 import '../services/clarification_service.dart';
@@ -100,39 +101,45 @@ extension ProcessActionToRoutingKind on ProcessAction {
       };
 }
 
-/// The Outcome-shaped attributes a clarify card has collected for a Capture.
+/// What a clarify card has collected for a Capture, across both grains.
 ///
-/// A Capture carries only title and notes; energy, time estimate, due date and
-/// tags are *Outcome* attributes with no column to live in until the Outcome
-/// exists (ADR-0006). The card holds them here and
-/// [ClarificationService.clarifyCaptureToOutcome] writes them onto the Outcome
-/// it mints, in the same transaction as the provenance link and the stamp.
+/// A Capture carries only title and notes; due date and tags are *Outcome*
+/// attributes with no column to live in until the Outcome exists (ADR-0006),
+/// and the card holds them here so
+/// [ClarificationService.clarifyCaptureToOutcome] can write them onto the
+/// Outcome it mints, in the same transaction as the provenance link and the
+/// stamp.
+///
+/// [action] is the other grain: the phrase plus the effort attributes that
+/// belong to the *action of doing* (ADR-0001, issue #477). Its nullness is the
+/// single answer to "is there an Action here at all?" — the card nulls the
+/// whole draft on a blank title rather than carrying a blank phrase beside
+/// live effort values.
 class ClarifyDraft {
   const ClarifyDraft({
     required this.title,
     this.notes,
-    this.energyLevel,
-    this.timeEstimate,
     this.dueDate,
     this.tagIds = const <String>{},
-    this.nextActionText,
+    this.action,
   });
 
   final String title;
   final String? notes;
-  final String? energyLevel;
-  final int? timeEstimate;
   final DateTime? dueDate;
 
   /// Non-person tags (context / project) to attach to the new Outcome. Person
   /// tags travel separately — the Waiting For picker supplies them.
   final Set<String> tagIds;
 
-  /// The phrase to record as the new Outcome's next action, if the card wants
-  /// one. The clarify card owns this policy (it mirrors the title so a freshly
-  /// clarified row never lands on the Next list actionless); the
-  /// [ProcessAction.nextActionDialog] modifier overrides it when active.
-  final String? nextActionText;
+  /// The Action the card describes, or null when it describes none.
+  ///
+  /// The clarify card owns the policy that fills it (the title-as-action
+  /// mirror, so a freshly clarified row never lands on the Next list
+  /// actionless); the [ProcessAction.nextActionDialog] modifier overrides its
+  /// phrase when active. Energy and estimate ride along and, on an Actionless
+  /// destination, land on the Outcome columns as draft (D3).
+  final ActionDraft? action;
 }
 
 /// What a [ProcessToHandlers] bar is clarifying — the two shapes of ADR-0006.
@@ -367,11 +374,11 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
   /// Called once after a successful write (or after `keep` stamps
   /// `last_clarified_at`). Not called when the user cancels a sub-dialog.
   ///
-  /// Callsites that want to couple a route to a `next_action_text` write
-  /// (e.g. inbox-clarify treating the title as the next action) own that
-  /// write here — the routing call itself is intent-only for plain
+  /// Callsites that want to couple a route to an Action write (e.g.
+  /// inbox-clarify treating the title as the next action) own that write
+  /// here — the routing call itself is intent-only for plain
   /// `next` / `waitingFor`, and only the [ProcessAction.nextActionDialog]
-  /// modifier writes `next_action_text` from inside the widget.
+  /// modifier writes an Action from inside the widget.
   final Future<void> Function(ProcessAction)? onAfterRoute;
 
   /// Notified with `true` when a tap begins its write and `false` once it
@@ -541,7 +548,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   /// nothing (ADR-0006).
   Future<void> _commit(
     RoutingKind to, {
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
   }) async {
     switch (widget.subject) {
@@ -549,7 +556,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         await _clarification.clarifyToOutcome(
           todo.id,
           to: to,
-          nextActionText: nextActionText,
+          actionText: actionText,
           personTagIds: personTagIds,
           userId: personTagIds != null ? ref.read(currentUserIdProvider) : null,
         );
@@ -569,10 +576,8 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
             title: d.title,
             to: to,
             notes: d.notes,
-            energyLevel: d.energyLevel,
-            timeEstimate: d.timeEstimate,
             dueDate: d.dueDate,
-            nextActionText: nextActionText ?? d.nextActionText,
+            action: _mergedAction(d, actionText),
             personTagIds: personTagIds,
             tagIds: d.tagIds,
           );
@@ -584,15 +589,24 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
           userId: ref.read(currentUserIdProvider),
           title: d.title,
           notes: d.notes,
-          energyLevel: d.energyLevel,
-          timeEstimate: d.timeEstimate,
           dueDate: d.dueDate,
-          // The dialog modifier's phrase wins over the card's title mirror.
-          nextActionText: nextActionText ?? d.nextActionText,
+          action: _mergedAction(d, actionText),
           personTagIds: personTagIds,
           tagIds: d.tagIds,
         );
     }
+  }
+
+  /// The Action to write, reconciling the card's draft with a phrase the
+  /// [ProcessAction.nextActionDialog] modifier collected.
+  ///
+  /// The dialog's phrase wins over the card's title mirror, but only the
+  /// *phrase*: the effort attributes the card collected ride through, which a
+  /// bare `actionText ?? d.action?.text` would drop.
+  ActionDraft? _mergedAction(ClarifyDraft d, String? actionText) {
+    if (actionText == null || actionText.isEmpty) return d.action;
+    return d.action?.copyWith(text: actionText) ??
+        ActionDraft(text: actionText);
   }
 
   Future<void> _keep() async {
@@ -705,7 +719,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       // still notify the callsite so it can react (e.g. clear a stale
       // action record); its handler re-reads the row and sees the
       // unchanged value.
-      await _commit(RoutingKind.nextAction, nextActionText: result);
+      await _commit(RoutingKind.nextAction, actionText: result);
     }
     await _notifyAfterRoute(ProcessAction.nextActionDialog);
   }
@@ -736,9 +750,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // row that has since vanished must leave nothing behind.
     if (!await _subjectExists()) return;
 
-    // Routing to waitingFor is intent-only — `next_action_text` is on the
-    // orthogonal "what's the action?" axis and is not touched here. Callsites
-    // that want to couple a phrase write own it via `onAfterRoute` (or the
+    // Routing to waitingFor is intent-only — the Action is on the orthogonal
+    // "what's the action?" axis and is not touched here. Callsites that want
+    // to couple a phrase write own it via `onAfterRoute` (or the
     // `nextActionDialog` modifier when editing an existing phrase).
     await _commit(RoutingKind.waitingFor, personTagIds: selected);
     await _notifyAfterRoute(ProcessAction.waitingFor);

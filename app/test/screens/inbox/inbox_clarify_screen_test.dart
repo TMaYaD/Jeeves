@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
@@ -71,6 +72,22 @@ Future<Todo?> _outcomeOf(GtdDatabase db, String captureId) async {
   final ids = await db.captureDao.outcomeIdsForCapture(captureId);
   if (ids.isEmpty) return null;
   return db.todoDao.getTodo(ids.single);
+}
+
+/// An Outcome's **raw** `energy_level` / `time_estimate` columns.
+///
+/// Deliberately a raw `select(db.todos)` and never [_outcomeOf] / `getTodo`:
+/// those carry the D2 projection, which COALESCEs the *current Action's* value
+/// over the column. A claim about what the column holds, read through the
+/// projection, would resolve on the Action's own value and pass whether or not
+/// the column was ever written — unfalsifiable.
+Future<({String? energy, int? time})> _rawEffortColumns(
+  GtdDatabase db,
+  String outcomeId,
+) async {
+  final row = await (db.select(db.todos)..where((t) => t.id.equals(outcomeId)))
+      .getSingle();
+  return (energy: row.energyLevel, time: row.timeEstimate);
 }
 
 /// Scrolls [label] into view and taps it.
@@ -165,10 +182,8 @@ class _RecordingClarificationService implements ClarificationService {
     required String title,
     RoutingKind? to,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -180,10 +195,8 @@ class _RecordingClarificationService implements ClarificationService {
         title: title,
         to: to,
         notes: notes,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
         dueDate: dueDate,
-        nextActionText: nextActionText,
+        action: action,
         personTagIds: personTagIds,
         tagIds: tagIds,
         outcomeId: outcomeId,
@@ -222,14 +235,14 @@ class _RecordingClarificationService implements ClarificationService {
   Future<void> clarifyToOutcome(
     String id, {
     required RoutingKind to,
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
     String? userId,
   }) =>
       inner.clarifyToOutcome(
         id,
         to: to,
-        nextActionText: nextActionText,
+        actionText: actionText,
         personTagIds: personTagIds,
         userId: userId,
       );
@@ -255,18 +268,16 @@ class _RecordingClarificationService implements ClarificationService {
     required String userId,
     required String title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
   }) {
     lastNotes = notes;
-    lastEnergyLevel = energyLevel;
-    lastTimeEstimate = timeEstimate;
+    lastEnergyLevel = action?.energyLevel;
+    lastTimeEstimate = action?.timeEstimateMinutes;
     lastDueDate = dueDate;
     return inner.clarifyCaptureToOutcome(
         captureId,
@@ -274,10 +285,8 @@ class _RecordingClarificationService implements ClarificationService {
         userId: userId,
         title: title,
         notes: notes,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
         dueDate: dueDate,
-        nextActionText: nextActionText,
+        action: action,
         personTagIds: personTagIds,
         tagIds: tagIds,
         outcomeId: outcomeId,
@@ -303,10 +312,8 @@ class _FailingClarificationService extends _RecordingClarificationService {
     required String userId,
     required String title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -329,10 +336,8 @@ class _BlockingClarificationService extends _RecordingClarificationService {
     required String userId,
     required String title,
     String? notes,
-    String? energyLevel,
-    int? timeEstimate,
     DateTime? dueDate,
-    String? nextActionText,
+    ActionDraft? action,
     Set<String>? personTagIds,
     Set<String> tagIds = const {},
     String? outcomeId,
@@ -345,10 +350,8 @@ class _BlockingClarificationService extends _RecordingClarificationService {
       userId: userId,
       title: title,
       notes: notes,
-      energyLevel: energyLevel,
-      timeEstimate: timeEstimate,
       dueDate: dueDate,
-      nextActionText: nextActionText,
+      action: action,
       personTagIds: personTagIds,
       tagIds: tagIds,
       outcomeId: outcomeId,
@@ -781,6 +784,47 @@ void main() {
       expect(outcome.notes, isNull);
       expect(outcome.dueDate, isNull);
       expect(outcome.clarified, isTrue);
+    });
+
+    testWidgets('effort set on the card travels as one ActionDraft — onto the '
+        'Outcome columns and through them onto the birth Action',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      final recorder =
+          _RecordingClarificationService(DaoClarificationService(db));
+      await tester.pumpWidget(
+        _buildApp(db, 'x', clarificationService: recorder),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.descendant(
+        of: find.byType(ClarifyEnergyPicker),
+        matching: find.text('High'),
+      ));
+      await tester.pump();
+      await tester.tap(find.text('30m'));
+      await tester.pump();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      // The card composed one draft, not three loose fields.
+      expect(recorder.lastEnergyLevel, 'high');
+      expect(recorder.lastTimeEstimate, 30);
+
+      // The raw columns carry them (D1/D3 draft store) — read raw, because a
+      // current Action exists on this route and the projection's COALESCE
+      // would resolve on *its* values no matter what the columns hold.
+      final outcome = (await _outcomeOf(db, 'x'))!;
+      expect(await _rawEffortColumns(db, outcome.id), (energy: 'high', time: 30));
+      // … and the birth Action seeded from them, which only holds because
+      // insertOutcome still runs before applyRouting.
+      final action = await db.actionDao.getCurrentAction(outcome.id);
+      expect(action?.actionText, 'Buy milk');
+      expect(action?.energyLevel, 'high');
+      expect(action?.timeEstimate, 30);
     });
 
     testWidgets('a failed write surfaces an error and does not pop',

@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/gtd_database.dart';
+import '../models/action_draft.dart';
 import '../models/ritual.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../services/clarification_service.dart';
@@ -307,14 +308,15 @@ enum ReviewActionKind {
 class ReviewActionRecord {
   const ReviewActionRecord({
     required this.kind,
-    this.nextActionText,
+    this.actionText,
     this.personTagIds = const {},
   });
 
   final ReviewActionKind kind;
 
-  /// Recorded text when [kind] is [ReviewActionKind.updateNextAction].
-  final String? nextActionText;
+  /// Recorded Action phrase when [kind] is
+  /// [ReviewActionKind.updateNextAction].
+  final String? actionText;
 
   /// Person tag IDs assigned when [kind] is [ReviewActionKind.waitingFor].
   final Set<String> personTagIds;
@@ -666,7 +668,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     String captureId, {
     required RoutingKind to,
     String? title,
-    String? nextActionText,
+    String? actionText,
     Set<String>? personTagIds,
   }) async {
     final idx = state.inboxNav.index;
@@ -681,7 +683,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         userId: _userId,
         title: title ?? capture.title,
         notes: capture.notes,
-        nextActionText: nextActionText,
+        action: actionText == null ? null : ActionDraft(text: actionText),
         personTagIds: personTagIds,
         tagIds: await _db.captureDao.tagHintIdsForCapture(captureId),
       );
@@ -723,7 +725,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         id,
         to: RoutingKind.nextAction,
         title: title,
-        nextActionText: title,
+        actionText: title,
       );
 
   /// Clarifies the current Capture into a delegated Outcome.
@@ -741,7 +743,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         id,
         to: RoutingKind.waitingFor,
         title: title,
-        nextActionText: title,
+        actionText: title,
         personTagIds: personTagIds,
       );
 
@@ -886,14 +888,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.nextAction,
-      nextActionText: text,
+      actionText: text,
       userId: _userId,
     );
     if (state.reviewNav.index != idx) return;
     if (trimmed.isNotEmpty) {
       _recordAndAdvance(ReviewActionRecord(
         kind: ReviewActionKind.updateNextAction,
-        nextActionText: trimmed,
+        actionText: trimmed,
       ));
     } else {
       // Blank text normalises to NULL and the cursor does not advance, but
