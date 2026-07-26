@@ -1288,16 +1288,13 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       final h = await mountPlan(tester, 'eff7');
-      // Drain the screen chrome's own overflow before measuring anything the
-      // Plan section owns. The header attribute row (Status / Time / Energy in
-      // fixed-flex Expandeds) overflows by 29px at 320dp under the test font —
-      // Ahem renders every glyph as a full em square — with no planned row
-      // mounted at all. That is pre-existing and out of this feature's scope;
-      // draining it here is what lets the assertions below be `isNull` rather
-      // than a blanket swallow that would hide a real overflow in the row or
-      // the sheet.
-      expect(tester.takeException(), isNotNull,
-          reason: 'the pre-existing header-row overflow at 320dp');
+      // The screen chrome lays out clean at 320dp with no planned row mounted,
+      // so every `isNull` below carries real signal about the Plan section's
+      // own content rather than inheriting a swallowed baseline overflow. The
+      // test font (Ahem renders every glyph as a full em square) makes this
+      // the pathological width for the Plan section's fixed-width labels.
+      expect(tester.takeException(), isNull,
+          reason: 'the screen chrome itself lays out clean at 320dp');
 
       await tester.runAsync(() => db.actionDao.addPlannedAction(
           'eff7', 'a deliberately long planned action phrase that wraps',
@@ -1319,6 +1316,23 @@ void main() {
       expect(time.right, lessThanOrEqualTo(row.right));
       expect(tester.takeException(), isNull,
           reason: 'the planned row itself adds no overflow at 320dp');
+
+      // The add affordance's label is Flexible, so a phrase wider than the
+      // leftover width gives somewhere — but the absence of an overflow
+      // exception above cannot tell us where: a label that wraps onto extra
+      // lines is exactly as exception-free as one that ellipsises. Pin the
+      // truncation configuration itself, since that is the difference. This
+      // stays a config assertion on purpose: the English phrase happens to fit
+      // one line at 320dp, so no measurable layout distinguishes the two, and
+      // it is a longer localisation that would silently start wrapping.
+      // Located via the InkWell's key because the same phrase is also the
+      // sheet title elsewhere in this file.
+      final addLabel = tester.widget<Text>(find.descendant(
+        of: find.byKey(const Key('plan_add_trigger')),
+        matching: find.byType(Text),
+      ));
+      expect(addLabel.maxLines, 1);
+      expect(addLabel.overflow, TextOverflow.ellipsis);
 
       // The sheet itself at the same width.
       await tester.tap(find.text('a deliberately long planned action phrase '
