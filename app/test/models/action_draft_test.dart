@@ -53,6 +53,7 @@ void main() {
       );
       // A bare null argument means "keep" …
       expect(draft.copyWith(energyLevel: null).energyLevel, 'medium');
+      expect(draft.copyWith(timeEstimateMinutes: null).timeEstimateMinutes, 45);
       // … the flag is the only way to clear.
       expect(draft.copyWith(clearEnergyLevel: true).energyLevel, isNull);
       expect(draft.copyWith(clearTimeEstimate: true).timeEstimateMinutes, isNull);

@@ -141,6 +141,14 @@ void main() {
       .watch()
       .map((rows) => rows.map((r) => r.read<String>('title')).toList());
 
+  Stream<List<String?>> watchEnergyLevels() => db
+      .customSelect(
+        "SELECT energy_level FROM actions WHERE outcome_id = 'o1'",
+        readsFrom: {db.actions},
+      )
+      .watch()
+      .map((rows) => rows.map((r) => r.read<String?>('energy_level')).toList());
+
   test('an ActionDao primitive refreshes an actions-view watcher even though '
       'the trigger makes the write report changes()==0', () async {
     final seen = <List<String>>[];
@@ -168,14 +176,7 @@ void main() {
     final id = planned.single.id;
 
     final seen = <List<String?>>[];
-    final sub = db
-        .customSelect(
-          "SELECT energy_level FROM actions WHERE outcome_id = 'o1'",
-          readsFrom: {db.actions},
-        )
-        .watch()
-        .map((rows) => rows.map((r) => r.read<String?>('energy_level')).toList())
-        .listen(seen.add);
+    final sub = watchEnergyLevels().listen(seen.add);
     addTearDown(sub.cancel);
 
     await _waitUntil(() => seen.isNotEmpty);
@@ -195,14 +196,7 @@ void main() {
     final id = (await db.actionDao.getPlannedActions('o1')).single.id;
 
     final seen = <List<String?>>[];
-    final sub = db
-        .customSelect(
-          "SELECT energy_level FROM actions WHERE outcome_id = 'o1'",
-          readsFrom: {db.actions},
-        )
-        .watch()
-        .map((rows) => rows.map((r) => r.read<String?>('energy_level')).toList())
-        .listen(seen.add);
+    final sub = watchEnergyLevels().listen(seen.add);
     addTearDown(sub.cancel);
 
     await _waitUntil(() => seen.isNotEmpty && seen.last.contains('high'));
