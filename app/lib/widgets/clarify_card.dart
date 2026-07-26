@@ -332,15 +332,25 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         dueDate: _dueDate,
       );
 
-  /// Drops this Capture's retained draft: the verdict has landed, so the
+  /// Drops this Capture's retained draft when [action] was a verdict: the
   /// interpretation now lives on an Outcome (or the fragment was discarded)
   /// and there is nothing left to carry.
   ///
   /// Also latches [_verdictReached] so the stash in [dispose] — which runs
   /// moments later, as the host advances its cursor — cannot put the spent
   /// draft straight back.
-  void _discardRetainedDraft() {
+  ///
+  /// **Not every action reaching `onAfterRoute` is a verdict**, which is why
+  /// this is gated on [ProcessActionEndsCaptureClarification] rather than run
+  /// unconditionally. `keep` on a Capture deliberately leaves it in the Inbox
+  /// with `clarified_at` still NULL, so discarding there would throw away the
+  /// typing *and* — via the latch — suppress the re-stash that would have
+  /// saved it, on an item the user has not finished clarifying. That is the
+  /// loss ADR-0023 exists to prevent, and it would be a fourth discard trigger
+  /// on top of the three that ADR names.
+  void _discardRetainedDraft(ProcessAction action) {
     if (!_isCapture) return;
+    if (!action.endsCaptureClarification) return;
     _verdictReached = true;
     widget.retention?.discard(_subjectId);
   }
@@ -1038,10 +1048,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   ///
   /// On a Capture the text half does not exist: nothing it holds is written.
   Future<void> _onAfterRoute(ProcessAction action) async {
-    // The verdict has landed: the interpretation now lives on the Outcome the
+    // If a verdict landed, the interpretation now lives on the Outcome the
     // routing minted (or the fragment was discarded), so the retained draft is
-    // spent.
-    _discardRetainedDraft();
+    // spent. Actions that leave the Capture in the Inbox keep theirs.
+    _discardRetainedDraft(action);
     if (!_isCapture) {
       try {
         // Tapping a destination does not move focus, so the focus-loss trigger
@@ -1088,7 +1098,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// throwing hook lands in that widget's boundary, exactly as in
   /// [_onAfterRoute].
   Future<void> _onCaptureCompleted() async {
-    _discardRetainedDraft();
+    _discardRetainedDraft(ProcessAction.completeCapture);
     await widget.onCaptureCompleted?.call();
   }
 

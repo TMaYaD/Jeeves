@@ -62,6 +62,53 @@ enum ProcessAction {
   reclarify,
 }
 
+/// Whether an action reported through [ProcessToHandlers.onAfterRoute] means a
+/// **Capture** reached a verdict — the decision that ends its clarify act and
+/// spends anything a surface was holding on its behalf (ADR-0023).
+///
+/// Read by [ClarifyCard] to decide whether the retained draft may be dropped.
+/// `onAfterRoute` fires for every action the bar handles, including ones that
+/// deliberately leave the Capture in the Inbox, so "the hook ran" is not the
+/// same question as "the Capture is done with".
+///
+/// Where each answer comes from, in this file:
+///
+/// - `next`, `waitingFor`, `someday`, `done`, `trash` all reach [_commit]
+///   unconditionally once the subject still exists, and its [CaptureSubject]
+///   branch either mints an Outcome and stamps `clarified_at` or discards the
+///   Capture outright. Verdicts. (`done` is excepted on a Capture card, but it
+///   is a verdict wherever it is offered.)
+/// - `completeCapture` stamps `clarified_at` and creates nothing. A verdict.
+/// - `keep` is an explicit no-op on a [CaptureSubject] in [_keep] — "leave it
+///   in the Inbox", `clarified_at` stays NULL. **Not** a verdict.
+/// - `reclarify` throws on a [CaptureSubject]; it can never report one.
+/// - `nextActionDialog` notifies even when the dialog came back blank and no
+///   write was made ([_nextWithDialog]), so it cannot promise a verdict.
+///
+/// Deliberately conservative on the last two: a false negative leaks a store
+/// entry that a ceremony reset collects, while a false positive throws away
+/// what the user typed. Only one of those is a bug ADR-0023 exists to prevent.
+///
+/// Says nothing about the n-m carve, where the same destinations leave the
+/// Capture in the Inbox ([CaptureSubject.completesClarification]): that surface
+/// reports through `CaptureOutcomesSection` rather than the clarify card's own
+/// bar, and the card is given only its two genuine verdicts.
+extension ProcessActionEndsCaptureClarification on ProcessAction {
+  bool get endsCaptureClarification => switch (this) {
+        ProcessAction.next ||
+        ProcessAction.waitingFor ||
+        ProcessAction.someday ||
+        ProcessAction.done ||
+        ProcessAction.trash ||
+        ProcessAction.completeCapture =>
+          true,
+        ProcessAction.keep ||
+        ProcessAction.reclarify ||
+        ProcessAction.nextActionDialog =>
+          false,
+      };
+}
+
 /// Co-located translation: callsites holding a [RoutingKind] from a session
 /// record convert at the read site so the widget never sees [RoutingKind].
 extension RoutingKindToProcessAction on RoutingKind {
