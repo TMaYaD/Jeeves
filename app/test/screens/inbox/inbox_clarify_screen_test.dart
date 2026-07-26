@@ -121,189 +121,16 @@ Future<List<String>> _inboxIds(GtdDatabase db) async {
   return [for (final r in rows) r.id];
 }
 
-/// Delegates every [ClarificationService] call to a real
-/// [DaoClarificationService] while recording the clear flags the last
-/// [updateFields] call carried, so tests can assert the screen never sends a
-/// spurious clear for a field that had no value.
-class _RecordingClarificationService implements ClarificationService {
-  _RecordingClarificationService(this.inner);
-
-  final ClarificationService inner;
-
-  bool? lastClearNotes;
-  bool? lastClearEnergyLevel;
-  bool? lastClearTimeEstimate;
-  bool? lastClearDueDate;
-
-  /// Draft attributes the screen passed into [clarifyCaptureToOutcome]. The
-  /// screen no longer routes text edits through [updateFields] — a Capture's
-  /// title/notes go to CaptureDao — so this is where the "no spurious values"
-  /// contract is now observable.
-  String? lastNotes;
-  String? lastEnergyLevel;
-  int? lastTimeEstimate;
-  DateTime? lastDueDate;
-
-  @override
-  Future<void> updateFields(
-    String id, {
-    String? title,
-    String? notes,
-    String? energyLevel,
-    int? timeEstimate,
-    DateTime? dueDate,
-    bool clearNotes = false,
-    bool clearEnergyLevel = false,
-    bool clearTimeEstimate = false,
-    bool clearDueDate = false,
-  }) {
-    lastClearNotes = clearNotes;
-    lastClearEnergyLevel = clearEnergyLevel;
-    lastClearTimeEstimate = clearTimeEstimate;
-    lastClearDueDate = clearDueDate;
-    return inner.updateFields(
-      id,
-      title: title,
-      notes: notes,
-      energyLevel: energyLevel,
-      timeEstimate: timeEstimate,
-      dueDate: dueDate,
-      clearNotes: clearNotes,
-      clearEnergyLevel: clearEnergyLevel,
-      clearTimeEstimate: clearTimeEstimate,
-      clearDueDate: clearDueDate,
-    );
-  }
-
-  @override
-  Future<String> carveOutcome(
-    String captureId, {
-    required String userId,
-    required String title,
-    RoutingKind? to,
-    String? notes,
-    DateTime? dueDate,
-    ActionDraft? action,
-    Set<String>? personTagIds,
-    Set<String> tagIds = const {},
-    String? outcomeId,
-    DateTime? now,
-  }) =>
-      inner.carveOutcome(
-        captureId,
-        userId: userId,
-        title: title,
-        to: to,
-        notes: notes,
-        dueDate: dueDate,
-        action: action,
-        personTagIds: personTagIds,
-        tagIds: tagIds,
-        outcomeId: outcomeId,
-        now: now,
-      );
-
-  @override
-  Future<void> mergeIntoOutcome(
-    String captureId,
-    String outcomeId, {
-    required String userId,
-    DateTime? now,
-  }) =>
-      inner.mergeIntoOutcome(captureId, outcomeId, userId: userId, now: now);
-
-  @override
-  Future<void> unlinkOutcome(
-    String captureId,
-    String outcomeId, {
-    required bool deleteCarved,
-  }) =>
-      inner.unlinkOutcome(captureId, outcomeId, deleteCarved: deleteCarved);
-
-  @override
-  Future<void> completeCaptureClarification(String captureId, {DateTime? now}) =>
-      inner.completeCaptureClarification(captureId, now: now);
-
-  @override
-  Future<bool> exists(String id) => inner.exists(id);
-
-  @override
-  Future<Set<String>> getPersonTagIds(String id) =>
-      inner.getPersonTagIds(id);
-
-  @override
-  Future<void> clarifyToOutcome(
-    String id, {
-    required RoutingKind to,
-    String? actionText,
-    Set<String>? personTagIds,
-    String? userId,
-  }) =>
-      inner.clarifyToOutcome(
-        id,
-        to: to,
-        actionText: actionText,
-        personTagIds: personTagIds,
-        userId: userId,
-      );
-
-  @override
-  Future<int> completeOutcome(String id) => inner.completeOutcome(id);
-
-  @override
-  Future<void> completeCurrentAction(String id) =>
-      inner.completeCurrentAction(id);
-
-  @override
-  Future<void> stampClarified(String id) => inner.stampClarified(id);
-
-  @override
-  Future<bool> captureExists(String captureId) =>
-      inner.captureExists(captureId);
-
-  @override
-  Future<String> clarifyCaptureToOutcome(
-    String captureId, {
-    required RoutingKind to,
-    required String userId,
-    required String title,
-    String? notes,
-    DateTime? dueDate,
-    ActionDraft? action,
-    Set<String>? personTagIds,
-    Set<String> tagIds = const {},
-    String? outcomeId,
-    DateTime? now,
-  }) {
-    lastNotes = notes;
-    lastEnergyLevel = action?.energyLevel;
-    lastTimeEstimate = action?.timeEstimateMinutes;
-    lastDueDate = dueDate;
-    return inner.clarifyCaptureToOutcome(
-        captureId,
-        to: to,
-        userId: userId,
-        title: title,
-        notes: notes,
-        dueDate: dueDate,
-        action: action,
-        personTagIds: personTagIds,
-        tagIds: tagIds,
-        outcomeId: outcomeId,
-        now: now,
-      );
-  }
-
-  @override
-  Future<void> discardCapture(String captureId, {DateTime? now}) =>
-      inner.discardCapture(captureId, now: now);
-}
-
 /// A [ClarificationService] whose Capture-clarify write always fails, so the
 /// screen's error path can be exercised against a real failure rather than a
 /// simulated one.
-class _FailingClarificationService extends _RecordingClarificationService {
-  _FailingClarificationService(super.inner);
+///
+/// **Extends** the real [DaoClarificationService] rather than implementing the
+/// interface: every other method is the production one, so a test that reaches
+/// past the override is still driving real behaviour, and a method added to
+/// [ClarificationService] does not break this file (#454).
+class _FailingClarificationService extends DaoClarificationService {
+  _FailingClarificationService(super.db);
 
   @override
   Future<String> clarifyCaptureToOutcome(
@@ -323,9 +150,10 @@ class _FailingClarificationService extends _RecordingClarificationService {
 }
 
 /// A [ClarificationService] whose Capture-clarify write parks on [gate], so a
-/// test can observe the UI mid-write.
-class _BlockingClarificationService extends _RecordingClarificationService {
-  _BlockingClarificationService(super.inner, this.gate);
+/// test can observe the UI mid-write. Real service underneath — see
+/// [_FailingClarificationService].
+class _BlockingClarificationService extends DaoClarificationService {
+  _BlockingClarificationService(super.db, this.gate);
 
   final Future<void> gate;
 
@@ -615,10 +443,7 @@ void main() {
       await tester.pumpWidget(_buildApp(
         db,
         'x',
-        clarificationService: _BlockingClarificationService(
-          DaoClarificationService(db),
-          gate.future,
-        ),
+        clarificationService: _BlockingClarificationService(db, gate.future),
       ));
       await tester.pumpAndSettle();
 
@@ -654,10 +479,7 @@ void main() {
       await tester.pumpWidget(_buildApp(
         db,
         'x',
-        clarificationService: _BlockingClarificationService(
-          DaoClarificationService(db),
-          gate.future,
-        ),
+        clarificationService: _BlockingClarificationService(db, gate.future),
       ));
       await tester.pumpAndSettle();
 
@@ -691,10 +513,7 @@ void main() {
       await tester.pumpWidget(_buildApp(
         db,
         'x',
-        clarificationService: _BlockingClarificationService(
-          DaoClarificationService(db),
-          gate.future,
-        ),
+        clarificationService: _BlockingClarificationService(db, gate.future),
       ));
       await tester.pumpAndSettle();
 
@@ -763,28 +582,28 @@ void main() {
       await db.captureDao
           .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
-      final recorder =
-          _RecordingClarificationService(DaoClarificationService(db));
-      await tester.pumpWidget(
-        _buildApp(db, 'x', clarificationService: recorder),
-      );
+      // The real service, with nothing wrapped around it: what the screen sent
+      // is exactly what the row now holds, so the row is the assertion.
+      await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
       // Nothing was entered, so nothing may be fabricated into the Outcome.
-      expect(recorder.lastNotes, isNull);
-      expect(recorder.lastEnergyLevel, isNull);
-      expect(recorder.lastTimeEstimate, isNull);
-      expect(recorder.lastDueDate, isNull);
-
       final outcome = (await _outcomeOf(db, 'x'))!;
-      expect(outcome.energyLevel, isNull);
-      expect(outcome.timeEstimate, isNull);
       expect(outcome.notes, isNull);
       expect(outcome.dueDate, isNull);
       expect(outcome.clarified, isTrue);
+      // Effort read raw: the D2 projection COALESCEs the current Action's
+      // values over the columns, so `outcome.energyLevel` would resolve on the
+      // Action and pass whether or not the column was written.
+      expect(await _rawEffortColumns(db, outcome.id), (energy: null, time: null));
+      // …and the birth Action invented none either — the draft carried no
+      // effort, so neither grain may have any.
+      final action = await db.actionDao.getCurrentAction(outcome.id);
+      expect(action?.energyLevel, isNull);
+      expect(action?.timeEstimate, isNull);
     });
 
     testWidgets('effort set on the card travels as one ActionDraft — onto the '
@@ -793,11 +612,7 @@ void main() {
       await db.captureDao
           .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
 
-      final recorder =
-          _RecordingClarificationService(DaoClarificationService(db));
-      await tester.pumpWidget(
-        _buildApp(db, 'x', clarificationService: recorder),
-      );
+      await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.descendant(
@@ -811,13 +626,15 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      // The card composed one draft, not three loose fields.
-      expect(recorder.lastEnergyLevel, 'high');
-      expect(recorder.lastTimeEstimate, 30);
-
-      // The raw columns carry them (D1/D3 draft store) — read raw, because a
-      // current Action exists on this route and the projection's COALESCE
-      // would resolve on *its* values no matter what the columns hold.
+      // That both grains carry the same pair is what says the card composed
+      // one ActionDraft rather than three loose fields: the columns are
+      // written from the draft and the birth Action is seeded from them, so
+      // effort split across two paths would show up as a mismatch here.
+      // ClarifyDraft.assemble's own unit tests pin the composition directly.
+      //
+      // The raw columns (D1/D3 draft store) — read raw, because a current
+      // Action exists on this route and the projection's COALESCE would
+      // resolve on *its* values no matter what the columns hold.
       final outcome = (await _outcomeOf(db, 'x'))!;
       expect(await _rawEffortColumns(db, outcome.id), (energy: 'high', time: 30));
       // … and the birth Action seeded from them, which only holds because
@@ -837,8 +654,7 @@ void main() {
         _buildApp(
           db,
           'x',
-          clarificationService:
-              _FailingClarificationService(DaoClarificationService(db)),
+          clarificationService: _FailingClarificationService(db),
         ),
       );
       await tester.pumpAndSettle();
