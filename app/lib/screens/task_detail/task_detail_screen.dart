@@ -1203,12 +1203,18 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
           children: [
             Icon(Icons.add, size: 18, color: Color(0xFF2563EB)),
             SizedBox(width: 8),
-            Text(
-              'Add planned action',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF2563EB),
+            // The label takes the leftover width and ellipsises rather than
+            // painting past the edge: at 320dp a long localisation of this
+            // phrase has nowhere to go beside the fixed-width icon.
+            Flexible(
+              child: Text(
+                'Add planned action',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF2563EB),
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
