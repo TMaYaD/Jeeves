@@ -470,14 +470,24 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           (trimmedTitle != _baselineTitle || trimmedNotes != _baselineNotes);
       if (hasPendingWrite) {
         unawaited(
-          _databaseForDisposeFlush.todoDao.updateFields(
-            _subjectId,
-            title: trimmedTitle,
-            // Same clear-flag contract as [_saveOutcomeText]: an emptied field
-            // nulls the column rather than storing `''`.
-            notes: trimmedNotes.isNotEmpty ? trimmedNotes : null,
-            clearNotes: trimmedNotes.isEmpty,
-          ),
+          _databaseForDisposeFlush.todoDao
+              .updateFields(
+                _subjectId,
+                title: trimmedTitle,
+                // Same clear-flag contract as [_saveOutcomeText]: an emptied
+                // field nulls the column rather than storing `''`.
+                notes: trimmedNotes.isNotEmpty ? trimmedNotes : null,
+                clearNotes: trimmedNotes.isEmpty,
+              )
+              // The card is gone, so there is no surface left to tell the user
+              // on — a SnackBar needs a context this State no longer has. The
+              // console is the only sink, and it is the one
+              // `task_detail_screen` already uses for the same fire-and-forget
+              // text save. Without it a throwing DAO escapes as an unhandled
+              // async error from teardown, which reads as a framework fault
+              // rather than a lost edit.
+              .catchError((Object e) =>
+                  debugPrint('ClarifyCard: dispose flush failed: $e')),
         );
       }
     }

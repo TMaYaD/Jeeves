@@ -1247,6 +1247,28 @@ void main() {
 
       expect((await _rawTodoRow(db, 't')).updatedAt, seededUpdatedAt);
     });
+
+    testWidgets('a failing flush is logged rather than thrown into teardown',
+        (tester) async {
+      // The flush is `unawaited` and runs from `dispose()`, so a throwing DAO
+      // has nowhere to go: the card is gone, `context` with it, and a SnackBar
+      // is impossible. Uncaught, it escapes as an unhandled async error during
+      // teardown — which reads as a framework fault rather than a lost edit,
+      // and in a test takes an unrelated case down with it.
+      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+
+      // Closing the database is the one way to fail this write from outside
+      // the card: it is issued after `dispose()` has already run, so nothing
+      // in the widget tree is left to intercept.
+      await db.close();
+      await unmountWhileFocused(tester);
+
+      expect(tester.takeException(), isNull);
+    });
   });
 
   // The card hands its post-route bookkeeping to [ProcessToHandlers] as that
