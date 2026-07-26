@@ -993,6 +993,11 @@ class ReclarifyRoute extends StatelessWidget {
       body: ClarifyCard.forOutcome(
         todoId: todoId,
         onAfterRoute: (action) async {
+          // The card awaits its own post-route bookkeeping before calling
+          // this, so the route can be gone by the time it runs — pop the
+          // screen from underneath (platform back, a deep link) and
+          // `Navigator.of` on a defunct element throws.
+          if (!context.mounted) return;
           if (Navigator.of(context).canPop()) {
             Navigator.of(context).pop(action);
           }
