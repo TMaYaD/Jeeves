@@ -20,6 +20,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
+import 'package:jeeves/widgets/clarify_retention.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/person_tag_picker.dart';
@@ -272,6 +273,9 @@ Widget _captureHarness(
   // here and push the re-read row down it, exactly as a live drift `watch()`
   // would, without leaving a pending timer behind on dispose.
   Stream<Capture?>? captureStream,
+  // A real store, as the ceremony hosts pass. Left null everywhere else, which
+  // is what the standalone screen and the Re-clarify route do.
+  ClarifyRetention? retention,
 }) {
   return ProviderScope(
     overrides: [
@@ -291,6 +295,7 @@ Widget _captureHarness(
         body: ClarifyCard.forCapture(
           captureId: capture.id,
           onAfterRoute: onAfterRoute,
+          retention: retention,
         ),
       ),
     ),
@@ -1204,6 +1209,205 @@ void main() {
       await unmountWhileFocused(tester);
 
       expect((await _rawTodoRow(db, 't')).updatedAt, seededUpdatedAt);
+    });
+  });
+
+  // A Capture's text is never persisted (ADR-0023), so without retention Back
+  // inside a Ceremony performance re-seeds the card from the untouched row and
+  // the typing is gone. These tests drive the real unmount/remount — a test
+  // that never unmounts cannot tell working retention from a State that simply
+  // survived.
+  group('ClarifyCard \u2014 retained drafts survive an unmount', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('typing, leaving and coming back finds the draft',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final retention = ClarifyRetention();
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await tester.enterText(
+          find.byKey(const Key('clarify_notes')), 'Barista recommends it');
+      await tester.pump();
+
+      // Leave the card entirely, exactly as retreating the item cursor does
+      // (the ValueKey changes, so the State is disposed).
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+
+      expect(titleText(tester), 'Buy oat milk');
+      expect(notesText(tester), 'Barista recommends it');
+      // …and still nothing was written to the row on the way through.
+      expect((await _rawCaptureRow(db, 'x')).title, 'Buy milk');
+    });
+
+    testWidgets('the draft-only attributes come back too', (tester) async {
+      // Energy, estimate and due date have no column on a Capture, so before
+      // retention they were lost on every unmount, silently.
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final retention = ClarifyRetention();
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+      await tester.tap(find.descendant(
+        of: find.byType(ClarifyEnergyPicker),
+        matching: find.text('High'),
+      ));
+      await tester.pump();
+      await tester.tap(find.text('30m'));
+      await tester.pump();
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+
+      expect(
+        tester
+            .widget<ClarifyEnergyPicker>(find.byType(ClarifyEnergyPicker))
+            .selected,
+        'high',
+      );
+      expect(
+        tester
+            .widget<ClarifyEstimateChip>(
+                find.widgetWithText(ClarifyEstimateChip, '30m'))
+            .selected,
+        isTrue,
+      );
+    });
+
+    testWidgets('a change that landed on a clean field is adopted on re-seed',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final retention = ClarifyRetention();
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+      // Only the notes are touched, so the title stays clean.
+      await tester.enterText(find.byKey(const Key('clarify_notes')), 'Barista');
+      await tester.pump();
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+
+      // The row changes while no card is open — a replicated write, say.
+      await db.captureDao.updateFields('x', title: 'Buy oat milk');
+      final changed = (await db.captureDao.getCapture('x'))!;
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: changed, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+
+      expect(titleText(tester), 'Buy oat milk',
+          reason: 'the clean field takes the incoming change');
+      expect(notesText(tester), 'Barista',
+          reason: 'the dirty field keeps the typing');
+    });
+
+    testWidgets('a dirty field is not clobbered by an incoming change',
+        (tester) async {
+      // Three distinct strings: seeded, typed, incoming. If any two coincide
+      // the assertion holds whichever branch ran.
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final retention = ClarifyRetention();
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy almond milk');
+      await tester.pump();
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+
+      await db.captureDao.updateFields('x', title: 'Buy oat milk');
+      final changed = (await db.captureDao.getCapture('x'))!;
+      final feed = StreamController<Capture?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: changed,
+        retention: retention,
+        captureStream: feed.stream,
+      ));
+      feed.add(changed);
+      await _pumpFrames(tester, frames: 5);
+      expect(titleText(tester), 'Buy almond milk');
+
+      // The stale baseline is what keeps it dirty for the rest of the card's
+      // life: a *further* incoming change must still leave it alone. Advancing
+      // the baseline on re-seed would let this push overwrite the typing.
+      await db.captureDao.updateFields('x', title: 'Buy soy milk');
+      feed.add(await db.captureDao.getCapture('x'));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(titleText(tester), 'Buy almond milk');
+    });
+
+    testWidgets('the verdict discards the draft', (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final retention = ClarifyRetention();
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await tester.pump();
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      // The dispose that follows the verdict must not put it back — the
+      // interpretation is on the Outcome now.
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+
+      expect(retention.read('x'), isNull);
+    });
+
+    testWidgets('with no store, leaving discards the typing', (tester) async {
+      // The standalone screen and the Re-clarify route pass no store, so the
+      // absence has to actually mean something.
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await tester.pump();
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(titleText(tester), 'Buy milk');
     });
   });
 }

@@ -13,14 +13,17 @@
 ///   first frame the snapshot is not yet loaded.
 ///
 /// Navigation is index-based; the snapshot pins the order, while per-item
-/// attributes are read live from Drift via [ClarifyCard]. Edits autosave on
-/// change so they survive Skip and Back without any draft layer in the
-/// planning state.
+/// attributes are read live from Drift via [ClarifyCard]. Nothing typed there
+/// is written to the Capture (ADR-0023), so the in-progress draft is held in
+/// [ClarifyRetention] — outside the planning state, because it is per-Capture
+/// working memory rather than part of the session record — and Skip and Back
+/// keep the typing.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../providers/clarify_retention_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../widgets/ceremony/clarify_step.dart';
 import '../../../widgets/process_to_handlers.dart';
@@ -58,6 +61,7 @@ class InboxClarificationStep extends ConsumerWidget {
           ref.read(focusSessionPlanningProvider.notifier).skipInboxItem(),
       onLoad: () =>
           ref.read(focusSessionPlanningProvider.notifier).loadInboxSnapshot(),
+      retention: ref.read(clarifyRetentionProvider),
     );
   }
 }

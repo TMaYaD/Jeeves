@@ -27,6 +27,7 @@ import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
+import 'clarify_retention_provider.dart';
 import 'database_provider.dart';
 import 'synced_preferences_provider.dart';
 
@@ -1019,6 +1020,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       availableMinutes: state.availableMinutes,
       availableTimeSet: state.availableTimeSet,
     );
+    // Retained clarify drafts belong to the performance that produced them,
+    // the same as the inbox snapshot and its cursor above.
+    ref.read(clarifyRetentionProvider).clearAll();
   }
 
   /// Resets the planning ritual to a fresh performance.
@@ -1039,6 +1043,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       availableTimeSet: preservedTimeSet,
       energyLevel: preservedEnergy,
     );
+    // A fresh performance re-loads the inbox snapshot, so a draft left against
+    // an item from the last one has nothing to come back to.
+    ref.read(clarifyRetentionProvider).clearAll();
     // Re-populate the rollover pre-selection: build()'s microtask ran once per
     // process and never fires again on this in-process replan path (#461). The
     // just-closed session's rollover ids are now committed and queryable — the

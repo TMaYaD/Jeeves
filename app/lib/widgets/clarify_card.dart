@@ -50,6 +50,7 @@ import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'async_subject.dart';
 import 'capture_outcomes_section.dart';
+import 'clarify_retention.dart';
 import 'clarify_shared_widgets.dart';
 import 'meta_chip.dart' show formatMinutesLabel;
 import 'context_tag_picker.dart';
@@ -79,6 +80,7 @@ class ClarifyCard extends ConsumerStatefulWidget {
     this.lastAction,
     this.onAfterRoute,
     this.onCaptureCompleted,
+    this.retention,
   }) : todoId = null;
 
   /// Re-clarify an Outcome that has already been through the flow once.
@@ -88,7 +90,11 @@ class ClarifyCard extends ConsumerStatefulWidget {
     this.lastAction,
     this.onAfterRoute,
   })  : captureId = null,
-        onCaptureCompleted = null;
+        onCaptureCompleted = null,
+        // An Outcome's edits persist as they happen, so there is nothing to
+        // retain. Fixed rather than offered, so "re-clarify with retention"
+        // cannot be written.
+        retention = null;
 
   /// The Capture being clarified, or null when re-clarifying an Outcome.
   final String? captureId;
@@ -110,6 +116,17 @@ class ClarifyCard extends ConsumerStatefulWidget {
   /// [ProcessAction] to report and nothing for a host to record as the
   /// item's routing. Hosts that only need to advance a cursor wire both.
   final Future<void> Function()? onCaptureCompleted;
+
+  /// Where the in-progress draft is held while the user navigates away and
+  /// back within a Ceremony performance. Null means no retention: leaving
+  /// discards the typing.
+  ///
+  /// Passed in rather than looked up so the card can stash from `dispose()`,
+  /// where `ref` is already unusable (#529) — and so a host that should not
+  /// retain expresses that by passing nothing. The standalone
+  /// `/inbox/:id/clarify` screen and the Re-clarify route both have exactly
+  /// two exits, each a deliberate leave, so neither is given one.
+  final ClarifyRetention? retention;
 
   @override
   ConsumerState<ClarifyCard> createState() => _ClarifyCardState();
@@ -164,6 +181,21 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// seeding from that would leave the draft permanently tagless.
   bool _draftTagsSeeded = false;
 
+  /// True once this Capture has reached a verdict. Suppresses the retention
+  /// stash in [dispose], which would otherwise reinstate the draft the verdict
+  /// just discarded.
+  bool _verdictReached = false;
+
+  /// Whether the last build rendered the n-m surface, where the Capture is
+  /// read-only and the card contributes no text fields.
+  ///
+  /// Read in [dispose] to skip the stash: there is nothing on screen to
+  /// retain, and stashing the untouched seed would overwrite a real draft left
+  /// by a 1-1 pass. Tracked from the build rather than assumed constant
+  /// because `clarifyModeProvider` is a synced preference that can flip while
+  /// the card is open.
+  bool _renderedNToM = false;
+
   /// The subject values the card's fields were last reconciled against —
   /// seeded from the row, or written back to it.
   ///
@@ -193,19 +225,54 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }) {
     if (_initialised) return;
     _initialised = true;
-    _titleCtrl = TextEditingController(text: title);
-    _notesCtrl = TextEditingController(text: notes ?? '');
-    _baselineTitle = title.trim();
-    _baselineNotes = (notes ?? '').trim();
-    _titleIsBlank = title.trim().isEmpty;
-    // A Capture carries none of these columns — they start empty and live as
-    // draft state until the Outcome is created.
-    _energyLevel = energyLevel;
-    _timeEstimate = timeEstimate;
-    _dueDate = dueDate?.toLocal();
+    // On a Capture with a retention store, the seed is the reconciliation of
+    // the retained draft against this row — see [RetainedClarifyDraft.seedFrom]
+    // for the per-field rule. With no store, or on an Outcome, `seedFrom(null)`
+    // is exactly "take the row", which is what every surface did before
+    // retention existed.
+    final seed = RetainedClarifyDraft.seedFrom(
+      _isCapture ? widget.retention?.read(_subjectId) : null,
+      incomingTitle: title,
+      incomingNotes: notes,
+    );
+    _titleCtrl = TextEditingController(text: seed.title);
+    _notesCtrl = TextEditingController(text: seed.notes);
+    _baselineTitle = seed.baselineTitle;
+    _baselineNotes = seed.baselineNotes;
+    _titleIsBlank = seed.title.trim().isEmpty;
+    // A Capture carries none of these columns — they start empty (or from the
+    // retained draft) and live as draft state until the Outcome is created.
+    _energyLevel = seed.energyLevel ?? energyLevel;
+    _timeEstimate = seed.timeEstimateMinutes ?? timeEstimate;
+    _dueDate = seed.dueDate ?? dueDate?.toLocal();
     _baselineEnergy = _energyLevel;
     _baselineTimeEstimate = _timeEstimate;
     _baselineDueDate = _dueDate;
+  }
+
+  /// The card's current text and draft attributes, with the baselines they
+  /// were typed against, ready to hand to the retention store.
+  RetainedClarifyDraft _retainable() => RetainedClarifyDraft(
+        title: _titleCtrl?.text ?? '',
+        notes: _notesCtrl?.text ?? '',
+        baselineTitle: _baselineTitle,
+        baselineNotes: _baselineNotes,
+        energyLevel: _energyLevel,
+        timeEstimateMinutes: _timeEstimate,
+        dueDate: _dueDate,
+      );
+
+  /// Drops this Capture's retained draft: the verdict has landed, so the
+  /// interpretation now lives on an Outcome (or the fragment was discarded)
+  /// and there is nothing left to carry.
+  ///
+  /// Also latches [_verdictReached] so the stash in [dispose] — which runs
+  /// moments later, as the host advances its cursor — cannot put the spent
+  /// draft straight back.
+  void _discardRetainedDraft() {
+    if (!_isCapture) return;
+    _verdictReached = true;
+    widget.retention?.discard(_subjectId);
   }
 
   /// Reconciles the card with the subject as local storage now holds it,
@@ -284,6 +351,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   @override
   void dispose() {
+    // Stash the in-progress draft so Back within a Ceremony performance finds
+    // it again. Synchronous, and through the injected store rather than `ref`,
+    // which is already unusable here (#529).
+    //
+    // Skipped once a verdict has landed (the draft is spent) and in n-m, where
+    // the card renders no text fields and would stash a seed over a real
+    // draft.
+    if (_isCapture && _initialised && !_verdictReached && !_renderedNToM) {
+      widget.retention?.stash(_subjectId, _retainable());
+    }
     // The Outcome shape's last line of defence: leaving the card while a field
     // still holds focus (a route pop tears the focus scope down without
     // notifying this listener first) would otherwise drop the edit.
@@ -520,7 +597,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           _draftTagsSeeded = true;
           _draftTagIds = {for (final t in hints) t.id};
         }
-        if (ref.watch(clarifyModeProvider) == ClarifyMode.nToM) {
+        _renderedNToM = ref.watch(clarifyModeProvider) == ClarifyMode.nToM;
+        if (_renderedNToM) {
           return _buildNToM(capture, hints);
         }
         return _buildBody(
@@ -843,6 +921,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   ///
   /// On a Capture the first half does not exist: nothing it holds is written.
   Future<void> _onAfterRoute(ProcessAction action) async {
+    // The verdict has landed: the interpretation now lives on the Outcome the
+    // routing minted (or the fragment was discarded), so the retained draft is
+    // spent.
+    _discardRetainedDraft();
     if (!_isCapture) {
       try {
         // Tapping a destination does not move focus, so the focus-loss trigger
@@ -890,6 +972,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// discipline as [_onAfterRoute], with only the host half to run: the n-m
   /// surface is Capture-only and a Capture's text is never written.
   Future<void> _onCaptureCompleted() async {
+    _discardRetainedDraft();
     try {
       await widget.onCaptureCompleted?.call();
     } catch (_) {

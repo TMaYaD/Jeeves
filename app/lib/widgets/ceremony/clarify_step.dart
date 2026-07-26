@@ -32,6 +32,7 @@ import 'package:flutter/material.dart';
 
 import '../../utils/snapshot_nav.dart';
 import '../../widgets/clarify_card.dart';
+import '../../widgets/clarify_retention.dart';
 import '../../widgets/process_to_handlers.dart';
 
 /// Shared "Clarify Inbox" step body widget.
@@ -47,6 +48,7 @@ class ClarifyStep extends StatefulWidget {
     required this.onAfterRoute,
     this.onAfterComplete,
     this.onLoad,
+    this.retention,
   });
 
   /// The inbox snapshot cursor for this ceremony.
@@ -71,6 +73,15 @@ class ClarifyStep extends StatefulWidget {
   /// Called once on the first frame when [nav] is not yet loaded, so the
   /// caller can kick the snapshot load.
   final VoidCallback? onLoad;
+
+  /// Where an in-progress clarify draft is held across navigation.
+  ///
+  /// Retreating the item cursor changes the card's [ValueKey], and crossing a
+  /// step boundary unmounts the whole page (the wizard's `PageView` keeps no
+  /// off-screen page alive), so the card's own State cannot carry it. Nothing
+  /// persists a Capture's text either (ADR-0023), which is what makes the
+  /// store the only thing standing between Back and lost typing.
+  final ClarifyRetention? retention;
 
   @override
   State<ClarifyStep> createState() => _ClarifyStepState();
@@ -134,6 +145,7 @@ class _ClarifyStepState extends State<ClarifyStep> {
       lastAction: widget.routings[index]?.toProcessAction(),
       onAfterRoute: widget.onAfterRoute,
       onCaptureCompleted: widget.onAfterComplete,
+      retention: widget.retention,
     );
   }
 }

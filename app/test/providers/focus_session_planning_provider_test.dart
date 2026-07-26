@@ -6,9 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/providers/clarify_retention_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/services/notification_service.dart';
+import 'package:jeeves/widgets/clarify_retention.dart';
 import '../test_helpers.dart';
 
 /// Pumps the event loop until [predicate] holds or [timeout] elapses. Async
@@ -133,6 +135,34 @@ void main() {
       expect(state.currentStep, 0,
           reason: 'reEnterPlanning should reset to step 0');
     });
+
+    // A retained clarify draft belongs to the performance that produced it,
+    // the same as the inbox snapshot and its cursor. Both entry points that
+    // begin a fresh performance drop it; one that survived would seed a card
+    // in the next performance with typing the user has forgotten writing.
+    for (final (label, reset) in <(String, Future<void> Function(dynamic))>[
+      ('startDay', (n) => n.startDay()),
+      ('reEnterPlanning', (n) => n.reEnterPlanning()),
+    ]) {
+      test('$label discards retained clarify drafts', () async {
+        final retention = container.read(clarifyRetentionProvider);
+        retention.stash(
+          'c1',
+          const RetainedClarifyDraft(
+            title: 'typed title',
+            notes: '',
+            baselineTitle: 'Buy milk',
+            baselineNotes: '',
+          ),
+        );
+        expect(retention.read('c1'), isNotNull,
+            reason: 'the stash must land, or the clear below proves nothing');
+
+        await reset(container.read(focusSessionPlanningProvider.notifier));
+
+        expect(retention.read('c1'), isNull);
+      });
+    }
 
     test('startDay resets step and snapshot navigation', () async {
       final notifier = container.read(focusSessionPlanningProvider.notifier);

@@ -3,9 +3,11 @@ import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/providers/clarify_retention_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
+import 'package:jeeves/widgets/clarify_retention.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/periodic_review_test_helpers.dart';
@@ -117,6 +119,29 @@ void main() {
       final state = container.read(periodicReviewProvider);
       expect(state.currentStep, equals(0));
       expect(state.inboxNav.isLoaded, isFalse);
+    });
+
+    test('completeReview discards retained clarify drafts', () async {
+      // A retained draft is in-session working memory, exactly like the
+      // snapshots and cursors above. One that outlived the review would seed a
+      // card in the next one, with typing the user has forgotten writing.
+      await container.read(syncedPreferencesProvider.future);
+      final retention = container.read(clarifyRetentionProvider);
+      retention.stash(
+        'a',
+        const RetainedClarifyDraft(
+          title: 'typed title',
+          notes: '',
+          baselineTitle: 'Item a',
+          baselineNotes: '',
+        ),
+      );
+      expect(retention.read('a'), isNotNull,
+          reason: 'the stash must land, or the clear below proves nothing');
+
+      await container.read(periodicReviewProvider.notifier).completeReview();
+
+      expect(retention.read('a'), isNull);
     });
 
     test('per-step nav advance/previous mutate the matching nav only', () async {
