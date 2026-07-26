@@ -19,6 +19,8 @@ import '../database/gtd_database.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../providers/auth_provider.dart';
 import '../services/clarification_service.dart';
+import 'app_title_bar/app_title_bar.dart';
+import 'capture/capture_action.dart';
 import 'clarify_card.dart';
 import 'next_action_dialog.dart';
 import 'person_tag_picker.dart';
@@ -632,7 +634,10 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     final routed = await Navigator.of(context).push<ProcessAction>(
       MaterialPageRoute<ProcessAction>(
         builder: (routeContext) => Scaffold(
-          appBar: AppBar(title: const Text('Re-clarify')),
+          appBar: AppTitleBar(
+            title: 'Re-clarify',
+            pinnedAction: captureAction(routeContext),
+          ),
           body: ClarifyCard.forOutcome(
             todoId: subject.todo.id,
             onAfterRoute: (action) async {
