@@ -1317,6 +1317,23 @@ void main() {
       expect(tester.takeException(), isNull,
           reason: 'the planned row itself adds no overflow at 320dp');
 
+      // The add affordance's label is Flexible, so a phrase wider than the
+      // leftover width gives somewhere — but the absence of an overflow
+      // exception above cannot tell us where: a label that wraps onto extra
+      // lines is exactly as exception-free as one that ellipsises. Pin the
+      // truncation configuration itself, since that is the difference. This
+      // stays a config assertion on purpose: the English phrase happens to fit
+      // one line at 320dp, so no measurable layout distinguishes the two, and
+      // it is a longer localisation that would silently start wrapping.
+      // Located via the InkWell's key because the same phrase is also the
+      // sheet title elsewhere in this file.
+      final addLabel = tester.widget<Text>(find.descendant(
+        of: find.byKey(const Key('plan_add_trigger')),
+        matching: find.byType(Text),
+      ));
+      expect(addLabel.maxLines, 1);
+      expect(addLabel.overflow, TextOverflow.ellipsis);
+
       // The sheet itself at the same width.
       await tester.tap(find.text('a deliberately long planned action phrase '
           'that wraps'));
