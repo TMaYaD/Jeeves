@@ -775,9 +775,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // The *abandon* arm — a retirement with nothing to succeed it — writes
     // nothing to `todos` beyond the stamp below. It used to clear the cursor to
     // stop the startup sweep resurrecting the retired Action; the sweep's
-    // adoption pass now mints only into an Outcome with **no `actions` rows at
-    // all**, and the `superseded` row this leaves behind is itself the guard
-    // (ADR-0022).
+    // cursor-adoption pass is deleted outright (ADR-0022), so nothing reads the
+    // cursor to resurrect anything, and the `superseded` row this leaves behind
+    // needs no cursor-clear guard at all.
     final didMutate = current != null || hasReplacement;
     if (didMutate) await _stampOutcome(outcomeId, ts);
     // A `time_logs` row was written iff the retired Action had an open log to
@@ -811,9 +811,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // no successor to continue against (CONTEXT.md § Switching Actions).
     final closedLog = await _closeOpenLogFor(current.id, ts);
     // Nothing is written to `todos`: completion must not stamp, and the cursor
-    // is retired (ADR-0022). The `done` row left behind is what stops the
-    // sweep's adoption pass minting a replacement. The caller still fires the
-    // `todos` view notification — see [completeCurrentAction].
+    // is retired (ADR-0022). There is no adoption pass left to guard against —
+    // it was deleted outright, not merely guarded tighter. The caller still
+    // fires the `todos` view notification — see [completeCurrentAction].
     return (changed: true, stamped: false, logChanged: closedLog != null);
   }
 
