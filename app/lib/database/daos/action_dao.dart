@@ -810,9 +810,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // (issue #476), not at a later endFocus(). No reopen: a finished Action has
     // no successor to continue against (CONTEXT.md § Switching Actions).
     final closedLog = await _closeOpenLogFor(current.id, ts);
-    // Nothing is written to `todos`: completion must not stamp, and the cursor
-    // is retired (ADR-0022). There is no adoption pass left to guard against —
-    // it was deleted outright, not merely guarded tighter. The caller still
+    // Nothing is written to `todos`: completion must not stamp, and there is
+    // no Outcome-column cursor to clear — it was deleted outright (ADR-0022,
+    // ADR-0024), along with the adoption pass that would have needed guarding. The caller still
     // fires the `todos` view notification — see [completeCurrentAction].
     return (changed: true, stamped: false, logChanged: closedLog != null);
   }
