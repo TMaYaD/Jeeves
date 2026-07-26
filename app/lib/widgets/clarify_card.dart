@@ -252,12 +252,24 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     if (hasPendingWrite) {
       final db = ref.read(databaseProvider);
       final id = _subjectId;
+      // Same clear-flag contract as `_flushTextSave`: an emptied field nulls
+      // the column rather than storing `''`.
+      final notes = trimmedNotes.isNotEmpty ? trimmedNotes : null;
+      final clearNotes = trimmedNotes.isEmpty;
       unawaited(
         _isCapture
-            ? db.captureDao
-                .updateFields(id, title: trimmedTitle, notes: trimmedNotes)
-            : db.todoDao
-                .updateFields(id, title: trimmedTitle, notes: trimmedNotes),
+            ? db.captureDao.updateFields(
+                id,
+                title: trimmedTitle,
+                notes: notes,
+                clearNotes: clearNotes,
+              )
+            : db.todoDao.updateFields(
+                id,
+                title: trimmedTitle,
+                notes: notes,
+                clearNotes: clearNotes,
+              ),
       );
     }
     _titleCtrl?.dispose();
@@ -288,12 +300,23 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     }
     final db = ref.read(databaseProvider);
     final id = _subjectId;
+    // An emptied notes field must null the column, not store `''`: every
+    // `notes == null` read treats an empty string as "has notes". `null` is
+    // "no change" to both DAOs, so clearing has to travel as the clear flag.
     if (_isCapture) {
-      await db.captureDao
-          .updateFields(id, title: trimmedTitle, notes: trimmedNotes);
+      await db.captureDao.updateFields(
+        id,
+        title: trimmedTitle,
+        notes: trimmedNotes.isNotEmpty ? trimmedNotes : null,
+        clearNotes: trimmedNotes.isEmpty,
+      );
     } else {
-      await db.todoDao
-          .updateFields(id, title: trimmedTitle, notes: trimmedNotes);
+      await db.todoDao.updateFields(
+        id,
+        title: trimmedTitle,
+        notes: trimmedNotes.isNotEmpty ? trimmedNotes : null,
+        clearNotes: trimmedNotes.isEmpty,
+      );
     }
     _lastSavedTitle = trimmedTitle;
     _lastSavedNotes = trimmedNotes;
@@ -305,10 +328,18 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   // they autosave as before.
 
   Future<void> _saveEnergy(String? level) async {
-    if (_isCapture || level == null) return;
+    if (_isCapture) return;
+    // `null` means "no change" to the DAO, so deselecting has to say so with
+    // the clear flag — otherwise the write is a silent no-op and, worse,
+    // `_lastSavedEnergy` would drift away from the column and leave the field
+    // permanently dirty to `_adoptFromSubject`.
     _lastSavedEnergy = level;
     final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(_subjectId, energyLevel: level);
+    await db.todoDao.updateFields(
+      _subjectId,
+      energyLevel: level,
+      clearEnergyLevel: level == null,
+    );
   }
 
   Future<void> _saveTimeEstimate(int? minutes) async {

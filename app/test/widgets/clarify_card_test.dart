@@ -36,11 +36,16 @@ Future<Todo> _insertInboxTodo(
   GtdDatabase db, {
   required String id,
   String title = 'Buy milk',
+  String? notes,
+  String? energyLevel,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value(title),
+        notes: notes != null ? Value(notes) : const Value.absent(),
+        energyLevel:
+            energyLevel != null ? Value(energyLevel) : const Value.absent(),
         captureSource: const Value('manual'),
         userId: const Value(_userId),
         createdAt: Value(now),
@@ -48,6 +53,22 @@ Future<Todo> _insertInboxTodo(
       ));
   return (await db.todoDao.getTodo(id))!;
 }
+
+/// An Outcome's **raw** `todos` row.
+///
+/// Deliberately a plain `select(db.todos)` and never `getTodo`: the latter
+/// carries the D2 projection, which COALESCEs the current Action's value over
+/// `energy_level` / `time_estimate`. A claim about what the column holds, read
+/// through the projection, resolves on the Action's value instead and would
+/// pass whether or not the column was ever written — unfalsifiable. Mirrors
+/// `_rawEffortColumns` in `test/screens/inbox/inbox_clarify_screen_test.dart`.
+Future<Todo> _rawTodoRow(GtdDatabase db, String todoId) =>
+    (db.select(db.todos)..where((t) => t.id.equals(todoId))).getSingle();
+
+/// A Capture's raw row — no projection involved, but read directly for the
+/// same reason: the assertion should depend on nothing but the column.
+Future<Capture> _rawCaptureRow(GtdDatabase db, String captureId) =>
+    (db.select(db.captures)..where((c) => c.id.equals(captureId))).getSingle();
 
 Future<Tag> _insertTag(
   GtdDatabase db, {
@@ -152,11 +173,13 @@ Future<Capture> _insertCapture(
   GtdDatabase db, {
   required String id,
   String title = 'Buy milk',
+  String? notes,
 }) async {
   final now = DateTime.now();
   await db.captureDao.insertCapture(CapturesCompanion(
     id: Value(id),
     title: Value(title),
+    notes: notes != null ? Value(notes) : const Value.absent(),
     captureSource: const Value('manual'),
     userId: const Value(_userId),
     createdAt: Value(now),
@@ -916,4 +939,98 @@ void main() {
     });
   });
 
+  // Both DAOs read a bare `null` as "no change" and take a `clear*` flag to
+  // null a column. The card used to omit those flags, so clearing a field
+  // either wrote nothing at all (energy) or wrote `''` (notes). Each test
+  // below seeds a non-null value first — without the seed the assertion would
+  // hold whether or not the write happened.
+  group('ClarifyCard — clearing a field nulls the column', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('deselecting energy on an Outcome nulls energy_level',
+        (tester) async {
+      final todo =
+          await _insertInboxTodo(db, id: 't', energyLevel: 'high');
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _harness(db, todo: todo, todoStream: feed.stream),
+      );
+      feed.add(todo);
+      await _pumpFrames(tester, frames: 5);
+      expect(
+        tester
+            .widget<ClarifyEnergyPicker>(find.byType(ClarifyEnergyPicker))
+            .selected,
+        'high',
+        reason: 'the seeded value must reach the picker, or the deselect '
+            'below is not a deselect',
+      );
+
+      // Tapping the selected chip deselects it — the picker reports `null`.
+      await _scrollAndTap(tester, 'High');
+      await _pumpFrames(tester);
+
+      expect((await _rawTodoRow(db, 't')).energyLevel, isNull);
+
+      // Second order: the write also has to move `_lastSavedEnergy`, or the
+      // card's clean/dirty test reads the field as permanently dirty and no
+      // incoming change is ever applied to it again.
+      await db.todoDao.updateFields('t', energyLevel: 'low');
+      feed.add(await db.todoDao.getTodo('t'));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(
+        tester
+            .widget<ClarifyEnergyPicker>(find.byType(ClarifyEnergyPicker))
+            .selected,
+        'low',
+        reason: 'the energy field must still adopt incoming changes after a '
+            'deselect — it is clean, not dirty',
+      );
+    });
+
+    testWidgets('clearing notes on a Capture nulls the column, not empty '
+        'string', (tester) async {
+      final capture =
+          await _insertCapture(db, id: 'x', notes: 'Ask the barista');
+      final feed = StreamController<Capture?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, captureStream: feed.stream),
+      );
+      feed.add(capture);
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
+      // Well past the 400ms autosave debounce.
+      await _pumpFrames(tester);
+
+      expect((await _rawCaptureRow(db, 'x')).notes, isNull);
+    });
+
+    testWidgets('clearing notes on an Outcome nulls the column, not empty '
+        'string', (tester) async {
+      final todo =
+          await _insertInboxTodo(db, id: 't', notes: 'Ask the barista');
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester.pumpWidget(
+        _harness(db, todo: todo, todoStream: feed.stream),
+      );
+      feed.add(todo);
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
+      await _pumpFrames(tester);
+
+      expect((await _rawTodoRow(db, 't')).notes, isNull);
+    });
+  });
 }
