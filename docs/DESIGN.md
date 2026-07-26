@@ -258,9 +258,12 @@ It is a `PreferredSizeWidget` mounted in `Scaffold.appBar`, configured
 `content_for`-style slot written into from below, which during a route
 transition would race between the outgoing and incoming screen. Every screen
 adopts it: the shell list routes (via `AppShell`, one bar keyed off route
-state), task detail, clarify, settings, import, search, active focus, and the
-three ceremonies (via the shared `Wizard`). The auth routes keep their own
-minimal chrome. Capture rides the bar's pinned slot (`pinnedAction`, #458) on
+state), task detail, clarify, settings, import, search, active focus, the
+three ceremonies (via the shared `Wizard`), and the Re-clarify sub-flow
+(`ProcessToHandlers._reclarify`'s pushed `ClarifyCard` route, #519) — the one
+adopter reached via `Navigator.push` rather than a `router.dart` route. The
+auth routes keep their own minimal chrome. Capture rides the bar's pinned slot
+(`pinnedAction`, #458) on
 every bar-adopting screen except the Inbox, whose `QuickAddBar` already serves
 capture — the bar suppresses the pinned action there rather than present a
 second, competing affordance.
