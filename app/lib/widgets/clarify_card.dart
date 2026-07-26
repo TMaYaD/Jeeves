@@ -527,8 +527,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   // Energy / time estimate / due date are Outcome attributes with no column on
   // a Capture. On a Capture card the setState in the callsite *is* the save:
-  // the value rides the draft into clarifyCaptureToOutcome. On an Outcome card
-  // they autosave as before.
+  // the value rides the draft into clarifyCaptureToOutcome (and, between
+  // mounts, the retention store). On an Outcome card they save immediately —
+  // they are the Outcome's own attributes, not the provenance record ADR-0023
+  // protects.
 
   Future<void> _saveEnergy(String? level) async {
     if (_isCapture) return;
