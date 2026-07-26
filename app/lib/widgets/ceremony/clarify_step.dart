@@ -77,10 +77,10 @@ class ClarifyStep extends StatefulWidget {
   /// Where an in-progress clarify draft is held across navigation.
   ///
   /// Retreating the item cursor changes the card's [ValueKey], and crossing a
-  /// step boundary unmounts the whole page (the wizard's `PageView` keeps no
-  /// off-screen page alive), so the card's own State cannot carry it. Nothing
-  /// persists a Capture's text either (ADR-0023), which is what makes the
-  /// store the only thing standing between Back and lost typing.
+  /// step boundary unmounts the whole page once the fields are not holding
+  /// focus, so the card's own State cannot carry it. Nothing persists a
+  /// Capture's text either (ADR-0023), which is what makes the store the only
+  /// thing standing between Back and lost typing.
   final ClarifyRetention? retention;
 
   @override

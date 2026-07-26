@@ -72,6 +72,14 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
 /// sleep) before settling the frame — see [settleWithRealAsync].
 Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
+/// The text the clarify card currently holds in its title field.
+String _titleText(WidgetTester tester) =>
+    tester
+        .widget<TextField>(find.byKey(const Key('clarify_title')))
+        .controller
+        ?.text ??
+    '';
+
 /// Unmounts the tree so streaming providers dispose before the end-of-test
 /// pending-timer check.
 Future<void> _dispose(WidgetTester tester) async {
@@ -188,6 +196,53 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('execution home'), findsOneWidget);
+
+      await _dispose(tester);
+    });
+
+    testWidgets(
+        'typing on a Capture survives crossing a step boundary and coming '
+        'back', (tester) async {
+      // Crossing a step boundary disposes the whole page — a wider unmount
+      // than the ValueKey teardown clarify_step_test.dart covers, and one the
+      // retention store has to survive now that a Capture's text is never
+      // written (ADR-0023).
+      await _insertInbox(db, 'i1');
+      final (widget, _, container) = _app(db);
+      addTearDown(container.dispose);
+      await tester.pumpWidget(widget);
+      await _settle(tester);
+      await advancePastIntro(tester, container);
+
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await tester.pump();
+
+      // Drop focus first, and not for tidiness: `EditableText` keeps its page
+      // alive while it holds focus (AutomaticKeepAliveClientMixin), so a
+      // still-focused field leaves the whole step mounted off-screen and the
+      // card's State simply survives the crossing. The assertion would then
+      // hold with the stash deleted — this line is what makes the test
+      // falsifiable.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
+
+      // Forward into Review Tasks (step 2).
+      container.read(focusSessionPlanningProvider.notifier).advanceStep();
+      await settleAcrossTransition(tester);
+      expect(
+          find.byKey(const Key('clarify_title'), skipOffstage: false),
+          findsNothing,
+          reason: 'the step really is gone — otherwise the return below '
+              'proves nothing');
+
+      // …and back to Clarify Inbox.
+      container.read(focusSessionPlanningProvider.notifier).goToStep(1);
+      await settleAcrossTransition(tester);
+
+      expect(_titleText(tester), 'Buy oat milk');
+      expect((await db.captureDao.getCapture('i1'))!.title, 'Inbox item i1',
+          reason: 'and the Capture itself was never rewritten (ADR-0023)');
 
       await _dispose(tester);
     });
