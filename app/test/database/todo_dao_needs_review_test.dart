@@ -11,16 +11,12 @@ GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 /// Inserts a clarified, non-done next-action task and returns its id.
 ///
-/// A non-blank [nextActionText] also stamps the retired `next_action_text`
-/// cursor column, but that write is inert fixture noise — the column is
-/// neither read nor written by the app (ADR-0022). What the assertions below
-/// actually depend on is the matching `current` Action row this helper seeds
-/// alongside it, which is what the Actionless predicate reads (ADR-0001
-/// story 3). Blank / whitespace text mints no Action row, mirroring the
-/// blank→NULL normalisation.
+/// A non-blank [actionText] seeds a matching `current` Action row, which is
+/// what the Actionless predicate reads (ADR-0001 story 3). Blank / whitespace
+/// text mints no Action row, mirroring the blank→Actionless normalisation.
 Future<String> _insertClarifiedTask(
   GtdDatabase db, {
-  String? nextActionText,
+  String? actionText,
   DateTime? lastNextActionCompletionAt,
   DateTime? lastClarifiedAt,
   String intent = 'next',
@@ -34,8 +30,6 @@ Future<String> _insertClarifiedTask(
     clarified: const Value(true),
     intent: Value(intent),
     createdAt: Value(now),
-    nextActionText:
-        nextActionText != null ? Value(nextActionText) : const Value.absent(),
     lastNextActionCompletionAt: lastNextActionCompletionAt != null
         ? Value(lastNextActionCompletionAt)
         : const Value.absent(),
@@ -45,7 +39,7 @@ Future<String> _insertClarifiedTask(
   await seedCurrentAction(
     db,
     outcomeId: id,
-    text: nextActionText,
+    text: actionText,
     userId: _userId,
     createdAt: now,
   );
@@ -118,11 +112,11 @@ void main() {
     tearDown(() => db.close());
 
     // Fixture 1: Fresh task processed through inbox-clarify does not surface.
-    test('1: task with next_action_text set, no session history — not in result',
+    test('1: task with a current Action, no session history — not in result',
         () async {
       await _insertClarifiedTask(
         db,
-        nextActionText: 'Buy milk',
+        actionText: 'Buy milk',
         lastNextActionCompletionAt: null,
       );
 
@@ -139,7 +133,7 @@ void main() {
           DateTime.now().subtract(const Duration(hours: 1)).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
       );
@@ -147,11 +141,12 @@ void main() {
       final result = await db.todoDao.getNeedsReview();
       expect(result, hasLength(1));
       expect(result.first.id, id);
-      expect(result.first.nextActionText, isNotNull);
+      expect(await db.actionDao.getCurrentAction(id), isNotNull,
+          reason: 'the actionable branch of the predicate, not the Stale one');
     });
 
-    // Fixture 3: Stale task with no next_action_text — Actionless + Stale.
-    test('3: stale task with next_action_text NULL — in result with noNextAction hint (both branches)',
+    // Fixture 3: Stale task with no current Action — Actionless + Stale.
+    test('3: stale Actionless task — in result with noNextAction hint (both branches)',
         () async {
       final clarifiedAt =
           DateTime.now().subtract(const Duration(hours: 2)).toUtc();
@@ -159,7 +154,7 @@ void main() {
           DateTime.now().subtract(const Duration(hours: 1)).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
       );
@@ -167,7 +162,8 @@ void main() {
       final result = await db.todoDao.getNeedsReview();
       expect(result, hasLength(1));
       expect(result.first.id, id);
-      expect(result.first.nextActionText, isNull);
+      expect(await db.actionDao.getCurrentAction(id), isNull,
+          reason: 'Actionless: no current Action row');
     });
 
     // Fixture 4: Non-person (organising) tag added — does not affect timestamps.
@@ -178,7 +174,7 @@ void main() {
           DateTime.now().subtract(const Duration(hours: 1)).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
       );
@@ -210,7 +206,7 @@ void main() {
           DateTime.now().subtract(const Duration(hours: 1)).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
       );
@@ -227,7 +223,7 @@ void main() {
     test('6: setNextActionText on actionless task — task leaves result', () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastNextActionCompletionAt: null,
       );
 
@@ -241,7 +237,7 @@ void main() {
 
     // Fixture 7: Done task does not surface.
     test('7: done task — not in result', () async {
-      final id = await _insertClarifiedTask(db, nextActionText: null);
+      final id = await _insertClarifiedTask(db, actionText: null);
       await db.todoDao.markDone(id);
 
       final result = await db.todoDao.getNeedsReview();
@@ -250,7 +246,7 @@ void main() {
 
     // Fixture 8: Trashed task does not surface.
     test('8: trashed task — not in result', () async {
-      final id = await _insertClarifiedTask(db, nextActionText: null);
+      final id = await _insertClarifiedTask(db, actionText: null);
       await db.customUpdate(
         "UPDATE todos SET intent = 'trash' WHERE id = ? AND user_id = ?",
         variables: [Variable(id), Variable(_userId)],
@@ -277,11 +273,11 @@ void main() {
     });
 
     // Fixture 10: Pure Actionless without any session history — DOES surface.
-    test('10: actionless task (next_action_text NULL, no session) — in result',
+    test('10: actionless task (no current Action, no session) — in result',
         () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastNextActionCompletionAt: null,
         lastClarifiedAt: null,
       );
@@ -289,7 +285,8 @@ void main() {
       final result = await db.todoDao.getNeedsReview();
       expect(result, hasLength(1));
       expect(result.first.id, id);
-      expect(result.first.nextActionText, isNull);
+      expect(await db.actionDao.getCurrentAction(id), isNull,
+          reason: 'Actionless: no current Action row');
     });
 
     // markDone stamps last_clarified_at — task leaves result.
@@ -300,7 +297,7 @@ void main() {
           DateTime.now().subtract(const Duration(hours: 1)).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
       );
@@ -316,7 +313,7 @@ void main() {
     test('deferred actionless task leaves result after deferTaskToMaybe', () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastNextActionCompletionAt: null,
       );
 
@@ -337,7 +334,7 @@ void main() {
           DateTime.now().subtract(const Duration(hours: 1)).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
       );
@@ -352,7 +349,7 @@ void main() {
 
     // Membership flips as the actionless condition is fixed.
     test('actionless task is in the queue, leaves after a next action is set', () async {
-      final id = await _insertClarifiedTask(db, nextActionText: null);
+      final id = await _insertClarifiedTask(db, actionText: null);
 
       expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isTrue);
 
@@ -368,7 +365,7 @@ void main() {
     test('delegated actionless task — not in result', () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
@@ -377,13 +374,13 @@ void main() {
       expect(result, isEmpty);
     });
 
-    // Delegated + whitespace-only next_action_text — also excluded (guards
+    // Delegated + whitespace-only action text — also excluded (guards
     // the TRIM(...) = '' branch).
-    test('delegated whitespace-only next_action_text task — not in result',
+    test('delegated whitespace-only action text task — not in result',
         () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: '   ',
+        actionText: '   ',
         lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
@@ -402,7 +399,7 @@ void main() {
           DateTime.now().subtract(const Duration(hours: 1)).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
       );
@@ -435,7 +432,7 @@ void main() {
         'history at all', () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: null,
       );
@@ -452,7 +449,7 @@ void main() {
         () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: null,
       );
@@ -467,7 +464,7 @@ void main() {
     test('a done row missing done_at falls back to updated_at', () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: null,
       );
@@ -482,7 +479,7 @@ void main() {
         'timestamp it writes to the retired row', () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: null,
       );
@@ -499,7 +496,7 @@ void main() {
       // stamping; the widening must not read those as engagement (R2).
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: null,
       );
@@ -518,7 +515,7 @@ void main() {
         'stamping, and re-clarifying takes it back out', () async {
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: null,
       );

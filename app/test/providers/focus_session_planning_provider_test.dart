@@ -706,7 +706,7 @@ void main() {
         userId: const Value('local'),
         clarified: const Value(true),
         createdAt: Value(now),
-        // nextActionText absent → NULL → Actionless
+        // no Action row seeded → Actionless
       ));
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
@@ -735,7 +735,7 @@ void main() {
         userId: const Value('local'),
         clarified: const Value(true),
         createdAt: Value(now),
-        // nextActionText absent → NULL → Actionless
+        // no Action row seeded → Actionless
       ));
       // An inbox Capture that, clarified without a next action, would also
       // land in needs-review (Actionless). It is clarified *with* a next
@@ -821,13 +821,11 @@ void main() {
         userId: const Value(userId),
         clarified: const Value(true),
         createdAt: Value(now),
-        nextActionText: const Value('Do the thing'),
         lastClarifiedAt: Value(clarifiedAt),
         lastNextActionCompletionAt: Value(completedAt),
       ));
-      // The cursor column above is inert (retired by abandonment, ADR-0022);
-      // the phrase is an Action row too — the grain the re-clarify predicate
-      // actually reads (ADR-0001 story 3).
+      // The Action row is the grain the re-clarify predicate reads
+      // (ADR-0001 story 3).
       await seedCurrentAction(
         db,
         outcomeId: id,
@@ -847,7 +845,7 @@ void main() {
         userId: const Value(userId),
         clarified: const Value(true),
         createdAt: Value(now),
-        // nextActionText absent → NULL
+        // no Action row seeded → Actionless
       ));
       return id;
     }
@@ -868,7 +866,7 @@ void main() {
       expect(state.reviewNav.index, 1);
     });
 
-    test('updateReviewItemNextAction: sets nextActionText; stamps lastClarifiedAt; reviewIndex advances',
+    test('updateReviewItemNextAction: sets the current Action; stamps lastClarifiedAt; reviewIndex advances',
         () async {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
@@ -942,7 +940,7 @@ void main() {
     test('deferReviewItemToSomeday on actionless task: leaves result; reviewIndex advances',
         () async {
       // intent=maybe is excluded from the review predicate, so the task leaves
-      // the queue even when next_action_text is NULL.
+      // the queue even when the Outcome is Actionless.
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
@@ -970,10 +968,10 @@ void main() {
       expect(state.reviewNav.index, 1);
     });
 
-    test('markReviewItemWaitingFor on actionless task: leaves next_action_text untouched; task remains in needs-review',
+    test('markReviewItemWaitingFor on actionless task: mints no Action; task remains in needs-review',
         () async {
       // Routing is intent-only; per the orthogonality model, the
-      // user-action axis (`next_action_text`) is not touched by a route
+      // user-action axis (the current Action) is not touched by a route
       // to waitingFor. An actionless task therefore stays in the
       // re-clarification queue until the dialog records a phrase.
       final id = await insertActionlessTask();
@@ -1087,7 +1085,7 @@ void main() {
       expect(task?.doneAt, isNull);
     });
 
-    test('updateNextAction then back then deferToSomeday: next_action_text preserved',
+    test('updateNextAction then back then deferToSomeday: the Action is preserved',
         () async {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);

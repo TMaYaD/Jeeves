@@ -3,8 +3,8 @@
 /// `ClarifyCard` opts out of the default-on `nextActionDialog` modifier
 /// (`except: {nextActionDialog}`) because it supplies the next-action phrase
 /// through the title-as-action coupling instead. Tapping Next must therefore
-/// stay a one-tap route — no dialog — and still leave the row with a defined
-/// `next_action_text`.
+/// stay a one-tap route — no dialog — and still leave the Outcome with a
+/// defined current Action.
 library;
 
 import 'dart:async';
@@ -426,7 +426,7 @@ void main() {
     tearDown(() async => db.close());
 
     testWidgets(
-        're-clarify does NOT clobber an existing next_action_text',
+        're-clarify does NOT clobber an existing current Action',
         (tester) async {
       // Seed a previously-clarified row that already has a deliberate phrase.
       final now = DateTime.now();
@@ -435,14 +435,11 @@ void main() {
             title: const Value('Plan party'),
             clarified: const Value(true),
             intent: const Value('next'),
-            nextActionText: const Value('Email guest list'),
             userId: const Value(_userId),
             createdAt: Value(now),
             updatedAt: Value(now),
           ));
-      // …and the Action row, which is what the mirror guard actually
-      // consults (ADR-0001 story 3) — the cursor column above is retired by
-      // abandonment (ADR-0022) and plays no part in that read.
+      // The Action row is what the mirror guard consults (ADR-0001 story 3).
       await seedCurrentAction(
         db,
         outcomeId: 'rc-mirror-1',
@@ -463,24 +460,19 @@ void main() {
       await tester.pumpAndSettle();
 
       // The Action grain is what the mirror guard consults and what every read
-      // surface renders, so it is the assertion that actually pins the
-      // behaviour: without it the test passes even if re-clarify overwrites the
-      // current Action with the title, because the frozen cursor would sit
-      // there unchanged either way (ADR-0022).
+      // surface renders, so it is the assertion that pins the behaviour.
       final action = await db.actionDao.getCurrentAction('rc-mirror-1');
       expect(action?.actionText, 'Email guest list',
           reason: 're-clarify must not overwrite a deliberate phrase with the '
               'title');
 
       final row = await db.todoDao.getTodo('rc-mirror-1');
-      expect(row?.nextActionText, 'Email guest list',
-          reason: 'the legacy cursor is frozen, not rewritten');
       expect(row?.intent, 'next');
     });
 
     testWidgets(
-        're-clarify DOES set next_action_text from title when previously '
-        'empty', (tester) async {
+        're-clarify DOES set the current Action from the title when previously '
+        'Actionless', (tester) async {
       await _insertInboxTodo(
         db,
         id: 'rc-mirror-2',
@@ -646,7 +638,7 @@ void main() {
 
     // Orthogonality invariant (ARCHITECTURE.md): tag edits must not touch the
     // intent axis (next/maybe/trash), the delegate axis (person-tag join
-    // rows), or next_action_text. The invariant is independent of which intent
+    // rows), or the current Action. The invariant is independent of which intent
     // the row holds, so one representative value ('next') exercises the same
     // code path all three would.
     testWidgets('tag edits leave intent and delegate axis unchanged',

@@ -1,36 +1,34 @@
 /// The `reconcileActionsAtStartup` sweep, narrowed to its one safe, cursor-free
-/// pass (ADR-0001 story 9, issue #479; ADR-0022).
+/// pass (ADR-0001 story 9, issue #479; ADR-0022, ADR-0024).
 ///
 /// Drives the production SQL against a real SQLite database over the same
 /// query/exec seam production uses (PowerSync only supplies the transaction),
 /// mirroring `migrate_local_inbox_test.dart`.
 ///
-/// The sweep now does exactly one thing — [convergeMultiCurrentActions],
-/// **cursor-free**: it retires the losers of an accidental multi-`current` set
-/// by the writers' deterministic winner rule, visiting any Outcome with more
-/// than one `current` row whatever its cursor says.
+/// The sweep does exactly one thing — [convergeMultiCurrentActions]: it retires
+/// the losers of an accidental multi-`current` set by the writers' deterministic
+/// winner rule, visiting any Outcome with more than one `current` row.
 ///
-/// Three cursor-driven arms were deleted over the course of #479, and the tests
-/// that pinned them are **inverted** here rather than removed, because their old
-/// assertions are exactly the behaviours that must now never happen:
+/// Three cursor-driven arms were deleted over the course of #479, and the
+/// `todos.next_action_text` column they read no longer exists at all (#525). The
+/// family of tests that seeded a cursor to prove each arm was gone went with the
+/// column — a cursor an Outcome cannot carry needs no test proving it is
+/// ignored. What survives is stronger and does not depend on the column's
+/// absence for its meaning:
 ///
-/// * **Pass A mode 1** overwrote a `current` Action's text/metadata from the
-///   cursor — it would revert every Action-grain edit at the next launch.
-/// * **Pass B** retired every `current` Action whose Outcome had a blank
-///   cursor — the moment the cursor stops being written that retires every
-///   current Action on the device.
-/// * **Cursor adoption** minted the deterministic-id `current` Action for a live
-///   Outcome with a non-blank cursor and no `actions` rows at all. Its safety
-///   argument was that every role transition leaves a row behind, so a
-///   zero-`actions` Outcome could only be one the app had never touched. That was
-///   false: `ActionDao.removePlannedAction` is a hard `DELETE`, so *demote then
-///   remove* leaves a live cursor over zero Action rows and the next launch minted
-///   the just-deleted Action back as `current`. The two-tap repro is pinned below.
+/// * **the sweep never mints an Action, from any input** — the invariant that
+///   made cursor adoption impossible, pinned by the two-tap repro below and by
+///   the monotonicity guarantee;
+/// * **the sweep only ever retires** — `COUNT(*)` is unchanged and no existing
+///   row's `text` is rewritten, which is what made Pass A mode 1 impossible;
+/// * **a `current` Action is never retired except as a convergence loser** —
+///   what made Pass B impossible;
+/// * and the structural anchor: **the sweep completes on a store with no
+///   `todos` table at all**, so any re-introduced Outcome-column read raises
+///   `no such table` here rather than quietly destroying Action rows.
 ///
-/// The invariants pinned here: **the sweep never mints an Action, from any
-/// input**; **monotonicity** (a run never lowers `COUNT(*) FROM actions` and
-/// never rewrites an existing row's `text`); idempotency; and
-/// clarification-neutrality (never stamps `last_clarified_at` — ADR-0012).
+/// Plus idempotency and clarification-neutrality (never stamps
+/// `last_clarified_at` — ADR-0012).
 library;
 
 import 'package:drift/drift.dart' hide isNotNull, isNull;
@@ -72,7 +70,6 @@ Future<int> _sweep(GtdDatabase db, {DateTime? now}) => db.transaction(
 Future<void> _seedOutcome(
   GtdDatabase db, {
   required String id,
-  String? nextActionText,
   String? energyLevel,
   int? timeEstimate,
   DateTime? lastClarifiedAt,
@@ -85,7 +82,6 @@ Future<void> _seedOutcome(
         title: Value('Outcome $id'),
         userId: const Value(_userId),
         createdAt: Value(_t0),
-        nextActionText: Value(nextActionText),
         energyLevel: Value(energyLevel),
         timeEstimate: Value(timeEstimate),
         lastClarifiedAt: Value(lastClarifiedAt),
@@ -169,24 +165,24 @@ Future<DateTime?> _lastClarified(GtdDatabase db, String outcomeId) async {
 /// exercises every arm at once (used by the idempotency, non-stamping and
 /// monotonicity guarantees, which must hold across all of them together).
 Future<void> _seedEveryArm(GtdDatabase db) async {
-  // Adoption's old victim: non-blank cursor, no actions rows at all. It must
-  // stay Actionless — this is the shape *demote then remove* leaves behind.
-  await _seedOutcome(db,
-      id: 'adopt', nextActionText: 'mint me', lastClarifiedAt: _clarified);
+  // Adoption's old victim: an Outcome with no `actions` rows at all. It must
+  // stay Actionless — this is the shape *demote then remove* leaves behind, and
+  // the one the deleted adoption pass minted a `current` row for.
+  await _seedOutcome(db, id: 'actionless', lastClarifiedAt: _clarified);
 
-  // Pass B's old victim: blank cursor with a live current Action.
-  await _seedOutcome(db,
-      id: 'blank-cursor', nextActionText: null, lastClarifiedAt: _clarified);
+  // Pass B's old victim: a lone live `current` Action, which the pass retired.
+  await _seedOutcome(db, id: 'lone-current', lastClarifiedAt: _clarified);
   await _insertAction(db,
-      id: backfillActionIdFor('blank-cursor'),
-      outcomeId: 'blank-cursor',
+      id: backfillActionIdFor('lone-current'),
+      outcomeId: 'lone-current',
       text: 'survives',
       role: 'current');
 
-  // Mode 1's old victim: cursor text disagreeing with the current Action.
+  // Mode 1's old victim: a `current` Action whose text and metadata were edited
+  // away from what the Outcome's own columns say. The Action-local values must
+  // survive; mode 1 copied the Outcome's over them.
   await _seedOutcome(db,
       id: 'drifted',
-      nextActionText: 'cursor says this',
       energyLevel: 'high',
       timeEstimate: 90,
       lastClarifiedAt: _clarified);
@@ -198,9 +194,8 @@ Future<void> _seedEveryArm(GtdDatabase db) async {
       energyLevel: 'low',
       timeEstimate: 5);
 
-  // Convergence: two current rows, and a blank cursor to prove it is cursor-free.
-  await _seedOutcome(db,
-      id: 'multi', nextActionText: null, lastClarifiedAt: _clarified);
+  // Convergence: two current rows — the one arm that still writes.
+  await _seedOutcome(db, id: 'multi', lastClarifiedAt: _clarified);
   await _insertAction(db,
       id: 'aaa',
       outcomeId: 'multi',
@@ -214,9 +209,8 @@ Future<void> _seedEveryArm(GtdDatabase db) async {
       role: 'current',
       updatedAt: DateTime.parse('2026-06-25T09:00:00.000Z'));
 
-  // Terminal rows under a live cursor: nothing may be resurrected.
-  await _seedOutcome(db,
-      id: 'retired', nextActionText: 'old cursor', lastClarifiedAt: _clarified);
+  // Terminal rows: nothing may be resurrected.
+  await _seedOutcome(db, id: 'retired', lastClarifiedAt: _clarified);
   await _insertAction(db,
       id: backfillActionIdFor('retired'),
       outcomeId: 'retired',
@@ -224,8 +218,7 @@ Future<void> _seedEveryArm(GtdDatabase db) async {
       role: 'superseded',
       updatedAt: _t0);
 
-  await _seedOutcome(db,
-      id: 'finished', nextActionText: 'old cursor', lastClarifiedAt: _clarified);
+  await _seedOutcome(db, id: 'finished', lastClarifiedAt: _clarified);
   await _insertAction(db,
       id: backfillActionIdFor('finished'),
       outcomeId: 'finished',
@@ -246,49 +239,24 @@ void main() {
   // ---------------------------------------------------------------------------
 
   group('the sweep never mints an Action', () {
-    test('a non-blank cursor over zero action rows mints nothing — cursor '
-        'adoption is gone', () async {
-      // Inverts the adoption pass's headline test. Nothing reads the cursor at
-      // runtime any more; only the one-time Drift v26 backfill does.
-      await _seedOutcome(db,
-          id: 'o1',
-          nextActionText: 'freshly set',
-          energyLevel: 'medium',
-          timeEstimate: 12,
-          lastClarifiedAt: _clarified);
-
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
-      expect(await _actions(db, 'o1'), isEmpty);
-      expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
-    });
-
-    test('★ the two-tap resurrection is impossible: demote then remove leaves a '
-        'live cursor over zero Action rows, and the sweep still mints nothing',
+    test('★ the two-tap resurrection is impossible: demote then remove leaves '
+        'an Outcome with zero Action rows, and the sweep still mints nothing',
         () async {
       // THE regression. `applyRemovePlannedAction` is a hard DELETE — the only
       // mutation that drives an Outcome to zero `actions` rows while the `todos`
-      // row survives — so adoption's "a transition always leaves a row behind"
-      // guard had a hole. Driven through the real DAO primitives, on a store
-      // whose cursor was populated in the dual-write era.
-      await _seedOutcome(db,
-          id: 'o1',
-          nextActionText: 'a dual-write era cursor',
-          lastClarifiedAt: _clarified);
+      // row survives — so the deleted adoption pass's "a transition always
+      // leaves a row behind" guard had a hole, and the next launch minted the
+      // just-removed Action back as `current`. Driven through the real DAO
+      // primitives.
+      await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
       await db.actionDao.setCurrentAction('o1', 'the thing', now: _t0);
       final actionId = (await _current(db, 'o1'))!['id'] as String;
 
-      // Tap 1: demote. #520 removed the cursor clear, so the cursor survives.
+      // Tap 1: demote to planned. Tap 2: remove it — hard delete, zero rows.
       await db.actionDao.demoteCurrentAction(actionId, now: _clarified);
-      // Tap 2: remove the planned row. Hard delete — zero `actions` rows left.
       await db.actionDao.removePlannedAction(actionId, now: _clarified);
 
       expect(await _actions(db, 'o1'), isEmpty, reason: 'precondition');
-      final todo =
-          await (db.select(db.todos)..where((t) => t.id.equals('o1'))).getSingle();
-      expect(todo.nextActionText, 'a dual-write era cursor',
-          reason: 'precondition: the cursor is still live');
 
       final repaired = await _sweep(db);
 
@@ -297,117 +265,13 @@ void main() {
           reason: 'the deleted Action must not come back as current');
     });
 
-    test('a blank or whitespace-only cursor mints nothing', () async {
-      await _seedOutcome(db, id: 'blank', nextActionText: null);
-      await _seedOutcome(db, id: 'spaces', nextActionText: '   ');
-
-      expect(await _sweep(db), 0);
-      expect(await _actions(db, 'blank'), isEmpty);
-      expect(await _actions(db, 'spaces'), isEmpty);
-    });
-
-    test('non-blank cursor + a superseded row: NO resurrection — an abandoned '
-        'Action stays abandoned', () async {
-      await _seedOutcome(db,
-          id: 'o1',
-          nextActionText: 're-set by an old client',
-          lastClarifiedAt: _clarified);
-      await _insertAction(db,
-          id: backfillActionIdFor('o1'),
-          outcomeId: 'o1',
-          text: 'was retired',
-          role: 'superseded',
-          updatedAt: _t0);
-
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
-      final rows = await _actions(db, 'o1');
-      expect(rows, hasLength(1), reason: 'nothing minted alongside it');
-      expect(rows.single['role'], 'superseded',
-          reason: 'the deterministic slot must not be flipped back to current');
-      expect(rows.single['text'], 'was retired',
-          reason: 'the cursor text must not be written onto it');
-      expect(rows.single['updated_at'], _t0.toIso8601String());
-      expect(await _current(db, 'o1'), isNull);
-      expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
-    });
-
-    test('non-blank cursor + a done row: nothing is minted', () async {
-      await _seedOutcome(db,
-          id: 'o1', nextActionText: 'still want this', lastClarifiedAt: _clarified);
-      final doneAt = DateTime.parse('2026-06-15T09:00:00.000Z');
-      await _insertAction(db,
-          id: backfillActionIdFor('o1'),
-          outcomeId: 'o1',
-          text: 'already done',
-          role: 'done',
-          doneAt: doneAt);
-
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
-      final rows = await _actions(db, 'o1');
-      expect(rows, hasLength(1));
-      expect(rows.single['role'], 'done');
-      expect(rows.single['done_at'], doneAt.toIso8601String());
-      expect(await _current(db, 'o1'), isNull);
-    });
-
-    test('non-blank cursor + only planned rows: nothing is minted', () async {
-      await _seedOutcome(db,
-          id: 'o1', nextActionText: 'cursor text', lastClarifiedAt: _clarified);
-      await _insertAction(db,
-          id: 'p1',
-          outcomeId: 'o1',
-          text: 'queued for later',
-          role: 'planned',
-          position: 0);
-
-      expect(await _sweep(db), 0);
-      final rows = await _actions(db, 'o1');
-      expect(rows, hasLength(1));
-      expect(rows.single['role'], 'planned');
-      expect(rows.single['text'], 'queued for later');
-    });
-
-    test('two superseded rows under a live cursor: no self-heal', () async {
-      await _seedOutcome(db,
-          id: 'o1', nextActionText: 'still live', lastClarifiedAt: _clarified);
-      await _insertAction(db,
-          id: 'random-a',
-          outcomeId: 'o1',
-          text: 'a version',
-          role: 'superseded',
-          updatedAt: DateTime.parse('2026-06-20T09:00:00.000Z'));
-      await _insertAction(db,
-          id: backfillActionIdFor('o1'),
-          outcomeId: 'o1',
-          text: 'backfill version',
-          role: 'superseded',
-          updatedAt: DateTime.parse('2026-06-21T09:00:00.000Z'));
-
-      expect(await _sweep(db), 0);
-      expect(await _current(db, 'o1'), isNull);
-      expect(
-        [for (final r in await _actions(db, 'o1')) r['role']],
-        ['superseded', 'superseded'],
-      );
-    });
-
-    test('no lifecycle state is adopted — done, trashed, maybe, unclarified and '
-        'plain next Outcomes all stay Actionless under a live cursor', () async {
-      await _seedOutcome(db, id: 'live', nextActionText: 'do this');
-      await _seedOutcome(db,
-          id: 'done',
-          nextActionText: 'was doing this',
-          doneAt: '2026-06-15T09:00:00.000Z');
-      await _seedOutcome(db,
-          id: 'binned', nextActionText: 'was doing this', intent: 'trash');
-      await _seedOutcome(db,
-          id: 'someday', nextActionText: 'might do this', intent: 'maybe');
-      await _seedOutcome(db,
-          id: 'unprocessed', nextActionText: 'ring the dentist', clarified: false);
+    test('no lifecycle state grows an Action — done, trashed, maybe, '
+        'unclarified and plain next Outcomes all stay Actionless', () async {
+      await _seedOutcome(db, id: 'live', lastClarifiedAt: _clarified);
+      await _seedOutcome(db, id: 'done', doneAt: '2026-06-15T09:00:00.000Z');
+      await _seedOutcome(db, id: 'binned', intent: 'trash');
+      await _seedOutcome(db, id: 'someday', intent: 'maybe');
+      await _seedOutcome(db, id: 'unprocessed', clarified: false);
 
       expect(await _sweep(db), 0);
       for (final id in const [
@@ -418,118 +282,25 @@ void main() {
         'unprocessed',
       ]) {
         expect(await _actions(db, id), isEmpty,
-            reason: '$id must not grow an Action from its cursor');
+            reason: '$id must not grow an Action');
       }
-    });
-
-    test('an Outcome with no cursor and no actions stays Actionless', () async {
-      await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
-
-      expect(await _sweep(db), 0);
-      expect(await _actions(db, 'o1'), isEmpty);
+      expect(await _lastClarified(db, 'live'), _clarified, reason: 'no stamp');
     });
   });
 
   // ---------------------------------------------------------------------------
-  // Deleted arm: Pass A mode 1 (cursor → current Action text/metadata).
+  // Deleted arm: Pass B (retire every `current` Action whose Outcome had a
+  // blank cursor). With the cursor gone the pass could only ever have fired on
+  // *every* current Action, so the invariant that outlives it is simply: a lone
+  // `current` Action is never retired. This is the one whose absence destroys
+  // user data — and, via the sync-up, everyone else's copy of it.
   // ---------------------------------------------------------------------------
 
-  group('mode 1 is gone', () {
-    test('cursor text disagreeing with the current Action leaves the Action '
-        'untouched', () async {
-      await _seedOutcome(db,
-          id: 'o1',
-          nextActionText: 'cursor text',
-          lastClarifiedAt: _clarified);
-      await _insertAction(db,
-          id: backfillActionIdFor('o1'),
-          outcomeId: 'o1',
-          text: 'the edited Action text',
-          role: 'current',
-          updatedAt: _t0);
-
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
-      final cur = await _current(db, 'o1');
-      expect(cur!['text'], 'the edited Action text');
-      expect(cur['updated_at'], _t0.toIso8601String(),
-          reason: 'not even touched');
-      expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
-    });
-
-    test('cursor metadata disagreeing with the current Action leaves the '
-        "Action's own energy/time intact", () async {
-      await _seedOutcome(db,
-          id: 'o1',
-          nextActionText: 'same text',
-          energyLevel: 'high',
-          timeEstimate: 90,
-          lastClarifiedAt: _clarified);
-      await _insertAction(db,
-          id: backfillActionIdFor('o1'),
-          outcomeId: 'o1',
-          text: 'same text',
-          role: 'current',
-          energyLevel: 'low',
-          timeEstimate: 5,
-          updatedAt: _t0);
-
-      expect(await _sweep(db), 0);
-      final cur = await _current(db, 'o1');
-      expect(cur!['energy_level'], 'low');
-      expect(cur['time_estimate'], 5);
-      expect(cur['updated_at'], _t0.toIso8601String());
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Deleted arm: Pass B (retire every current Action under a blank cursor).
-  // This is the invariant whose absence destroys user data.
-  // ---------------------------------------------------------------------------
-
-  group('Pass B is gone', () {
-    test('★ blank cursor + a current Action: the Action SURVIVES', () async {
-      await _seedOutcome(db,
-          id: 'o1', nextActionText: null, lastClarifiedAt: _clarified);
-      await _insertAction(db,
-          id: backfillActionIdFor('o1'),
-          outcomeId: 'o1',
-          text: 'the user\'s current Action',
-          role: 'current',
-          updatedAt: _t0);
-
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
-      final cur = await _current(db, 'o1');
-      expect(cur, isNotNull,
-          reason: 'a cursorless current Action must never be retired');
-      expect(cur!['role'], 'current');
-      expect(cur['text'], 'the user\'s current Action');
-      expect(cur['updated_at'], _t0.toIso8601String());
-      expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
-    });
-
-    test('★ whitespace-only cursor + a current Action: the Action SURVIVES',
+  group('a current Action is never retired outside convergence', () {
+    test('★ a whole store of single-current Outcomes is left completely alone',
         () async {
-      await _seedOutcome(db,
-          id: 'o1', nextActionText: '   ', lastClarifiedAt: _clarified);
-      await _insertAction(db,
-          id: backfillActionIdFor('o1'),
-          outcomeId: 'o1',
-          text: 'still mine',
-          role: 'current');
-
-      expect(await _sweep(db), 0);
-      expect((await _current(db, 'o1'))!['text'], 'still mine');
-    });
-
-    test('★ a whole store of cursorless current Actions is left completely '
-        'alone — the post-Stage-2 steady state', () async {
       for (var i = 0; i < 5; i++) {
-        await _seedOutcome(db,
-            id: 'o$i', nextActionText: null, lastClarifiedAt: _clarified);
+        await _seedOutcome(db, id: 'o$i', lastClarifiedAt: _clarified);
         await _insertAction(db,
             id: backfillActionIdFor('o$i'),
             outcomeId: 'o$i',
@@ -550,10 +321,9 @@ void main() {
   // ---------------------------------------------------------------------------
 
   group('convergeMultiCurrentActions', () {
-    test('★ two current rows under a BLANK cursor converge to the deterministic '
-        'winner — convergence no longer rides the cursor join', () async {
-      await _seedOutcome(db,
-          id: 'o1', nextActionText: null, lastClarifiedAt: _clarified);
+    test('★ two current rows converge to the deterministic winner — convergence '
+        'no longer rides a cursor join', () async {
+      await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
       await _insertAction(db,
           id: 'aaa',
           outcomeId: 'o1',
@@ -579,10 +349,8 @@ void main() {
       expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
     });
 
-    test('a non-blank cursor still converges, and the winner is untouched',
-        () async {
-      await _seedOutcome(db,
-          id: 'o1', nextActionText: 'winning', lastClarifiedAt: _clarified);
+    test('the winner is not even touched', () async {
+      await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
       await _insertAction(db,
           id: 'aaa',
           outcomeId: 'o1',
@@ -602,12 +370,13 @@ void main() {
         (await _actions(db, 'o1')).firstWhere((r) => r['id'] == 'bbb')
             ['updated_at'],
         DateTime.parse('2026-06-25T09:00:00.000Z').toIso8601String(),
+        reason: 'the winner keeps its own updated_at — no write reaches it',
       );
     });
 
     test('winner rule: greatest COALESCE(updated_at, created_at), tie-break '
         'smallest id — matching ActionDao', () async {
-      await _seedOutcome(db, id: 'o1', nextActionText: null);
+      await _seedOutcome(db, id: 'o1');
       // Same effective timestamp on all three (updated_at NULL falls back to
       // created_at), so the smallest id wins.
       await _insertAction(db,
@@ -623,7 +392,7 @@ void main() {
 
     test('converges several Outcomes in one run, and leaves single-current '
         'Outcomes alone', () async {
-      await _seedOutcome(db, id: 'multi', nextActionText: null);
+      await _seedOutcome(db, id: 'multi');
       await _insertAction(db,
           id: 'm-a',
           outcomeId: 'multi',
@@ -636,7 +405,7 @@ void main() {
           text: 'b',
           role: 'current',
           updatedAt: DateTime.parse('2026-06-25T09:00:00.000Z'));
-      await _seedOutcome(db, id: 'solo', nextActionText: null);
+      await _seedOutcome(db, id: 'solo');
       await _insertAction(db,
           id: 's-a', outcomeId: 'solo', text: 'solo', role: 'current');
 
@@ -647,7 +416,7 @@ void main() {
 
     test('planned and terminal rows are never counted as multi-current',
         () async {
-      await _seedOutcome(db, id: 'o1', nextActionText: null);
+      await _seedOutcome(db, id: 'o1');
       await _insertAction(db,
           id: 'cur', outcomeId: 'o1', text: 'the current', role: 'current');
       await _insertAction(db,
@@ -690,8 +459,8 @@ void main() {
       await _sweep(db);
 
       for (final id in const [
-        'adopt',
-        'blank-cursor',
+        'actionless',
+        'lone-current',
         'drifted',
         'multi',
         'retired',
@@ -746,7 +515,7 @@ void main() {
   group('live write paths are sweep-stable', () {
     test('planned rows survive the sweep untouched', () async {
       await _seedOutcome(db,
-          id: 'o1', nextActionText: 'live', lastClarifiedAt: _clarified);
+          id: 'o1', lastClarifiedAt: _clarified);
       await _insertAction(db,
           id: backfillActionIdFor('o1'),
           outcomeId: 'o1',
@@ -812,10 +581,12 @@ void main() {
       expect((await _actions(db, 'o1')).single['role'], 'superseded');
     });
 
-    test('a completed Action is never resurrected — and no longer depends on '
-        'the completion having cleared the cursor', () async {
-      await _seedOutcome(db,
-          id: 'o1', nextActionText: 'ship it', lastClarifiedAt: _clarified);
+    test('a completed Action is never resurrected — the done row keeps the '
+        'deterministic backfill id, and nothing is minted beside it', () async {
+      // The backfill id is the slot the deleted adoption pass minted into, so
+      // an Outcome whose only row already occupies it is the shape most likely
+      // to be flipped back to `current` by a revived pass.
+      await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
       await _insertAction(db,
           id: backfillActionIdFor('o1'),
           outcomeId: 'o1',
@@ -824,10 +595,6 @@ void main() {
 
       final completedAt = DateTime.parse('2026-06-20T09:00:00.000Z');
       await db.actionDao.completeCurrentAction('o1', now: completedAt);
-      // Put the cursor back, as a straggler old client's replay would.
-      await db.customStatement(
-        "UPDATE todos SET next_action_text = 'ship it' WHERE id = 'o1'",
-      );
 
       final repaired = await _sweep(db);
 

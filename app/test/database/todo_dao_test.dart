@@ -60,6 +60,94 @@ Future<String> _insertPersonTag(
 void main() {
   setUpAll(configureSqliteForTests);
 
+  // These two groups moved here from the deleted `action_cursor_freeze_test.dart`
+  // when #525 dropped `todos.next_action_text`. That suite's subject — "no code
+  // path writes the cursor" — is subsumed by the column's absence, but its
+  // Action-grain halves were the only coverage anywhere for
+  // `setNextActionTextIfActionless` (including #501's TOCTOU skip path) and for
+  // `deleteOutcome`'s cascade onto `actions`, so they live on here, beside the
+  // rest of TodoDao's write primitives.
+  group('TodoDao — setNextActionTextIfActionless', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    final t0 = DateTime.parse('2026-07-01T09:00:00.000Z');
+    final t1 = DateTime.parse('2026-07-01T10:00:00.000Z');
+
+    test('the write path mints the current Action and stamps', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+
+      final wrote = await db.todoDao
+          .setNextActionTextIfActionless('o1', 'Book venue', now: t1);
+
+      expect(wrote, isTrue);
+      expect((await db.actionDao.getCurrentAction('o1'))?.actionText,
+          'Book venue');
+      expect((await db.todoDao.getTodo('o1'))?.lastClarifiedAt, t1,
+          reason: 'the write path still stamps');
+    });
+
+    test('the skip path (#501 TOCTOU guard) writes nothing at all', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await seedCurrentAction(
+        db,
+        outcomeId: 'o1',
+        text: 'deliberate phrase',
+        userId: _userId,
+        createdAt: t0,
+      );
+      final before = await db.todoDao.getTodo('o1');
+
+      final wrote = await db.todoDao
+          .setNextActionTextIfActionless('o1', 'Mirrored title', now: t1);
+
+      expect(wrote, isFalse);
+      expect((await db.actionDao.getCurrentAction('o1'))?.actionText,
+          'deliberate phrase',
+          reason: 'a deliberate Action is never overwritten by the mirror');
+      final after = await db.todoDao.getTodo('o1');
+      expect(after?.lastClarifiedAt, before?.lastClarifiedAt,
+          reason: 'the skip path stamps nothing');
+      expect(after?.updatedAt, before?.updatedAt);
+    });
+
+    test('blank text is a caller error', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+
+      expect(
+        () => db.todoDao.setNextActionTextIfActionless('o1', '   ', now: t1),
+        throwsArgumentError,
+      );
+    });
+  });
+
+  group('TodoDao — deleteOutcome', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('cascades Action rows and spares its siblings', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await _insertTodo(db, id: 'sibling', title: 'Sibling');
+      await db.todoDao.setNextActionText('o1', 'x');
+      await db.actionDao.supersedeCurrentAction('o1', newActionText: 'y');
+      await db.todoDao.setNextActionText('sibling', 'keep me');
+
+      await db.todoDao.deleteOutcome('o1');
+
+      final orphans = await db
+          .customSelect("SELECT id FROM actions WHERE outcome_id = 'o1'")
+          .get();
+      expect(orphans, isEmpty,
+          reason: 'both the done/superseded chain and the current row go');
+      expect((await db.actionDao.getCurrentAction('sibling'))?.actionText,
+          'keep me');
+    });
+  });
+
   group('TodoDao — watchTodosById', () {
     late GtdDatabase db;
 
@@ -237,10 +325,10 @@ void main() {
     // The Next List membership rule:
     //
     //   Next = intent='next' ∧ clarified ∧ done_at IS NULL ∧
-    //          (next_action_text IS NOT NULL ∨ no PersonBlocker on the Outcome)
+    //          (has a current Action ∨ no PersonBlocker on the Outcome)
     //
-    // The single excluded quadrant is actionless (next_action_text IS NULL)
-    // AND PersonBlocked (carries any Tag(type='person')) — that combination
+    // The single excluded quadrant is actionless (no `actions` row with
+    // role='current') AND PersonBlocked (carries any Tag(type='person')) — that combination
     // is a pure wait and surfaces only on Waiting For, not on the daily
     // Next List. Cross-reference CONTEXT.md § Next / Waiting For and the
     // refined rule at
@@ -250,7 +338,7 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('Q1: intent=next, has next_action_text, no person-tag → on Next',
+    test('Q1: intent=next, has a current Action, no person-tag → on Next',
         () async {
       await _insertTodo(db, id: 'q1', title: 'Buy milk');
       await db.todoDao.setNextActionText('q1', 'Buy milk');
@@ -260,7 +348,7 @@ void main() {
     });
 
     test(
-        'Q2: intent=next, has next_action_text, has person-tag → on Next '
+        'Q2: intent=next, has a current Action, has person-tag → on Next '
         '(actionable+PersonBlocked overlap)', () async {
       // The "call Trixy for a follow up" case: PersonBlocker coexists with a
       // doable current Action, so the Outcome belongs on Next AND on Waiting
@@ -276,7 +364,7 @@ void main() {
     });
 
     test(
-        'Q3: intent=next, no next_action_text, no person-tag → on Next '
+        'Q3: intent=next, Actionless, no person-tag → on Next '
         '(re-clarify candidate; still surfaces)', () async {
       // An actionless Outcome with no PersonBlocker is on Next — the daily
       // re-clarification surface will pick it up via getNeedsReview,
@@ -288,7 +376,7 @@ void main() {
     });
 
     test(
-        'Q4: intent=next, no next_action_text, has person-tag → NOT on Next '
+        'Q4: intent=next, Actionless, has person-tag → NOT on Next '
         '(pure wait — surfaces only on Waiting For)', () async {
       // The excluded quadrant this PR introduces. Without a current Action
       // the Outcome offers nothing the user can do today; its cadence
@@ -339,43 +427,6 @@ void main() {
           reason: 'actionless+PersonBlocked excluded from filtered Next too');
     });
 
-    test('a whitespace-only cursor leaked in by a direct write mints no Action, '
-        'so the Outcome stays actionless', () async {
-      // A straggler client can still PATCH todos.next_action_text directly.
-      // Membership of Next is decided at the Action grain (an `actions` row
-      // with role='current'), so a leaked whitespace cursor must leave the
-      // Outcome actionless — blank text is unrepresentable as an Action
-      // (ActionDao rejects it), which is the same normalisation
-      // setNextActionText applies.
-      final now = DateTime.now();
-      await db.into(db.todos).insert(TodosCompanion(
-        id: const Value('q4w'),
-        title: const Value('Whitespace action, person-blocked'),
-        clarified: const Value(true),
-        userId: const Value(_userId),
-        nextActionText: const Value('   '),
-        createdAt: Value(now),
-        updatedAt: Value(now),
-      ));
-      await _insertPersonTag(db, id: 'q4w-eve', name: 'Eve');
-      await db.tagDao.assignTag('q4w', 'q4w-eve', _userId);
-
-      // Positive control, so the exclusion below cannot pass vacuously: the
-      // same shape with a real current Action *is* on Next.
-      await _insertTodo(db, id: 'q2w', title: 'Real action, person-blocked');
-      await db.todoDao.setNextActionText('q2w', 'Call Eve');
-      await _insertPersonTag(db, id: 'q2w-eve', name: 'Eve-2');
-      await db.tagDao.assignTag('q2w', 'q2w-eve', _userId);
-
-      expect(await db.actionDao.getCurrentAction('q4w'), isNull,
-          reason: 'a whitespace cursor mints no Action');
-
-      final ids = (await db.todoDao.watchNext().first).map((t) => t.id).toSet();
-      expect(ids, isNot(contains('q4w')),
-          reason: 'whitespace cursor + person-tag stays actionless');
-      expect(ids, contains('q2w'),
-          reason: 'the control proves the exclusion is not vacuous');
-    });
   });
 
   group('TodoDao — getNextExcludingPersonTagged', () {
@@ -792,17 +843,13 @@ void main() {
     });
 
     test('done: clarified=true, done_at=now, intent left as-is, and the '
-        'completion cascade never touches the legacy cursor', () async {
+        'completion cascade completes the current Action', () async {
       await _insertTodo(db, id: 'r4', title: 'Task', clarified: false);
-      // Seed a legacy cursor value as a pre-retirement client would have left
-      // it, plus a **real current Action** so `done` actually runs the
-      // completion cascade. With an Actionless Outcome the "cursor untouched"
-      // claim would hold for the wrong reason — no cascade would run at all.
+      // A **real current Action** so `done` actually runs the completion
+      // cascade — with an Actionless Outcome the assertion below would hold
+      // for the wrong reason, no cascade having run at all.
       await (db.update(db.todos)..where((t) => t.id.equals('r4'))).write(
-        const TodosCompanion(
-          intent: Value('maybe'),
-          nextActionText: Value('preserved'),
-        ),
+        const TodosCompanion(intent: Value('maybe')),
       );
       await db.actionDao.setCurrentAction('r4', 'finish it');
 
@@ -817,8 +864,6 @@ void main() {
       expect(row?.doneAt, isNotNull);
       expect(await db.actionDao.getCurrentAction('r4'), isNull,
           reason: 'the cascade completed the current Action');
-      expect(row?.nextActionText, 'preserved',
-          reason: 'the retired cursor is neither read nor written (ADR-0022)');
     });
 
     test('trash: clarified=true, intent=trash, done_at=null', () async {
@@ -1074,7 +1119,6 @@ void main() {
       expect(after2?.intent, after1?.intent);
       expect(after2?.clarified, after1?.clarified);
       expect(after2?.doneAt, after1?.doneAt);
-      expect(after2?.nextActionText, after1?.nextActionText);
     });
   });
 

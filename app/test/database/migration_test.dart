@@ -253,7 +253,7 @@ void main() {
       expect(rows.first.read<String>('title'), 'Waiting task');
     });
 
-    test('v20→v21 migration: next_action_text and last_next_action_completion_at added', () async {
+    test('v20→v21 migration: last_next_action_completion_at added', () async {
       final db = _openInMemory();
       addTearDown(db.close);
 
@@ -288,22 +288,116 @@ void main() {
       final m = db.createMigrator();
       await db.migration.onUpgrade(m, 20, 21);
 
-      // Both new columns must exist.
+      // The new column must exist. v21's sibling `next_action_text` was
+      // dropped again in v28 (#525), so this block no longer adds it.
       final cols = await db.customSelect('PRAGMA table_info(todos)').get();
       final colNames = cols.map((r) => r.read<String>('name')).toSet();
-      expect(colNames, contains('next_action_text'));
       expect(colNames, contains('last_next_action_completion_at'));
 
-      // Row must have survived with both columns NULL.
+      // Row must have survived with the new column NULL.
       final rows = await db.customSelect(
-        'SELECT title, next_action_text, last_next_action_completion_at '
+        'SELECT title, last_next_action_completion_at '
         'FROM todos WHERE id = ?',
         variables: [Variable.withString('v20t1')],
       ).get();
       expect(rows.length, 1);
       expect(rows.first.read<String>('title'), 'Legacy task');
-      expect(rows.first.read<String?>('next_action_text'), isNull);
       expect(rows.first.read<String?>('last_next_action_completion_at'), isNull);
+    });
+
+    test('v27→v28 migration: next_action_text dropped, every other column '
+        'survives with its data', () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // Simulate a pre-v28 database by recreating todos *with* the cursor.
+      // Only PRAGMA and raw customSelect below: the Drift-generated `todos`
+      // accessor no longer knows the column, and `TodoDao.getTodo` resolves
+      // energy_level / time_estimate through the D2 COALESCE against `actions`,
+      // so an assertion through either would pass whether or not the drop
+      // preserved the underlying data.
+      await db.customStatement('DROP TABLE IF EXISTS todos');
+      await db.customStatement('''
+        CREATE TABLE "todos" (
+          "id" TEXT NOT NULL,
+          "title" TEXT NOT NULL,
+          "clarified" INTEGER NOT NULL DEFAULT 1,
+          "user_id" TEXT NOT NULL,
+          "created_at" TEXT NOT NULL,
+          "energy_level" TEXT,
+          "time_estimate" INTEGER,
+          "last_clarified_at" TEXT,
+          "next_action_text" TEXT,
+          "last_next_action_completion_at" TEXT,
+          PRIMARY KEY ("id")
+        )
+      ''');
+
+      // Every seeded value is non-null and non-default, so a drop that silently
+      // rebuilt the table and lost a column's data fails loudly. A NULL cursor
+      // seed in particular would pass whether or not the drop worked at all.
+      await db.customStatement(
+        'INSERT INTO todos (id, title, clarified, user_id, created_at, '
+        'energy_level, time_estimate, last_clarified_at, next_action_text, '
+        'last_next_action_completion_at) '
+        "VALUES ('v27t1', 'Ship the thing', 1, 'test-user', "
+        "'2026-07-01T09:00:00.000Z', 'high', 45, '2026-07-02T09:00:00.000Z', "
+        "'call the plumber', '2026-07-03T09:00:00.000Z')",
+      );
+
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 27, 28);
+
+      final colNames = (await db.customSelect('PRAGMA table_info(todos)').get())
+          .map((r) => r.read<String>('name'))
+          .toSet();
+      expect(colNames, isNot(contains('next_action_text')),
+          reason: 'the retired cursor is gone (ADR-0024)');
+      expect(colNames, contains('last_next_action_completion_at'),
+          reason: 'the live sibling column must not be dropped with it');
+
+      final row = (await db
+              .customSelect(
+                'SELECT title, energy_level, time_estimate, last_clarified_at, '
+                'last_next_action_completion_at FROM todos WHERE id = ?',
+                variables: [Variable.withString('v27t1')],
+              )
+              .get())
+          .single;
+      expect(row.read<String>('title'), 'Ship the thing');
+      expect(row.read<String?>('energy_level'), 'high');
+      expect(row.read<int?>('time_estimate'), 45);
+      expect(row.read<String?>('last_clarified_at'), '2026-07-02T09:00:00.000Z');
+      expect(row.read<String?>('last_next_action_completion_at'),
+          '2026-07-03T09:00:00.000Z');
+    });
+
+    test('v27→v28 migration: dropping an already-absent column is a no-op',
+        () async {
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      // onUpgrade runs every `from < N` block, so a low-`from` upgrade reaches
+      // v28 on a table that never had the cursor. It must not throw.
+      await db.customStatement('DROP TABLE IF EXISTS todos');
+      await db.customStatement('''
+        CREATE TABLE "todos" (
+          "id" TEXT NOT NULL,
+          "title" TEXT NOT NULL,
+          "user_id" TEXT NOT NULL,
+          "created_at" TEXT NOT NULL,
+          PRIMARY KEY ("id")
+        )
+      ''');
+
+      final m = db.createMigrator();
+      await db.migration.onUpgrade(m, 27, 28);
+
+      final colNames = (await db.customSelect('PRAGMA table_info(todos)').get())
+          .map((r) => r.read<String>('name'))
+          .toSet();
+      expect(colNames, isNot(contains('next_action_text')));
+      expect(colNames, contains('title'));
     });
 
     test('v18→v19 migration: waiting_for dropped, last_clarified_at added', () async {

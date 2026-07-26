@@ -33,7 +33,6 @@ Future<String> _insertNextActionTodo(
   GtdDatabase db, {
   required String id,
   String title = 'Plain next action',
-  String? nextActionText,
   String? currentActionText,
 }) async {
   final now = DateTime.now();
@@ -42,21 +41,15 @@ Future<String> _insertNextActionTodo(
         title: Value(title),
         clarified: const Value(true),
         intent: const Value('next'),
-        nextActionText:
-            nextActionText != null ? Value(nextActionText) : const Value.absent(),
         userId: const Value(_userId),
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
-  // The Action row is what the step reads (ADR-0001 story 3); the cursor
-  // column is retired by abandonment (ADR-0022) and neither read nor written
-  // by the app, so this helper defaults the Action text to match it here as
-  // fixture setup only. A test can set [currentActionText] separately to
-  // prove which one is read.
+  // The Action row is what the step reads (ADR-0001 story 3).
   await seedCurrentAction(
     db,
     outcomeId: id,
-    text: currentActionText ?? nextActionText,
+    text: currentActionText,
     userId: _userId,
     createdAt: now,
   );
@@ -116,19 +109,17 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    testWidgets('the subtext is the current Action, not the cursor column',
+    testWidgets('the subtext is the current Action, not the Outcome title',
         (tester) async {
       await _insertNextActionTodo(
         db,
         id: 'na1',
         title: 'Repaint the fence',
-        nextActionText: 'stale cursor phrase',
         currentActionText: 'Buy the primer',
       );
       await _enterStep(tester, db);
 
       expect(find.text('Buy the primer'), findsOneWidget);
-      expect(find.text('stale cursor phrase'), findsNothing);
     });
 
     testWidgets('an Actionless Outcome renders no subtext', (tester) async {
@@ -229,7 +220,7 @@ void main() {
         db,
         id: 'na1',
         title: 'Old title',
-        nextActionText: 'Email Bob',
+        currentActionText: 'Email Bob',
       );
       await _enterStep(tester, db, reclarifyIds: const ['na1']);
 
@@ -250,9 +241,11 @@ void main() {
 
       final row = await db.todoDao.getTodo('na1');
       expect(row?.title, 'Updated title');
-      // Mirror guard: existing next_action_text was non-empty, so the
-      // ClarifyMode.reclarify back-out (no route) leaves it untouched.
-      expect(row?.nextActionText, 'Email Bob');
+      // Mirror guard: the Outcome already had a current Action, so the
+      // ClarifyMode.reclarify back-out (no route) leaves it untouched — the
+      // title edit must not overwrite a deliberate Action phrase.
+      expect((await db.actionDao.getCurrentAction('na1'))?.actionText,
+          'Email Bob');
     });
   });
 }

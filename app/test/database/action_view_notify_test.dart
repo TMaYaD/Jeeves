@@ -13,8 +13,8 @@
 ///
 /// **Why the `todos` watchers assert on emission counts, not values.** These
 /// tests used to read `todos.next_action_text` and treat a changed value as
-/// proof the watcher refreshed. The cursor is retired (ADR-0022) and several of
-/// these transactions now write nothing to `todos` at all — but the `todos`
+/// proof the watcher refreshed. The cursor is gone (ADR-0022, ADR-0024) and
+/// several of these transactions write nothing to `todos` at all — but the `todos`
 /// notify must still fire, because two list watchers name only
 /// `{todoTags, tags}` in `readsFrom` and the async bridge is briefly silent on
 /// cold start. A value-based assertion cannot express that any more; counting
