@@ -109,6 +109,17 @@ class ClarifyCard extends ConsumerStatefulWidget {
 }
 
 class _ClarifyCardState extends ConsumerState<ClarifyCard> {
+  /// The database handle, captured while the element is still mounted so
+  /// [dispose] can issue its pending-edit flush.
+  ///
+  /// `dispose()` cannot reach it through `ref`: `StatefulElement.unmount()`
+  /// calls `Element.unmount()` — which marks the element defunct, so
+  /// `context.mounted` goes false — *before* it calls `state.dispose()`, and
+  /// Riverpod's `ref` asserts on exactly that. Reading it there threw on the
+  /// flush's first line and the edit was lost (#529). Every other read in this
+  /// State runs while mounted and goes through `ref` as usual.
+  late final GtdDatabase _databaseForDisposeFlush;
+
   TextEditingController? _titleCtrl;
   TextEditingController? _notesCtrl;
   String? _energyLevel;
@@ -238,19 +249,27 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _databaseForDisposeFlush = ref.read(databaseProvider);
+  }
+
+  @override
   void dispose() {
     _textDebouncer?.cancel();
     _textDebouncer = null;
-    // Snapshot pending edits and the DAO reference up-front so the
-    // fire-and-forget flush below doesn't touch disposed controllers or
-    // assign back into a disposed State (which `_flushTextSave` would do
-    // when updating `_lastSavedTitle` / `_lastSavedNotes` after its await).
+    // Snapshot pending edits up-front so the fire-and-forget flush below
+    // doesn't touch disposed controllers or assign back into a disposed State
+    // (which `_flushTextSave` would do when updating `_lastSavedTitle` /
+    // `_lastSavedNotes` after its await). The database handle comes from
+    // [_databaseForDisposeFlush] rather than `ref`, which is already unusable
+    // by the time this runs — see that field.
     final trimmedTitle = (_titleCtrl?.text ?? '').trim();
     final trimmedNotes = (_notesCtrl?.text ?? '').trim();
     final hasPendingWrite = trimmedTitle.isNotEmpty &&
         (trimmedTitle != _lastSavedTitle || trimmedNotes != _lastSavedNotes);
     if (hasPendingWrite) {
-      final db = ref.read(databaseProvider);
+      final db = _databaseForDisposeFlush;
       final id = _subjectId;
       // Same clear-flag contract as `_flushTextSave`: an emptied field nulls
       // the column rather than storing `''`.

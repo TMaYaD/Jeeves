@@ -138,6 +138,22 @@ Future<void> _pumpFrames(WidgetTester tester, {int frames = 40}) async {
   }
 }
 
+/// The text the card currently holds in its title field.
+String titleText(WidgetTester tester) =>
+    tester
+        .widget<TextField>(find.byKey(const Key('clarify_title')))
+        .controller
+        ?.text ??
+    '';
+
+/// The text the card currently holds in its notes field.
+String notesText(WidgetTester tester) =>
+    tester
+        .widget<TextField>(find.byKey(const Key('clarify_notes')))
+        .controller
+        ?.text ??
+    '';
+
 /// Bounded scroll to bring [label] into the viewport, then tap it. The Tags
 /// section pushes the PROCESS TO bar below the fold and a ListView doesn't
 /// build off-screen children.
@@ -763,20 +779,6 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    String titleText(WidgetTester tester) =>
-        tester
-            .widget<TextField>(find.byKey(const Key('clarify_title')))
-            .controller
-            ?.text ??
-        '';
-
-    String notesText(WidgetTester tester) =>
-        tester
-            .widget<TextField>(find.byKey(const Key('clarify_notes')))
-            .controller
-            ?.text ??
-        '';
-
     testWidgets('Capture card adopts a change to an untouched field',
         (tester) async {
       final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
@@ -826,10 +828,10 @@ void main() {
       expect(titleText(tester), 'Buy almond milk');
       expect(notesText(tester), 'Barista');
 
-      // Let the autosave debounce fire before the card is torn down. Disposing
-      // with an unflushed edit takes the card's fire-and-forget flush path,
-      // which reads a provider from `dispose()` and throws under the test
-      // binding — a latent bug of its own, not what this test is pinning.
+      // Let the autosave debounce fire before the card is torn down, so this
+      // test pins the live binding and nothing else. Disposing with an
+      // unflushed edit takes the card's fire-and-forget flush path, which is
+      // exercised deliberately by the `#529` group at the end of this file.
       await _pumpFrames(tester, frames: 15);
     });
 
@@ -1029,6 +1031,100 @@ void main() {
 
       await tester.enterText(find.byKey(const Key('clarify_notes')), '');
       await _pumpFrames(tester);
+
+      expect((await _rawTodoRow(db, 't')).notes, isNull);
+    });
+  });
+
+  // `dispose()`'s flush is the last line of defence for an edit made inside the
+  // 400 ms autosave debounce: leave the card that fast and nothing else will
+  // ever write it.
+  //
+  // It used to open by reading `databaseProvider` off `ref`. That never worked:
+  // `StatefulElement.unmount()` calls `Element.unmount()` — which marks the
+  // element defunct, so `context.mounted` goes false — *before* it calls
+  // `state.dispose()`, and Riverpod asserts on exactly that. The flush threw on
+  // its first line, the `unawaited` write was never issued, and the edit was
+  // lost with only an uncaught teardown error to show for it (#529).
+  //
+  // Each test below unmounts without advancing the clock past the debounce, so
+  // the dispose flush is the only thing that could have done the write. Notes
+  // are seeded non-null so the `isNull` assertions are falsifiable.
+  group('ClarifyCard — the dispose flush persists a pending edit (#529)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    /// Tears the card down and lets its fire-and-forget flush reach the
+    /// database.
+    ///
+    /// `pumpWidget` does not advance the fake clock, so the 400 ms debounce
+    /// still has not fired when `dispose()` runs — no other write path is in
+    /// play. The flush is `unawaited`, so it needs a turn of the *real* event
+    /// loop to land; `pumpAndSettle` is not an option on the Capture path
+    /// (see [_pumpFrames]).
+    Future<void> unmountBeforeDebounce(WidgetTester tester) async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+    }
+
+    testWidgets('Capture card writes a title edited inside the debounce window',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await unmountBeforeDebounce(tester);
+
+      expect((await _rawCaptureRow(db, 'x')).title, 'Buy oat milk');
+    });
+
+    testWidgets('Capture card nulls notes cleared inside the debounce window',
+        (tester) async {
+      final capture =
+          await _insertCapture(db, id: 'x', notes: 'Ask the barista');
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+      expect(notesText(tester), 'Ask the barista',
+          reason: 'the seeded notes must reach the field, or clearing it '
+              'below is not a clear');
+
+      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
+      await unmountBeforeDebounce(tester);
+
+      // `clearNotes` (#528) only becomes reachable once the flush stops
+      // throwing: without the flag an emptied field would store `''`.
+      expect((await _rawCaptureRow(db, 'x')).notes, isNull);
+    });
+
+    testWidgets('Outcome card writes a title edited inside the debounce window',
+        (tester) async {
+      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await unmountBeforeDebounce(tester);
+
+      expect((await _rawTodoRow(db, 't')).title, 'Buy oat milk');
+    });
+
+    testWidgets('Outcome card nulls notes cleared inside the debounce window',
+        (tester) async {
+      final todo =
+          await _insertInboxTodo(db, id: 't', notes: 'Ask the barista');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+      expect(notesText(tester), 'Ask the barista',
+          reason: 'the seeded notes must reach the field, or clearing it '
+              'below is not a clear');
+
+      await tester.enterText(find.byKey(const Key('clarify_notes')), '');
+      await unmountBeforeDebounce(tester);
 
       expect((await _rawTodoRow(db, 't')).notes, isNull);
     });
