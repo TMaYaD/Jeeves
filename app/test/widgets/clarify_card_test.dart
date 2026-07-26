@@ -1218,6 +1218,41 @@ void main() {
     });
   });
 
+  // The card hands its post-route bookkeeping to [ProcessToHandlers] as that
+  // widget's own `onAfterRoute`, and keeps no error boundary of its own around
+  // the host hook — the bar already runs it behind one. This is what makes the
+  // absence safe rather than a swallowed failure.
+  group('ClarifyCard — a failing host hook is still reported', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('the routing lands and the failure is reported', (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onAfterRoute: (_) async => throw StateError('cursor advance failed'),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      expect(
+        find.textContaining('Saved, but finishing up failed'),
+        findsOneWidget,
+        reason: 'the hook threw, and the user has to be told the bookkeeping '
+            'did not finish',
+      );
+      expect(await _inboxIds(db), isEmpty,
+          reason: 'the verdict itself landed — "try again" would be wrong '
+              'advice, which is why this is not the write-failed message');
+    });
+  });
+
   // A Capture's text is never persisted (ADR-0023), so without retention Back
   // inside a Ceremony performance re-seeds the card from the untouched row and
   // the typing is gone. These tests drive the real unmount/remount — a test

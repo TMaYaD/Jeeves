@@ -66,12 +66,6 @@ import 'project_picker.dart';
 const _kTextSaveFailedMessage =
     'Routed, but your latest edit to the text was not saved.';
 
-/// Shown when the host's post-verdict hook fails (cursor advance, navigation).
-/// Deliberately distinct from [_kTextSaveFailedMessage] so the two failures are
-/// never mistaken for each other.
-const _kFinishingUpFailedMessage =
-    'Saved, but finishing up failed. Some details may not have been updated.';
-
 /// What a clarify surface does with the subject's tags — and, inseparably, how
 /// it reads them.
 ///
@@ -250,11 +244,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// Whether the last build rendered the n-m surface, where the Capture is
   /// read-only and the card contributes no text fields.
   ///
-  /// Read in [dispose] to skip the stash: there is nothing on screen to
-  /// retain, and stashing the untouched seed would overwrite a real draft left
-  /// by a 1-1 pass. Tracked from the build rather than assumed constant
-  /// because `clarifyModeProvider` is a synced preference that can flip while
-  /// the card is open.
+  /// Read in [dispose] to skip the stash: with no fields on screen, nothing
+  /// can have been edited while this mode was showing. Tracked from the build
+  /// rather than assumed constant because `clarifyModeProvider` is a synced
+  /// preference that can flip while the card is open.
+  ///
+  /// Not a guard against clobbering a 1-1 draft: [_initialiseFrom] seeds a
+  /// Capture card from the retained draft in *either* mode, so the stash this
+  /// skips would have written the same draft straight back. The one case it
+  /// decides is a flip to n-m part-way through an edit, where the typing is
+  /// left unstashed.
   bool _renderedNToM = false;
 
   /// The Capture's tag hints under [ClarifyTagSection.draftInputOnly], read
@@ -446,8 +445,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // which is already unusable here (#529).
     //
     // Skipped once a verdict has landed (the draft is spent) and in n-m, where
-    // the card renders no text fields and would stash a seed over a real
-    // draft.
+    // the card renders no text fields — see [_renderedNToM] for what that
+    // second condition does and does not decide.
     if (_isCapture && _initialised && !_verdictReached && !_renderedNToM) {
       widget.retention?.stash(_subjectId, _retainable());
     }
@@ -1024,15 +1023,20 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     );
   }
 
-  /// Post-routing bookkeeping, with each half on its own error boundary.
+  /// Post-routing bookkeeping.
   ///
   /// The routing verdict has already landed by the time this runs. Saving the
   /// Outcome's own text is a *different* event from the host failing to
-  /// advance its cursor, and collapsing them would let one hide the other —
-  /// the host would never be told, or the save failure would be blamed on the
-  /// host. Each is reported where it happens and neither aborts the other.
+  /// advance its cursor, so it gets its own boundary: without one, a failed
+  /// save would be reported as the host's failure *and* would abort the host
+  /// hook, leaving the cursor where it was.
   ///
-  /// On a Capture the first half does not exist: nothing it holds is written.
+  /// The host hook itself needs no boundary here. This whole method is the
+  /// `onAfterRoute` [ProcessToHandlers] invokes, and that widget already runs
+  /// it inside its own try/catch reporting the same message — a second one
+  /// would only be a copy of it.
+  ///
+  /// On a Capture the text half does not exist: nothing it holds is written.
   Future<void> _onAfterRoute(ProcessAction action) async {
     // The verdict has landed: the interpretation now lives on the Outcome the
     // routing minted (or the fragment was discarded), so the retained draft is
@@ -1074,23 +1078,18 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         _report(_kTextSaveFailedMessage);
       }
     }
-    try {
-      await widget.onAfterRoute?.call(action);
-    } catch (_) {
-      _report(_kFinishingUpFailedMessage);
-    }
+    await widget.onAfterRoute?.call(action);
   }
 
-  /// Post-verdict bookkeeping for the n-m surface. Same two-boundary
-  /// discipline as [_onAfterRoute], with only the host half to run: the n-m
-  /// surface is Capture-only and a Capture's text is never written.
+  /// Post-verdict bookkeeping for the n-m surface — only the host half to run:
+  /// the n-m surface is Capture-only and a Capture's text is never written.
+  ///
+  /// Reached from [CaptureOutcomesSection]'s own [ProcessToHandlers], so a
+  /// throwing hook lands in that widget's boundary, exactly as in
+  /// [_onAfterRoute].
   Future<void> _onCaptureCompleted() async {
     _discardRetainedDraft();
-    try {
-      await widget.onCaptureCompleted?.call();
-    } catch (_) {
-      _report(_kFinishingUpFailedMessage);
-    }
+    await widget.onCaptureCompleted?.call();
   }
 
   void _report(String message) {
