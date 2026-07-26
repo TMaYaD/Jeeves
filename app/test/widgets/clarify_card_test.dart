@@ -165,9 +165,15 @@ Future<void> _pumpFrames(WidgetTester tester, {int frames = 40}) async {
 /// while the card is open (ADR-0023) — `tester.enterText` leaves the field
 /// focused, so a test that types and asserts without this is asserting on the
 /// pre-edit row.
+///
+/// The save is `unawaited`, so the fake frames alone only reach it by way of
+/// the microtasks a `pump` happens to drain. The real event loop turn is what
+/// makes "the write landed" a property of the helper rather than of how the
+/// DAO happens to schedule itself.
 Future<void> _loseFocus(WidgetTester tester) async {
   FocusManager.instance.primaryFocus?.unfocus();
   await _pumpFrames(tester, frames: 5);
+  await tester.runAsync(() => pumpEventQueue());
 }
 
 /// The text the card currently holds in its title field.

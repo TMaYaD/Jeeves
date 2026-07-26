@@ -98,16 +98,18 @@ Future<void> _scrollAndTap(WidgetTester tester, String label) async {
   await tester.tap(find.text(label));
 }
 
-/// A [ClarificationService] whose Capture-clarify write parks on [gate], so a
-/// test can observe the surface mid-write.
-class _BlockingClarificationService implements ClarificationService {
-  _BlockingClarificationService(this.inner, this.gate);
+/// The real service with its Capture-clarify write parked on [gate], so a test
+/// can observe the surface mid-write.
+///
+/// A subclass rather than a fake: every other method on it is the production
+/// one, so this cannot drift out of step with the interface — and adding a
+/// method to [ClarificationService] is a compile-time event here rather than a
+/// runtime `noSuchMethod` surprise.
+class _BlockingClarificationService extends DaoClarificationService {
+  _BlockingClarificationService(super.db, this.gate);
 
-  final ClarificationService inner;
+  /// Completes when the test is ready for the write to land.
   final Future<void> gate;
-
-  @override
-  Future<bool> captureExists(String captureId) => inner.captureExists(captureId);
 
   @override
   Future<String> clarifyCaptureToOutcome(
@@ -124,7 +126,7 @@ class _BlockingClarificationService implements ClarificationService {
     DateTime? now,
   }) async {
     await gate;
-    return inner.clarifyCaptureToOutcome(
+    return super.clarifyCaptureToOutcome(
       captureId,
       to: to,
       userId: userId,
@@ -138,10 +140,6 @@ class _BlockingClarificationService implements ClarificationService {
       now: now,
     );
   }
-
-  @override
-  noSuchMethod(Invocation invocation) =>
-      throw UnsupportedError('${invocation.memberName} not used by this test');
 }
 
 /// A Capture card in whichever configuration a test is exercising.
@@ -423,10 +421,7 @@ void main() {
         capture,
         tagSection: ClarifyTagSection.draftInputOnly,
         onProcessingChanged: reported.add,
-        clarificationService: _BlockingClarificationService(
-          DaoClarificationService(db),
-          gate.future,
-        ),
+        clarificationService: _BlockingClarificationService(db, gate.future),
       ));
       await _pumpFrames(tester, frames: 5);
 

@@ -140,7 +140,8 @@ void main() {
     // the same as the inbox snapshot and its cursor. Both entry points that
     // begin a fresh performance drop it; one that survived would seed a card
     // in the next performance with typing the user has forgotten writing.
-    for (final (label, reset) in <(String, Future<void> Function(dynamic))>[
+    for (final (label, reset)
+        in <(String, Future<void> Function(FocusSessionPlanningNotifier))>[
       ('startDay', (n) => n.startDay()),
       ('reEnterPlanning', (n) => n.reEnterPlanning()),
     ]) {
