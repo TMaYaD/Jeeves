@@ -276,6 +276,10 @@ Widget _captureHarness(
   // A real store, as the ceremony hosts pass. Left null everywhere else, which
   // is what the standalone screen and the Re-clarify route do.
   ClarifyRetention? retention,
+  // The ceremony default. The standalone screen's `draftInputOnly` is
+  // exercised by clarify_surface_parity_test.dart.
+  ClarifyTagSection tagSection = ClarifyTagSection.editablePickers,
+  Widget? footer,
 }) {
   return ProviderScope(
     overrides: [
@@ -294,8 +298,10 @@ Widget _captureHarness(
       home: Scaffold(
         body: ClarifyCard.forCapture(
           captureId: capture.id,
+          tagSection: tagSection,
           onAfterRoute: onAfterRoute,
           retention: retention,
+          footer: footer,
         ),
       ),
     ),

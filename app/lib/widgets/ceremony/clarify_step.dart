@@ -139,6 +139,9 @@ class _ClarifyStepState extends State<ClarifyStep> {
     return ClarifyCard.forCapture(
       key: ValueKey(captureId),
       captureId: captureId,
+      // The ceremony surfaces let the user categorise as they clarify: the
+      // pickers write tag hints, which seed the Outcome the item becomes.
+      tagSection: ClarifyTagSection.editablePickers,
       // The RoutingKindToProcessAction extension lives in
       // process_to_handlers.dart and is imported transitively via
       // clarify_card.dart → process_to_handlers.dart.

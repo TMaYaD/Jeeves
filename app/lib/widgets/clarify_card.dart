@@ -72,15 +72,38 @@ const _kTextSaveFailedMessage =
 const _kFinishingUpFailedMessage =
     'Saved, but finishing up failed. Some details may not have been updated.';
 
+/// What a clarify surface does with the subject's tags — and, inseparably, how
+/// it reads them.
+///
+/// The two halves are fused on purpose. A surface that renders no chips has
+/// nothing on screen for a live stream to keep in step, and subscribing to a
+/// live drift query from a widget leaves a pending timer that hangs
+/// `pumpAndSettle` (docs/TESTING.md). Splitting this into "render pickers?"
+/// and "watch or read once?" would make "no pickers, live watch" writable,
+/// and it is wrong in both directions.
+enum ClarifyTagSection {
+  /// Editable project and context pickers, whose edits persist immediately as
+  /// tag hints. Requires a live subscription so the chips re-render on change.
+  editablePickers,
+
+  /// Render no tag section at all, and read the hints exactly once as draft
+  /// input for the Outcome.
+  draftInputOnly,
+}
+
 class ClarifyCard extends ConsumerStatefulWidget {
   /// Clarify an Inbox Capture into a new Outcome.
   const ClarifyCard.forCapture({
     super.key,
     required this.captureId,
+    required this.tagSection,
     this.lastAction,
     this.onAfterRoute,
     this.onCaptureCompleted,
     this.retention,
+    this.footer,
+    this.missingCta,
+    this.onProcessingChanged,
   }) : todoId = null;
 
   /// Re-clarify an Outcome that has already been through the flow once.
@@ -94,7 +117,15 @@ class ClarifyCard extends ConsumerStatefulWidget {
         // An Outcome's edits persist as they happen, so there is nothing to
         // retain. Fixed rather than offered, so "re-clarify with retention"
         // cannot be written.
-        retention = null;
+        retention = null,
+        // An Outcome's tags live in `todo_tags` and there are no *hints* to
+        // consume as draft input, so `draftInputOnly` has no meaning on this
+        // shape.
+        tagSection = ClarifyTagSection.editablePickers,
+        // The one host is [ReclarifyRoute], which owns its own chrome.
+        footer = null,
+        missingCta = null,
+        onProcessingChanged = null;
 
   /// The Capture being clarified, or null when re-clarifying an Outcome.
   final String? captureId;
@@ -127,6 +158,36 @@ class ClarifyCard extends ConsumerStatefulWidget {
   /// `/inbox/:id/clarify` screen and the Re-clarify route both have exactly
   /// two exits, each a deliberate leave, so neither is given one.
   final ClarifyRetention? retention;
+
+  /// Whether the card renders editable tag pickers, and how it reads the tags
+  /// either way. Required on a Capture: the two live hosts genuinely differ,
+  /// so a third must decide rather than inherit.
+  final ClarifyTagSection tagSection;
+
+  /// Rendered as the card's last child, below the PROCESS TO bar.
+  ///
+  /// The slot exists for affordances that are not routing verdicts — the
+  /// standalone screen's Skip, which leaves `clarified_at` NULL and the
+  /// Capture in the Inbox. The host builds it and owns its enabled state, so
+  /// the card never learns what "Skip" means.
+  final Widget? footer;
+
+  /// The way out offered when the subject is gone from local storage.
+  ///
+  /// Hosts reached as their own route supply one — a pushed screen has no
+  /// other exit once its fields are gone. The ceremony hosts pass none: their
+  /// step footer already owns Skip, and a second exit there would offer to
+  /// leave the whole ritual.
+  final Widget? missingCta;
+
+  /// Mirrors [ProcessToHandlers]' in-flight state outward, so a host can shut
+  /// the escapes it owns — its own back button, a platform-back guard, the
+  /// [footer] — alongside the bar's own buttons.
+  ///
+  /// The card reports; it never guards. Every exit belongs to a host, so the
+  /// decision does too. Fires false from a `finally`, which can arrive after
+  /// the host has unmounted — hosts must guard their own `setState`.
+  final ValueChanged<bool>? onProcessingChanged;
 
   @override
   ConsumerState<ClarifyCard> createState() => _ClarifyCardState();
@@ -195,6 +256,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// because `clarifyModeProvider` is a synced preference that can flip while
   /// the card is open.
   bool _renderedNToM = false;
+
+  /// The Capture's tag hints under [ClarifyTagSection.draftInputOnly], read
+  /// once in [initState].
+  ///
+  /// They seed the new Outcome's tags through the draft — minus the person
+  /// hints, which [ClarifyDraft.assemble] drops. Failing to read them costs
+  /// the user their hints, not their clarification, so a failure leaves the
+  /// card usable with an empty list rather than tearing it down: the subject
+  /// the card renders comes from elsewhere.
+  List<Tag> _oneShotHints = const <Tag>[];
 
   /// The subject values the card's fields were last reconciled against —
   /// seeded from the row, or written back to it.
@@ -334,6 +405,9 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   void initState() {
     super.initState();
     _databaseForDisposeFlush = ref.read(databaseProvider);
+    if (_isCapture && widget.tagSection == ClarifyTagSection.draftInputOnly) {
+      unawaited(_loadOneShotHints());
+    }
     if (!_isCapture) {
       // Focus loss is the Outcome shape's save trigger. A Capture's text is
       // never written, so it gets no listener — the absence is the rule
@@ -341,6 +415,22 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       _titleFocusNode.addListener(_onFocusChanged);
       _notesFocusNode.addListener(_onFocusChanged);
     }
+  }
+
+  /// Reads the tag hints that seed the new Outcome's tags — see
+  /// [_oneShotHints] for why a failure is swallowed.
+  Future<void> _loadOneShotHints() async {
+    final List<Tag> hints;
+    try {
+      hints = await ref
+          .read(databaseProvider)
+          .captureDao
+          .tagHintsForCapture(_subjectId);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _oneShotHints = hints);
   }
 
   void _onFocusChanged() {
@@ -583,19 +673,24 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     return AsyncSubject<Capture>(
       asyncValue: ref.watch(captureProvider(captureId)),
       missingTitle: 'This item is no longer here',
-      // The card is always embedded — in a ceremony step, or in the reclarify
-      // route — and its host owns the exit, so it supplies no CTA of its own.
-      missingBuilder: (_) => const ClarifySubjectMissing(),
+      missingBuilder: (_) => ClarifySubjectMissing(cta: widget.missingCta),
       dataBuilder: (context, capture) {
         // A Capture stores only title and notes; the rest of the card starts
         // empty and rides the draft into the Outcome.
         _initialiseFrom(title: capture.title, notes: capture.notes);
 
-        final hintsAsync = ref.watch(captureTagHintsProvider(captureId));
-        final hints = hintsAsync.asData?.value ?? const <Tag>[];
-        if (hintsAsync.hasValue && !_draftTagsSeeded) {
-          _draftTagsSeeded = true;
-          _draftTagIds = {for (final t in hints) t.id};
+        final List<Tag> hints;
+        if (widget.tagSection == ClarifyTagSection.editablePickers) {
+          final hintsAsync = ref.watch(captureTagHintsProvider(captureId));
+          hints = hintsAsync.asData?.value ?? const <Tag>[];
+          if (hintsAsync.hasValue && !_draftTagsSeeded) {
+            _draftTagsSeeded = true;
+            _draftTagIds = {for (final t in hints) t.id};
+          }
+        } else {
+          // draftInputOnly: the one-shot read from [initState]. Deliberately
+          // no `ref.watch` of the hint provider — see [ClarifyTagSection].
+          hints = _oneShotHints;
         }
         _renderedNToM = ref.watch(clarifyModeProvider) == ClarifyMode.nToM;
         if (_renderedNToM) {
@@ -629,6 +724,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     return AsyncSubject<Todo>(
       asyncValue: ref.watch(taskDetailTodoProvider(todoId)),
       missingTitle: 'This item is no longer here',
+      // `missingCta` is fixed null on this shape — [ReclarifyRoute] is the one
+      // host and its app bar is the way back.
       missingBuilder: (_) => const ClarifySubjectMissing(),
       dataBuilder: (context, todo) {
         _initialiseFrom(
@@ -756,37 +853,39 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         ),
         const SizedBox(height: 20),
 
-        const ClarifyFieldLabel('TAGS'),
-        const SizedBox(height: 8),
-        // Project row — single-select; reuse ProjectPickerWidget so styling
-        // matches task_detail_screen.dart. Its "No project" state doubles as
-        // the optional-tag hint.
-        ProjectPickerWidget(
-          currentProjectTag: projectTag,
-          onAssign: (t) {
-            _draftReplaceOfType(t, projectTags);
-            unawaited(_saveAssignProject(t.id));
-          },
-          onClear: () {
-            _draftRemoveAll(projectTags);
-            unawaited(_saveClearProject());
-          },
-        ),
-        const SizedBox(height: 12),
-        // Context row — multi-select; reuse ContextTagPickerWidget. Its
-        // "+ context" trailing affordance doubles as the optional-tag hint.
-        ContextTagPickerWidget(
-          assignedTags: contextTags,
-          onAssign: (t) {
-            _draftAdd(t);
-            unawaited(_saveAssignContext(t.id));
-          },
-          onRemove: (t) {
-            _draftRemove(t.id);
-            unawaited(_saveRemoveContext(t.id));
-          },
-        ),
-        const SizedBox(height: 20),
+        if (widget.tagSection == ClarifyTagSection.editablePickers) ...[
+          const ClarifyFieldLabel('TAGS'),
+          const SizedBox(height: 8),
+          // Project row — single-select; reuse ProjectPickerWidget so styling
+          // matches task_detail_screen.dart. Its "No project" state doubles as
+          // the optional-tag hint.
+          ProjectPickerWidget(
+            currentProjectTag: projectTag,
+            onAssign: (t) {
+              _draftReplaceOfType(t, projectTags);
+              unawaited(_saveAssignProject(t.id));
+            },
+            onClear: () {
+              _draftRemoveAll(projectTags);
+              unawaited(_saveClearProject());
+            },
+          ),
+          const SizedBox(height: 12),
+          // Context row — multi-select; reuse ContextTagPickerWidget. Its
+          // "+ context" trailing affordance doubles as the optional-tag hint.
+          ContextTagPickerWidget(
+            assignedTags: contextTags,
+            onAssign: (t) {
+              _draftAdd(t);
+              unawaited(_saveAssignContext(t.id));
+            },
+            onRemove: (t) {
+              _draftRemove(t.id);
+              unawaited(_saveRemoveContext(t.id));
+            },
+          ),
+          const SizedBox(height: 20),
+        ],
 
         const ClarifyFieldLabel('ENERGY LEVEL'),
         const SizedBox(height: 8),
@@ -887,7 +986,12 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           },
           lastAction: widget.lastAction,
           onAfterRoute: _onAfterRoute,
+          onProcessingChanged: widget.onProcessingChanged,
         ),
+        if (widget.footer != null) ...[
+          const SizedBox(height: 20),
+          widget.footer!,
+        ],
       ],
     );
   }
@@ -907,6 +1011,13 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           tagIds: _draft(hints).tagIds,
           onCompleted: _onCaptureCompleted,
         ),
+        // The footer survives into n-m unchanged: leaving mid-split is exactly
+        // what that mode is for — the Capture keeps whatever Outcomes it has
+        // carved so far and stays in the Inbox.
+        if (widget.footer != null) ...[
+          const SizedBox(height: 20),
+          widget.footer!,
+        ],
       ],
     );
   }
