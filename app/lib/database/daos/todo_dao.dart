@@ -41,9 +41,10 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// `todos.map(row.data)` hydrates the [Todo] model with **Action-grain**
   /// `energy_level` / `time_estimate` (D2) and live-derived `time_spent_minutes`
   /// (issue #480) — leaving UI and providers untouched. The raw
-  /// `todos.energy_level` / `time_estimate` columns are now write-mirror
-  /// compatibility, like `next_action_text`, until story 9 drops them. [t] is
-  /// the `todos` table's SQL alias in the enclosing query.
+  /// `todos.energy_level` / `time_estimate` columns remain the write mirror and
+  /// the Actionless draft store (D1/D3). `next_action_text` is projected only
+  /// for column parity — it is the retired cursor (ADR-0022), neither read nor
+  /// written. [t] is the `todos` table's SQL alias in the enclosing query.
   ///
   /// Queries carrying this projection must list `actions` and `time_logs` in
   /// `readsFrom` so a synced Action or TimeLog write re-emits their watchers.
@@ -64,7 +65,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   ///
   /// Carries the [todoProjectionSql] so the returned [Todo]'s `energyLevel` /
   /// `timeEstimate` resolve to the current Action (D2) — the task-detail
-  /// editors read these, and their edits dual-write back through
+  /// editors read these, and their edits mirror back through
   /// [updateFields], so read and write stay on the same grain.
   Future<Todo?> getTodo(String todoId) {
     return customSelect(
@@ -491,21 +492,17 @@ EXISTS (
     attachedDatabase.notifyTodosViewWrite();
   }
 
-  /// Sets [next_action_text] and stamps [last_clarified_at] atomically, and
-  /// dual-writes the matching `current` Action row (ADR-0001 story 2).
+  /// Writes the Outcome's `current` Action from a single phrase and stamps
+  /// [last_clarified_at] atomically (ADR-0001 story 2).
   ///
   /// Used by inbox-clarify (to record the task title as the default action) and
   /// by the review step's "Update next action" action.
   ///
-  /// The cursor column is **write-only** compatibility as of story 3 — nothing
-  /// in the app reads it for current-Action existence or text any more (it is
-  /// retired outright in story 9). This method keeps its cursor write
-  /// byte-identical so an older client still syncing against it keeps working,
-  /// and, in the same transaction with the same timestamp, drives [ActionDao],
-  /// which is what every read now consults: a non-blank text
-  /// sets/edits the `current` Action, a blank text clears it (the existing
-  /// blank→NULL normalisation, mirrored on the Action side as a supersede with
-  /// no replacement). Both sides therefore agree after every call.
+  /// The name is the legacy one-field surface's, not the storage's: nothing
+  /// here touches `todos.next_action_text`, which is retired (ADR-0022). A
+  /// non-blank text sets/edits the `current` Action; a blank text clears it
+  /// (the blank→Actionless normalisation, expressed on the Action side as a
+  /// supersession with no replacement).
   Future<void> setNextActionText(
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
@@ -535,9 +532,9 @@ EXISTS (
   /// left untouched, never clobbered by a mirrored title.
   ///
   /// Write path: identical to [setNextActionText] on an Actionless Outcome —
-  /// the same cursor + Action dual-write, stamped with one shared [ts], and the
-  /// same post-commit view-notifies. Skip path (a `current` Action exists):
-  /// no writes, no stamp, no convergence, no notify.
+  /// the same Action write, stamped with one shared [ts], and the same
+  /// post-commit view-notifies. Skip path (a `current` Action exists): no
+  /// writes, no stamp, no convergence, no notify.
   ///
   /// Blank [text] is a caller error (the mirror only fires with a non-blank
   /// title), mirroring [ActionDao.setCurrentAction]'s contract.
@@ -570,10 +567,15 @@ EXISTS (
   }
 
   /// Transaction body shared by [setNextActionText] and
-  /// [setNextActionTextIfActionless]: the cursor + Action dual-write and the
+  /// [setNextActionTextIfActionless]: the Action write and the
   /// `last_clarified_at` / `updated_at` stamp, encoded once. Runs inside the
   /// caller's transaction; the caller notifies after commit. [normalized] is
-  /// already trimmed — blank clears both sides (the blank→NULL normalisation).
+  /// already trimmed — blank makes the Outcome Actionless (the blank→NULL
+  /// normalisation, expressed as a supersession with no replacement).
+  ///
+  /// The stamp is written here rather than left to [ActionDao] because these
+  /// surfaces stamp even when the Action write is a no-op (re-submitting the
+  /// identical phrase is still a clarifying micro-act).
   ///
   /// Returns whether a `time_logs` row changed (the blank→supersede path closes
   /// the current Action's open log, issue #476) so the caller can fire the
@@ -582,7 +584,6 @@ EXISTS (
       String todoId, String normalized, DateTime ts) async {
     await (update(todos)..where((t) => t.id.equals(todoId)))
         .write(TodosCompanion(
-      nextActionText: Value(normalized.isEmpty ? null : normalized),
       lastClarifiedAt: Value(ts),
       updatedAt: Value(ts),
     ));
@@ -840,13 +841,13 @@ AND (
   /// matrix that [applyRouting] enforces. `last_clarified_at` is stamped on
   /// every call.
   ///
-  /// | `to`         | clarified | intent  | done_at | next_action_text          |
-  /// |--------------|-----------|---------|---------|---------------------------|
-  /// | `nextAction` | true      | 'next'  | clear   | set if `nextActionText`   |
-  /// | `waitingFor` | true      | 'next'  | clear   | set if `nextActionText`   |
-  /// | `maybe`      | true      | 'maybe' | clear   | leave                     |
-  /// | `done`       | true      | leave   | now     | clear (Action completed)  |
-  /// | `trash`      | true      | 'trash' | leave   | leave                     |
+  /// | `to`         | clarified | intent  | done_at | current Action           |
+  /// |--------------|-----------|---------|---------|--------------------------|
+  /// | `nextAction` | true      | 'next'  | clear   | set if `nextActionText`  |
+  /// | `waitingFor` | true      | 'next'  | clear   | set if `nextActionText`  |
+  /// | `maybe`      | true      | 'maybe' | clear   | leave                    |
+  /// | `done`       | true      | leave   | now     | completed                |
+  /// | `trash`      | true      | 'trash' | leave   | leave                    |
   ///
   /// Cleanup rule: any non-Done, non-Trash route clears `done_at` if set, so
   /// promoting a previously-completed task back to active state can't leave
@@ -854,10 +855,8 @@ AND (
   /// alone so a completion record is preserved through soft-delete.
   ///
   /// Done also terminates the Outcome's current Action as `done` (ADR-0001
-  /// story 4) — the same cascade [markDone] runs, which is why the Done row's
-  /// `next_action_text` is cleared rather than left: the cursor has to keep
-  /// agreeing with the Action side. Trash deliberately leaves Action rows
-  /// alone; they persist exactly as the Outcome row does.
+  /// story 4) — the same cascade [markDone] runs. Trash deliberately leaves
+  /// Action rows alone; they persist exactly as the Outcome row does.
   ///
   /// Person-tag associations are orthogonal to the intent axis:
   /// [applyRouting] only touches them when the caller explicitly passes
@@ -878,10 +877,9 @@ AND (
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final tsIso = ts.toIso8601String();
-    // Only the Next / Waiting For arms touch the next-action cursor, and only
-    // when the caller passes a phrase; those are the arms that dual-write the
-    // Action row (ADR-0001 story 2). An absent [nextActionText] leaves both the
-    // cursor and the Action untouched.
+    // Only the Next / Waiting For arms carry a next-action phrase, and only
+    // when the caller passes one; those are the arms that write the Action row.
+    // An absent [nextActionText] leaves the Action untouched.
     final touchesAction = (to == RoutingKind.nextAction ||
             to == RoutingKind.waitingFor) &&
         nextActionText != null;
@@ -893,9 +891,6 @@ AND (
             clarified: const Value(true),
             intent: const Value('next'),
             doneAt: const Value(null),
-            nextActionText: nextActionText != null
-                ? Value(_normaliseText(nextActionText))
-                : const Value.absent(),
             lastClarifiedAt: Value(ts),
             updatedAt: Value(ts),
           ),
@@ -980,15 +975,17 @@ AND (
   /// stamp). Any non-no-op call therefore stamps [lastClarifiedAt].
   ///
   /// **Energy / time-estimate are Action-grain metadata (ADR-0001 story 7).**
-  /// This is the only live writer of them on an existing Outcome, so it
-  /// dual-writes: the `todos.energy_level` / `time_estimate` columns are kept
-  /// mirrored (D1 — write-mirror compatibility until story 9, and the draft
-  /// store while the Outcome is Actionless per D3), and when a `current` Action
-  /// exists the same values are written onto it through
-  /// [ActionDao.applyEditAction] **in one transaction** with the same
-  /// timestamp, so the two sides never drift and the startup sweep stays a
-  /// no-op. Whichever side is the read source (currently the Action, via
-  /// [effectiveEnergyLevelSql]) therefore always reflects the edit.
+  /// This is the only live writer of them on an existing Outcome, so it writes
+  /// both grains: the `todos.energy_level` / `time_estimate` columns stay
+  /// mirrored (D1, and the draft store while the Outcome is Actionless per
+  /// D3), and when a `current` Action exists the same values are written onto
+  /// it through [ActionDao.applyEditAction] **in one transaction** with the
+  /// same timestamp. The mirror is what keeps the per-field D2 COALESCE
+  /// fallback ([effectiveEnergyLevelSql]) from resurfacing a retired Action's
+  /// estimate, so both sides always reflect the edit.
+  ///
+  /// This metadata mirror is unrelated to the retired `next_action_text`
+  /// cursor (ADR-0022) and deliberately outlives it.
   ///
   /// To clear a nullable column, pass the matching `clear*` flag (e.g.
   /// `clearTimeEstimate: true`). Passing `null` for the typed parameter is
@@ -1020,7 +1017,7 @@ AND (
         clearTimeEstimate ||
         clearDueDate;
     // Whether this call touches Action-grain metadata at all — the arm that
-    // must be dual-written to the current Action.
+    // must be mirrored to the current Action.
     final touchesMetadata = energyLevel != null ||
         timeEstimate != null ||
         clearEnergyLevel ||
@@ -1055,7 +1052,7 @@ AND (
     await transaction(() async {
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
       if (touchesMetadata) {
-        // Dual-write onto the current Action, if one exists. Actionless
+        // Mirror onto the current Action, if one exists. Actionless
         // Outcomes keep the values as draft on the columns above (D3); the
         // draft seeds the birth Action when the next `current` Action is
         // created (ActionDao.applySetCurrentAction). Reading the current Action

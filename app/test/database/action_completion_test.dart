@@ -23,8 +23,10 @@ final _t1 = DateTime.parse('2026-07-01T10:00:00.000Z');
 final _t2 = DateTime.parse('2026-07-01T11:00:00.000Z');
 final _t3 = DateTime.parse('2026-07-01T12:00:00.000Z');
 
-/// Seeds a clarified Outcome plus **both** sides of the dual write: the cursor
-/// column and the matching `current` Action row.
+/// Seeds a clarified Outcome with a real `current` Action **and** a legacy
+/// cursor value, as a store written by a pre-retirement client would look. The
+/// cursor is seeded purely so the "nothing writes it" assertions below are
+/// observable — production never sets it any more (ADR-0022).
 Future<void> _seedClarifiedOutcome(
   GtdDatabase db, {
   String id = 'o1',
@@ -87,10 +89,11 @@ void main() {
 
   group('ActionDao.completeCurrentAction', () {
     test(
-        'terminates the current Action, clears the cursor, leaves the Outcome '
-        'undone and unstamped, and the Outcome lands in needs-review',
+        'terminates the current Action, writes nothing to the Outcome row, '
+        'leaves it undone and unstamped, and lands it in needs-review',
         () async {
       await _seedClarifiedOutcome(db, lastClarifiedAt: _t1);
+      final before = await _outcome(db, 'o1');
 
       await db.actionDao.completeCurrentAction('o1', now: _t2);
 
@@ -105,9 +108,15 @@ void main() {
           reason: 'finishing one Action never completes the Outcome');
       expect(outcome.lastClarifiedAt, _t1,
           reason: 'completion is an engagement signal, not a clarifying act');
-      expect(outcome.nextActionText, isNull,
-          reason: 'the cursor must agree with the Action side (no current row)');
-      expect(outcome.updatedAt, _t2);
+      expect(outcome.nextActionText, 'call the plumber',
+          reason: 'the retired cursor is neither read nor written (ADR-0022)');
+      // Deliberate consequence of retiring the cursor: completion is now a
+      // pure `actions` write, so the Outcome row's `updated_at` no longer moves
+      // and stops being a "something about this Outcome changed" signal. The
+      // view-notify (see action_view_notify_test.dart) is what keeps watchers
+      // correct; nothing may reintroduce a `todos` write to restore the churn.
+      expect(outcome.updatedAt, before.updatedAt,
+          reason: 'completion writes nothing to `todos`');
 
       expect(await db.actionDao.getCurrentAction('o1'), isNull);
 
@@ -201,7 +210,8 @@ void main() {
       expect(outcome.doneAt, isNotNull);
       expect(outcome.lastClarifiedAt, _t2,
           reason: 'completing the Outcome is a clarifying act — it stamps');
-      expect(outcome.nextActionText, isNull);
+      expect(outcome.nextActionText, 'call the plumber',
+          reason: 'the completion cascade does not touch the retired cursor');
 
       final rows = {
         for (final r in await _actions(db, 'o1')) r['id'] as String: r,
@@ -237,7 +247,8 @@ void main() {
       final outcome = await _outcome(db, 'o1');
       expect(outcome.doneAt, isNotNull);
       expect(outcome.lastClarifiedAt, _t2);
-      expect(outcome.nextActionText, isNull);
+      expect(outcome.nextActionText, 'call the plumber',
+          reason: 'the completion cascade does not touch the retired cursor');
       final rows = await _actions(db, 'o1');
       expect(rows.single['role'], 'done');
       expect(rows.single['done_at'], _t2.toIso8601String());

@@ -10,13 +10,15 @@ import 'package:jeeves/services/notification_service.dart';
 /// runtime [DynamicLibrary] overrides, so no manual path fixup is needed.
 void configureSqliteForTests() {}
 
-/// Seeds the `current` Action row that mirrors [text] for [outcomeId] — the
-/// dual-write invariant every next-action write path upholds (ADR-0001 story
-/// 2) and the grain every read consults from story 3 on.
+/// Seeds the `current` Action row carrying [text] for [outcomeId] — the only
+/// grain the app reads or writes for "what is this Outcome's next move?"
+/// (ADR-0001 story 3).
 ///
-/// Fixtures that write `todos.next_action_text` directly (bypassing
-/// `TodoDao.setNextActionText`) call this so the two sides agree, exactly as
-/// they would in production. A blank or null [text] seeds nothing, mirroring
+/// Any fixture that wants an Outcome to *have* a next action must call this.
+/// Setting `todos.next_action_text` instead does nothing: that column is the
+/// retired legacy cursor (ADR-0022), and an Outcome carrying only a cursor is
+/// genuinely Actionless — a list-exclusion assertion over such a fixture will
+/// pass for the wrong reason. A blank or null [text] seeds nothing, mirroring
 /// the blank → Actionless normalisation `setNextActionText` applies.
 ///
 /// [id] defaults to `action-<outcomeId>`; pass it when a test needs a second

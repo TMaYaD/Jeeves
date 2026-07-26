@@ -29,7 +29,6 @@ Future<Todo> _insertTodo(
   GtdDatabase db, {
   required String id,
   String title = 'Ship the thing',
-  String? nextActionText,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
@@ -37,8 +36,6 @@ Future<Todo> _insertTodo(
         title: Value(title),
         clarified: const Value(true),
         intent: const Value('next'),
-        nextActionText:
-            nextActionText != null ? Value(nextActionText) : const Value.absent(),
         userId: const Value(_userId),
         createdAt: Value(now),
         updatedAt: Value(now),

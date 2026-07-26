@@ -469,7 +469,8 @@ void main() {
       // Dialog wrote the phrase and applied the routing.
       final row = await db.todoDao.getTodo('t2');
       expect(row?.intent, 'next');
-      expect(row?.nextActionText, 'Draft the outline');
+      expect((await db.actionDao.getCurrentAction('t2'))?.actionText,
+          'Draft the outline');
 
       // ListReviewStep recorded a nextAction routing at the live cursor and
       // advanced exactly once.
@@ -509,7 +510,7 @@ void main() {
       final row = await db.todoDao.getTodo('t1');
       expect(row?.intent, 'maybe',
           reason: 'blank Save must not change the intent');
-      expect(row?.nextActionText, isNull,
+      expect(await db.actionDao.getCurrentAction('t1'), isNull,
           reason: 'blank Save must not write a phrase');
       expect(recorded, isEmpty,
           reason: 'blank promotion must not record a routing');

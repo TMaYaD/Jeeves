@@ -1,34 +1,36 @@
-/// The `reconcileActionsWithCursor` startup sweep, narrowed to its two safe,
-/// monotone passes (ADR-0001 story 9, issue #479).
+/// The `reconcileActionsAtStartup` sweep, narrowed to its one safe, cursor-free
+/// pass (ADR-0001 story 9, issue #479; ADR-0022).
 ///
 /// Drives the production SQL against a real SQLite database over the same
 /// query/exec seam production uses (PowerSync only supplies the transaction),
 /// mirroring `migrate_local_inbox_test.dart`.
 ///
-/// The sweep now does exactly two things:
+/// The sweep now does exactly one thing — [convergeMultiCurrentActions],
+/// **cursor-free**: it retires the losers of an accidental multi-`current` set
+/// by the writers' deterministic winner rule, visiting any Outcome with more
+/// than one `current` row whatever its cursor says.
 ///
-/// * [convergeMultiCurrentActions] — **cursor-free**: retires the losers of an
-///   accidental multi-`current` set by the writers' deterministic winner rule.
-///   It visits any Outcome with more than one `current` row, whatever its
-///   cursor says.
-/// * [adoptCursorsWithoutActions] — **cursor-dependent, mint-only**: mints the
-///   deterministic-id `current` Action for an Outcome that has a non-blank
-///   `todos.next_action_text` **and no `actions` rows at all**.
-///
-/// Two arms were deleted outright, and the tests that pinned them are inverted
-/// here rather than removed, because their old assertions are exactly the
-/// behaviours that must now never happen:
+/// Three cursor-driven arms were deleted over the course of #479, and the tests
+/// that pinned them are **inverted** here rather than removed, because their old
+/// assertions are exactly the behaviours that must now never happen:
 ///
 /// * **Pass A mode 1** overwrote a `current` Action's text/metadata from the
 ///   cursor — it would revert every Action-grain edit at the next launch.
 /// * **Pass B** retired every `current` Action whose Outcome had a blank
 ///   cursor — the moment the cursor stops being written that retires every
 ///   current Action on the device.
+/// * **Cursor adoption** minted the deterministic-id `current` Action for a live
+///   Outcome with a non-blank cursor and no `actions` rows at all. Its safety
+///   argument was that every role transition leaves a row behind, so a
+///   zero-`actions` Outcome could only be one the app had never touched. That was
+///   false: `ActionDao.removePlannedAction` is a hard `DELETE`, so *demote then
+///   remove* leaves a live cursor over zero Action rows and the next launch minted
+///   the just-deleted Action back as `current`. The two-tap repro is pinned below.
 ///
-/// The invariants pinned here: **monotonicity** (a run never lowers
-/// `COUNT(*) FROM actions` and never rewrites an existing row's `text`),
-/// idempotency, and clarification-neutrality (never stamps `last_clarified_at`
-/// — ADR-0012).
+/// The invariants pinned here: **the sweep never mints an Action, from any
+/// input**; **monotonicity** (a run never lowers `COUNT(*) FROM actions` and
+/// never rewrites an existing row's `text`); idempotency; and
+/// clarification-neutrality (never stamps `last_clarified_at` — ADR-0012).
 library;
 
 import 'package:drift/drift.dart' hide isNotNull, isNull;
@@ -57,27 +59,10 @@ Future<List<Map<String, Object?>>> _rawQuery(
   return [for (final r in rows) r.data];
 }
 
+/// The whole sweep, driven over the same query/exec seam production uses.
+/// `reconcileActionsAtStartup` supplies nothing but the write transaction.
 Future<int> _sweep(GtdDatabase db, {DateTime? now}) => db.transaction(
-      () => reconcileActionsWithCursorSteps(
-        query: (sql, args) => _rawQuery(db, sql, args),
-        exec: (sql, args) => db.customStatement(sql, args),
-        now: now ?? _sweepAt,
-      ),
-    );
-
-/// Drives the convergence pass on its own — the proof that it no longer rides
-/// the cursor join.
-Future<int> _converge(GtdDatabase db, {DateTime? now}) => db.transaction(
       () => convergeMultiCurrentActions(
-        query: (sql, args) => _rawQuery(db, sql, args),
-        exec: (sql, args) => db.customStatement(sql, args),
-        now: now ?? _sweepAt,
-      ),
-    );
-
-/// Drives the adoption pass on its own.
-Future<int> _adopt(GtdDatabase db, {DateTime? now}) => db.transaction(
-      () => adoptCursorsWithoutActions(
         query: (sql, args) => _rawQuery(db, sql, args),
         exec: (sql, args) => db.customStatement(sql, args),
         now: now ?? _sweepAt,
@@ -107,30 +92,6 @@ Future<void> _seedOutcome(
         doneAt: Value(doneAt),
         intent: Value(intent),
         clarified: Value(clarified),
-      ));
-}
-
-/// Attaches a `Tag(type='person')` to [outcomeId] — the only thing that makes a
-/// `intent='next'` Outcome a *Waiting For* one (`TodoDao.watchPersonTagged`).
-Future<void> _attachPersonTag(
-  GtdDatabase db, {
-  required String outcomeId,
-  required String tagId,
-}) async {
-  await db.into(db.tags).insert(
-        TagsCompanion(
-          id: Value(tagId),
-          name: Value('person-$tagId'),
-          type: const Value('person'),
-          userId: const Value(_userId),
-        ),
-        mode: InsertMode.insertOrIgnore,
-      );
-  await db.into(db.todoTags).insert(TodoTagsCompanion(
-        id: Value('$outcomeId:$tagId'),
-        todoId: Value(outcomeId),
-        tagId: Value(tagId),
-        userId: const Value(_userId),
       ));
 }
 
@@ -208,7 +169,8 @@ Future<DateTime?> _lastClarified(GtdDatabase db, String outcomeId) async {
 /// exercises every arm at once (used by the idempotency, non-stamping and
 /// monotonicity guarantees, which must hold across all of them together).
 Future<void> _seedEveryArm(GtdDatabase db) async {
-  // Adoption: non-blank cursor, no actions rows at all.
+  // Adoption's old victim: non-blank cursor, no actions rows at all. It must
+  // stay Actionless — this is the shape *demote then remove* leaves behind.
   await _seedOutcome(db,
       id: 'adopt', nextActionText: 'mint me', lastClarifiedAt: _clarified);
 
@@ -280,12 +242,14 @@ void main() {
   tearDown(() => db.close());
 
   // ---------------------------------------------------------------------------
-  // Adoption pass — mint-only, and only into a genuinely empty Outcome.
+  // Deleted arm: cursor adoption. The sweep mints nothing, from any input.
   // ---------------------------------------------------------------------------
 
-  group('adoptCursorsWithoutActions', () {
-    test('non-blank cursor + zero action rows: mints exactly one row at the '
-        'deterministic backfill id, without stamping', () async {
+  group('the sweep never mints an Action', () {
+    test('a non-blank cursor over zero action rows mints nothing — cursor '
+        'adoption is gone', () async {
+      // Inverts the adoption pass's headline test. Nothing reads the cursor at
+      // runtime any more; only the one-time Drift v26 backfill does.
       await _seedOutcome(db,
           id: 'o1',
           nextActionText: 'freshly set',
@@ -295,46 +259,55 @@ void main() {
 
       final repaired = await _sweep(db);
 
-      expect(repaired, 1);
-      final rows = await _actions(db, 'o1');
-      expect(rows, hasLength(1));
-      expect(rows.single['id'], backfillActionIdFor('o1'));
-      expect(rows.single['role'], 'current');
-      expect(rows.single['text'], 'freshly set');
-      expect(rows.single['energy_level'], 'medium');
-      expect(rows.single['time_estimate'], 12);
-      expect(rows.single['user_id'], _userId);
+      expect(repaired, 0);
+      expect(await _actions(db, 'o1'), isEmpty);
       expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
     });
 
-    test('a second run mints nothing more', () async {
+    test('★ the two-tap resurrection is impossible: demote then remove leaves a '
+        'live cursor over zero Action rows, and the sweep still mints nothing',
+        () async {
+      // THE regression. `applyRemovePlannedAction` is a hard DELETE — the only
+      // mutation that drives an Outcome to zero `actions` rows while the `todos`
+      // row survives — so adoption's "a transition always leaves a row behind"
+      // guard had a hole. Driven through the real DAO primitives, on a store
+      // whose cursor was populated in the dual-write era.
       await _seedOutcome(db,
-          id: 'o1', nextActionText: 'freshly set', lastClarifiedAt: _clarified);
+          id: 'o1',
+          nextActionText: 'a dual-write era cursor',
+          lastClarifiedAt: _clarified);
+      await db.actionDao.setCurrentAction('o1', 'the thing', now: _t0);
+      final actionId = (await _current(db, 'o1'))!['id'] as String;
 
-      await _sweep(db);
-      final afterFirst = await _actions(db, 'o1');
-      final repaired =
-          await _sweep(db, now: DateTime.parse('2026-08-01T00:00:00.000Z'));
+      // Tap 1: demote. #520 removed the cursor clear, so the cursor survives.
+      await db.actionDao.demoteCurrentAction(actionId, now: _clarified);
+      // Tap 2: remove the planned row. Hard delete — zero `actions` rows left.
+      await db.actionDao.removePlannedAction(actionId, now: _clarified);
 
-      expect(repaired, 0, reason: 'the Outcome now has an actions row');
-      expect(await _actions(db, 'o1'), afterFirst);
+      expect(await _actions(db, 'o1'), isEmpty, reason: 'precondition');
+      final todo =
+          await (db.select(db.todos)..where((t) => t.id.equals('o1'))).getSingle();
+      expect(todo.nextActionText, 'a dual-write era cursor',
+          reason: 'precondition: the cursor is still live');
+
+      final repaired = await _sweep(db);
+
+      expect(repaired, 0);
+      expect(await _actions(db, 'o1'), isEmpty,
+          reason: 'the deleted Action must not come back as current');
     });
 
     test('a blank or whitespace-only cursor mints nothing', () async {
       await _seedOutcome(db, id: 'blank', nextActionText: null);
       await _seedOutcome(db, id: 'spaces', nextActionText: '   ');
 
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
+      expect(await _sweep(db), 0);
       expect(await _actions(db, 'blank'), isEmpty);
       expect(await _actions(db, 'spaces'), isEmpty);
     });
 
     test('non-blank cursor + a superseded row: NO resurrection — an abandoned '
         'Action stays abandoned', () async {
-      // Inverts the old mode-3 resurrect test. A cursor left standing by a
-      // straggler client must never revive an Action the user retired.
       await _seedOutcome(db,
           id: 'o1',
           nextActionText: 're-set by an old client',
@@ -361,10 +334,6 @@ void main() {
     });
 
     test('non-blank cursor + a done row: nothing is minted', () async {
-      // Inverts the old mode-3 resurrect *guard*, which minted a fresh
-      // random-uuid current row beside the done one. Deliberate behaviour
-      // change: an Outcome whose only Action was completed on another device
-      // no longer regrows an Action here from a stale cursor.
       await _seedOutcome(db,
           id: 'o1', nextActionText: 'still want this', lastClarifiedAt: _clarified);
       final doneAt = DateTime.parse('2026-06-15T09:00:00.000Z');
@@ -379,15 +348,13 @@ void main() {
 
       expect(repaired, 0);
       final rows = await _actions(db, 'o1');
-      expect(rows, hasLength(1), reason: 'no fresh-uuid current minted');
+      expect(rows, hasLength(1));
       expect(rows.single['role'], 'done');
       expect(rows.single['done_at'], doneAt.toIso8601String());
       expect(await _current(db, 'o1'), isNull);
-      expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
     });
 
-    test('non-blank cursor + only planned rows: nothing is minted — "no actions '
-        'rows at all" means all roles, not just current', () async {
+    test('non-blank cursor + only planned rows: nothing is minted', () async {
       await _seedOutcome(db,
           id: 'o1', nextActionText: 'cursor text', lastClarifiedAt: _clarified);
       await _insertAction(db,
@@ -397,20 +364,14 @@ void main() {
           role: 'planned',
           position: 0);
 
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
+      expect(await _sweep(db), 0);
       final rows = await _actions(db, 'o1');
       expect(rows, hasLength(1));
       expect(rows.single['role'], 'planned');
       expect(rows.single['text'], 'queued for later');
     });
 
-    test('two superseded rows under a live cursor: no self-heal — the old '
-        'both-superseded resurrect is gone', () async {
-      // Inverts the both-superseded self-heal test. The convergence race it
-      // repaired is real but rare; reviving a retired row on a cursor's word is
-      // the more dangerous of the two, so the sweep now leaves it alone.
+    test('two superseded rows under a live cursor: no self-heal', () async {
       await _seedOutcome(db,
           id: 'o1', nextActionText: 'still live', lastClarifiedAt: _clarified);
       await _insertAction(db,
@@ -426,14 +387,39 @@ void main() {
           role: 'superseded',
           updatedAt: DateTime.parse('2026-06-21T09:00:00.000Z'));
 
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
+      expect(await _sweep(db), 0);
       expect(await _current(db, 'o1'), isNull);
       expect(
         [for (final r in await _actions(db, 'o1')) r['role']],
         ['superseded', 'superseded'],
       );
+    });
+
+    test('no lifecycle state is adopted — done, trashed, maybe, unclarified and '
+        'plain next Outcomes all stay Actionless under a live cursor', () async {
+      await _seedOutcome(db, id: 'live', nextActionText: 'do this');
+      await _seedOutcome(db,
+          id: 'done',
+          nextActionText: 'was doing this',
+          doneAt: '2026-06-15T09:00:00.000Z');
+      await _seedOutcome(db,
+          id: 'binned', nextActionText: 'was doing this', intent: 'trash');
+      await _seedOutcome(db,
+          id: 'someday', nextActionText: 'might do this', intent: 'maybe');
+      await _seedOutcome(db,
+          id: 'unprocessed', nextActionText: 'ring the dentist', clarified: false);
+
+      expect(await _sweep(db), 0);
+      for (final id in const [
+        'live',
+        'done',
+        'binned',
+        'someday',
+        'unprocessed',
+      ]) {
+        expect(await _actions(db, id), isEmpty,
+            reason: '$id must not grow an Action from its cursor');
+      }
     });
 
     test('an Outcome with no cursor and no actions stays Actionless', () async {
@@ -445,145 +431,12 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Adoption is scoped to *live* Outcomes: `done_at IS NULL`, and nothing more.
-  // Completion is the only transition that terminates Actions, so it is the
-  // only lifecycle state in which a `current` row is a state no write path can
-  // produce. The narrowing test and the over-narrowing tests belong together:
-  // the pass has to reject completed Outcomes *and* still adopt every other
-  // shape, because the cursor columns are going away and a skipped Outcome
-  // loses its next-action text permanently.
-  // ---------------------------------------------------------------------------
-
-  group('adoption is scoped to live Outcomes', () {
-    test('a completed Outcome with a cursor and no actions mints nothing — '
-        'completion terminates the current Action (story 4), so a current row '
-        'on a done Outcome is a state no write path produces', () async {
-      await _seedOutcome(db,
-          id: 'finished-legacy',
-          nextActionText: 'a phrase left on a task the user finished',
-          doneAt: '2026-06-15T09:00:00.000Z',
-          lastClarifiedAt: _clarified);
-
-      final repaired = await _sweep(db);
-
-      expect(repaired, 0);
-      expect(await _actions(db, 'finished-legacy'), isEmpty);
-    });
-
-    test('★ a trashed Outcome is STILL adopted — trashing does not terminate '
-        'Actions (applyRouting\'s trash arm leaves them alone), trash has no '
-        'expiry, and restore would otherwise bring the Outcome back Actionless',
-        () async {
-      await _seedOutcome(db,
-          id: 'discarded',
-          nextActionText: 'a phrase left on a task the user binned',
-          intent: 'trash',
-          lastClarifiedAt: _clarified);
-
-      final repaired = await _sweep(db);
-
-      expect(repaired, 1);
-      final row = await _current(db, 'discarded');
-      expect(row, isNotNull);
-      expect(row!['id'], backfillActionIdFor('discarded'));
-      expect(row['text'], 'a phrase left on a task the user binned',
-          reason: 'the text is preserved for whenever the user restores it; '
-              'every GTD list gates on intent IN (next, maybe), so the row '
-              'changes no list, count or badge while it sits in Trash');
-    });
-
-    test('a completed AND trashed Outcome mints nothing — done_at is the guard '
-        'that rejects it, and trash does not rescue it', () async {
-      await _seedOutcome(db,
-          id: 'both',
-          nextActionText: 'finished then binned',
-          doneAt: '2026-06-15T09:00:00.000Z',
-          intent: 'trash',
-          lastClarifiedAt: _clarified);
-
-      expect(await _sweep(db), 0);
-      expect(await _actions(db, 'both'), isEmpty);
-    });
-
-    test('★ a Waiting For Outcome is STILL adopted — Waiting For is '
-        'intent=next plus a person tag, not a fourth intent', () async {
-      await _seedOutcome(db,
-          id: 'delegated',
-          nextActionText: 'chase Trixy for the estimate',
-          lastClarifiedAt: _clarified);
-      await _attachPersonTag(db, outcomeId: 'delegated', tagId: 'trixy');
-
-      final repaired = await _sweep(db);
-
-      expect(repaired, 1);
-      final row = await _current(db, 'delegated');
-      expect(row, isNotNull);
-      expect(row!['id'], backfillActionIdFor('delegated'));
-      expect(row['text'], 'chase Trixy for the estimate');
-    });
-
-    test('★ a Next Outcome is still adopted', () async {
-      await _seedOutcome(db,
-          id: 'live-next',
-          nextActionText: 'draft the reply',
-          lastClarifiedAt: _clarified);
-
-      expect(await _sweep(db), 1);
-      expect((await _current(db, 'live-next'))!['text'], 'draft the reply');
-    });
-
-    test('★ a Someday/Maybe Outcome is still adopted — applyRouting\'s maybe '
-        'arm leaves cursor and Action rows alone, and adoption is a one-shot '
-        'rescue that dies with the columns', () async {
-      await _seedOutcome(db,
-          id: 'deferred',
-          nextActionText: 'price up the loft conversion',
-          intent: 'maybe',
-          lastClarifiedAt: _clarified);
-
-      expect(await _sweep(db), 1);
-      expect((await _current(db, 'deferred'))!['text'],
-          'price up the loft conversion');
-    });
-
-    test('★ an unclarified Outcome is still adopted', () async {
-      await _seedOutcome(db,
-          id: 'unprocessed',
-          nextActionText: 'ring the dentist',
-          clarified: false,
-          lastClarifiedAt: _clarified);
-
-      expect(await _sweep(db), 1);
-      expect((await _current(db, 'unprocessed'))!['text'], 'ring the dentist');
-    });
-
-    test('a mixed store adopts exactly the live Outcomes in one run', () async {
-      await _seedOutcome(db, id: 'live', nextActionText: 'do this');
-      await _seedOutcome(db,
-          id: 'done', nextActionText: 'was doing this', doneAt: '2026-06-15T09:00:00.000Z');
-      await _seedOutcome(db,
-          id: 'binned', nextActionText: 'was doing this', intent: 'trash');
-      await _seedOutcome(db,
-          id: 'someday', nextActionText: 'might do this', intent: 'maybe');
-
-      expect(await _sweep(db), 3);
-      expect(await _actions(db, 'live'), hasLength(1));
-      expect(await _actions(db, 'someday'), hasLength(1));
-      expect(await _actions(db, 'binned'), hasLength(1));
-      expect(await _actions(db, 'done'), isEmpty,
-          reason: 'completion is the only lifecycle exclusion');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // Deleted arm: Pass A mode 1 (cursor → current Action text/metadata).
   // ---------------------------------------------------------------------------
 
   group('mode 1 is gone', () {
     test('cursor text disagreeing with the current Action leaves the Action '
         'untouched', () async {
-      // Inverts the old mode-1 test. The Action is the grain of truth; a cursor
-      // write from a straggler client can no longer revert an Action edit.
       await _seedOutcome(db,
           id: 'o1',
           nextActionText: 'cursor text',
@@ -637,8 +490,6 @@ void main() {
 
   group('Pass B is gone', () {
     test('★ blank cursor + a current Action: the Action SURVIVES', () async {
-      // Inverts the old mode-2 phantom test. With the cursor no longer written,
-      // Pass B would retire every current Action on the device at next launch.
       await _seedOutcome(db,
           id: 'o1', nextActionText: null, lastClarifiedAt: _clarified);
       await _insertAction(db,
@@ -695,7 +546,7 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
-  // Convergence pass — cursor-free.
+  // Convergence pass — cursor-free, and now the whole sweep.
   // ---------------------------------------------------------------------------
 
   group('convergeMultiCurrentActions', () {
@@ -726,25 +577,6 @@ void main() {
       expect(loser['updated_at'], _sweepAt.toIso8601String());
       expect(loser['text'], 'losing', reason: 'a retired row keeps its text');
       expect(await _lastClarified(db, 'o1'), _clarified, reason: 'no stamp');
-    });
-
-    test('the pass alone (no adoption) converges a blank-cursor set', () async {
-      await _seedOutcome(db, id: 'o1', nextActionText: null);
-      await _insertAction(db,
-          id: 'aaa',
-          outcomeId: 'o1',
-          text: 'losing',
-          role: 'current',
-          updatedAt: DateTime.parse('2026-06-20T09:00:00.000Z'));
-      await _insertAction(db,
-          id: 'bbb',
-          outcomeId: 'o1',
-          text: 'winning',
-          role: 'current',
-          updatedAt: DateTime.parse('2026-06-25T09:00:00.000Z'));
-
-      expect(await _converge(db), 1);
-      expect(await _currentIds(db, 'o1'), ['bbb']);
     });
 
     test('a non-blank cursor still converges, and the winner is untouched',
@@ -846,7 +678,7 @@ void main() {
       final second =
           await _sweep(db, now: DateTime.parse('2026-08-01T00:00:00.000Z'));
 
-      expect(first, 2, reason: 'one adoption mint + one convergence retire');
+      expect(first, 1, reason: 'one convergence retire, and nothing else');
       expect(second, 0, reason: 'nothing left to repair');
       expect(await _allActions(db), afterFirst);
     });
@@ -870,8 +702,8 @@ void main() {
       }
     });
 
-    test('★ monotonicity: COUNT(*) never decreases and no existing row\'s text '
-        'is rewritten', () async {
+    test('★ the sweep only ever retires: COUNT(*) is unchanged and no existing '
+        'row\'s text is rewritten', () async {
       await _seedEveryArm(db);
       final before = await _allActions(db);
       final textsBefore = {
@@ -881,14 +713,14 @@ void main() {
       await _sweep(db);
 
       final after = await _allActions(db);
-      expect(after.length, greaterThanOrEqualTo(before.length),
-          reason: 'the sweep only ever adds rows');
+      expect(after.length, before.length,
+          reason: 'the sweep neither mints nor deletes a row');
       for (final row in after) {
         final id = row['id'] as String;
-        if (textsBefore.containsKey(id)) {
-          expect(row['text'], textsBefore[id],
-              reason: 'the sweep must never rewrite an existing row\'s text');
-        }
+        expect(textsBefore.containsKey(id), isTrue,
+            reason: 'the sweep must never mint a row');
+        expect(row['text'], textsBefore[id],
+            reason: 'the sweep must never rewrite an existing row\'s text');
       }
       expect(
         {for (final r in before) r['id']}
@@ -898,12 +730,11 @@ void main() {
       );
     });
 
-    test('the steady state is two reads and no writes at all', () async {
+    test('the steady state is one read and no writes at all', () async {
       await _seedEveryArm(db);
       await _sweep(db);
 
-      expect(await _converge(db), 0);
-      expect(await _adopt(db), 0);
+      expect(await _sweep(db), 0);
     });
   });
 
@@ -913,7 +744,7 @@ void main() {
   // ---------------------------------------------------------------------------
 
   group('live write paths are sweep-stable', () {
-    test('planned rows survive both passes untouched', () async {
+    test('planned rows survive the sweep untouched', () async {
       await _seedOutcome(db,
           id: 'o1', nextActionText: 'live', lastClarifiedAt: _clarified);
       await _insertAction(db,
@@ -1077,12 +908,12 @@ void main() {
 
   // ---------------------------------------------------------------------------
   // NULL columns. Every group above drives the sweep against the Drift schema,
-  // whose `todos.user_id` and `actions.outcome_id` are NOT NULL — a constraint
-  // production does NOT have. On-device both tables are PowerSync views over
-  // `ps_data__*(id, data)` with `json_extract`, so every column is unconstrained
-  // and a legacy or peer-written row can carry a NULL anywhere. The sweep runs
-  // inside the startup write transaction, so a failed cast there is not a
-  // dropped row — it is a launch that never completes.
+  // whose `actions.outcome_id` is NOT NULL — a constraint production does NOT
+  // have. On-device `actions` is a PowerSync view over `ps_data__*(id, data)`
+  // with `json_extract`, so every column is unconstrained and a legacy row can
+  // carry a NULL anywhere. The sweep runs inside the startup write transaction,
+  // so a failed cast there is not a dropped row — it is a launch that never
+  // completes.
   //
   // These tests therefore build the *view-shaped* store: the same table names
   // and columns, no constraints at all.
@@ -1094,13 +925,6 @@ void main() {
     setUp(() {
       raw = sqlite.sqlite3.openInMemory();
       raw.execute('''
-        CREATE TABLE todos (
-          id TEXT PRIMARY KEY, title TEXT, user_id TEXT, created_at TEXT,
-          done_at TEXT, intent TEXT, clarified INTEGER, next_action_text TEXT,
-          energy_level TEXT, time_estimate INTEGER, last_clarified_at TEXT
-        )
-      ''');
-      raw.execute('''
         CREATE TABLE actions (
           id TEXT PRIMARY KEY, outcome_id TEXT, user_id TEXT, text TEXT,
           role TEXT, position INTEGER, energy_level TEXT, time_estimate INTEGER,
@@ -1111,7 +935,7 @@ void main() {
 
     tearDown(() => raw.close());
 
-    Future<int> sweepRaw() => reconcileActionsWithCursorSteps(
+    Future<int> sweepRaw() => convergeMultiCurrentActions(
           query: (sql, args) async =>
               [for (final r in raw.select(sql, args)) {...r}],
           exec: (sql, args) async => raw.execute(sql, args),
@@ -1121,44 +945,26 @@ void main() {
     List<Map<String, Object?>> rawActions() =>
         [for (final r in raw.select('SELECT * FROM actions ORDER BY id')) {...r}];
 
-    test('★ a todos row with a NULL user_id is skipped, not cast — the sweep '
-        'completes instead of taking the launch down', () async {
+    test('★ the sweep touches no `todos` table at all — it completes on a store '
+        'that does not even have one', () async {
+      // The structural guard behind "nothing reads the cursor at runtime". The
+      // setUp above deliberately creates only `actions`; any re-introduced
+      // cursor read would raise `SqliteException: no such table: todos` here
+      // rather than quietly minting rows again.
       raw.execute(
-        "INSERT INTO todos (id, title, user_id, intent, clarified, "
-        "next_action_text) VALUES ('orphan', 'no owner', NULL, 'next', 1, "
-        "'adopt me if you can')",
-      );
-
-      // Without `AND t.user_id IS NOT NULL` in the adoption query this throws a
-      // TypeError (`null` is not a `String`) mid-transaction, at startup.
-      final repaired = await sweepRaw();
-
-      expect(repaired, 0);
-      expect(rawActions(), isEmpty,
-          reason: 'the row is skipped, and left exactly as it was');
-      expect(
-        raw.select("SELECT next_action_text FROM todos WHERE id = 'orphan'"),
-        hasLength(1),
-        reason: 'skipping is not deleting — a later launch can still adopt it',
-      );
-    });
-
-    test('a NULL user_id row does not stop its healthy siblings being adopted',
-        () async {
-      raw.execute(
-        "INSERT INTO todos (id, title, user_id, intent, clarified, "
-        "next_action_text) VALUES "
-        "('a-orphan', 'no owner', NULL, 'next', 1, 'skip me'), "
-        "('b-owned', 'owned', 'test-user', 'next', 1, 'adopt me')",
+        "INSERT INTO actions (id, outcome_id, user_id, text, role, created_at, "
+        "updated_at) VALUES "
+        "('b1', 'o1', 'test-user', 'loser', 'current', "
+        "'2026-06-01T09:00:00.000Z', '2026-06-20T09:00:00.000Z'), "
+        "('b2', 'o1', 'test-user', 'winner', 'current', "
+        "'2026-06-01T09:00:00.000Z', '2026-06-25T09:00:00.000Z')",
       );
 
       expect(await sweepRaw(), 1);
-      final rows = rawActions();
-      expect(rows, hasLength(1));
-      expect(rows.single['id'], backfillActionIdFor('b-owned'));
-      expect(rows.single['outcome_id'], 'b-owned');
-      expect(rows.single['user_id'], 'test-user');
-      expect(rows.single['text'], 'adopt me');
+      expect(
+        {for (final r in rawActions()) r['id']: r['role']},
+        {'b1': 'superseded', 'b2': 'current'},
+      );
     });
 
     test('actions rows with a NULL outcome_id are left alone by the '
@@ -1200,108 +1006,6 @@ void main() {
         {for (final r in rawActions()) r['id']: r['role']},
         {'a0': 'current', 'b1': 'superseded', 'b2': 'current'},
       );
-    });
-
-    test('a fully-populated view-shaped store behaves exactly as the Drift one',
-        () async {
-      raw.execute(
-        "INSERT INTO todos (id, title, user_id, intent, clarified, "
-        "next_action_text, energy_level, time_estimate) VALUES "
-        "('o1', 'live', 'test-user', 'next', 1, 'mint me', 'medium', 12)",
-      );
-
-      expect(await sweepRaw(), 1);
-      final row = rawActions().single;
-      expect(row['id'], backfillActionIdFor('o1'));
-      expect(row['role'], 'current');
-      expect(row['text'], 'mint me');
-      expect(row['energy_level'], 'medium');
-      expect(row['time_estimate'], 12);
-    });
-
-    test('★ an actions row already sitting on the deterministic mint id is '
-        'skipped, not collided with — the sweep completes instead of taking '
-        'the launch down', () async {
-      // The `NOT EXISTS` guard in the adoption query is over `outcome_id`, so a
-      // row with a NULL `outcome_id` does not satisfy it — yet it can still
-      // occupy the primary key `backfillActionIdFor('o1')`. Without the
-      // occupied-id probe the bare INSERT raises
-      // `SqliteException(1555): UNIQUE constraint failed: actions.id`
-      // inside the startup write transaction.
-      raw.execute(
-        "INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) "
-        "VALUES (?, NULL, 'test-user', 'squatting on the id', 'current', "
-        "'2026-06-01T09:00:00.000Z')",
-        [backfillActionIdFor('o1')],
-      );
-      raw.execute(
-        "INSERT INTO todos (id, title, user_id, intent, clarified, "
-        "next_action_text) VALUES ('o1', 'cursor bearer', 'test-user', "
-        "'next', 1, 'mint me')",
-      );
-
-      final repaired = await sweepRaw();
-
-      expect(repaired, 0);
-      final rows = rawActions();
-      expect(rows, hasLength(1), reason: 'nothing is minted for o1');
-      expect(rows.single['text'], 'squatting on the id',
-          reason: 'mint-only and monotone: the occupant is never overwritten');
-      expect(
-        raw.select("SELECT next_action_text FROM todos WHERE id = 'o1'").single[
-            'next_action_text'],
-        'mint me',
-        reason: 'skipping is not deleting',
-      );
-    });
-
-    test('an occupied mint id does not stop its healthy siblings being adopted',
-        () async {
-      raw.execute(
-        "INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) "
-        "VALUES (?, NULL, 'test-user', 'squatter', 'current', "
-        "'2026-06-01T09:00:00.000Z')",
-        [backfillActionIdFor('a-blocked')],
-      );
-      raw.execute(
-        "INSERT INTO todos (id, title, user_id, intent, clarified, "
-        "next_action_text) VALUES "
-        "('a-blocked', 'id taken', 'test-user', 'next', 1, 'skip me'), "
-        "('b-free', 'id free', 'test-user', 'next', 1, 'adopt me')",
-      );
-
-      expect(await sweepRaw(), 1);
-      expect(
-        {for (final r in rawActions()) r['id']: r['text']},
-        {
-          backfillActionIdFor('a-blocked'): 'squatter',
-          backfillActionIdFor('b-free'): 'adopt me',
-        },
-      );
-    });
-
-    test('★ a trashed Outcome is adopted in a view-shaped store too', () async {
-      raw.execute(
-        "INSERT INTO todos (id, title, user_id, intent, clarified, "
-        "next_action_text) VALUES ('binned', 'discarded', 'test-user', "
-        "'trash', 1, 'keep this phrase for restore')",
-      );
-
-      expect(await sweepRaw(), 1);
-      expect(rawActions().single['text'], 'keep this phrase for restore');
-    });
-
-    test('a NULL intent is adopted like any other', () async {
-      // Characterization: adoption reads no `intent` at all, so the JSON-backed
-      // view's missing-column NULL cannot silently drop a row the way a bare
-      // `intent != 'trash'` (NULL, never true) once would have.
-      raw.execute(
-        "INSERT INTO todos (id, title, user_id, intent, next_action_text) "
-        "VALUES ('o1', 'no intent', 'test-user', NULL, 'mint me')",
-      );
-
-      expect(await sweepRaw(), 1);
-      expect(rawActions().single['text'], 'mint me');
     });
   });
 }

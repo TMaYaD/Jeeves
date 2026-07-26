@@ -283,7 +283,9 @@ void main() {
       expect(row?.intent, 'next');
       // Title-as-action coupling still mirrors the title into the phrase so
       // the row leaves the inbox with a defined action.
-      expect(row?.nextActionText, 'Buy milk');
+      expect((await db.actionDao.getCurrentAction(outcomeIds.single))
+          ?.actionText,
+          'Buy milk');
       // And the Capture is stamped, so it leaves the Inbox.
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
       expect(await _inboxIds(db), isEmpty);
@@ -399,8 +401,9 @@ void main() {
             createdAt: Value(now),
             updatedAt: Value(now),
           ));
-      // …and the Action row the phrase dual-writes to, which is what the
-      // mirror guard now consults (ADR-0001 story 3).
+      // …and the Action row, which is what the mirror guard actually
+      // consults (ADR-0001 story 3) — the cursor column above is retired by
+      // abandonment (ADR-0022) and plays no part in that read.
       await seedCurrentAction(
         db,
         outcomeId: 'rc-mirror-1',
@@ -420,10 +423,19 @@ void main() {
       await _tapNextAction(tester);
       await tester.pumpAndSettle();
 
-      final row = await db.todoDao.getTodo('rc-mirror-1');
-      expect(row?.nextActionText, 'Email guest list',
+      // The Action grain is what the mirror guard consults and what every read
+      // surface renders, so it is the assertion that actually pins the
+      // behaviour: without it the test passes even if re-clarify overwrites the
+      // current Action with the title, because the frozen cursor would sit
+      // there unchanged either way (ADR-0022).
+      final action = await db.actionDao.getCurrentAction('rc-mirror-1');
+      expect(action?.actionText, 'Email guest list',
           reason: 're-clarify must not overwrite a deliberate phrase with the '
               'title');
+
+      final row = await db.todoDao.getTodo('rc-mirror-1');
+      expect(row?.nextActionText, 'Email guest list',
+          reason: 'the legacy cursor is frozen, not rewritten');
       expect(row?.intent, 'next');
     });
 
@@ -450,10 +462,10 @@ void main() {
       await _tapNextAction(tester);
       await tester.pumpAndSettle();
 
-      final row = await db.todoDao.getTodo('rc-mirror-2');
-      expect(row?.nextActionText, 'Decide on venue',
-          reason: 'an empty next_action_text on re-clarify is filled from '
-              'the title so the row leaves with a defined action');
+      expect((await db.actionDao.getCurrentAction('rc-mirror-2'))?.actionText,
+          'Decide on venue',
+          reason: 'an Actionless Outcome on re-clarify has its Action filled '
+              'from the title so the row leaves with a defined action');
     });
   });
 
@@ -606,11 +618,19 @@ void main() {
             id: const Value('orth-$intent'),
             title: const Value('Task'),
             intent: const Value(intent),
-            nextActionText: const Value('Do the thing'),
             userId: const Value(_userId),
             createdAt: Value(now),
             updatedAt: Value(now),
           ));
+      // The next-action axis lives on the `actions` table. Seeding it there
+      // (rather than on the retired cursor column) is what makes the
+      // orthogonality claim below actually protect anything.
+      await seedCurrentAction(
+        db,
+        outcomeId: 'orth-$intent',
+        text: 'Do the thing',
+        userId: _userId,
+      );
       final todo = (await db.todoDao.getTodo('orth-$intent'))!;
       final ctx =
           await _insertTag(db, id: 'c1', name: 'home', type: 'context');
@@ -634,7 +654,8 @@ void main() {
       Future<void> expectInvariants() async {
         final row = await db.todoDao.getTodo('orth-$intent');
         expect(row?.intent, intent);
-        expect(row?.nextActionText, 'Do the thing');
+        expect((await db.actionDao.getCurrentAction('orth-$intent'))?.actionText,
+            'Do the thing');
         expect(await _joinedTagIds(db, 'orth-$intent'), contains(person.id),
             reason: 'the delegate axis (person tag) is untouched');
       }

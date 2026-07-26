@@ -149,7 +149,8 @@ void main() {
       await tester.pumpAndSettle();
 
       final row = await db.todoDao.getTodo('wf1');
-      expect(row?.nextActionText, 'Call Trixy for an update');
+      expect((await db.actionDao.getCurrentAction('wf1'))?.actionText,
+          'Call Trixy for an update');
       expect(row?.intent, 'next');
 
       // intent ⊥ delegate: promoting to Next must not strip the delegate.
@@ -190,7 +191,7 @@ void main() {
       // The DB row is untouched: a blank promotion neither writes a phrase
       // nor re-routes the item off Waiting For.
       final row = await db.todoDao.getTodo('wf1');
-      expect(row?.nextActionText, isNull);
+      expect(await db.actionDao.getCurrentAction('wf1'), isNull);
       expect(row?.intent, 'next');
     });
 
@@ -204,8 +205,7 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
-      final row = await db.todoDao.getTodo('wf1');
-      expect(row?.nextActionText, isNull);
+      expect(await db.actionDao.getCurrentAction('wf1'), isNull);
       final state = container.read(periodicReviewProvider);
       expect(state.waitingForRoutings, isEmpty);
       expect(state.waitingForNav.index, 0);

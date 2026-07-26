@@ -24,7 +24,7 @@ import '../database/powersync_storage.dart';
 import '../services/api_service.dart';
 import '../services/backend_connector.dart';
 import '../services/migration_service.dart'
-    show migrateLocalInboxToCaptures, reconcileActionsWithCursor;
+    show migrateLocalInboxToCaptures, reconcileActionsAtStartup;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -52,14 +52,15 @@ final FutureProvider<ps.PowerSyncDatabase> powerSyncInstanceProvider =
   // and insert-before-delete, so it is safe on every launch.
   await migrateLocalInboxToCaptures(db);
 
-  // Reconcile Action rows against the authoritative next-action cursor before
-  // anything reads them (ADR-0001 story 2, issue #472). The #471 backfill was a
-  // one-time snapshot and old app versions keep editing cursors during the
-  // dual-write rollout, so the two can drift; this guarded, idempotent,
-  // cursor→actions sweep repairs the drift (stale text, phantom current rows,
-  // missing rows) without ever stamping `last_clarified_at`. Like the migration
-  // above it runs before any watcher exists, so it needs no view-notify.
-  await reconcileActionsWithCursor(db);
+  // Repair the Action grain before anything reads it (ADR-0001 story 9, issue
+  // #479; ADR-0022). One pass: converge an accidental multi-`current` set onto
+  // the writers' deterministic winner, retiring the losers. It reads `actions`
+  // and nothing else — no code path reads the legacy `todos.next_action_text`
+  // cursor at runtime any more, and none may be added (the only cursor reader
+  // left is the one-time Drift v26 backfill). It never overwrites an Action's
+  // text and never stamps `last_clarified_at` (ADR-0012). Like the migration
+  // above it runs before any watcher exists, so no view-notify.
+  await reconcileActionsAtStartup(db);
 
   // Bridge the current auth state to PowerSync's connection lifecycle.
   // [currentUserIdProvider] holds `'local'` when no-one is logged in and

@@ -86,7 +86,8 @@ void main() {
       final row = await _row(db, 'a');
       expect(row.clarified, isTrue);
       expect(row.intent, 'next');
-      expect(row.nextActionText, 'Call Alice');
+      expect((await db.actionDao.getCurrentAction('a'))?.actionText,
+          'Call Alice');
       expect(row.lastClarifiedAt, isNotNull);
       expect(row.doneAt, isNull);
     });
@@ -175,7 +176,6 @@ void main() {
       expect(row.doneAt, isNull, reason: 'the Outcome is not achieved');
       expect(row.lastClarifiedAt, clarifiedAt,
           reason: 'completion is engagement, not clarification');
-      expect(row.nextActionText, isNull);
       expect(await db.actionDao.getCurrentAction('a'), isNull);
     });
 
@@ -244,7 +244,8 @@ void main() {
       expect(outcome.title, 'Draft outline');
       expect(outcome.clarified, isTrue);
       expect(outcome.intent, 'next');
-      expect(outcome.nextActionText, 'Draft outline');
+      expect((await db.actionDao.getCurrentAction(outcomeId))?.actionText,
+          'Draft outline');
       expect(outcome.lastClarifiedAt, isNotNull);
 
       // Provenance link + Capture stamped out of the Inbox.

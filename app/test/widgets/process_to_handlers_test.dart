@@ -29,7 +29,6 @@ Future<Todo> _insertTodo(
   GtdDatabase db, {
   required String id,
   String title = 'Task',
-  String? nextActionText,
   bool clarified = true,
   String intent = 'next',
   String? doneAt,
@@ -40,8 +39,6 @@ Future<Todo> _insertTodo(
         title: Value(title),
         clarified: Value(clarified),
         intent: Value(intent),
-        nextActionText:
-            nextActionText != null ? Value(nextActionText) : const Value.absent(),
         doneAt: doneAt != null ? Value(doneAt) : const Value.absent(),
         userId: const Value(_userId),
         createdAt: Value(now),
@@ -629,8 +626,7 @@ void main() {
     testWidgets(
         'Next with the modifier excepted writes immediately; dialog never '
         'opens', (tester) async {
-      final todo =
-          await _insertTodo(db, id: 'nd1', nextActionText: 'pre-existing');
+      final todo = await _insertTodo(db, id: 'nd1');
       await tester.pumpWidget(_harness(
         db,
         todo: todo,
@@ -649,10 +645,21 @@ void main() {
     testWidgets(
         'Next opens the prefilled dialog by default; cancel = no write',
         (tester) async {
-      // The cursor deliberately disagrees with the Action: the dialog must
-      // prefill from the current Action (ADR-0001 story 3), not the column.
-      final todo =
-          await _insertTodo(db, id: 'nd2', nextActionText: 'stale cursor');
+      // The prefill comes from the caller-supplied `currentActionText`, which
+      // is the caller's projection of the Action grain (ADR-0001 story 3 —
+      // `getCurrentActionTexts`, plumbed through `OutcomeSubject`). The widget
+      // itself does no DB read, so the seeded Action row and the argument are
+      // deliberately given *different* text: that is what discriminates the
+      // three candidate sources apart. With every value set to the same string
+      // the assertion could not tell the argument from the store, the title, or
+      // the retired cursor.
+      final todo = await _insertTodo(db, id: 'nd2');
+      await seedCurrentAction(
+        db,
+        outcomeId: 'nd2',
+        text: 'a row the widget never reads',
+        userId: _userId,
+      );
       // No include needed — the dialog modifier is on by default.
       await tester
           .pumpWidget(_harness(db, todo: todo, currentActionText: 'old'));
@@ -668,7 +675,10 @@ void main() {
           matching: find.byType(TextField),
         ),
       );
-      expect(field.controller?.text, 'old');
+      expect(field.controller?.text, 'old',
+          reason: 'the prefill is the caller-supplied Action-grain projection — '
+              'not the Outcome title, not the retired cursor, and not a direct '
+              'read of the seeded `actions` row');
 
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -699,7 +709,8 @@ void main() {
 
       final row = await db.todoDao.getTodo('nd3');
       expect(row?.intent, 'next');
-      expect(row?.nextActionText, 'Draft proposal');
+      expect((await db.actionDao.getCurrentAction('nd3'))?.actionText,
+          'Draft proposal');
     });
   });
 
@@ -795,11 +806,11 @@ void main() {
     tearDown(() async => db.close());
 
     testWidgets(
-        'Waiting For (picker confirm) does NOT write next_action_text',
+        'Waiting For (picker confirm) does NOT mint a current Action',
         (tester) async {
       // Orthogonality: routing to waitingFor sets intent + delegate, not
       // the user-action phrase. The dialog modifier (or a callsite-owned
-      // setter) is the only path that writes next_action_text.
+      // setter) is the only path that writes the Action.
       final todo = await _insertTodo(db, id: 'na1');
       await _insertPersonTag(db, id: 'alice', name: 'Alice');
       await tester.pumpWidget(_harness(
@@ -815,18 +826,22 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'Done'));
       await tester.pumpAndSettle();
 
-      final row = await db.todoDao.getTodo('na1');
-      expect(row?.nextActionText, isNull,
+      expect(await db.actionDao.getCurrentAction('na1'), isNull,
           reason: 'waitingFor route must not synthesise a phrase');
     });
 
     testWidgets(
         'Next with the dialog excepted does NOT overwrite an existing '
-        'next_action_text', (tester) async {
-      final todo = await _insertTodo(
+        'current Action', (tester) async {
+      final todo = await _insertTodo(db, id: 'na2');
+      // Seed the phrase at the Action grain — the only grain there is. Seeding
+      // the retired cursor instead would leave a genuinely Actionless Outcome
+      // and the assertion below would pass without protecting anything.
+      await seedCurrentAction(
         db,
-        id: 'na2',
-        nextActionText: 'pre-existing phrase',
+        outcomeId: 'na2',
+        text: 'pre-existing phrase',
+        userId: _userId,
       );
       await tester.pumpWidget(_harness(
         db,
@@ -837,8 +852,8 @@ void main() {
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
-      final row = await db.todoDao.getTodo('na2');
-      expect(row?.nextActionText, 'pre-existing phrase',
+      expect((await db.actionDao.getCurrentAction('na2'))?.actionText,
+          'pre-existing phrase',
           reason: 'plain next-action route is intent-only');
     });
   });

@@ -181,7 +181,8 @@ void main() {
 
       final outcome = await db.todoDao.getTodo(outcomeId);
       expect(outcome!.intent, 'next');
-      expect(outcome.nextActionText, 'Compare fares');
+      expect((await db.actionDao.getCurrentAction(outcomeId))?.actionText,
+          'Compare fares');
     });
 
     test('attaches person tags when the carve routes to Waiting For', () async {

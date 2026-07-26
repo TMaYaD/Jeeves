@@ -8,8 +8,18 @@
 /// `GtdDatabase.notifyActionsViewWrite` an [ActionDao] write issues after
 /// commit. This recreates that exact topology on a real sqlite_async database
 /// and proves (a) an ActionDao primitive refreshes an `actions` watcher, and
-/// (b) a `TodoDao` dual-write refreshes both the `todos`- and `actions`-view
-/// watchers.
+/// (b) the `TodoDao` one-field surfaces refresh both the `todos`- and
+/// `actions`-view watchers.
+///
+/// **Why the `todos` watchers assert on emission counts, not values.** These
+/// tests used to read `todos.next_action_text` and treat a changed value as
+/// proof the watcher refreshed. The cursor is retired (ADR-0022) and several of
+/// these transactions now write nothing to `todos` at all — but the `todos`
+/// notify must still fire, because two list watchers name only
+/// `{todoTags, tags}` in `readsFrom` and the async bridge is briefly silent on
+/// cold start. A value-based assertion cannot express that any more; counting
+/// emissions can, and it is the stronger claim: it fails if the notify is
+/// dropped as "redundant" even though the value would not have moved anyway.
 @TestOn('!browser')
 library;
 
@@ -119,6 +129,18 @@ void main() {
       .watch()
       .map((rows) => rows.map((r) => r.read<String>('text')).toList());
 
+  /// A `todos`-only watcher. It reads `title` — a column these transactions do
+  /// not touch — deliberately: the assertion is that the stream *re-emits*,
+  /// which is what `notifyTodosViewWrite` is for and the only thing a watcher
+  /// naming a different table in `readsFrom` can rely on.
+  Stream<List<String>> watchTodoTitles() => db
+      .customSelect(
+        "SELECT title FROM todos WHERE id = 'o1'",
+        readsFrom: {db.todos},
+      )
+      .watch()
+      .map((rows) => rows.map((r) => r.read<String>('title')).toList());
+
   test('an ActionDao primitive refreshes an actions-view watcher even though '
       'the trigger makes the write report changes()==0', () async {
     final seen = <List<String>>[];
@@ -134,22 +156,14 @@ void main() {
     expect(seen.last, ['call the plumber']);
   });
 
-  test('completeCurrentAction refreshes both view watchers — the cursor clear '
-      'touches `todos` without stamping, so the todos notify cannot be gated '
-      'on the stamp', () async {
+  test('completeCurrentAction refreshes both view watchers — it now writes '
+      'nothing to `todos` at all, so the todos notify is unconditional and '
+      'cannot be gated on the stamp (which completion never moves)', () async {
     await db.todoDao.setNextActionText('o1', 'call the plumber');
 
-    final cursors = <List<String>>[];
+    final todoEmissions = <List<String>>[];
     final actionRoles = <List<String>>[];
-    final subTodo = db
-        .customSelect(
-          "SELECT next_action_text FROM todos WHERE id = 'o1'",
-          readsFrom: {db.todos},
-        )
-        .watch()
-        .map((rows) =>
-            rows.map((r) => r.read<String?>('next_action_text') ?? '').toList())
-        .listen(cursors.add);
+    final subTodo = watchTodoTitles().listen(todoEmissions.add);
     final subAction = db
         .customSelect(
           "SELECT role FROM actions WHERE outcome_id = 'o1'",
@@ -162,34 +176,28 @@ void main() {
     addTearDown(subAction.cancel);
 
     await _waitUntil(() =>
-        cursors.isNotEmpty &&
-        cursors.last.first == 'call the plumber' &&
+        todoEmissions.isNotEmpty &&
         actionRoles.isNotEmpty &&
         actionRoles.last.contains('current'));
+    final todoEmissionsBefore = todoEmissions.length;
 
     await db.actionDao.completeCurrentAction('o1');
 
     await _waitUntil(() =>
-        cursors.last.first == '' && actionRoles.last.contains('done'));
-    expect(cursors.last, ['']);
+        actionRoles.last.contains('done') &&
+        todoEmissions.length > todoEmissionsBefore);
     expect(actionRoles.last, ['done']);
+    expect(todoEmissions.length, greaterThan(todoEmissionsBefore),
+        reason: 'the todos view watcher must still be refreshed');
   });
 
-  test('clearCurrentAction refreshes both view watchers — its cursor clear '
-      'rides on the stamp, which an abandon always moves', () async {
+  test('clearCurrentAction refreshes both view watchers — its `todos` write is '
+      'now only the stamp, which an abandon always moves', () async {
     await db.todoDao.setNextActionText('o1', 'call the plumber');
 
-    final cursors = <List<String>>[];
+    final todoEmissions = <List<String>>[];
     final actionRoles = <List<String>>[];
-    final subTodo = db
-        .customSelect(
-          "SELECT next_action_text FROM todos WHERE id = 'o1'",
-          readsFrom: {db.todos},
-        )
-        .watch()
-        .map((rows) =>
-            rows.map((r) => r.read<String?>('next_action_text') ?? '').toList())
-        .listen(cursors.add);
+    final subTodo = watchTodoTitles().listen(todoEmissions.add);
     final subAction = db
         .customSelect(
           "SELECT role FROM actions WHERE outcome_id = 'o1'",
@@ -202,17 +210,19 @@ void main() {
     addTearDown(subAction.cancel);
 
     await _waitUntil(() =>
-        cursors.isNotEmpty &&
-        cursors.last.first == 'call the plumber' &&
+        todoEmissions.isNotEmpty &&
         actionRoles.isNotEmpty &&
         actionRoles.last.contains('current'));
+    final todoEmissionsBefore = todoEmissions.length;
 
     await db.actionDao.clearCurrentAction('o1');
 
     await _waitUntil(() =>
-        cursors.last.first == '' && actionRoles.last.contains('superseded'));
-    expect(cursors.last, ['']);
+        actionRoles.last.contains('superseded') &&
+        todoEmissions.length > todoEmissionsBefore);
     expect(actionRoles.last, ['superseded']);
+    expect(todoEmissions.length, greaterThan(todoEmissionsBefore),
+        reason: 'the todos view watcher must still be refreshed');
   });
 
   test('completeCurrentAction refreshes a time_logs-view watcher when it '
@@ -250,33 +260,26 @@ void main() {
     expect(openCounts.last, 0);
   });
 
-  test('a TodoDao dual-write refreshes both the todos- and actions-view '
+  test('TodoDao.setNextActionText refreshes both the todos- and actions-view '
       'watchers', () async {
-    final todoTitles = <List<String>>[];
+    final todoEmissions = <List<String>>[];
     final actionTexts = <List<String>>[];
-    final subTodo = db
-        .customSelect(
-          "SELECT next_action_text FROM todos WHERE id = 'o1'",
-          readsFrom: {db.todos},
-        )
-        .watch()
-        .map((rows) =>
-            rows.map((r) => r.read<String?>('next_action_text') ?? '').toList())
-        .listen(todoTitles.add);
+    final subTodo = watchTodoTitles().listen(todoEmissions.add);
     final subAction = watchActionTexts().listen(actionTexts.add);
     addTearDown(subTodo.cancel);
     addTearDown(subAction.cancel);
 
-    await _waitUntil(() => todoTitles.isNotEmpty && actionTexts.isNotEmpty);
+    await _waitUntil(() => todoEmissions.isNotEmpty && actionTexts.isNotEmpty);
+    final todoEmissionsBefore = todoEmissions.length;
 
     await db.todoDao.setNextActionText('o1', 'draft the plan');
 
     await _waitUntil(() =>
-        todoTitles.last.length == 1 &&
-        todoTitles.last.first == 'draft the plan' &&
         actionTexts.last.length == 1 &&
-        actionTexts.last.first == 'draft the plan');
-    expect(todoTitles.last, ['draft the plan']);
+        actionTexts.last.first == 'draft the plan' &&
+        todoEmissions.length > todoEmissionsBefore);
     expect(actionTexts.last, ['draft the plan']);
+    expect(todoEmissions.length, greaterThan(todoEmissionsBefore),
+        reason: 'the todos view watcher must still be refreshed');
   });
 }
