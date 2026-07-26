@@ -63,34 +63,32 @@ class ClarifyEnergyPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: _levels.map(((String, String, Color) level) {
         final (value, label, color) = level;
         final isSelected = selected == value;
-        return Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => onSelect(isSelected ? null : value),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: isSelected ? color.withValues(alpha: 0.1) : Colors.transparent,
-                border: Border.all(
-                  color: isSelected ? color : _borderGray,
-                  width: isSelected ? 2 : 1,
-                ),
-                borderRadius: _radiusChip,
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => onSelect(isSelected ? null : value),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: isSelected ? color.withValues(alpha: 0.1) : Colors.transparent,
+              border: Border.all(
+                color: isSelected ? color : _borderGray,
+                width: isSelected ? 2 : 1,
               ),
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                  color: isSelected ? color : _textGray,
-                ),
+              borderRadius: _radiusChip,
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected ? color : _textGray,
               ),
             ),
           ),
