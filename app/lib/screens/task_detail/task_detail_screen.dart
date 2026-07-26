@@ -9,13 +9,16 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../database/daos/action_dao.dart' show TerminatedAction;
 import '../../database/gtd_database.dart';
+import '../../models/action_draft.dart';
 import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/async_subject.dart';
+import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/context_tag_picker.dart';
+import '../../widgets/meta_chip.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
 import '../../widgets/task_status_row.dart';
@@ -808,65 +811,41 @@ class _PlanSection extends ConsumerStatefulWidget {
 class _PlanSectionState extends ConsumerState<_PlanSection> {
   static const _muted = Color(0xFF9CA3AF);
   static const _ink = Color(0xFF1F2937);
-
-  bool _adding = false;
-  late final TextEditingController _addController;
-  late final FocusNode _addFocus;
-
-  String? _editingId;
-  late final TextEditingController _editController;
-  late final FocusNode _editFocus;
-
-  @override
-  void initState() {
-    super.initState();
-    _addController = TextEditingController();
-    _addFocus = FocusNode();
-    _editController = TextEditingController();
-    _editFocus = FocusNode();
-    _editFocus.addListener(() {
-      if (!_editFocus.hasFocus && _editingId != null) _commitEdit();
-    });
-  }
-
-  @override
-  void dispose() {
-    _addController.dispose();
-    _addFocus.dispose();
-    _editController.dispose();
-    _editFocus.dispose();
-    super.dispose();
-  }
+  static const _energyColor = Color(0xFF7C3AED);
+  static const _timeColor = Color(0xFF2563EB);
 
   TaskDetailNotifier get _notifier =>
       ref.read(taskDetailNotifierProvider(widget.outcomeId));
 
-  void _submitAdd() {
-    final text = _addController.text.trim();
-    if (text.isNotEmpty) _notifier.addPlannedAction(text).ignore();
-    _addController.clear();
-    setState(() => _adding = false);
-  }
-
-  void _startEdit(Action row) {
-    setState(() {
-      _editingId = row.id;
-      _editController.text = row.actionText;
-    });
-    Future.delayed(const Duration(milliseconds: 50), () {
-      // The row can be disposed within the delay (navigate away, or the row
-      // disappears via a sync) — requesting focus on a dead node would throw.
-      if (!mounted) return;
-      _editFocus.requestFocus();
-    });
-  }
-
-  void _commitEdit() {
-    final id = _editingId;
-    if (id == null) return;
-    final text = _editController.text.trim();
-    if (text.isNotEmpty) _notifier.editAction(id, text: text).ignore();
-    setState(() => _editingId = null);
+  /// Opens the add/edit sheet for a planned Action — [row] null to add one.
+  ///
+  /// Dismissing the sheet cancels silently, matching [_confirmReplace] and
+  /// [_confirmAbandon]: one confirm button, no Cancel, barrier tap discards.
+  ///
+  /// Takes the **row**, never its index. A planned row's index moves under a
+  /// drag or a synced reorder, and closing over it would send the edit to
+  /// whichever Action happened to land in that slot. The row's `id` is stable.
+  Future<void> _openActionSheet({Action? row}) async {
+    // Captured before the await: reading the autoDispose provider afterwards
+    // can outlive the ref.
+    final notifier = _notifier;
+    final result = await showModalBottomSheet<ActionDraft>(
+      context: context,
+      backgroundColor: Colors.white,
+      // Carries a text field, so the sheet must be able to grow past half the
+      // screen and sit above the keyboard.
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
+      ),
+      builder: (ctx) => _PlanActionSheet(initial: row),
+    );
+    if (result == null) return; // dismissed → cancel
+    if (row == null) {
+      notifier.addPlannedAction(result).ignore();
+    } else {
+      notifier.editAction(row.id, result).ignore();
+    }
   }
 
   void _onPromote(Action row, Action? current) {
@@ -1111,12 +1090,14 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
   }
 
   Widget _buildPlannedRow(Action row, int index, Action? current) {
-    final editing = _editingId == row.id;
     return Padding(
       key: Key('planned_action_${row.id}'),
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
+          // `index` is used here and nowhere else in this row: it belongs to
+          // the drag system's index space, and the tap target below sits
+          // outside this listener's subtree so nothing else can enter it.
           ReorderableDragStartListener(
             index: index,
             child: const Padding(
@@ -1126,30 +1107,25 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
             ),
           ),
           Expanded(
-            child: editing
-                ? TextField(
-                    key: const Key('plan_edit_field'),
-                    controller: _editController,
-                    focusNode: _editFocus,
-                    style: const TextStyle(fontSize: 15, color: _ink),
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
-                      border: InputBorder.none,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _openActionSheet(row: row),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      row.actionText,
+                      style: const TextStyle(fontSize: 15, color: _ink),
                     ),
-                    onSubmitted: (_) => _commitEdit(),
-                  )
-                : GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => _startEdit(row),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Text(
-                        row.actionText,
-                        style: const TextStyle(fontSize: 15, color: _ink),
-                      ),
-                    ),
-                  ),
+                    const SizedBox(height: 2),
+                    _buildEffortMeta(row),
+                  ],
+                ),
+              ),
+            ),
           ),
           IconButton(
             key: Key('plan_promote_${row.id}'),
@@ -1170,30 +1146,54 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
     );
   }
 
-  Widget _buildAddAffordance() {
-    if (_adding) {
-      return TextField(
-        key: const Key('plan_add_field'),
-        controller: _addController,
-        focusNode: _addFocus,
-        autofocus: true,
-        style: const TextStyle(fontSize: 15, color: _ink),
-        decoration: const InputDecoration(
-          isDense: true,
-          contentPadding: EdgeInsets.symmetric(vertical: 6),
-          border: InputBorder.none,
-          hintText: 'Add planned action',
-          hintStyle: TextStyle(color: Color(0xFFD1D5DB)),
+  /// The planned row's effort line: an energy chip, a time chip, or — when the
+  /// row carries neither — a quiet `Set` prompt.
+  ///
+  /// **Read-only by construction.** [MetaChip] contains no gesture, and the
+  /// `Set` prompt is bare `Text`; the row's single tap target is the ancestor
+  /// [GestureDetector] that opens the sheet, so there is exactly one way in.
+  Widget _buildEffortMeta(Action row) {
+    final energy = row.energyLevel;
+    final time = row.timeEstimate;
+    if (energy == null && time == null) {
+      return Text(
+        'Set',
+        key: Key('planned_effort_unset_${row.id}'),
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+          color: _muted,
         ),
-        textInputAction: TextInputAction.done,
-        onSubmitted: (_) => _submitAdd(),
-        onTapOutside: (_) => _submitAdd(),
       );
     }
+    return Wrap(
+      key: Key('planned_meta_${row.id}'),
+      spacing: 8,
+      runSpacing: 4,
+      children: [
+        if (energy != null)
+          MetaChip(
+            key: Key('planned_energy_${row.id}'),
+            icon: Icons.bolt_outlined,
+            label: energyLevelLabel(energy),
+            color: _energyColor,
+          ),
+        if (time != null)
+          MetaChip(
+            key: Key('planned_time_${row.id}'),
+            icon: Icons.timer_outlined,
+            label: formatMinutesLabel(time),
+            color: _timeColor,
+          ),
+      ],
+    );
+  }
+
+  Widget _buildAddAffordance() {
     return InkWell(
       key: const Key('plan_add_trigger'),
-      onTap: () => setState(() => _adding = true),
-      borderRadius: BorderRadius.circular(8),
+      onTap: () => _openActionSheet(),
+      borderRadius: BorderRadius.circular(4),
       child: const Padding(
         padding: EdgeInsets.symmetric(vertical: 6),
         child: Row(
@@ -1209,6 +1209,159 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The add/edit sheet for a planned Action: the phrase plus the two effort
+/// pickers, returning an [ActionDraft] on confirm and null on dismissal.
+///
+/// One widget, one parameter: [initial] null adds, non-null edits. The pickers
+/// are the same [ClarifyEnergyPicker] / [ClarifyEstimateChip] the clarify
+/// surfaces use, over the same [kEstimateOptionsMinutes] ladder, so effort
+/// means the same thing wherever it is set.
+///
+/// **An empty title cannot delete the row.** In edit mode a blank field just
+/// parks the sheet un-confirmable; dismissing discards the edit and the row
+/// keeps the text it had. Removing a planned Action is the row's `×` and
+/// nothing else (ADR-0018).
+class _PlanActionSheet extends StatefulWidget {
+  const _PlanActionSheet({this.initial});
+
+  /// The Action being edited, or null when adding a new one.
+  final Action? initial;
+
+  @override
+  State<_PlanActionSheet> createState() => _PlanActionSheetState();
+}
+
+class _PlanActionSheetState extends State<_PlanActionSheet> {
+  late final TextEditingController _textController;
+  String? _energyLevel;
+  int? _timeEstimateMinutes;
+
+  @override
+  void initState() {
+    super.initState();
+    _textController = TextEditingController(text: widget.initial?.actionText);
+    _energyLevel = widget.initial?.energyLevel;
+    _timeEstimateMinutes = widget.initial?.timeEstimate;
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    super.dispose();
+  }
+
+  bool get _canConfirm => _textController.text.trim().isNotEmpty;
+
+  void _confirm() {
+    final text = _textController.text.trim();
+    if (text.isEmpty) return;
+    Navigator.pop(
+      context,
+      ActionDraft(
+        text: text,
+        energyLevel: _energyLevel,
+        timeEstimateMinutes: _timeEstimateMinutes,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final editing = widget.initial != null;
+    return SafeArea(
+      child: Padding(
+        // The keyboard inset is what keeps the field and confirm button off
+        // the top of the keyboard on a short screen.
+        padding: EdgeInsets.fromLTRB(
+          24,
+          24,
+          24,
+          16 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                editing ? 'Edit planned action' : 'Add planned action',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('plan_action_text'),
+                controller: _textController,
+                autofocus: true,
+                textCapitalization: TextCapitalization.sentences,
+                minLines: 1,
+                maxLines: 2,
+                style: const TextStyle(fontSize: 15),
+                decoration: const InputDecoration(
+                  labelText: 'Action',
+                  hintText: "What's the next physical, visible step?",
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(4)),
+                  ),
+                ),
+                // Rebuild so the confirm button's enablement tracks the field.
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _confirm(),
+              ),
+              const SizedBox(height: 20),
+              const ClarifyFieldLabel('ENERGY LEVEL'),
+              const SizedBox(height: 8),
+              ClarifyEnergyPicker(
+                key: const Key('plan_action_energy'),
+                selected: _energyLevel,
+                onSelect: (value) => setState(() => _energyLevel = value),
+              ),
+              const SizedBox(height: 20),
+              const ClarifyFieldLabel('TIME ESTIMATE'),
+              const SizedBox(height: 8),
+              Wrap(
+                key: const Key('plan_action_estimate'),
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final minutes in kEstimateOptionsMinutes)
+                    ClarifyEstimateChip(
+                      label: formatMinutesLabel(minutes),
+                      selected: _timeEstimateMinutes == minutes,
+                      // Tapping the selected chip deselects it, matching the
+                      // energy picker.
+                      onTap: () => setState(
+                        () => _timeEstimateMinutes =
+                            _timeEstimateMinutes == minutes ? null : minutes,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  key: const Key('plan_action_confirm'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(2)),
+                    ),
+                  ),
+                  onPressed: _canConfirm ? _confirm : null,
+                  child: Text(editing ? 'Save' : 'Add'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

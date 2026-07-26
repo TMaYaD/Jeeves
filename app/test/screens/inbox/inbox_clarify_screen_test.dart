@@ -770,6 +770,46 @@ void main() {
       expect(outcome.clarified, isTrue);
     });
 
+    testWidgets('effort set on the card travels as one ActionDraft — onto the '
+        'Outcome columns and through them onto the birth Action',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      final recorder =
+          _RecordingClarificationService(DaoClarificationService(db));
+      await tester.pumpWidget(
+        _buildApp(db, 'x', clarificationService: recorder),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.descendant(
+        of: find.byType(ClarifyEnergyPicker),
+        matching: find.text('High'),
+      ));
+      await tester.pump();
+      await tester.tap(find.text('30m'));
+      await tester.pump();
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      // The card composed one draft, not three loose fields.
+      expect(recorder.lastEnergyLevel, 'high');
+      expect(recorder.lastTimeEstimate, 30);
+
+      // The columns carry them (D1/D3 draft store) …
+      final outcome = (await _outcomeOf(db, 'x'))!;
+      expect(outcome.energyLevel, 'high');
+      expect(outcome.timeEstimate, 30);
+      // … and the birth Action seeded from them, which only holds because
+      // insertOutcome still runs before applyRouting.
+      final action = await db.actionDao.getCurrentAction(outcome.id);
+      expect(action?.actionText, 'Buy milk');
+      expect(action?.energyLevel, 'high');
+      expect(action?.timeEstimate, 30);
+    });
+
     testWidgets('a failed write surfaces an error and does not pop',
         (tester) async {
       await db.captureDao

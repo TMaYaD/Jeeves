@@ -150,7 +150,6 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   int? _lastSavedTimeEstimate;
   DateTime? _lastSavedDueDate;
 
-  static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
   /// True when this card is clarifying a Capture rather than re-clarifying an
   /// Outcome. Selects every save path below.
@@ -683,7 +682,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: _estimateOptions.map((m) {
+          children: kEstimateOptionsMinutes.map((m) {
             final selected = _timeEstimate == m;
             return ClarifyEstimateChip(
               label: m < 60

@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import '../database/daos/action_dao.dart' show TerminatedAction;
 import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
+import '../models/action_draft.dart';
 import '../models/todo.dart' show Intent, RoutingKind;
 import 'auth_provider.dart';
 import 'database_provider.dart';
@@ -253,32 +254,42 @@ class TaskDetailNotifier {
 
   // --- Planned queue (ADR-0004 story 5, issue #475) ---
 
-  /// Append a `planned` Action to this Outcome's queue.
-  Future<void> addPlannedAction(
-    String text, {
-    String? energyLevel,
-    int? timeEstimate,
-  }) =>
+  /// Append a `planned` Action to this Outcome's queue, exactly as [draft]
+  /// describes it.
+  ///
+  /// Writes nothing to the Outcome's `energy_level` / `time_estimate` columns:
+  /// a `planned` row is not engageable (ADR-0004), so its effort values must
+  /// not reach the mirror D2's COALESCE reads as the *current* Action's. The
+  /// mirror is re-established at promotion, by `ActionDao._promoteRow`.
+  Future<void> addPlannedAction(ActionDraft draft) =>
       _db.actionDao.addPlannedAction(
         _todoId,
-        text,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
+        draft.text,
+        energyLevel: draft.energyLevel,
+        timeEstimate: draft.timeEstimateMinutes,
       );
 
-  /// In-place edit of any Action on this Outcome (the planned queue's inline
-  /// rename; role-agnostic).
-  Future<void> editAction(
-    String actionId, {
-    String? text,
-    String? energyLevel,
-    int? timeEstimate,
-  }) =>
+  /// **Replace** an Action's attributes with [draft] — not a patch.
+  ///
+  /// The sheet that produces the draft shows every field, so a null on it is
+  /// the user having deselected a chip, not "leave alone". [ActionDao.editAction]
+  /// reads a null typed argument as *no change*, so the nulls are mapped onto
+  /// its `clear*` flags here; without that, deselecting a chip would silently
+  /// fail to clear.
+  ///
+  /// The patch-shaped sibling is [TodoDao.updateFields], on the Outcome grain —
+  /// it is also the only writer that upholds the D1 mirror, which is why this
+  /// one is for `planned` rows. Editing a `current` row through here would
+  /// change the Action without the mirror (risk noted in `docs/ARCHITECTURE.md`);
+  /// the Plan section only ever routes planned rows to it.
+  Future<void> editAction(String actionId, ActionDraft draft) =>
       _db.actionDao.editAction(
         actionId,
-        text: text,
-        energyLevel: energyLevel,
-        timeEstimate: timeEstimate,
+        text: draft.text,
+        energyLevel: draft.energyLevel,
+        timeEstimate: draft.timeEstimateMinutes,
+        clearEnergyLevel: draft.energyLevel == null,
+        clearTimeEstimate: draft.timeEstimateMinutes == null,
       );
 
   /// Rewrite the planned queue order to [orderedIds].

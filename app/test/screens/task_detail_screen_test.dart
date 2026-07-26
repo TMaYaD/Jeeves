@@ -845,9 +845,11 @@ void main() {
 
       Future<void> addPlanned(String text) async {
         await tester.tap(find.byKey(const Key('plan_add_trigger')));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const Key('plan_action_text')), text);
         await tester.pump();
-        await tester.enterText(find.byKey(const Key('plan_add_field')), text);
-        await tester.testTextInput.receiveAction(TextInputAction.done);
+        await tester.tap(find.byKey(const Key('plan_action_confirm')));
+        await tester.pumpAndSettle();
         await settleWrite();
         await refresh();
       }
@@ -871,12 +873,15 @@ void main() {
       rows = await plannedRows();
       expect(rows.map((a) => a.actionText), ['second', 'first']);
 
-      // --- Inline edit the front row ---
+      // --- Edit the front row through the sheet ---
       await tester.tap(find.text('second'));
-      await tester.pump(const Duration(milliseconds: 60));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit planned action'), findsOneWidget);
       await tester.enterText(
-          find.byKey(const Key('plan_edit_field')), 'second (edited)');
-      await tester.testTextInput.receiveAction(TextInputAction.done);
+          find.byKey(const Key('plan_action_text')), 'second (edited)');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('plan_action_confirm')));
+      await tester.pumpAndSettle();
       await settleWrite();
       await refresh();
       rows = await plannedRows();
@@ -962,6 +967,342 @@ void main() {
       await refresh();
       expect((await plannedRows()).map((a) => a.actionText),
           isNot(contains('scratch')));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Planned-row effort pickers (issue #477). Same hand-cranked harness as the
+  // journey above.
+  //
+  // The Outcome-column assertions read `db.todos` **raw**, never `getTodo`:
+  // that one carries the D2 projection, which COALESCEs the current Action's
+  // value over the column, so a missing mirror would still satisfy it.
+  // ---------------------------------------------------------------------------
+  group('TaskDetailScreen — planned-row effort (issue #477)', () {
+    late GtdDatabase db;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      db = _openInMemory();
+    });
+    tearDown(() async => db.close());
+
+    /// Everything a plan-section test needs: the mounted screen plus the
+    /// hand-cranked stream refresh and the DAO reads behind it.
+    Future<
+        ({
+          Future<void> Function() refresh,
+          Future<void> Function() settleWrite,
+          Future<List<Action>> Function() plannedRows,
+          Future<Action?> Function() currentRow,
+          Future<({String? energy, int? time})> Function() todoColumns,
+        })> mountPlan(WidgetTester tester, String id) async {
+      final todo = await _insertAt(db, id: id, title: 'Plan outcome');
+      final curCtrl = StreamController<Action?>.broadcast();
+      final plnCtrl = StreamController<List<Action>>.broadcast();
+      addTearDown(curCtrl.close);
+      addTearDown(plnCtrl.close);
+
+      Future<List<Action>> plannedRows() async =>
+          (await tester.runAsync(() => db.actionDao.getPlannedActions(id)))!;
+      Future<Action?> currentRow() async => await tester
+          .runAsync<Action?>(() => db.actionDao.getCurrentAction(id));
+      Future<({String? energy, int? time})> todoColumns() async {
+        final row = await tester.runAsync(
+            () => (db.select(db.todos)..where((t) => t.id.equals(id)))
+                .getSingle());
+        return (energy: row!.energyLevel, time: row.timeEstimate);
+      }
+
+      Future<void> refresh() async {
+        curCtrl.add(await currentRow());
+        plnCtrl.add(await plannedRows());
+        await tester.pump();
+        await tester.pump();
+      }
+
+      Future<void> settleWrite() => tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+
+      final (widget, router) = _buildScreen(
+        db,
+        id,
+        initialTodo: todo,
+        currentActionStream: curCtrl.stream,
+        plannedActionsStream: plnCtrl.stream,
+      );
+      await _showTaskDetail(tester, widget, router, id);
+      await refresh();
+      return (
+        refresh: refresh,
+        settleWrite: settleWrite,
+        plannedRows: plannedRows,
+        currentRow: currentRow,
+        todoColumns: todoColumns,
+      );
+    }
+
+    /// Taps an energy chip *inside the sheet* — scoped, because a planned row
+    /// behind the modal renders the same label.
+    Future<void> pickEnergy(WidgetTester tester, String label) async {
+      await tester.tap(find.descendant(
+        of: find.byKey(const Key('plan_action_energy')),
+        matching: find.text(label),
+      ));
+      await tester.pump();
+    }
+
+    Future<void> pickEstimate(WidgetTester tester, String label) async {
+      await tester.tap(find.descendant(
+        of: find.byKey(const Key('plan_action_estimate')),
+        matching: find.text(label),
+      ));
+      await tester.pump();
+    }
+
+    testWidgets(
+        'journey: add with effort → chips render → edit via sheet → promote '
+        'mirrors onto the Outcome columns', (tester) async {
+      final h = await mountPlan(tester, 'eff1');
+
+      // --- Add, setting both effort attributes in the sheet ---
+      await tester.tap(find.byKey(const Key('plan_add_trigger')));
+      await tester.pumpAndSettle();
+      expect(find.text('Add planned action'), findsWidgets);
+      await tester.enterText(
+          find.byKey(const Key('plan_action_text')), 'draft the brief');
+      await tester.pump();
+      await pickEnergy(tester, 'High');
+      await pickEstimate(tester, '45m');
+      await tester.tap(find.byKey(const Key('plan_action_confirm')));
+      await tester.pumpAndSettle();
+      await h.settleWrite();
+      await h.refresh();
+
+      var rows = await h.plannedRows();
+      expect(rows.single.actionText, 'draft the brief');
+      expect(rows.single.energyLevel, 'high');
+      expect(rows.single.timeEstimate, 45);
+
+      // The row renders both chips.
+      final rowId = rows.single.id;
+      expect(find.byKey(Key('planned_energy_$rowId')), findsOneWidget);
+      expect(find.byKey(Key('planned_time_$rowId')), findsOneWidget);
+      expect(find.byKey(Key('planned_effort_unset_$rowId')), findsNothing);
+
+      // A planned row must not touch the Outcome columns: D2 would read its
+      // value back as the *current* Action's.
+      expect((await h.todoColumns()).energy, isNull);
+      expect((await h.todoColumns()).time, isNull);
+
+      // --- Edit through the sheet: the pickers open prefilled ---
+      await tester.tap(find.text('draft the brief'));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit planned action'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('plan_action_text')))
+            .controller!
+            .text,
+        'draft the brief',
+        reason: 'the sheet prefills from the row it was opened on',
+      );
+      await pickEnergy(tester, 'Low');
+      await pickEstimate(tester, '15m');
+      await tester.tap(find.byKey(const Key('plan_action_confirm')));
+      await tester.pumpAndSettle();
+      await h.settleWrite();
+      await h.refresh();
+
+      rows = await h.plannedRows();
+      expect(rows.single.energyLevel, 'low');
+      expect(rows.single.timeEstimate, 15);
+      // Chips refresh with the edit.
+      expect(find.text('Low'), findsOneWidget);
+      expect(find.text('15m'), findsOneWidget);
+
+      // --- Promote: the effort travels, and the mirror is re-established ---
+      await tester.tap(find.byKey(Key('plan_promote_$rowId')));
+      await h.settleWrite();
+      await h.refresh();
+
+      final promoted = await h.currentRow();
+      expect(promoted!.energyLevel, 'low');
+      expect(promoted.timeEstimate, 15);
+      final cols = await h.todoColumns();
+      expect(cols.energy, 'low',
+          reason: 'promotion re-establishes the D1 mirror');
+      expect(cols.time, 15);
+    });
+
+    testWidgets('the edit sheet clears both values when the chips are '
+        'deselected', (tester) async {
+      final h = await mountPlan(tester, 'eff2');
+      await tester.runAsync(() => db.actionDao.addPlannedAction(
+          'eff2', 'has effort',
+          energyLevel: 'high', timeEstimate: 45));
+      await h.refresh();
+      final rowId = (await h.plannedRows()).single.id;
+
+      await tester.tap(find.text('has effort'));
+      await tester.pumpAndSettle();
+      // Tapping the selected chip deselects it.
+      await pickEnergy(tester, 'High');
+      await pickEstimate(tester, '45m');
+      await tester.tap(find.byKey(const Key('plan_action_confirm')));
+      await tester.pumpAndSettle();
+      await h.settleWrite();
+      await h.refresh();
+
+      final row = (await h.plannedRows()).single;
+      expect(row.energyLevel, isNull,
+          reason: 'a null on the draft must map to clearEnergyLevel: true — '
+              'ActionDao.editAction reads a bare null as "no change"');
+      expect(row.timeEstimate, isNull);
+      expect(find.byKey(Key('planned_effort_unset_$rowId')), findsOneWidget);
+      expect(find.byKey(Key('planned_energy_$rowId')), findsNothing);
+    });
+
+    testWidgets('a planned row with no effort shows the Set affordance and no '
+        'chips', (tester) async {
+      final h = await mountPlan(tester, 'eff3');
+      await tester.runAsync(
+          () => db.actionDao.addPlannedAction('eff3', 'no effort yet'));
+      await h.refresh();
+      final rowId = (await h.plannedRows()).single.id;
+
+      expect(find.byKey(Key('planned_effort_unset_$rowId')), findsOneWidget);
+      expect(find.text('Set'), findsOneWidget);
+      expect(find.byKey(Key('planned_meta_$rowId')), findsNothing);
+    });
+
+    testWidgets('planned row meta chips are read-only', (tester) async {
+      final h = await mountPlan(tester, 'eff4');
+      await tester.runAsync(() => db.actionDao.addPlannedAction(
+          'eff4', 'has effort',
+          energyLevel: 'high', timeEstimate: 45));
+      await h.refresh();
+      final rowId = (await h.plannedRows()).single.id;
+
+      // Scoped to the meta line: the row's own tap GestureDetector is an
+      // *ancestor* of it, so it cannot pollute the result.
+      final meta = find.byKey(Key('planned_meta_$rowId'));
+      expect(meta, findsOneWidget);
+      for (final type in [IconButton, TextField, InkWell, GestureDetector]) {
+        expect(
+          find.descendant(of: meta, matching: find.byType(type)),
+          findsNothing,
+          reason: 'a chip is a label, not a control — the row is the target',
+        );
+      }
+    });
+
+    testWidgets('the add sheet refuses an empty title', (tester) async {
+      final h = await mountPlan(tester, 'eff5');
+
+      await tester.tap(find.byKey(const Key('plan_add_trigger')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('plan_action_confirm')))
+            .onPressed,
+        isNull,
+        reason: 'a blank phrase names no Action',
+      );
+
+      // Effort alone does not enable it either.
+      await pickEnergy(tester, 'High');
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('plan_action_confirm')))
+            .onPressed,
+        isNull,
+      );
+
+      // Dismiss: nothing was written.
+      Navigator.of(tester.element(find.byKey(const Key('plan_action_text'))))
+          .pop();
+      await tester.pumpAndSettle();
+      await h.settleWrite();
+      await h.refresh();
+      expect(await h.plannedRows(), isEmpty);
+    });
+
+    testWidgets('the sheet follows the row, not the index, after a reorder',
+        (tester) async {
+      final h = await mountPlan(tester, 'eff6');
+      await tester.runAsync(() async {
+        await db.actionDao.addPlannedAction('eff6', 'alpha');
+        await db.actionDao.addPlannedAction('eff6', 'beta');
+      });
+      await h.refresh();
+      expect((await h.plannedRows()).map((a) => a.actionText),
+          ['alpha', 'beta']);
+
+      final rlv =
+          tester.widget<ReorderableListView>(find.byType(ReorderableListView));
+      rlv.onReorderItem!(1, 0); // 'beta' to the front
+      await h.settleWrite();
+      await h.refresh();
+      expect((await h.plannedRows()).map((a) => a.actionText),
+          ['beta', 'alpha']);
+
+      // Tap the row now sitting at index 0. A handler closing over `index`
+      // rather than the row would open 'alpha' here.
+      await tester.tap(find.text('beta'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('plan_action_text')))
+            .controller!
+            .text,
+        'beta',
+      );
+    });
+
+    testWidgets('the planned row and its sheet lay out at 320dp',
+        (tester) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final h = await mountPlan(tester, 'eff7');
+      await tester.runAsync(() => db.actionDao.addPlannedAction(
+          'eff7', 'a deliberately long planned action phrase that wraps',
+          energyLevel: 'medium', timeEstimate: 90));
+      await h.refresh();
+      final rowId = (await h.plannedRows()).single.id;
+
+      // Measured rects, not takeException(): the section's unrelated
+      // "Add planned action" row overflows at this width under the test font
+      // (Ahem renders every glyph as a full em square), which would mask this
+      // row's own result either way.
+      final row = tester.getRect(find.byKey(Key('planned_action_$rowId')));
+      final remove = tester.getRect(find.byKey(Key('plan_remove_$rowId')));
+      expect(row.width, lessThanOrEqualTo(320.0));
+      expect(remove.right, lessThanOrEqualTo(row.right),
+          reason: 'the trailing controls stay inside the row at 320dp');
+      expect(remove.width, greaterThan(0.0));
+
+      // Both chips fit on the meta line at this width (the Wrap wraps them
+      // onto a second line rather than overflowing if a locale pushes past).
+      final energy = tester.getRect(find.byKey(Key('planned_energy_$rowId')));
+      final time = tester.getRect(find.byKey(Key('planned_time_$rowId')));
+      expect(energy.left, greaterThanOrEqualTo(row.left));
+      expect(time.right, lessThanOrEqualTo(row.right));
+      tester.takeException();
+
+      // The sheet itself at the same width.
+      await tester.tap(find.text('a deliberately long planned action phrase '
+          'that wraps'));
+      await tester.pumpAndSettle();
+      final confirm =
+          tester.getRect(find.byKey(const Key('plan_action_confirm')));
+      expect(confirm.left, greaterThanOrEqualTo(0.0));
+      expect(confirm.right, lessThanOrEqualTo(320.0));
+      expect(confirm.width, greaterThan(0.0));
+      tester.takeException();
     });
   });
 

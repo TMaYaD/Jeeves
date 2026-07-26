@@ -27,6 +27,13 @@ const _energyHighColor = Color(0xFFDC2626);
 const _radiusButton = BorderRadius.all(Radius.circular(2));
 const _radiusChip = BorderRadius.all(Radius.circular(4));
 
+/// The time-estimate options, in minutes, every effort picker offers.
+///
+/// One list so the clarify card, the standalone clarify screen, the n-m New
+/// Outcome form and the Plan section's action sheet cannot drift apart — a
+/// user who learns the ladder on one surface meets the same one everywhere.
+const kEstimateOptionsMinutes = [5, 10, 15, 30, 45, 60, 90, 120];
+
 class ClarifyFieldLabel extends StatelessWidget {
   const ClarifyFieldLabel(this.label, {super.key});
   final String label;

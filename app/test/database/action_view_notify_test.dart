@@ -156,6 +156,64 @@ void main() {
     expect(seen.last, ['call the plumber']);
   });
 
+  // The planned-row effort sheet (#477) edits an Action's metadata and nothing
+  // else. The task-detail widget test cannot catch a dropped notify — its
+  // harness hand-cranks the plan-section streams off DAO reads rather than
+  // subscribing to the real one — so the live-refresh claim is pinned here,
+  // against the production view topology.
+  test('editAction refreshes an actions-view watcher on a metadata-only edit',
+      () async {
+    await db.actionDao.addPlannedAction('o1', 'draft the brief');
+    final planned = await db.actionDao.getPlannedActions('o1');
+    final id = planned.single.id;
+
+    final seen = <List<String?>>[];
+    final sub = db
+        .customSelect(
+          "SELECT energy_level FROM actions WHERE outcome_id = 'o1'",
+          readsFrom: {db.actions},
+        )
+        .watch()
+        .map((rows) => rows.map((r) => r.read<String?>('energy_level')).toList())
+        .listen(seen.add);
+    addTearDown(sub.cancel);
+
+    await _waitUntil(() => seen.isNotEmpty);
+    expect(seen.last, [null]);
+
+    // Text untouched — only the metadata moves.
+    await db.actionDao.editAction(id, energyLevel: 'high', timeEstimate: 45);
+
+    await _waitUntil(() => seen.last.contains('high'));
+    expect(seen.last, ['high']);
+  });
+
+  test('editAction refreshes an actions-view watcher when a clear flag nulls '
+      'the metadata', () async {
+    await db.actionDao.addPlannedAction('o1', 'draft the brief',
+        energyLevel: 'high', timeEstimate: 45);
+    final id = (await db.actionDao.getPlannedActions('o1')).single.id;
+
+    final seen = <List<String?>>[];
+    final sub = db
+        .customSelect(
+          "SELECT energy_level FROM actions WHERE outcome_id = 'o1'",
+          readsFrom: {db.actions},
+        )
+        .watch()
+        .map((rows) => rows.map((r) => r.read<String?>('energy_level')).toList())
+        .listen(seen.add);
+    addTearDown(sub.cancel);
+
+    await _waitUntil(() => seen.isNotEmpty && seen.last.contains('high'));
+
+    await db.actionDao
+        .editAction(id, clearEnergyLevel: true, clearTimeEstimate: true);
+
+    await _waitUntil(() => seen.last.contains(null));
+    expect(seen.last, [null]);
+  });
+
   test('completeCurrentAction refreshes both view watchers — it now writes '
       'nothing to `todos` at all, so the todos notify is unconditional and '
       'cannot be gated on the stamp (which completion never moves)', () async {

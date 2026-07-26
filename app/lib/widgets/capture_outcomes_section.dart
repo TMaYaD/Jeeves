@@ -80,7 +80,6 @@ const _radiusSurface = BorderRadius.all(Radius.circular(6));
 const _kWriteFailedMessage = 'Operation failed. Please try again.';
 
 /// Time-estimate options, matching the 1-1 clarify surfaces.
-const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
 class CaptureOutcomesSection extends ConsumerStatefulWidget {
   const CaptureOutcomesSection({
@@ -712,7 +711,7 @@ class _NewOutcomeForm extends StatelessWidget {
         Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: _estimateOptions.map((m) {
+          children: kEstimateOptionsMinutes.map((m) {
             final selected = timeEstimate == m;
             return ClarifyEstimateChip(
               label: m < 60

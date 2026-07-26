@@ -69,6 +69,38 @@ Future<String?> _nextText(GtdDatabase db, String outcomeId) async {
   return row.nextActionText;
 }
 
+/// Sets the Outcome's raw mirror columns directly.
+///
+/// `ActionDao` never writes them on the current grain — `TodoDao.updateFields`
+/// is the D1 dual-writer, and `applySetCurrentAction` *seeds from* the columns
+/// rather than writing to them. Seeding here is what makes "the planned write
+/// left the columns alone" a falsifiable claim.
+Future<void> _mirrorColumns(
+  GtdDatabase db,
+  String outcomeId, {
+  String? energy,
+  int? time,
+}) async {
+  await (db.update(db.todos)..where((t) => t.id.equals(outcomeId))).write(
+    TodosCompanion(energyLevel: Value(energy), timeEstimate: Value(time)),
+  );
+}
+
+/// The Outcome's **raw** `energy_level` / `time_estimate` columns.
+///
+/// Deliberately a raw `select(db.todos)` and never [TodoDao.getTodo]: that one
+/// carries the D2 projection, which COALESCEs the current Action's value over
+/// the column. Reading the mirror through it would make a *missing* mirror
+/// unfalsifiable — the assertion would pass on the Action's own value.
+Future<({String? energy, int? time})> _todoColumns(
+  GtdDatabase db,
+  String outcomeId,
+) async {
+  final row = await (db.select(db.todos)..where((t) => t.id.equals(outcomeId)))
+      .getSingle();
+  return (energy: row.energyLevel, time: row.timeEstimate);
+}
+
 /// Planned rows for an Outcome, in the DAO's queue order (position, created_at,
 /// id), as (id, text, position) records.
 Future<List<(String, String, int?)>> _planned(
@@ -423,7 +455,142 @@ void main() {
     });
   });
 
+  // The planned-queue effort pickers (#477) add exactly two write paths, and
+  // both must stay Action-local. A `planned` row's metadata reaching
+  // `todos.energy_level` / `time_estimate` would be read back by D2's COALESCE
+  // as if it were the *current* Action's value — the mirror invariant (D1)
+  // broken by a row that is not even engageable (ADR-0004).
+  group('planned-row metadata is Action-local (D1 preservation)', () {
+    test('addPlannedAction with metadata writes nothing to the Outcome columns',
+        () async {
+      // The columns hold the current Action's mirrored values (what
+      // TodoDao.updateFields, the D1 dual-writer, would have left there).
+      await _mirrorColumns(db, 'o1', energy: 'low', time: 5);
+      await db.actionDao.setCurrentAction('o1', 'the current one',
+          energyLevel: 'low', timeEstimate: 5, now: _t1);
+
+      await db.actionDao.addPlannedAction('o1', 'later',
+          energyLevel: 'high', timeEstimate: 120, now: _t2);
+
+      final planned = await db.actionDao.getPlannedActions('o1');
+      expect(planned.single.energyLevel, 'high');
+      expect(planned.single.timeEstimate, 120);
+      final cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, 'low',
+          reason: 'the columns still mirror the *current* Action');
+      expect(cols.time, 5);
+    });
+
+    test('addPlannedAction on an Actionless Outcome leaves the draft columns '
+        'alone', () async {
+      await (db.update(db.todos)..where((t) => t.id.equals('o1'))).write(
+        const TodosCompanion(
+          energyLevel: Value('medium'),
+          timeEstimate: Value(25),
+        ),
+      );
+
+      await db.actionDao.addPlannedAction('o1', 'later',
+          energyLevel: 'high', timeEstimate: 120, now: _t2);
+
+      final cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, 'medium',
+          reason: 'the Actionless draft (D3) is not clobbered by a planned row');
+      expect(cols.time, 25);
+    });
+
+    test('editAction on a planned row writes nothing to the Outcome columns',
+        () async {
+      await _mirrorColumns(db, 'o1', energy: 'low', time: 5);
+      await db.actionDao.setCurrentAction('o1', 'the current one',
+          energyLevel: 'low', timeEstimate: 5, now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'later', now: _t2);
+      final plannedId = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.editAction(plannedId,
+          text: 'later, revised',
+          energyLevel: 'high',
+          timeEstimate: 90,
+          now: _t3);
+
+      final planned = await db.actionDao.getPlannedActions('o1');
+      expect(planned.single.actionText, 'later, revised');
+      expect(planned.single.energyLevel, 'high');
+      expect(planned.single.timeEstimate, 90);
+      final cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, 'low');
+      expect(cols.time, 5);
+    });
+
+    test('editAction clear flags null the planned row only', () async {
+      await _mirrorColumns(db, 'o1', energy: 'low', time: 5);
+      await db.actionDao.setCurrentAction('o1', 'the current one',
+          energyLevel: 'low', timeEstimate: 5, now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'later',
+          energyLevel: 'high', timeEstimate: 90, now: _t2);
+      final plannedId = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.editAction(plannedId,
+          clearEnergyLevel: true, clearTimeEstimate: true, now: _t3);
+
+      final planned = await db.actionDao.getPlannedActions('o1');
+      expect(planned.single.energyLevel, isNull);
+      expect(planned.single.timeEstimate, isNull);
+      final cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, 'low');
+      expect(cols.time, 5);
+    });
+  });
+
   group('promotePlannedAction', () {
+    // The invariant the planned-row effort pickers depend on: a planned row's
+    // metadata is Action-local until promotion, and promotion is what
+    // re-establishes the D1 mirror. Seeded so the planned row's values
+    // *differ* from the columns — otherwise the assertion cannot fail.
+    test('the promoted row overwrites the Outcome columns with its own '
+        'metadata', () async {
+      await (db.update(db.todos)..where((t) => t.id.equals('o1'))).write(
+        const TodosCompanion(
+          energyLevel: Value('low'),
+          timeEstimate: Value(5),
+        ),
+      );
+      await db.actionDao.addPlannedAction('o1', 'do the thing',
+          energyLevel: 'high', timeEstimate: 30, now: _t1);
+      final id = (await _planned(db, 'o1')).single.$1;
+
+      // Before promotion the columns are untouched by the planned row.
+      var cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, 'low');
+      expect(cols.time, 5);
+
+      await db.actionDao.promotePlannedAction(id, now: _t2);
+
+      cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, 'high',
+          reason: '_promoteRow mirrors the promoted row onto the columns');
+      expect(cols.time, 30);
+    });
+
+    test('a promoted row with no metadata mirrors NULL, not the stale column '
+        'values', () async {
+      await (db.update(db.todos)..where((t) => t.id.equals('o1'))).write(
+        const TodosCompanion(
+          energyLevel: Value('low'),
+          timeEstimate: Value(5),
+        ),
+      );
+      await db.actionDao.addPlannedAction('o1', 'no effort set', now: _t1);
+      final id = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.promotePlannedAction(id, now: _t2);
+
+      final cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, isNull,
+          reason: 'no inheritance — D2 must not resurrect a stale value');
+      expect(cols.time, isNull);
+    });
+
     test('flips role to current, clears position, mirrors metadata, leaves the '
         'cursor alone, and stamps', () async {
       await (db.update(db.todos)..where((t) => t.id.equals('o1')))
@@ -497,7 +664,12 @@ void main() {
       expect(cur['text'], 'new current');
       expect(await _nextText(db, 'o1'), 'stale cursor',
           reason: 'the retired cursor is neither read nor written (ADR-0022)');
-      expect((await db.todoDao.getTodo('o1'))!.energyLevel, 'low');
+      // Raw column, not getTodo: the projection would COALESCE the promoted
+      // Action's own value over a missing mirror and pass either way.
+      expect((await _todoColumns(db, 'o1')).energy, 'low');
+      // The superseded row keeps whatever it had — history is truthful, and
+      // the promoted row never inherits from it (D4).
+      expect(old['energy_level'], isNull);
       expect(await _planned(db, 'o1'), isEmpty);
       expect(await _lastClarified(db, 'o1'), _t3);
     });

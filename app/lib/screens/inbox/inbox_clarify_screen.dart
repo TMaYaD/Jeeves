@@ -91,7 +91,6 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// (docs/TESTING.md).
   Set<String> _hintTagIds = const <String>{};
 
-  static const _estimateOptions = [5, 10, 15, 30, 45, 60, 90, 120];
 
   @override
   void initState() {
@@ -421,7 +420,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: _estimateOptions.map((m) {
+                  children: kEstimateOptionsMinutes.map((m) {
                     final selected = _timeEstimate == m;
                     return ClarifyEstimateChip(
                       label: m < 60
