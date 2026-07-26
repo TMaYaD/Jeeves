@@ -1128,5 +1128,43 @@ void main() {
 
       expect((await _rawTodoRow(db, 't')).notes, isNull);
     });
+
+    // The flush above is gated on `hasPendingWrite` — trimmed title
+    // non-empty and (title or notes actually differs from what was last
+    // saved). Nothing pins the other side of that guard: a clean unmount,
+    // with no edit at all, must issue no write. If the guard were ever made
+    // unconditional, every unmount would bump `updated_at` on a row the user
+    // never touched — which feeds sync arbitration and the trash list's
+    // `ORDER BY COALESCE(last_clarified_at, updated_at, created_at)`.
+    // `updated_at` is the sharpest signal available: both DAOs'
+    // `updateFields` always stamp it on any write, so an unchanged value
+    // means the dispose flush never ran.
+    testWidgets(
+        'Capture card issues no write on a clean dispose (no pending edit)',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final seededUpdatedAt = capture.updatedAt;
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+
+      // No edit made — unmount straight away, still inside the debounce.
+      await unmountBeforeDebounce(tester);
+
+      expect((await _rawCaptureRow(db, 'x')).updatedAt, seededUpdatedAt);
+    });
+
+    testWidgets(
+        'Outcome card issues no write on a clean dispose (no pending edit)',
+        (tester) async {
+      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      final seededUpdatedAt = todo.updatedAt;
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+
+      // No edit made — unmount straight away, still inside the debounce.
+      await unmountBeforeDebounce(tester);
+
+      expect((await _rawTodoRow(db, 't')).updatedAt, seededUpdatedAt);
+    });
   });
 }
