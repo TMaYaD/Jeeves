@@ -15,7 +15,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/database/daos/capture_dao.dart' show CarvedOutcome;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/clarify_mode.dart';
+import 'package:jeeves/providers/clarify_mode_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
@@ -32,6 +35,22 @@ import '../test_helpers.dart';
 const _userId = 'local';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
+
+/// A [ClarifyMode] a test can flip while a card is open.
+///
+/// The real notifier derives from `syncedPreferencesProvider`, which is exactly
+/// what makes the flip possible in production: the mode is a *synced*
+/// preference, so a change made on another device lands mid-edit.
+class _MutableClarifyMode extends ClarifyModeNotifier {
+  _MutableClarifyMode(this._initial);
+
+  final ClarifyMode _initial;
+
+  @override
+  ClarifyMode build() => _initial;
+
+  void switchTo(ClarifyMode mode) => state = mode;
+}
 
 Future<Todo> _insertInboxTodo(
   GtdDatabase db, {
@@ -280,6 +299,14 @@ Widget _captureHarness(
   // exercised by clarify_surface_parity_test.dart.
   ClarifyTagSection tagSection = ClarifyTagSection.editablePickers,
   Widget? footer,
+  // The clarify-mode preference, when a test needs to flip it under an open
+  // card. Left null everywhere else, where the real notifier's default
+  // (`oneToOne`) is what every other test in this file exercises.
+  ClarifyModeNotifier? clarifyMode,
+  // Feeds `carvedOutcomesProvider`, which only the n-m body subscribes to.
+  // Required whenever a test reaches that body: the real provider is a live
+  // drift `watch()` and leaves a pending timer behind on dispose.
+  Stream<List<CarvedOutcome>>? carvedOutcomes,
 }) {
   return ProviderScope(
     overrides: [
@@ -290,6 +317,10 @@ Widget _captureHarness(
       captureTagHintsProvider(capture.id).overrideWith(
         (_) => tagHintsStream ?? Stream.value(const <Tag>[]),
       ),
+      if (clarifyMode != null)
+        clarifyModeProvider.overrideWith(() => clarifyMode),
+      if (carvedOutcomes != null)
+        carvedOutcomesProvider(capture.id).overrideWith((_) => carvedOutcomes),
       personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
@@ -1457,6 +1488,96 @@ void main() {
       await tester.runAsync(() => pumpEventQueue());
 
       expect(retention.read('x'), isNull);
+    });
+
+    // `clarifyMode` is a *synced* preference, so it can flip while a card is
+    // open — a change made on another device, or in Settings on this one.
+    // ADR-0023 names three points at which a retained draft is discarded
+    // (verdict, performance reset, process death); a mode flip is not one of
+    // them, and it must not become one by accident.
+    testWidgets('a flip to n-m mid-edit still stashes the typing',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final retention = ClarifyRetention();
+      final mode = _MutableClarifyMode(ClarifyMode.oneToOne);
+      final carved = StreamController<List<CarvedOutcome>>.broadcast();
+      addTearDown(carved.close);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        retention: retention,
+        clarifyMode: mode,
+        carvedOutcomes: carved.stream,
+      ));
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+      await tester.pump();
+
+      // The preference changes underneath the open card. The n-m body renders
+      // no text fields, so the typing is off screen from here on — but it is
+      // still in the controller, and flipping back would show it again.
+      mode.switchTo(ClarifyMode.nToM);
+      await _pumpFrames(tester, frames: 5);
+      carved.add(const []);
+      await _pumpFrames(tester, frames: 5);
+      expect(find.byKey(const Key('capture_text')), findsOneWidget,
+          reason: 'the flip has to actually reach the n-m body, or the stash '
+              'below is the ordinary 1-1 one');
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+
+      expect(retention.read('x')?.title, 'Buy oat milk',
+          reason: 'changing a display preference is not a verdict — it must '
+              'not throw away what the user typed');
+    });
+
+    testWidgets('a pass through n-m leaves an existing draft intact',
+        (tester) async {
+      // The other half of the same removal: with the n-m body seeded from the
+      // store like any other (`_initialiseFrom` runs before the mode is even
+      // read), stashing on the way out writes the draft straight back rather
+      // than clobbering it with the row.
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final retention = ClarifyRetention();
+      final carved = StreamController<List<CarvedOutcome>>.broadcast();
+      addTearDown(carved.close);
+      retention.stash(
+        'x',
+        const RetainedClarifyDraft(
+          title: 'Buy oat milk',
+          notes: 'Barista recommends it',
+          baselineTitle: 'Buy milk',
+          baselineNotes: '',
+        ),
+      );
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        retention: retention,
+        clarifyMode: _MutableClarifyMode(ClarifyMode.nToM),
+        carvedOutcomes: carved.stream,
+      ));
+      await _pumpFrames(tester, frames: 5);
+      carved.add(const []);
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+
+      // Back in 1-1, the draft must read exactly as it did before the n-m
+      // visit — including its *dirty* state, which is what stops the row's
+      // title from being adopted over the typing.
+      await tester.pumpWidget(
+        _captureHarness(db, capture: capture, retention: retention),
+      );
+      await _pumpFrames(tester, frames: 5);
+
+      expect(titleText(tester), 'Buy oat milk');
+      expect(notesText(tester), 'Barista recommends it');
     });
 
     testWidgets('with no store, leaving discards the typing', (tester) async {

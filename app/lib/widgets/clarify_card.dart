@@ -241,21 +241,6 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// just discarded.
   bool _verdictReached = false;
 
-  /// Whether the last build rendered the n-m surface, where the Capture is
-  /// read-only and the card contributes no text fields.
-  ///
-  /// Read in [dispose] to skip the stash: with no fields on screen, nothing
-  /// can have been edited while this mode was showing. Tracked from the build
-  /// rather than assumed constant because `clarifyModeProvider` is a synced
-  /// preference that can flip while the card is open.
-  ///
-  /// Not a guard against clobbering a 1-1 draft: [_initialiseFrom] seeds a
-  /// Capture card from the retained draft in *either* mode, so the stash this
-  /// skips would have written the same draft straight back. The one case it
-  /// decides is a flip to n-m part-way through an edit, where the typing is
-  /// left unstashed.
-  bool _renderedNToM = false;
-
   /// The Capture's tag hints under [ClarifyTagSection.draftInputOnly], read
   /// once in [initState].
   ///
@@ -454,10 +439,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // it again. Synchronous, and through the injected store rather than `ref`,
     // which is already unusable here (#529).
     //
-    // Skipped once a verdict has landed (the draft is spent) and in n-m, where
-    // the card renders no text fields — see [_renderedNToM] for what that
-    // second condition does and does not decide.
-    if (_isCapture && _initialised && !_verdictReached && !_renderedNToM) {
+    // A landed verdict is the only thing that skips it: the draft is spent, and
+    // re-stashing would put back what the verdict just discarded. In
+    // particular the clarify *mode* is not a condition. The n-m body renders no
+    // text fields, so it looked like one — but [_initialiseFrom] seeds a
+    // Capture card from the retained draft in either mode, and runs before the
+    // mode is read at all, so the stash writes the same draft straight back.
+    // Skipping it in n-m only decided the case where the synced preference
+    // flips part-way through an edit, and there it silently dropped the typing
+    // — a fourth discard trigger on top of the three ADR-0023 names.
+    if (_isCapture && _initialised && !_verdictReached) {
       widget.retention?.stash(_subjectId, _retainable());
     }
     // The Outcome shape's last line of defence: leaving the card while a field
@@ -703,8 +694,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // no `ref.watch` of the hint provider — see [ClarifyTagSection].
           hints = _oneShotHints;
         }
-        _renderedNToM = ref.watch(clarifyModeProvider) == ClarifyMode.nToM;
-        if (_renderedNToM) {
+        if (ref.watch(clarifyModeProvider) == ClarifyMode.nToM) {
           return _buildNToM(capture, hints);
         }
         return _buildBody(
