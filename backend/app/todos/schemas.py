@@ -138,7 +138,6 @@ class TodoCreate(BaseModel):
     # (docs/SYNC.md § The todos upload contract).
     time_spent_minutes: int = Field(default=0, ge=0)
     last_clarified_at: datetime | None = None
-    next_action_text: str | None = None
     last_next_action_completion_at: datetime | None = None
     # Client-stamped write timestamps.  The server never writes updated_at;
     # created_at falls back to the server default only when omitted, so
@@ -193,7 +192,6 @@ class TodoUpdate(BaseModel):
     # verbatim (docs/SYNC.md § The todos upload contract).
     time_spent_minutes: int | None = Field(default=None, ge=0)
     last_clarified_at: datetime | None = None
-    next_action_text: str | None = None
     last_next_action_completion_at: datetime | None = None
     updated_at: datetime | None = None
     # Legacy compatibility field — only "next_action" is accepted; ignored by the DB layer.
@@ -692,7 +690,6 @@ class TodoOut(BaseModel):
     # Client-state columns (migrations 0007/0022/0024)
     last_clarified_at: datetime | None
     time_spent_minutes: int
-    next_action_text: str | None
     last_next_action_completion_at: datetime | None
     # Legacy compatibility: state column was dropped in migration 0020; always "next_action".
     state: str = "next_action"
