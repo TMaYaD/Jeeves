@@ -63,12 +63,6 @@ Future<DateTime?> _lastClarified(GtdDatabase db, String outcomeId) async {
   return row.lastClarifiedAt;
 }
 
-Future<String?> _nextText(GtdDatabase db, String outcomeId) async {
-  final row = await (db.select(db.todos)..where((t) => t.id.equals(outcomeId)))
-      .getSingle();
-  return row.nextActionText;
-}
-
 /// Sets the Outcome's raw mirror columns directly.
 ///
 /// `ActionDao` never writes them on the current grain — `TodoDao.updateFields`
@@ -210,18 +204,18 @@ void main() {
       expect(await _lastClarified(db, 'o1'), _t2);
     });
 
-    test('with a replacement mints the new current and leaves the cursor alone',
+    test('with a replacement mints the new current and retires the old',
         () async {
-      await (db.update(db.todos)..where((t) => t.id.equals('o1')))
-          .write(const TodosCompanion(nextActionText: Value('stale cursor')));
-      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+      await db.actionDao.setCurrentAction('o1', 'old', now: _t1);
 
       await db.actionDao
           .supersedeCurrentAction('o1', newActionText: 'new', now: _t2);
 
       expect((await _current(db, 'o1'))!['text'], 'new');
-      expect(await _nextText(db, 'o1'), 'stale cursor',
-          reason: 'the retired cursor is neither read nor written (ADR-0022)');
+      final retired = (await _actions(db, 'o1'))
+          .firstWhere((r) => r['role'] == 'superseded');
+      expect(retired['text'], 'old',
+          reason: 'the replaced Action keeps its text (ADR-0018 history)');
     });
   });
 
@@ -243,46 +237,32 @@ void main() {
       expect(await _actions(db, 'o2'), isEmpty);
       expect(await _lastClarified(db, 'o2'), _t0,
           reason: 'no current row → no stamp');
-      expect(await _nextText(db, 'o2'), isNull);
     });
 
-    test('leaves the retired Action as history and never touches the cursor',
-        () async {
-      // Seed a stale cursor the way a pre-retirement client would have.
-      await (db.update(db.todos)..where((t) => t.id.equals('o1')))
-          .write(const TodosCompanion(nextActionText: Value('stale cursor')));
-      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+    test('leaves the retired Action as history', () async {
+      await db.actionDao.setCurrentAction('o1', 'old', now: _t1);
 
       await db.actionDao.clearCurrentAction('o1', now: _t2);
 
       expect(await _current(db, 'o1'), isNull);
       expect((await _actions(db, 'o1')).single['role'], 'superseded',
           reason: 'the superseded row is what stops the sweep resurrecting '
-              'the abandoned Action — not a cursor clear (ADR-0022)');
-      expect(await _nextText(db, 'o1'), 'stale cursor',
-          reason: 'the retired cursor is neither read nor written');
+              'the abandoned Action (ADR-0018, ADR-0022)');
+      expect((await _actions(db, 'o1')).single['text'], 'old');
     });
 
-    test('abandon stamps where completion does not — and neither touches the '
-        'cursor', () async {
-      // A stale cursor, seeded as a pre-retirement client would have left it,
-      // so "untouched" is an observable claim rather than a vacuous NULL.
-      await (db.update(db.todos)..where((t) => t.id.equals('o1')))
-          .write(const TodosCompanion(nextActionText: Value('stale cursor')));
-
-      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+    test('abandon stamps where completion does not', () async {
+      await db.actionDao.setCurrentAction('o1', 'old', now: _t1);
       await db.actionDao.clearCurrentAction('o1', now: _t2);
 
       expect(await _lastClarified(db, 'o1'), _t2,
           reason: 'abandoning is a clarifying act');
-      expect(await _nextText(db, 'o1'), 'stale cursor');
 
-      await db.todoDao.setNextActionText('o1', 'another', now: _t3);
+      await db.actionDao.setCurrentAction('o1', 'another', now: _t3);
       await db.actionDao.completeCurrentAction('o1', now: _t4);
 
       expect(await _lastClarified(db, 'o1'), _t3,
           reason: 'completion is engagement, not clarification');
-      expect(await _nextText(db, 'o1'), 'stale cursor');
     });
   });
 
@@ -673,10 +653,8 @@ void main() {
       expect(cols.time, isNull);
     });
 
-    test('flips role to current, clears position, mirrors metadata, leaves the '
-        'cursor alone, and stamps', () async {
-      await (db.update(db.todos)..where((t) => t.id.equals('o1')))
-          .write(const TodosCompanion(nextActionText: Value('stale cursor')));
+    test('flips role to current, clears position, mirrors metadata, and stamps',
+        () async {
       await db.actionDao.addPlannedAction('o1', 'do the thing',
           energyLevel: 'high', timeEstimate: 30, now: _t1);
       final id = (await _planned(db, 'o1')).single.$1;
@@ -688,8 +666,6 @@ void main() {
       expect(cur['role'], 'current');
       expect(cur['position'], isNull);
       expect(await _planned(db, 'o1'), isEmpty);
-      expect(await _nextText(db, 'o1'), 'stale cursor',
-          reason: 'the retired cursor is neither read nor written (ADR-0022)');
       // The energy/time mirror is a separate mechanism and deliberately stays:
       // it is what keeps the D2 read fallback off the replaced Action.
       final todo = await db.todoDao.getTodo('o1');
@@ -727,9 +703,7 @@ void main() {
 
   group('supersedeAndPromote', () {
     test('retires the current (ADR-0018 terminal time = updated_at) and flips '
-        'the planned row up, cursor untouched, one stamp', () async {
-      await (db.update(db.todos)..where((t) => t.id.equals('o1')))
-          .write(const TodosCompanion(nextActionText: Value('stale cursor')));
+        'the planned row up, one stamp', () async {
       await db.actionDao.setCurrentAction('o1', 'old current',
           energyLevel: 'high', timeEstimate: 90, now: _t1);
       final oldId = (await _current(db, 'o1'))!['id'] as String;
@@ -749,8 +723,6 @@ void main() {
       final cur = await _current(db, 'o1');
       expect(cur!['id'], plannedId);
       expect(cur['text'], 'new current');
-      expect(await _nextText(db, 'o1'), 'stale cursor',
-          reason: 'the retired cursor is neither read nor written (ADR-0022)');
       // Raw columns, not getTodo: the projection would COALESCE the promoted
       // Action's own value over a missing mirror and pass either way.
       // The mirror now reads as the *promoted* row: 'low' with no estimate,
@@ -781,8 +753,8 @@ void main() {
   });
 
   group('demoteCurrentAction', () {
-    test('flips the current back to planned at position 0 (shifting), clears '
-        'the cursor text, and stamps', () async {
+    test('flips the current back to planned at position 0 (shifting) and '
+        'stamps', () async {
       await db.actionDao.addPlannedAction('o1', 'kept', now: _t1);
       await db.actionDao.setCurrentAction('o1', 'demote me', now: _t2);
       final curId = (await _current(db, 'o1'))!['id'] as String;
@@ -793,8 +765,6 @@ void main() {
       final planned = await _planned(db, 'o1');
       expect(planned.map((p) => p.$2), ['demote me', 'kept']);
       expect(planned.map((p) => p.$3), [0, 1]);
-      expect(await _nextText(db, 'o1'), isNull,
-          reason: 'demote must clear the cursor (Mode 3 resurrect guard)');
       expect(await _lastClarified(db, 'o1'), _t3);
     });
 

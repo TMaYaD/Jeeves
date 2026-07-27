@@ -48,8 +48,68 @@ const _requiredIndexes = <String, List<List<String>>>{
   ],
 };
 
+/// Columns that were deliberately removed and must never come back, keyed by
+/// table. Check C above only pins Drift↔PowerSync *agreement*: re-adding a
+/// column to `tables.dart` regenerates the PowerSync schema from it, so the two
+/// stay consistent and Check C stays green. This is the assertion that fails.
+///
+/// `todos.next_action_text` — the retired next-action cursor, dropped in
+/// ADR-0024 (issue #525). `actions` is the only next-action grain; an
+/// Outcome-column mirror of the current Action's text re-arms every cursor path
+/// #479 deleted.
+const _retiredColumns = <String, List<String>>{
+  'todos': ['next_action_text'],
+};
+
 void main() {
   setUpAll(configureSqliteForTests);
+
+  test('retired columns stay retired, on both sides of the schema', () async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final psByName = {for (final t in powersyncSchema.tables) t.name: t};
+    final failures = <String>[];
+
+    for (final entry in _retiredColumns.entries) {
+      final driftTable = db.allTables
+          .firstWhere((t) => t.actualTableName == entry.key);
+      // Raw SQL column names, not the Dart getter keys: a re-add under a
+      // different getter name mapped to the same column must still fail.
+      final driftCols = {
+        for (final col in driftTable.columnsByName.values) col.name,
+      };
+      final psCols = {
+        for (final col in psByName[entry.key]?.columns ?? const []) col.name,
+      };
+      // And the live SQLite table, so a hand-written CREATE TABLE or a
+      // migration that re-adds the column is caught too.
+      final liveCols = (await db
+              .customSelect('PRAGMA table_info(${entry.key})')
+              .get())
+          .map((r) => r.read<String>('name'))
+          .toSet();
+
+      for (final column in entry.value) {
+        if (driftCols.contains(column)) {
+          failures.add('${entry.key}.$column: back in the Drift schema');
+        }
+        if (psCols.contains(column)) {
+          failures.add('${entry.key}.$column: back in the PowerSync schema');
+        }
+        if (liveCols.contains(column)) {
+          failures.add('${entry.key}.$column: back in the created table');
+        }
+      }
+    }
+
+    if (failures.isNotEmpty) {
+      fail(
+        'Retired columns have been re-declared:\n'
+        '${failures.map((f) => '  • $f').join('\n')}',
+      );
+    }
+  });
 
   test(
     'every synced Drift table has id UNIQUE NOT NULL and matching PowerSync columns',

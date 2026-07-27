@@ -131,7 +131,7 @@ void main() {
     });
 
     testWidgets(
-        'phrase + Save writes next_action_text, keeps the person tag, '
+        'phrase + Save sets the current Action, keeps the person tag, '
         'records a Next routing, and advances', (tester) async {
       await _insertWaitingForTodo(db, id: 'wf1');
       final container = await _enterStep(tester, db);

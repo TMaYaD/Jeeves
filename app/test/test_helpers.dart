@@ -15,11 +15,10 @@ void configureSqliteForTests() {}
 /// (ADR-0001 story 3).
 ///
 /// Any fixture that wants an Outcome to *have* a next action must call this.
-/// Setting `todos.next_action_text` instead does nothing: that column is the
-/// retired legacy cursor (ADR-0022), and an Outcome carrying only a cursor is
-/// genuinely Actionless — a list-exclusion assertion over such a fixture will
-/// pass for the wrong reason. A blank or null [text] seeds nothing, mirroring
-/// the blank → Actionless normalisation `setNextActionText` applies.
+/// There is no Outcome column to set instead — the `todos.next_action_text`
+/// cursor was retired (ADR-0022) and then dropped (ADR-0024). A blank or null
+/// [text] seeds nothing, mirroring the blank → Actionless normalisation
+/// `setCurrentActionText` applies.
 ///
 /// [id] defaults to `action-<outcomeId>`; pass it when a test needs a second
 /// row on the same Outcome or a specific winner-rule ordering.

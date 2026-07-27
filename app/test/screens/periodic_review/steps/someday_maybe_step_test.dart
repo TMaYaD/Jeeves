@@ -99,7 +99,7 @@ void main() {
     tearDown(() async => db.close());
 
     testWidgets(
-        'phrase + Save routes to Next, writes next_action_text, records a '
+        'phrase + Save routes to Next, sets the current Action, records a '
         'Someday routing, and advances', (tester) async {
       await _insertSomedayTodo(db, id: 'sm1');
       final container = await _enterStep(tester, db);

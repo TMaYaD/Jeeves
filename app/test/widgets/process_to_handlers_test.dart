@@ -739,7 +739,7 @@ void main() {
     });
 
     testWidgets(
-        'Next (dialog default-on) — Save writes new nextActionText and routes',
+        'Next (dialog default-on) — Save writes the new Action and routes',
         (tester) async {
       final todo = await _insertTodo(db, id: 'nd3');
       await tester.pumpWidget(_harness(db, todo: todo));
@@ -902,7 +902,7 @@ void main() {
     });
   });
 
-  group('ProcessToHandlers — next_action_text is on the user-action axis',
+  group('ProcessToHandlers — the current Action is on the user-action axis',
       () {
     late GtdDatabase db;
 

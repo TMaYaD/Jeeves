@@ -164,7 +164,7 @@ void main() {
       expect(draftCols.energy, 'high');
 
       // Creating the birth Action (no metadata passed) seeds from the draft.
-      await db.todoDao.setNextActionText('o1', 'sketch the plan', now: _t2);
+      await db.todoDao.setCurrentActionText('o1', 'sketch the plan', now: _t2);
 
       final cur = await _current(db, 'o1');
       expect(cur!.energy, 'high', reason: 'birth Action seeded from draft');

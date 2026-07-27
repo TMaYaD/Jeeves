@@ -101,7 +101,6 @@ async def create_todo(
         capture_source=body.capture_source,
         time_spent_minutes=body.time_spent_minutes,
         last_clarified_at=body.last_clarified_at,
-        next_action_text=body.next_action_text,
         last_next_action_completion_at=body.last_next_action_completion_at,
         updated_at=body.updated_at,
         user_id=current_user.id,

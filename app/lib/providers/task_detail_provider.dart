@@ -328,9 +328,9 @@ class TaskDetailNotifier {
   /// Distinct from **Remove**, which hard-deletes an unengaged `planned` row.
   /// Abandon retires; nothing is deleted and the row is never re-promotable.
   /// Unlike completion this *is* a clarifying act, so it stamps
-  /// `last_clarified_at`. It writes nothing to `todos.next_action_text` — the
-  /// cursor is retired (ADR-0022) — and needs no cursor clear to guard against
-  /// resurrection: the startup sweep never reads the cursor at all.
+  /// `last_clarified_at`. It writes only `actions` and needs no cursor clear to
+  /// guard against resurrection: the `todos.next_action_text` column is gone
+  /// (ADR-0022, ADR-0024) and the startup sweep reads no Outcome column at all.
   Future<void> abandonCurrentAction() =>
       _db.actionDao.clearCurrentAction(_todoId);
 

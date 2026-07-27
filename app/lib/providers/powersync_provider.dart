@@ -55,11 +55,11 @@ final FutureProvider<ps.PowerSyncDatabase> powerSyncInstanceProvider =
   // Repair the Action grain before anything reads it (ADR-0001 story 9, issue
   // #479; ADR-0022). One pass: converge an accidental multi-`current` set onto
   // the writers' deterministic winner, retiring the losers. It reads `actions`
-  // and nothing else — no code path reads the legacy `todos.next_action_text`
-  // cursor at runtime any more, and none may be added (the only cursor reader
-  // left is the one-time Drift v26 backfill). It never overwrites an Action's
-  // text and never stamps `last_clarified_at` (ADR-0012). Like the migration
-  // above it runs before any watcher exists, so no view-notify.
+  // and nothing else — the legacy `todos.next_action_text` cursor has no
+  // readers left, and no longer exists to acquire one (ADR-0024). It never
+  // overwrites an Action's text and never stamps `last_clarified_at`
+  // (ADR-0012). Like the migration above it runs before any watcher exists, so
+  // no view-notify.
   await reconcileActionsAtStartup(db);
 
   // Bridge the current auth state to PowerSync's connection lifecycle.

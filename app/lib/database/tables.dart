@@ -73,10 +73,6 @@ class Todos extends Table with Synced {
   IntColumn get timeSpentMinutes =>
       integer().withDefault(const Constant(0)).clientDefault(() => 0)();
 
-  /// The current next-action text for this task. NULL = no next action defined (Actionless).
-  /// Set when a task is processed through inbox-clarify or the review step.
-  TextColumn get nextActionText => text().withLength(max: 500).nullable()();
-
   /// When a focus session last closed with this task non-done.
   /// Stamped by reviewAndCloseSession. Used to detect staleness vs lastClarifiedAt.
   DateTimeColumn get lastNextActionCompletionAt => dateTime().nullable()();
@@ -469,11 +465,14 @@ class CaptureTags extends Table with Synced {
 /// timestamp is read from `updated_at`, and the Outcome's history is the
 /// time-ordered chain of terminated Action rows.
 ///
-/// Story 1 is pure plumbing: no DAO reads or writes `actions` yet. The table
-/// exists and replicates so no version skew can lose an Action, and the Drift
-/// v26 upgrade backfills one `current` Action per Outcome with a non-blank
-/// `next_action_text`, converging with the server backfill on a deterministic
-/// uuid5 id (see `backfillActionIdFor`, ADR-0019).
+/// `actions` is the only next-action grain. The server-side backfill (Alembic
+/// 0028) gave one `current` Action to each Outcome that held a non-blank
+/// cursor **at the moment that migration ran** — it is a one-time pass, not
+/// ongoing reconciliation, so an Outcome with a blank cursor got none and
+/// renders Actionless until re-clarified. It mints a deterministic uuid5 id
+/// from the Outcome id (see `backfillActionIdFor`, ADR-0019) so no version
+/// skew can duplicate a row. The `todos.next_action_text` cursor it read from
+/// no longer exists (ADR-0024).
 class Actions extends Table with Synced {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get outcomeId =>

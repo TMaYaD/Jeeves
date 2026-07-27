@@ -18,7 +18,6 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
 import 'daos/action_dao.dart';
-import 'daos/action_ids.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
 import 'daos/search_dao.dart';
@@ -46,7 +45,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 27;
+  int get schemaVersion => 28;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -372,8 +371,9 @@ class GtdDatabase extends _$GtdDatabase {
             }
           }
           if (from < 21) {
-            // Add next_action_text and last_next_action_completion_at (issue #237).
-            await _addColumnIfTable(m, todos, todos.nextActionText);
+            // Add last_next_action_completion_at (issue #237). The sibling
+            // next_action_text column this block also added is gone — the v28
+            // block below drops it, so there is nothing to add here (ADR-0024).
             await _addColumnIfTable(m, todos, todos.lastNextActionCompletionAt);
           }
           if (from < 22) {
@@ -459,79 +459,17 @@ class GtdDatabase extends _$GtdDatabase {
             // only create the real table on the NativeDatabase test path,
             // guarding on sqlite_master exactly like the Capture tables
             // (from < 24) and focus_session_dispositions (from < 25).
+            //
+            // Table creation only: the client-side Action backfill that used to
+            // run here read `todos.next_action_text`, which v28 drops. The
+            // server backfill (Alembic 0028) already minted every one of those
+            // Actions on the same deterministic uuid5 id, so a client reaching
+            // v26 today re-syncs them rather than re-deriving them (ADR-0024).
             final rows = await customSelect(
               "SELECT type FROM sqlite_master WHERE name = 'actions'",
             ).get();
             if (rows.isEmpty) {
               await m.createTable(actions);
-            }
-
-            // Client-side backfill (ADR-0019): mint one `current` Action per
-            // Outcome with a non-blank next_action_text, on the same
-            // deterministic uuid5 id as the server backfill (Alembic 0028), so
-            // the two converge to a single row via upsert-on-replay (ADR-0015).
-            // The predicate mirrors the server's and the app's actionless
-            // normalisation — SQLite TRIM strips U+0020 only, matching the
-            // backend. uuid5 is not computable in SQLite, so iterate in Dart.
-            // created_at = COALESCE(last_clarified_at, created_at), derived only
-            // from replicated data so both origins produce field-identical
-            // rows. Each insert is guarded by NOT EXISTS so a device that
-            // already downloaded the server row — or re-runs the migration —
-            // mints nothing. This runs before any watcher exists, so it needs
-            // no notifyActionsViewWrite.
-            //
-            // Guard on the cursor columns' presence: onUpgrade runs every
-            // `from < N` block, so a low-`from` upgrade reaches here too, and a
-            // real todos view/table always carries these columns by now — but a
-            // synthetic partial-schema upgrade path (older migration unit tests)
-            // may not. Skip the backfill rather than fail on a missing column;
-            // if the cursor columns are absent there is nothing to backfill.
-            // The skip is block-scoped, NOT a bare `return`: this is the last
-            // `from < N` block today, but a future schema bump appends its own
-            // block right after, and `return` would exit the whole onUpgrade
-            // closure and silently skip every later migration.
-            final todosCols = await customSelect('PRAGMA table_info(todos)').get();
-            final todosColNames =
-                todosCols.map((r) => r.read<String>('name')).toSet();
-            const requiredCols = {
-              'id',
-              'next_action_text',
-              'energy_level',
-              'time_estimate',
-              'last_clarified_at',
-              'created_at',
-              'user_id',
-            };
-            if (requiredCols.every(todosColNames.contains)) {
-              final qualifying = await customSelect(
-                "SELECT id, next_action_text, energy_level, time_estimate, "
-                "last_clarified_at, created_at, user_id FROM todos "
-                "WHERE next_action_text IS NOT NULL "
-                "AND TRIM(next_action_text) != ''",
-              ).get();
-              for (final row in qualifying) {
-                final todoId = row.read<String>('id');
-                final actionId = backfillActionIdFor(todoId);
-                await customStatement(
-                  "INSERT INTO actions "
-                  "(id, outcome_id, user_id, text, role, position, energy_level, "
-                  " time_estimate, created_at, updated_at, done_at) "
-                  "SELECT ?, ?, ?, ?, 'current', NULL, ?, ?, COALESCE(?, ?), "
-                  "       NULL, NULL "
-                  "WHERE NOT EXISTS (SELECT 1 FROM actions WHERE id = ?)",
-                  [
-                    actionId,
-                    todoId,
-                    row.read<String>('user_id'),
-                    row.read<String>('next_action_text'),
-                    row.read<String?>('energy_level'),
-                    row.read<int?>('time_estimate'),
-                    row.read<String?>('last_clarified_at'),
-                    row.read<String>('created_at'),
-                    actionId,
-                  ],
-                );
-              }
             }
           }
           if (from < 27) {
@@ -544,6 +482,20 @@ class GtdDatabase extends _$GtdDatabase {
             // unreconstructable), and totals are unaffected because every
             // time-spent derivation aggregates by task_id.
             await _addColumnIfTable(m, timeLogs, timeLogs.actionId);
+          }
+          if (from < 28) {
+            // Drop the retired next-action cursor (issue #525, ADR-0024).
+            // `actions` is the only next-action grain; nothing has read or
+            // written this column since ADR-0022.
+            //
+            // A no-op on the production path — `todos` is a PowerSync view and
+            // _dropColumnIfTable short-circuits on views, exactly like the v19
+            // `waiting_for` drop. The view simply stops projecting the key on
+            // the next cold start, when PowerSync regenerates it from
+            // powersyncSchema; the orphaned key stays in the ps_data__todos
+            // JSON blob, unreachable. On the NativeDatabase path (tests, fresh
+            // local stores) this is a real ALTER TABLE ... DROP COLUMN.
+            await _dropColumnIfTable('todos', 'next_action_text');
           }
         },
       );

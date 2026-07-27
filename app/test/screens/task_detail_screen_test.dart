@@ -30,25 +30,16 @@ const _userId = 'local';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
-/// A legacy `todos.next_action_text` value no production path can produce.
-/// Seeding it is what makes the cursor-freeze assertions below meaningful: on
-/// an Outcome whose cursor was never populated, `nextActionText, isNull` holds
-/// whatever the write path does. Against the sentinel the assertion catches both
-/// an accidental **write** (replaced by the Action text) and an accidental
-/// **clear** (becomes NULL) — the method `action_cursor_freeze_test.dart` uses.
-const _legacyCursorSentinel = 'LEGACY-SENTINEL';
-
 Future<Todo> _insertAt(
   GtdDatabase db, {
   required String id,
   String title = 'Test task',
   String intent = 'next',
-  String? nextActionText,
 }) async {
   final now = DateTime.now();
   await db.customInsert(
     'INSERT INTO todos (id, title, user_id, created_at, time_spent_minutes, '
-    'intent, next_action_text) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'intent) VALUES (?, ?, ?, ?, ?, ?)',
     variables: [
       Variable.withString(id),
       Variable.withString(title),
@@ -56,7 +47,6 @@ Future<Todo> _insertAt(
       Variable.withDateTime(now),
       Variable.withInt(0),
       Variable.withString(intent),
-      Variable<String>(nextActionText),
     ],
   );
   return (await db.todoDao.getTodo(id))!;
@@ -796,10 +786,8 @@ void main() {
     testWidgets(
         'journey: add → reorder → edit → promote (Actionless) → demote → '
         'replace via confirm sheet → remove', (tester) async {
-      final todo = await _insertAt(db,
-          id: 'plan1',
-          title: 'Plan outcome',
-          nextActionText: _legacyCursorSentinel);
+      final todo =
+          await _insertAt(db, id: 'plan1', title: 'Plan outcome');
       final curCtrl = StreamController<Action?>.broadcast();
       final plnCtrl = StreamController<List<Action>>.broadcast();
       addTearDown(curCtrl.close);
@@ -896,13 +884,6 @@ void main() {
       final promoted = await currentRow();
       expect(promoted, isNotNull);
       expect(promoted!.actionText, 'second (edited)');
-      // The legacy cursor is retired (ADR-0022): a promote writes the Action
-      // and nothing else, so the seeded sentinel must still be sitting there
-      // untouched — neither rewritten to the Action text nor cleared.
-      final todoAfterPromote =
-          await tester.runAsync(() => db.todoDao.getTodo('plan1'));
-      expect(todoAfterPromote!.nextActionText, _legacyCursorSentinel,
-          reason: 'promote must neither write nor clear the retired cursor');
       expect(find.byKey(const Key('plan_current_action')), findsOneWidget);
       expect((await stamp())!.isAfter(beforePromote!), isTrue,
           reason: 'promote stamps');
@@ -912,13 +893,6 @@ void main() {
       await settleWrite();
       await refresh();
       expect(await currentRow(), isNull);
-      final todoAfterDemote =
-          await tester.runAsync(() => db.todoDao.getTodo('plan1'));
-      expect(todoAfterDemote!.nextActionText, _legacyCursorSentinel,
-          reason: 'demote must neither write nor clear the retired cursor '
-              'either — leaving it live is safe because nothing reads it at '
-              'runtime, not because the `planned` row guards it (a subsequent '
-              'Remove hard-deletes that row)');
 
       // Promote 'first' directly so a current exists for the replace path.
       rows = await plannedRows();
@@ -1377,10 +1351,8 @@ void main() {
     testWidgets(
         'journey: abandon → history row → complete → history newest-first',
         (tester) async {
-      final todo = await _insertAt(db,
-          id: 'hist1',
-          title: 'History outcome',
-          nextActionText: _legacyCursorSentinel);
+      final todo =
+          await _insertAt(db, id: 'hist1', title: 'History outcome');
       final curCtrl = StreamController<Action?>.broadcast();
       final plnCtrl = StreamController<List<Action>>.broadcast();
       final hisCtrl = StreamController<List<TerminatedAction>>.broadcast();
@@ -1449,12 +1421,6 @@ void main() {
       expect(afterAbandon.length, 1);
       expect(afterAbandon.single.action.role, 'superseded');
       expect(afterAbandon.single.action.actionText, 'write the draft');
-      final todoAfterAbandon =
-          await tester.runAsync(() => db.todoDao.getTodo('hist1'));
-      expect(todoAfterAbandon!.nextActionText, _legacyCursorSentinel,
-          reason: 'abandon neither writes nor clears the cursor (ADR-0022) — '
-              'the abandoned Action cannot be resurrected because nothing '
-              'reads the cursor at runtime at all');
       expect((await stamp())!.isAfter(beforeAbandon ?? DateTime(2000)), isTrue,
           reason: 'abandon is a clarifying act and stamps');
 

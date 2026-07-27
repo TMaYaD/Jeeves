@@ -59,9 +59,9 @@ class PeriodicReviewState {
   /// Current Action text for the Outcomes in every list-driven snapshot,
   /// keyed by Outcome id. An absent key is an Actionless Outcome.
   ///
-  /// Loaded alongside each snapshot from `actions` — the Action entity, not
-  /// the `next_action_text` cursor, is what the steps render and what the
-  /// re-clarify dialog prefills (ADR-0001 story 3). One map across the steps
+  /// Loaded alongside each snapshot from `actions` — the Action entity is the
+  /// only next-action grain, and what the steps render and the re-clarify
+  /// dialog prefills (ADR-0001 story 3). One map across the steps
   /// because Outcome ids are unique; each loader merges its slice in.
   final Map<String, String> actionTexts;
 

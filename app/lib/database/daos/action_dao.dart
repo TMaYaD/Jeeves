@@ -52,12 +52,12 @@
 /// reorder / remove among the stamping micro-acts), except a no-op reorder
 /// (unchanged order writes nothing and does not stamp).
 ///
-/// **The `actions` table is the only grain.** No primitive here writes the
-/// legacy `todos.next_action_text` cursor, which is retired by abandonment —
-/// still declared and still replicated, but neither read nor written
-/// (ADR-0022, issue #479). A future contributor who "restores" a cursor write
-/// to keep the two sides agreeing would be re-introducing the second source of
-/// truth this model exists to remove.
+/// **The `actions` table is the only grain.** The legacy
+/// `todos.next_action_text` cursor was retired by abandonment (ADR-0022, issue
+/// #479) and then dropped from the schema outright (ADR-0024, issue #525). A
+/// future contributor who re-adds an Outcome-column mirror of the current
+/// Action's text, to keep two sides agreeing, would be re-introducing the
+/// second source of truth this model exists to remove.
 ///
 /// What primitives *do* still mirror onto `todos` is Action **metadata**
 /// (`energy_level` / `time_estimate`), which is a separate mechanism with a
@@ -69,8 +69,8 @@
 /// The legacy one-field surfaces in [TodoDao] compose these primitives through
 /// the `apply*` transaction-body variants (package-internal), which run inside
 /// the caller's transaction and defer notification to the caller (so watchers
-/// never re-read pre-commit state) — see `TodoDao.setNextActionText` /
-/// `setNextActionTextIfActionless` / `applyRouting` / `deleteOutcome`.
+/// never re-read pre-commit state) — see `TodoDao.setCurrentActionText` /
+/// `setCurrentActionTextIfActionless` / `applyRouting` / `deleteOutcome`.
 library;
 
 import 'package:drift/drift.dart';
@@ -201,7 +201,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
 
   /// Make the Outcome Actionless: [supersedeCurrentAction] with no replacement.
   /// Retires the current Action, so the Outcome carries none. No current row →
-  /// no-op (no stamp). This is the Action side of `setNextActionText('')`'s
+  /// no-op (no stamp). This is the Action side of `setCurrentActionText('')`'s
   /// blank→Actionless normalisation.
   Future<void> clearCurrentAction(String outcomeId, {DateTime? now}) =>
       supersedeCurrentAction(outcomeId, now: now);
@@ -567,8 +567,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   // Transaction-body variants — run inside the caller's transaction, never
   // notify (the caller notifies after its own commit). Used by the public
   // wrappers above and by TodoDao's writers, for which the `actions` table is
-  // the only grain — the `todos.next_action_text` cursor is retired by
-  // abandonment (ADR-0022) and is neither read nor written here.
+  // the only grain — the `todos.next_action_text` cursor is retired and no
+  // longer exists (ADR-0022, ADR-0024).
   // ---------------------------------------------------------------------------
 
   Future<ActionWriteEffect> applySetCurrentAction(
@@ -595,10 +595,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       // on its columns as draft. When its first `current` Action is born and
       // the caller passes no metadata, seed the birth Action from those draft
       // columns — so the draft lands on the Action for *every* creation path
-      // (clarify `applyRouting`, `setNextActionText`,
-      // `setNextActionTextIfActionless`) with no signature change. Explicit
-      // args win over the draft. This agrees with the sweep's cursor → actions
-      // direction (it would have converged to exactly this state).
+      // (clarify `applyRouting`, `setCurrentActionText`,
+      // `setCurrentActionTextIfActionless`) with no signature change. Explicit
+      // args win over the draft.
       var seededEnergy = energyLevel;
       var seededTime = timeEstimate;
       if (seededEnergy == null || seededTime == null) {
@@ -810,9 +809,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // (issue #476), not at a later endFocus(). No reopen: a finished Action has
     // no successor to continue against (CONTEXT.md § Switching Actions).
     final closedLog = await _closeOpenLogFor(current.id, ts);
-    // Nothing is written to `todos`: completion must not stamp, and the cursor
-    // is retired (ADR-0022). There is no adoption pass left to guard against —
-    // it was deleted outright, not merely guarded tighter. The caller still
+    // Nothing is written to `todos`: completion must not stamp, and there is
+    // no Outcome-column cursor to clear — it was deleted outright (ADR-0022,
+    // ADR-0024), along with the adoption pass that would have needed guarding. The caller still
     // fires the `todos` view notification — see [completeCurrentAction].
     return (changed: true, stamped: false, logChanged: closedLog != null);
   }

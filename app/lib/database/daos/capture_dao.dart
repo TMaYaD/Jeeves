@@ -54,8 +54,9 @@ class CarvedOutcome {
 
   /// Text of the Outcome's current Action, or null when it is Actionless.
   ///
-  /// Joined in rather than read off [outcome]: the Action entity — not the
-  /// `next_action_text` cursor — is what the app believes (ADR-0001 story 3).
+  /// Joined in rather than read off [outcome]: the Action entity is the only
+  /// next-action grain (ADR-0001 story 3; the Outcome-column cursor it replaced
+  /// no longer exists, ADR-0024).
   final String? currentActionText;
 
   /// Names of the Outcome's Context tags, alphabetical.

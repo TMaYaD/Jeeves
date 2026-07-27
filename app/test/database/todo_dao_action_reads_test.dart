@@ -1,13 +1,13 @@
 /// Reads move to Action rows (ADR-0001 story 3, issue #473).
 ///
-/// The Next List rule and the re-clarification predicates now answer "does this
-/// Outcome have a current Action?" from the `actions` table, not from the
-/// `todos.next_action_text` cursor. These tests pin three things:
+/// The Next List rule and the re-clarification predicates answer "does this
+/// Outcome have a current Action?" from the `actions` table. The
+/// `todos.next_action_text` cursor they replaced no longer exists (ADR-0024),
+/// so the parity group that compared the two grains went with it — the
+/// predicates' own behaviour is pinned by `todo_dao_test.dart` (the Next
+/// quadrants) and `todo_dao_needs_review_test.dart` (the re-clarify fixtures).
+/// These tests pin two things:
 ///
-/// * **Parity** — on a store seeded through the public write paths (which
-///   write only the `actions` table; the cursor is retired by abandonment,
-///   ADR-0022), the new Action-grain predicates return exactly what the
-///   frozen cursor-grain clauses return.
 /// * **Entity grain** — only `role='current'` counts (a `planned` row is not
 ///   engageable, ADR-0004; a `superseded`-only Outcome is Actionless), and a
 ///   multi-current race resolves to the deterministic winner *in the read*
@@ -28,50 +28,12 @@ final _t0 = DateTime.parse('2026-07-01T09:00:00.000Z');
 final _t1 = DateTime.parse('2026-07-01T10:00:00.000Z');
 final _t2 = DateTime.parse('2026-07-01T11:00:00.000Z');
 
-/// The **frozen** pre-#473 cursor-grain clauses, kept verbatim so the parity
-/// test compares against what shipped rather than against a re-derivation.
-const _frozenNextWhere = '''
-clarified = 1 AND done_at IS NULL AND intent = 'next'
-AND (
-  (todos.next_action_text IS NOT NULL AND TRIM(todos.next_action_text) != '')
-  OR NOT EXISTS (
-    SELECT 1 FROM todo_tags tt
-    JOIN tags tg ON tg.id = tt.tag_id
-    WHERE tt.todo_id = todos.id AND tg.type = 'person'
-  )
-)''';
-
-const _frozenNeedsReviewWhere = '''
-clarified = 1
-AND done_at IS NULL
-AND intent = 'next'
-AND (
-  (last_next_action_completion_at IS NOT NULL
-   AND (last_clarified_at IS NULL
-        OR last_clarified_at < last_next_action_completion_at))
-  OR (
-    (next_action_text IS NULL OR TRIM(next_action_text) = '')
-    AND NOT EXISTS (
-      SELECT 1 FROM todo_tags tt
-      JOIN tags tg ON tg.id = tt.tag_id
-      WHERE tt.todo_id = todos.id AND tg.type = 'person'
-    )
-  )
-)''';
-
 /// Is [id] currently in the re-clarification queue? Asked through the one
 /// surviving production entry point, [TodoDao.getNeedsReview] — the
 /// `isNeedsReview` / `getNeedsReviewCount` wrappers were dead surface and were
 /// removed in #494.
 Future<bool> _isNeedsReview(GtdDatabase db, String id) async =>
     (await db.todoDao.getNeedsReview()).any((t) => t.id == id);
-
-Future<List<String>> _idsMatching(GtdDatabase db, String where) async {
-  final rows = await db
-      .customSelect('SELECT id FROM todos WHERE $where ORDER BY created_at')
-      .get();
-  return rows.map((r) => r.read<String>('id')).toList();
-}
 
 Future<String> _seedOutcome(
   GtdDatabase db,
@@ -261,100 +223,6 @@ void main() {
   // Parity with the frozen cursor-grain clauses
   // ---------------------------------------------------------------------------
 
-  group('predicate parity with the legacy cursor semantics', () {
-    /// Writes the legacy cursor value the pre-retirement dual-write *would*
-    /// have left on [id]. Production no longer writes `next_action_text` at all
-    /// (ADR-0022), so the fixture has to supply it: without it the frozen
-    /// clauses below would read NULL everywhere and the comparison would be
-    /// vacuous rather than a parity check.
-    Future<void> mirrorLegacyCursor(String id, String? text) =>
-        (db.update(db.todos)..where((t) => t.id.equals(id)))
-            .write(TodosCompanion(nextActionText: Value(text)));
-
-    /// Seeds one Outcome per interesting quadrant **through the public write
-    /// paths** for the Action grain, with the legacy cursor mirrored alongside
-    /// so both grains describe the same store.
-    Future<void> seedRepresentativeStore() async {
-      // Actioned.
-      await _seedOutcome(db, 'actioned', createdAt: _t0);
-      await db.todoDao.setNextActionText('actioned', 'Book the venue');
-      await mirrorLegacyCursor('actioned', 'Book the venue');
-
-      // Actionless.
-      await _seedOutcome(db, 'actionless', createdAt: _t0);
-
-      // Actionless + PersonBlocked — the single excluded Next quadrant.
-      await _seedOutcome(db, 'actionless-blocked', createdAt: _t0);
-      await _attachPersonTag(db, 'actionless-blocked');
-
-      // Actioned + PersonBlocked — on Next *and* Waiting For, by design.
-      await _seedOutcome(db, 'actioned-blocked', createdAt: _t0);
-      await _attachPersonTag(db, 'actioned-blocked');
-      await db.todoDao.setNextActionText('actioned-blocked', 'Chase Trixy');
-      await mirrorLegacyCursor('actioned-blocked', 'Chase Trixy');
-
-      // Whitespace-cleared — the blank→Actionless normalisation.
-      await _seedOutcome(db, 'cleared', createdAt: _t0);
-      await db.todoDao.setNextActionText('cleared', 'Temporary');
-      await db.todoDao.setNextActionText('cleared', '   ');
-      await mirrorLegacyCursor('cleared', null);
-
-      // Stale (worked on in a session after the last clarification).
-      await _seedOutcome(db, 'stale',
-          createdAt: _t0,
-          lastClarifiedAt: _t0,
-          lastNextActionCompletionAt: _t2);
-      await db.todoDao.setNextActionText('stale', 'Keep going');
-      await mirrorLegacyCursor('stale', 'Keep going');
-      await (db.update(db.todos)..where((t) => t.id.equals('stale'))).write(
-        TodosCompanion(lastClarifiedAt: Value(_t0)),
-      );
-
-      // Done / someday / trashed / unclarified — out of every list.
-      await _seedOutcome(db, 'done',
-          createdAt: _t0, doneAt: _t2.toIso8601String());
-      await _seedOutcome(db, 'someday', createdAt: _t0, intent: 'maybe');
-      await _seedOutcome(db, 'trashed', createdAt: _t0, intent: 'trash');
-      await _seedOutcome(db, 'unclarified', createdAt: _t0, clarified: false);
-    }
-
-    setUp(seedRepresentativeStore);
-
-    test('watchNext matches the frozen cursor clause', () async {
-      final expected = await _idsMatching(db, _frozenNextWhere);
-      final actual =
-          (await db.todoDao.watchNext().first).map((t) => t.id).toList();
-      expect(actual, expected);
-      expect(actual, isNotEmpty);
-    });
-
-    test('watchNext under a tag filter matches the frozen cursor clause',
-        () async {
-      final tagId = 'ptag-actioned-blocked';
-      final expected = await _idsMatching(
-        db,
-        "$_frozenNextWhere AND EXISTS (SELECT 1 FROM todo_tags tt2 "
-        "WHERE tt2.todo_id = todos.id AND tt2.tag_id = '$tagId')",
-      );
-      final actual = (await db.todoDao.watchNext(tagIds: {tagId}).first)
-          .map((t) => t.id)
-          .toList();
-      expect(actual, expected);
-      expect(actual, ['actioned-blocked']);
-    });
-
-    test('the re-clarify queue matches the frozen cursor clause', () async {
-      final expected = await _idsMatching(db, _frozenNeedsReviewWhere);
-
-      expect((await db.todoDao.getNeedsReview()).map((t) => t.id), expected);
-      for (final id in ['actionless', 'stale', 'cleared', 'actioned', 'done']) {
-        expect(await _isNeedsReview(db, id), expected.contains(id),
-            reason: 'the re-clarify queue disagrees for $id');
-      }
-      expect(expected, isNotEmpty);
-    });
-  });
-
   // ---------------------------------------------------------------------------
   // Entity grain: only role='current' counts
   // ---------------------------------------------------------------------------
@@ -396,20 +264,18 @@ void main() {
       expect(await db.actionDao.getCurrentAction('retired'), isNull);
     });
 
-    test('the Action row wins over a skewed cursor', () async {
-      // A pre-#472 client PATCHed the cursor without minting an Action row.
-      await _seedOutcome(db, 'skewed');
-      await (db.update(db.todos)..where((t) => t.id.equals('skewed'))).write(
-        const TodosCompanion(nextActionText: Value('Cursor says actioned')),
-      );
-      await _attachPersonTag(db, 'skewed');
+    test('a PersonBlocked Outcome is engageable exactly when it has a current '
+        'Action', () async {
+      // The excluded Next quadrant is Actionless AND PersonBlocked; adding a
+      // current Action to the same shape puts it back on Next.
+      await _seedOutcome(db, 'blocked-actionless');
+      await _attachPersonTag(db, 'blocked-actionless');
 
       expect((await db.todoDao.watchNext().first).map((t) => t.id),
-          isNot(contains('skewed')));
-      expect(await _isNeedsReview(db, 'skewed'), isFalse,
+          isNot(contains('blocked-actionless')));
+      expect(await _isNeedsReview(db, 'blocked-actionless'), isFalse,
           reason: 'PersonBlocked Outcomes never enter the Actionless branch');
 
-      // …and the converse: an Action row with a NULL cursor is engageable.
       await _seedOutcome(db, 'action-only');
       await _attachPersonTag(db, 'action-only');
       await _rawAction(db,

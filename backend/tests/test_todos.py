@@ -622,13 +622,26 @@ async def test_patch_tag_null_color_clears_it(client: AsyncClient) -> None:
 async def test_connector_shaped_payload_roundtrips_client_state(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    """Standing tripwire for the #380 audit: a POST shaped exactly like a
+    """A stale client that still sends the retired cursor gets a 201, and every
+    live client-state field still round-trips verbatim.
+
+    Two properties in one payload.
+
+    Standing tripwire for the #380 audit: a POST shaped exactly like a
     PowerSync connector PUT — every client-state column, SQLite integer
     booleans, Drift space-before-offset timestamps — must persist verbatim.
     Any column silently dropped here defaults on the server and gets
     replicated back over the local value on the next checkpoint download.
     When adding a column to the Drift Todos table, add it to TodoCreate,
-    TodoUpdate, and this payload (see docs/SYNC.md § todos upload contract)."""
+    TodoUpdate, and this payload (see docs/SYNC.md § todos upload contract).
+
+    Tolerant-reader tripwire for #525: ``next_action_text`` stays in the
+    payload deliberately, even though migration 0030 dropped the column and no
+    schema declares it any more (ADR-0024).  Pydantic's default
+    ``extra='ignore'`` is the only reason a client that predates the drop keeps
+    uploading successfully — a 4xx would dead-letter its queue, and a 500 would
+    wedge it forever on PowerSync's 5xx retry.  Setting ``extra="forbid"`` on
+    ``TodoCreate`` turns this into a 422 and fails here, loudly."""
     token = await register(client, "connector-put@example.com")
     headers = auth_header(token)
     todo_id = str(uuid4())
@@ -651,6 +664,9 @@ async def test_connector_shaped_payload_roundtrips_client_state(
         "user_id": "spoofed-user-id",  # server-owned: must be ignored
         "last_clarified_at": "2026-07-11T18:30:00.000Z",
         "time_spent_minutes": 5,
+        # Retired by migration 0030 / ADR-0024 — kept here on purpose as the
+        # stale-client half of this test.  Do not remove it and do not add it
+        # back to any schema.
         "next_action_text": "Sort into a project",
         "last_next_action_completion_at": "2026-07-09T12:00:00.000 +05:30",
     }
@@ -681,7 +697,10 @@ async def test_connector_shaped_payload_roundtrips_client_state(
     assert fetched["energy_level"] == "low"
     assert fetched["capture_source"] == "share_sheet"
     assert fetched["time_spent_minutes"] == 5
-    assert fetched["next_action_text"] == "Sort into a project"
+    # The retired field is neither stored nor echoed: it is dropped on the way
+    # in, and TodoOut no longer declares it.
+    assert "next_action_text" not in created
+    assert "next_action_text" not in fetched
     _assert_instant(fetched["due_date"], "2026-07-20T00:00:00+05:30")
     _assert_instant(fetched["created_at"], "2026-07-10T09:15:00+05:30")
     _assert_instant(fetched["updated_at"], "2026-07-11T18:30:00+00:00")

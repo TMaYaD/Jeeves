@@ -13,8 +13,8 @@
 ///
 /// **Why the `todos` watchers assert on emission counts, not values.** These
 /// tests used to read `todos.next_action_text` and treat a changed value as
-/// proof the watcher refreshed. The cursor is retired (ADR-0022) and several of
-/// these transactions now write nothing to `todos` at all — but the `todos`
+/// proof the watcher refreshed. The cursor is gone (ADR-0022, ADR-0024) and
+/// several of these transactions write nothing to `todos` at all — but the `todos`
 /// notify must still fire, because two list watchers name only
 /// `{todoTags, tags}` in `readsFrom` and the async bridge is briefly silent on
 /// cold start. A value-based assertion cannot express that any more; counting
@@ -211,7 +211,7 @@ void main() {
   test('completeCurrentAction refreshes both view watchers — it now writes '
       'nothing to `todos` at all, so the todos notify is unconditional and '
       'cannot be gated on the stamp (which completion never moves)', () async {
-    await db.todoDao.setNextActionText('o1', 'call the plumber');
+    await db.todoDao.setCurrentActionText('o1', 'call the plumber');
 
     final todoEmissions = <List<String>>[];
     final actionRoles = <List<String>>[];
@@ -245,7 +245,7 @@ void main() {
 
   test('clearCurrentAction refreshes both view watchers — its `todos` write is '
       'now only the stamp, which an abandon always moves', () async {
-    await db.todoDao.setNextActionText('o1', 'call the plumber');
+    await db.todoDao.setCurrentActionText('o1', 'call the plumber');
 
     final todoEmissions = <List<String>>[];
     final actionRoles = <List<String>>[];
@@ -312,7 +312,7 @@ void main() {
     expect(openCounts.last, 0);
   });
 
-  test('TodoDao.setNextActionText refreshes both the todos- and actions-view '
+  test('TodoDao.setCurrentActionText refreshes both the todos- and actions-view '
       'watchers', () async {
     final todoEmissions = <List<String>>[];
     final actionTexts = <List<String>>[];
@@ -324,7 +324,7 @@ void main() {
     await _waitUntil(() => todoEmissions.isNotEmpty && actionTexts.isNotEmpty);
     final todoEmissionsBefore = todoEmissions.length;
 
-    await db.todoDao.setNextActionText('o1', 'draft the plan');
+    await db.todoDao.setCurrentActionText('o1', 'draft the plan');
 
     await _waitUntil(() =>
         actionTexts.last.length == 1 &&

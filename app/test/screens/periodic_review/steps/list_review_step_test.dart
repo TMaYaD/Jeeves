@@ -433,7 +433,7 @@ void main() {
     });
 
     testWidgets(
-        'phrase + Save writes next_action_text, records nextAction at the '
+        'phrase + Save sets the current Action, records nextAction at the '
         'live cursor index, and advances', (tester) async {
       final todo1 = await _insertTodo(db, id: 't1', intent: 'maybe');
       final todo2 = await _insertTodo(db, id: 't2', intent: 'maybe');
@@ -501,8 +501,8 @@ void main() {
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
-      // Leave the field empty — the dialog skips the write, so the row's
-      // `next_action_text` stays null. ListReviewStep re-reads, sees blank,
+      // Leave the field empty — the dialog skips the write, so the Outcome
+      // stays Actionless. ListReviewStep re-reads, sees blank,
       // and must neither record a routing nor advance the cursor.
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();

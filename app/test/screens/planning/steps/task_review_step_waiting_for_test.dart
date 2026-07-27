@@ -26,8 +26,7 @@ GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 Future<String> _insertClarifiedTask(
   GtdDatabase db, {
-  String? nextActionText,
-  String? currentActionText,
+  String? actionText,
   DateTime? lastNextActionCompletionAt,
   DateTime? lastClarifiedAt,
   String title = 'Task',
@@ -41,21 +40,18 @@ Future<String> _insertClarifiedTask(
     clarified: const Value(true),
     intent: const Value('next'),
     createdAt: Value(now),
-    nextActionText:
-        nextActionText != null ? Value(nextActionText) : const Value.absent(),
     lastNextActionCompletionAt: lastNextActionCompletionAt != null
         ? Value(lastNextActionCompletionAt)
         : const Value.absent(),
     lastClarifiedAt:
         lastClarifiedAt != null ? Value(lastClarifiedAt) : const Value.absent(),
   ));
-  // The cursor column above is retired by abandonment (ADR-0022) and inert;
-  // a non-blank phrase is an Action row too, which is what the Actionless
-  // predicate and the hint actually read (ADR-0001 story 3).
+  // A non-blank phrase seeds an Action row, which is what the Actionless
+  // predicate and the hint read (ADR-0001 story 3).
   await seedCurrentAction(
     db,
     outcomeId: id,
-    text: currentActionText ?? nextActionText,
+    text: actionText,
     userId: _userId,
     createdAt: now,
   );
@@ -118,12 +114,11 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    testWidgets('renders the current Action, not the cursor column',
+    testWidgets('renders the current Action, not the Outcome title',
         (tester) async {
       await _insertClarifiedTask(
         db,
-        nextActionText: 'stale cursor phrase',
-        currentActionText: 'Draft the agenda',
+        actionText: 'Draft the agenda',
         lastClarifiedAt:
             DateTime.now().subtract(_staleTaskClarifiedOffset).toUtc(),
         lastNextActionCompletionAt:
@@ -134,7 +129,8 @@ void main() {
       await _enterReviewStep(tester, db);
 
       expect(find.text('Draft the agenda'), findsOneWidget);
-      expect(find.text('stale cursor phrase'), findsNothing);
+      expect(find.text('Run the retro'), findsOneWidget,
+          reason: 'the Action is subtext under the Outcome title, not instead');
       expect(find.text('Updated since last clarified'), findsOneWidget);
     });
 
@@ -172,7 +168,7 @@ void main() {
           DateTime.now().subtract(_staleTaskCompletedOffset).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Email Trixy',
+        actionText: 'Email Trixy',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
         title: 'Waiting on Trixy',
@@ -200,7 +196,7 @@ void main() {
           DateTime.now().subtract(_staleTaskCompletedOffset).toUtc();
       await _insertClarifiedTask(
         db,
-        nextActionText: 'Draft email',
+        actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
         title: 'No delegate stale',
@@ -218,7 +214,7 @@ void main() {
         (tester) async {
       await _insertClarifiedTask(
         db,
-        nextActionText: null,
+        actionText: null,
         title: 'Actionless',
       );
 
@@ -239,7 +235,7 @@ void main() {
       final clarifiedAt = DateTime.now().toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Email Trixy',
+        actionText: 'Email Trixy',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
         title: 'Recently re-clarified',
@@ -265,7 +261,7 @@ void main() {
           DateTime.now().subtract(_staleTaskCompletedOffset).toUtc();
       final id = await _insertClarifiedTask(
         db,
-        nextActionText: 'Sync with team',
+        actionText: 'Sync with team',
         lastClarifiedAt: clarifiedAt,
         lastNextActionCompletionAt: completedAt,
         title: 'Multi-delegate',

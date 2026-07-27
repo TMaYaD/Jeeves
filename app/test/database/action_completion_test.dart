@@ -40,7 +40,6 @@ Future<void> _seedClarifiedOutcome(
         clarified: const Value(true),
         intent: const Value('next'),
         createdAt: Value(_t0),
-        nextActionText: Value(actionText),
         lastClarifiedAt: Value(lastClarifiedAt ?? _t1),
       ));
   await db.into(db.actions).insert(ActionsCompanion(
@@ -108,8 +107,6 @@ void main() {
           reason: 'finishing one Action never completes the Outcome');
       expect(outcome.lastClarifiedAt, _t1,
           reason: 'completion is an engagement signal, not a clarifying act');
-      expect(outcome.nextActionText, 'call the plumber',
-          reason: 'the retired cursor is neither read nor written (ADR-0022)');
       // Deliberate consequence of retiring the cursor: completion is now a
       // pure `actions` write, so the Outcome row's `updated_at` no longer moves
       // and stops being a "something about this Outcome changed" signal. The
@@ -210,8 +207,6 @@ void main() {
       expect(outcome.doneAt, isNotNull);
       expect(outcome.lastClarifiedAt, _t2,
           reason: 'completing the Outcome is a clarifying act — it stamps');
-      expect(outcome.nextActionText, 'call the plumber',
-          reason: 'the completion cascade does not touch the retired cursor');
 
       final rows = {
         for (final r in await _actions(db, 'o1')) r['id'] as String: r,
@@ -247,8 +242,6 @@ void main() {
       final outcome = await _outcome(db, 'o1');
       expect(outcome.doneAt, isNotNull);
       expect(outcome.lastClarifiedAt, _t2);
-      expect(outcome.nextActionText, 'call the plumber',
-          reason: 'the completion cascade does not touch the retired cursor');
       final rows = await _actions(db, 'o1');
       expect(rows.single['role'], 'done');
       expect(rows.single['done_at'], _t2.toIso8601String());
@@ -260,8 +253,8 @@ void main() {
       await db.todoDao.applyRouting('o1', to: RoutingKind.maybe, now: _t2);
 
       expect((await _current(db, 'o1'))!['id'], 'action-o1');
-      expect(await _outcome(db, 'o1').then((o) => o.nextActionText),
-          'call the plumber');
+      expect((await _current(db, 'o1'))!['text'], 'call the plumber',
+          reason: 'routing to maybe never rewrites the Action text');
     });
 
     test('trashing leaves Action rows untouched — rows persist like the '
