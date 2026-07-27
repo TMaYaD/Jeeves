@@ -29,7 +29,7 @@ is moved or deleted, so drift-recovery re-runs are safe:
    Every field derives only from replicated Outcome data —
    ``created_at = COALESCE(last_clarified_at, created_at)`` — so the two origins
    produce field-identical rows, not just id-identical ones.  Each insert is
-   guarded by ``WHERE NOT EXISTS`` on the id, so a re-run, or a run after
+   guarded by ``ON CONFLICT (id) DO NOTHING``, so a re-run, or a run after
    clients already uploaded their own backfill rows, is a no-op that never
    overwrites.
 
@@ -153,13 +153,27 @@ END $$;
         )
     ).all()
 
+    # The re-run guard is ``ON CONFLICT DO NOTHING`` on the primary key rather
+    # than ``WHERE NOT EXISTS (... WHERE id = :id)``.  The latter bound ``:id``
+    # twice — once as a bare value in an INSERT..SELECT list, where Postgres
+    # deduces ``text``, and once against ``actions.id``, where it deduces
+    # ``character varying`` — and asyncpg's prepared statements make the
+    # disagreement fatal: ``AmbiguousParameterError: inconsistent types deduced
+    # for parameter $1``.  It fired only when the backfill loop had at least one
+    # row to insert, so an empty database never prepared the statement at all.
+    # Binding the id exactly once, in a VALUES list whose target column types
+    # are known, makes the deduction unambiguous by construction — a cast that
+    # merely reconciled the two positions would leave the next edit free to
+    # reintroduce the same class of failure.  The guard's semantics are
+    # unchanged: a re-run, or a run after clients uploaded their own backfill
+    # rows, is a no-op that never overwrites.
     insert_stmt = sa.text(
         "INSERT INTO actions "
         "(id, outcome_id, user_id, text, role, position, energy_level, "
         " time_estimate, created_at, updated_at, done_at) "
-        "SELECT :id, :outcome_id, :user_id, :text, 'current', NULL, "
-        "       :energy_level, :time_estimate, :created_at, NULL, NULL "
-        "WHERE NOT EXISTS (SELECT 1 FROM actions WHERE id = :id)"
+        "VALUES (:id, :outcome_id, :user_id, :text, 'current', NULL, "
+        "        :energy_level, :time_estimate, :created_at, NULL, NULL) "
+        "ON CONFLICT (id) DO NOTHING"
     )
 
     for row in qualifying:
