@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-27
-**Context:** Issue #525, epic #470. Reverses ADR-0022. Builds on ADR-0012 (clarification-neutral sweep), ADR-0015 (upsert-on-replay), ADR-0017 (sync-rules-as-config), ADR-0018 (supersession without linkage), ADR-0019 (deterministic dual-origin backfill ids).
+**Context:** Issue #525, epic #470. Reverses ADR-0022. Builds on ADR-0012 (never auto-stamp on migration drift), ADR-0015 (upsert-on-replay), ADR-0017 (sync-rules-as-config), ADR-0018 (supersession without linkage), ADR-0019 (deterministic dual-origin backfill ids).
 
 ## Decision
 
@@ -35,6 +35,14 @@ Atomicity *within* the change is not a matter of ruling. Dropping the column whi
 **Recovery is wipe-and-reseed.** The server holds the Actions; a wiped client re-syncs correct data. The accepted cost is local-only unsynced state on the wiped device.
 
 Two things are deliberately discarded. First, the Postgres `next_action_text` values — Alembic 0028 already derived every non-blank one **that existed when it ran** into an `actions` row, so what is lost is duplicated text, not information. 0028 is a one-time migration with no successor pass, so that guarantee stops at rows written after it; nothing has written the cursor since #479, which leaves only a pre-#479 client as a source of uncovered text, and the ruling above is that none exists. Second, the cursor text on a **never-signed-in, pre-Drift-v26** local store, which has no server copy and nothing to reseed from. That second case is the only genuinely unrecoverable one, and it is not being waived as negligible: it is an **explicit exception taken inside the alpha window**, on the owner's ruling, on a fleet the owner controls. The general question it raises — what durability guarantee an offline-first client owes a store that has never synced — is **not settled by this ADR** and is tracked in **#534**.
+
+## What the drop costs Alembic 0028
+
+Dropping the column narrows 0028 from generally re-runnable to re-runnable **only while `todos.next_action_text` still exists** — that is, within a single 0027 → head run, where 0028 precedes 0030. Once a database has reached 0030, rewinding `alembic_version` and re-entering 0028 raises `UndefinedColumnError` instead of no-opping, so 0028 is no longer available as a drift-recovery re-run under ADR-0012. Nor can a downgrade restore that: 0030's `downgrade()` re-adds the column as all-NULL, which the backfill predicate (`next_action_text IS NOT NULL AND TRIM(...) != ''`) matches zero of.
+
+This is an accepted consequence, not an oversight. 0028's guards (`ON CONFLICT (id) DO NOTHING`, independent index and publication checks) still hold, so re-entry within a single run is safe and is pinned by `test_0028_backfill_reapplied_over_existing_rows_is_a_no_op`. What is given up is the *drift-recovery* use, which ADR-0012 already treats as a deliberate human `alembic stamp` rather than an automatic one. Recovery from a bad forward apply past 0030 is restore-from-backup plus `stamp`, exactly as 0028's own downgrade note says.
+
+The general hazard is worth stating once: **a guarded, idempotent migration stops being re-runnable when a later revision drops a column its data step reads.** Idempotence is a property of a migration *against a schema*, not of the migration alone.
 
 ## On deleting `action_cursor_freeze_test.dart`
 
