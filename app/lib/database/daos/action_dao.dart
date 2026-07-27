@@ -69,8 +69,8 @@
 /// The legacy one-field surfaces in [TodoDao] compose these primitives through
 /// the `apply*` transaction-body variants (package-internal), which run inside
 /// the caller's transaction and defer notification to the caller (so watchers
-/// never re-read pre-commit state) — see `TodoDao.setNextActionText` /
-/// `setNextActionTextIfActionless` / `applyRouting` / `deleteOutcome`.
+/// never re-read pre-commit state) — see `TodoDao.setCurrentActionText` /
+/// `setCurrentActionTextIfActionless` / `applyRouting` / `deleteOutcome`.
 library;
 
 import 'package:drift/drift.dart';
@@ -201,7 +201,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
 
   /// Make the Outcome Actionless: [supersedeCurrentAction] with no replacement.
   /// Retires the current Action, so the Outcome carries none. No current row →
-  /// no-op (no stamp). This is the Action side of `setNextActionText('')`'s
+  /// no-op (no stamp). This is the Action side of `setCurrentActionText('')`'s
   /// blank→Actionless normalisation.
   Future<void> clearCurrentAction(String outcomeId, {DateTime? now}) =>
       supersedeCurrentAction(outcomeId, now: now);
@@ -595,10 +595,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       // on its columns as draft. When its first `current` Action is born and
       // the caller passes no metadata, seed the birth Action from those draft
       // columns — so the draft lands on the Action for *every* creation path
-      // (clarify `applyRouting`, `setNextActionText`,
-      // `setNextActionTextIfActionless`) with no signature change. Explicit
-      // args win over the draft. This agrees with the sweep's cursor → actions
-      // direction (it would have converged to exactly this state).
+      // (clarify `applyRouting`, `setCurrentActionText`,
+      // `setCurrentActionTextIfActionless`) with no signature change. Explicit
+      // args win over the draft.
       var seededEnergy = energyLevel;
       var seededTime = timeEstimate;
       if (seededEnergy == null || seededTime == null) {

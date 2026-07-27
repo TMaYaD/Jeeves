@@ -499,18 +499,18 @@ EXISTS (
   /// Used by inbox-clarify (to record the task title as the default action) and
   /// by the review step's "Update next action" action.
   ///
-  /// The name is the legacy one-field surface's, not the storage's: the
-  /// `todos.next_action_text` column it was named for no longer exists
-  /// (ADR-0022, ADR-0024) and this writes only `actions`. A
-  /// non-blank text sets/edits the `current` Action; a blank text clears it
+  /// This is the **one-field** surface — one phrase in, the `current` Action
+  /// out — and it writes only `actions` plus the Outcome's clarification
+  /// stamp; no Outcome column holds a next-action phrase (ADR-0022, ADR-0024).
+  /// A non-blank text sets/edits the `current` Action; a blank text clears it
   /// (the blank→Actionless normalisation, expressed on the Action side as a
   /// supersession with no replacement).
-  Future<void> setNextActionText(
+  Future<void> setCurrentActionText(
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final normalized = text.trim();
-    final logChanged =
-        await transaction(() => _applySetNextActionText(todoId, normalized, ts));
+    final logChanged = await transaction(
+        () => _applySetCurrentActionText(todoId, normalized, ts));
     // Both `todos` and `actions` are PowerSync views in production, so the
     // writes report changes()==0; notify Drift explicitly so watchers refresh
     // without relying solely on the async bridge (#342, ADR-0010).
@@ -533,14 +533,14 @@ EXISTS (
   /// user has already given a deliberate phrase (a `current` Action exists) is
   /// left untouched, never clobbered by a mirrored title.
   ///
-  /// Write path: identical to [setNextActionText] on an Actionless Outcome —
+  /// Write path: identical to [setCurrentActionText] on an Actionless Outcome —
   /// the same Action write, stamped with one shared [ts], and the same
   /// post-commit view-notifies. Skip path (a `current` Action exists): no
   /// writes, no stamp, no convergence, no notify.
   ///
   /// Blank [text] is a caller error (the mirror only fires with a non-blank
   /// title), mirroring [ActionDao.setCurrentAction]'s contract.
-  Future<bool> setNextActionTextIfActionless(
+  Future<bool> setCurrentActionTextIfActionless(
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final normalized = text.trim();
@@ -548,7 +548,7 @@ EXISTS (
       throw ArgumentError.value(
         text,
         'text',
-        'setNextActionTextIfActionless requires non-blank text',
+        'setCurrentActionTextIfActionless requires non-blank text',
       );
     }
     var logChanged = false;
@@ -556,11 +556,11 @@ EXISTS (
       final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
       if (current != null) return false;
       // Non-blank text here, so this never supersedes — logChanged stays false.
-      logChanged = await _applySetNextActionText(todoId, normalized, ts);
+      logChanged = await _applySetCurrentActionText(todoId, normalized, ts);
       return true;
     });
     if (wrote) {
-      // See [setNextActionText]: view writes report changes()==0 (#342, ADR-0010).
+      // See [setCurrentActionText]: view writes report changes()==0 (#342, ADR-0010).
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();
       if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
@@ -568,8 +568,8 @@ EXISTS (
     return wrote;
   }
 
-  /// Transaction body shared by [setNextActionText] and
-  /// [setNextActionTextIfActionless]: the Action write and the
+  /// Transaction body shared by [setCurrentActionText] and
+  /// [setCurrentActionTextIfActionless]: the Action write and the
   /// `last_clarified_at` / `updated_at` stamp, encoded once. Runs inside the
   /// caller's transaction; the caller notifies after commit. [normalized] is
   /// already trimmed — blank makes the Outcome Actionless (the blank→NULL
@@ -582,7 +582,7 @@ EXISTS (
   /// Returns whether a `time_logs` row changed (the blank→supersede path closes
   /// the current Action's open log, issue #476) so the caller can fire the
   /// TimeLog view notification after commit (ADR-0010).
-  Future<bool> _applySetNextActionText(
+  Future<bool> _applySetCurrentActionText(
       String todoId, String normalized, DateTime ts) async {
     await (update(todos)..where((t) => t.id.equals(todoId)))
         .write(TodosCompanion(

@@ -571,7 +571,7 @@ void main() {
 
     test('an abandoned Action stays abandoned', () async {
       await _seedOutcome(db, id: 'o1', lastClarifiedAt: _clarified);
-      await db.todoDao.setNextActionText('o1', 'ship it', now: _t0);
+      await db.todoDao.setCurrentActionText('o1', 'ship it', now: _t0);
       await db.actionDao.clearCurrentAction('o1', now: _clarified);
 
       final repaired = await _sweep(db);

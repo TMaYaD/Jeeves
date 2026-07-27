@@ -206,7 +206,7 @@ void main() {
 
     test('with a replacement mints the new current and retires the old',
         () async {
-      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+      await db.actionDao.setCurrentAction('o1', 'old', now: _t1);
 
       await db.actionDao
           .supersedeCurrentAction('o1', newActionText: 'new', now: _t2);
@@ -240,7 +240,7 @@ void main() {
     });
 
     test('leaves the retired Action as history', () async {
-      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+      await db.actionDao.setCurrentAction('o1', 'old', now: _t1);
 
       await db.actionDao.clearCurrentAction('o1', now: _t2);
 
@@ -252,13 +252,13 @@ void main() {
     });
 
     test('abandon stamps where completion does not', () async {
-      await db.todoDao.setNextActionText('o1', 'old', now: _t1);
+      await db.actionDao.setCurrentAction('o1', 'old', now: _t1);
       await db.actionDao.clearCurrentAction('o1', now: _t2);
 
       expect(await _lastClarified(db, 'o1'), _t2,
           reason: 'abandoning is a clarifying act');
 
-      await db.todoDao.setNextActionText('o1', 'another', now: _t3);
+      await db.actionDao.setCurrentAction('o1', 'another', now: _t3);
       await db.actionDao.completeCurrentAction('o1', now: _t4);
 
       expect(await _lastClarified(db, 'o1'), _t3,

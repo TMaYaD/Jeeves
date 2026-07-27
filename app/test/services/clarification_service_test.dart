@@ -168,7 +168,7 @@ void main() {
     test('completeCurrentAction ends the Action without completing or '
         'stamping the Outcome', () async {
       await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
-      await db.todoDao.setNextActionText('a', 'call the plumber');
+      await db.todoDao.setCurrentActionText('a', 'call the plumber');
       final clarifiedAt = (await _row(db, 'a')).lastClarifiedAt;
 
       await service.completeCurrentAction('a');

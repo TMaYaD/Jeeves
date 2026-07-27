@@ -18,7 +18,7 @@ void configureSqliteForTests() {}
 /// There is no Outcome column to set instead — the `todos.next_action_text`
 /// cursor was retired (ADR-0022) and then dropped (ADR-0024). A blank or null
 /// [text] seeds nothing, mirroring the blank → Actionless normalisation
-/// `setNextActionText` applies.
+/// `setCurrentActionText` applies.
 ///
 /// [id] defaults to `action-<outcomeId>`; pass it when a test needs a second
 /// row on the same Outcome or a specific winner-rule ordering.

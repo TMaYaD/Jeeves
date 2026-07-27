@@ -220,7 +220,7 @@ void main() {
     });
 
     // Fixture 6: "Update next action" on an Actionless task — leaves result.
-    test('6: setNextActionText on actionless task — task leaves result', () async {
+    test('6: setCurrentActionText on actionless task — task leaves result', () async {
       final id = await _insertClarifiedTask(
         db,
         actionText: null,
@@ -229,7 +229,7 @@ void main() {
 
       expect(await db.todoDao.getNeedsReview(), hasLength(1));
 
-      await db.todoDao.setNextActionText(id,'Draft proposal');
+      await db.todoDao.setCurrentActionText(id,'Draft proposal');
 
       final result = await db.todoDao.getNeedsReview();
       expect(result, isEmpty);
@@ -353,7 +353,7 @@ void main() {
 
       expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isTrue);
 
-      await db.todoDao.setNextActionText(id,'Do something');
+      await db.todoDao.setCurrentActionText(id,'Do something');
 
       expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isFalse);
     });
@@ -526,7 +526,7 @@ void main() {
 
       expect(await db.todoDao.getNeedsReview(), hasLength(1));
 
-      await db.todoDao.setNextActionText(id, 'Chase the reply');
+      await db.todoDao.setCurrentActionText(id, 'Chase the reply');
 
       expect(await db.todoDao.getNeedsReview(), isEmpty);
     });

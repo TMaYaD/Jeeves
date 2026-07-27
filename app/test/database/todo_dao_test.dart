@@ -64,10 +64,10 @@ void main() {
   // when #525 dropped `todos.next_action_text`. That suite's subject — "no code
   // path writes the cursor" — is subsumed by the column's absence, but its
   // Action-grain halves were the only coverage anywhere for
-  // `setNextActionTextIfActionless` (including #501's TOCTOU skip path) and for
+  // `setCurrentActionTextIfActionless` (including #501's TOCTOU skip path) and for
   // `deleteOutcome`'s cascade onto `actions`, so they live on here, beside the
   // rest of TodoDao's write primitives.
-  group('TodoDao — setNextActionTextIfActionless', () {
+  group('TodoDao — setCurrentActionTextIfActionless', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
@@ -80,7 +80,7 @@ void main() {
       await _insertTodo(db, id: 'o1', title: 'Outcome o1');
 
       final wrote = await db.todoDao
-          .setNextActionTextIfActionless('o1', 'Book venue', now: t1);
+          .setCurrentActionTextIfActionless('o1', 'Book venue', now: t1);
 
       expect(wrote, isTrue);
       expect((await db.actionDao.getCurrentAction('o1'))?.actionText,
@@ -101,7 +101,7 @@ void main() {
       final before = await db.todoDao.getTodo('o1');
 
       final wrote = await db.todoDao
-          .setNextActionTextIfActionless('o1', 'Mirrored title', now: t1);
+          .setCurrentActionTextIfActionless('o1', 'Mirrored title', now: t1);
 
       expect(wrote, isFalse);
       expect((await db.actionDao.getCurrentAction('o1'))?.actionText,
@@ -117,9 +117,46 @@ void main() {
       await _insertTodo(db, id: 'o1', title: 'Outcome o1');
 
       expect(
-        () => db.todoDao.setNextActionTextIfActionless('o1', '   ', now: t1),
+        () => db.todoDao.setCurrentActionTextIfActionless('o1', '   ', now: t1),
         throwsArgumentError,
       );
+    });
+  });
+
+  group('TodoDao — setCurrentActionText', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    final t1 = DateTime.parse('2026-07-01T10:00:00.000Z');
+    final t2 = DateTime.parse('2026-07-01T11:00:00.000Z');
+
+    test('re-submitting the identical phrase stamps even though the Action '
+        'write is a no-op', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await db.todoDao.setCurrentActionText('o1', 'call the plumber', now: t1);
+      final actionBefore = await db.actionDao.getCurrentAction('o1');
+
+      await db.todoDao.setCurrentActionText('o1', '  call the plumber  ',
+          now: t2);
+
+      final actionAfter = await db.actionDao.getCurrentAction('o1');
+      expect(actionAfter?.id, actionBefore?.id);
+      expect(actionAfter?.updatedAt, actionBefore?.updatedAt,
+          reason: 'ActionDao treats identical normalised text as a no-op and '
+              'does not stamp — so the Outcome stamp below can only come from '
+              'this surface');
+      // Raw column read: `getTodo` would answer from the projection, but
+      // `last_clarified_at` is not COALESCEd, so either read works. Kept raw
+      // for symmetry with the effort-column rule.
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('o1')))
+          .getSingle();
+      expect(row.lastClarifiedAt, t2,
+          reason: 're-submitting the same phrase is still a clarifying '
+              'micro-act, so the one-field surface stamps regardless');
+      expect(row.updatedAt, t2);
     });
   });
 
@@ -132,9 +169,9 @@ void main() {
     test('cascades Action rows and spares its siblings', () async {
       await _insertTodo(db, id: 'o1', title: 'Outcome o1');
       await _insertTodo(db, id: 'sibling', title: 'Sibling');
-      await db.todoDao.setNextActionText('o1', 'x');
+      await db.todoDao.setCurrentActionText('o1', 'x');
       await db.actionDao.supersedeCurrentAction('o1', newActionText: 'y');
-      await db.todoDao.setNextActionText('sibling', 'keep me');
+      await db.todoDao.setCurrentActionText('sibling', 'keep me');
 
       await db.todoDao.deleteOutcome('o1');
 
@@ -341,7 +378,7 @@ void main() {
     test('Q1: intent=next, has a current Action, no person-tag → on Next',
         () async {
       await _insertTodo(db, id: 'q1', title: 'Buy milk');
-      await db.todoDao.setNextActionText('q1', 'Buy milk');
+      await db.todoDao.setCurrentActionText('q1', 'Buy milk');
 
       final items = await db.todoDao.watchNext().first;
       expect(items.map((t) => t.id), contains('q1'));
@@ -354,7 +391,7 @@ void main() {
       // doable current Action, so the Outcome belongs on Next AND on Waiting
       // For. This PR must NOT exclude it from Next.
       await _insertTodo(db, id: 'q2', title: 'Catch up with Trixy');
-      await db.todoDao.setNextActionText('q2', 'Call Trixy for a follow up');
+      await db.todoDao.setCurrentActionText('q2', 'Call Trixy for a follow up');
       await _insertPersonTag(db, id: 'q2-trixy', name: 'Trixy');
       await db.tagDao.assignTag('q2', 'q2-trixy', _userId);
 
@@ -413,7 +450,7 @@ void main() {
 
       // q2f: actionable + person-tagged + context-tagged → must appear.
       await _insertTodo(db, id: 'q2f', title: 'Catch up with Trixy');
-      await db.todoDao.setNextActionText('q2f', 'Call Trixy');
+      await db.todoDao.setCurrentActionText('q2f', 'Call Trixy');
       await _insertPersonTag(db, id: 'q2f-trixy', name: 'Trixy-f');
       await db.tagDao.assignTag('q2f', 'q2f-trixy', _userId);
       await db.tagDao.assignTag('q2f', ctxTagId, _userId);
@@ -826,7 +863,7 @@ void main() {
     test('maybe: clarified=true, intent=maybe, done_at=null, '
         'current Action untouched', () async {
       await _insertTodo(db, id: 'r3', title: 'Task', clarified: false);
-      await db.todoDao.setNextActionText('r3', 'preserved');
+      await db.todoDao.setCurrentActionText('r3', 'preserved');
 
       await db.todoDao.applyRouting(
         'r3',

@@ -1081,7 +1081,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             await ref
                 .read(databaseProvider)
                 .todoDao
-                .setNextActionTextIfActionless(_subjectId, title);
+                .setCurrentActionTextIfActionless(_subjectId, title);
           }
         }
       } catch (_) {

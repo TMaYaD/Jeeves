@@ -465,12 +465,14 @@ class CaptureTags extends Table with Synced {
 /// timestamp is read from `updated_at`, and the Outcome's history is the
 /// time-ordered chain of terminated Action rows.
 ///
-/// `actions` is the only next-action grain. Existing Outcomes were given one
-/// `current` Action each by the server-side backfill (Alembic 0028), which
-/// mints a deterministic uuid5 id from the Outcome id (see
-/// `backfillActionIdFor`, ADR-0019) so no version skew can duplicate a row.
-/// The `todos.next_action_text` cursor those backfills read from no longer
-/// exists (ADR-0024).
+/// `actions` is the only next-action grain. The server-side backfill (Alembic
+/// 0028) gave one `current` Action to each Outcome that held a non-blank
+/// cursor **at the moment that migration ran** — it is a one-time pass, not
+/// ongoing reconciliation, so an Outcome with a blank cursor got none and
+/// renders Actionless until re-clarified. It mints a deterministic uuid5 id
+/// from the Outcome id (see `backfillActionIdFor`, ADR-0019) so no version
+/// skew can duplicate a row. The `todos.next_action_text` cursor it read from
+/// no longer exists (ADR-0024).
 class Actions extends Table with Synced {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get outcomeId =>
