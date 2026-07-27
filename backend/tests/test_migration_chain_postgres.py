@@ -52,6 +52,10 @@ _OUTCOME_WITHOUT_CLARIFIED_AT = "chain-todo-fallback"
 _OUTCOME_BLANK_CURSOR = "chain-todo-blank-cursor"
 _OUTCOME_NULL_CURSOR = "chain-todo-null-cursor"
 
+# Seeded only in the re-entry test, *after* 0028 has already run once: its
+# Action can therefore only exist if the backfill genuinely re-executed.
+_OUTCOME_ADDED_AFTER_FIRST_BACKFILL = "chain-todo-added-after-first-backfill"
+
 # uuid5(NAMESPACE_URL, "jeeves://action/backfill/<todo_id>") — the deterministic
 # ids 0028 mints.  Spelled out rather than recomputed with the migration's own
 # helper so a change to that helper fails this test instead of moving with it.
@@ -59,6 +63,13 @@ _BACKFILL_IDS = {
     _OUTCOME_WITH_CURSOR: "9565a928-0420-5407-bbc5-cf40a43c8a29",
     _OUTCOME_WITHOUT_CLARIFIED_AT: "5572bb54-7f88-5cf9-b8a1-39b30dc21adc",
 }
+_LATE_BACKFILL_ID = "3c95d34b-e517-5173-8309-de0deb726220"
+
+# The cursor text 0028 derives _OUTCOME_WITH_CURSOR's Action from, and the text a
+# device writes over it while the server cannot accept Action uploads.  They must
+# differ for the "client edit survives re-entry" assertion to mean anything.
+_CURSOR_TEXT = "Email Bob about the contract"
+_CLIENT_EDITED_TEXT = "edited by a client during the outage"
 
 
 def _database_url() -> str:
@@ -156,14 +167,6 @@ def _upgrade(revision: str, scratch_dsn: str) -> None:
     )
 
 
-def _downgrade(revision: str, scratch_dsn: str) -> None:
-    result = _alembic("downgrade", revision, scratch_dsn)
-    assert result.returncode == 0, (
-        f"alembic downgrade {revision} failed\n"
-        f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
-    )
-
-
 async def _seed_representative_rows(dsn: str) -> None:
     """Rows covering every branch of 0028's backfill predicate.
 
@@ -181,8 +184,9 @@ async def _seed_representative_rows(dsn: str) -> None:
             "                   time_spent_minutes, next_action_text, energy_level, "
             "                   time_estimate, last_clarified_at) "
             "VALUES ($1, 'Ship the thing', 'chain-user', now(), 'next', true, 0, "
-            "        'Email Bob about the contract', 'high', 30, now())",
+            "        $2, 'high', 30, now())",
             _OUTCOME_WITH_CURSOR,
+            _CURSOR_TEXT,
         )
         # No last_clarified_at: exercises the created_at fallback.
         await conn.execute(
@@ -254,7 +258,7 @@ def test_backfill_mints_one_current_action_per_non_blank_cursor(
     assert all(action["position"] is None and action["done_at"] is None for action in actions)
 
     with_cursor = actions[1]
-    assert with_cursor["text"] == "Email Bob about the contract"
+    assert with_cursor["text"] == _CURSOR_TEXT
     assert with_cursor["energy_level"] == "high"
     assert with_cursor["time_estimate"] == 30
     assert with_cursor["user_id"] == "chain-user"
@@ -280,36 +284,90 @@ def test_rerunning_upgrade_head_is_a_no_op(scratch_database: str) -> None:
 def test_0028_backfill_reapplied_over_existing_rows_is_a_no_op(
     scratch_database: str,
 ) -> None:
-    """0028 re-run *while its rows already exist* — the guard's real job.
+    """0028's backfill re-entered while its rows already exist — the guard's real job.
 
-    ``upgrade head`` from head is a no-op because Alembic skips applied
-    revisions, so it never re-enters the backfill.  Driving 0028 down to 0029
-    and back up does: the downgrade of 0029 leaves ``actions`` and its rows in
-    place (0028 is irreversible by design and refuses to drop them), so the
-    second forward run re-executes the backfill against a table that already
-    holds every row it is about to insert.
+    **Why the stamp is rewritten rather than downgraded.**  There is no
+    downgrade path back across 0028: its ``downgrade()`` raises on purpose
+    (dropping ``actions`` would destroy client-uploaded rows).  ``alembic
+    downgrade 0028`` therefore stops *at* 0028 without ever invoking it and
+    leaves the stamp reading ``0028``, so the next ``upgrade head`` skips the
+    revision entirely and the backfill never re-runs.  The only way in is to
+    move the *stamp* rather than the schema: rewrite ``alembic_version`` to
+    0027 by raw SQL while leaving ``actions`` and every row in it untouched.
+    That is precisely the drift ADR-0012's re-runnable contract exists for — a
+    stamp that under-reports what the schema already holds — and it is the
+    shape of the production recovery this migration has to survive.
+
+    **Why the first pass stops at 0028.**  0030 drops
+    ``todos.next_action_text``, which 0028's backfill reads; re-entry has to
+    happen while the source column is still there, exactly as it would inside a
+    single 0027 → head deploy.
+
+    **Why a late Outcome is seeded.**  Without it a passing test could not
+    distinguish "the guard held" from "the backfill never ran" — the failure
+    mode this test previously had.  ``_OUTCOME_ADDED_AFTER_FIRST_BACKFILL`` is
+    inserted after 0028's first pass, so its Action can only exist if the
+    backfill genuinely re-executed.
     """
     _upgrade(_SEED_AT_REVISION, scratch_database)
     asyncio.run(_seed_representative_rows(scratch_database))
-    _upgrade("head", scratch_database)
+    # Stop at 0028, not head: 0030 drops the column the backfill reads.
+    _upgrade("0028", scratch_database)
 
-    # A row a client uploaded after the first backfill must survive untouched.
+    # The outage scenario: a device edits its locally-minted Action — the same
+    # deterministic id 0028 mints — while the server cannot accept the upload.
+    # The Outcome's cursor still holds the pre-outage text.  A re-entered
+    # backfill must not push that stale text back over the edit.
     asyncio.run(
         _execute(
             scratch_database,
             [
-                "UPDATE actions SET text = 'edited by a client' "
-                f"WHERE outcome_id = '{_OUTCOME_WITH_CURSOR}'"
+                f"UPDATE actions SET text = '{_CLIENT_EDITED_TEXT}' "
+                f"WHERE outcome_id = '{_OUTCOME_WITH_CURSOR}'",
+                # An Outcome that appears only after the first backfill: proof
+                # that the second pass actually enters the loop body.
+                "INSERT INTO todos (id, title, user_id, created_at, intent, clarified, "
+                "                   time_spent_minutes, next_action_text) "
+                f"VALUES ('{_OUTCOME_ADDED_AFTER_FIRST_BACKFILL}', 'Late arrival', "
+                "        'chain-user', now(), 'next', true, 0, 'Book the venue')",
             ],
         )
     )
 
-    _downgrade("0028", scratch_database)
+    # The edit and the cursor it derives from must actually disagree, or the
+    # survival assertion below would hold no matter what the migration does.
+    source = asyncio.run(
+        _fetch(
+            scratch_database,
+            "SELECT t.next_action_text AS cursor_text, a.text AS action_text "
+            "FROM todos t JOIN actions a ON a.outcome_id = t.id "
+            f"WHERE t.id = '{_OUTCOME_WITH_CURSOR}'",
+        )
+    )
+    assert source == [{"cursor_text": _CURSOR_TEXT, "action_text": _CLIENT_EDITED_TEXT}]
+
+    # Force re-entry: the stamp goes back to 0027, the data stays put.
+    asyncio.run(_execute(scratch_database, ["UPDATE alembic_version SET version_num = '0027'"]))
     _upgrade("head", scratch_database)
 
     actions = asyncio.run(
-        _fetch(scratch_database, "SELECT outcome_id, text FROM actions ORDER BY outcome_id")
+        _fetch(scratch_database, "SELECT id, outcome_id, text FROM actions ORDER BY outcome_id")
     )
-    assert len(actions) == len(_BACKFILL_IDS)
-    # DO NOTHING, not DO UPDATE: the client's edit is not clobbered by a re-run.
-    assert actions[1]["text"] == "edited by a client"
+    by_outcome = {action["outcome_id"]: action for action in actions}
+
+    # The backfill really did re-execute: the late Outcome got its Action.
+    assert _OUTCOME_ADDED_AFTER_FIRST_BACKFILL in by_outcome
+    assert by_outcome[_OUTCOME_ADDED_AFTER_FIRST_BACKFILL]["id"] == _LATE_BACKFILL_ID
+    assert by_outcome[_OUTCOME_ADDED_AFTER_FIRST_BACKFILL]["text"] == "Book the venue"
+
+    # 1. ON CONFLICT (id) DO NOTHING held: re-entry minted no duplicates.  The
+    #    pre-existing Outcomes still have exactly one Action each, on the same
+    #    deterministic ids as before.
+    assert len(actions) == len(_BACKFILL_IDS) + 1
+    for outcome_id, backfill_id in _BACKFILL_IDS.items():
+        assert by_outcome[outcome_id]["id"] == backfill_id
+
+    # 2. DO NOTHING, not DO UPDATE: the device's edit is still there, and the
+    #    stale cursor text was not written back over it.
+    assert by_outcome[_OUTCOME_WITH_CURSOR]["text"] == _CLIENT_EDITED_TEXT
+    assert by_outcome[_OUTCOME_WITH_CURSOR]["text"] != _CURSOR_TEXT
