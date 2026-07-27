@@ -48,6 +48,15 @@ jobs:
       SECRET_KEY: ci-test-secret-not-for-production
       DATABASE_URL: postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves_test
 
+    # The Postgres service is load-bearing for pytest, not just for the
+    # `python -m app.migrate` smoke check below: tests/test_migration_chain_postgres.py
+    # runs the real migration chain against a scratch database it creates beside
+    # jeeves_test, seeded with representative rows.  That seeding is what the
+    # smoke check cannot do — it migrates an *empty* database, so a data-backfill
+    # migration's SQL is never executed and never even prepared.  Migration 0028
+    # broke five consecutive production deploys through a green run of this job
+    # for exactly that reason.  DATABASE_URL must therefore stay set here; the
+    # test fails rather than skips when CI is set, so dropping it is loud.
     services:
       postgres:
         image: postgres:18-alpine@sha256:1b1689b20d16a014a3d195653381cf2caa75a41a92d93b255a9d6ea29fd353aa
