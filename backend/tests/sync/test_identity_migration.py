@@ -14,6 +14,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 import sqlalchemy as sa
 from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
@@ -141,19 +142,31 @@ def test_0032_leaves_existing_rows_untouched_and_unbackfilled() -> None:
         assert conn.execute(sa.text("SELECT id FROM users")).scalars().all() == ["u1"]
 
 
-def test_0032_downgrade_removes_only_what_it_added() -> None:
+def test_0032_refuses_to_downgrade_and_keeps_the_escrow() -> None:
+    """The escrow blob is the only way back into an account with no device left.
+
+    Same contract as 0031's refusal: the downgrade raises *before* touching any
+    schema, and the assertion is that everything it would have dropped is still
+    there — a refusal that had already dropped the escrow would be no better
+    than the drop.
+    """
     engine = _engine_at_0031()
     _apply_0032(engine)
-    _run(engine, _load("migration_0032", "0032_add_identity_root_escrow.py"), downgrade=True)
+    with pytest.raises(RuntimeError, match="irreversible"):
+        _run(engine, _load("migration_0032", "0032_add_identity_root_escrow.py"), downgrade=True)
 
     with engine.connect() as conn:
         inspector = sa.inspect(conn)
         remaining = set(inspector.get_table_names())
-        assert "recovery_escrows" not in remaining
-        assert "recovery_escrow_fetches" not in remaining
-        assert {"members", "ops", "refresh_tokens", "users"} <= remaining
+        assert {
+            "recovery_escrows",
+            "recovery_escrow_fetches",
+            "members",
+            "ops",
+            "refresh_tokens",
+            "users",
+        } <= remaining
         member_columns = {column["name"] for column in inspector.get_columns("members")}
-        assert {"kex_pk", "chained_at"}.isdisjoint(member_columns)
+        assert {"kex_pk", "chained_at"} <= member_columns
         token_columns = {column["name"] for column in inspector.get_columns("refresh_tokens")}
-        assert "member_id" not in token_columns
-        assert conn.execute(sa.text("SELECT id FROM refresh_tokens")).scalars().all() == ["t1"]
+        assert "member_id" in token_columns
