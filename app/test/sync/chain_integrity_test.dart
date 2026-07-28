@@ -40,12 +40,32 @@ extension _Alarms on SimDevice {
         for (final alarm in await client.integrityAlarms()) alarm.kind: alarm,
       };
 
+  /// The default Workspace's log rows. Scoped, because a device holds two
+  /// Workspaces now — the GTD one and the User-global preferences one — over the
+  /// same store, and every sync table is keyed by workspace id.
   Future<List<OpLogRow>> loggedOps() => (database.select(database.opLog)
+        ..where((row) => row.workspaceId.equals(client.workspaceId))
         ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
       .get();
 
+  /// Author one content op into the device's **default** Workspace.
+  ///
+  /// These cases are about one Workspace's chain, and preferences now live in the
+  /// User-global preferences Workspace — so authoring through `preferences` would
+  /// put the op in a different log from the one under test.
+  Future<void> authorLocal(SimWorkspace workspace, Object? value) async {
+    workspace.clock.advance(10);
+    await client.capture(
+      collection: _harnessCollection,
+      entityId: _docId(workspace),
+      fields: {'step': value},
+    );
+  }
+
   Future<int> cursor() async {
-    final row = await database.select(database.syncCursors).getSingleOrNull();
+    final row = await (database.select(database.syncCursors)
+          ..where((row) => row.workspaceId.equals(client.workspaceId)))
+        .getSingleOrNull();
     return row?.lastSeq ?? 0;
   }
 }
@@ -82,6 +102,13 @@ Future<Map<String, Object?>?> _doc(SimDevice device, SimWorkspace workspace) =>
     device.registry.register(_harnessCollection).readEntity(_docId(workspace));
 
 void main() {
+  /// The peer's first *content* op sits at this position in its own chain.
+  ///
+  /// `enrolFixture` spends author_seq 1 on the `member_register` and 2 on the
+  /// explicit owner Grant: roles are one materialisation path, so there are no
+  /// implied grants and a Member's authority costs a chain slot like anything else.
+  const int firstPeerContentAuthorSeq = 3;
+
   late SimWorkspace workspace;
   late SimDevice a;
   late AuthorFixture peer;
@@ -122,7 +149,7 @@ void main() {
     // The successor is held, not dropped: refused ops are evidence.
     final refused = await a.client.quarantined();
     expect(refused.single.reason, SyncRejectionReason.authorChainGap.code);
-    expect(refused.single.authorSeq, 4);
+    expect(refused.single.authorSeq, firstPeerContentAuthorSeq + 2);
     expect(refused.single.releasedAt, isNull);
     // Only the op before the gap applied.
     expect(await _doc(a, workspace), {'step': 'one'});
@@ -165,7 +192,7 @@ void main() {
       reason: 'the server still reordered, and that stands',
     );
     final released = await a.client.quarantined();
-    expect(released.single.authorSeq, 3);
+    expect(released.single.authorSeq, firstPeerContentAuthorSeq + 1);
     expect(released.single.releasedAt, isNotNull);
     // Nothing still stands refused, so the refusal count is back to zero even
     // though the row is kept for inspection.
@@ -200,7 +227,7 @@ void main() {
     expect(alarms[IntegrityAlarmKind.authorStreamReordered.code], isNotNull);
     expect(await _doc(a, workspace), {'step': 'two'});
     final standing = await a.client.quarantined(includeReleased: false);
-    expect(standing.single.authorSeq, 5);
+    expect(standing.single.authorSeq, firstPeerContentAuthorSeq + 3);
   });
 
   test('an incompatible predecessor is a fork, not a heal', () async {
@@ -224,7 +251,7 @@ void main() {
     // A validly signed alternate at position 3, chained to the real head — so
     // the successor's `prev_author_hash` names something that is provably not
     // what occupies its predecessor's slot.
-    peer.nextAuthorSeq = 3;
+    peer.nextAuthorSeq = firstPeerContentAuthorSeq + 1;
     peer.lastEnvelopeHash = headHash;
     final alternate = await _op(workspace, peer, 'alternate');
     workspace.server.injectUnchecked(workspace.workspaceId, alternate);
@@ -247,7 +274,7 @@ void main() {
     // one stays out.
     expect(await _doc(a, workspace), {'step': 'alternate'});
     final standing = await a.client.quarantined(includeReleased: false);
-    expect(standing.single.authorSeq, 4);
+    expect(standing.single.authorSeq, firstPeerContentAuthorSeq + 2);
   });
 
   test('a prev-hash mismatch at head + 1 is its own accusation', () async {
@@ -364,7 +391,7 @@ void main() {
       // History the device has already verified stops existing, and the freed
       // transport position is handed out again to different bytes.
       workspace.server.rollbackToSeq(appended.first.seq - 1);
-      peer.nextAuthorSeq = 2;
+      peer.nextAuthorSeq = firstPeerContentAuthorSeq;
       peer.lastEnvelopeHash = envelopeHash(
         (await a.loggedOps())
             .firstWhere((row) =>
@@ -506,8 +533,8 @@ void main() {
   group('own writes', () {
     test('a rollback below our acknowledged head wedges the outbox, visibly',
         () async {
-      await a.preferences.set('one', '"1"');
-      await a.preferences.set('two', '"2"');
+      await a.authorLocal(workspace, 'one');
+      await a.authorLocal(workspace, 'two');
       await a.sync();
       final acknowledged = await a.client.authoredEnvelopes();
 
@@ -519,7 +546,7 @@ void main() {
           if (row.authorMemberId == a.identity.memberId) row.seq,
       ]..sort();
       workspace.server.rollbackToSeq(ownSeqs.last - 1);
-      await a.preferences.set('three', '"3"');
+      await a.authorLocal(workspace, 'three');
 
       final health = await a.sync();
 
@@ -559,7 +586,7 @@ void main() {
       workspace.server.injectUnchecked(workspace.workspaceId, ahead);
       await a.sync();
 
-      await a.preferences.set('mine', '"mine"');
+      await a.authorLocal(workspace, 'mine');
       await peerSession.postOps(
         workspace.workspaceId,
         [await _op(workspace, peer, 'from the peer')],
@@ -578,7 +605,7 @@ void main() {
 
     test('a substituted copy of our own op is a divergence, and ours stands',
         () async {
-      await a.preferences.set('mine', '"mine"');
+      await a.authorLocal(workspace, 'mine');
       await a.sync();
       final authored = await a.client.authoredEnvelopes();
       final nextAuthorSeq = authored.length + 1;
@@ -586,7 +613,7 @@ void main() {
       // A different envelope at a position this device has authored but not yet
       // pulled back. The chain rules alone cannot catch it — only the retained
       // outbox can, which is what it is retained for.
-      await a.preferences.set('local', '"local"');
+      await a.authorLocal(workspace, 'local');
       final substitute = await a.identity.signer.buildEnvelope(
         OpHeader(
           workspaceId: workspace.workspaceId,
@@ -620,14 +647,15 @@ void main() {
         (await a.client.quarantined()).single.reason,
         SyncRejectionReason.ownWritesDivergence.code,
       );
-      expect(await _doc(a, workspace), isNull);
-      expect(await a.preferences.get('local'), '"local"');
+      // The local copy stands: what this device authored is what it reads, and
+      // the substitute's payload never applied.
+      expect(await _doc(a, workspace), {'step': 'local'});
     });
 
     test('a tampered copy of our own op fails on the signature first', () async {
       // Pins the receive order: the signature is checked before anything is
       // compared, so tampering never even reaches the own-writes check.
-      await a.preferences.set('mine', '"mine"');
+      await a.authorLocal(workspace, 'mine');
       await a.sync();
       final authored = await a.client.authoredEnvelopes();
       final tampered = Uint8List.fromList(authored.last);
@@ -720,10 +748,12 @@ void main() {
     );
 
     final logged = await a.loggedOps();
-    final refusedRow = logged.firstWhere((row) => row.authorSeq == 2);
+    final refusedRow =
+        logged.firstWhere((row) => row.authorSeq == firstPeerContentAuthorSeq);
     expect(refusedRow.refusedReason, SyncRejectionReason.hlcInTheFuture.code);
     expect(refusedRow.appliedAt, isNull, reason: 'logged as evidence, never applied');
-    final appliedRow = logged.firstWhere((row) => row.authorSeq == 3);
+    final appliedRow =
+        logged.firstWhere((row) => row.authorSeq == firstPeerContentAuthorSeq + 1);
     expect(appliedRow.appliedAt, isNotNull);
     expect(appliedRow.refusedReason, isNull);
 

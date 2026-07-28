@@ -256,6 +256,74 @@ class ControlChainState extends Table {
   Set<Column<Object>> get primaryKey => {workspaceId};
 }
 
+/// Every control op this device has **applied**, in seq order.
+///
+/// The recompute substrate for the grants view (#549). Grants and roles are
+/// derived from these rows at read time rather than cached: control ops are few,
+/// so there is nothing here worth a copy — and per the naming rule, a stored copy
+/// would have to say so in its name and could then go stale. `controlChainState`
+/// remains the fast head pointer over the same facts.
+///
+/// [certHlc] fields are the *certificate's* clock, not the op's: the fork
+/// tie-break is "earliest cert HLC, then lowest author member id", and an op-level
+/// clock would let a forking author move the tie by re-signing an envelope.
+@TableIndex(name: 'applied_control_log_workspace', columns: {#workspaceId, #seq})
+@DataClassName('AppliedControlRow')
+class AppliedControlLog extends Table {
+  TextColumn get workspaceId => text()();
+
+  /// The server's transport cursor for this op. The authorization verdict is
+  /// positional against these numbers, which is why they are stored.
+  IntColumn get seq => integer()();
+
+  /// One of `control_payload.dart`'s served control types.
+  TextColumn get controlType => text()();
+
+  /// The unframed payload bytes, kept verbatim so the chain link — SHA-256 over
+  /// exactly these bytes — is recomputable rather than remembered.
+  BlobColumn get payloadBytes => blob()();
+  BlobColumn get payloadHash => blob()();
+
+  /// What this op named as its predecessor. Two rows sharing one value are a
+  /// fork, which is the whole detection rule.
+  BlobColumn get prevControlHash => blob()();
+  TextColumn get authorMemberId => text()();
+
+  /// The certificate's own HLC, flattened for ordering: `wall_ms`, then
+  /// `counter`. The tie-break's first key.
+  IntColumn get certWallMs => integer()();
+  IntColumn get certCounter => integer()();
+  DateTimeColumn get appliedAt => dateTime()();
+
+  /// Set when a fork resolution put this op on the losing branch. Rows are kept
+  /// rather than deleted: the log is evidence, and a quarantined branch is
+  /// something the user gets to inspect.
+  DateTimeColumn get quarantinedAt => dateTime().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {workspaceId, seq};
+}
+
+/// The monotone `key_epoch` floor for one Workspace.
+///
+/// Raise-only, and consulted when **authoring**: a device refuses to build an
+/// envelope below the floor, which is what makes a rotation stick rather than
+/// being undone by the next offline write. Fixed at 0 by genesis; #554's verified
+/// `rotate` control op is the only thing that will ever raise it in anger, and
+/// until then the floor is exercised through the API and across restart.
+///
+/// Not named `cached_*` deliberately: this is not derived from anything. It is
+/// the persisted high-water mark itself, and the raise-only API is its contract.
+@DataClassName('EpochFloorRow')
+class EpochFloors extends Table {
+  TextColumn get workspaceId => text()();
+  IntColumn get keyEpochFloor => integer()();
+  DateTimeColumn get raisedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {workspaceId};
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -269,6 +337,8 @@ class ControlChainState extends Table {
     RowTombstones,
     RootPins,
     ControlChainState,
+    AppliedControlLog,
+    EpochFloors,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -277,9 +347,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// v2 adds the pinned-Root and control-chain tables (#548); v3 adds
   /// `sync_cursors.last_sync_completed_at` (#550); v4 adds the integrity-alarm
   /// store, the quarantine and op-log columns the chain verdict needs, and the
-  /// three indexes it reads through (#551).
+  /// three indexes it reads through (#551); v5 adds the applied-control log the
+  /// grants view is derived from and the per-Workspace `epoch_floor` (#549).
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -315,6 +386,15 @@ class SyncDatabase extends _$SyncDatabase {
             await migrator.create(opLogAuthorChain);
             await migrator.create(opLogAuthorOpId);
             await migrator.create(quarantinedOpsAuthorChain);
+          }
+          if (from < 5) {
+            // Two new tables and one index. Nothing is backfilled: a device
+            // upgrading here has applied no control op under the #549 rules, and
+            // its `epoch_floor` is genuinely unset rather than zero-by-decree —
+            // the raise-only API reads an absent row as the 0 floor genesis fixes.
+            await migrator.createTable(appliedControlLog);
+            await migrator.createTable(epochFloors);
+            await migrator.create(appliedControlLogWorkspace);
           }
         },
       );

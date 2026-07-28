@@ -61,7 +61,9 @@ import 'chain_verifier.dart';
 import 'control_payload.dart';
 import 'domain_projector.dart';
 import 'envelope.dart';
+import 'grants_view.dart';
 import 'hlc.dart';
+import 'ids.dart';
 import 'member_identity.dart';
 import 'op_payload.dart';
 import 'reducer.dart';
@@ -84,6 +86,9 @@ const Set<int> _slotTakenResultCodes = {
   SqlExtendedError.SQLITE_CONSTRAINT_PRIMARYKEY,
   SqlExtendedError.SQLITE_CONSTRAINT_UNIQUE,
 };
+
+/// Whether an arriving control op takes its position, or loses a fork.
+enum _ControlPosition { accept, quarantineThis }
 
 class SyncClient {
   SyncClient({
@@ -110,6 +115,13 @@ class SyncClient {
 
   /// The owning User. Half of the escrow slot key, and not otherwise trusted.
   final String userId;
+
+  /// Whether this client speaks for the User-global preferences Workspace.
+  ///
+  /// The one place a Workspace's *identity* changes a rule: preferences grant
+  /// every Device and no Service ever, and the boundary is structural rather than
+  /// a policy the reducer could be talked out of.
+  bool get isPreferencesWorkspace => workspaceId == userPreferencesWorkspaceId(userId);
   final MemberIdentity identity;
   final MemberDirectory directory;
   final int pullPageLimit;
@@ -136,6 +148,14 @@ class SyncClient {
   /// scan of its own then a hostile 500-op reorder would heal in 500 recursive
   /// frames instead of 500 iterations.
   String? _releasingChainOfAuthor;
+
+  /// Set when a control fork resolution invalidated the authorization verdicts
+  /// content ops were applied under.
+  ///
+  /// Acted on at the end of the pull rather than mid-page: a rebuild replays the
+  /// whole retained log, so doing it per-op inside a page would be quadratic in
+  /// the page for no extra correctness.
+  bool _rebuildRequired = false;
 
   /// The member-scoped transport, or a refusal if enrolment has not finished.
   ///
@@ -240,11 +260,27 @@ class SyncClient {
   Future<String> _authorAndQueue({
     required int opClass,
     required Uint8List payload,
+    int keyEpoch = 0,
   }) async {
+    // The floor is consulted on **authoring**, which is where it bites: refusing
+    // to build an envelope below it is what makes a rotation stick rather than
+    // being undone by the next offline write. Control ops are exempt — a `rotate`
+    // that raises the floor cannot be required to already clear it.
+    if (opClass != opClassControl) {
+      final floor = await epochFloor();
+      if (keyEpoch < floor) {
+        throw SyncRejection(
+          SyncRejectionReason.keyEpochBelowFloor,
+          'refusing to author at key_epoch $keyEpoch, below this Workspace\'s '
+          'floor of $floor',
+        );
+      }
+    }
     final chain = await _authorChain();
     final header = OpHeader(
       workspaceId: workspaceId,
       opClass: opClass,
+      keyEpoch: keyEpoch,
       opId: _newOpId(),
       authorMemberId: identity.memberId,
       authorKeyId: identity.keyId,
@@ -430,11 +466,104 @@ class SyncClient {
       }
       hasMore = page.hasMore && page.ops.isNotEmpty && advanced;
     }
+    if (_rebuildRequired) {
+      // A control fork resolved during this pull, so the authorization verdicts
+      // the content ops applied under are no longer the right ones.
+      affected.addAll(await rebuildFromOpLog());
+    }
     // Projection is the tail of the receive order, one pass per batch: an
     // entity touched by three ops in one pull is projected once, from the
     // reduced state all three produced.
     await projector?.project(affected);
     await _stampPullCompleted();
+  }
+
+  /// Clear derived state and replay the retained log, recomputing **only** the
+  /// authorization verdict.
+  ///
+  /// The honest mechanism behind "re-verdict content after a fork resolution".
+  /// The reduced substrate is a join-semilattice with **no per-seq lineage**, so
+  /// there is no such thing as discarding reduced state back to a seq: the only
+  /// correct move is a full rebuild. Every retained envelope (#546) is replayed
+  /// through the shipped reducer (#550) in seq order.
+  ///
+  /// One rule bounds the replay: **reducer-guard refusals are honoured from the
+  /// persisted `refusedReason` (#551), never re-evaluated.** Replaying an
+  /// `hlc_in_the_future` refusal hours later would flip the answer and diverge
+  /// devices — the exact failure `refusedReason` exists to prevent. Only
+  /// `no_live_grant` is recomputed, because that is the verdict the fork changed.
+  ///
+  /// **Idempotent**: running it twice from the same winning chain is a no-op, so
+  /// the recovery path can never oscillate. #555 inherits this entry point, since
+  /// compaction needs the same one and must keep it correct under pruning.
+  Future<Set<AffectedEntity>> rebuildFromOpLog() async {
+    _rebuildRequired = false;
+    final rows = await (_db.select(_db.opLog)
+          ..where((row) => row.workspaceId.equals(workspaceId))
+          ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
+        .get();
+
+    // Derived state only. The op log, the outbox, the applied control log and the
+    // quarantine are all evidence, and evidence is not edited.
+    await _db.transaction(() async {
+      await _db.delete(_db.reducedFields).go();
+      await _db.delete(_db.fieldClocks).go();
+      await _db.delete(_db.rowTombstones).go();
+    });
+
+    final view = await grantsView();
+    final affected = <AffectedEntity>{};
+    for (final row in rows) {
+      final OpHeader header;
+      final OpPayload payload;
+      try {
+        final parts = splitEnvelope(row.envelope);
+        header = OpHeader.parse(parts.header);
+        if (header.opClass == opClassControl) continue;
+        payload = OpPayload.decode(parseBody(parts.body));
+      } on SyncRejection {
+        // Bytes that no longer parse cannot be re-applied, and the row stays as
+        // the evidence it is. Refusing to replay it is the fail-closed answer.
+        continue;
+      }
+
+      final refused = row.refusedReason;
+      if (refused != null && refused != SyncRejectionReason.noLiveGrant.code) {
+        // A reducer-guard refusal: honoured verbatim, never re-evaluated.
+        continue;
+      }
+
+      final authorization = view.verdictFor(
+        authorMemberId: header.authorMemberId,
+        opClass: header.opClass,
+        seq: row.seq,
+      );
+      if (authorization != null) {
+        await _stampRefused(row.seq, authorization.reason);
+        continue;
+      }
+      try {
+        affected.addAll(await _reducer.apply(
+          payload,
+          authorMemberIdHex: memberIdToHex(header.authorMemberId),
+        ));
+        // Newly authorized by the corrected view: clear the stale refusal so the
+        // row stops claiming a verdict that no longer stands.
+        if (refused != null) await _clearRefused(row.seq);
+        await _stampApplied(row.seq);
+      } on SyncRejection catch (rejection) {
+        // A guard that fires on a *fresh* evaluation is recorded as it was the
+        // first time; the clock is not re-consulted for anything already judged.
+        await _stampRefused(row.seq, rejection.reason);
+      }
+    }
+    return affected;
+  }
+
+  Future<void> _clearRefused(int seq) async {
+    await (_db.update(_db.opLog)
+          ..where((row) => row.workspaceId.equals(workspaceId) & row.seq.equals(seq)))
+        .write(const OpLogCompanion(refusedReason: Value(null)));
   }
 
   /// A served op at or below the `since` it was asked past: alarm, and refuse it
@@ -536,6 +665,23 @@ class SyncClient {
       }
 
       if (!await _logReceived(pulled, header)) return const {};
+
+      // The authorization stage, between the chain verdict and the reducer
+      // guards. Evaluated at the op's *own* server seq, never against current
+      // control state — see [GrantsView]. A refusal here is #551's
+      // logged-but-refused class: the row above is already written and advances
+      // per-author accounting, so an honest successor is never falsely gapped.
+      final authorization = (await grantsView()).verdictFor(
+        authorMemberId: header.authorMemberId,
+        opClass: header.opClass,
+        seq: pulled.seq,
+      );
+      if (authorization != null) {
+        await _stampRefused(pulled.seq, authorization.reason);
+        await _refuse(pulled, authorization, header);
+        // The chain head advanced, so a quarantined successor may now be valid.
+        return _releaseChainSuccessors(header.authorMemberId);
+      }
 
       final affected = <AffectedEntity>{};
       try {
@@ -756,31 +902,118 @@ class SyncClient {
         .write(QuarantinedOpsCompanion(releasedAt: Value(_now())));
   }
 
-  /// The six-step MemberRegister verification, in order, before the directory
-  /// learns anything.
+  /// Per-type control verification, in D7's normative order, before anything is
+  /// applied.
   ///
-  /// Step 4 is the load-bearing one. A genuine certificate is public the moment
-  /// it is in the log; without checking the envelope signature against the
-  /// certificate's *own* key, anyone holding a copy could wrap it around
-  /// self-signed envelopes and manufacture forks in the victim's chain.
+  /// Four served types, one dispatch. Two of them — `workspace_genesis` and
+  /// `member_register` — carry their author's own registration, which is why the
+  /// envelope-signature check *defers* into here: the directory by definition has
+  /// no entry for an author that is registering itself. The other two are authored
+  /// by members the directory already knows, so their envelopes are verified
+  /// against the ordinary chain-gated key.
+  ///
+  /// Step "the certificate's key must actually have signed this envelope" is the
+  /// load-bearing one for the registering pair. A genuine certificate is public
+  /// the moment it is in the log; without it, anyone holding a copy could wrap it
+  /// around self-signed envelopes and manufacture forks in the victim's chain.
   Future<void> _receiveControl(PulledOp pulled, Uint8List body, OpHeader header) async {
-    // 1. Parse the payload.
     final payloadBytes = parseBody(body);
     final payload = ControlPayload.decode(payloadBytes);
     payload.requireServedType();
+    payload.requireChainLinkShape();
 
     final rootPk = await pinnedRootPk();
     if (rootPk == null) {
       throw const SyncRejection(
         SyncRejectionReason.badRootSignature,
-        'no Root is pinned on this device, so no registration can be verified',
+        'no Root is pinned on this device, so no control op can be verified',
       );
     }
-    // 2. Root's signature, over the certificate's literal bytes.
-    await verifyRegistrationCertificate(payload.certBytes, payload.rootSig, rootPk);
-    final certificate = payload.certificate();
 
-    // 3. The certificate must be about this envelope's author.
+    // Verification first, and it produces no side effects: whatever the type
+    // teaches this device is held back until the chain check below has run, so a
+    // refused op never leaves a key in the directory behind it.
+    RegistrationCertificate? learned;
+    switch (payload.controlType) {
+      case controlTypeWorkspaceGenesis:
+        await verifyGenesisCertificate(payload.certBytes, payload.rootSig, rootPk);
+        final genesis = payload.genesisCertificate();
+        if (!sameBytes(genesis.rootPk, rootPk)) {
+          // The Root inside the signed genesis must be the Root this device
+          // pinned: that cross-check is why it is in there at all.
+          throw const SyncRejection(
+            SyncRejectionReason.badRootSignature,
+            'the genesis names a different Root than this device pinned',
+          );
+        }
+        if (genesis.workspaceId != workspaceId) {
+          throw SyncRejection(
+            SyncRejectionReason.workspaceMismatch,
+            'genesis names workspace ${genesis.workspaceId}, pulled from $workspaceId',
+          );
+        }
+        learned = genesis.asRegistration();
+        await _bindRegistrationToEnvelope(learned, pulled, header);
+
+      case controlTypeMemberRegister:
+        await verifyRegistrationCertificate(payload.certBytes, payload.rootSig, rootPk);
+        final certificate = payload.certificate();
+        if (certificate.workspaceId != workspaceId) {
+          throw SyncRejection(
+            SyncRejectionReason.workspaceMismatch,
+            'certificate names workspace ${certificate.workspaceId}, pulled from '
+            '$workspaceId',
+          );
+        }
+        await _bindRegistrationToEnvelope(certificate, pulled, header);
+        learned = certificate;
+
+      case controlTypeGrant:
+        await _receiveGrant(pulled, payload, header, rootPk);
+
+      case controlTypeRevoke:
+        await _receiveRevoke(pulled, payload, header, rootPk);
+
+      default:
+        // Unreachable: `requireServedType` already refused it.
+        throw SyncRejection(
+          SyncRejectionReason.unsupportedControlType,
+          'control type "${payload.controlType}" is not served',
+        );
+    }
+
+    // Position and chain, **last** — the same place #548's six-step order put it.
+    // Authority is judged on the bytes, which is a question about the op alone; the
+    // chain is a question about this receiver's own state, and asking it first
+    // would mask a forged certificate behind a chain complaint. A fork here is
+    // *resolved* rather than refused (F14e), and only the winning branch applies.
+    final applied = await _appliedControlLog();
+    if (await _resolveControlPosition(pulled, payload, header, applied) ==
+        _ControlPosition.quarantineThis) {
+      throw SyncRejection(
+        SyncRejectionReason.controlChainFork,
+        'control op at seq ${pulled.seq} lost the fork tie-break for '
+        'prev_control_hash ${_hex(payload.prevControlHash)}',
+      );
+    }
+
+    // Verified *and* positioned: now the op may teach this device something.
+    if (learned != null) directory.rememberChained(learned);
+    if (payload.controlType == controlTypeWorkspaceGenesis) {
+      // Genesis fixes the epoch floor at 0. Recorded rather than assumed, so a
+      // Workspace's floor exists from the moment the Workspace does.
+      await raiseEpochFloor(0);
+    }
+    await _appendAppliedControlOp(pulled, payload, header, payloadBytes);
+  }
+
+  /// The registering pair's binding steps: the certificate must be *about* this
+  /// author, and its own key must have signed this envelope.
+  Future<void> _bindRegistrationToEnvelope(
+    RegistrationCertificate certificate,
+    PulledOp pulled,
+    OpHeader header,
+  ) async {
     if (certificate.memberId != header.authorMemberId) {
       throw SyncRejection(
         SyncRejectionReason.badRootSignature,
@@ -788,41 +1021,268 @@ class SyncClient {
         '${header.authorMemberId}',
       );
     }
-    // 4. The certificate's key must actually have signed this envelope.
     await verifyEnvelope(pulled.envelope, certificate.signPk);
-    // 5. …and must be the key the header names.
-    if (!_sameBytes(certificate.signKeyId, header.authorKeyId)) {
+    if (!sameBytes(certificate.signKeyId, header.authorKeyId)) {
       throw const SyncRejection(
         SyncRejectionReason.badRootSignature,
         'certificate key id is not the one the header names',
       );
     }
-    // 6. Position and chain.
     if (header.authorSeq != 1) {
+      // D1's generalisation of #548's rule: an author's first op must be the
+      // control op that registers it.
       throw SyncRejection(
         SyncRejectionReason.controlChainBreak,
-        'a member_register must be its author\'s first op, not seq '
+        'a registering control op must be its author\'s first op, not seq '
         '${header.authorSeq}',
       );
     }
-    final chain = await _controlChain();
-    final expectedPrevHash = chain?.lastControlPayloadHash ?? zeroPrevControlHash;
-    if (!_sameBytes(payload.prevControlHash, expectedPrevHash)) {
-      // A zero hash arriving when control ops have been applied is a fork
-      // candidate, never a benign "fresh chain".
+  }
+
+  /// Verify one Grant: the authority signed it, and the grantee is resolvable.
+  Future<void> _receiveGrant(
+    PulledOp pulled,
+    ControlPayload payload,
+    OpHeader header,
+    Uint8List rootPk,
+  ) async {
+    // The envelope first: a Grant's author is an already-registered member, so
+    // the chain-gated directory holds its key and there is nothing to defer.
+    await verifyEnvelope(
+      pulled.envelope,
+      directory.publicKeyFor(header.authorMemberId, header.authorKeyId),
+    );
+    final authorityPk = await _authorityPublicKey(payload.authority, header, pulled.seq, rootPk);
+    await verifyGrantCertificate(payload.certBytes, payload.signature, authorityPk);
+    // Decoded *after* the signature check: parsing first would be reading an
+    // unauthenticated document. `owner_grant_requires_root` fires in here.
+    final grant = payload.grantCertificate();
+    if (grant.workspaceId != workspaceId) {
       throw SyncRejection(
-        SyncRejectionReason.controlChainBreak,
-        'prev_control_hash does not name the last applied control op '
-        '(${chain?.appliedCount ?? 0} applied)',
+        SyncRejectionReason.workspaceMismatch,
+        'grant names workspace ${grant.workspaceId}, pulled from $workspaceId',
       );
     }
+    if (grant.granter != payload.authority) {
+      // The signed certificate names its own granter; the payload's field only
+      // says which key to check it against.
+      throw const SyncRejection(
+        SyncRejectionReason.badGrantSignature,
+        'the certificate and the payload disagree about the granter',
+      );
+    }
+    if (!directory.isChained(grant.memberId)) {
+      // Fail closed on an unmaterialised grantee: never a dangling forward
+      // reference. The bar is the chain-gated directory, which is stricter than
+      // anything the server could assert.
+      throw SyncRejection(
+        SyncRejectionReason.unknownGrantee,
+        'no verified registration for grantee ${grant.memberId}',
+      );
+    }
+    if (isPreferencesWorkspace && directory.kindOf(grant.memberId) != memberKindDevice) {
+      // The client-side half of "every Device, no Service ever". Refused to
+      // *apply*, not merely refused to author: a served Service grant into the
+      // preferences Workspace must be inert on every device.
+      throw SyncRejection(
+        SyncRejectionReason.serviceGrantForbidden,
+        'the user_preferences Workspace grants no Service; ${grant.memberId} is '
+        'a ${directory.kindOf(grant.memberId)}',
+      );
+    }
+  }
 
-    directory.rememberChained(certificate);
+  /// Verify one Revoke, including the revoke half of the owner ceiling.
+  Future<void> _receiveRevoke(
+    PulledOp pulled,
+    ControlPayload payload,
+    OpHeader header,
+    Uint8List rootPk,
+  ) async {
+    await verifyEnvelope(
+      pulled.envelope,
+      directory.publicKeyFor(header.authorMemberId, header.authorKeyId),
+    );
+    final authorityPk = await _authorityPublicKey(payload.authority, header, pulled.seq, rootPk);
+    await verifyRevokeCertificate(payload.certBytes, payload.signature, authorityPk);
+    final revoke = payload.revokeCertificate();
+    if (revoke.workspaceId != workspaceId) {
+      throw SyncRejection(
+        SyncRejectionReason.workspaceMismatch,
+        'revoke names workspace ${revoke.workspaceId}, pulled from $workspaceId',
+      );
+    }
+    if (revoke.revoker != payload.authority) {
+      throw const SyncRejection(
+        SyncRejectionReason.badRevokeSignature,
+        'the certificate and the payload disagree about the revoker',
+      );
+    }
+    final target = (await grantsView()).grants[revoke.grantId];
+    if (target == null) {
+      throw SyncRejection(
+        SyncRejectionReason.unknownGrantee,
+        'no applied Grant ${revoke.grantId} for this Revoke to unmake',
+      );
+    }
+    if (target.role == roleOwner && payload.authority != granterRoot) {
+      // The revoke half of the ceiling, and the one half that *needs* state: the
+      // frozen revoke certificate names a grant id, not a role, so only a
+      // receiver holding the Grant can tell an owner revocation from any other.
+      throw const SyncRejection(
+        SyncRejectionReason.ownerRevokeRequiresRoot,
+        'an owner Grant may only be revoked by Root',
+      );
+    }
+  }
+
+  /// Whose key must have signed a grant or revoke certificate.
+  ///
+  /// Root, or the authoring Member itself — **authority does not travel by
+  /// courier**. A member-signed control op additionally needs a live *owner*
+  /// Grant at this op's own seq, which is the matrix's `op_class = 2` row.
+  Future<Uint8List> _authorityPublicKey(
+    String authority,
+    OpHeader header,
+    int seq,
+    Uint8List rootPk,
+  ) async {
+    if (authority == granterRoot) return rootPk;
+    if (authority != header.authorMemberId) {
+      throw SyncRejection(
+        SyncRejectionReason.badGrantSignature,
+        'a member-signed control op must be authored by the member whose '
+        'authority it claims',
+      );
+    }
+    if (!(await grantsView()).wasOwnerAt(authority, seq)) {
+      throw SyncRejection(
+        SyncRejectionReason.noLiveGrant,
+        'member $authority held no live owner Grant at seq $seq',
+      );
+    }
+    return directory.publicKeyFor(header.authorMemberId, header.authorKeyId);
+  }
+  // --- The applied control log, and the grants view derived from it -----------
+
+  Future<List<AppliedControlRow>> _appliedControlLog({bool includeQuarantined = false}) =>
+      (_db.select(_db.appliedControlLog)
+            ..where((row) => includeQuarantined
+                ? row.workspaceId.equals(workspaceId)
+                : row.workspaceId.equals(workspaceId) & row.quarantinedAt.isNull())
+            ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
+          .get();
+
+  /// The grants view, recomputed from the applied control log.
+  ///
+  /// Derived at read time rather than cached: control ops are few, so there is
+  /// nothing here worth a copy — and per the naming rule a stored copy would have
+  /// to announce itself as one, and would then be free to go stale.
+  Future<GrantsView> grantsView() async {
+    final rows = await _appliedControlLog();
+    final grants = <String, DerivedGrant>{};
+    for (final row in rows) {
+      final payload = ControlPayload.decode(row.payloadBytes);
+      switch (row.controlType) {
+        case controlTypeGrant:
+          final grant = payload.grantCertificate();
+          grants[grant.grantId] = DerivedGrant(
+            grantId: grant.grantId,
+            memberId: grant.memberId,
+            role: grant.role,
+            granter: grant.granter,
+            grantedSeq: row.seq,
+          );
+        case controlTypeRevoke:
+          final revoke = payload.revokeCertificate();
+          final existing = grants[revoke.grantId];
+          // A Revoke for a Grant this device never applied is dropped rather than
+          // remembered: the verification stage already refused that case, so
+          // reaching here means the Grant was quarantined on a losing fork branch.
+          if (existing == null) continue;
+          grants[revoke.grantId] = DerivedGrant(
+            grantId: existing.grantId,
+            memberId: existing.memberId,
+            role: existing.role,
+            granter: existing.granter,
+            grantedSeq: existing.grantedSeq,
+            revokedBySeq: row.seq,
+          );
+      }
+    }
+    return GrantsView(grants);
+  }
+
+  /// Every applied Grant, live or not — the surface #553's device list reads.
+  Future<List<DerivedGrant>> grants() async =>
+      (await grantsView()).grants.values.toList()
+        ..sort((a, b) => a.grantedSeq.compareTo(b.grantedSeq));
+
+  /// Live Grants with no current-epoch KeyWrap.
+  ///
+  /// A named, surfaced state *now*, dormant until #554: with no KeyWraps the
+  /// predicate is defined against epoch 0 and never fires. The vocabulary and the
+  /// seam land here so #554 wires delivery rather than concepts.
+  Future<List<DerivedGrant>> orphanedGrants() async =>
+      (await grantsView()).orphanedGrants().toList();
+
+  Future<void> _appendAppliedControlOp(
+    PulledOp pulled,
+    ControlPayload payload,
+    OpHeader header,
+    Uint8List payloadBytes,
+  ) async {
+    final hlc = _certificateHlc(payload);
+    await _db.into(_db.appliedControlLog).insertOnConflictUpdate(
+          AppliedControlLogCompanion.insert(
+            workspaceId: workspaceId,
+            seq: pulled.seq,
+            controlType: payload.controlType,
+            payloadBytes: payloadBytes,
+            payloadHash: controlPayloadHash(payloadBytes),
+            prevControlHash: payload.prevControlHash,
+            authorMemberId: header.authorMemberId,
+            certWallMs: hlc.wallMs,
+            certCounter: hlc.counter,
+            appliedAt: _now(),
+          ),
+        );
     await _db.into(_db.controlChainState).insertOnConflictUpdate(
           ControlChainStateCompanion.insert(
             workspaceId: workspaceId,
             lastControlPayloadHash: controlPayloadHash(payloadBytes),
-            appliedCount: (chain?.appliedCount ?? 0) + 1,
+            appliedCount: (await _controlChain())?.appliedCount ?? 0,
+          ),
+        );
+    // The head is derived from the log rather than incremented, so a fork
+    // resolution that quarantines a branch cannot leave the counter lying.
+    await _refreshControlChainHead();
+  }
+
+  /// The certificate's own clock — the fork tie-break's first key.
+  ///
+  /// Deliberately not the op-level HLC: a forking author could otherwise move the
+  /// tie by re-signing an envelope around the same certificate.
+  Hlc _certificateHlc(ControlPayload payload) => switch (payload.controlType) {
+        controlTypeWorkspaceGenesis => payload.genesisCertificate().createdAtHlc,
+        controlTypeMemberRegister => payload.certificate().registeredAtHlc,
+        controlTypeGrant => payload.grantCertificate().grantedAtHlc,
+        controlTypeRevoke => payload.revokeCertificate().revokedAtHlc,
+        _ => throw SyncRejection(
+            SyncRejectionReason.unsupportedControlType,
+            'control type "${payload.controlType}" carries no certificate clock',
+          ),
+      };
+
+  /// Recompute `controlChainState` from the applied log.
+  Future<void> _refreshControlChainHead() async {
+    final rows = await _appliedControlLog();
+    await _db.into(_db.controlChainState).insertOnConflictUpdate(
+          ControlChainStateCompanion.insert(
+            workspaceId: workspaceId,
+            lastControlPayloadHash:
+                rows.isEmpty ? zeroPrevControlHash : rows.last.payloadHash,
+            appliedCount: rows.length,
           ),
         );
   }
@@ -834,6 +1294,133 @@ class SyncClient {
   /// The chain link a control op this device authors next must name.
   Future<Uint8List> appliedControlHead() async =>
       (await _controlChain())?.lastControlPayloadHash ?? zeroPrevControlHash;
+
+  // --- Control fork resolution (F14e) ----------------------------------------
+
+  /// Whether an arriving control op wins its position, and what to do if it does.
+  ///
+  /// Two applied-or-arriving control ops naming the same predecessor are a fork.
+  /// The winner is **earliest certificate HLC, then lowest author member id** —
+  /// deterministic and order-independent, so every device reaches the same answer
+  /// whichever order it saw them in. Mutual owner revocation is exactly this case
+  /// and needs no extra machinery.
+  Future<_ControlPosition> _resolveControlPosition(
+    PulledOp pulled,
+    ControlPayload payload,
+    OpHeader header,
+    List<AppliedControlRow> applied,
+  ) async {
+    final expected = applied.isEmpty ? zeroPrevControlHash : applied.last.payloadHash;
+    if (sameBytes(payload.prevControlHash, expected)) {
+      return _ControlPosition.accept;
+    }
+
+    final rival = applied
+        .where((row) => sameBytes(row.prevControlHash, payload.prevControlHash))
+        .firstOrNull;
+    if (rival == null) {
+      // Not a fork — a skip or a restart. The chain names a predecessor this
+      // device does not hold at the head, and nothing here claims that position.
+      throw SyncRejection(
+        SyncRejectionReason.controlChainBreak,
+        'prev_control_hash does not name the last applied control op '
+        '(${applied.length} applied)',
+      );
+    }
+
+    final hlc = _certificateHlc(payload);
+    if (_arrivalWinsTieBreak(
+      arrivalWallMs: hlc.wallMs,
+      arrivalCounter: hlc.counter,
+      arrivalAuthorMemberId: header.authorMemberId,
+      rival: rival,
+    )) {
+      // The already-applied branch loses. Quarantine it and everything chaining
+      // through it, then re-reduce content under the corrected view.
+      await _quarantineControlBranch(rival);
+      return _ControlPosition.accept;
+    }
+    return _ControlPosition.quarantineThis;
+  }
+
+  /// Earliest cert HLC, then lowest author member id. Total and order-independent.
+  bool _arrivalWinsTieBreak({
+    required int arrivalWallMs,
+    required int arrivalCounter,
+    required String arrivalAuthorMemberId,
+    required AppliedControlRow rival,
+  }) {
+    if (arrivalWallMs != rival.certWallMs) return arrivalWallMs < rival.certWallMs;
+    if (arrivalCounter != rival.certCounter) return arrivalCounter < rival.certCounter;
+    return arrivalAuthorMemberId.compareTo(rival.authorMemberId) < 0;
+  }
+
+  /// Quarantine a losing branch: the loser and every op chaining through it.
+  ///
+  /// Rows are marked rather than deleted — the log is evidence — and the branch is
+  /// walked forward by payload hash so a long losing tail goes in one pass.
+  Future<void> _quarantineControlBranch(AppliedControlRow loser) async {
+    final applied = await _appliedControlLog();
+    final doomed = <int>{loser.seq};
+    var hashes = <Uint8List>[loser.payloadHash];
+    while (hashes.isNotEmpty) {
+      final next = <Uint8List>[];
+      for (final row in applied) {
+        if (doomed.contains(row.seq)) continue;
+        if (hashes.any((hash) => sameBytes(row.prevControlHash, hash))) {
+          doomed.add(row.seq);
+          next.add(row.payloadHash);
+        }
+      }
+      hashes = next;
+    }
+    final now = _now();
+    for (final seq in doomed) {
+      await (_db.update(_db.appliedControlLog)
+            ..where((row) => row.workspaceId.equals(workspaceId) & row.seq.equals(seq)))
+          .write(AppliedControlLogCompanion(quarantinedAt: Value(now)));
+    }
+    await _raiseAlarm(
+      IntegrityAlarmKind.controlChainFork,
+      detail: 'control fork resolved against ${doomed.length} applied op(s) '
+          'starting at seq ${loser.seq}; the branch is quarantined and content '
+          'was re-reduced under the winning grants view',
+    );
+    // A resolved control fork can change which *content* ops were authorized, so
+    // convergence of the grants view alone is not convergence.
+    _rebuildRequired = true;
+  }
+
+  // --- epoch_floor ------------------------------------------------------------
+
+  /// The monotone `key_epoch` floor for this Workspace. Absent reads as 0.
+  Future<int> epochFloor() async {
+    final row = await (_db.select(_db.epochFloors)
+          ..where((r) => r.workspaceId.equals(workspaceId)))
+        .getSingleOrNull();
+    return row?.keyEpochFloor ?? 0;
+  }
+
+  /// Raise the floor, clamping to the maximum ever seen.
+  ///
+  /// **Raise-only by construction**: a request to lower it is silently the
+  /// no-op it has to be, because a floor that could fall would let a rotation be
+  /// undone by an older op — which is the whole thing the floor prevents. #554's
+  /// verified `rotate` control op is the only production caller; until then this
+  /// is exercised through the API and across restart.
+  Future<int> raiseEpochFloor(int keyEpoch) async {
+    final current = await epochFloor();
+    final raised = keyEpoch > current ? keyEpoch : current;
+    await _db.into(_db.epochFloors).insertOnConflictUpdate(
+          EpochFloorsCompanion.insert(
+            workspaceId: workspaceId,
+            keyEpochFloor: raised,
+            raisedAt: _now(),
+          ),
+        );
+    return raised;
+  }
+
 
   /// Append to the log, or record that the append itself was refused.
   ///
@@ -1154,10 +1741,7 @@ SELECT
   }
 }
 
-bool _sameBytes(Uint8List a, Uint8List b) {
-  if (a.length != b.length) return false;
-  for (var index = 0; index < a.length; index++) {
-    if (a[index] != b[index]) return false;
-  }
-  return true;
-}
+bool _sameBytes(Uint8List a, Uint8List b) => sameBytes(a, b);
+
+String _hex(Uint8List bytes) =>
+    bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();

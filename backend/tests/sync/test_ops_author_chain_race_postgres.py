@@ -26,7 +26,9 @@ duplicates, so no news) is exercised at all.
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -41,8 +43,9 @@ from sqlalchemy.ext.asyncio import (
 
 from app.auth.models import User
 from app.database import Base
-from app.sync.ids import implicit_workspace_id
-from app.sync.models import Member, Op
+from app.sync.control_payload import GRANTER_ROOT, MEMBER_KIND_DEVICE, ROLE_OWNER
+from app.sync.ids import default_workspace_id
+from app.sync.models import Grant, Member, Op, Workspace
 from app.sync.routes import post_ops
 from app.sync.schemas import PostOpsRequest
 from app.sync.signal_hub import SignalHub
@@ -112,10 +115,14 @@ async def race_engine() -> AsyncIterator[AsyncEngine]:
 
 @pytest_asyncio.fixture
 async def enrolled(race_engine: AsyncEngine) -> tuple[User, Member, SpecDevice]:
-    """One user with one registered device, committed and visible to everyone.
+    """One user with one registered device in a founded Workspace, committed.
 
-    The endpoint now authenticates the *Member*, so the fixture hands back the
-    row the member-scoped token would have resolved to.
+    The endpoint authenticates the *Member*, so the fixture hands back the row the
+    member-scoped token would have resolved to.  The ``workspaces`` and ``grants``
+    rows are seeded directly rather than through a genesis batch: they are the
+    server's own materialised index (ADR-0028), and what this file races is the
+    author-chain constraint, not the control plane that fills them.  Without them
+    a content POST would be refused before the race could happen.
     """
     user = User(id=_USER_ID, email="author-chain-race@example.com", hashed_password="x")
     device = SpecDevice()
@@ -125,10 +132,23 @@ async def enrolled(race_engine: AsyncEngine) -> tuple[User, Member, SpecDevice]:
         sign_pk=device.sign_pk,
         key_id=device.key_id,
         kex_pk=device.kex_pk,
+        member_kind=MEMBER_KIND_DEVICE,
+        chained_at=datetime.now(UTC),
     )
     async with async_sessionmaker(race_engine, expire_on_commit=False)() as session:
         session.add(user)
         session.add(member)
+        session.add(Workspace(workspace_id=default_workspace_id(user.id), genesis_seq=0))
+        session.add(
+            Grant(
+                workspace_id=default_workspace_id(user.id),
+                grant_id=uuid.uuid4(),
+                member_id=device.member_id,
+                role=ROLE_OWNER,
+                granter=GRANTER_ROOT,
+                granted_seq=0,
+            )
+        )
         await session.commit()
     return user, member, device
 
@@ -155,14 +175,14 @@ async def test_a_raced_fork_of_the_author_chain_is_a_409_not_a_500(
     fork, so the answer is the same 409 a sequential gap earns.
     """
     user, member, device = enrolled
-    workspace_id = implicit_workspace_id(user.id)
+    workspace_id = default_workspace_id(user.id)
     winner = device.next_envelope(workspace_id, advance=False)
     loser = device.next_envelope(workspace_id, advance=False)
     assert winner != loser
 
     hub = SignalHub()
     sessions = async_sessionmaker(race_engine, expire_on_commit=False)
-    with hub.subscribe(workspace_id) as subscriber:
+    with hub.subscribe(workspace_id, member.member_id) as subscriber:
         async with sessions() as losing, sessions() as winning:
             await _pin_snapshot_before_the_winner(losing)
 
@@ -211,12 +231,12 @@ async def test_a_raced_replay_comes_back_as_the_idempotent_duplicate(
     held rather than that its chain is broken.
     """
     user, member, device = enrolled
-    workspace_id = implicit_workspace_id(user.id)
+    workspace_id = default_workspace_id(user.id)
     replayed = device.next_envelope(workspace_id)
 
     hub = SignalHub()
     sessions = async_sessionmaker(race_engine, expire_on_commit=False)
-    with hub.subscribe(workspace_id) as subscriber:
+    with hub.subscribe(workspace_id, member.member_id) as subscriber:
         async with sessions() as losing, sessions() as winning:
             await _pin_snapshot_before_the_winner(losing)
 
@@ -250,7 +270,7 @@ async def test_the_constraint_is_scoped_to_one_author_in_one_workspace(
     dressed as a safety one.
     """
     user, member, device = enrolled
-    workspace_id = implicit_workspace_id(user.id)
+    workspace_id = default_workspace_id(user.id)
     second_device = SpecDevice()
 
     second_member = Member(
@@ -259,17 +279,31 @@ async def test_the_constraint_is_scoped_to_one_author_in_one_workspace(
         sign_pk=second_device.sign_pk,
         key_id=second_device.key_id,
         kex_pk=second_device.kex_pk,
+        member_kind=MEMBER_KIND_DEVICE,
+        chained_at=datetime.now(UTC),
     )
     sessions = async_sessionmaker(race_engine, expire_on_commit=False)
     async with sessions() as setup:
         setup.add(second_member)
+        # Its own live Grant, seeded the same way the fixture seeds the founder's:
+        # a content POST needs one, and what this races is the chain constraint.
+        setup.add(
+            Grant(
+                workspace_id=workspace_id,
+                grant_id=uuid.uuid4(),
+                member_id=second_device.member_id,
+                role=ROLE_OWNER,
+                granter=GRANTER_ROOT,
+                granted_seq=0,
+            )
+        )
         await setup.commit()
 
     from_first = device.next_envelope(workspace_id)
     from_second = second_device.next_envelope(workspace_id)
 
     hub = SignalHub()
-    with hub.subscribe(workspace_id) as subscriber:
+    with hub.subscribe(workspace_id, member.member_id) as subscriber:
         async with sessions() as other, sessions() as one:
             await _pin_snapshot_before_the_winner(other)
             await post_ops(workspace_id, PostOpsRequest(ops=[encode(from_first)]), one, member, hub)

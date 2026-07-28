@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.sync.escrow import RECOVERY_FETCH_DAILY_LIMIT
-from app.sync.ids import implicit_workspace_id
+from app.sync.ids import default_workspace_id
 from app.sync.models import RecoveryEscrow, RecoveryEscrowFetch
 from tests.conftest import auth_header, register
 from tests.sync.builders import SpecRoot, escrow_blob, user_id_from_token
@@ -34,7 +34,7 @@ class EscrowFixture:
 
 async def _open(client: AsyncClient, email: str) -> EscrowFixture:
     token = await register(client, email)
-    return EscrowFixture(token, implicit_workspace_id(user_id_from_token(token)), SpecRoot())
+    return EscrowFixture(token, default_workspace_id(user_id_from_token(token)), SpecRoot())
 
 
 def detail_of(response: object) -> dict[str, object]:
@@ -161,7 +161,7 @@ async def test_a_blob_signed_for_another_workspace_cannot_be_replayed(
 ) -> None:
     """The workspace id sits inside the signed preimage, so the slot is bound."""
     escrow = await _open(client, "escrow-slot-bound@example.com")
-    foreign = escrow.root.escrow_body(implicit_workspace_id("somebody-else"))
+    foreign = escrow.root.escrow_body(default_workspace_id("somebody-else"))
     response = await client.put(
         f"/w/{escrow.workspace_id}/recovery", json=foreign, headers=escrow.headers
     )
@@ -198,7 +198,7 @@ async def test_another_users_escrow_slot_is_unreachable(client: AsyncClient) -> 
 
 
 async def test_the_escrow_requires_authentication(client: AsyncClient) -> None:
-    workspace_id = implicit_workspace_id("nobody")
+    workspace_id = default_workspace_id("nobody")
     assert (await client.get(f"/w/{workspace_id}/recovery")).status_code == 401
     assert (await client.put(f"/w/{workspace_id}/recovery", json={})).status_code == 401
 

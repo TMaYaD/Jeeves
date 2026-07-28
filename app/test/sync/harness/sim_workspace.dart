@@ -56,7 +56,134 @@ Future<Uint8List> memberRegisterEnvelope({
       controlType: controlTypeMemberRegister,
       prevControlHash: prevControlHash,
       certBytes: certBytes,
-      rootSig: signature,
+      signature: signature,
+    ).encode(),
+    authorSeq: authorSeq,
+  );
+}
+
+/// Mint a `workspace_genesis` envelope for [device], signed by [root].
+///
+/// Genesis embeds the founding Device's registration, so this is also how the
+/// harness brings a founder's *keys* into a Workspace (ADR-0031).
+Future<Uint8List> workspaceGenesisEnvelope({
+  required AuthorFixture device,
+  required String workspaceId,
+  required RootAuthority root,
+  required int wallMs,
+  Uint8List? rootPk,
+  Uint8List? prevControlHash,
+  bool corruptSignature = false,
+  int? authorSeq,
+}) async {
+  final certificate = GenesisCertificate(
+    workspaceId: workspaceId,
+    rootPk: rootPk ?? root.rootPk,
+    founder: MemberKeys(
+      memberId: device.memberId,
+      signPk: device.signPk,
+      kexPk: device.kexPk,
+    ),
+    createdAtHlc: Hlc.forMember(device.memberId, wallMs),
+  );
+  final certBytes = certificate.encode();
+  final signature = await root.signGenesisCertificateBytes(certBytes);
+  if (corruptSignature) signature[signature.length - 1] ^= 0x01;
+  return device.nextEnvelope(
+    workspaceId,
+    opClass: opClassControl,
+    payload: ControlPayload(
+      controlType: controlTypeWorkspaceGenesis,
+      prevControlHash: prevControlHash ?? zeroPrevControlHash,
+      certBytes: certBytes,
+      signature: signature,
+    ).encode(),
+    authorSeq: authorSeq,
+  );
+}
+
+/// Mint a `grant` envelope. [signingKey] null means Root signs it.
+///
+/// Root for an `owner` role — the only authority that may mint one (ADR-0031) —
+/// and an owning Device's own key for anything less.
+Future<Uint8List> grantEnvelope({
+  required AuthorFixture device,
+  required String workspaceId,
+  required RootAuthority root,
+  required Uint8List prevControlHash,
+  required String memberId,
+  required int wallMs,
+  String role = roleOwner,
+  String? granter,
+  String? grantId,
+  AuthorFixture? signer,
+  bool corruptSignature = false,
+  int? authorSeq,
+}) async {
+  final resolvedGranter = granter ?? granterRoot;
+  final certificate = GrantCertificate(
+    workspaceId: workspaceId,
+    grantId: grantId ?? const Uuid().v4(),
+    memberId: memberId,
+    role: role,
+    granter: resolvedGranter,
+    grantedAtHlc: Hlc.forMember(memberId, wallMs),
+  );
+  final certBytes = certificate.encode();
+  final signature = signer == null
+      ? await root.signGrantCertificateBytes(certBytes)
+      : await signer.signGrantCertificateBytes(certBytes);
+  if (corruptSignature) signature[signature.length - 1] ^= 0x01;
+  return device.nextEnvelope(
+    workspaceId,
+    opClass: opClassControl,
+    payload: ControlPayload(
+      controlType: controlTypeGrant,
+      prevControlHash: prevControlHash,
+      certBytes: certBytes,
+      signature: signature,
+      authority: resolvedGranter,
+    ).encode(),
+    authorSeq: authorSeq,
+  );
+}
+
+/// Mint a `revoke` envelope naming one [grantId]. Revocation is grant-granular.
+Future<Uint8List> revokeEnvelope({
+  required AuthorFixture device,
+  required String workspaceId,
+  required RootAuthority root,
+  required Uint8List prevControlHash,
+  required String grantId,
+  required int wallMs,
+  String? revoker,
+  AuthorFixture? signer,
+  bool corruptSignature = false,
+  int? authorSeq,
+}) async {
+  final resolvedRevoker = revoker ?? granterRoot;
+  final revokeId = const Uuid().v4();
+  final certificate = RevokeCertificate(
+    workspaceId: workspaceId,
+    revokeId: revokeId,
+    grantId: grantId,
+    revoker: resolvedRevoker,
+    revokedAtHlc: Hlc.forMember(revokeId, wallMs),
+  );
+  final certBytes = certificate.encode();
+  final signature = signer == null
+      ? await root.signRevokeCertificateBytes(certBytes)
+      : await signer.signRevokeCertificateBytes(certBytes);
+  if (corruptSignature) signature[signature.length - 1] ^= 0x01;
+  return device.nextEnvelope(
+    workspaceId,
+    opClass: opClassControl,
+    payload: ControlPayload(
+      controlType: controlTypeRevoke,
+      prevControlHash: prevControlHash,
+      certBytes: certBytes,
+      signature: signature,
+      authority: resolvedRevoker,
     ).encode(),
     authorSeq: authorSeq,
   );
@@ -120,7 +247,10 @@ class SimWorkspace {
   final String userId;
   final List<SimDevice> devices;
 
-  String get workspaceId => implicitWorkspaceId(userId);
+  String get workspaceId => defaultWorkspaceId(userId);
+
+  /// The implicit User-global preferences Workspace — every Device, no Service.
+  String get preferencesWorkspaceId => userPreferencesWorkspaceId(userId);
 
   /// The passphrase device A generated. The only secret that travels between
   /// devices in this harness.
@@ -153,22 +283,51 @@ class SimWorkspace {
   /// holds none. Not a server capability — the real server never walks the
   /// control chain — but the harness needs to author ops a pulling client will
   /// accept, and this is how a pulling client sees it.
-  Uint8List controlChainHead() {
+  Uint8List controlChainHead([String? workspace]) {
+    final target = workspace ?? workspaceId;
     for (final op in server.storedOps.reversed) {
       final header = op.header;
-      if (op.workspaceId != workspaceId || header?.opClass != opClassControl) continue;
+      if (op.workspaceId != target || header?.opClass != opClassControl) continue;
       return controlPayloadHash(parseBody(splitEnvelope(op.envelope).body));
     }
     return zeroPrevControlHash;
   }
 
-  /// Bring an [AuthorFixture] in as a genuinely chained Member.
+  /// The grant id of a device's own owner Grant, read off the log.
+  ///
+  /// Read from the *signed control ops* rather than from any server table, which
+  /// is the only way a test can name a Grant without borrowing the server's word
+  /// for it.
+  String ownerGrantIdOf(String memberId, {String? workspace}) {
+    final target = workspace ?? workspaceId;
+    for (final op in server.storedOps) {
+      final header = op.header;
+      if (op.workspaceId != target || header?.opClass != opClassControl) continue;
+      final payload = ControlPayload.decode(parseBody(splitEnvelope(op.envelope).body));
+      if (payload.controlType != controlTypeGrant) continue;
+      final grant = payload.grantCertificate();
+      if (grant.memberId == memberId && grant.role == roleOwner) return grant.grantId;
+    }
+    throw StateError('no owner Grant for $memberId in $target');
+  }
+
+  /// Bring an [AuthorFixture] in as a genuinely chained, genuinely granted Member.
   ///
   /// Registers its keys, takes a member credential by proof of possession, and
-  /// posts a real Root-signed MemberRegister at the head of the control chain.
-  /// A test that wants an author every device will *accept* uses this; a test
-  /// that wants one every device must *refuse* simply skips it.
-  Future<FakeSyncServerMemberSession> enrolFixture(AuthorFixture device) async {
+  /// posts a real Root-signed MemberRegister plus an explicit Grant at the head of
+  /// the control chain — the same two-op shape `EnrolmentService` posts, because
+  /// roles are one materialisation path and there are no implied grants.
+  ///
+  /// A test that wants an author every device will *accept* uses this; a test that
+  /// wants one every device must *refuse* skips it, or passes [grant] false to get
+  /// a chained-but-ungranted author.
+  Future<FakeSyncServerMemberSession> enrolFixture(
+    AuthorFixture device, {
+    bool grant = true,
+    String role = roleOwner,
+    String? workspace,
+  }) async {
+    final target = workspace ?? workspaceId;
     final user = server.connectAsUser(userId);
     await user.registerMember(
       memberId: device.memberId,
@@ -183,15 +342,27 @@ class SimWorkspace {
     ) as FakeSyncServerMemberSession;
 
     final root = await recoverRoot();
-    await session.postOps(workspaceId, [
-      await memberRegisterEnvelope(
-        device: device,
-        workspaceId: workspaceId,
-        root: root,
-        prevControlHash: controlChainHead(),
-        wallMs: clock.nowMs,
-      ),
-    ]);
+    final register = await memberRegisterEnvelope(
+      device: device,
+      workspaceId: target,
+      root: root,
+      prevControlHash: controlChainHead(target),
+      wallMs: clock.nowMs,
+    );
+    await session.postOps(target, [register]);
+    if (grant) {
+      await session.postOps(target, [
+        await grantEnvelope(
+          device: device,
+          workspaceId: target,
+          root: root,
+          prevControlHash: controlPayloadHash(parseBody(splitEnvelope(register).body)),
+          memberId: device.memberId,
+          role: role,
+          wallMs: clock.nowMs,
+        ),
+      ]);
+    }
     root.drop();
     return session;
   }

@@ -74,6 +74,17 @@ enum IntegrityAlarmKind {
   /// when #554 lands.
   signatureInvalid('signature_invalid'),
 
+  /// Two control ops named the same predecessor. The tie-break picked one branch
+  /// and quarantined the other; content was re-reduced under the corrected grants
+  /// view, because a resolved control fork can change which content ops were
+  /// authorized and convergence of the grants view alone is not convergence.
+  controlChainFork('control_chain_fork'),
+
+  /// A content op whose author held no Grant permitting its `op_class` at the
+  /// op's own seq. Raised independently of anything the server did — clients
+  /// never read server grant rows.
+  noLiveGrant('no_live_grant'),
+
   /// An append found the slot it claims already taken.
   ///
   /// [chainVerdict] cannot produce this — it refuses a *chain* position the log
@@ -256,6 +267,10 @@ IntegrityAlarmKind? alarmForRejection(SyncRejectionReason reason) => switch (rea
         IntegrityAlarmKind.duplicateOpIdDivergence,
       SyncRejectionReason.ownWritesDivergence => IntegrityAlarmKind.ownWritesDivergence,
       SyncRejectionReason.staleReplayedOp => IntegrityAlarmKind.stalePrefixServed,
+      SyncRejectionReason.controlChainFork => IntegrityAlarmKind.controlChainFork,
+      // An op the server should never have accepted: it holds the same grants
+      // index the verdict is about, so serving one is a claim worth surfacing.
+      SyncRejectionReason.noLiveGrant => IntegrityAlarmKind.noLiveGrant,
       _ => null,
     };
 

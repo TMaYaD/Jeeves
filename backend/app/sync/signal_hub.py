@@ -7,6 +7,15 @@ free: N notifies before the waiter wakes collapse into one poke, and the pull
 that follows sweeps up everything past the cursor.  Nothing here is persisted,
 no seq is stored, and no per-member cursor exists (review F17).
 
+**Subscriptions are member-aware.**  A socket is authenticated once, at the
+handshake, and never re-checked, so revoking a Member's last live Grant has to be
+able to *close* its sockets rather than merely stop admitting new ones — until it
+does, a revoked subscriber keeps learning that activity exists in the Workspace.
+:meth:`SignalHub.revoke` trips a second event on exactly that Member's
+subscriptions, which the socket pump turns into a ``4403`` close.  The member id
+is the only thing the hub knows about a subscriber beyond its Workspace, and it
+is used for nothing else.
+
 **Deployment constraint.** This fan-out is in-process, which is correct only
 because uvicorn runs single-process everywhere we deploy (Dockerfile, Procfile,
 compose — no ``--workers``).  A second worker would silently deliver pokes to
@@ -24,19 +33,26 @@ from types import TracebackType
 
 
 class SignalSubscription:
-    """One subscriber's handle: an event that is set whenever news arrives.
+    """One subscriber's handle: an event set whenever news arrives, and a second
+    one set when this subscriber's authority is revoked.
 
-    Used as an async context manager so the unsubscribe happens on every exit
-    path, including a client disconnect raised out of the send loop.
+    Used as a context manager so the unsubscribe happens on every exit path,
+    including a client disconnect raised out of the send loop.
     """
 
-    def __init__(self, hub: SignalHub, workspace_id: uuid.UUID) -> None:
+    def __init__(self, hub: SignalHub, workspace_id: uuid.UUID, member_id: uuid.UUID) -> None:
         self._hub = hub
         self._workspace_id = workspace_id
+        self.member_id = member_id
         self._event = asyncio.Event()
+        self._revoked = asyncio.Event()
 
     async def wait(self) -> None:
         await self._event.wait()
+
+    async def wait_revoked(self) -> None:
+        """Completes when this Member's last live Grant is revoked."""
+        await self._revoked.wait()
 
     def pending(self) -> bool:
         """Whether a poke is waiting — the state ``wait`` would return on at once.
@@ -47,11 +63,19 @@ class SignalSubscription:
         """
         return self._event.is_set()
 
+    def is_revoked(self) -> bool:
+        return self._revoked.is_set()
+
     def clear(self) -> None:
         self._event.clear()
 
     def notify(self) -> None:
         self._event.set()
+
+    def revoke(self) -> None:
+        """Mark this subscription for closure.  Never cleared: a revocation does
+        not un-happen, and the socket it belongs to is about to end."""
+        self._revoked.set()
 
     def unsubscribe(self) -> None:
         self._hub.unsubscribe(self._workspace_id, self)
@@ -72,8 +96,8 @@ class SignalHub:
     def __init__(self) -> None:
         self._subscribers: dict[uuid.UUID, set[SignalSubscription]] = {}
 
-    def subscribe(self, workspace_id: uuid.UUID) -> SignalSubscription:
-        subscription = SignalSubscription(self, workspace_id)
+    def subscribe(self, workspace_id: uuid.UUID, member_id: uuid.UUID) -> SignalSubscription:
+        subscription = SignalSubscription(self, workspace_id, member_id)
         self._subscribers.setdefault(workspace_id, set()).add(subscription)
         return subscription
 
@@ -89,6 +113,19 @@ class SignalHub:
         """Poke every subscriber of this Workspace.  Never crosses Workspaces."""
         for subscription in tuple(self._subscribers.get(workspace_id, ())):
             subscription.notify()
+
+    def revoke(self, workspace_id: uuid.UUID, member_id: uuid.UUID) -> int:
+        """Close every live socket this Member holds on this Workspace.
+
+        Returns how many were tripped, so the caller can record that a revocation
+        actually reached the transport rather than merely the index.
+        """
+        tripped = 0
+        for subscription in tuple(self._subscribers.get(workspace_id, ())):
+            if subscription.member_id == member_id:
+                subscription.revoke()
+                tripped += 1
+        return tripped
 
     def subscriber_count(self, workspace_id: uuid.UUID) -> int:
         return len(self._subscribers.get(workspace_id, ()))

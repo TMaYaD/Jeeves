@@ -82,12 +82,14 @@ def _apply_0032(engine: sa.engine.Engine) -> None:
     _run(engine, _load("migration_0032", "0032_add_identity_root_escrow.py"))
 
 
-def test_0032_chains_from_0031_and_is_the_current_head() -> None:
+def test_0032_chains_from_0031() -> None:
     module = _load("migration_0032", "0032_add_identity_root_escrow.py")
     assert module.revision == "0032"
     assert module.down_revision == "0031"
+    # 0032 is no longer the head — 0033 adds the control-plane indexes on top of
+    # it (see ``test_grants_migration.py``); what matters here is where it sits.
     script = ScriptDirectory.from_config(migrate._alembic_config())
-    assert script.get_heads() == ["0032"]
+    assert "0032" in {revision.revision for revision in script.walk_revisions()}
 
 
 def test_0032_matches_the_models_it_backs() -> None:
@@ -97,6 +99,10 @@ def test_0032_matches_the_models_it_backs() -> None:
     with engine.connect() as conn:
         inspector = sa.inspect(conn)
         assert {"recovery_escrows", "recovery_escrow_fetches"} <= set(inspector.get_table_names())
+        # ``members.member_kind`` arrives in 0033, so it is excluded here and
+        # asserted there — the point of this comparison is that *0032's* shape
+        # has not drifted from the models the routes write through.
+        later_columns = {"members": {"member_kind"}}
         for table, model in (
             ("members", Member),
             ("refresh_tokens", RefreshToken),
@@ -104,7 +110,10 @@ def test_0032_matches_the_models_it_backs() -> None:
             ("recovery_escrow_fetches", RecoveryEscrowFetch),
         ):
             migrated = {column["name"] for column in inspector.get_columns(table)}
-            assert migrated == {column.name for column in model.__table__.columns}, table
+            expected = {column.name for column in model.__table__.columns} - later_columns.get(
+                table, set()
+            )
+            assert migrated == expected, table
 
         # The escrow slot is keyed per (workspace, user): one Root per User, and
         # a shape that survives shared Workspaces without another migration.

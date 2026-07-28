@@ -62,6 +62,8 @@ import 'package:jeeves/sync/sync_transport.dart';
 import 'harness/author_fixture.dart';
 import 'harness/fake_sync_server.dart';
 import 'harness/signal_probe.dart';
+import 'harness/sim_workspace.dart'
+    show grantEnvelope, simulationStartWallMs, workspaceGenesisEnvelope;
 
 const String _userId = 'contract-user';
 const String _otherUserId = 'contract-neighbour';
@@ -80,13 +82,28 @@ Matcher throwsStatus(int status, [String? code]) => throwsA(
 Uint8List _seedOf(int offset) =>
     Uint8List.fromList(List<int>.generate(32, (index) => (index + offset) % 256));
 
+/// The founding ceremony spends the founding device's first two chain slots — one
+/// on the genesis, one on its explicit owner Grant — so its first *content* op
+/// sits here. Roles are one materialisation path, so nothing is implied.
+const int firstContentAuthorSeq = 3;
+
+/// Only the content rows, in seq order.
+///
+/// Every founded Workspace's log opens with the two control ops of its founding
+/// ceremony, so a test about content appends filters them out rather than
+/// counting them.
+List<StoredOp> contentOps(FakeSyncServer server) => [
+      for (final op in server.storedOps)
+        if (op.header?.opClass == opClassContent) op,
+    ];
+
 void main() {
   late FakeSyncServer server;
   late FakeSyncServerUserSession userSession;
   late FakeSyncServerMemberSession session;
   late AuthorFixture author;
   late RootAuthority root;
-  final workspaceId = implicitWorkspaceId(_userId);
+  final workspaceId = defaultWorkspaceId(_userId);
 
   /// Escrow a Root so the server has something to check certificates against,
   /// then register a device and take its member credential — the same order a
@@ -108,6 +125,35 @@ void main() {
         ) as FakeSyncServerMemberSession;
   }
 
+  /// The founding ceremony: genesis, then a root-signed owner self-grant.
+  ///
+  /// Two ops in one batch and in that order, exactly as `EnrolmentService` posts
+  /// them. Genesis embeds the founder's registration, so there is no separate
+  /// `member_register` for the founding device — and without the Grant a content
+  /// POST would be refused before reaching anything else under test.
+  Future<void> found(
+    FakeSyncServerMemberSession memberSession,
+    AuthorFixture device, {
+    String? workspace,
+  }) async {
+    final target = workspace ?? workspaceId;
+    final genesis = await workspaceGenesisEnvelope(
+      device: device,
+      workspaceId: target,
+      root: root,
+      wallMs: simulationStartWallMs,
+    );
+    final grant = await grantEnvelope(
+      device: device,
+      workspaceId: target,
+      root: root,
+      prevControlHash: controlPayloadHash(parseBody(splitEnvelope(genesis).body)),
+      memberId: device.memberId,
+      wallMs: simulationStartWallMs,
+    );
+    await memberSession.postOps(target, [genesis, grant]);
+  }
+
   setUp(() async {
     server = FakeSyncServer();
     userSession = server.connectAsUser(_userId);
@@ -122,6 +168,7 @@ void main() {
     );
     author = await AuthorFixture.create(seed: _seedOf(1));
     session = await enrol(userSession, author);
+    await found(session, author);
   });
 
   group('POST /w/{w}/ops', () {
@@ -133,7 +180,7 @@ void main() {
       expect(results.map((r) => r.duplicate), [false, false]);
       expect(results[0].seq, lessThan(results[1].seq));
 
-      final stored = server.storedOps;
+      final stored = contentOps(server);
       expect(stored.map((op) => op.envelope), [first, second]);
       for (final op in stored) {
         // Index columns come from the envelope, never from the request.
@@ -159,7 +206,7 @@ void main() {
 
       expect(replay.map((r) => r.duplicate), [true, true]);
       expect(replay.map((r) => r.seq), first.map((r) => r.seq));
-      expect(server.storedOps.length, 2);
+      expect(contentOps(server).length, 2);
     });
 
     test('partially duplicate batch appends only the new ops', () async {
@@ -169,7 +216,7 @@ void main() {
       final fresh = await author.nextEnvelope(workspaceId);
       final results = await session.postOps(workspaceId, [alreadySent, fresh]);
       expect(results.map((r) => r.duplicate), [true, false]);
-      expect(server.storedOps.length, 2);
+      expect(contentOps(server).length, 2);
     });
 
     test('a repeat inside one batch is a duplicate of its first appearance',
@@ -178,12 +225,12 @@ void main() {
       final results = await session.postOps(workspaceId, [envelope, envelope]);
       expect(results.map((r) => r.duplicate), [false, true]);
       expect(results[0].seq, results[1].seq);
-      expect(server.storedOps.length, 1);
+      expect(contentOps(server).length, 1);
     });
 
     test('author_seq gap rejects the whole batch with the structured conflict',
         () async {
-      await author.nextEnvelope(workspaceId); // burn author_seq 1
+      await author.nextEnvelope(workspaceId); // burn one chain slot
       final afterTheGap = await author.nextEnvelope(workspaceId);
       await expectLater(
         () => session.postOps(workspaceId, [afterTheGap]),
@@ -192,11 +239,11 @@ void main() {
               .having((error) => error.statusCode, 'statusCode', 409)
               .having((error) => error.code, 'code', authorChainConflictCode)
               .having((error) => error.opIndex, 'opIndex', 0)
-              .having((error) => error.submittedAuthorSeq, 'submittedAuthorSeq', 2)
-              .having((error) => error.expectedAuthorSeq, 'expectedAuthorSeq', 1),
+              .having((error) => error.submittedAuthorSeq, 'submittedAuthorSeq', firstContentAuthorSeq + 1)
+              .having((error) => error.expectedAuthorSeq, 'expectedAuthorSeq', firstContentAuthorSeq),
         ),
       );
-      expect(server.storedOps, isEmpty);
+      expect(contentOps(server), isEmpty);
     });
 
     test('two ops claiming the same author_seq land exactly once', () async {
@@ -209,11 +256,11 @@ void main() {
         () => session.postOps(workspaceId, [second]),
         throwsStatus(409, authorChainConflictCode),
       );
-      expect(server.storedOps.map((op) => op.envelope), [first]);
+      expect(contentOps(server).map((op) => op.envelope), [first]);
     });
 
     test('header workspace mismatch is rejected', () async {
-      final foreign = await author.nextEnvelope(implicitWorkspaceId('someone-else'));
+      final foreign = await author.nextEnvelope(defaultWorkspaceId('someone-else'));
       expect(
         () => session.postOps(workspaceId, [foreign]),
         throwsStatus(422, 'workspace_mismatch'),
@@ -257,7 +304,7 @@ void main() {
         () => session.postOps(workspaceId, [tooShort]),
         throwsStatus(422, 'envelope_too_short'),
       );
-      expect(server.storedOps, isEmpty);
+      expect(contentOps(server), isEmpty);
     });
 
     test('foreign author is rejected', () async {
@@ -299,25 +346,25 @@ void main() {
         () => session.postOps(workspaceId, [envelope]),
         throwsStatus(403, 'author_member_mismatch'),
       );
-      expect(server.storedOps, isEmpty);
+      expect(contentOps(server), isEmpty);
     });
 
     test("another user's workspace is rejected", () async {
-      final otherWorkspaceId = implicitWorkspaceId(_otherUserId);
+      final otherWorkspaceId = defaultWorkspaceId(_otherUserId);
       final envelope = await author.nextEnvelope(otherWorkspaceId);
       expect(
         () => session.postOps(otherWorkspaceId, [envelope]),
-        throwsStatus(403, 'no_workspace_grant'),
+        throwsStatus(403, 'workspace_not_derivable'),
       );
       expect(
         () => session.pullOps(otherWorkspaceId, since: 0, limit: 10),
-        throwsStatus(403, 'no_workspace_grant'),
+        throwsStatus(403, 'workspace_not_derivable'),
       );
     });
 
     test('empty batch is accepted and appends nothing', () async {
       expect(await session.postOps(workspaceId, const []), isEmpty);
-      expect(server.storedOps, isEmpty);
+      expect(contentOps(server), isEmpty);
     });
   });
 
@@ -329,7 +376,11 @@ void main() {
       }
       await session.postOps(workspaceId, envelopes);
 
-      final firstPage = await session.pullOps(workspaceId, since: 0, limit: 2);
+      // Past the founding ceremony's control ops: paging is what is under test,
+      // and the genesis and self-grant are not part of the page arithmetic.
+      final foundedThrough = contentOps(server).first.seq - 1;
+      final firstPage =
+          await session.pullOps(workspaceId, since: foundedThrough, limit: 2);
       expect(firstPage.hasMore, isTrue);
       expect(firstPage.ops.map((op) => op.envelope), envelopes.sublist(0, 2));
 
@@ -348,10 +399,14 @@ void main() {
         await author.nextEnvelope(workspaceId),
       ];
       await session.postOps(workspaceId, envelopes);
-      final stored = server.storedOps;
+      final stored = contentOps(server);
       server.markCompacted(stored.first.seq, by: stored.last.seq);
 
-      final pulled = await session.pullOps(workspaceId, since: 0, limit: 10);
+      final pulled = await session.pullOps(
+        workspaceId,
+        since: stored.first.seq - 1,
+        limit: 10,
+      );
       expect(pulled.ops.map((op) => op.envelope), [envelopes[1]]);
     });
   });
@@ -367,7 +422,7 @@ void main() {
     });
 
     test('subscribe to another workspace is refused with 4403', () async {
-      final pokes = PokeRecorder(session.newSeqSignals(implicitWorkspaceId(_otherUserId)));
+      final pokes = PokeRecorder(session.newSeqSignals(defaultWorkspaceId(_otherUserId)));
       await pumpEvents();
 
       expect(pokes.pokeCount, 0);
@@ -378,7 +433,7 @@ void main() {
             // The structured code, not the prose: a close frame carries no body,
             // so the client branches on the code — and the fake keeps it beside
             // the close code rather than regressing to a bare string.
-            .having((e) => e.code, 'code', 'no_workspace_grant'),
+            .having((e) => e.code, 'code', 'workspace_not_derivable'),
       );
       await pokes.cancel();
     });
@@ -416,7 +471,7 @@ void main() {
       final neighbourUser = server.connectAsUser(_otherUserId);
       final neighbourDevice = await AuthorFixture.create(seed: _seedOf(270));
       final neighbour = await enrol(neighbourUser, neighbourDevice);
-      final neighbourWorkspaceId = implicitWorkspaceId(_otherUserId);
+      final neighbourWorkspaceId = defaultWorkspaceId(_otherUserId);
       final pokes = PokeRecorder(neighbour.newSeqSignals(neighbourWorkspaceId));
       await pumpEvents();
 
@@ -442,6 +497,27 @@ void main() {
   });
 
   group('op_class=2: MemberRegister', () {
+    /// The chain link the next control op must name, computed the way a pulling
+    /// client computes it: SHA-256 over the last control op's payload bytes.
+    Uint8List controlHead() {
+      for (final op in server.storedOps.reversed) {
+        if (op.workspaceId != workspaceId) continue;
+        if (op.header?.opClass != opClassControl) continue;
+        return controlPayloadHash(parseBody(splitEnvelope(op.envelope).body));
+      }
+      return zeroPrevControlHash;
+    }
+
+    /// A second Device with keys and a credential, holding **no Grant**.
+    ///
+    /// Every *bad* `member_register` case runs through a sibling rather than
+    /// through the founder, whose registration the genesis already embedded — the
+    /// founder has no separate register to get wrong.
+    Future<(AuthorFixture, FakeSyncServerMemberSession)> joinSibling(int seed) async {
+      final sibling = await AuthorFixture.create(seed: _seedOf(seed));
+      return (sibling, await enrol(userSession, sibling));
+    }
+
     Future<Uint8List> registerFor(
       AuthorFixture device, {
       RootAuthority? signer,
@@ -466,69 +542,92 @@ void main() {
         opClass: opClassControl,
         payload: ControlPayload(
           controlType: controlTypeMemberRegister,
-          prevControlHash: prevControlHash ?? zeroPrevControlHash,
+          // The observed head by default: an all-zero link is genesis-only
+          // (ADR-0031), so a register that carried one would be refused as a
+          // truncated-history claim before anything else was examined.
+          prevControlHash: prevControlHash ?? controlHead(),
           certBytes: certBytes,
-          rootSig: signature,
+          signature: signature,
         ).encode(),
         authorSeq: authorSeq,
       );
     }
 
     test('a Root-signed member_register materialises the membership', () async {
-      final envelope = await registerFor(author);
-      final results = await session.postOps(workspaceId, [envelope]);
+      final (sibling, siblingSession) = await joinSibling(141);
+      final envelope = await registerFor(sibling);
+      final results = await siblingSession.postOps(workspaceId, [envelope]);
       expect(results.single.duplicate, isFalse);
-      expect(server.storedOps.single.envelope, envelope);
-      expect(server.storedOps.single.header!.opClass, opClassControl);
-      expect(server.isChained(author.memberId), isTrue);
+      expect(server.storedOps.last.envelope, envelope);
+      expect(server.storedOps.last.header!.opClass, opClassControl);
+      expect(server.isChained(sibling.memberId), isTrue);
+    });
+
+    test('a member_register with a zero chain link is rejected', () async {
+      // An all-zero prev_control_hash is **genesis-only** (ADR-0031). Refused
+      // even by a receiver whose control state is empty, which is what makes a
+      // truncated history always detectable.
+      final (sibling, siblingSession) = await joinSibling(142);
+      final envelope =
+          await registerFor(sibling, prevControlHash: zeroPrevControlHash);
+      expect(
+        () => siblingSession.postOps(workspaceId, [envelope]),
+        throwsStatus(422, 'control_chain_break'),
+      );
+      expect(server.isChained(sibling.memberId), isFalse);
     });
 
     test('the control chain link is the predecessors payload hash', () async {
-      final first = await registerFor(author);
-      await session.postOps(workspaceId, [first]);
+      final before = server.storedOps.length;
+      final (first, firstSession) = await joinSibling(140);
+      final firstRegister = await registerFor(first);
+      await firstSession.postOps(workspaceId, [firstRegister]);
 
-      final sibling = await AuthorFixture.create(seed: _seedOf(140));
-      final siblingSession = await enrol(userSession, sibling);
-      final firstPayload = parseBody(splitEnvelope(first).body);
+      final (second, secondSession) = await joinSibling(150);
+      final firstPayload = parseBody(splitEnvelope(firstRegister).body);
       final chained = await registerFor(
-        sibling,
+        second,
         prevControlHash: controlPayloadHash(firstPayload),
       );
       final payload = ControlPayload.decode(parseBody(splitEnvelope(chained).body));
       expect(payload.prevControlHash, controlPayloadHash(firstPayload));
       expect(payload.prevControlHash, isNot(zeroPrevControlHash));
 
-      await siblingSession.postOps(workspaceId, [chained]);
-      expect(server.storedOps.length, 2);
+      await secondSession.postOps(workspaceId, [chained]);
+      expect(server.storedOps.length, before + 2);
     });
 
     test('a control op with a bad Root signature is rejected', () async {
-      final envelope = await registerFor(author, corruptSignature: true);
+      final (sibling, siblingSession) = await joinSibling(143);
+      final envelope = await registerFor(sibling, corruptSignature: true);
       expect(
-        () => session.postOps(workspaceId, [envelope]),
+        () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'bad_root_signature'),
       );
-      expect(server.isChained(author.memberId), isFalse);
+      expect(server.isChained(sibling.memberId), isFalse);
     });
 
     test('a control op signed by a foreign Root is rejected', () async {
+      final (sibling, siblingSession) = await joinSibling(144);
       final envelope = await registerFor(
-        author,
+        sibling,
         signer: await RootAuthority.fromSecretKey(_seedOf(77)),
       );
       expect(
-        () => session.postOps(workspaceId, [envelope]),
+        () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'bad_root_signature'),
       );
     });
 
     test('an unserved control type is rejected', () async {
+      // #554's landing slot: every control type this build does not serve is
+      // closed. `grant` is served now, so `rotate` carries the case.
       final envelope = await author.nextEnvelope(
         workspaceId,
         opClass: opClassControl,
         payload: ControlPayload(
-          controlType: 'grant',
-          prevControlHash: zeroPrevControlHash,
+          controlType: 'rotate',
+          prevControlHash: controlHead(),
         ).encode(),
       );
       expect(
@@ -568,51 +667,58 @@ void main() {
 
     test('a member_register away from author_seq 1 is rejected', () async {
       // The position rule, and its precedence over the chain-gap 409.
-      final envelope = await registerFor(author, authorSeq: 4);
+      final (sibling, siblingSession) = await joinSibling(145);
+      final before = server.storedOps.length;
+      final envelope = await registerFor(sibling, authorSeq: 4);
       expect(
-        () => session.postOps(workspaceId, [envelope]),
+        () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'member_register_not_first'),
       );
-      expect(server.storedOps, isEmpty);
+      expect(server.storedOps.length, before);
     });
 
     test('a certificate naming another member is rejected', () async {
+      final (sibling, siblingSession) = await joinSibling(146);
       final envelope = await registerFor(
-        author,
+        sibling,
         certificate: RegistrationCertificate(
           workspaceId: workspaceId,
-          memberId: implicitWorkspaceId('a-different-member'),
-          signPk: author.signPk,
-          kexPk: author.kexPk,
-          registeredAtHlc: Hlc.forMember(author.memberId, 1800000000000),
+          memberId: defaultWorkspaceId('a-different-member'),
+          signPk: sibling.signPk,
+          kexPk: sibling.kexPk,
+          registeredAtHlc: Hlc.forMember(sibling.memberId, 1800000000000),
         ),
       );
       expect(
-        () => session.postOps(workspaceId, [envelope]),
+        () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'cert_member_mismatch'),
       );
     });
 
     test('a certificate naming another key is rejected', () async {
+      final (sibling, siblingSession) = await joinSibling(147);
       final other = await AuthorFixture.create(seed: _seedOf(160));
       final envelope = await registerFor(
-        author,
+        sibling,
         certificate: RegistrationCertificate(
           workspaceId: workspaceId,
-          memberId: author.memberId,
+          memberId: sibling.memberId,
           signPk: other.signPk,
-          kexPk: author.kexPk,
-          registeredAtHlc: Hlc.forMember(author.memberId, 1800000000000),
+          kexPk: sibling.kexPk,
+          registeredAtHlc: Hlc.forMember(sibling.memberId, 1800000000000),
         ),
       );
       expect(
-        () => session.postOps(workspaceId, [envelope]),
+        () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'cert_key_mismatch'),
       );
     });
 
     test('a control op without a stored Root fails closed', () async {
-      // No escrow means no Root the server can check against.
+      // No escrow means no Root the server can check against. Exercised through
+      // *genesis*, because that is the first control op a Workspace ever sees and
+      // therefore the first place the missing slot bites — which is also why the
+      // ceremony's escrow PUT is strictly sequenced before its genesis post.
       final bare = FakeSyncServer();
       final bareUser = bare.connectAsUser(_userId);
       final device = await AuthorFixture.create(seed: _seedOf(180));
@@ -628,7 +734,14 @@ void main() {
         signature: await device.signChallenge(nonce),
       );
       expect(
-        () async => bareSession.postOps(workspaceId, [await registerFor(device)]),
+        () async => bareSession.postOps(workspaceId, [
+          await workspaceGenesisEnvelope(
+            device: device,
+            workspaceId: workspaceId,
+            root: root,
+            wallMs: simulationStartWallMs,
+          ),
+        ]),
         throwsStatus(422, 'bad_root_signature'),
       );
     });
@@ -754,7 +867,7 @@ void main() {
 
     test('an unknown member has no challenge', () async {
       expect(
-        () => userSession.requestMemberChallenge(implicitWorkspaceId('nobody')),
+        () => userSession.requestMemberChallenge(defaultWorkspaceId('nobody')),
         throwsStatus(404, 'unknown_member'),
       );
     });
@@ -800,7 +913,7 @@ void main() {
 
     test('an unknown member does not get a counter', () async {
       // The 404 precedes the counter, so enumeration cannot exhaust anything.
-      final stranger = implicitWorkspaceId('never-registered');
+      final stranger = defaultWorkspaceId('never-registered');
       for (var index = 0; index < fakeServerMemberChallengeLimit + 5; index++) {
         expect(
           () => userSession.requestMemberChallenge(stranger),
@@ -924,7 +1037,7 @@ void main() {
 
     test('a blob signed for another workspace cannot be replayed', () async {
       final foreign = await bareRoot.escrowRecord(
-        workspaceId: implicitWorkspaceId('somebody-else'),
+        workspaceId: defaultWorkspaceId('somebody-else'),
         version: 1,
         blob: harnessEscrowBlob(),
       );
@@ -954,11 +1067,11 @@ void main() {
       final neighbour = bare.connectAsUser(_otherUserId);
       expect(
         () async => neighbour.putRecoveryEscrow(workspaceId, await record(1)),
-        throwsStatus(403, 'no_workspace_grant'),
+        throwsStatus(403, 'workspace_not_derivable'),
       );
       expect(
         () => neighbour.fetchRecoveryEscrow(workspaceId),
-        throwsStatus(403, 'no_workspace_grant'),
+        throwsStatus(403, 'workspace_not_derivable'),
       );
     });
 

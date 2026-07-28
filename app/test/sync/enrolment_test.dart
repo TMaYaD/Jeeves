@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
+import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/root_authority.dart';
 import 'package:jeeves/sync/sync_transport.dart';
@@ -57,21 +58,57 @@ void main() {
 
       // The escrow is written by the ceremony, not by a later step: a device
       // that generated Root and did not escrow it would be a lost account.
-      final escrow = await server
-          .connectAsUser(_userId)
-          .fetchRecoveryEscrow(first.client.workspaceId);
-      expect(escrow!.version, firstEscrowVersion);
-      expect(escrow.rootPk, first.outcome.rootPk);
+      // **Both** slots, in the pinned order. The same blob under two signatures —
+      // `workspace_id` is inside the preimage — and recovery always reads the
+      // default one, so a crash between the two PUTs leaves the recoverable slot
+      // written. Both exist because the server resolves a Workspace's `root_pk`
+      // from the slot of the Workspace being posted to.
+      final user = server.connectAsUser(_userId);
+      for (final scope in derivableWorkspaceIds(_userId)) {
+        final escrow = await user.fetchRecoveryEscrow(scope);
+        expect(escrow!.version, firstEscrowVersion, reason: scope);
+        expect(escrow.rootPk, first.outcome.rootPk, reason: scope);
+      }
+      final defaultSlot =
+          await user.fetchRecoveryEscrow(defaultWorkspaceId(_userId));
+      final prefsSlot =
+          await user.fetchRecoveryEscrow(userPreferencesWorkspaceId(_userId));
+      expect(prefsSlot!.blob, defaultSlot!.blob, reason: 'one blob, two slots');
+      expect(
+        prefsSlot.rootSig,
+        isNot(defaultSlot.rootSig),
+        reason: 'each slot is signed for its own Workspace',
+      );
 
-      // And the register is in the log, with the zero chain link that is only
-      // legal because nothing preceded it.
-      final register = server.storedOps.single;
-      expect(register.header!.opClass, opClassControl);
-      expect(register.header!.authorSeq, 1);
-      final payload =
-          ControlPayload.decode(parseBody(splitEnvelope(register.envelope).body));
-      expect(payload.controlType, controlTypeMemberRegister);
-      expect(payload.prevControlHash, zeroPrevControlHash);
+      // And each Workspace's log opens with a genesis carrying the zero chain
+      // link — legal only because nothing preceded it — followed by the founder's
+      // explicit root-signed owner Grant.
+      for (final scope in derivableWorkspaceIds(_userId)) {
+        final control = [
+          for (final op in server.storedOps)
+            if (op.workspaceId == scope && op.header?.opClass == opClassControl) op,
+        ];
+        expect(control.length, 2, reason: scope);
+        expect(control.first.header!.authorSeq, 1, reason: scope);
+        final genesis = ControlPayload.decode(
+          parseBody(splitEnvelope(control.first.envelope).body),
+        );
+        expect(genesis.controlType, controlTypeWorkspaceGenesis, reason: scope);
+        expect(genesis.prevControlHash, zeroPrevControlHash, reason: scope);
+        // Genesis embeds the founding Device's registration, so there is no
+        // separate `member_register` for it (ADR-0031).
+        expect(
+          genesis.genesisCertificate().founder.memberId,
+          first.identity.memberId,
+          reason: scope,
+        );
+        final grant = ControlPayload.decode(
+          parseBody(splitEnvelope(control[1].envelope).body),
+        );
+        expect(grant.controlType, controlTypeGrant, reason: scope);
+        expect(grant.authority, granterRoot, reason: scope);
+        expect(grant.grantCertificate().role, roleOwner, reason: scope);
+      }
       expect(server.isChained(first.identity.memberId), isTrue);
     });
 

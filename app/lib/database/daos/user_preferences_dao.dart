@@ -8,7 +8,8 @@ library;
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
-import '../../sync/ids.dart' show implicitWorkspaceId, preferenceEntityId, userPreferencesCollection;
+import '../../sync/ids.dart'
+    show preferenceEntityId, userPreferencesCollection, userPreferencesWorkspaceId;
 import '../gtd_database.dart';
 
 class UserPreferencesDao {
@@ -64,9 +65,13 @@ class UserPreferencesDao {
       // that create the same preference offline converge as one entity under
       // field-grain merge instead of forking. The `value` field is the one
       // ADR-0011's Conflict Strategy registry arbitrates.
+      //
+      // The workspace is the **User-global preferences one**, not the default
+      // GTD Workspace: preferences live behind a boundary that no Service is
+      // ever granted, and the derivation is keyed off that Workspace's id.
       _db.opCapture.write(
         collection: userPreferencesCollection,
-        entityId: preferenceEntityId(implicitWorkspaceId(userId), key),
+        entityId: preferenceEntityId(userPreferencesWorkspaceId(userId), key),
         fields: {
           'user_id': userId,
           'key': key,

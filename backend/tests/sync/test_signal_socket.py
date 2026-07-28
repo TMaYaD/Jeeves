@@ -45,7 +45,9 @@ from app.config import settings
 from app.database import get_db
 from app.main import app
 from app.redis import get_redis
-from app.sync.ids import implicit_workspace_id
+from app.sync.control_payload import ZERO_PREV_CONTROL_HASH, control_payload_hash
+from app.sync.envelope import parse_body, split_envelope
+from app.sync.ids import default_workspace_id
 from app.sync.routes import (
     KEEPALIVE_FRAME,
     SIGNAL_CLOSE_FORBIDDEN,
@@ -54,7 +56,7 @@ from app.sync.routes import (
 )
 from app.sync.signal_hub import SignalHub, get_signal_hub
 from tests.conftest import auth_header, register
-from tests.sync.builders import SpecDevice, encode_all, user_id_from_token
+from tests.sync.builders import SpecDevice, SpecRoot, encode_all, user_id_from_token
 
 #: Long enough that a healthy socket never emits one mid-test, so a keepalive
 #: only ever shows up where a test asked for it by shortening the interval.
@@ -87,16 +89,30 @@ class Session:
         member_token: str,
         workspace_id: uuid.UUID,
         device: SpecDevice,
+        root: SpecRoot,
+        owner_grant_id: uuid.UUID,
     ) -> None:
         self.user_token = user_token
         self.member_token = member_token
         self.workspace_id = workspace_id
         self.device = device
+        self.root = root
+        #: The device's own owner Grant — what a revocation test takes away.
+        self.owner_grant_id = owner_grant_id
+        self.control_head = ZERO_PREV_CONTROL_HASH
 
     @property
     def headers(self) -> dict[str, str]:
         """The ops routes' credential — the member token, never the user's."""
         return auth_header(self.member_token)
+
+    @property
+    def user_headers(self) -> dict[str, str]:
+        return auth_header(self.user_token)
+
+    def advance_control_head(self, envelope: bytes) -> bytes:
+        self.control_head = control_payload_hash(parse_body(split_envelope(envelope)[1]))
+        return envelope
 
 
 @pytest.fixture(autouse=True)
@@ -138,8 +154,22 @@ async def http_client(db: AsyncSession, redis: Redis, hub: SignalHub) -> AsyncIt
 
 
 async def _open_session(client: AsyncClient, email: str) -> Session:
-    """Run the whole enrolment ceremony: register, then prove possession."""
+    """Run the whole ceremony: escrow, register, prove possession, found.
+
+    The founding batch — genesis then a root-signed owner self-grant — is part of
+    the ceremony rather than test scaffolding: a content POST needs a live Grant,
+    so a device that skipped it could not produce the append these tests poke on.
+    """
     user_token = await register(client, email)
+    workspace_id = default_workspace_id(user_id_from_token(user_token))
+    root = SpecRoot()
+    escrow = await client.put(
+        f"/w/{workspace_id}/recovery",
+        json=root.escrow_body(workspace_id),
+        headers=auth_header(user_token),
+    )
+    assert escrow.status_code == 200, escrow.text
+
     device = SpecDevice()
     registered = await client.post(
         "/members", json=device.registration_body(), headers=auth_header(user_token)
@@ -154,13 +184,34 @@ async def _open_session(client: AsyncClient, email: str) -> Session:
         json={"nonce": nonce, "signature": device.challenge_signature(nonce)},
     )
     assert issued.status_code == 200, issued.text
+    member_token: str = issued.json()["access_token"]
 
-    return Session(
-        user_token=user_token,
-        member_token=issued.json()["access_token"],
-        workspace_id=implicit_workspace_id(user_id_from_token(user_token)),
-        device=device,
+    genesis = root.genesis_envelope(device, workspace_id)
+    grant_certificate = root.grant_certificate(workspace_id, member_id=device.member_id)
+    grant = root.grant_envelope(
+        device,
+        workspace_id,
+        certificate=grant_certificate,
+        prev_control_hash=control_payload_hash(parse_body(split_envelope(genesis)[1])),
     )
+    founded = await client.post(
+        f"/w/{workspace_id}/ops",
+        json=encode_all(genesis, grant),
+        headers=auth_header(member_token),
+    )
+    assert founded.status_code == 200, founded.text
+
+    session = Session(
+        user_token=user_token,
+        member_token=member_token,
+        workspace_id=workspace_id,
+        device=device,
+        root=root,
+        owner_grant_id=grant_certificate.grant_id,
+    )
+    session.advance_control_head(genesis)
+    session.advance_control_head(grant)
+    return session
 
 
 @pytest_asyncio.fixture

@@ -1,37 +1,63 @@
-/// The device enrolment ceremony — the same seven steps for the first Device
-/// and the Nth.
+/// The device enrolment ceremony — one code path, branching on what the *log*
+/// says rather than on which device this is.
 ///
-/// That sameness is the point of ADR-0028's design: there is no "pairing" mode
-/// that needs a second device online, and no code path that only the first
-/// device takes. The only difference is where Root comes from — generated, or
-/// unwrapped out of the recovery escrow with the passphrase.
+/// There is no "pairing" mode that needs a second device online, and no step that
+/// only the first device of an account takes. The only two differences are where
+/// Root comes from — generated, or unwrapped out of the recovery escrow with the
+/// passphrase — and whether the Workspace being enrolled into already has a
+/// genesis. That second branch is decided by **pulling and looking**, which is
+/// what makes it recoverable rather than positional.
 ///
 /// ```
 /// 1. Obtain Root for the ceremony
-///      first device: generate (random, never derived — F1) + a master wrap key,
-///                    build the blob, sign it, PUT at version 1, pin root_pk
-///      Nth device:   GET the escrow -> floor-check -> unwrap -> pin root_pk
-/// 2. Persist the device keypairs (separate sign and KEX — F8/F19)
-/// 3. POST /members under the User credential — a shell row, no authority
-/// 4. Proof of possession -> the member-scoped transport
-/// 5. Pull and apply the existing control log
-/// 6. Author the MemberRegister as this device's op 1, naming the head of the
-///    log it just applied, and post it
+///      first device: generate (random, never derived — F1) + a master wrap key
+///      Nth device:   GET the default escrow -> floor-check -> unwrap
+/// 2. Pin root_pk, and write the escrow to BOTH slots — default first, then
+///    user_preferences. Recovery always reads the default slot, so a crash
+///    between the two PUTs leaves the recoverable one written.
+/// 3. Persist the device keypairs (separate sign and KEX — F8/F19)
+/// 4. POST /members under the User credential — a shell row, no authority
+/// 5. Proof of possession -> the member-scoped transport
+/// 6. Per Workspace, default first then user_preferences:
+///      pull and apply the existing control log, then branch on what was seen
+///        observed EMPTY     -> op 1 `workspace_genesis`, op 2 root-signed
+///                             owner self-grant
+///        observed NON-EMPTY -> op 1 `member_register`, op 2 root-signed
+///                             owner self-grant
 /// 7. Drop Root
 /// ```
 ///
-/// **Steps 5 and 6 are not interchangeable.** A device that registered before
-/// pulling would emit an all-zero `prev_control_hash` into a populated chain,
-/// and every honest client would quarantine it as a fork. The pull is what
-/// makes the chain link truthful.
+/// **Genesis authorship is log-state-conditioned, not device-ordinal-conditioned**
+/// (ADR-0031): *any* device holding Root authors the genesis for a Workspace whose
+/// control log it observed empty. A first-device rule would leave an
+/// unrecoverable window — the prefs escrow PUT lands, the process dies before the
+/// prefs genesis posts, and from then on every later device takes the "Nth" path
+/// into a genesis-less Workspace and is fork-refused forever. Conditioning on the
+/// log closes it: the next enrolling device observes the empty prefs log and
+/// authors the genesis itself.
+///
+/// **The pull is not interchangeable with the claim.** A device that authored
+/// before pulling would emit a fork-lie `prev_control_hash`, and every honest
+/// client would quarantine it. The pull happens while this device holds a member
+/// credential and *no Grant whatsoever*, which is exactly what the server's
+/// member-GET rule exists to admit.
+///
+/// **Every Device gets an explicit root-signed owner Grant.** Roles are one
+/// materialisation path — no implied grants, genesis included. Devices are owners
+/// because the User acts through them, and the corollary is deliberate: revoking a
+/// Device takes the passphrase, because only Root can revoke an owner Grant.
 library;
 
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:uuid/uuid.dart';
+
 import 'control_payload.dart';
 import 'device_key_store.dart';
+import 'envelope.dart';
 import 'hlc.dart';
+import 'ids.dart';
 import 'passphrase_policy.dart';
 import 'recovery_escrow.dart';
 import 'root_authority.dart';
@@ -68,6 +94,7 @@ class EnrolmentService {
     required this.client,
     required this.userTransport,
     required this.keyStore,
+    required this.workspaceClientFactory,
     required int Function() nowMs,
     this.passphrasePolicy = const PassphrasePolicy(),
     this.kdfParameters = Argon2idParameters.floor,
@@ -78,9 +105,20 @@ class EnrolmentService {
   })  : _nowMs = nowMs,
         _random = random ?? Random.secure();
 
+  /// The client for the **default** Workspace. The ceremony is per-User, so it
+  /// reaches the second Workspace through [workspaceClientFactory].
   final SyncClient client;
   final UserTransport userTransport;
   final DeviceKeyStore keyStore;
+
+  /// Builds (or returns) the client for another of this User's Workspaces.
+  ///
+  /// Required rather than optional: the ceremony covers two Workspaces, and a
+  /// service that silently covered one would leave the preferences Workspace
+  /// genesis-less — which is the state the log-state branch exists to recover
+  /// from, not one worth creating on purpose.
+  final Future<SyncClient> Function(String workspaceId) workspaceClientFactory;
+
   final PassphrasePolicy passphrasePolicy;
 
   /// What a blob this device *writes* is wrapped under, and the floor every
@@ -109,6 +147,21 @@ class EnrolmentService {
   /// catastrophic bug rather than a weak-crypto one.
   final Random _random;
 
+  /// The wrapped blob this ceremony writes into **both** escrow slots.
+  ///
+  /// The same bytes under two signatures — `workspace_id` is inside the
+  /// preimage — whether they were just generated (first device) or fetched from
+  /// the default slot (any later device). Identical bytes is what makes the
+  /// second slot a copy rather than a second secret to keep track of.
+  Uint8List? _escrowBlob;
+
+  /// Slots this ceremony already knows the record for.
+  ///
+  /// The default slot is always one of them — either just written or just
+  /// fetched — and re-reading it would spend another of the escrow route's
+  /// audited, rate-limited fetches for an answer already in hand.
+  final Map<String, RecoveryEscrowRecord> _knownEscrowRecords = {};
+
   /// Enrol the first Device of an account: mint Root and escrow it.
   ///
   /// [passphrase] defaults to a generated diceware phrase. A user-chosen one is
@@ -135,6 +188,12 @@ class EnrolmentService {
         floor: kdfFloor,
         random: _random,
       );
+      _escrowBlob = blob;
+      // The default slot first, and pinned before anything else: recovery always
+      // reads this slot, so a crash after it leaves the account recoverable. The
+      // prefs slot is written by `_registerThisDevice`, strictly before any prefs
+      // genesis is posted — the server resolves `root_pk` from the slot of the
+      // Workspace being posted to, so posting into a slotless one is unverifiable.
       final record = await userTransport.putRecoveryEscrow(
         client.workspaceId,
         await root.escrowRecord(
@@ -143,6 +202,7 @@ class EnrolmentService {
           blob: blob,
         ),
       );
+      _knownEscrowRecords[client.workspaceId] = record;
       await client.pinRoot(root.rootPk, record.version);
       await _registerThisDevice(root);
       return EnrolmentOutcome(
@@ -243,6 +303,9 @@ class EnrolmentService {
 
     // Floor first: a below-floor blob is refused before any KDF work runs.
     readEscrowBlobParameters(record.blob, floor: kdfFloor);
+    // The bytes this ceremony will copy into any slot that is still empty.
+    _escrowBlob = record.blob;
+    _knownEscrowRecords[client.workspaceId] = record;
     final secrets = await unwrapEscrowBlob(
       blob: record.blob,
       passphrase: passphrase,
@@ -262,7 +325,21 @@ class EnrolmentService {
   Future<void> _registerThisDevice(RootAuthority root) async {
     final identity = client.identity;
 
-    // 2. Persist the keypairs before anything can depend on them existing.
+    // 2. Both escrow slots, in a pinned order. The default slot first, because
+    //    recovery always reads that one: a crash between the two PUTs must leave
+    //    the recoverable slot written rather than the other way round.
+    //
+    //    Two slots doubles the pre-first-write TOFU surface the escrow docstring
+    //    describes (two first-writes instead of one, same trust model) and is
+    //    accepted for the same reason the window was accepted at all. It is what
+    //    keeps the server's control verification uniform per Workspace —
+    //    `root_pk` is resolved from the slot of the Workspace being posted to —
+    //    and it survives shared Workspaces without a shape change.
+    for (final workspace in _workspaces) {
+      await _writeEscrowSlot(root, workspace);
+    }
+
+    // 3. Persist the keypairs before anything can depend on them existing.
     await keyStore.write(
       client.workspaceId,
       StoredDeviceKeys(
@@ -272,14 +349,14 @@ class EnrolmentService {
       ),
     );
 
-    // 3. A shell row: public keys and no authority whatsoever.
+    // 4. A shell row: public keys and no authority whatsoever.
     await userTransport.registerMember(
       memberId: identity.memberId,
       signPk: identity.signPk,
       kexPk: identity.kexPk,
     );
 
-    // 4. Prove possession of the signing key, and take the member credential.
+    // 5. Prove possession of the signing key, and take the member credential.
     final nonce = await userTransport.requestMemberChallenge(identity.memberId);
     client.useMemberTransport(
       await userTransport.completeMemberChallenge(
@@ -289,26 +366,139 @@ class EnrolmentService {
       ),
     );
 
-    // 5. Apply the control log before claiming a place in it.
-    await client.pull();
-
-    // 6. Register, naming the head this device actually observed.
-    final certificate = identity.certificateFor(
-      workspaceId: client.workspaceId,
-      registeredAtHlc: Hlc.forMember(identity.memberId, _nowMs()),
-    );
-    final certBytes = certificate.encode();
-    await client.captureControl(
-      ControlPayload(
-        controlType: controlTypeMemberRegister,
-        prevControlHash: await client.appliedControlHead(),
-        certBytes: certBytes,
-        rootSig: await root.signCertificateBytes(certBytes),
-      ).encode(),
-    );
-    await client.flushOutbox();
+    // 6. Per Workspace, default first: pull, look, then claim.
+    for (final workspace in _workspaces) {
+      await _claimPlaceIn(workspace, root);
+    }
     // 7. Root is dropped by the caller's `finally`, whatever happened here.
   }
+
+  /// The two Workspaces every enrolment covers, in the order it covers them.
+  List<String> get _workspaces => derivableWorkspaceIds(client.userId);
+
+  /// Write the slot if it is empty, and **pin Root for it either way**.
+  ///
+  /// The pin is per `(workspace, user)` because the escrow slot is: each Workspace
+  /// resolves its own `root_pk`, so a device that pinned only one of them could
+  /// not verify a control op in the other. Skipping the pin is what leaves the
+  /// second Workspace's log unverifiable and its genesis re-authored for ever.
+  Future<void> _writeEscrowSlot(RootAuthority root, String workspaceId) async {
+    final scoped =
+        workspaceId == client.workspaceId ? client : await workspaceClientFactory(workspaceId);
+    final known = _knownEscrowRecords[workspaceId];
+    var version = known?.version ?? firstEscrowVersion;
+    if (known == null) {
+      // The same blob under a second signature: `workspace_id` is inside the
+      // preimage, so a record signed for one Workspace can never be replayed
+      // into another.
+      //
+      // **Written blind, and a version conflict is the answer "already there".**
+      // A slot that already holds a record is not this ceremony's to replace, and
+      // asking first would spend one of the escrow *read* path's audited,
+      // rate-limited fetches on a question the write itself answers.
+      try {
+        final written = await userTransport.putRecoveryEscrow(
+          workspaceId,
+          await root.escrowRecord(
+            workspaceId: workspaceId,
+            version: firstEscrowVersion,
+            blob: _escrowBlob!,
+          ),
+        );
+        version = written.version;
+        _knownEscrowRecords[workspaceId] = written;
+      } on SyncTransportException catch (refusal) {
+        if (refusal.code != escrowVersionRegressionCode) rethrow;
+        // Written by an earlier device, or by an earlier run of this ceremony
+        // that crashed after the PUT. Either way the slot holds the same Root:
+        // both slots carry one blob, written in lockstep.
+        version = firstEscrowVersion;
+      }
+    }
+    await scoped.pinRoot(root.rootPk, version);
+  }
+
+  /// Pull the Workspace's control log, then author the two ops it needs.
+  ///
+  /// The branch is on **what the log said**, not on which device this is. A
+  /// Workspace whose control log is observed empty gets a genesis from whoever is
+  /// holding Root; one that is not gets an ordinary registration.
+  Future<void> _claimPlaceIn(String workspaceId, RootAuthority root) async {
+    final scoped = client.workspaceId == workspaceId
+        ? client
+        : await workspaceClientFactory(workspaceId);
+
+    // The pull is load-bearing, and it runs while this device holds a member
+    // credential and no Grant: authoring first would emit a fork-lie chain link.
+    await scoped.pull();
+    final observedHead = await scoped.appliedControlHead();
+    final observedEmpty = sameBytes(observedHead, zeroPrevControlHash);
+
+    final Uint8List firstPayload;
+    if (observedEmpty) {
+      final genesis = GenesisCertificate(
+        workspaceId: workspaceId,
+        rootPk: root.rootPk,
+        founder: scoped.identity.certificateFor(
+          workspaceId: workspaceId,
+          registeredAtHlc: Hlc.forMember(scoped.identity.memberId, _nowMs()),
+        ).keys,
+        createdAtHlc: Hlc.forMember(scoped.identity.memberId, _nowMs()),
+      );
+      final certBytes = genesis.encode();
+      firstPayload = ControlPayload(
+        controlType: controlTypeWorkspaceGenesis,
+        prevControlHash: zeroPrevControlHash,
+        certBytes: certBytes,
+        signature: await root.signGenesisCertificateBytes(certBytes),
+      ).encode();
+    } else {
+      final certificate = scoped.identity.certificateFor(
+        workspaceId: workspaceId,
+        registeredAtHlc: Hlc.forMember(scoped.identity.memberId, _nowMs()),
+      );
+      final certBytes = certificate.encode();
+      firstPayload = ControlPayload(
+        controlType: controlTypeMemberRegister,
+        prevControlHash: observedHead,
+        certBytes: certBytes,
+        signature: await root.signCertificateBytes(certBytes),
+      ).encode();
+    }
+    await scoped.captureControl(firstPayload);
+
+    // The explicit owner Grant. Root-signed because an owner role may only be
+    // minted by Root (ADR-0031) — which is also why revoking this Device later
+    // takes the passphrase.
+    final grant = GrantCertificate(
+      workspaceId: workspaceId,
+      grantId: _newGrantId(),
+      memberId: scoped.identity.memberId,
+      role: roleOwner,
+      granter: granterRoot,
+      grantedAtHlc: Hlc.forMember(scoped.identity.memberId, _nowMs()),
+    );
+    final grantBytes = grant.encode();
+    await scoped.captureControl(
+      ControlPayload(
+        controlType: controlTypeGrant,
+        prevControlHash: controlPayloadHash(firstPayload),
+        certBytes: grantBytes,
+        signature: await root.signGrantCertificateBytes(grantBytes),
+        authority: granterRoot,
+      ).encode(),
+    );
+    await scoped.flushOutbox();
+    // And pull them back, so this device *applies* the two ops it just authored.
+    // Control ops have no optimistic local path — they reduce to nothing, and the
+    // directory, the grants view and the epoch floor are all filled by the receive
+    // pipeline. Without this a freshly enrolled device would not know its own
+    // authority until its next sync, which is a needlessly odd moment to leave it
+    // in when the round-trip is already in hand.
+    await scoped.pull();
+  }
+
+  String _newGrantId() => const Uuid().v4();
 
   Uint8List _randomBytes(int length) =>
       Uint8List.fromList(List<int>.generate(length, (_) => _random.nextInt(256)));

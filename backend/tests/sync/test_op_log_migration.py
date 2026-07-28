@@ -70,12 +70,14 @@ def test_0031_creates_the_op_log_and_member_registry() -> None:
     with engine.connect() as conn:
         inspector = sa.inspect(conn)
         assert {"ops", "members"} <= set(inspector.get_table_names())
-        # ``members`` grows two nullable columns in 0032, so the model comparison
-        # for it lives there; here the table only has to hold 0031's own shape.
+        # ``members`` grows nullable columns in 0032 and 0033, so the model
+        # comparisons for those live there; here the table only has to hold
+        # 0031's own shape.
         migrated_members = {column["name"] for column in inspector.get_columns("members")}
         assert migrated_members == {column.name for column in Member.__table__.columns} - {
             "kex_pk",
             "chained_at",
+            "member_kind",
         }
         migrated_ops = {column["name"] for column in inspector.get_columns("ops")}
         assert migrated_ops == {column.name for column in Op.__table__.columns}

@@ -20,13 +20,34 @@ user session should be able to subscribe to.  ``POST /members`` and the recovery
 escrow routes take the User credential instead, because they are what a Device
 uses *before* it has a member credential.
 
-Authorization on the Workspace itself is still the stub #549 replaces: a User
-has exactly one implicit Workspace derived from the user id, and the Grants
-index that will decide the question does not exist yet.  Signal sockets are
-authenticated once, at the handshake, and never re-checked: #549 therefore owes
-not only the Grants index but **closing live signal sockets when a grant is
-revoked**, since until it does a revoked subscriber keeps learning that activity
-exists in the Workspace.
+**Workspace authorization splits three ways**, and the split is load-bearing:
+
+* **User-credential routes** (the recovery escrow) admit a ``workspace_id`` in
+  ``derivable_workspace_ids(user_id)`` — the default Workspace and the implicit
+  ``user_preferences`` one.  They are pre-genesis by necessity: the escrow slot
+  is what establishes the ``root_pk`` a genesis op is then verified against.
+* **Member GET routes** (``GET /w/{w}/ops``, ``GET /w/{w}/members``, the signal
+  handshake) admit any **unrevoked** member token whose User derives the
+  Workspace — *no Grant required*.  "Revoked" is index-defined: a Member with at
+  least one grant row and none live is refused and its sockets closed.  A
+  *pre-grant* Member (zero grant rows) is admitted, which is what lets the
+  enrolment ceremony pull and apply the control log before it holds any Grant,
+  and it reopens nothing — reads were always User-scoped by derivation, and the
+  storage-DoS closure lives on the write path.  Likewise a **pre-genesis GET
+  returns an empty page**, never an error: ``workspace_not_created`` is scoped to
+  POST paths only, because the empty-log observation is exactly what the
+  ceremony branches on.
+* **Member content POSTs** require a **live Grant** and dispatch on
+  ``(grant.role, header.op_class)``.  A root-signed control payload lands
+  regardless of Grants — that is how an ungranted device's register-plus-grant
+  batch gets in at all — and everything else needs a role the matrix admits.
+
+Materialising a Revoke does three things in one breath: stamp
+``grants.revoked_by_seq``, kill the Member's refresh tokens when it has no live
+Grant left, and **close its live signal sockets**.  The last one matters because
+a socket is authenticated once, at the handshake, and never re-checked; without
+it a revoked subscriber would keep learning that activity exists in the
+Workspace.
 
 **Error details.** Every rejection this module raises carries a structured
 detail — ``{"code": <snake_case>, ...}`` — and a per-op rejection on
@@ -43,6 +64,7 @@ import base64
 import binascii
 import uuid
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -69,11 +91,27 @@ from app.config import settings
 from app.database import get_db
 from app.redis import get_redis
 from app.sync.control_payload import (
+    CONTROL_TYPE_GRANT,
+    CONTROL_TYPE_MEMBER_REGISTER,
+    CONTROL_TYPE_REVOKE,
+    CONTROL_TYPE_WORKSPACE_GENESIS,
+    GRANTER_ROOT,
     KEX_PUBLIC_KEY_BYTES,
+    MEMBER_KIND_DEVICE,
+    ROLE_OP_CLASS_MATRIX,
+    ROLE_OWNER,
+    ZERO_PREV_CONTROL_HASH,
     ControlPayload,
     ControlPayloadError,
+    GenesisCertificate,
+    GrantCertificate,
+    RegistrationCertificate,
+    RevokeCertificate,
     UnsupportedControlTypeError,
+    verify_genesis_certificate,
+    verify_grant_certificate,
     verify_registration_certificate,
+    verify_revoke_certificate,
 )
 from app.sync.envelope import (
     MINIMUM_ENVELOPE_BYTES,
@@ -98,7 +136,7 @@ from app.sync.escrow import (
     recovery_fetch_retry_after_seconds,
     verify_escrow_signature,
 )
-from app.sync.ids import implicit_workspace_id
+from app.sync.ids import derivable_workspace_ids, user_preferences_workspace_id
 from app.sync.member_auth import (
     MEMBER_CHALLENGE_NONCE_BYTES,
     TOKEN_USE_MEMBER,
@@ -109,7 +147,7 @@ from app.sync.member_auth import (
     member_challenge_retry_after_seconds,
     verify_member_challenge,
 )
-from app.sync.models import Member, Op, RecoveryEscrow, RecoveryEscrowFetch
+from app.sync.models import Grant, Member, Op, RecoveryEscrow, RecoveryEscrowFetch, Workspace
 from app.sync.schemas import (
     MemberChallengeResponse,
     MemberListResponse,
@@ -148,13 +186,43 @@ SIGNAL_CLOSE_UNAUTHENTICATED = 4401
 SIGNAL_CLOSE_FORBIDDEN = 4403
 
 
-def _authorize_workspace(workspace_id: uuid.UUID, user_id: str) -> None:
-    """Stub Grant check: a User reaches exactly their own implicit Workspace."""
-    if workspace_id != implicit_workspace_id(user_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "no_workspace_grant"},
-        )
+def _require_derivable_workspace(workspace_id: uuid.UUID, user_id: str) -> None:
+    """The outermost gate on every Workspace route.
+
+    A User reaches the two Workspaces their id derives — the default one and the
+    implicit ``user_preferences`` one — and nothing else.  This is not a Grant
+    check: it is the v1 rule that keeps the Workspace id space closed, and real
+    user-created Workspaces will lift it by resolving membership instead.
+    """
+    if workspace_id not in derivable_workspace_ids(user_id):
+        raise _forbidden("workspace_not_derivable")
+
+
+async def _refuse_if_revoked(db: AsyncSession, workspace_id: uuid.UUID, member: Member) -> None:
+    """The member-GET gate: an unrevoked member token is enough.
+
+    Revocation is index-defined — at least one grant row and none live — so a
+    *pre-grant* Member is admitted and a revoked one is refused immediately, on
+    reads as well as writes.  That immediacy is half of AC 1; the other half is
+    the client's own authorization stage, which does not consult the server.
+    """
+    index = await _grant_index(db, workspace_id)
+    if index.is_revoked(member.member_id):
+        raise _forbidden("no_live_grant", revoked=True)
+
+
+def _forbidden(code: str, **fields: Any) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": code, **fields},
+    )
+
+
+def _conflict(code: str, **fields: Any) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": code, **fields},
+    )
 
 
 def _unprocessable(code: str, **fields: Any) -> HTTPException:
@@ -162,6 +230,64 @@ def _unprocessable(code: str, **fields: Any) -> HTTPException:
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail={"code": code, **fields},
     )
+
+
+@dataclass(slots=True)
+class _GrantState:
+    member_id: uuid.UUID
+    role: str
+    revoked: bool
+
+
+class _GrantIndex:
+    """The ``grants`` rows for one Workspace, walked forward in batch order.
+
+    The server materialises a batch's control ops in the order they arrive, so a
+    Grant authored at index 1 counts for a content op at index 2 of the same POST.
+    Holding the walk in memory is what makes that true without flushing between
+    ops — and it is the same "validity at the log position of signing" rule the
+    client applies to its own derived view.
+    """
+
+    def __init__(self, rows: list[Grant]) -> None:
+        self._states: dict[uuid.UUID, _GrantState] = {
+            row.grant_id: _GrantState(
+                member_id=row.member_id, role=row.role, revoked=row.revoked_by_seq is not None
+            )
+            for row in rows
+        }
+
+    def state(self, grant_id: uuid.UUID) -> _GrantState | None:
+        return self._states.get(grant_id)
+
+    def live_roles(self, member_id: uuid.UUID) -> set[str]:
+        return {
+            state.role
+            for state in self._states.values()
+            if state.member_id == member_id and not state.revoked
+        }
+
+    def has_any_grant(self, member_id: uuid.UUID) -> bool:
+        return any(state.member_id == member_id for state in self._states.values())
+
+    def is_revoked(self, member_id: uuid.UUID) -> bool:
+        """At least one grant row, none of them live."""
+        return self.has_any_grant(member_id) and not self.live_roles(member_id)
+
+    def add(self, grant_id: uuid.UUID, member_id: uuid.UUID, role: str) -> None:
+        self._states[grant_id] = _GrantState(member_id=member_id, role=role, revoked=False)
+
+    def revoke(self, grant_id: uuid.UUID) -> None:
+        state = self._states.get(grant_id)
+        if state is not None:
+            state.revoked = True
+
+
+async def _grant_index(db: AsyncSession, workspace_id: uuid.UUID) -> _GrantIndex:
+    rows = (
+        (await db.execute(select(Grant).where(Grant.workspace_id == workspace_id))).scalars().all()
+    )
+    return _GrantIndex(list(rows))
 
 
 def _decode_base64(value: str, code: str, **fields: Any) -> bytes:
@@ -249,7 +375,8 @@ async def list_workspace_members(
     Chain-gating means a Member's key is learned from its own Root-signed
     MemberRegister in the log, never from this list.  Poisoning it is inert.
     """
-    _authorize_workspace(workspace_id, current_member.user_id)
+    _require_derivable_workspace(workspace_id, current_member.user_id)
+    await _refuse_if_revoked(db, workspace_id, current_member)
     rows = (
         (await db.execute(select(Member).where(Member.user_id == current_member.user_id)))
         .scalars()
@@ -420,8 +547,19 @@ async def put_recovery_escrow(
     the escrow (review F16).  The first write establishes ``root_pk`` — account
     creation writes the escrow in the same breath, and the pre-first-write race
     window is accepted and recorded.
+
+    **The ceremony writes two slots**, the default Workspace's and the implicit
+    ``user_preferences`` one, in that order — the same blob under two signatures,
+    ``workspace_id`` being inside the preimage.  That doubles the pre-first-write
+    TOFU window (two first-writes instead of one) under the same trust model, and
+    is accepted for the same reason the window was accepted at all.  Recovery
+    always reads the **default** slot, so a crash between the two PUTs leaves the
+    recoverable one written.  Both slots exist because the server resolves a
+    Workspace's ``root_pk`` from the slot of the Workspace being posted to, which
+    keeps control verification uniform per Workspace and survives shared
+    Workspaces without a shape change.
     """
-    _authorize_workspace(workspace_id, current_user.id)
+    _require_derivable_workspace(workspace_id, current_user.id)
     blob = _decode_base64(body.blob_b64, "malformed_escrow_blob")
     root_sig = _decode_base64(body.root_sig_b64, "malformed_escrow_signature")
     root_pk = _decode_base64(body.root_pk_b64, "malformed_root_pk")
@@ -502,7 +640,7 @@ async def get_recovery_escrow(
     The route takes no body and no parameters: nothing passphrase-derived ever
     reaches the server, so there is nothing for it to accept.
     """
-    _authorize_workspace(workspace_id, current_user.id)
+    _require_derivable_workspace(workspace_id, current_user.id)
     if await count_recovery_fetch(redis, current_user.id) > RECOVERY_FETCH_DAILY_LIMIT:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -553,7 +691,7 @@ async def post_ops(
     current_member: Member = Depends(get_current_member),
     hub: SignalHub = Depends(get_signal_hub),
 ) -> PostOpsResponse:
-    _authorize_workspace(workspace_id, current_member.user_id)
+    _require_derivable_workspace(workspace_id, current_member.user_id)
     if len(body.ops) > MAX_OPS_PER_BATCH:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -593,10 +731,11 @@ async def post_ops(
     if not parsed:
         return PostOpsResponse(results=[])
 
-    # Control verification runs before the chain-conflict check below, so a
-    # mispositioned register yields `member_register_not_first` and never the
-    # 409 — a client's chain verdict only ever sees registers already at seq 1.
-    chained_members = await _verify_control_ops(db, workspace_id, current_member, parsed)
+    # Control verification and per-op authorization run before the chain-conflict
+    # check below, so a mispositioned register yields `member_register_not_first`
+    # and never the 409 — a client's chain verdict only ever sees registers
+    # already at seq 1.
+    admissions = await _verify_and_authorize(db, workspace_id, current_member, parsed)
 
     try:
         results = await _append_batch(db, workspace_id, parsed)
@@ -620,9 +759,23 @@ async def post_ops(
                 detail={"code": "author_chain_conflict"},
             ) from exc
 
-    for member in chained_members:
-        member.chained_at = member.chained_at or datetime.now(UTC)
+    # Materialisation runs *after* the append because every index row it writes is
+    # anchored to a transport seq, and a seq does not exist until the op is
+    # stored.  That is not an implementation accident: the authorization verdict
+    # is positional against `granted_seq`/`revoked_by_seq`, so those numbers have
+    # to be the real ones.
+    revoked_members = await _materialise_control(db, workspace_id, admissions, results)
     await db.commit()
+
+    for member_id in revoked_members:
+        # Two halves of one revocation, both after the commit.  The refresh
+        # tokens die so nothing can authenticate a *new* socket or POST, and the
+        # live sockets close so an already-authenticated subscriber stops
+        # learning that activity exists in the Workspace — a socket is
+        # authenticated once, at the handshake, and never re-checked.
+        await revoke_member_transport(db, member_id)
+        hub.revoke(workspace_id, member_id)
+
     if any(not result.duplicate for result in results):
         # After the commit, never before: a subscriber woken by a poke pulls
         # immediately, and pulling against an uncommitted transaction would
@@ -631,66 +784,487 @@ async def post_ops(
     return PostOpsResponse(results=results)
 
 
-async def _verify_control_ops(
+@dataclass(slots=True)
+class _ControlAdmission:
+    """One verified control op, and what it will materialise once it has a seq.
+
+    Verification and materialisation are deliberately two passes: the first can
+    refuse the whole batch, the second needs transport seqs that only exist after
+    the append.  Carrying the parsed certificate between them means the bytes are
+    verified exactly once.
+    """
+
+    index: int
+    control_type: str
+    #: Populated by ``member_register`` and by the registration a genesis embeds.
+    registration: RegistrationCertificate | None = None
+    grant: GrantCertificate | None = None
+    revoke: RevokeCertificate | None = None
+
+
+async def _verify_and_authorize(
     db: AsyncSession,
     workspace_id: uuid.UUID,
     current_member: Member,
     parsed: list[tuple[bytes, OpHeader]],
-) -> list[Member]:
-    """Check every ``op_class=2`` op in the batch, in D2's order.
+) -> list[_ControlAdmission]:
+    """Verify every control op and authorize every op, in arrival order.
 
-    Returns the Members whose registration this batch materialises.  Every
-    rejection is a 422 with a structured detail carrying the batch ``index``:
-    one fail-closed family, so #549 can open control types up by adding cases
-    rather than by loosening the failure mode.
+    The walk is ordered on purpose: the server materialises a batch's control ops
+    in the order they arrive, so a Grant authored at index 1 counts for a content
+    op at index 2 of the same POST.  That is "validity at the log position of
+    signing" — the same rule the client applies to its own derived view.
+
+    Control-op rejections are a 422 carrying the batch ``index``: one fail-closed
+    family, so #554 opens a control type up by adding a case rather than by
+    loosening the failure mode.  Authorization rejections are a 403, matching
+    ``author_member_mismatch`` — the caller's credential is the thing at fault.
     """
-    to_chain: list[Member] = []
-    root_pk: bytes | None = None
+    grants = await _grant_index(db, workspace_id)
+    workspace_exists = await db.get(Workspace, workspace_id) is not None
+    # Which of this batch's ops the log already holds.  A replay must not read as
+    # a *reuse* of the grant id it carries: the id belongs to the op that first
+    # asserted it, and re-posting that same op asserts nothing new.
+    replayed_op_ids = set(
+        (
+            await db.execute(
+                select(Op.op_id).where(
+                    Op.workspace_id == workspace_id,
+                    Op.author_member_id == current_member.member_id,
+                    Op.op_id.in_({header.op_id for _, header in parsed}),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    escrow = await db.get(RecoveryEscrow, (workspace_id, current_member.user_id))
+    # No escrow means no Root the server can check against, so nothing can be
+    # Root-signed: fail closed rather than materialise on trust.  The escrow slot
+    # of *this* Workspace, which is why the ceremony writes both slots.
+    root_pk = escrow.root_pk if escrow is not None else b""
+    is_preferences = workspace_id == user_preferences_workspace_id(current_member.user_id)
+    # Member kinds this batch certifies but has not yet materialised — the
+    # enrolment batch grants itself in the same POST that registers it.
+    staged_kinds: dict[uuid.UUID, str] = {}
+
+    admissions: list[_ControlAdmission] = []
     for index, (envelope, header) in enumerate(parsed):
         if header.op_class != OP_CLASS_CONTROL:
+            # Content today; suggestion and compaction when #557/#555 widen
+            # SERVED_OP_CLASSES.  Both need a Workspace somebody signed into
+            # existence and a live Grant whose role the matrix admits.
+            if not workspace_exists:
+                raise _conflict("workspace_not_created", index=index)
+            _require_role(grants, current_member.member_id, header.op_class, index)
             continue
 
-        _header_bytes, body, _signature = split_envelope(envelope)
+        payload = _decode_control_payload(envelope, index)
         try:
-            payload_bytes = parse_body(body)
-        except EnvelopeError as exc:
-            # A body the framing cannot even delimit never reaches control
-            # parsing — same fail-closed family, its own code.
-            raise _unprocessable(exc.reason, index=index) from exc
-
-        try:
-            payload = ControlPayload.decode(payload_bytes)
-            payload.require_served_type()
-        except UnsupportedControlTypeError as exc:
-            raise _unprocessable(exc.reason, index=index, type=exc.observed_type) from exc
+            payload.require_chain_link_shape()
         except ControlPayloadError as exc:
             raise _unprocessable(exc.reason, index=index) from exc
 
-        if header.author_seq != 1:
-            # A member_register is its author's *first* op.  The chain rule only
-            # guarantees that an author's first op is seq 1; it does not
-            # guarantee that seq 1 is the register.
-            raise _unprocessable(
-                "member_register_not_first", index=index, author_seq=header.author_seq
+        if payload.control_type == CONTROL_TYPE_WORKSPACE_GENESIS:
+            genesis = _verify_genesis(
+                payload,
+                header,
+                index=index,
+                workspace_id=workspace_id,
+                current_member=current_member,
+                root_pk=root_pk,
+                workspace_exists=workspace_exists,
             )
+            founder = genesis.as_registration()
+            workspace_exists = True
+            staged_kinds[founder.member_id] = founder.member_kind
+            admissions.append(
+                _ControlAdmission(
+                    index=index,
+                    control_type=payload.control_type,
+                    registration=founder,
+                )
+            )
+            continue
 
-        if root_pk is None:
-            escrow = await db.get(RecoveryEscrow, (workspace_id, current_member.user_id))
-            # No escrow means no Root the server can check against, so nothing
-            # can be Root-signed: fail closed rather than materialise on trust.
-            root_pk = escrow.root_pk if escrow is not None else b""
-        try:
-            verify_registration_certificate(payload.cert_bytes, payload.root_sig, root_pk)
-            certificate = payload.certificate()
-        except ControlPayloadError as exc:
-            raise _unprocessable(exc.reason, index=index) from exc
+        if not workspace_exists:
+            raise _conflict("workspace_not_created", index=index)
 
-        if certificate.member_id != header.author_member_id:
-            raise _unprocessable("cert_member_mismatch", index=index)
-        if certificate.sign_pk != current_member.sign_pk:
-            raise _unprocessable("cert_key_mismatch", index=index)
-        to_chain.append(current_member)
-    return to_chain
+        # A **root-signed** control payload lands regardless of Grants: that is
+        # how an ungranted device's register-plus-grant batch gets in at all, and
+        # it is safe because Root's signature is the strongest authority there is.
+        # Anything else needs the live owner Grant the matrix demands.
+        if not payload.is_root_signed:
+            _require_role(grants, current_member.member_id, OP_CLASS_CONTROL, index)
+
+        if payload.control_type == CONTROL_TYPE_MEMBER_REGISTER:
+            registration = _verify_member_register(
+                payload,
+                header,
+                index=index,
+                workspace_id=workspace_id,
+                current_member=current_member,
+                root_pk=root_pk,
+            )
+            staged_kinds[registration.member_id] = registration.member_kind
+            admissions.append(
+                _ControlAdmission(
+                    index=index,
+                    control_type=payload.control_type,
+                    registration=registration,
+                )
+            )
+        elif payload.control_type == CONTROL_TYPE_GRANT:
+            grant = await _verify_grant(
+                db,
+                payload,
+                header,
+                index=index,
+                workspace_id=workspace_id,
+                current_member=current_member,
+                root_pk=root_pk,
+                grants=grants,
+                staged_kinds=staged_kinds,
+                is_preferences=is_preferences,
+                is_replay=header.op_id in replayed_op_ids,
+            )
+            grants.add(grant.grant_id, grant.member_id, grant.role)
+            admissions.append(
+                _ControlAdmission(index=index, control_type=payload.control_type, grant=grant)
+            )
+        elif payload.control_type == CONTROL_TYPE_REVOKE:
+            revoke = _verify_revoke(
+                payload,
+                header,
+                index=index,
+                workspace_id=workspace_id,
+                current_member=current_member,
+                root_pk=root_pk,
+                grants=grants,
+            )
+            grants.revoke(revoke.grant_id)
+            admissions.append(
+                _ControlAdmission(index=index, control_type=payload.control_type, revoke=revoke)
+            )
+        else:  # pragma: no cover — ``require_served_type`` already refused it
+            raise _unprocessable("unsupported_control_type", index=index)
+
+    return admissions
+
+
+def _require_role(grants: _GrantIndex, member_id: uuid.UUID, op_class: int, index: int) -> None:
+    """The ``(grant.role, header.op_class)`` matrix, content-blind as ever."""
+    roles = grants.live_roles(member_id)
+    if not roles:
+        # ``revoked`` separates "never granted" from "granted and taken away".
+        # The refusal is the same either way; the distinction is what a client
+        # surfaces to a user whose device has been removed.
+        if grants.has_any_grant(member_id):
+            raise _forbidden("no_live_grant", index=index, revoked=True)
+        raise _forbidden("no_live_grant", index=index)
+    if not roles & ROLE_OP_CLASS_MATRIX.get(op_class, frozenset()):
+        raise _forbidden(
+            "role_forbids_op_class", index=index, op_class=op_class, roles=sorted(roles)
+        )
+
+
+def _decode_control_payload(envelope: bytes, index: int) -> ControlPayload:
+    _header_bytes, body, _signature = split_envelope(envelope)
+    try:
+        payload_bytes = parse_body(body)
+    except EnvelopeError as exc:
+        # A body the framing cannot even delimit never reaches control parsing —
+        # same fail-closed family, its own code.
+        raise _unprocessable(exc.reason, index=index) from exc
+    try:
+        payload = ControlPayload.decode(payload_bytes)
+        payload.require_served_type()
+    except UnsupportedControlTypeError as exc:
+        raise _unprocessable(exc.reason, index=index, type=exc.observed_type) from exc
+    except ControlPayloadError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    return payload
+
+
+def _verify_genesis(
+    payload: ControlPayload,
+    header: OpHeader,
+    *,
+    index: int,
+    workspace_id: uuid.UUID,
+    current_member: Member,
+    root_pk: bytes,
+    workspace_exists: bool,
+) -> GenesisCertificate:
+    """Genesis is the Workspace's first control op, and its author's first op.
+
+    It carries the founding Member's registration because it has to: the
+    envelope's author key is unknowable before the certificate parses, and there
+    is no earlier op to learn it from (ADR-0031).  So the founding Device authors
+    no separate ``member_register`` — genesis *is* its registration.
+    """
+    if index != 0 or workspace_exists:
+        # First in the log and first in the batch.  A second genesis is not a
+        # fork for the server to resolve: it holds no control chain, so it
+        # refuses and leaves the tie-break to the clients that do.
+        raise _conflict("genesis_not_first", index=index)
+    if workspace_id not in derivable_workspace_ids(current_member.user_id):
+        # The v1 anti-junk-workspace rule, restated at the one place a Workspace
+        # comes into being.  Real user-created Workspaces lift it.
+        raise _forbidden("workspace_not_derivable", index=index)
+    if header.author_seq != 1:
+        # D1's generalisation of #548's rule: an author's first op must be the
+        # control op that registers it — a ``member_register``, or the genesis
+        # that embeds one.
+        raise _unprocessable("member_register_not_first", index=index, author_seq=header.author_seq)
+    if payload.prev_control_hash != ZERO_PREV_CONTROL_HASH:
+        raise _unprocessable("control_chain_break", index=index)
+    try:
+        verify_genesis_certificate(payload.cert_bytes, payload.root_sig, root_pk)
+        certificate = payload.genesis_certificate()
+    except ControlPayloadError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    if certificate.workspace_id != workspace_id:
+        raise _unprocessable("cert_workspace_mismatch", index=index)
+    if certificate.root_pk != root_pk:
+        # The Root inside the signed genesis must be the Root the slot holds:
+        # that cross-check is why it is in there at all.
+        raise _unprocessable("cert_root_pk_mismatch", index=index)
+    if certificate.founder.member_id != header.author_member_id:
+        raise _unprocessable("cert_member_mismatch", index=index)
+    if certificate.founder.sign_pk != current_member.sign_pk:
+        raise _unprocessable("cert_key_mismatch", index=index)
+    return certificate
+
+
+def _verify_member_register(
+    payload: ControlPayload,
+    header: OpHeader,
+    *,
+    index: int,
+    workspace_id: uuid.UUID,
+    current_member: Member,
+    root_pk: bytes,
+) -> RegistrationCertificate:
+    if header.author_seq != 1:
+        # A register is its author's *first* op.  The chain rule only guarantees
+        # that an author's first op is seq 1; it does not guarantee that seq 1 is
+        # the register.
+        raise _unprocessable("member_register_not_first", index=index, author_seq=header.author_seq)
+    try:
+        verify_registration_certificate(payload.cert_bytes, payload.root_sig, root_pk)
+        certificate = payload.certificate()
+    except ControlPayloadError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    if certificate.workspace_id != workspace_id:
+        raise _unprocessable("cert_workspace_mismatch", index=index)
+    if certificate.member_id != header.author_member_id:
+        raise _unprocessable("cert_member_mismatch", index=index)
+    if certificate.sign_pk != current_member.sign_pk:
+        raise _unprocessable("cert_key_mismatch", index=index)
+    return certificate
+
+
+async def _verify_grant(
+    db: AsyncSession,
+    payload: ControlPayload,
+    header: OpHeader,
+    *,
+    index: int,
+    workspace_id: uuid.UUID,
+    current_member: Member,
+    root_pk: bytes,
+    grants: _GrantIndex,
+    staged_kinds: dict[uuid.UUID, str],
+    is_preferences: bool,
+    is_replay: bool,
+) -> GrantCertificate:
+    """Verify one Grant, including both authority ceilings.
+
+    An ``owner`` Grant may only be minted with ``granter == "root"``, exactly as
+    it may only be revoked with ``revoker == "root"``.  The symmetry is the point
+    (ADR-0031): an owner-mints-owner rule would let a compromised device create
+    an attacker-owner cheaply while removing one still cost the passphrase, and
+    that asymmetry favours the attacker.
+    """
+    try:
+        certificate = payload.grant_certificate()
+    except ControlPayloadError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    if certificate.workspace_id != workspace_id:
+        raise _unprocessable("cert_workspace_mismatch", index=index)
+    if certificate.granter != payload.authority:
+        # The signed certificate names its own granter; the payload's ``granter``
+        # field only says which key to check it against.  A disagreement between
+        # them is a forgery attempt, not a spelling.
+        raise _unprocessable("cert_granter_mismatch", index=index)
+    granter_pk = _authority_public_key(
+        payload.authority, header, index=index, root_pk=root_pk, current_member=current_member
+    )
+    try:
+        verify_grant_certificate(payload.cert_bytes, payload.signature, granter_pk)
+    except ControlPayloadError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    if certificate.role == ROLE_OWNER and payload.authority != GRANTER_ROOT:
+        raise _unprocessable("owner_grant_requires_root", index=index)
+
+    grantee = await db.get(Member, certificate.member_id)
+    if grantee is None or grantee.user_id != current_member.user_id:
+        raise _unprocessable("unknown_grantee", index=index)
+    if certificate.member_id in staged_kinds:
+        member_kind = staged_kinds[certificate.member_id]
+    elif grantee.chained_at is not None:
+        # Rows chained before #549 carry no ``member_kind`` and were all Devices,
+        # so ``device`` here is exact rather than a guess.
+        member_kind = grantee.member_kind or MEMBER_KIND_DEVICE
+    else:
+        # Fail closed on an unmaterialised grantee: a Grant is never held as a
+        # dangling forward reference, and the server's bar is the same one the
+        # client's chain-gated directory applies.
+        raise _unprocessable("unknown_grantee", index=index)
+    if is_preferences and member_kind != MEMBER_KIND_DEVICE:
+        # The server-side half of "every Device, no Service ever".  The boundary
+        # is structural, which is why preferences are a Workspace of their own:
+        # a preference can never leak through an AI grant.
+        raise _unprocessable("service_grant_forbidden", index=index)
+    if not is_replay and grants.state(certificate.grant_id) is not None:
+        # A *different* op reusing a grant id — refused rather than allowed to
+        # collide on the index's primary key.  A replay of the op that minted the
+        # id in the first place is excluded, because it asserts nothing new: the
+        # id belongs to that op, and re-posting it is the dedupe path's business.
+        raise _conflict("grant_id_already_used", index=index)
+    return certificate
+
+
+def _verify_revoke(
+    payload: ControlPayload,
+    header: OpHeader,
+    *,
+    index: int,
+    workspace_id: uuid.UUID,
+    current_member: Member,
+    root_pk: bytes,
+    grants: _GrantIndex,
+) -> RevokeCertificate:
+    """Revocation is **grant-granular**: a Revoke names one ``grant_id``.
+
+    Revoking a granter does not cascade (F14c).  Nothing re-evaluates a Grant
+    that was valid at the position it was signed at, so a fact once valid stands
+    — which is what makes late arrivals honest rather than retroactively refused.
+    """
+    try:
+        certificate = payload.revoke_certificate()
+    except ControlPayloadError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    if certificate.workspace_id != workspace_id:
+        raise _unprocessable("cert_workspace_mismatch", index=index)
+    if certificate.revoker != payload.authority:
+        raise _unprocessable("cert_granter_mismatch", index=index)
+    revoker_pk = _authority_public_key(
+        payload.authority, header, index=index, root_pk=root_pk, current_member=current_member
+    )
+    try:
+        verify_revoke_certificate(payload.cert_bytes, payload.signature, revoker_pk)
+    except ControlPayloadError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    target = grants.state(certificate.grant_id)
+    if target is None:
+        raise _unprocessable("unknown_grantee", index=index)
+    if target.role == ROLE_OWNER and payload.authority != GRANTER_ROOT:
+        raise _unprocessable("owner_revoke_requires_root", index=index)
+    return certificate
+
+
+def _authority_public_key(
+    authority: str,
+    header: OpHeader,
+    *,
+    index: int,
+    root_pk: bytes,
+    current_member: Member,
+) -> bytes:
+    """Whose key must have signed this grant or revoke certificate.
+
+    Root, or the authoring Member itself — **authority does not travel by
+    courier**.  The owner-Grant requirement on the author was already applied by
+    the matrix before this is reached, so all that is left is to insist the
+    claimed authority *is* the author.
+    """
+    if authority == GRANTER_ROOT:
+        return root_pk
+    if str(header.author_member_id) != authority:
+        raise _unprocessable("cert_granter_mismatch", index=index)
+    return current_member.sign_pk
+
+
+async def _materialise_control(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    admissions: list[_ControlAdmission],
+    results: list[OpResult],
+) -> list[uuid.UUID]:
+    """Write the index rows the batch's control ops stand for.
+
+    Returns the Members that lost their last live Grant, whose transport
+    credentials and live sockets the caller then closes.
+    """
+    staged_grants: dict[uuid.UUID, Grant] = {}
+    revoked_from: set[uuid.UUID] = set()
+    now = datetime.now(UTC)
+    for admission in admissions:
+        result = results[admission.index]
+        if result.duplicate:
+            # A verbatim replay: the index already holds what this op stands for,
+            # and re-materialising it would move ``granted_seq`` off the op that
+            # actually created the Grant.
+            continue
+        registration = admission.registration
+        if registration is not None:
+            member = await db.get(Member, registration.member_id)
+            if member is not None:
+                member.chained_at = member.chained_at or now
+                member.member_kind = registration.member_kind
+        if admission.control_type == CONTROL_TYPE_WORKSPACE_GENESIS:
+            db.add(Workspace(workspace_id=workspace_id, genesis_seq=result.seq, created_at=now))
+        elif admission.grant is not None:
+            granted = Grant(
+                workspace_id=workspace_id,
+                grant_id=admission.grant.grant_id,
+                member_id=admission.grant.member_id,
+                role=admission.grant.role,
+                granter=admission.grant.granter,
+                granted_seq=result.seq,
+                created_at=now,
+            )
+            db.add(granted)
+            staged_grants[granted.grant_id] = granted
+        elif admission.revoke is not None:
+            target = staged_grants.get(admission.revoke.grant_id) or await db.get(
+                Grant, (workspace_id, admission.revoke.grant_id)
+            )
+            if target is None:  # pragma: no cover — verification proved it exists
+                continue
+            target.revoked_by_seq = result.seq
+            revoked_from.add(target.member_id)
+
+    if not revoked_from:
+        return []
+    # One query, after the writes: the select autoflushes, so it sees this
+    # batch's own grants and revocations rather than a stale snapshot.
+    still_live = set(
+        (
+            await db.execute(
+                select(Grant.member_id).where(
+                    Grant.workspace_id == workspace_id,
+                    Grant.member_id.in_(revoked_from),
+                    Grant.revoked_by_seq.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [member_id for member_id in revoked_from if member_id not in still_live]
 
 
 async def _append_batch(
@@ -801,8 +1375,15 @@ async def pull_ops(
     db: AsyncSession = Depends(get_db),
     current_member: Member = Depends(get_current_member),
 ) -> PullOpsResponse:
-    """``since`` is a pure client parameter — no cursor is persisted (review F17)."""
-    _authorize_workspace(workspace_id, current_member.user_id)
+    """``since`` is a pure client parameter — no cursor is persisted (review F17).
+
+    A **pre-genesis pull returns an empty page**, never an error: this is the
+    observation the enrolment ceremony branches on when it decides whether to
+    author a genesis, and it runs while the device holds a member credential and
+    no Grant at all.  ``workspace_not_created`` is a POST-path refusal only.
+    """
+    _require_derivable_workspace(workspace_id, current_member.user_id)
+    await _refuse_if_revoked(db, workspace_id, current_member)
     rows = (
         (
             await db.execute(
@@ -873,10 +1454,16 @@ async def signal_socket(
         await _close_quietly(websocket, SIGNAL_CLOSE_UNAUTHENTICATED)
         return
     try:
-        _authorize_workspace(workspace_id, current_member.user_id)
+        _require_derivable_workspace(workspace_id, current_member.user_id)
+        # The handshake is held to the member-GET bar: an unrevoked member token
+        # is enough, so a pre-grant device can subscribe during enrolment, and a
+        # revoked one is refused at the door as well as having its live sockets
+        # closed under it.
+        await _refuse_if_revoked(db, workspace_id, current_member)
     except HTTPException:
         await _close_quietly(websocket, SIGNAL_CLOSE_FORBIDDEN)
         return
+    member_id = current_member.member_id
 
     # The handshake is the only part of this endpoint that may hold a database
     # session.  ``Depends(get_db)`` checks one out for the lifetime of the
@@ -889,10 +1476,14 @@ async def signal_socket(
     # outlive the handshake, and the signal pump must never touch the database.
     # ``current_member`` is deliberately not read again — the authorization
     # decision it feeds is already made above, and it is a detached ORM instance
-    # the moment this session closes.
+    # the moment this session closes.  Its ``member_id`` was copied out above for
+    # the subscription, which needs a plain uuid and not a live ORM row.
     await db.close()
 
-    with hub.subscribe(workspace_id) as subscription:
+    # Member-aware: a revocation has to be able to close *this* Member's sockets,
+    # and the id is the only thing the hub knows about a subscriber beyond its
+    # Workspace.
+    with hub.subscribe(workspace_id, member_id) as subscription:
         # FastAPI only observes a client close while a read is pending, so the
         # socket is drained concurrently with the send loop.  Inbound frames
         # after the handshake are ignored: the client has nothing to say here.
@@ -932,24 +1523,38 @@ async def _pump_signals(
     subscription: SignalSubscription,
     reader: asyncio.Task[None],
 ) -> None:
-    """One loop, two frame kinds, nothing else — ever.
+    """One loop, two frame kinds and one close — nothing else, ever.
 
     The keepalive is the *timeout branch* of the same wait that delivers pokes,
     so it fires only in the absence of news.  That makes it the exact complement
     of what a poke reveals ("no activity right now"), which is why an
     application-level heartbeat adds nothing to the leak surface.
+
+    The third branch is revocation.  A socket is authenticated once, at the
+    handshake, and never re-checked, so losing the last live Grant has to reach
+    an *already open* socket — otherwise a revoked subscriber keeps learning that
+    activity exists in the Workspace.  It closes with ``4403``, the same code the
+    handshake would have refused it with, so the client's reconnect ladder needs
+    no new branch: it already treats 4403 as "do not retry blindly".
     """
     while not reader.done():
         waiter = asyncio.create_task(subscription.wait())
+        revoked = asyncio.create_task(subscription.wait_revoked())
         try:
             done, _ = await asyncio.wait(
-                {waiter, reader},
+                {waiter, revoked, reader},
                 timeout=settings.signal_keepalive_interval_seconds,
                 return_when=asyncio.FIRST_COMPLETED,
             )
         finally:
-            if not waiter.done():
-                waiter.cancel()
+            for task in (waiter, revoked):
+                if not task.done():
+                    task.cancel()
+        if revoked in done:
+            # Checked before the reader: a revoked subscriber should learn *why*
+            # its socket ended, and a bare disconnect says nothing.
+            await _close_quietly(websocket, SIGNAL_CLOSE_FORBIDDEN)
+            return
         if reader in done:
             return
         if waiter in done:
