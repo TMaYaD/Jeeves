@@ -12,16 +12,29 @@ import uuid
 from collections.abc import Coroutine
 from typing import Any
 
+import pytest
+
 from app.sync.signal_hub import SignalHub
+
+# How long a "this never fires" probe waits before it believes the wait is
+# pending.  Eight call sites take their verdict from this one window, so it is
+# named rather than repeated: there is a single place to widen it if CI ever gets
+# slow enough for a legitimate wake to miss it.
+_PENDING_PROBE_SECONDS = 0.05
 
 
 async def _never_completes(awaitable: Coroutine[Any, Any, None], *, message: str) -> None:
-    """Assert a wait stays pending — the only way to prove a poke did *not* fire."""
+    """Assert a wait stays pending — the only way to prove a poke did *not* fire.
+
+    The timeout is the pass, and the failure is raised *outside* the ``except``:
+    nothing this function can catch is also how it reports a completed wait, so
+    widening the caught type can never turn a negative assertion into a pass.
+    """
     try:
-        await asyncio.wait_for(awaitable, timeout=0.05)
-        raise AssertionError(message)
+        await asyncio.wait_for(awaitable, timeout=_PENDING_PROBE_SECONDS)
     except TimeoutError:
-        pass
+        return
+    pytest.fail(message)
 
 
 async def test_n_notifies_before_the_wake_collapse_into_one_poke() -> None:

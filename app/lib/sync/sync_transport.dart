@@ -221,11 +221,12 @@ abstract class SyncTransport {
     required int limit,
   });
 
-  /// One (re)subscription per listen. Events are pokes: "new seq available,
-  /// run a sync from your cursor". The server sends one poke immediately on
-  /// successful subscribe, and keepalives while idle (not surfaced as events).
-  /// Stream error carries the close code when the server refused us (4401,
-  /// 4403); error/done otherwise = connection lost. The caller owns
-  /// reconnect policy.
+  /// One subscription per call: the returned stream is single-subscription and
+  /// spent once cancelled, so reconnecting means calling this again rather than
+  /// re-listening. Events are pokes: "new seq available, run a sync from your
+  /// cursor". The server sends one poke immediately on successful subscribe, and
+  /// keepalives while idle (not surfaced as events). Stream error carries the
+  /// close code when the server refused us (4401, 4403); error/done otherwise =
+  /// connection lost. The caller owns reconnect policy.
   Stream<void> newSeqSignals(String workspaceId);
 }

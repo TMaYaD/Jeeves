@@ -67,13 +67,18 @@ class SignalSocket {
 
 /// The poke stream [SyncTransport.newSeqSignals] promises, over a raw socket.
 ///
-/// Cold: [open] runs once per listen, so each subscription is a fresh socket
-/// with a freshly read token, and cancelling closes it. Keepalives are consumed
-/// here — they reset the idle deadline and are never forwarded — so a listener
-/// downstream sees pokes and nothing else. Every failure mode arrives as a
-/// stream error: a refusal carries the server's close code, and a lost, silent
-/// or misbehaving socket carries [SyncTransportException.unreachable] or the
-/// protocol-violation code.
+/// One socket per *call*, not per listen. The returned stream is
+/// single-subscription and cold: [open] runs when it is first listened to, with
+/// a freshly read token, and cancelling closes the socket. Once cancelled the
+/// stream is spent — re-listening does not reopen anything. Reconnecting means
+/// calling [SyncTransport.newSeqSignals] again for a new stream and a new
+/// socket, which is what `SignalListener._subscribe` does on every reconnect.
+///
+/// Keepalives are consumed here — they reset the idle deadline and are never
+/// forwarded — so a listener downstream sees pokes and nothing else. Every
+/// failure mode arrives as a stream error: a refusal carries the server's close
+/// code, and a lost, silent or misbehaving socket carries
+/// [SyncTransportException.unreachable] or the protocol-violation code.
 Stream<void> decodeSignalFrames(
   Future<SignalSocket> Function() open, {
   Duration idleDeadline = signalIdleDeadline,
