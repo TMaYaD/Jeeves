@@ -10,7 +10,7 @@
 
 The alternative this rejects is the one we initially recorded: server-managed membership with signature "columns reserved now, enforcement later." The review's F1 showed that deferral is void, not merely risky — per-op signatures are only as strong as the registry the verifier resolves authors against, and if that registry is server-supplied, a malicious server registers its own member key and signs whatever it likes. Nor can enforcement be retrofitted: ops signed by an unchained member during the deferral window can never be retroactively attributed — the same argument that put per-op signatures in v1 puts the signed control plane there too. A signed data plane over an unsigned control plane is decoration.
 
-Root also resolves the constraint that shaped everything: a single-device user must enrol a new device with only a passphrase, no second device online. The passphrase therefore stops being merely a key-wrapper and becomes a *signing authority* — an enrolling device unwraps the escrow, holds Root for the duration, and signs its own registration.
+Root also resolves the constraint that shaped everything: a single-device user must enrol a new device with only a passphrase, no second device online. The passphrase therefore stops being merely a key-wrapper and becomes the gate to a *signing authority* — an enrolling device unwraps the escrow with it, obtains the random Root key, holds Root for the duration, and signs its own registration with Root. The passphrase itself never signs.
 
 ## Consequences
 

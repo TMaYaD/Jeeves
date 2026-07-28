@@ -1,6 +1,6 @@
 # Proposal: Minimal Sync Server
 
-**Status:** Design settled (grilled 2026-07-27, vocabulary in `CONTEXT.md`; adversarial security review adopted in full — see [Security review](#security-review)). Not yet broken into issues.
+**Status:** Design settled (grilled 2026-07-27, vocabulary in `CONTEXT.md`; adversarial security review adopted in full — see [Security review](./minimal-sync-server-security-review.md)). Not yet broken into issues.
 
 **ADRs:** [0026 Minimal Sync Server](../adr/0026-minimal-sync-server.md) · [0027 Workspace as partition unit](../adr/0027-workspace-as-partition-unit.md) · [0028 Signed control plane in the log](../adr/0028-signed-control-plane-in-the-log.md) · [0025 Area is exclusive](../adr/0025-area-is-exclusive-label-is-cross-cutting.md)
 
@@ -18,7 +18,7 @@ AI features become **clients, not server features**: a Service holds a key the U
 
 ## Shape
 
-The server stores and transports **opaque ciphertext**. It never holds a decryption capability, never parses domain rows, and never changes when the domain model does.
+The server stores and transports **opaque payloads**. It never parses domain rows and never changes when the domain model does. Opacity is contractual from day one and cryptographic from `aead_v1` on: the first cutover ships `plaintext_v1` envelopes (see Migration), so until E2EE turns on the server *could* read a payload it is contractually forbidden to parse; after it, the server holds no decryption capability at all. The confidentiality boundary therefore moves with that envelope swap, and only the `aead_v1` phase defends against a hostile operator or a stolen database.
 
 Its irreducible knowledge: identity (Users, Members and their public keys), partition (Workspaces, Grants — wrapped keys it cannot unwrap), order (a per-Workspace sequence assigned at receipt), cursors' *absence* (see metadata), retention, a payload-free "there's news" signal, and quotas on ciphertext bytes.
 
@@ -78,7 +78,7 @@ The adversarial security review ([minimal-sync-server-security-review.md](./mini
 ```
 header (canonical, fixed order, length-prefixed):
   suite            u8    # 1 = XChaCha20-Poly1305 + Ed25519; no separate alg field
-  op_class         u8    # 1=content 2=control 3=suggestion; unknown => quarantine
+  op_class         u8    # 1=content 2=control 3=suggestion 4=compaction 5=prune; unknown => quarantine
   workspace_id     16B
   key_epoch        u32
   op_id            16B   # namespaced by author; uniqueness (w, author, op_id)
@@ -110,7 +110,7 @@ A **suggestion** is an op of `op_class=suggestion` — a proposed change from a 
 No workspace-level snapshot artifact. Compaction is **entity-level** and collapses into the op mechanism:
 
 - A **compaction op** is an authoritative op re-asserting every field of one entity. Protocol-identity requirement: it carries the **original per-field HLCs** (and authorship provenance), never the compactor's clock — otherwise compaction wins merges it must lose against offline edits pending at older HLCs.
-- A **prune op** is a signed op enumerating the seqs its compaction supersedes. **v1 prunes are soft deletes:** the server sets `compacted_by` on the enumerated rows and never deletes — history stays available to the user on demand. Default pulls exclude compacted rows; a history view requests them. Soft→hard is an easy later shift; hard→soft is impossible. Accepted cost: server storage only grows in v1. Signed prunes keep legitimate GC distinguishable from server truncation.
+- A **prune op** is a signed op enumerating the seqs its compaction supersedes. **v1 prunes are soft deletes:** the server sets `compacted_by` on the enumerated rows and never deletes — history stays available to the user on demand. Default pulls exclude compacted rows; a history view requests them. Soft→hard is an easy later shift; hard→soft is impossible. Accepted cost: server storage only grows in v1. Signed prunes keep legitimate GC distinguishable from server truncation — which is why a prune op is itself never pruned or compacted, alongside control ops. A compaction op is an ordinary compaction target: the next compaction of the same entity supersedes it.
 - Soft delete retains old-epoch ciphertext indefinitely, so members retain historical epoch keys — which the `master_wrap_key` escrow structure provides for free.
 - Fresh-device bootstrap = replay the compacted log (one stream, no snapshot+tail merge). A stale device (cursor below pruned history) resets the same way, then applies and uploads its pending local ops as normal — aggressive compaction forces resets, never loses authored data. Tombstone floor / stale-member cutoff: 180 days; beyond it, pending ops referencing entities absent-without-tombstone are quarantined for user review, not applied and not dropped.
 - Knobs: compact an entity at ~20 live ops; prune grace of a few days; unresolved suggestions never pruned. Control ops never compacted.
@@ -130,7 +130,7 @@ All checks content-blind. **D** = Device (member JWT), **S** = Service (member J
 | `GET /w/{w}/keywraps/me` | the member | `jwt.member == row.member` |
 | `POST /members` (enrol) | U | stores pubkeys only; **no authority** until a Root-signed MemberRegister lands |
 | `POST /members/{m}/challenge` | key possession | Ed25519 over server nonce, domain-separated |
-| `POST /services` / kex-key rotate | OP | identity key also pinned app-side; subkeys signed by identity key |
+| `POST /services` / kex-key rotate | OP | identity key pinned app-side for first-party services (rotated by app update), by user-confirmed fingerprint or app-trusted signed directory for third-party/self-hosted; subkeys signed by identity key |
 | `GET /w/{w}/recovery` | U, rate-limited + audited | never accepts passphrase-derived input |
 | `PUT /w/{w}/recovery` | Root-signed blob | verify against stored `root_pk`; version strictly greater |
 | Revoke member | owner (participants); Root (owners) | refuse POST **and** GET immediately |
@@ -163,6 +163,7 @@ Multi-Area Outcomes are resolved before or during cutover per ADR-0025 (user cho
 - A stolen *unlocked* device is total compromise of that User's Workspaces.
 - Passphrase entropy is the E2EE ceiling against a ciphertext-snapshot adversary; in a shared Workspace, the weakest member's passphrase.
 - No forward secrecy within an epoch; scheduled rotation bounds it.
+- The one-epoch write grace (`key_epoch ≥ current − 1`) lets a survivor's in-flight op land at the old epoch after a revoke+rotate, where the revoked Member can still read it. Accepted deliberately (review Q5: in-flight epoch-*N* ops from survivors are applied) — and the reason revoke+rotate must be prompt. Ops at the old epoch from the *revoked* Member are quarantined, not applied.
 - Authorization is whole-Workspace-granular by construction — which is why `user_preferences` has its own Workspace and the AI is a suggester.
 
 ## Deferred (v2 by nature, hooks reserved in v1)
