@@ -53,6 +53,8 @@ from typing import Final
 from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
 
+from app.redis import increment_in_window
+
 #: Every signing use of the Root key is domain-separated (review F7).
 SIGNING_DOMAIN_ESCROW_V1: Final = b"jeeves/escrow/v1"
 
@@ -79,6 +81,10 @@ ROOT_SIGNATURE_BYTES: Final = 64
 #: A slot's first write.  Anything else on create is a version regression: the
 #: caller is either replaying or trying to plant an unreachably high version.
 FIRST_ESCROW_VERSION: Final = 1
+#: The ceiling the ``version`` column can hold.  A value above it is refused at
+#: the edge with the route's own structured detail rather than reaching the
+#: database driver, which would surface a signed-64-bit overflow as a 500.
+MAX_ESCROW_VERSION: Final = 2**63 - 1
 #: The value reported as ``stored_version`` when no record exists — "create must
 #: be v1" reads unambiguously off it, so create and regression share one code.
 NO_ESCROW_STORED_VERSION: Final = 0
@@ -123,14 +129,13 @@ def recovery_fetch_counter_key(user_id: str) -> str:
 async def count_recovery_fetch(redis: object, user_id: str) -> int:
     """Increment and return this user's fetch count inside the current window.
 
-    Same Redis-counter shape as ``sws_nonce``: the first increment starts the
-    window, and the key expires with it rather than being swept.
+    The counter and its window are set in one round trip by
+    ``increment_in_window``: the first increment starts the window, and the key
+    expires with it rather than being swept.
     """
-    key = recovery_fetch_counter_key(user_id)
-    count: int = await redis.incr(key)  # type: ignore[attr-defined]
-    if count == 1:
-        await redis.expire(key, RECOVERY_FETCH_WINDOW_SECONDS)  # type: ignore[attr-defined]
-    return count
+    return await increment_in_window(
+        redis, recovery_fetch_counter_key(user_id), RECOVERY_FETCH_WINDOW_SECONDS
+    )
 
 
 async def recovery_fetch_retry_after_seconds(redis: object, user_id: str) -> int:

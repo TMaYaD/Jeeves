@@ -342,29 +342,35 @@ class SimWorkspace {
     ) as FakeSyncServerMemberSession;
 
     final root = await recoverRoot();
-    final register = await memberRegisterEnvelope(
-      device: device,
-      workspaceId: target,
-      root: root,
-      prevControlHash: controlChainHead(target),
-      wallMs: clock.nowMs,
-    );
-    await session.postOps(target, [register]);
-    if (grant) {
-      await session.postOps(target, [
-        await grantEnvelope(
-          device: device,
-          workspaceId: target,
-          root: root,
-          prevControlHash: controlPayloadHash(parseBody(splitEnvelope(register).body)),
-          memberId: device.memberId,
-          role: role,
-          wallMs: clock.nowMs,
-        ),
-      ]);
+    try {
+      final register = await memberRegisterEnvelope(
+        device: device,
+        workspaceId: target,
+        root: root,
+        prevControlHash: controlChainHead(target),
+        wallMs: clock.nowMs,
+      );
+      await session.postOps(target, [register]);
+      if (grant) {
+        await session.postOps(target, [
+          await grantEnvelope(
+            device: device,
+            workspaceId: target,
+            root: root,
+            prevControlHash: controlPayloadHash(parseBody(splitEnvelope(register).body)),
+            memberId: device.memberId,
+            role: role,
+            wallMs: clock.nowMs,
+          ),
+        ]);
+      }
+      return session;
+    } finally {
+      // Every other Root-holding path in the harness drops in a `finally`, and a
+      // refused post is exactly what the negative tests stage: without this a
+      // failing ceremony would leave Root live for the rest of the test.
+      root.drop();
     }
-    root.drop();
-    return session;
   }
 
   /// Push everyone, then pull everyone, twice — one pass would leave the first

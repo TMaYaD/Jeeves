@@ -54,7 +54,21 @@ const int escrowNonceBytes = 24;
 /// `root_sk 32B || master_wrap_key 32B` — a constant plaintext width, for ever.
 const int escrowSecretBytes = 64;
 const int poly1305TagBytes = 16;
-const int escrowBlobHeaderBytes = 4 + 4 + 4 + 1 + escrowSaltBytes + escrowNonceBytes;
+
+/// The header's field widths, in the order the blob carries them.
+const int escrowMagicBytes = 4;
+const int escrowMemoryKibBytes = 4;
+const int escrowTimeCostBytes = 4;
+const int escrowParallelismBytes = 1;
+
+/// Every header boundary derived from the widths above rather than written out.
+/// A field-width change then moves the reads and the writes together.
+const int escrowMemoryKibOffset = escrowMagicBytes;
+const int escrowTimeCostOffset = escrowMemoryKibOffset + escrowMemoryKibBytes;
+const int escrowParallelismOffset = escrowTimeCostOffset + escrowTimeCostBytes;
+const int escrowSaltOffset = escrowParallelismOffset + escrowParallelismBytes;
+const int escrowNonceOffset = escrowSaltOffset + escrowSaltBytes;
+const int escrowBlobHeaderBytes = escrowNonceOffset + escrowNonceBytes;
 const int escrowBlobBytes = escrowBlobHeaderBytes + escrowSecretBytes + poly1305TagBytes;
 
 const int rootSecretKeyBytes = 32;
@@ -103,7 +117,19 @@ enum RecoveryEscrowFailure {
 
   /// A version below the highest this device has seen for the slot. **An
   /// alarm**: the server is serving an older escrow than it once did.
-  versionRollback('escrow_version_rollback');
+  versionRollback('escrow_version_rollback'),
+
+  /// The slot is empty — there is no escrow to recover against. Distinct from
+  /// [malformedBlob] because the two are different outcomes on screen: an
+  /// absent slot means "this account was never enrolled", a malformed one means
+  /// "what the server served is not an escrow".
+  noEscrowStored('no_recovery_escrow'),
+
+  /// Argon2id refused the parameters the blob declares. Above the floor and
+  /// still unrunnable here — a hostile blob can name costs or a parallelism
+  /// this platform's implementation rejects. **An alarm**, not a prompt: no
+  /// passphrase was tested, so "wrong passphrase" would be a lie.
+  kdfUnavailable('kdf_unavailable');
 
   const RecoveryEscrowFailure(this.code);
 
@@ -235,7 +261,7 @@ Future<Uint8List> wrapEscrowBlob({
     ..setRange(rootSecretKeyBytes, escrowSecretBytes, secrets.masterWrapKey);
   final secretBox = await _cipher.encrypt(
     plaintext,
-    secretKey: await _deriveKey(passphrase, salt, parameters),
+    secretKey: await _deriveKeyOrRefuse(passphrase, salt, parameters),
     nonce: nonce,
     aad: header,
   );
@@ -254,12 +280,8 @@ Future<EscrowedSecrets> unwrapEscrowBlob({
   Argon2idParameters floor = Argon2idParameters.floor,
 }) async {
   final parameters = readEscrowBlobParameters(blob, floor: floor);
-  final salt = Uint8List.sublistView(blob, 13, 13 + escrowSaltBytes);
-  final nonce = Uint8List.sublistView(
-    blob,
-    13 + escrowSaltBytes,
-    escrowBlobHeaderBytes,
-  );
+  final salt = Uint8List.sublistView(blob, escrowSaltOffset, escrowSaltOffset + escrowSaltBytes);
+  final nonce = Uint8List.sublistView(blob, escrowNonceOffset, escrowBlobHeaderBytes);
   final header = Uint8List.sublistView(blob, 0, escrowBlobHeaderBytes);
   final cipherText = Uint8List.sublistView(
     blob,
@@ -268,11 +290,15 @@ Future<EscrowedSecrets> unwrapEscrowBlob({
   );
   final mac = Uint8List.sublistView(blob, escrowBlobHeaderBytes + escrowSecretBytes);
 
+  // Derived outside the AEAD try: a KDF that refuses the declared parameters is
+  // its own classified refusal, not an authentication failure.
+  final key = await _deriveKeyOrRefuse(passphrase, salt, parameters);
+
   final List<int> plaintext;
   try {
     plaintext = await _cipher.decrypt(
       SecretBox(cipherText, nonce: nonce, mac: Mac(mac)),
-      secretKey: await _deriveKey(passphrase, salt, parameters),
+      secretKey: key,
       aad: header,
     );
   } on SecretBoxAuthenticationError {
@@ -315,9 +341,9 @@ Argon2idParameters readEscrowBlobParameters(
   }
   final view = ByteData.view(blob.buffer, blob.offsetInBytes, escrowBlobHeaderBytes);
   final parameters = Argon2idParameters(
-    memoryKib: view.getUint32(4, Endian.big),
-    timeCost: view.getUint32(8, Endian.big),
-    parallelism: blob[12],
+    memoryKib: view.getUint32(escrowMemoryKibOffset, Endian.big),
+    timeCost: view.getUint32(escrowTimeCostOffset, Endian.big),
+    parallelism: blob[escrowParallelismOffset],
   );
   _requireAtOrAboveFloor(parameters, floor);
   return parameters;
@@ -333,6 +359,27 @@ void _requireAtOrAboveFloor(Argon2idParameters parameters, Argon2idParameters fl
 }
 
 final Cipher _cipher = Xchacha20.poly1305Aead();
+
+/// [_deriveKey], with anything the KDF throws classified.
+///
+/// The floor check upstream only proves the declared costs are high enough. A
+/// blob may still name a memory cost, iteration count or parallelism this
+/// platform's Argon2id refuses outright — and an unclassified exception out of
+/// the package would escape the alarm-vs-prompt split every caller branches on.
+Future<SecretKey> _deriveKeyOrRefuse(
+  String passphrase,
+  Uint8List salt,
+  Argon2idParameters parameters,
+) async {
+  try {
+    return await _deriveKey(passphrase, salt, parameters);
+  } catch (error) {
+    throw RecoveryEscrowException(
+      RecoveryEscrowFailure.kdfUnavailable,
+      'Argon2id refused $parameters on this platform: $error',
+    );
+  }
+}
 
 Future<SecretKey> _deriveKey(
   String passphrase,
@@ -351,13 +398,13 @@ Future<SecretKey> _deriveKey(
 
 Uint8List _blobHeader(Argon2idParameters parameters, Uint8List salt, Uint8List nonce) {
   final header = Uint8List(escrowBlobHeaderBytes);
-  header.setRange(0, 4, escrowBlobMagic);
+  header.setRange(0, escrowMagicBytes, escrowBlobMagic);
   ByteData.view(header.buffer)
-    ..setUint32(4, parameters.memoryKib, Endian.big)
-    ..setUint32(8, parameters.timeCost, Endian.big);
-  header[12] = parameters.parallelism;
-  header.setRange(13, 13 + escrowSaltBytes, salt);
-  header.setRange(13 + escrowSaltBytes, escrowBlobHeaderBytes, nonce);
+    ..setUint32(escrowMemoryKibOffset, parameters.memoryKib, Endian.big)
+    ..setUint32(escrowTimeCostOffset, parameters.timeCost, Endian.big);
+  header[escrowParallelismOffset] = parameters.parallelism;
+  header.setRange(escrowSaltOffset, escrowSaltOffset + escrowSaltBytes, salt);
+  header.setRange(escrowNonceOffset, escrowBlobHeaderBytes, nonce);
   return header;
 }
 

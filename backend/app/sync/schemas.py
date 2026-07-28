@@ -62,6 +62,10 @@ class RecoveryEscrowRequest(BaseModel):
     """Write the passphrase-wrapped Root.  Every field is opaque to the server
     except ``root_sig``, which it verifies against the slot's Root."""
 
+    #: Bounded to the column's range by the route, which refuses anything outside
+    #: it with the structured ``malformed_escrow_version`` detail every other
+    #: rejection in this module carries — a ``Field`` constraint here would answer
+    #: with Pydantic's own error shape instead.
     version: int
     blob_b64: str
     root_sig_b64: str

@@ -98,7 +98,7 @@ void main() {
       final blob = await wrap();
       // Flip a salt byte: the ciphertext is untouched, but the header is
       // authenticated as additional data, so the tag no longer matches.
-      blob[14] ^= 0x01;
+      blob[escrowSaltOffset + 1] ^= 0x01;
       expect(
         () => unwrapEscrowBlob(blob: blob, passphrase: _passphrase, floor: _testKdf),
         throwsEscrow(RecoveryEscrowFailure.wrongPassphrase),
@@ -120,10 +120,11 @@ void main() {
   });
 
   group('KDF floor', () {
-    test('refuses to write below the floor', () {
+    test('refuses to write below the floor', () async {
       // F12's weakened-params-at-write attack, closed at the writing end.
-      expect(
-        () => wrap(
+      // `wrap` is async, so the refusal has to be awaited to be asserted at all.
+      await expectLater(
+        wrap(
           parameters: const Argon2idParameters(
             memoryKib: 8,
             timeCost: 1,
@@ -131,6 +132,25 @@ void main() {
           ),
         ),
         throwsEscrow(RecoveryEscrowFailure.kdfBelowFloor),
+      );
+    });
+
+    test('a KDF the platform refuses is classified, not an unhandled crash',
+        () async {
+      // Above the floor and still unrunnable: this Argon2id implementation
+      // requires `memory >= 8 * parallelism`, so a blob may declare costs that
+      // clear every floor check and then blow up inside the KDF. That has to
+      // surface as an escrow refusal — an unclassified error would escape the
+      // alarm-vs-prompt split the recovery screens branch on — and as an
+      // *alarm*, because no passphrase was ever tested.
+      const unrunnable = Argon2idParameters(memoryKib: 8, timeCost: 1, parallelism: 8);
+      await expectLater(
+        wrap(parameters: unrunnable, floor: unrunnable),
+        throwsEscrow(RecoveryEscrowFailure.kdfUnavailable),
+      );
+      expect(
+        const RecoveryEscrowException(RecoveryEscrowFailure.kdfUnavailable, '').isAlarm,
+        isTrue,
       );
     });
 
@@ -237,6 +257,8 @@ void main() {
   });
 
   group('Root', () {
+    final workspaceId = defaultWorkspaceId('escrow-test-user');
+
     test('is reopenable from its secret and refuses use after being dropped',
         () async {
       final root = await RootAuthority.fromSecretKey(_bytes(0x66));
@@ -247,6 +269,43 @@ void main() {
       // Best-effort zeroize, but a use-after-drop is loud rather than a quiet
       // signature with a key that should be gone.
       expect(() => root.secretKey, throwsStateError);
+    });
+
+    test('a dropped Root signs nothing at all', () async {
+      // The claim in `drop`'s docstring, asserted for *every* signing path: the
+      // ceremony is over, so a Root-signed certificate produced afterwards would
+      // be a valid signature nobody is holding the key to on purpose. Zeroing the
+      // escrowed copy is not enough on its own — the keypair has to go with it.
+      final root = await RootAuthority.fromSecretKey(_bytes(0x77));
+      final certBytes = Uint8List.fromList([1, 2, 3, 4]);
+      // Live: every path signs.
+      expect(await root.signCertificateBytes(certBytes), isNotEmpty);
+      expect(await root.signGenesisCertificateBytes(certBytes), isNotEmpty);
+      expect(await root.signGrantCertificateBytes(certBytes), isNotEmpty);
+      expect(await root.signRevokeCertificateBytes(certBytes), isNotEmpty);
+      expect(await root.signEscrow(workspaceId, firstEscrowVersion, certBytes), isNotEmpty);
+
+      root.drop();
+
+      // Synchronously, at the call: the liveness check runs before any future is
+      // handed back, so a caller cannot even queue a signature.
+      expect(() => root.signCertificateBytes(certBytes), throwsStateError);
+      expect(() => root.signGenesisCertificateBytes(certBytes), throwsStateError);
+      expect(() => root.signGrantCertificateBytes(certBytes), throwsStateError);
+      expect(() => root.signRevokeCertificateBytes(certBytes), throwsStateError);
+      expect(
+        () => root.signEscrow(workspaceId, firstEscrowVersion, certBytes),
+        throwsStateError,
+      );
+      // `escrowRecord` is an async function, so its refusal is a rejected future.
+      await expectLater(
+        root.escrowRecord(
+          workspaceId: workspaceId,
+          version: firstEscrowVersion,
+          blob: await wrap(),
+        ),
+        throwsStateError,
+      );
     });
   });
 }

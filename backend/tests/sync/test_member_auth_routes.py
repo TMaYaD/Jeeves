@@ -273,6 +273,34 @@ async def test_a_nonce_that_is_not_base64_is_a_422(client: AsyncClient) -> None:
     assert detail_of(response) == {"code": "bad_member_challenge"}
 
 
+async def test_an_unreadable_attempt_still_spends_the_challenge(
+    client: AsyncClient,
+) -> None:
+    """A malformed attempt is an attempt: it must not leave the nonce alive.
+
+    The challenge is consumed before either field is decoded, so an attacker
+    cannot hold a nonce open by offering garbage — otherwise the one refusal
+    shape that does not reach the ``GETDEL`` becomes an unlimited retry window on
+    a live nonce.
+    """
+    enrolled = await _enrol(client, "pop-unreadable-spends@example.com")
+    nonce = await _challenge(client, enrolled.device.member_id)
+
+    unreadable = await client.post(
+        f"/members/{enrolled.device.member_id}/token",
+        json={"nonce": nonce, "signature": "not base64 at all!!"},
+    )
+    assert unreadable.status_code == 422, unreadable.text
+
+    # The genuine proof over the same nonce now finds nothing to check it against.
+    honest = await client.post(
+        f"/members/{enrolled.device.member_id}/token",
+        json={"nonce": nonce, "signature": enrolled.device.challenge_signature(nonce)},
+    )
+    assert honest.status_code == 401, honest.text
+    assert detail_of(honest) == {"code": "bad_member_challenge"}
+
+
 # --- Credential separation ----------------------------------------------------
 
 
@@ -305,7 +333,13 @@ async def test_a_refused_laundering_attempt_does_not_rotate_the_member_token(
     enrolled = await _enrol(client, "pop-launder-intact@example.com")
     tokens = await _member_tokens(client, enrolled)
 
-    await client.post("/session/refresh", json={"refresh_token": tokens["refresh_token"]})
+    # The refusal itself is the claim: without asserting it, a route that
+    # regressed into minting a *user* session off a member-scoped row would leave
+    # the member token unrotated and every assertion below would still pass.
+    laundered = await client.post(
+        "/session/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert laundered.status_code == 401, laundered.text
 
     stored = (
         (await db.execute(select(RefreshToken).where(RefreshToken.member_id.is_not(None))))
@@ -457,8 +491,11 @@ async def test_the_challenge_limit_is_per_member(
         )
     ).status_code == 201
 
-    for _ in range(3):
-        await client.post(f"/members/{enrolled.device.member_id}/challenge")
+    # Driven off the configured cap, and every allowed response asserted: a loop
+    # of a hard-coded length cannot tell a limit of 2 from one of 3.
+    for _ in range(settings.member_challenge_daily_limit):
+        allowed = await client.post(f"/members/{enrolled.device.member_id}/challenge")
+        assert allowed.status_code == 200, allowed.text
     assert (await client.post(f"/members/{enrolled.device.member_id}/challenge")).status_code == 429
     assert (await client.post(f"/members/{sibling.member_id}/challenge")).status_code == 200
 

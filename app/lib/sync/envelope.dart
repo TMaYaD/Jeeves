@@ -481,14 +481,16 @@ int _readUint64(ByteData view, int offset) {
   return high * 0x100000000 + view.getUint32(offset + 4, Endian.big);
 }
 
-/// First 8 bytes of SHA-256 over the raw 32-byte Ed25519 public key.
+/// First 8 bytes of SHA-256 over a raw 32-byte public key.
 ///
-/// The server derives this the same way and stores what it derived, never a
-/// client's claim; the client recomputes it locally for the header.
-Uint8List deriveKeyId(Uint8List signPublicKey) {
-  _requireLength(signPublicKey, signPublicKeyBytes, 'sign_pk');
+/// The one key-id derivation in the protocol, used for both key ids a Member
+/// carries — the Ed25519 signing key's and the X25519 KEX key's, which are the
+/// same width. The server derives this the same way and stores what it derived,
+/// never a client's claim; the client recomputes it locally for the header.
+Uint8List deriveKeyId(Uint8List publicKey) {
+  _requireLength(publicKey, signPublicKeyBytes, 'public key');
   return Uint8List.fromList(
-    crypto.sha256.convert(signPublicKey).bytes.sublist(0, authorKeyIdBytes),
+    crypto.sha256.convert(publicKey).bytes.sublist(0, authorKeyIdBytes),
   );
 }
 

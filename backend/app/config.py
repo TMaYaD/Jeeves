@@ -89,8 +89,15 @@ class Settings(BaseSettings):
     # default leaves room for retries and still turns a flood into a 429.
     # Settings fields rather than module constants so a test can lower the cap
     # instead of issuing the production number of requests to reach it.
-    member_challenge_daily_limit: int = 120
-    member_challenge_window_seconds: int = 86_400
+    #
+    # All four timing and ceiling settings below are ``gt=0``: zero or negative
+    # values do not degrade the protection, they remove it — a non-positive
+    # window makes Redis' ``EXPIRE`` delete the counter it was meant to age, a
+    # non-positive ceiling refuses every honest challenge, and a non-positive
+    # socket interval or deadline disables the keepalive or rejects every auth
+    # frame on arrival. A misconfiguration fails settings construction instead.
+    member_challenge_daily_limit: int = Field(default=120, gt=0)
+    member_challenge_window_seconds: int = Field(default=86_400, gt=0)
 
     # Realtime signal socket (`WS /w/{w}/signal`).  The keepalive interval sits
     # below Dokku's default 60 s `proxy_read_timeout` so the proxy never reaps an
@@ -98,8 +105,8 @@ class Settings(BaseSettings):
     # The auth-frame deadline bounds how long an unauthenticated socket may sit
     # open.  Both are Settings fields so the socket tests can run in
     # milliseconds instead of waiting out the production values.
-    signal_keepalive_interval_seconds: float = 25.0
-    signal_auth_frame_deadline_seconds: float = 10.0
+    signal_keepalive_interval_seconds: float = Field(default=25.0, gt=0)
+    signal_auth_frame_deadline_seconds: float = Field(default=10.0, gt=0)
 
     # CORS — set to actual Flutter app origin(s) in production
     allowed_origins: list[str] = ["*"]
