@@ -38,6 +38,15 @@ class SignalSubscription:
     async def wait(self) -> None:
         await self._event.wait()
 
+    def pending(self) -> bool:
+        """Whether a poke is waiting — the state ``wait`` would return on at once.
+
+        The counterpart of ``subscriber_count``: it exists so a test can observe
+        the fan-out without a socket, which is the only way a caller invoked
+        outside the ASGI app can assert that a poke fired.
+        """
+        return self._event.is_set()
+
     def clear(self) -> None:
         self._event.clear()
 
