@@ -33,9 +33,11 @@ JEEVES_WORKSPACE_NAMESPACE: Final = uuid.UUID("e9d4afd3-87e4-5450-bd7d-4fc191ff3
 #: frozen.  A namespace of its own rather than a second key inside the default
 #: one: the two ids must be independent, so neither can be computed from the
 #: other by a client that only knows one.
-USER_PREFERENCES_WORKSPACE_NAMESPACE: Final = uuid.uuid5(
-    uuid.NAMESPACE_URL, "https://jeeves.app/sync/workspace/user-preferences/v1"
-)
+#:
+#: A literal, like its sibling above, rather than the ``uuid5`` call that produced
+#: it: Workspace identity is protocol, and recomputing it at runtime would make it
+#: depend on both languages' uuid5 implementations staying byte-stable forever.
+USER_PREFERENCES_WORKSPACE_NAMESPACE: Final = uuid.UUID("c2b38d21-5518-5ad6-88b1-cc253ab3495f")
 
 #: The collection the ``user_preferences`` Workspace carries.
 USER_PREFERENCES_COLLECTION: Final = "user_preferences"

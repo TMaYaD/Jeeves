@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any, Protocol
 
 import pytest_asyncio
 from httpx import AsyncClient, Response
@@ -36,28 +37,29 @@ from app.sync.envelope import OP_CLASS_CONTROL, parse_body, split_envelope
 from app.sync.ids import default_workspace_id, user_preferences_workspace_id
 from app.sync.models import Grant, Member, Workspace
 from tests.conftest import auth_header
-from tests.sync.builders import SpecDevice, SpecRoot, encode_all, user_id_from_token
-from tests.sync.test_ops_routes import (
+from tests.sync.builders import (
     Session,
-    _found_workspace,
-    _join_sibling,
-    _member_token,
-    _open_session,
-    all_ops,
-    detail_of,
+    SpecDevice,
+    SpecRoot,
+    encode_all,
+    found_workspace,
+    member_token,
+    open_session,
+    user_id_from_token,
 )
+from tests.sync.test_ops_routes import _join_sibling, all_ops, detail_of
 
 
 @pytest_asyncio.fixture
 async def session(client: AsyncClient) -> Session:
     """A founded default Workspace: genesis plus the founder's owner Grant."""
-    return await _open_session(client, "grants-owner@example.com")
+    return await open_session(client, "grants-owner@example.com")
 
 
 @pytest_asyncio.fixture
 async def unfounded(client: AsyncClient) -> Session:
     """Enrolled and credentialed, with nothing signed into existence yet."""
-    return await _open_session(client, "grants-unfounded@example.com", genesis=False)
+    return await open_session(client, "grants-unfounded@example.com", genesis=False)
 
 
 async def _post(
@@ -74,14 +76,25 @@ def _chain_after(envelope: bytes) -> bytes:
     return control_payload_hash(parse_body(split_envelope(envelope)[1]))
 
 
-def _forged_cert_bytes(certificate: object, **overrides: object) -> bytes:
+class _JsonDocument(Protocol):
+    """What ``_forged_cert_bytes`` actually needs of a certificate.
+
+    Structural, so every certificate dataclass satisfies it without declaring
+    anything — and typed, so the call does not have to be excused with an
+    ``attr-defined`` ignore against a bare ``object``.
+    """
+
+    def to_json_dict(self) -> dict[str, Any]: ...
+
+
+def _forged_cert_bytes(certificate: _JsonDocument, **overrides: object) -> bytes:
     """Serialise a certificate document the codec refuses to *decode*.
 
     Some rules — an unknown role, an owner Grant minted by a member — are pure
     document invariants, so the dataclass cannot produce the shape the wire has to
     carry.  Building the JSON by hand is the only way to put those bytes on it.
     """
-    document = certificate.to_json_dict() | overrides  # type: ignore[attr-defined]
+    document = certificate.to_json_dict() | overrides
     return json.dumps(document, separators=(",", ":")).encode("utf-8")
 
 
@@ -92,15 +105,15 @@ async def _found_preferences_workspace(client: AsyncClient, email: str) -> Sessi
     ``root_pk`` is resolved from the slot of the Workspace being posted to — and it
     survives shared Workspaces without a shape change.
     """
-    prefs = await _open_session(client, email, genesis=False)
-    prefs.workspace_id = user_preferences_workspace_id(user_id_from_token(prefs.token))
+    prefs = await open_session(client, email, genesis=False)
+    prefs.workspace_id = user_preferences_workspace_id(user_id_from_token(prefs.user_token))
     escrow = await client.put(
         f"/w/{prefs.workspace_id}/recovery",
         json=prefs.root.escrow_body(prefs.workspace_id),
         headers=prefs.user_headers,
     )
     assert escrow.status_code == 200, escrow.text
-    await _found_workspace(client, prefs)
+    await found_workspace(client, prefs)
     return prefs
 
 
@@ -455,7 +468,7 @@ async def test_a_member_cannot_mint_an_owner_grant(client: AsyncClient, session:
     register = session.root.member_register_envelope(
         sibling, session.workspace_id, prev_control_hash=session.control_head
     )
-    posted = await _post(client, session, register, token=await _member_token(client, sibling))
+    posted = await _post(client, session, register, token=await member_token(client, sibling))
     assert posted.status_code == 200, posted.text
     session.control_head = _chain_after(register)
 
@@ -496,6 +509,7 @@ async def test_a_member_cannot_revoke_an_owner_grant(
         session.workspace_id,
         grant_id=session.owner_grant_id,
         revoker=str(sibling.member_id),
+        revoker_member_id=sibling.member_id,
     )
     envelope = session.root.revoke_envelope(
         sibling,
@@ -557,6 +571,7 @@ async def test_a_member_cannot_revoke_an_owner_grant_staged_in_the_same_batch(
             session.workspace_id,
             grant_id=minted.grant_id,
             revoker=str(sibling.member_id),
+            revoker_member_id=sibling.member_id,
         ),
         prev_control_hash=_chain_after(grant),
         signing_key=sibling.signing_key,
@@ -574,6 +589,10 @@ async def test_a_member_cannot_revoke_an_owner_grant_staged_in_the_same_batch(
     # ops stand — the founding genesis and Grant, and the sibling's register.
     assert await db.get(Grant, (session.workspace_id, minted.grant_id)) is None
     assert len(await all_ops(db)) == 3
+    # Guarded like its sibling above: an ``owner_grant_id`` the fixture failed to
+    # set would otherwise reach ``db.get`` as a ``None`` key component and fail
+    # somewhere far from the cause.
+    assert session.owner_grant_id is not None
     still_live = await db.get(Grant, (session.workspace_id, session.owner_grant_id))
     assert still_live is not None and still_live.revoked_by_seq is None
 
@@ -625,7 +644,15 @@ async def test_a_grant_to_a_shell_row_with_no_registration_is_refused(
 async def test_a_revoke_naming_an_unknown_grant_is_refused(
     client: AsyncClient, session: Session
 ) -> None:
-    certificate = session.root.revoke_certificate(session.workspace_id, grant_id=uuid.uuid4())
+    """``unknown_grant``, not ``unknown_grantee``.
+
+    A Revoke names a ``grant_id``, so the thing it fails to resolve is a Grant.
+    Reusing the grantee code would leave a client unable to tell a failed
+    revocation from an invalid grantee.
+    """
+    certificate = session.root.revoke_certificate(
+        session.workspace_id, grant_id=uuid.uuid4(), revoker_member_id=session.device.member_id
+    )
     envelope = session.root.revoke_envelope(
         session.device,
         session.workspace_id,
@@ -634,7 +661,7 @@ async def test_a_revoke_naming_an_unknown_grant_is_refused(
     )
     response = await _post(client, session, envelope)
     assert response.status_code == 422, response.text
-    assert detail_of(response) == {"code": "unknown_grantee", "index": 0}
+    assert detail_of(response) == {"code": "unknown_grant", "index": 0}
 
 
 async def test_a_grant_signed_by_someone_other_than_its_author_is_refused(
@@ -685,7 +712,7 @@ async def test_the_preferences_workspace_refuses_a_service_grant(
         "/members", json=service.registration_body(), headers=prefs.user_headers
     )
     assert registered.status_code == 201, registered.text
-    service_token = await _member_token(client, service)
+    service_token = await member_token(client, service)
     service_certificate = prefs.root.certificate(service, prefs.workspace_id)
     service_register = prefs.root.member_register_envelope(
         service,
@@ -722,7 +749,7 @@ async def test_the_default_workspace_admits_a_service_grant(
         "/members", json=service.registration_body(), headers=session.user_headers
     )
     assert registered.status_code == 201, registered.text
-    service_token = await _member_token(client, service)
+    service_token = await member_token(client, service)
     register = session.root.member_register_envelope(
         service, session.workspace_id, prev_control_hash=session.control_head
     )
@@ -766,7 +793,9 @@ async def test_revoking_the_last_grant_refuses_reads_writes_and_kills_the_transp
         )
     ).status_code == 200
 
-    certificate = session.root.revoke_certificate(session.workspace_id, grant_id=grant_id)
+    certificate = session.root.revoke_certificate(
+        session.workspace_id, grant_id=grant_id, revoker_member_id=session.device.member_id
+    )
     envelope = session.root.revoke_envelope(
         session.device,
         session.workspace_id,
@@ -814,6 +843,53 @@ async def test_revoking_the_last_grant_refuses_reads_writes_and_kills_the_transp
     assert live == []
 
 
+async def test_re_revoking_a_grant_is_refused_and_leaves_the_boundary_put(
+    client: AsyncClient, session: Session, db: AsyncSession
+) -> None:
+    """The revocation boundary is immutable once stamped.
+
+    The authorization verdict is positional — ``granted_seq < S < revoked_by_seq``
+    — so letting a second Revoke move ``revoked_by_seq`` forward would *widen* the
+    window an already-revoked Grant covers, re-admitting ops authored after the
+    first revocation.  Refused rather than silently ignored, so the client learns
+    the Grant is already gone instead of believing it just revoked it.
+    """
+    _sibling, _token, participant_grant_id = await _enrol_participant(client, session)
+    first = session.root.revoke_envelope(
+        session.device,
+        session.workspace_id,
+        certificate=session.root.revoke_certificate(
+            session.workspace_id,
+            grant_id=participant_grant_id,
+            revoker_member_id=session.device.member_id,
+        ),
+        prev_control_hash=session.control_head,
+    )
+    assert (await _post(client, session, first)).status_code == 200
+    session.control_head = _chain_after(first)
+    revoked = await db.get(Grant, (session.workspace_id, participant_grant_id))
+    assert revoked is not None
+    boundary = revoked.revoked_by_seq
+    assert boundary is not None
+
+    second = session.root.revoke_envelope(
+        session.device,
+        session.workspace_id,
+        certificate=session.root.revoke_certificate(
+            session.workspace_id,
+            grant_id=participant_grant_id,
+            revoker_member_id=session.device.member_id,
+        ),
+        prev_control_hash=session.control_head,
+    )
+    response = await _post(client, session, second)
+    assert response.status_code == 422, response.text
+    assert detail_of(response) == {"code": "already_revoked", "index": 0}
+
+    await db.refresh(revoked)
+    assert revoked.revoked_by_seq == boundary
+
+
 async def test_revoking_one_of_two_grants_leaves_the_member_live(
     client: AsyncClient, session: Session, db: AsyncSession
 ) -> None:
@@ -836,7 +912,9 @@ async def test_revoking_one_of_two_grants_leaves_the_member_live(
     session.control_head = _chain_after(grant)
 
     certificate = session.root.revoke_certificate(
-        session.workspace_id, grant_id=participant_grant_id
+        session.workspace_id,
+        grant_id=participant_grant_id,
+        revoker_member_id=session.device.member_id,
     )
     envelope = session.root.revoke_envelope(
         session.device,
@@ -907,7 +985,9 @@ async def test_revoking_a_granter_does_not_cascade(
     session.control_head = _chain_after(grant)
 
     # Now Root removes the granter.
-    certificate = session.root.revoke_certificate(session.workspace_id, grant_id=granter_grant_id)
+    certificate = session.root.revoke_certificate(
+        session.workspace_id, grant_id=granter_grant_id, revoker_member_id=session.device.member_id
+    )
     envelope = session.root.revoke_envelope(
         session.device,
         session.workspace_id,
@@ -930,7 +1010,9 @@ async def test_replaying_a_revoke_does_not_move_the_boundary(
 ) -> None:
     """A duplicate must not re-materialise: ``revoked_by_seq`` names one op."""
     _sibling, _token, grant_id = await _enrol_participant(client, session)
-    certificate = session.root.revoke_certificate(session.workspace_id, grant_id=grant_id)
+    certificate = session.root.revoke_certificate(
+        session.workspace_id, grant_id=grant_id, revoker_member_id=session.device.member_id
+    )
     envelope = session.root.revoke_envelope(
         session.device,
         session.workspace_id,

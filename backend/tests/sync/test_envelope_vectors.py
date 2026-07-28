@@ -345,7 +345,10 @@ def test_control_constants_match_the_frozen_file() -> None:
     assert domains["escrow_v1"] == esc.SIGNING_DOMAIN_ESCROW_V1.decode("ascii")
     # Seven distinct domains, or a signature made for one use would verify for
     # another (review F7).  Grant and Revoke are separate for exactly that
-    # reason: an unmaking must never be replayable as a making.
+    # reason: an unmaking must never be replayable as a making.  The count is
+    # asserted alongside the distinctness so an eighth domain cannot slip in
+    # under prose that still says seven.
+    assert len(domains) == 7
     assert len(set(domains.values())) == len(domains)
 
     frozen = _PROTOCOL["control"]

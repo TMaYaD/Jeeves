@@ -76,6 +76,14 @@ const String _userId = 'contract-user';
 const String _otherUserId = 'contract-neighbour';
 const Uuid _uuid = Uuid();
 
+/// A well-formed member id belonging to nobody, for the fail-closed cases.
+///
+/// Not `defaultWorkspaceId`: that derives a **Workspace** id, and CONTEXT.md keeps
+/// Workspace and Member as distinct entities. Both are uuid5, so borrowing one for
+/// the other reads as though the two id spaces were one.
+String unregisteredMemberId(String name) =>
+    _uuid.v5(Namespace.url.value, 'jeeves://test/member/$name');
+
 /// The chain link the next control op must name, computed the way a pulling
 /// client computes it: SHA-256 over the last control op's payload bytes.
 Uint8List controlHeadOf(FakeSyncServer server, String workspaceId) {
@@ -592,16 +600,9 @@ void main() {
   });
 
   group('op_class=2: MemberRegister', () {
-    /// The chain link the next control op must name, computed the way a pulling
-    /// client computes it: SHA-256 over the last control op's payload bytes.
-    Uint8List controlHead() {
-      for (final op in server.storedOps.reversed) {
-        if (op.workspaceId != workspaceId) continue;
-        if (op.header?.opClass != opClassControl) continue;
-        return controlPayloadHash(parseBody(splitEnvelope(op.envelope).body));
-      }
-      return zeroPrevControlHash;
-    }
+    /// This group's workspace closed over [controlHeadOf]. One implementation of
+    /// the chain-link rule, so the two cannot drift.
+    Uint8List controlHead() => controlHeadOf(server, workspaceId);
 
     /// A second Device with keys and a credential, holding **no Grant**.
     ///
@@ -778,7 +779,7 @@ void main() {
         sibling,
         certificate: RegistrationCertificate(
           workspaceId: workspaceId,
-          memberId: defaultWorkspaceId('a-different-member'),
+          memberId: unregisteredMemberId('a-different-member'),
           signPk: sibling.signPk,
           kexPk: sibling.kexPk,
           registeredAtHlc: Hlc.forMember(sibling.memberId, 1800000000000),
@@ -987,7 +988,7 @@ void main() {
 
     test('an unknown member has no challenge', () async {
       expect(
-        () => userSession.requestMemberChallenge(defaultWorkspaceId('nobody')),
+        () => userSession.requestMemberChallenge(unregisteredMemberId('nobody')),
         throwsStatus(404, 'unknown_member'),
       );
     });
@@ -1033,7 +1034,7 @@ void main() {
 
     test('an unknown member does not get a counter', () async {
       // The 404 precedes the counter, so enumeration cannot exhaust anything.
-      final stranger = defaultWorkspaceId('never-registered');
+      final stranger = unregisteredMemberId('never-registered');
       for (var index = 0; index < fakeServerMemberChallengeLimit + 5; index++) {
         expect(
           () => userSession.requestMemberChallenge(stranger),

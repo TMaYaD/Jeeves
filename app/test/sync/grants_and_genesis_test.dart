@@ -458,7 +458,7 @@ void main() {
       // so the page below carries exactly them and `since` sits under both.
       await workspace.a.sync();
 
-      final grantId = _grantIdFor(workspace, peer.memberId);
+      final grantId = workspace.grantIdOf(peer.memberId);
       final content = await _contentOp(workspace, peer, 'authored while granted');
       final contentSeq = (await peerSession.postOps(
         workspace.workspaceId,
@@ -520,7 +520,7 @@ void main() {
     await workspace.enrolFixture(peer, role: roleParticipant);
     await workspace.a.sync();
 
-    final grantId = _grantIdFor(workspace, peer.memberId);
+    final grantId = workspace.grantIdOf(peer.memberId);
     final before = (await workspace.a.client.grantsView()).liveRoles(peer.memberId);
     expect(before, {roleParticipant});
 
@@ -542,7 +542,7 @@ void main() {
       seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 131)),
     );
     final session = await workspace.enrolFixture(peer, role: roleParticipant);
-    final grantId = _grantIdFor(workspace, peer.memberId);
+    final grantId = workspace.grantIdOf(peer.memberId);
 
     final root = await workspace.recoverRoot();
     await session.postOps(workspace.workspaceId, [
@@ -596,13 +596,14 @@ void main() {
       expect(await client.raiseEpochFloor(0), 3);
     });
 
-    test('authoring below the floor is refused', () async {
+    test('authoring at an explicitly stale epoch is refused', () async {
       await workspace.a.client.raiseEpochFloor(2);
       await expectLater(
         workspace.a.client.capture(
           collection: _harnessCollection,
           entityId: _docId(workspace),
           fields: const {'step': 'below the floor'},
+          keyEpoch: 1,
         ),
         throwsA(
           predicate<Object>(
@@ -613,6 +614,25 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('a raise does not brick the device\'s own content authoring', () async {
+      // The floor exists to stop *stale* writes, not to stop the device that
+      // raised it from writing at all. An ordinary `capture()` picks up the
+      // current epoch, so it clears every floor it is itself subject to —
+      // otherwise the first rotation would be an outage for its own author.
+      await workspace.a.client.raiseEpochFloor(7);
+      await workspace.a.client.capture(
+        collection: _harnessCollection,
+        entityId: _docId(workspace),
+        fields: const {'step': 'after the raise'},
+      );
+      final authored = await workspace.a.client.authoredEnvelopes();
+      expect(OpHeader.parse(splitEnvelope(authored.last).header).keyEpoch, 7);
+
+      // And it converges: the op is authored at an epoch every peer accepts.
+      await workspace.syncAll();
+      expect((await _doc(workspace.b, workspace))?['step'], 'after the raise');
     });
 
     test('survives a restart', () async {
@@ -671,7 +691,7 @@ void main() {
       device: service,
       workspaceId: prefs.workspaceId,
       root: root,
-      prevControlHash: workspace.controlChainHead(prefs.workspaceId),
+      prevControlHash: workspace.controlChainHead(workspace: prefs.workspaceId),
       wallMs: workspace.clock.nowMs,
       certificate: certificate,
     );
@@ -867,6 +887,9 @@ void main() {
       grantedAtHlc: Hlc.forMember(grantee.memberId, workspace.clock.nowMs),
     );
     final certBytes = certificate.encode();
+    // One read, so the seq and the hash below come from the *same* snapshot of the
+    // chain rather than from two independent ones.
+    final authored = await workspace.a.client.authoredEnvelopes();
     // Signed with the *Device's own* key — no Root anywhere in this path.
     final envelope = await workspace.a.identity.signer.buildEnvelope(
       OpHeader(
@@ -875,10 +898,8 @@ void main() {
         opId: _uuid.v4(),
         authorMemberId: workspace.a.identity.memberId,
         authorKeyId: workspace.a.identity.keyId,
-        authorSeq: (await workspace.a.client.authoredEnvelopes()).length + 1,
-        prevAuthorHash: envelopeHash(
-          (await workspace.a.client.authoredEnvelopes()).last,
-        ),
+        authorSeq: authored.length + 1,
+        prevAuthorHash: envelopeHash(authored.last),
       ),
       frameBody(
         ControlPayload(
@@ -908,20 +929,4 @@ void main() {
     );
     expect(results.single.duplicate, isFalse);
   });
-}
-
-/// The grant id in the log for [memberId] — read from the signed control ops.
-///
-/// Never from a server table: a test that took the server's word for which Grant
-/// is which could not then prove the server's word does not matter.
-String _grantIdFor(SimWorkspace workspace, String memberId) {
-  for (final op in workspace.server.storedOps) {
-    if (op.header?.opClass != opClassControl) continue;
-    if (op.workspaceId != workspace.workspaceId) continue;
-    final payload = ControlPayload.decode(parseBody(splitEnvelope(op.envelope).body));
-    if (payload.controlType != controlTypeGrant) continue;
-    final grant = payload.grantCertificate();
-    if (grant.memberId == memberId) return grant.grantId;
-  }
-  throw StateError('no Grant for $memberId in the log');
 }

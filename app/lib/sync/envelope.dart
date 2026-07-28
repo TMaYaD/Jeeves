@@ -183,9 +183,14 @@ enum SyncRejectionReason {
   /// role, so unlike its mint counterpart this one is a *stateful* verdict.
   ownerRevokeRequiresRoot('owner_revoke_requires_root'),
 
-  /// A Grant or Revoke naming a grantee or Grant this device cannot resolve.
-  /// Fail-closed: never held as a dangling forward reference.
+  /// A Grant naming a grantee this device cannot resolve. Fail-closed: never held
+  /// as a dangling forward reference.
   unknownGrantee('unknown_grantee'),
+
+  /// A Revoke naming a Grant this device cannot resolve. Distinct from
+  /// [unknownGrantee] because a Revoke names a `grant_id`: conflating the two
+  /// leaves a client unable to tell a failed revocation from an invalid grantee.
+  unknownGrant('unknown_grant'),
 
   /// A Grant to a non-Device member in the `user_preferences` Workspace — the
   /// client-side half of "every Device, no Service ever".

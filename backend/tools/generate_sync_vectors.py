@@ -1074,12 +1074,12 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
         granter=str(MEMBER_IDS["device_a"]),
         granted_at_hlc=Hlc.for_member(MEMBER_IDS["device_b"], BASE_WALL_MS + 4000),
     )
-    # Built by hand: `GrantCertificate.decode` refuses this document, so
-    # `encode()` is unreachable through the dataclass for exactly the shape the
-    # vector has to carry.
-    non_root_owner_cert_bytes = json.dumps(
-        non_root_owner_grant.to_json_dict(), separators=(",", ":")
-    ).encode("utf-8")
+    # `encode()` produces these bytes directly: the owner-granter invariant is
+    # enforced by `GrantCertificate.decode`, not by the constructor, so the
+    # dataclass will happily *serialise* a document it would refuse to read back —
+    # which is exactly the shape this vector has to carry.  The two mutating cases
+    # below stay hand-rolled, because those documents cannot be constructed at all.
+    non_root_owner_cert_bytes = non_root_owner_grant.encode()
     unknown_role_cert_bytes = json.dumps(
         {
             **non_root_owner_grant.to_json_dict(),

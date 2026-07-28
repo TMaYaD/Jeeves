@@ -50,10 +50,12 @@ const String jeevesWorkspaceNamespace = 'e9d4afd3-87e4-5450-bd7d-4fc191ff3857';
 /// frozen. A namespace of its own rather than a second key inside the default
 /// one: the two ids must be independent, so neither can be computed from the
 /// other by a client that only knows one.
-final String userPreferencesWorkspaceNamespace = _uuid.v5(
-  Namespace.url.value,
-  'https://jeeves.app/sync/workspace/user-preferences/v1',
-);
+///
+/// A literal, like its sibling above, rather than the `uuid5` call that produced
+/// it: Workspace identity is protocol, and recomputing it at runtime would make
+/// it depend on the `uuid` package's v5 implementation staying byte-stable
+/// forever. The URL it derives from stays in the doc as the derivation of record.
+const String userPreferencesWorkspaceNamespace = 'c2b38d21-5518-5ad6-88b1-cc253ab3495f';
 
 /// The collection the `user_preferences` Workspace carries.
 const String userPreferencesCollection = 'user_preferences';

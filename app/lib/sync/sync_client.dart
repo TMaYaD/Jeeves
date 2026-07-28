@@ -90,6 +90,23 @@ const Set<int> _slotTakenResultCodes = {
 /// Whether an arriving control op takes its position, or loses a fork.
 enum _ControlPosition { accept, quarantineThis }
 
+/// A control op whose bytes have verified, and nothing more.
+///
+/// The seam that lets the receive path log the envelope between verification and
+/// application: [learned] is the registration the op *would* teach this device,
+/// carried rather than remembered so a refusal leaves no key behind it.
+class _VerifiedControlOp {
+  _VerifiedControlOp({
+    required this.payload,
+    required this.payloadBytes,
+    required this.learned,
+  });
+
+  final ControlPayload payload;
+  final Uint8List payloadBytes;
+  final RegistrationCertificate? learned;
+}
+
 /// What one [SyncClient.flushOutbox] concluded.
 ///
 /// A return value rather than an exception because none of the three is an
@@ -244,11 +261,21 @@ class SyncClient {
   /// whatever the network then does. The local reduce is optimistic and needs
   /// no server round-trip; when the op is pulled back its HLC is equal to the
   /// stored one, so re-applying it is a no-op.
+  ///
+  /// [keyEpoch] null — the normal case — authors at the Workspace's **current**
+  /// epoch. The floor is the only record of which epoch that is in this slice
+  /// (#554's rotate ops are what will raise it), so authoring at the floor is
+  /// authoring at the current epoch. Hard-coding 0 here would mean the first raise
+  /// bricked every content capture on the device with `keyEpochBelowFloor`, which
+  /// is the opposite of what a floor is for. An explicit value is for a caller that
+  /// genuinely knows the epoch it is writing under; below the floor it is refused,
+  /// which is the guard doing its job rather than the client refusing its own work.
   Future<String> capture({
     required String collection,
     required String entityId,
     Map<String, Object?> fields = const {},
     bool tombstone = false,
+    int? keyEpoch,
   }) async {
     final payload = OpPayload(
       collection: collection,
@@ -262,6 +289,7 @@ class SyncClient {
     final opId = await _authorAndQueue(
       opClass: opClassContent,
       payload: payload.encode(),
+      keyEpoch: keyEpoch ?? await epochFloor(),
     );
     final affected =
         await _reducer.apply(payload, authorMemberIdHex: identity.memberIdHex);
@@ -277,17 +305,23 @@ class SyncClient {
   /// The caller is `EnrolmentService`, which is the only thing in this slice
   /// that has a Root to sign a payload with.
   Future<String> captureControl(Uint8List payload) =>
-      _authorAndQueue(opClass: opClassControl, payload: payload);
+      _authorAndQueue(opClass: opClassControl, payload: payload, keyEpoch: 0);
 
+  /// [keyEpoch] is spelled at every call site rather than defaulted: a content op
+  /// that silently inherited 0 would be refused by its own author the moment the
+  /// floor rose above it, and the exemption that makes 0 correct belongs to
+  /// control ops alone.
   Future<String> _authorAndQueue({
     required int opClass,
     required Uint8List payload,
-    int keyEpoch = 0,
+    required int keyEpoch,
   }) async {
     // The floor is consulted on **authoring**, which is where it bites: refusing
     // to build an envelope below it is what makes a rotation stick rather than
     // being undone by the next offline write. Control ops are exempt — a `rotate`
-    // that raises the floor cannot be required to already clear it.
+    // that raises the floor cannot be required to already clear it — and a content
+    // op reaches here at the current epoch, so this fires only for a genuinely
+    // stale epoch an explicit caller supplied.
     if (opClass != opClassControl) {
       final floor = await epochFloor();
       if (keyEpoch < floor) {
@@ -424,6 +458,17 @@ class SyncClient {
   ///
   /// No alarm. A lost race is two honest devices doing the same correct thing.
   Future<void> _dropSupersededGenesis(List<OutboxRow> superseded) async {
+    // Read the re-derived head *before* the transaction, so clearing `authorState`
+    // and rewriting it are one atomic step. The head derives from `op_log`, which
+    // this transaction does not touch, so reading it first is safe — whereas a
+    // crash between a separate clear and a separate rewrite would leave the device
+    // with no `authorState` at all, and `_authorChain` would then report
+    // `nextAuthorSeq: 1` under the zero hash while the log still holds this
+    // author's earlier positions: the next op authored would claim a spent slot.
+    //
+    // Whatever of ours the log *does* hold still owns its positions, so the
+    // rewind is a re-derivation and not a reset to one.
+    final head = await _chainHead(identity.memberId);
     await _db.transaction(() async {
       for (final row in superseded) {
         await (_db.delete(_db.outbox)..where((r) => r.id.equals(row.id))).go();
@@ -433,20 +478,19 @@ class SyncClient {
                 row.workspaceId.equals(workspaceId) &
                 row.memberId.equals(identity.memberId)))
           .go();
+      // Left cleared when the log attests no head — a device that has just lost a
+      // founding race has nothing of its own in the winner's view of the log.
+      if (head != null) {
+        await _db.into(_db.authorState).insertOnConflictUpdate(
+              AuthorStateCompanion.insert(
+                workspaceId: workspaceId,
+                memberId: identity.memberId,
+                nextAuthorSeq: head.authorSeq + 1,
+                lastEnvelopeHash: head.envelopeHash,
+              ),
+            );
+      }
     });
-    // Whatever of ours the log *does* hold still owns its positions, so the
-    // rewind is a re-derivation and not a reset to one.
-    final head = await _chainHead(identity.memberId);
-    if (head != null) {
-      await _db.into(_db.authorState).insertOnConflictUpdate(
-            AuthorStateCompanion.insert(
-              workspaceId: workspaceId,
-              memberId: identity.memberId,
-              nextAuthorSeq: head.authorSeq + 1,
-              lastEnvelopeHash: head.envelopeHash,
-            ),
-          );
-    }
   }
 
   /// The own-writes verdict on one refused POST.
@@ -754,12 +798,31 @@ class SyncClient {
       }
 
       if (header.opClass == opClassControl) {
-        await _receiveControl(pulled, parts.body, header);
-        // A control op reduces to nothing, so it contributes no projection
-        // work; it is logged because later content ops from the same author
-        // chain to it. Its `applied_at` is stamped at once — the directory
-        // update *is* its apply, and it has already happened.
-        await _logReceived(pulled, header, appliedAt: _now());
+        // Verify, **then** log, **then** apply — the content path's order, for the
+        // content path's reasons. Logging before verifying would let a server burn
+        // an honest author's chain slots with bytes that never verified; applying
+        // before logging lands authority effects with no `op_log` row behind them,
+        // so a server spending one transport `seq` on two chain-valid control ops
+        // gets the second one's authority with nothing for a later content op to
+        // chain to. A taken slot ends the op here, without applying anything.
+        final verified = await _verifyControlOp(pulled, parts.body, header);
+        if (!await _logReceived(pulled, header)) return const {};
+        try {
+          await _applyControlOp(pulled, header, verified);
+        } on SyncRejection catch (rejection) {
+          // Logged-but-refused, the same shape the content path uses: the envelope
+          // stays as chain evidence, no authority effect landed, and the row
+          // records which guard fired. Rethrown so the outer catch still
+          // quarantines and accuses.
+          await _stampRefused(pulled.seq, rejection.reason);
+          rethrow;
+        }
+        // A control op reduces to nothing, so it contributes no projection work;
+        // it is logged because later content ops from the same author chain to it.
+        // `applied_at` is stamped only now — after verification and application
+        // both succeeded — so a refused control op is logged-but-unapplied
+        // evidence rather than a row claiming an apply that never happened.
+        await _stampApplied(pulled.seq);
         return const {};
       }
 
@@ -1028,7 +1091,17 @@ class SyncClient {
   /// load-bearing one for the registering pair. A genuine certificate is public
   /// the moment it is in the log; without it, anyone holding a copy could wrap it
   /// around self-signed envelopes and manufacture forks in the victim's chain.
-  Future<void> _receiveControl(PulledOp pulled, Uint8List body, OpHeader header) async {
+  ///
+  /// **Produces no side effects.** Nothing here writes, so the caller can log the
+  /// envelope between this and [_applyControlOp] — the op_log row must exist before
+  /// any authority effect does, and it must not exist for bytes that never verified.
+  /// Whatever the type teaches this device is carried out in the returned
+  /// [_VerifiedControlOp] rather than applied here.
+  Future<_VerifiedControlOp> _verifyControlOp(
+    PulledOp pulled,
+    Uint8List body,
+    OpHeader header,
+  ) async {
     final payloadBytes = parseBody(body);
     final payload = ControlPayload.decode(payloadBytes);
     payload.requireServedType();
@@ -1094,6 +1167,26 @@ class SyncClient {
         );
     }
 
+    return _VerifiedControlOp(
+      payload: payload,
+      payloadBytes: payloadBytes,
+      learned: learned,
+    );
+  }
+
+  /// Position a verified control op and apply what it stands for.
+  ///
+  /// Split from [_verifyControlOp] so the `op_log` row lands between the two: the
+  /// authority effects below — the directory entry, the epoch floor, the
+  /// `applied_control_log` row — must never exist without a row behind them, or a
+  /// server spending one transport `seq` on two chain-valid control ops lands the
+  /// second one's authority with nothing for a later content op to chain to.
+  Future<void> _applyControlOp(
+    PulledOp pulled,
+    OpHeader header,
+    _VerifiedControlOp verified,
+  ) async {
+    final payload = verified.payload;
     // Position and chain, **last** — the same place #548's six-step order put it.
     // Authority is judged on the bytes, which is a question about the op alone; the
     // chain is a question about this receiver's own state, and asking it first
@@ -1110,13 +1203,14 @@ class SyncClient {
     }
 
     // Verified *and* positioned: now the op may teach this device something.
+    final learned = verified.learned;
     if (learned != null) directory.rememberChained(learned);
     if (payload.controlType == controlTypeWorkspaceGenesis) {
       // Genesis fixes the epoch floor at 0. Recorded rather than assumed, so a
       // Workspace's floor exists from the moment the Workspace does.
       await raiseEpochFloor(0);
     }
-    await _appendAppliedControlOp(pulled, payload, header, payloadBytes);
+    await _appendAppliedControlOp(pulled, payload, header, verified.payloadBytes);
   }
 
   /// The registering pair's binding steps: the certificate must be *about* this
@@ -1233,7 +1327,7 @@ class SyncClient {
     final target = (await grantsView()).grants[revoke.grantId];
     if (target == null) {
       throw SyncRejection(
-        SyncRejectionReason.unknownGrantee,
+        SyncRejectionReason.unknownGrant,
         'no applied Grant ${revoke.grantId} for this Revoke to unmake',
       );
     }
@@ -1285,12 +1379,30 @@ class SyncClient {
             ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
           .get();
 
-  /// The grants view, recomputed from the applied control log.
+  /// The grants view, derived from the applied control log.
   ///
-  /// Derived at read time rather than cached: control ops are few, so there is
-  /// nothing here worth a copy — and per the naming rule a stored copy would have
-  /// to announce itself as one, and would then be free to go stale.
+  /// Nothing about the view is *stored*: [_grantsViewCache] lives only in memory
+  /// and only until the applied control log next changes, which is the one thing
+  /// that can move a verdict. It exists because the receive path asks for the view
+  /// once per **content** op, and recomputing it means re-reading every control row
+  /// and base64+JSON-decoding every payload again — a bootstrap pull of N content
+  /// ops over M control ops costs N×M decodes without it, and O(M) with it.
+  ///
+  /// Per the repo naming rule the retained copy says so in its name. Every writer
+  /// of `applied_control_log` — [_appendAppliedControlOp] and
+  /// [_quarantineControlBranch] — drops it, so there is no window in which a stale
+  /// view can be read.
+  GrantsView? _grantsViewCache;
+
+  void _invalidateGrantsViewCache() => _grantsViewCache = null;
+
   Future<GrantsView> grantsView() async {
+    final cached = _grantsViewCache;
+    if (cached != null) return cached;
+    return _grantsViewCache = await _deriveGrantsView();
+  }
+
+  Future<GrantsView> _deriveGrantsView() async {
     final rows = await _appliedControlLog();
     final grants = <String, DerivedGrant>{};
     for (final row in rows) {
@@ -1312,6 +1424,11 @@ class SyncClient {
           // remembered: the verification stage already refused that case, so
           // reaching here means the Grant was quarantined on a losing fork branch.
           if (existing == null) continue;
+          // First revocation wins. The verdict is positional
+          // (`grantedSeq < seq < revokedBySeq`), so letting a later Revoke move
+          // `revokedBySeq` forward would *widen* the window an already-revoked
+          // Grant covers — the boundary is immutable once stamped.
+          if (existing.revokedBySeq != null) continue;
           grants[revoke.grantId] = DerivedGrant(
             grantId: existing.grantId,
             memberId: existing.memberId,
@@ -1359,15 +1476,13 @@ class SyncClient {
             appliedAt: _now(),
           ),
         );
-    await _db.into(_db.controlChainState).insertOnConflictUpdate(
-          ControlChainStateCompanion.insert(
-            workspaceId: workspaceId,
-            lastControlPayloadHash: controlPayloadHash(payloadBytes),
-            appliedCount: (await _controlChain())?.appliedCount ?? 0,
-          ),
-        );
+    _invalidateGrantsViewCache();
     // The head is derived from the log rather than incremented, so a fork
-    // resolution that quarantines a branch cannot leave the counter lying.
+    // resolution that quarantines a branch cannot leave the counter lying — and
+    // that derivation is the *only* writer of `controlChainState`. An upsert here
+    // would be superseded by it a line later, and would meanwhile publish the
+    // pre-insert `appliedCount`, leaving the counter short if the process died in
+    // between.
     await _refreshControlChainHead();
   }
 
@@ -1492,6 +1607,7 @@ class SyncClient {
             ..where((row) => row.workspaceId.equals(workspaceId) & row.seq.equals(seq)))
           .write(AppliedControlLogCompanion(quarantinedAt: Value(now)));
     }
+    _invalidateGrantsViewCache();
     await _raiseAlarm(
       IntegrityAlarmKind.controlChainFork,
       detail: 'control fork resolved against ${doomed.length} applied op(s) '
