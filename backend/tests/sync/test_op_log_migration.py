@@ -53,12 +53,14 @@ def _engine_with_users() -> sa.engine.Engine:
     return engine
 
 
-def test_0031_chains_from_0030_and_is_the_current_head() -> None:
+def test_0031_chains_from_0030() -> None:
     module = _load_migration_0031()
     assert module.revision == "0031"
     assert module.down_revision == "0030"
+    # 0031 is no longer the head — 0032 adds the identity columns on top of it
+    # (see ``test_identity_migration.py``); what matters here is where it sits.
     script = ScriptDirectory.from_config(migrate._alembic_config())
-    assert script.get_heads() == ["0031"]
+    assert "0031" in {revision.revision for revision in script.walk_revisions()}
 
 
 def test_0031_creates_the_op_log_and_member_registry() -> None:
@@ -68,9 +70,15 @@ def test_0031_creates_the_op_log_and_member_registry() -> None:
     with engine.connect() as conn:
         inspector = sa.inspect(conn)
         assert {"ops", "members"} <= set(inspector.get_table_names())
-        for table, model in (("ops", Op), ("members", Member)):
-            migrated = {column["name"] for column in inspector.get_columns(table)}
-            assert migrated == {column.name for column in model.__table__.columns}, table
+        # ``members`` grows two nullable columns in 0032, so the model comparison
+        # for it lives there; here the table only has to hold 0031's own shape.
+        migrated_members = {column["name"] for column in inspector.get_columns("members")}
+        assert migrated_members == {column.name for column in Member.__table__.columns} - {
+            "kex_pk",
+            "chained_at",
+        }
+        migrated_ops = {column["name"] for column in inspector.get_columns("ops")}
+        assert migrated_ops == {column.name for column in Op.__table__.columns}
         index_names = {index["name"] for index in inspector.get_indexes("ops")}
         assert "ix_ops_workspace_seq" in index_names
 

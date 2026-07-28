@@ -62,10 +62,13 @@ void main() {
     await workspace.b.listener.start();
     await pumpEvents();
 
-    // C enrols after B subscribed, so B's directory has never heard of it. The
-    // poke-triggered sequence refreshes the directory before it pulls; a bare
-    // pull would quarantine C's ops, and the cursor would move past them for
-    // good.
+    // C enrols after B subscribed, so B has never heard of it. Nothing refreshes
+    // a directory here — C's MemberRegister is its own op 1, and `seq` ordering
+    // puts it ahead of C's content op in the very page the poke provokes, so the
+    // pull learns C's key before it needs it. This is the case that would break
+    // if the register were not pinned to author_seq 1: the content op would
+    // quarantine as `member_not_chained_to_root` and the cursor would move past
+    // it for good.
     final c = await SimDevice.create(
       label: 'C',
       userId: _userId,
@@ -75,6 +78,9 @@ void main() {
       keepaliveInterval: _keepaliveInterval,
       memberId: const Uuid().v5(jeevesWorkspaceNamespace, 'sim/device/late'),
       seed: Uint8List.fromList(List<int>.generate(32, (byte) => (byte + 7) % 256)),
+      // A later device enrols with the passphrase and nothing else — the Root in
+      // the escrow slot is A's, and minting a fresh one would be refused.
+      passphrase: workspace.passphrase,
     );
     await c.preferences.set('font', '"serif"');
     await c.sync();
@@ -355,21 +361,13 @@ class _ChattyTransport extends _DelegatingTransport {
       );
 }
 
+/// Wraps only the member-credential surface, because that is the whole of
+/// [SyncTransport]: the registry and escrow calls live on [UserTransport], which
+/// has no socket to interfere with.
 abstract class _DelegatingTransport implements SyncTransport {
   _DelegatingTransport(this.inner);
 
   final SyncTransport inner;
-
-  @override
-  Future<MemberRecord> registerMember({
-    required String memberId,
-    required Uint8List signPk,
-  }) =>
-      inner.registerMember(memberId: memberId, signPk: signPk);
-
-  @override
-  Future<List<MemberRecord>> fetchMembers(String workspaceId) =>
-      inner.fetchMembers(workspaceId);
 
   @override
   Future<List<OpAppendResult>> postOps(String workspaceId, List<Uint8List> envelopes) =>

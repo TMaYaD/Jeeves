@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -46,6 +46,13 @@ class RefreshToken(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(
         String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Set only on a member-scoped refresh token (ADR-0028's proof-of-possession
+    # flow).  Null means a full user session.  Revoking one Member's transport
+    # credential is then a query on this column, which is the mechanism #549's
+    # Revoke control op calls into.
+    member_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("members.member_id", ondelete="CASCADE"), nullable=True, index=True
     )
     # SHA-256 hex digest of the raw token sent to the client.
     # Storing the hash means a DB breach doesn't expose live tokens.

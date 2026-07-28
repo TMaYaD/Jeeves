@@ -75,9 +75,10 @@ KNOWN_OP_CLASSES: Final[frozenset[int]] = frozenset(
         OP_CLASS_PRUNE,
     }
 )
-#: Op classes this build serves.  Control is #548, suggestion #557,
-#: compaction/prune #555.
-SERVED_OP_CLASSES: Final[frozenset[int]] = frozenset({OP_CLASS_CONTENT})
+#: Op classes this build serves.  Control arrived with #548 and carries exactly
+#: one type, ``member_register`` (see ``app.sync.control_payload``); every other
+#: control type is still fail-closed.  Suggestion is #557, compaction/prune #555.
+SERVED_OP_CLASSES: Final[frozenset[int]] = frozenset({OP_CLASS_CONTENT, OP_CLASS_CONTROL})
 
 # --- Sizes ------------------------------------------------------------------
 

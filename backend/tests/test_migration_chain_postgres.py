@@ -226,7 +226,7 @@ def test_chain_reaches_head_with_seeded_data(scratch_database: str) -> None:
     _upgrade("head", scratch_database)
 
     stamped = asyncio.run(_fetch(scratch_database, "SELECT version_num FROM alembic_version"))
-    assert stamped == [{"version_num": "0031"}]
+    assert stamped == [{"version_num": "0032"}]
 
 
 def test_backfill_mints_one_current_action_per_non_blank_cursor(

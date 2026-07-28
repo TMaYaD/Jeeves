@@ -105,22 +105,26 @@ async def race_engine() -> AsyncIterator[AsyncEngine]:
 
 
 @pytest_asyncio.fixture
-async def enrolled(race_engine: AsyncEngine) -> tuple[User, SpecDevice]:
-    """One user with one registered device, committed and visible to everyone."""
+async def enrolled(race_engine: AsyncEngine) -> tuple[User, Member, SpecDevice]:
+    """One user with one registered device, committed and visible to everyone.
+
+    The endpoint now authenticates the *Member*, so the fixture hands back the
+    row the member-scoped token would have resolved to.
+    """
     user = User(id=_USER_ID, email="author-chain-race@example.com", hashed_password="x")
     device = SpecDevice()
+    member = Member(
+        member_id=device.member_id,
+        user_id=user.id,
+        sign_pk=device.sign_pk,
+        key_id=device.key_id,
+        kex_pk=device.kex_pk,
+    )
     async with async_sessionmaker(race_engine, expire_on_commit=False)() as session:
         session.add(user)
-        session.add(
-            Member(
-                member_id=device.member_id,
-                user_id=user.id,
-                sign_pk=device.sign_pk,
-                key_id=device.key_id,
-            )
-        )
+        session.add(member)
         await session.commit()
-    return user, device
+    return user, member, device
 
 
 async def _pin_snapshot_before_the_winner(session: AsyncSession) -> None:
@@ -136,7 +140,7 @@ async def _pin_snapshot_before_the_winner(session: AsyncSession) -> None:
 
 
 async def test_a_raced_fork_of_the_author_chain_is_a_409_not_a_500(
-    race_engine: AsyncEngine, enrolled: tuple[User, SpecDevice]
+    race_engine: AsyncEngine, enrolled: tuple[User, Member, SpecDevice]
 ) -> None:
     """Two *different* ops in one slot: the loser gets the gap conflict.
 
@@ -144,7 +148,7 @@ async def test_a_raced_fork_of_the_author_chain_is_a_409_not_a_500(
     resolves again against what is now committed — where the op is a genuine
     fork, so the answer is the same 409 a sequential gap earns.
     """
-    user, device = enrolled
+    user, member, device = enrolled
     workspace_id = implicit_workspace_id(user.id)
     winner = device.next_envelope(workspace_id, advance=False)
     loser = device.next_envelope(workspace_id, advance=False)
@@ -154,10 +158,10 @@ async def test_a_raced_fork_of_the_author_chain_is_a_409_not_a_500(
     async with sessions() as losing, sessions() as winning:
         await _pin_snapshot_before_the_winner(losing)
 
-        await post_ops(workspace_id, PostOpsRequest(ops=[encode(winner)]), winning, user)
+        await post_ops(workspace_id, PostOpsRequest(ops=[encode(winner)]), winning, member)
 
         with pytest.raises(HTTPException) as refusal:
-            await post_ops(workspace_id, PostOpsRequest(ops=[encode(loser)]), losing, user)
+            await post_ops(workspace_id, PostOpsRequest(ops=[encode(loser)]), losing, member)
         assert refusal.value.status_code == 409
 
     async with sessions() as reader:
@@ -166,7 +170,7 @@ async def test_a_raced_fork_of_the_author_chain_is_a_409_not_a_500(
 
 
 async def test_a_raced_replay_comes_back_as_the_idempotent_duplicate(
-    race_engine: AsyncEngine, enrolled: tuple[User, SpecDevice]
+    race_engine: AsyncEngine, enrolled: tuple[User, Member, SpecDevice]
 ) -> None:
     """The *same* op posted twice at once: the loser is told it already landed.
 
@@ -175,7 +179,7 @@ async def test_a_raced_replay_comes_back_as_the_idempotent_duplicate(
     with its seq, so a device that retried a timed-out POST learns the op is
     held rather than that its chain is broken.
     """
-    user, device = enrolled
+    user, member, device = enrolled
     workspace_id = implicit_workspace_id(user.id)
     replayed = device.next_envelope(workspace_id)
 
@@ -183,10 +187,14 @@ async def test_a_raced_replay_comes_back_as_the_idempotent_duplicate(
     async with sessions() as losing, sessions() as winning:
         await _pin_snapshot_before_the_winner(losing)
 
-        first = await post_ops(workspace_id, PostOpsRequest(ops=[encode(replayed)]), winning, user)
+        first = await post_ops(
+            workspace_id, PostOpsRequest(ops=[encode(replayed)]), winning, member
+        )
         assert [result.duplicate for result in first.results] == [False]
 
-        second = await post_ops(workspace_id, PostOpsRequest(ops=[encode(replayed)]), losing, user)
+        second = await post_ops(
+            workspace_id, PostOpsRequest(ops=[encode(replayed)]), losing, member
+        )
 
     assert [result.duplicate for result in second.results] == [True]
     assert [result.seq for result in second.results] == [result.seq for result in first.results]
@@ -197,27 +205,27 @@ async def test_a_raced_replay_comes_back_as_the_idempotent_duplicate(
 
 
 async def test_the_constraint_is_scoped_to_one_author_in_one_workspace(
-    race_engine: AsyncEngine, enrolled: tuple[User, SpecDevice]
+    race_engine: AsyncEngine, enrolled: tuple[User, Member, SpecDevice]
 ) -> None:
     """Two authors filling *their own* slot 1 concurrently both succeed.
 
     A constraint that serialised unrelated authors would be a throughput bug
     dressed as a safety one.
     """
-    user, device = enrolled
+    user, member, device = enrolled
     workspace_id = implicit_workspace_id(user.id)
     second_device = SpecDevice()
 
+    second_member = Member(
+        member_id=second_device.member_id,
+        user_id=user.id,
+        sign_pk=second_device.sign_pk,
+        key_id=second_device.key_id,
+        kex_pk=second_device.kex_pk,
+    )
     sessions = async_sessionmaker(race_engine, expire_on_commit=False)
     async with sessions() as setup:
-        setup.add(
-            Member(
-                member_id=second_device.member_id,
-                user_id=user.id,
-                sign_pk=second_device.sign_pk,
-                key_id=second_device.key_id,
-            )
-        )
+        setup.add(second_member)
         await setup.commit()
 
     from_first = device.next_envelope(workspace_id)
@@ -225,9 +233,9 @@ async def test_the_constraint_is_scoped_to_one_author_in_one_workspace(
 
     async with sessions() as other, sessions() as one:
         await _pin_snapshot_before_the_winner(other)
-        await post_ops(workspace_id, PostOpsRequest(ops=[encode(from_first)]), one, user)
+        await post_ops(workspace_id, PostOpsRequest(ops=[encode(from_first)]), one, member)
         accepted = await post_ops(
-            workspace_id, PostOpsRequest(ops=[encode(from_second)]), other, user
+            workspace_id, PostOpsRequest(ops=[encode(from_second)]), other, second_member
         )
     assert [result.duplicate for result in accepted.results] == [False]
 

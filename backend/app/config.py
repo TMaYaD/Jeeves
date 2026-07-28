@@ -80,6 +80,18 @@ class Settings(BaseSettings):
     # `kid` declared in infra/powersync/sync-config.yaml's client_auth.jwks.
     jwt_kid: str = "jeeves-dev"
 
+    # Member proof-of-possession challenges (`POST /members/{m}/challenge`).
+    # The route is unauthenticated on purpose — possession of the Device's
+    # signing key is the credential being proved — so the only thing standing
+    # between it and an unbounded nonce mill is this per-member ceiling.  A
+    # Device asks for a challenge once per transport credential and renews by
+    # refresh thereafter, so a day's honest traffic is single digits; the
+    # default leaves room for retries and still turns a flood into a 429.
+    # Settings fields rather than module constants so a test can lower the cap
+    # instead of issuing the production number of requests to reach it.
+    member_challenge_daily_limit: int = 120
+    member_challenge_window_seconds: int = 86_400
+
     # Realtime signal socket (`WS /w/{w}/signal`).  The keepalive interval sits
     # below Dokku's default 60 s `proxy_read_timeout` so the proxy never reaps an
     # idle-but-live subscription; the client's idle deadline is three intervals.

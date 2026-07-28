@@ -1,9 +1,15 @@
-/// One simulated device: its own store, its own keypair, a shared fake clock.
+/// One simulated device: its own store, its own keypairs, a shared fake clock.
 ///
 /// Everything a real device has except a UI and a network — which is the point.
 /// The PowerSync engine could not run here, so the delete-on-absent windows in
 /// `docs/SYNC.md` were only ever verified by hand; an op log over a plain
 /// transport interface can be driven end to end in a unit test.
+///
+/// A device here enrols the same way a real one does: it runs the whole
+/// ceremony in `EnrolmentService`, including obtaining Root from the passphrase.
+/// No key is ever handed from one [SimDevice] to another, which is what makes
+/// "a second device enrols with the passphrase alone" a claim the harness can
+/// actually make.
 library;
 
 import 'dart:async';
@@ -12,10 +18,14 @@ import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
+import 'package:jeeves/sync/device_key_store.dart';
+import 'package:jeeves/sync/enrolment.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/member_identity.dart';
+import 'package:jeeves/sync/passphrase_policy.dart';
 import 'package:jeeves/sync/preferences_store.dart';
+import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/signal_listener.dart';
 import 'package:jeeves/sync/signal_socket.dart';
@@ -25,6 +35,18 @@ import 'package:jeeves/sync/sync_transport.dart';
 
 import 'fake_sync_server.dart';
 import 'signal_probe.dart';
+
+/// Argon2id costs for the harness.
+///
+/// Reduced so a test suite that enrols dozens of devices does not spend minutes
+/// in a pure-Dart KDF. They are injected as *both* the parameters and the floor,
+/// so every blob still goes through the same floor-checking code path
+/// production uses — the check is exercised, only the cost is not.
+const Argon2idParameters harnessKdfParameters = Argon2idParameters(
+  memoryKib: 32,
+  timeCost: 1,
+  parallelism: 1,
+);
 
 /// A manually advanced clock. Two devices reading the same value produce
 /// genuinely concurrent HLCs, which is what the field-grain merge cases need —
@@ -121,14 +143,32 @@ class CeilingJitter implements Random {
 
 /// The device's link to the server: where offline and fault injection live, so
 /// [FakeSyncServer] stays a clean contract double.
-class DeviceLink implements SyncTransport {
-  DeviceLink(this._session, {SimTimers? timers}) : timers = timers ?? SimTimers();
+///
+/// It implements both credentials' surfaces because a *device* holds both — the
+/// User's session and, after enrolment, its own. The server keeps them apart;
+/// this is just where the network switch lives.
+class DeviceLink implements SyncTransport, UserTransport {
+  DeviceLink(
+    this._userSession, {
+    SimTimers? timers,
+    this.keepaliveInterval = signalKeepaliveInterval,
+  }) : timers = timers ?? SimTimers();
 
-  final FakeSyncServerSession _session;
+  final FakeSyncServerUserSession _userSession;
+
+  /// Set by [completeMemberChallenge]. Typed as the concrete member session
+  /// because the socket lives there: the raw frame stream is what fault
+  /// injection needs, and only the member credential has one.
+  FakeSyncServerMemberSession? _memberSession;
 
   /// Drives the transport's idle deadline, the half of the signal contract that
   /// lives on this side of the wire.
   final SimTimers timers;
+
+  /// Held here rather than read off [_memberSession] so the idle deadline is
+  /// known before enrolment — computing it must not be what reports that a
+  /// device has no member credential yet.
+  final Duration keepaliveInterval;
 
   bool online = true;
 
@@ -166,6 +206,9 @@ class DeviceLink implements SyncTransport {
     }
   }
 
+  FakeSyncServerMemberSession get _member =>
+      _memberSession ?? (throw StateError('device has not completed enrolment'));
+
   /// The network died under any open socket, and refuses to carry a new one.
   void dropSignals() {
     for (final relay in [..._liveSignals]) {
@@ -179,15 +222,58 @@ class DeviceLink implements SyncTransport {
   Future<MemberRecord> registerMember({
     required String memberId,
     required Uint8List signPk,
+    required Uint8List kexPk,
   }) async {
     _requireOnline();
-    return _session.registerMember(memberId: memberId, signPk: signPk);
+    return _userSession.registerMember(
+      memberId: memberId,
+      signPk: signPk,
+      kexPk: kexPk,
+    );
   }
 
   @override
   Future<List<MemberRecord>> fetchMembers(String workspaceId) async {
     _requireOnline();
-    return _session.fetchMembers(workspaceId);
+    return _userSession.fetchMembers(workspaceId);
+  }
+
+  @override
+  Future<RecoveryEscrowRecord?> fetchRecoveryEscrow(String workspaceId) async {
+    _requireOnline();
+    return _userSession.fetchRecoveryEscrow(workspaceId);
+  }
+
+  @override
+  Future<RecoveryEscrowRecord> putRecoveryEscrow(
+    String workspaceId,
+    RecoveryEscrowRecord record,
+  ) async {
+    _requireOnline();
+    return _userSession.putRecoveryEscrow(workspaceId, record);
+  }
+
+  @override
+  Future<Uint8List> requestMemberChallenge(String memberId) async {
+    _requireOnline();
+    return _userSession.requestMemberChallenge(memberId);
+  }
+
+  @override
+  Future<SyncTransport> completeMemberChallenge({
+    required String memberId,
+    required Uint8List nonce,
+    required Uint8List signature,
+  }) async {
+    _requireOnline();
+    _memberSession = await _userSession.completeMemberChallenge(
+      memberId: memberId,
+      nonce: nonce,
+      signature: signature,
+    ) as FakeSyncServerMemberSession;
+    // The client syncs through the link, not around it, so `goOffline` keeps
+    // working after enrolment.
+    return this;
   }
 
   @override
@@ -196,7 +282,7 @@ class DeviceLink implements SyncTransport {
     List<Uint8List> envelopes,
   ) async {
     _requireOnline();
-    final results = await _session.postOps(workspaceId, envelopes);
+    final results = await _member.postOps(workspaceId, envelopes);
     if (dropPostResponse) {
       throw const SyncTransportException.unreachable('response lost after append');
     }
@@ -217,7 +303,7 @@ class DeviceLink implements SyncTransport {
       pullFailure = null;
       throw failure;
     }
-    return _session.pullOps(workspaceId, since: since, limit: limit);
+    return _member.pullOps(workspaceId, since: since, limit: limit);
   }
 
   @override
@@ -226,7 +312,10 @@ class DeviceLink implements SyncTransport {
           _requireOnline();
           readBearerTokens.add(await bearerTokenProvider());
           final relay = StreamController<String>();
-          final upstream = _session.signalFrames(workspaceId).listen(
+          // Through the member session: a device that has not enrolled has no
+          // credential the socket would accept, and saying so here is the same
+          // refusal the server makes at the handshake.
+          final upstream = _member.signalFrames(workspaceId).listen(
             (frame) {
               if (!silent && !relay.isClosed) relay.add(frame);
             },
@@ -248,7 +337,7 @@ class DeviceLink implements SyncTransport {
           );
         },
         // The same three-missed-keepalives rule the real transport applies.
-        idleDeadline: _session.keepaliveInterval * 3,
+        idleDeadline: keepaliveInterval * 3,
         timerFactory: timers.create,
       );
 }
@@ -264,8 +353,16 @@ class SimDevice {
     required this.registry,
     required this.client,
     required this.link,
+    required this.keyStore,
+    required this.enrolment,
+    required this.outcome,
   }) : preferences = PreferencesStore(client: client, registry: registry);
 
+  /// Build a device and run the enrolment ceremony on it.
+  ///
+  /// [passphrase] is null for the very first device of an account — the
+  /// ceremony generates one and hands it back on [outcome], which is the only
+  /// thing any later device is given.
   static Future<SimDevice> create({
     required String label,
     required String userId,
@@ -273,6 +370,10 @@ class SimDevice {
     required FakeClock clock,
     String? memberId,
     Uint8List? seed,
+    String? passphrase,
+    Random? random,
+    Argon2idParameters kdf = harnessKdfParameters,
+    PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
     SimTimers? timers,
     Duration keepaliveInterval = signalKeepaliveInterval,
   }) async {
@@ -281,7 +382,15 @@ class SimDevice {
     // own in-memory one, so there is nothing to race.
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
     final database = SyncDatabase(NativeDatabase.memory());
-    final identity = await MemberIdentity.generate(memberId: memberId, seed: seed);
+    final identity = await MemberIdentity.generate(
+      memberId: memberId,
+      signSeed: seed,
+      // A distinct KEX seed from the same deterministic source: using one seed
+      // for two algorithms is exactly what F8's separate keys forbid.
+      kexSeed: seed == null
+          ? null
+          : Uint8List.fromList([for (final byte in seed) (byte + 0x5A) % 256]),
+    );
     final hlc = HlcClock(
       memberIdHex: identity.memberIdHex,
       nowMs: () => clock.nowMs,
@@ -289,23 +398,41 @@ class SimDevice {
     final registry = CollectionRegistry(database);
     final simTimers = timers ?? SimTimers();
     final link = DeviceLink(
-      server.connectAs(
+      // The clock the socket will run on is chosen here, and travels through
+      // the ceremony onto the member session that actually subscribes.
+      server.connectAsUser(
         userId,
         signalTimerFactory: simTimers.create,
         keepaliveInterval: keepaliveInterval,
       ),
       timers: simTimers,
+      keepaliveInterval: keepaliveInterval,
     );
     final client = SyncClient(
       workspaceId: implicitWorkspaceId(userId),
+      userId: userId,
       identity: identity,
-      transport: link,
       database: database,
       clock: hlc,
       reducer: Reducer(database, nowMs: () => clock.nowMs),
       now: () => clock.asDateTime,
     );
-    final device = SimDevice._(
+    final keyStore = InMemoryDeviceKeyStore();
+    final enrolment = EnrolmentService(
+      client: client,
+      userTransport: link,
+      keyStore: keyStore,
+      nowMs: () => clock.nowMs,
+      passphrasePolicy: passphrasePolicy,
+      kdfParameters: kdf,
+      kdfFloor: kdf,
+      random: random ?? Random(label.codeUnitAt(0)),
+    );
+    final outcome = passphrase == null
+        ? await enrolment.enrolFirstDevice()
+        : await enrolment.enrolWithPassphrase(passphrase);
+
+    return SimDevice._(
       label: label,
       userId: userId,
       database: database,
@@ -315,9 +442,10 @@ class SimDevice {
       registry: registry,
       client: client,
       link: link,
+      keyStore: keyStore,
+      enrolment: enrolment,
+      outcome: outcome,
     );
-    await client.enrol();
-    return device;
   }
 
   final String label;
@@ -329,6 +457,13 @@ class SimDevice {
   final CollectionRegistry registry;
   final SyncClient client;
   final DeviceLink link;
+  final DeviceKeyStore keyStore;
+  final EnrolmentService enrolment;
+
+  /// What this device's enrolment produced — including the passphrase, which
+  /// for the first device is the only copy that will ever exist.
+  final EnrolmentOutcome outcome;
+
   final PreferencesStore preferences;
 
   SimTimers get timers => link.timers;
@@ -356,12 +491,9 @@ class SimDevice {
 
   void goAudible() => link.silent = false;
 
-  /// A real client learns about new members before it can verify their ops, so
-  /// the directory refresh is part of a sync, not a one-off at enrolment.
-  Future<void> sync() async {
-    await client.refreshMemberDirectory();
-    await client.sync();
-  }
+  /// Push, then pull. There is no directory refresh: a MemberRegister is its
+  /// author's op 1, so the pull hydrates the directory in order by itself.
+  Future<void> sync() => client.sync();
 
   /// Sync, tolerating the offline case — for tests that just want everyone as
   /// converged as the network allows.

@@ -441,7 +441,7 @@ Sync is responsible for bidirectional offline-first replication between the Flut
 
 #### Flagged ambiguities
 
-- **The Workspace security cluster is designed but unimplemented.** The live system is PowerSync replicating a mirrored PostgreSQL schema — the **Sync Shape**, **Bucket**, **BackendConnector**, **Dead Letter**, and **Sync Token** entries below describe what runs today. Workspace, Member, Grant, KeyWrap, Root, Recovery, Author — and the opaque append-only replication they govern — describe the agreed replacement (`docs/proposals/minimal-sync-server.md`, with the adopted security review alongside it). Until it lands there is exactly one implicit Workspace per User and nothing in the code names any of these.
+- **The Workspace security cluster is half-built, and the live system is still the old one.** PowerSync replicating a mirrored PostgreSQL schema is what runs in the app — the **Sync Shape**, **Bucket**, **BackendConnector**, **Dead Letter**, and **Sync Token** entries below describe it, and it stays in place until the cutover. The replacement (`docs/proposals/minimal-sync-server.md`, with the adopted security review alongside it) exists in `backend/app/sync/` and `app/lib/sync/`, reachable only from its own test harness: **Member**, **Root**, **Recovery** and **Author** are implemented there — a Device enrols on the passphrase alone, pins Root, and registers itself with a Root-signed control op — while **Grant**, **KeyWrap**, roles and epochs are not, so there is still exactly one implicit Workspace per User and authority is Root-signed rather than role-scoped. **Workspace** as a first-class, genesis-signed partition is likewise still to come.
 
 ## Implementation
 

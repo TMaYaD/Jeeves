@@ -235,15 +235,20 @@ class SignalListener {
     }
   }
 
-  /// Directory refresh *then* pull, the order a full sync always uses.
+  /// A pull, and only a pull. A poke carries no outbox implication — pokes are
+  /// inbound news, so there is nothing to push in response to one.
   ///
-  /// Load-bearing, not hygiene: the cursor persists past an `unknownAuthorKey`
-  /// quarantine, so pulling a newly enrolled author's ops before learning their
-  /// key would quarantine them permanently, with no later refresh replaying
-  /// them. A poke carries no outbox implication — pokes are inbound news.
+  /// No directory refresh precedes it, because there is no directory to refresh:
+  /// a Member's key is learned from its own Root-signed MemberRegister, which is
+  /// that author's op 1, and `seq` ordering guarantees the register is pulled
+  /// before any of that author's content. The pull hydrates the directory in
+  /// order by itself, which is why `SyncClient` has no `refreshMemberDirectory`
+  /// for this to call. Ops from a Member whose registration has not been
+  /// verified still quarantine as `member_not_chained_to_root`, and still do so
+  /// terminally in this slice — but that is #551's quarantine heal to close, not
+  /// something a refresh here could have prevented.
   Future<void> _runSync() async {
     _syncRunCount++;
-    await _client.refreshMemberDirectory();
     await _client.pull();
   }
 }

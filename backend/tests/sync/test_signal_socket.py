@@ -1,13 +1,20 @@
 """The realtime signal contract: `WS /w/{w}/signal`.
 
 `app/test/sync/fake_sync_server_contract_test.dart` mirrors the cases that the
-in-process fake can express, under the same names.  Three cases have no twin —
-bad token, missing auth frame, keepalive — because the fake has no token model
-and no wall clock; they are backend-only by construction, and the fake's
-`emittedSignalFrames` check is a fidelity smoke test rather than the wire
-assertion.  **The load-bearing no-payload assertion lives here**: every poke is
-a zero-length *text* frame, every keepalive is exactly ``KEEPALIVE_FRAME``, and
-the socket never sends anything else.
+in-process fake can express, under the same names.  Four cases have no twin —
+bad token, user-token-refused, missing auth frame, keepalive — because the fake
+has no token model and no wall clock; they are backend-only by construction, and
+the fake's `emittedSignalFrames` check is a fidelity smoke test rather than the
+wire assertion.  **The load-bearing no-payload assertion lives here**: every poke
+is a zero-length *text* frame, every keepalive is exactly ``KEEPALIVE_FRAME``,
+and the socket never sends anything else.
+
+The socket authenticates with a **member-scoped** credential, the same one the
+ops routes require, so every session here runs the full enrolment ceremony
+rather than stopping at ``POST /members``.  That is the point of
+:func:`test_a_user_token_is_refused_with_4401`: a socket that accepted a plain
+user session would be the weak door into a Workspace whose HTTP surface refuses
+one.
 
 Two harness constraints shape this module.  The WebSocket client's transport
 owns an anyio task group, and pytest-asyncio runs fixture setup and teardown in
@@ -30,12 +37,14 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from httpx_ws import AsyncWebSocketSession, WebSocketDisconnect, aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from wsproto.events import BytesMessage, TextMessage
 
 from app.config import settings
 from app.database import get_db
 from app.main import app
+from app.redis import get_redis
 from app.sync.ids import implicit_workspace_id
 from app.sync.routes import (
     KEEPALIVE_FRAME,
@@ -64,16 +73,30 @@ SILENCE_WINDOW_SECONDS = 0.2
 
 
 class Session:
-    """One authenticated user with one registered device."""
+    """One authenticated user with one *enrolled* device — two credentials.
 
-    def __init__(self, token: str, workspace_id: uuid.UUID, device: SpecDevice) -> None:
-        self.token = token
+    The socket is held to the same bar as the ops routes, so it wants the
+    member-scoped token the proof-of-possession ceremony hands back.  The User
+    credential is kept alongside it because ``POST /members`` still needs one:
+    a Device has no member credential at that stage of the ceremony.
+    """
+
+    def __init__(
+        self,
+        user_token: str,
+        member_token: str,
+        workspace_id: uuid.UUID,
+        device: SpecDevice,
+    ) -> None:
+        self.user_token = user_token
+        self.member_token = member_token
         self.workspace_id = workspace_id
         self.device = device
 
     @property
     def headers(self) -> dict[str, str]:
-        return auth_header(self.token)
+        """The ops routes' credential — the member token, never the user's."""
+        return auth_header(self.member_token)
 
 
 @pytest.fixture(autouse=True)
@@ -91,17 +114,23 @@ def hub() -> SignalHub:
 
 
 @pytest_asyncio.fixture
-async def http_client(db: AsyncSession, hub: SignalHub) -> AsyncIterator[AsyncClient]:
+async def http_client(db: AsyncSession, redis: Redis, hub: SignalHub) -> AsyncIterator[AsyncClient]:
     """The writer side: plain HTTP over the app, on the test's transaction.
 
     Installing the overrides here is what also binds the sockets opened by
-    :func:`subscribe` to this same session and this same hub.
+    :func:`subscribe` to this same session and this same hub.  Redis is here
+    because the enrolment ceremony every session now runs goes through the
+    proof-of-possession challenge, which stores its nonce there.
     """
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield db
 
+    async def override_get_redis() -> AsyncIterator[Redis]:
+        yield redis
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis] = override_get_redis
     app.dependency_overrides[get_signal_hub] = lambda: hub
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
@@ -109,13 +138,29 @@ async def http_client(db: AsyncSession, hub: SignalHub) -> AsyncIterator[AsyncCl
 
 
 async def _open_session(client: AsyncClient, email: str) -> Session:
-    token = await register(client, email)
+    """Run the whole enrolment ceremony: register, then prove possession."""
+    user_token = await register(client, email)
     device = SpecDevice()
-    response = await client.post(
-        "/members", json=device.registration_body(), headers=auth_header(token)
+    registered = await client.post(
+        "/members", json=device.registration_body(), headers=auth_header(user_token)
     )
-    assert response.status_code == 201, response.text
-    return Session(token, implicit_workspace_id(user_id_from_token(token)), device)
+    assert registered.status_code == 201, registered.text
+
+    challenge = await client.post(f"/members/{device.member_id}/challenge")
+    assert challenge.status_code == 200, challenge.text
+    nonce: str = challenge.json()["nonce"]
+    issued = await client.post(
+        f"/members/{device.member_id}/token",
+        json={"nonce": nonce, "signature": device.challenge_signature(nonce)},
+    )
+    assert issued.status_code == 200, issued.text
+
+    return Session(
+        user_token=user_token,
+        member_token=issued.json()["access_token"],
+        workspace_id=implicit_workspace_id(user_id_from_token(user_token)),
+        device=device,
+    )
 
 
 @pytest_asyncio.fixture
@@ -167,14 +212,14 @@ async def test_subscribe_acks_with_an_immediate_poke(
 ) -> None:
     # The initial poke is the auth ack *and* the catch-up trigger: it is why the
     # server needs no memory of what any subscriber has already seen.
-    async with subscribe(session.workspace_id, session.token):
+    async with subscribe(session.workspace_id, session.member_token):
         pass
 
 
 async def test_subscribe_to_another_workspace_is_refused_with_4403(
     http_client: AsyncClient, session: Session
 ) -> None:
-    async with subscribe(uuid.uuid4(), session.token, expect_initial_poke=False) as ws:
+    async with subscribe(uuid.uuid4(), session.member_token, expect_initial_poke=False) as ws:
         with pytest.raises(WebSocketDisconnect) as refusal:
             await ws.receive(timeout=FRAME_TIMEOUT_SECONDS)
     assert refusal.value.code == SIGNAL_CLOSE_FORBIDDEN
@@ -182,6 +227,24 @@ async def test_subscribe_to_another_workspace_is_refused_with_4403(
 
 async def test_a_bad_token_is_refused_with_4401(http_client: AsyncClient, session: Session) -> None:
     async with subscribe(session.workspace_id, "not-a-jwt", expect_initial_poke=False) as ws:
+        with pytest.raises(WebSocketDisconnect) as refusal:
+            await ws.receive(timeout=FRAME_TIMEOUT_SECONDS)
+    assert refusal.value.code == SIGNAL_CLOSE_UNAUTHENTICATED
+
+
+async def test_a_user_token_is_refused_with_4401(
+    http_client: AsyncClient, session: Session
+) -> None:
+    """The socket is not the weak door.
+
+    It resolves identity through the same ``resolve_member_token`` the ops routes
+    use, so a valid *user* session — which cannot post or pull ops — cannot
+    subscribe to news about the Workspace either.  Were this the one surface that
+    still took a user token, a stolen session would learn every time the account
+    was active, which is exactly the metadata the payload-free poke exists to
+    avoid leaking.
+    """
+    async with subscribe(session.workspace_id, session.user_token, expect_initial_poke=False) as ws:
         with pytest.raises(WebSocketDisconnect) as refusal:
             await ws.receive(timeout=FRAME_TIMEOUT_SECONDS)
     assert refusal.value.code == SIGNAL_CLOSE_UNAUTHENTICATED
@@ -207,7 +270,7 @@ async def test_no_auth_frame_before_the_deadline_is_refused_with_4400(
 
 
 async def test_an_append_pokes_the_subscriber(http_client: AsyncClient, session: Session) -> None:
-    async with subscribe(session.workspace_id, session.token) as ws:
+    async with subscribe(session.workspace_id, session.member_token) as ws:
         response = await http_client.post(
             f"/w/{session.workspace_id}/ops",
             json=encode_all(session.device.next_envelope(session.workspace_id)),
@@ -229,7 +292,7 @@ async def test_a_duplicate_only_replay_does_not_poke(
     )
     assert first.status_code == 200, first.text
 
-    async with subscribe(session.workspace_id, session.token) as ws:
+    async with subscribe(session.workspace_id, session.member_token) as ws:
         replay = await http_client.post(
             f"/w/{session.workspace_id}/ops",
             json=encode_all(envelope),
@@ -246,7 +309,7 @@ async def test_an_append_never_pokes_another_workspace(
 ) -> None:
     neighbour = await _open_session(http_client, "signal-neighbour@example.com")
 
-    async with subscribe(neighbour.workspace_id, neighbour.token) as ws:
+    async with subscribe(neighbour.workspace_id, neighbour.member_token) as ws:
         response = await http_client.post(
             f"/w/{session.workspace_id}/ops",
             json=encode_all(session.device.next_envelope(session.workspace_id)),
@@ -264,7 +327,7 @@ async def test_an_idle_socket_emits_the_keepalive_literal(
     http_client: AsyncClient, session: Session
 ) -> None:
     settings.signal_keepalive_interval_seconds = FAST_TEST_INTERVAL_SECONDS
-    async with subscribe(session.workspace_id, session.token) as ws:
+    async with subscribe(session.workspace_id, session.member_token) as ws:
         event = await ws.receive(timeout=FRAME_TIMEOUT_SECONDS)
         assert isinstance(event, TextMessage)
         assert event.data == KEEPALIVE_FRAME
@@ -281,7 +344,9 @@ async def test_the_socket_sends_only_empty_pokes_and_the_keepalive_literal(
     """
     settings.signal_keepalive_interval_seconds = FAST_TEST_INTERVAL_SECONDS
     frames: list[str] = []
-    async with subscribe(session.workspace_id, session.token, expect_initial_poke=False) as ws:
+    async with subscribe(
+        session.workspace_id, session.member_token, expect_initial_poke=False
+    ) as ws:
         frames.append(await _next_text_frame(ws))
 
         response = await http_client.post(
@@ -316,7 +381,7 @@ async def _next_text_frame(ws: AsyncWebSocketSession, timeout: float = 0.1) -> s
 async def test_disconnect_unsubscribes(
     http_client: AsyncClient, hub: SignalHub, session: Session
 ) -> None:
-    async with subscribe(session.workspace_id, session.token):
+    async with subscribe(session.workspace_id, session.member_token):
         assert hub.subscriber_count(session.workspace_id) == 1
 
     # The hub holds subscriptions and nothing else, so a dropped socket must

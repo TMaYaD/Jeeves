@@ -1,85 +1,158 @@
-/// Stub Member identity: a self-generated keypair with no chain behind it.
+/// This Device's keys, and the directory of keys it will verify against.
 ///
-/// #548 replaces the trust model with ADR-0028's Root chain — a device unwraps
-/// the passphrase escrow, obtains Root, and signs its own Root-signed
-/// MemberRegister. Until then a device generates its own keypair and the server
-/// simply stores it, which means clients verifying against the registry are
-/// trusting the server (review F1). That is knowingly accepted for pre-launch
-/// dev data, and it is the one thing here that is a placeholder rather than a
-/// stub: the *shape* below is what #548 keeps.
+/// A Device holds two keypairs (review F8/F19): Ed25519 for signing envelopes
+/// and challenges, X25519 for key agreement once #554's KeyWraps exist. They
+/// are separate because a rotation of one should not force a rotation of the
+/// other, and because using one key for two algorithms is how protocols get
+/// cross-protocol attacks.
 ///
-/// Keys are held in memory. Keychain/Keystore storage is review F22 and #548's
-/// problem too.
+/// The directory is the heart of ADR-0028's trust model, and it is
+/// **chain-gated**: an entry exists only for this device's own identity and for
+/// Members whose Root-signed MemberRegister this device verified itself. The
+/// server's `GET /members` registry is a bootstrap hint and is never read here.
+/// That is what makes "ops from a Member not chained to Root are rejected by
+/// clients regardless of what the server serves" true rather than aspirational.
 library;
 
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:uuid/uuid.dart';
 
+import 'control_payload.dart';
 import 'envelope.dart';
 import 'hlc.dart';
-import 'sync_transport.dart';
 
 const Uuid _uuid = Uuid();
 
-/// This device's Member id and signing key.
+/// This device's Member id and its two keypairs.
 class MemberIdentity {
-  MemberIdentity._(this.memberId, this.signer);
+  MemberIdentity._(
+    this.memberId,
+    this.signer,
+    this._kexKeyPair,
+    this.kexSeed,
+    this.kexPk,
+  );
 
-  /// [seed] makes a device's key deterministic, which the harness relies on to
-  /// re-open a "restarted" device with the same identity.
-  static Future<MemberIdentity> generate({String? memberId, Uint8List? seed}) async {
-    final signer = await EnvelopeSigner.fromSeed(seed ?? _randomSeed());
-    return MemberIdentity._(memberId ?? _uuid.v4(), signer);
+  /// [signSeed]/[kexSeed] make a device's keys deterministic, which the harness
+  /// relies on to re-open a "restarted" device with the same identity.
+  static Future<MemberIdentity> generate({
+    String? memberId,
+    Uint8List? signSeed,
+    Uint8List? kexSeed,
+    Random? random,
+  }) async {
+    final entropy = random ?? Random.secure();
+    final signer = await EnvelopeSigner.fromSeed(
+      signSeed ?? _randomSeed(entropy),
+    );
+    final resolvedKexSeed = kexSeed ?? _randomSeed(entropy);
+    final kexKeyPair = await X25519().newKeyPairFromSeed(resolvedKexSeed);
+    final kexPublicKey = await kexKeyPair.extractPublicKey();
+    return MemberIdentity._(
+      memberId ?? _uuid.v4(),
+      signer,
+      kexKeyPair,
+      Uint8List.fromList(resolvedKexSeed),
+      Uint8List.fromList(kexPublicKey.bytes),
+    );
   }
 
   final String memberId;
   final EnvelopeSigner signer;
+  final SimpleKeyPair _kexKeyPair;
+
+  /// The 32 raw X25519 seed bytes, for `DeviceKeyStore`.
+  final Uint8List kexSeed;
+
+  /// The raw 32-byte X25519 public key. Registered and certified now; read by
+  /// nothing until #554.
+  final Uint8List kexPk;
 
   String get memberIdHex => memberIdToHex(memberId);
 
   Uint8List get signPk => signer.signPublicKey;
 
   /// Computed locally with the same derivation the server applies, so the
-  /// header's `author_key_id` and the registry's agree without a round-trip.
+  /// header's `author_key_id` and the certificate's agree without a round-trip.
   Uint8List get keyId => signer.keyId;
 
-  static Uint8List _randomSeed() {
-    final random = Random.secure();
-    return Uint8List.fromList(
-      List<int>.generate(signPublicKeyBytes, (_) => random.nextInt(256)),
-    );
-  }
+  /// The key-agreement half, for #554. Held here so the seam exists before the
+  /// feature does and the cert never has to grow a field to carry it.
+  SimpleKeyPair get kexKeyPair => _kexKeyPair;
+
+  /// Prove possession of the signing key for a transport challenge.
+  ///
+  /// The member id is inside the signed bytes, so a captured signature cannot
+  /// be replayed into another Member's challenge slot.
+  Future<Uint8List> signTransportChallenge(Uint8List nonce) => signer.signBytes(
+        domainSeparated(
+          signingDomainAuthChallengeV1,
+          [uuidToBytes(memberId), nonce],
+        ),
+      );
+
+  /// The certificate Root signs to register this device.
+  RegistrationCertificate certificateFor({
+    required String workspaceId,
+    required Hlc registeredAtHlc,
+  }) =>
+      RegistrationCertificate(
+        workspaceId: workspaceId,
+        memberId: memberId,
+        signPk: signPk,
+        kexPk: kexPk,
+        registeredAtHlc: registeredAtHlc,
+      );
+
+  static Uint8List _randomSeed(Random random) => Uint8List.fromList(
+        List<int>.generate(signPublicKeyBytes, (_) => random.nextInt(256)),
+      );
 }
 
-/// The verifying keys this device knows, keyed by author and key id.
+/// The verifying keys this device will accept an op from.
 ///
 /// `author_key_id` selects *which* of an author's keys verifies an op, so a key
-/// rotation (#548) is a new entry rather than an overwrite. An op naming a key
-/// this directory has never seen is refused, never guessed at.
+/// rotation (#549) is a new entry rather than an overwrite. An op naming a slot
+/// this directory has never learned is refused, never guessed at — and the only
+/// way to learn one is a MemberRegister that passed the full verification in
+/// `SyncClient`.
 class MemberDirectory {
   final Map<String, Uint8List> _keys = {};
+  final Set<String> _chainedMembers = {};
 
-  static String _slot(String memberId, Uint8List keyId) =>
-      '$memberId/${_hex(keyId)}';
+  static String _slot(String memberId, Uint8List keyId) => '$memberId/${_hex(keyId)}';
 
   static String _hex(Uint8List bytes) =>
       bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
 
-  void remember(MemberRecord record) {
-    _keys[_slot(record.memberId, record.keyId)] = record.signPk;
+  /// This device's own keys. Trusted because they never left this device — the
+  /// one entry that does not come from the log.
+  void rememberSelf(MemberIdentity identity) {
+    _keys[_slot(identity.memberId, identity.keyId)] = identity.signPk;
+    _chainedMembers.add(identity.memberId);
   }
 
-  void rememberAll(Iterable<MemberRecord> records) => records.forEach(remember);
+  /// Learn a Member's key from a certificate that has already been verified.
+  ///
+  /// Deliberately takes the parsed certificate rather than a registry record:
+  /// there is no way to call this with something the server merely asserted.
+  void rememberChained(RegistrationCertificate certificate) {
+    _keys[_slot(certificate.memberId, certificate.signKeyId)] = certificate.signPk;
+    _chainedMembers.add(certificate.memberId);
+  }
+
+  bool isChained(String memberId) => _chainedMembers.contains(memberId);
 
   /// The public key for this author and key id, or a fail-closed refusal.
   Uint8List publicKeyFor(String memberId, Uint8List keyId) {
     final key = _keys[_slot(memberId, keyId)];
     if (key == null) {
       throw SyncRejection(
-        SyncRejectionReason.unknownAuthorKey,
-        'no registered key ${_hex(keyId)} for member $memberId',
+        SyncRejectionReason.memberNotChainedToRoot,
+        'no Root-signed registration for member $memberId key ${_hex(keyId)}',
       );
     }
     return key;

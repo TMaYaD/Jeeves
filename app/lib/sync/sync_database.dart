@@ -129,6 +129,46 @@ class RowTombstones extends Table {
   Set<Column<Object>> get primaryKey => {collection, entityId};
 }
 
+/// The Root this device pinned for one `(workspace, user)` escrow slot.
+///
+/// Trust on first successful unwrap, against the *passphrase* and not against
+/// the server (ADR-0028): once [rootPk] is here, an escrow record signed by
+/// anything else is a server-integrity alarm rather than a prompt.
+///
+/// [highestEscrowVersionSeen] is a per-slot high-water mark, and the scoping is
+/// load-bearing: one shared across workspaces would let a busy slot's version
+/// numbers mask a rollback in a quiet one.
+@DataClassName('RootPinRow')
+class RootPins extends Table {
+  TextColumn get workspaceId => text()();
+  TextColumn get userId => text()();
+
+  /// Raw 32-byte Ed25519 Root public key.
+  BlobColumn get rootPk => blob()();
+  IntColumn get highestEscrowVersionSeen => integer()();
+  DateTimeColumn get pinnedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {workspaceId, userId};
+}
+
+/// The head of the cross-author control chain this device has *applied*.
+///
+/// [lastControlPayloadHash] is SHA-256 over the payload bytes of the last
+/// control op that passed verification, which is what the next one must name.
+/// [appliedCount] is what makes the zero-hash rule decidable: an all-zero
+/// `prev_control_hash` is legal only while no control op has been applied, and
+/// a zero hash arriving after that is a fork candidate, never a fresh start.
+@DataClassName('ControlChainRow')
+class ControlChainState extends Table {
+  TextColumn get workspaceId => text()();
+  BlobColumn get lastControlPayloadHash => blob()();
+  IntColumn get appliedCount => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {workspaceId};
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -139,11 +179,27 @@ class RowTombstones extends Table {
     ReducedFields,
     FieldClocks,
     RowTombstones,
+    RootPins,
+    ControlChainState,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
   SyncDatabase(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  /// Additive only. A device that already holds a log keeps every byte of it:
+  /// v2 adds the pinned-Root and control-chain tables and touches nothing else,
+  /// so an upgrade is two `CREATE TABLE`s and no data movement.
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (migrator) => migrator.createAll(),
+        onUpgrade: (migrator, from, to) async {
+          if (from < 2) {
+            await migrator.createTable(rootPins);
+            await migrator.createTable(controlChainState);
+          }
+        },
+      );
 }
