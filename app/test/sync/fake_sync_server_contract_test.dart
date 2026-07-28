@@ -38,7 +38,8 @@
 /// The two credential-separation cases the fake *can* speak to,
 /// `test_a_member_token_is_not_a_user_session` and
 /// `test_a_user_credential_cannot_post_ops`, are twinned in the
-/// `credential separation` group below — but as assertions about the type split
+/// `credential separation` group below (and, for that second case's members-route
+/// half, in `GET /w/{w}/members`) — but as assertions about the type split
 /// rather than about a 401, because that is the form the guarantee takes here.
 /// The real server refuses the wrong credential at runtime; the fake makes the
 /// wrong credential unrepresentable. Pinning the split matters precisely because
@@ -684,10 +685,35 @@ void main() {
       );
     });
 
+  });
+
+  group('GET /w/{w}/members', () {
     test("the workspace member registry lists the user's devices", () async {
-      final members = await userSession.fetchMembers(workspaceId);
+      // Read through the *member* session, because that is the credential the
+      // route requires: it authenticates with `get_current_member` and derives
+      // the owner from the token's Member. Nothing in the client calls this —
+      // the directory is hydrated from the log, never over HTTP — so the double
+      // models the endpoint and this twin is what pins its credential.
+      final members = await session.fetchMembers(workspaceId);
       expect(members.map((m) => m.memberId), [author.memberId]);
       expect(members.single.keyId, deriveKeyId(author.signPk));
+    });
+
+    test("another user's registry is unreachable", () async {
+      expect(
+        () => session.fetchMembers(implicitWorkspaceId(_otherUserId)),
+        throwsStatus(403, 'no_workspace_grant'),
+      );
+    });
+
+    test('the user credential cannot read the registry', () async {
+      // The twin of the members-route half of
+      // `test_a_user_credential_cannot_post_ops`. Over there a user token gets a
+      // 401; here the User session simply has no such method, and asserting the
+      // member session is not a [UserTransport] is what stops a later
+      // "simplification" from handing one object both reads.
+      expect(session, isNot(isA<UserTransport>()));
+      expect(userSession, isNot(isA<SyncTransport>()));
     });
   });
 
