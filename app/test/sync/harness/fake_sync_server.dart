@@ -150,6 +150,13 @@ class FakeSyncServer {
       final OpHeader header;
       try {
         header = OpHeader.parse(envelope);
+        if (envelope.length < minimumEnvelopeBytes) {
+          throw SyncRejection(
+            SyncRejectionReason.envelopeTooShort,
+            'envelope is ${envelope.length} bytes, the shortest legal one is '
+            '$minimumEnvelopeBytes',
+          );
+        }
         header.checkServed();
       } on SyncRejection catch (rejection) {
         throw SyncTransportException(422, 'ops[$index]: ${rejection.reason.code}');

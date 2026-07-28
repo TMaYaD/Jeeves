@@ -21,14 +21,17 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.database import get_db
 from app.sync.envelope import (
+    MINIMUM_ENVELOPE_BYTES,
     SIGN_PUBLIC_KEY_BYTES,
     EnvelopeError,
+    EnvelopeTooShortError,
     OpHeader,
     check_served,
     derive_key_id,
@@ -156,6 +159,15 @@ async def post_ops(
         envelope = _decode_base64(encoded, f"ops[{index}]")
         try:
             header = OpHeader.parse(envelope)
+            if len(envelope) < MINIMUM_ENVELOPE_BYTES:
+                # The one body-shaped rule a content-blind server can apply: it
+                # follows from the padding size classes alone, so refusing here
+                # costs no look at the body and keeps unstorable bytes out of
+                # the log rather than leaving every puller to quarantine them.
+                raise EnvelopeTooShortError(
+                    f"envelope is {len(envelope)} bytes, the shortest legal one "
+                    f"is {MINIMUM_ENVELOPE_BYTES}"
+                )
             check_served(header)
         except EnvelopeError as exc:
             raise HTTPException(
@@ -190,6 +202,41 @@ async def post_ops(
                 detail="Author is not a member registered to this user",
             )
 
+    try:
+        results = await _append_batch(db, workspace_id, parsed)
+    except IntegrityError:
+        # The author-chain constraint fired: another request for the same author
+        # committed between this one's MAX(author_seq) read and its insert.  The
+        # read is now stale by definition, so discard it and resolve once more
+        # against what is actually committed — a concurrent *replay* comes back
+        # as duplicate: true, and a genuine fork as the same 409 a sequential
+        # gap gets.  Never a 500: the client's move is to re-pull either way.
+        await db.rollback()
+        try:
+            results = await _append_batch(db, workspace_id, parsed)
+        except IntegrityError as exc:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="author_chain_conflict: a concurrent write took this author_seq",
+            ) from exc
+
+    await db.commit()
+    return PostOpsResponse(results=results)
+
+
+async def _append_batch(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    parsed: list[tuple[bytes, OpHeader]],
+) -> list[OpResult]:
+    """Resolve the batch against what is stored, stage the new ops, flush.
+
+    Split out from the endpoint so the whole read-then-write step can be retried
+    verbatim after the uniqueness constraint rejects a raced insert.  Raises
+    ``IntegrityError`` when it does; commits nothing.
+    """
+    authors = {header.author_member_id for _, header in parsed}
     existing_seq_by_key: dict[tuple[uuid.UUID, uuid.UUID], int] = {
         (row.author_member_id, row.op_id): row.seq
         for row in (
@@ -258,7 +305,7 @@ async def post_ops(
         plan.append((header.op_id, op, False))
 
     await db.flush()
-    results = [
+    return [
         OpResult(
             op_id=op_id,
             seq=entry if isinstance(entry, int) else entry.seq,
@@ -266,8 +313,6 @@ async def post_ops(
         )
         for op_id, entry, duplicate in plan
     ]
-    await db.commit()
-    return PostOpsResponse(results=results)
 
 
 @router.get("/w/{workspace_id}/ops", response_model=PullOpsResponse)

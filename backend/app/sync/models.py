@@ -68,8 +68,18 @@ class Op(Base):
         UniqueConstraint(
             "workspace_id", "author_member_id", "op_id", name="uq_ops_workspace_author_op_id"
         ),
+        # One author fills each slot of their own chain exactly once.  The POST
+        # handler's gap check reads MAX(author_seq) and then inserts, so two
+        # concurrent batches can both read the same maximum and both believe
+        # they own the next slot — a write skew no amount of application code
+        # closes.  The database is the only place that can, and a forked author
+        # chain is unrecoverable: `prev_author_hash` would name two successors.
+        # Doubles as the index for that MAX lookup, which is why there is no
+        # separate one.
+        UniqueConstraint(
+            "workspace_id", "author_member_id", "author_seq", name="uq_ops_workspace_author_seq"
+        ),
         Index("ix_ops_workspace_seq", "workspace_id", "seq"),
-        Index("ix_ops_workspace_author_seq", "workspace_id", "author_member_id", "author_seq"),
     )
 
     #: Transport cursor and nothing else (review F20): never causality, never a

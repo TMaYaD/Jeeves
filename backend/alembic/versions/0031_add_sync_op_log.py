@@ -79,15 +79,21 @@ def upgrade() -> None:
             "op_id",
             name="uq_ops_workspace_author_op_id",
         ),
+        # The author chain, enforced rather than merely indexed: two concurrent
+        # POSTs can both read the same MAX(author_seq) and both claim the next
+        # slot, and a forked chain cannot be repaired afterwards.  Its index
+        # also serves that MAX lookup, so no separate index is created.
+        sa.UniqueConstraint(
+            "workspace_id",
+            "author_member_id",
+            "author_seq",
+            name="uq_ops_workspace_author_seq",
+        ),
     )
     op.create_index("ix_ops_workspace_seq", "ops", ["workspace_id", "seq"])
-    op.create_index(
-        "ix_ops_workspace_author_seq", "ops", ["workspace_id", "author_member_id", "author_seq"]
-    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_ops_workspace_author_seq", table_name="ops")
     op.drop_index("ix_ops_workspace_seq", table_name="ops")
     op.drop_table("ops")
     op.drop_index("ix_members_user_id", table_name="members")

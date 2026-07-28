@@ -129,6 +129,15 @@ BODY_SIZE_CLASSES_BYTES: Final[tuple[int, ...]] = (256, 1024, 4096, 16384)
 #: with no hard cap — #550's notes fields can be large.
 BODY_OVERSIZE_MULTIPLE_BYTES: Final = 16384
 
+#: The shortest envelope that can possibly be well-formed: header ‖ the smallest
+#: body size class ‖ signature.  Every legal body is padded up to a size class,
+#: so ``ENVELOPE_OVERHEAD_BYTES + 1`` is not the floor — 256 is the smallest body
+#: there is.  Derived rather than written out so the number cannot drift from the
+#: padding rule it follows from.
+MINIMUM_ENVELOPE_BYTES: Final = (
+    HEADER_LENGTH_BYTES + BODY_SIZE_CLASSES_BYTES[0] + SIGNATURE_LENGTH_BYTES
+)
+
 
 # --- Failure surface --------------------------------------------------------
 
@@ -146,6 +155,18 @@ class EnvelopeError(Exception):
 
 class TruncatedEnvelopeError(EnvelopeError):
     reason = "truncated_envelope"
+
+
+class EnvelopeTooShortError(EnvelopeError):
+    """Shorter than ``MINIMUM_ENVELOPE_BYTES``, so no legal body fits.
+
+    Distinct from ``truncated_envelope``, which is about not reaching the fixed
+    158-byte header.  This one is the framing floor, and it is the only body-
+    shaped rule the *server* can apply while staying content-blind: it follows
+    from the padding size classes alone and needs no byte of the body read.
+    """
+
+    reason = "envelope_too_short"
 
 
 class UnsupportedSuiteError(EnvelopeError):

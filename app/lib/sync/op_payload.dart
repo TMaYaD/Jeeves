@@ -79,10 +79,14 @@ class OpPayload {
       );
     }
     final entityId = raw['id'];
-    if (entityId is! String) {
+    // Same shape the Python codec requires, and the same one `uuidToBytes`
+    // requires of the header ids: a canonical lowercase UUID and nothing else.
+    // Accepting a spelling the other codec rejects would mean one device
+    // applying an op its peer quarantines.
+    if (entityId is! String || !isCanonicalUuid(entityId)) {
       throw const SyncRejection(
         SyncRejectionReason.malformedPayload,
-        'id must be a string',
+        'id must be a canonical lowercase UUID string',
       );
     }
 

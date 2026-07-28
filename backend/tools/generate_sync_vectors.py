@@ -546,6 +546,36 @@ def _negative_vectors() -> list[dict[str, Any]]:
         )
     )
 
+    malformed_entity_id_payload = json.dumps(
+        {
+            "collection": USER_PREFERENCES_COLLECTION,
+            "id": str(THEME_ENTITY_ID).replace("-", ""),
+            "fields": {"value": {"v": '"dark"'}},
+            "hlc": [BASE_WALL_MS, 0, MEMBER_IDS["device_a"].hex],
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    vectors.append(
+        _negative(
+            "malformed_entity_id",
+            key="device_a",
+            reason="malformed_payload",
+            envelope=build_envelope(
+                _header(op_id_name="malformed_entity_id", key="device_a", author_seq=1),
+                frame_body(malformed_entity_id_payload),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "The right 32 hex digits, dashes removed.  Python's `uuid.UUID` "
+                "accepts this spelling and the Dart codec's `uuidToBytes` does "
+                "not, so it is exactly the shape the two codecs used to "
+                "disagree about.  Both now require the canonical lowercase "
+                "8-4-4-4-12 form and reject the rest rather than normalising, "
+                "as they do for an HLC member id."
+            ),
+        )
+    )
+
     vectors.append(
         _negative(
             "workspace_mismatch",

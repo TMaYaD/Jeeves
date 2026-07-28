@@ -36,6 +36,17 @@ from typing import Any, Final
 #: anything else rather than normalising it.
 MEMBER_ID_HEX_PATTERN: Final = re.compile(r"^[0-9a-f]{32}$")
 
+#: An entity ``id`` is a canonical lowercase UUID: 8-4-4-4-12 hex digits.
+#: ``uuid.UUID`` on its own is far more permissive — it strips braces, a
+#: ``urn:uuid:`` prefix and dashes wherever they fall — and the Dart codec's
+#: ``uuidToBytes`` is not, so parsing with it alone would leave the two codecs
+#: disagreeing about which payloads are legal.  A disagreement there is a
+#: convergence bug (one device applies an op its peer quarantines), so the shape
+#: is pinned here and mirrored in ``app/lib/sync/op_payload.dart``.
+CANONICAL_UUID_PATTERN: Final = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
 
 class MalformedPayloadError(Exception):
     """A body that framed correctly but is not a well-formed op payload."""
@@ -135,12 +146,9 @@ class OpPayload:
             raise MalformedPayloadError("collection must be a non-empty string")
 
         raw_id = raw.get("id")
-        if not isinstance(raw_id, str):
-            raise MalformedPayloadError("id must be a string")
-        try:
-            entity_id = uuid.UUID(raw_id)
-        except ValueError as exc:
-            raise MalformedPayloadError("id must be a UUID") from exc
+        if not isinstance(raw_id, str) or not CANONICAL_UUID_PATTERN.match(raw_id):
+            raise MalformedPayloadError("id must be a canonical lowercase UUID string")
+        entity_id = uuid.UUID(raw_id)
 
         raw_fields = raw.get("fields", {})
         if not isinstance(raw_fields, dict):

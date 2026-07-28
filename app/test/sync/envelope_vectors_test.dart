@@ -256,6 +256,78 @@ void main() {
     });
   });
 
+  group('author_seq representability', () {
+    /// The 158 header bytes with `author_seq` set to [high]:[low], written
+    /// directly because `OpHeader.serialize` refuses to emit a value it could
+    /// not read back.
+    Uint8List headerWithAuthorSeq(int high, int low) {
+      final bytes = Uint8List(headerLengthBytes);
+      final view = ByteData.view(bytes.buffer);
+      bytes[1] = opClassContent;
+      view.setUint32(62, high, Endian.big);
+      view.setUint32(66, low, Endian.big);
+      return bytes;
+    }
+
+    test('2^53 - 1 is the largest header a client will read', () {
+      expect(
+        OpHeader.parse(headerWithAuthorSeq(0x001FFFFF, 0xFFFFFFFF)).authorSeq,
+        maxRepresentableAuthorSeq,
+      );
+    });
+
+    test('2^53 is refused rather than rounded', () {
+      expect(
+        () => OpHeader.parse(headerWithAuthorSeq(0x00200000, 0)),
+        throwsRejection(SyncRejectionReason.unrepresentableAuthorSeq),
+      );
+    });
+  });
+
+  group('minimum envelope length', () {
+    test('follows from the smallest body size class', () {
+      expect(
+        minimumEnvelopeBytes,
+        headerLengthBytes + bodySizeClassesBytes.first + signatureLengthBytes,
+      );
+      // Strictly more than header + signature: a body is never empty.
+      expect(minimumEnvelopeBytes, greaterThan(envelopeOverheadBytes));
+    });
+  });
+
+  group('entity id', () {
+    Uint8List payloadWithId(String id) => Uint8List.fromList(
+          utf8.encode(jsonEncode({
+            'collection': 'user_preferences',
+            'id': id,
+            'fields': <String, Object?>{},
+            'hlc': [1, 0, '0123456789abcdef0123456789abcdef'],
+          })),
+        );
+
+    test('is accepted only in canonical lowercase form', () {
+      const canonical = '6c88dfa7-37af-53e5-83d1-93346df45bd4';
+      expect(OpPayload.decode(payloadWithId(canonical)).entityId, canonical);
+
+      // Each of these is something `uuid.UUID` would have swallowed on the
+      // Python side. Both codecs now reject them, so neither can apply an op
+      // the other quarantines.
+      for (final spelling in [
+        '6c88dfa737af53e583d193346df45bd4',
+        '6C88DFA7-37AF-53E5-83D1-93346DF45BD4',
+        '{6c88dfa7-37af-53e5-83d1-93346df45bd4}',
+        'urn:uuid:6c88dfa7-37af-53e5-83d1-93346df45bd4',
+        'not-a-uuid',
+      ]) {
+        expect(
+          () => OpPayload.decode(payloadWithId(spelling)),
+          throwsRejection(SyncRejectionReason.malformedPayload),
+          reason: spelling,
+        );
+      }
+    });
+  });
+
   group('member id hex', () {
     test('is rejected unless it is 32 lowercase hex characters', () {
       expect(() => Hlc(1, 0, 'ABCDEF01234567890123456789ABCDEF'), throwsRejection());

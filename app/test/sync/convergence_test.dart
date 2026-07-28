@@ -10,6 +10,7 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart' show Ed25519;
 import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart';
@@ -261,6 +262,56 @@ void main() {
       // Nothing refused reached the log: quarantine is not a soft filter.
       expect((await _opLogEnvelopes(device)).length, 1);
     }
+  });
+
+  test('an author_seq beyond 2^53 quarantines as unrepresentable', () async {
+    // The header field is a true u64, but `dart:typed_data` has no 64-bit
+    // accessors on the web, so the client recombines two 32-bit halves and is
+    // exact only to 2^53. A larger value is refused rather than silently
+    // rounded into a *different* sequence number — which would make one device
+    // read a chain slot its peers never wrote.
+    final seed = Uint8List.fromList(List<int>.generate(32, (index) => index + 41));
+    final author = await AuthorFixture.create(seed: seed);
+    await workspace.server
+        .connectAs(_specUserId)
+        .registerMember(memberId: author.memberId, signPk: author.signPk);
+
+    // The 158 header bytes are assembled by hand because `OpHeader.serialize`
+    // refuses to *write* a value it could not read back. That asymmetry is the
+    // point: only a broken or hostile server can put one on the wire, so only
+    // raw bytes can stage the case.
+    final template = await author.nextEnvelope(workspace.workspaceId);
+    final header = Uint8List.fromList(template.sublist(0, headerLengthBytes));
+    const authorSeqOffset = 62;
+    final view = ByteData.view(header.buffer);
+    // 0x0020000000000000 == 2^53, one past the largest representable value.
+    view.setUint32(authorSeqOffset, 0x00200000, Endian.big);
+    view.setUint32(authorSeqOffset + 4, 0, Endian.big);
+
+    final body = frameBody(Uint8List.fromList(utf8.encode('{"collection":"test"}')));
+    // Signed over the doctored header, so neither the signature check nor the
+    // key lookup can be what fires: the only thing wrong is the field itself.
+    final keyPair = await Ed25519().newKeyPairFromSeed(seed);
+    final signature =
+        await Ed25519().sign(signingInput(header, body), keyPair: keyPair);
+    final envelope = Uint8List.fromList([
+      ...header,
+      ...body,
+      ...signature.bytes,
+    ]);
+    expect(envelope.length, headerLengthBytes + body.length + signatureLengthBytes);
+
+    workspace.server.injectUnchecked(workspace.workspaceId, envelope);
+    await workspace.a.sync();
+
+    final quarantined = await workspace.a.client.quarantined();
+    expect(
+      quarantined.single.reason,
+      SyncRejectionReason.unrepresentableAuthorSeq.code,
+    );
+    // Nothing was applied and nothing was logged: a refusal is not a soft filter.
+    expect(await workspace.a.preferences.getAll(), isEmpty);
+    expect(await _opLogEnvelopes(workspace.a), isEmpty);
   });
 
   test('an op from an unregistered key quarantines rather than being trusted',

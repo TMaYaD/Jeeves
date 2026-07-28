@@ -6,11 +6,17 @@
 /// like the real server, and a missing or failing twin here is how a divergence
 /// announces itself.
 ///
-/// Two backend cases have no twin, both because the difference is in the wire
-/// format rather than the behaviour: `POST /members` accepts an optional
-/// `key_id` claim that the server must re-derive and reject when it disagrees,
-/// and [SyncTransport] has no way to send that claim (a client has no reason
-/// to). The derivation itself is covered below.
+/// Three backend cases have no twin. Two are wire-format rather than
+/// behaviour: `POST /members` accepts an optional `key_id` claim that the
+/// server must re-derive and either accept or reject, and [SyncTransport] has
+/// no way to send that claim (a client has no reason to) — the derivation
+/// itself is covered below. The third is `test_ops_require_authentication`:
+/// the fake has no unauthenticated state to be in, because a session *is* the
+/// credential here, so there is nothing to assert a 401 against.
+///
+/// The author-chain race in `test_ops_author_chain_race_postgres.py` is not a
+/// missing twin: it is a statement about a database under concurrency, and the
+/// fake is a single-threaded list.
 library;
 
 import 'dart:typed_data';
@@ -115,6 +121,19 @@ void main() {
       expect(server.storedOps, isEmpty);
     });
 
+    test('two ops claiming the same author_seq land exactly once', () async {
+      final first = await author.nextEnvelope(workspaceId, advance: false);
+      final second = await author.nextEnvelope(workspaceId, advance: false);
+      expect(first, isNot(second));
+
+      await session.postOps(workspaceId, [first]);
+      expect(
+        () => session.postOps(workspaceId, [second]),
+        throwsStatus(409),
+      );
+      expect(server.storedOps.map((op) => op.envelope), [first]);
+    });
+
     test('header workspace mismatch is rejected', () async {
       final foreign = await author.nextEnvelope(implicitWorkspaceId('someone-else'));
       expect(() => session.postOps(workspaceId, [foreign]), throwsStatus(422));
@@ -139,6 +158,15 @@ void main() {
         () => session.postOps(workspaceId, [Uint8List.sublistView(envelope, 0, 100)]),
         throwsStatus(422),
       );
+    });
+
+    test('envelope shorter than the minimum is rejected', () async {
+      final envelope = await author.nextEnvelope(workspaceId);
+      final tooShort = Uint8List.sublistView(envelope, 0, minimumEnvelopeBytes - 1);
+      // Long enough to parse as a header: not the truncated-header case.
+      expect(tooShort.length, greaterThan(headerLengthBytes));
+      expect(() => session.postOps(workspaceId, [tooShort]), throwsStatus(422));
+      expect(server.storedOps, isEmpty);
     });
 
     test('foreign author is rejected', () async {

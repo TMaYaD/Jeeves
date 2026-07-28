@@ -109,6 +109,15 @@ const List<int> bodySizeClassesBytes = [256, 1024, 4096, 16384];
 /// with no hard cap — #550's notes fields can be large.
 const int bodyOversizeMultipleBytes = 16384;
 
+/// The shortest envelope that can possibly be well-formed: header ‖ the
+/// smallest body size class ‖ signature.
+///
+/// Every legal body is padded up to a size class, so `envelopeOverheadBytes + 1`
+/// is not the floor — 256 is the smallest body there is. Derived rather than
+/// written out so the number cannot drift from the padding rule it follows from.
+final int minimumEnvelopeBytes =
+    headerLengthBytes + bodySizeClassesBytes.first + signatureLengthBytes;
+
 // --- Failure surface -------------------------------------------------------------
 
 /// Why an op was refused. The `code` strings are the contract shared with the
@@ -116,6 +125,7 @@ const int bodyOversizeMultipleBytes = 16384;
 /// rejection, not merely that something threw.
 enum SyncRejectionReason {
   truncatedEnvelope('truncated_envelope'),
+  envelopeTooShort('envelope_too_short'),
   unsupportedSuite('unsupported_suite'),
   unsupportedOpClass('unsupported_op_class'),
   invalidBodyLength('invalid_body_length'),
@@ -283,6 +293,16 @@ Uint8List _sliceOf(Uint8List source, int offset, int length) =>
 final RegExp _canonicalUuidPattern = RegExp(
   r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
 );
+
+/// True iff [value] is a canonical lowercase UUID string: 8-4-4-4-12 hex.
+///
+/// The one spelling of a UUID this protocol accepts anywhere — header ids here,
+/// and the payload's entity `id` in `op_payload.dart`. Python's `uuid.UUID`
+/// would also swallow braces, a `urn:uuid:` prefix and stray dashes; both codecs
+/// reject those rather than normalise them, for the same reason an uppercase HLC
+/// member id is rejected. A spelling the two codecs disagree about is a
+/// convergence bug, not a leniency.
+bool isCanonicalUuid(String value) => _canonicalUuidPattern.hasMatch(value);
 
 /// The 16 raw bytes of a canonical lowercase UUID string.
 ///

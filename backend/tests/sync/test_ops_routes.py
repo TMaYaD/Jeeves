@@ -18,6 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.sync.envelope import (
+    HEADER_LENGTH_BYTES,
+    MINIMUM_ENVELOPE_BYTES,
     OP_CLASS_COMPACTION,
     OpHeader,
     derive_key_id,
@@ -162,6 +164,36 @@ async def test_author_seq_gap_rejects_the_whole_batch(
     assert (await db.execute(select(Op))).scalars().all() == []
 
 
+async def test_two_ops_claiming_the_same_author_seq_land_exactly_once(
+    client: AsyncClient, session: Session, db: AsyncSession
+) -> None:
+    """One slot of an author's chain holds one op — the invariant behind
+    ``uq_ops_workspace_author_seq``.
+
+    Both envelopes are validly signed and differ only in op id, so nothing but
+    the chain rule separates them.  Sequentially the gap check refuses the
+    second; concurrently the database does (see
+    ``test_ops_author_chain_race_postgres.py``).  Either way it is a status, not
+    a crash, and the log keeps one op.
+    """
+    first = session.device.next_envelope(session.workspace_id, advance=False)
+    second = session.device.next_envelope(session.workspace_id, advance=False)
+    assert first != second
+
+    accepted = await client.post(
+        f"/w/{session.workspace_id}/ops", json=encode_all(first), headers=session.headers
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    refused = await client.post(
+        f"/w/{session.workspace_id}/ops", json=encode_all(second), headers=session.headers
+    )
+    assert refused.status_code == 409, refused.text
+
+    stored = (await db.execute(select(Op))).scalars().all()
+    assert [op.envelope for op in stored] == [first]
+
+
 async def test_header_workspace_mismatch_is_rejected(client: AsyncClient, session: Session) -> None:
     foreign = session.device.next_envelope(implicit_workspace_id("someone-else"))
     response = await client.post(
@@ -206,6 +238,30 @@ async def test_truncated_envelope_is_rejected(client: AsyncClient, session: Sess
     )
     assert response.status_code == 422, response.text
     assert "truncated_envelope" in response.json()["detail"]
+
+
+async def test_envelope_shorter_than_the_minimum_is_rejected(
+    client: AsyncClient, session: Session, db: AsyncSession
+) -> None:
+    """Past the header, but shorter than the smallest body class allows.
+
+    Bodies are padded to 256 bytes at minimum, so anything under
+    ``MINIMUM_ENVELOPE_BYTES`` could never have been framed legally.  The server
+    refuses it without reading a body byte rather than storing bytes every
+    puller would then have to quarantine.
+    """
+    too_short = session.device.next_envelope(session.workspace_id)[: MINIMUM_ENVELOPE_BYTES - 1]
+    # Long enough to parse as a header: this is not the truncated-header case.
+    assert len(too_short) > HEADER_LENGTH_BYTES
+
+    response = await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json={"ops": [encode(too_short)]},
+        headers=session.headers,
+    )
+    assert response.status_code == 422, response.text
+    assert "envelope_too_short" in response.json()["detail"]
+    assert (await db.execute(select(Op))).scalars().all() == []
 
 
 async def test_foreign_author_is_rejected(client: AsyncClient, session: Session) -> None:
