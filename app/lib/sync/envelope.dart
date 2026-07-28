@@ -65,8 +65,10 @@ const Set<int> knownOpClasses = {
   opClassPrune,
 };
 
-/// Control is #548, suggestion #557, compaction and prune #555.
-const Set<int> servedOpClasses = {opClassContent};
+/// Control arrived with #548 and carries exactly one type, `member_register`
+/// (see `control_payload.dart`); every other control type is still fail-closed.
+/// Suggestion is #557, compaction and prune #555.
+const Set<int> servedOpClasses = {opClassContent, opClassControl};
 
 // --- Sizes ---------------------------------------------------------------------
 
@@ -95,8 +97,18 @@ const int _offsetPrevAuthorHash = 70;
 const int _offsetObservedHead = 102;
 const int _offsetNonce = 134;
 
-/// Every signing use of a member key is domain-separated (review F7).
+/// Every signing use of every key is domain-separated (review F7). A signature
+/// made for one use must never verify for another, so each has its own prefix.
 const String signingDomainOpV1 = 'jeeves/op/v1';
+
+/// Root over a registration certificate — see `control_payload.dart`.
+const String signingDomainMemberRegisterV1 = 'jeeves/member-register/v1';
+
+/// A device over a transport proof-of-possession challenge.
+const String signingDomainAuthChallengeV1 = 'jeeves/auth-challenge/v1';
+
+/// Root over a recovery escrow record — see `recovery_escrow.dart`.
+const String signingDomainEscrowV1 = 'jeeves/escrow/v1';
 
 // --- Body framing (review F17) --------------------------------------------------
 
@@ -133,7 +145,21 @@ enum SyncRejectionReason {
   nonZeroPadding('non_zero_padding'),
   badSignature('bad_signature'),
   workspaceMismatch('workspace_mismatch'),
-  unknownAuthorKey('unknown_author_key'),
+
+  /// No *verified* MemberRegister has taught this device the author's key.
+  ///
+  /// Replaces the pre-#548 `unknown_author_key`, which meant "not in the
+  /// registry the server served us". A registry miss and a chain miss are
+  /// different claims: this one says nothing signed by Root vouches for the
+  /// author, whatever the server's registry says.
+  memberNotChainedToRoot('member_not_chained_to_root'),
+  badRootSignature('bad_root_signature'),
+  malformedControlPayload('malformed_control_payload'),
+  unsupportedControlType('unsupported_control_type'),
+
+  /// The control chain forked, skipped, or restarted under our feet. Detection
+  /// only in this slice; fork tie-break resolution is #549 (F14).
+  controlChainBreak('control_chain_break'),
   unrepresentableAuthorSeq('unrepresentable_author_seq'),
   malformedPayload('malformed_payload'),
   malformedMemberIdHex('malformed_member_id_hex'),
@@ -448,19 +474,48 @@ Uint8List parseBody(Uint8List body) {
 
 // --- Envelope ----------------------------------------------------------------------
 
-final Uint8List _signingDomainBytes =
-    Uint8List.fromList(ascii.encode(signingDomainOpV1));
+/// `ascii(domain) || parts…` — the shape every signed artifact here takes.
+///
+/// One helper rather than one concatenation per call site: the domain prefix is
+/// the whole defence against a signature made for one use verifying for
+/// another, and it is exactly the kind of thing an open-coded `addAll` drops.
+Uint8List domainSeparated(String domain, List<List<int>> parts) {
+  final builder = BytesBuilder(copy: false)..add(ascii.encode(domain));
+  for (final part in parts) {
+    builder.add(part);
+  }
+  return builder.toBytes();
+}
 
-Uint8List signingInput(Uint8List headerBytes, Uint8List body) {
-  final input = Uint8List(_signingDomainBytes.length + headerBytes.length + body.length);
-  input.setRange(0, _signingDomainBytes.length, _signingDomainBytes);
-  input.setRange(
-    _signingDomainBytes.length,
-    _signingDomainBytes.length + headerBytes.length,
-    headerBytes,
+Uint8List signingInput(Uint8List headerBytes, Uint8List body) =>
+    domainSeparated(signingDomainOpV1, [headerBytes, body]);
+
+/// Ed25519 over already-domain-separated bytes.
+Future<Uint8List> signDomainSeparated(
+  SimpleKeyPair keyPair,
+  Uint8List message,
+) async =>
+    Uint8List.fromList(
+      (await Ed25519().sign(message, keyPair: keyPair)).bytes,
+    );
+
+/// True iff [signature] is [publicKey]'s signature over [message].
+Future<bool> verifyDomainSeparated(
+  Uint8List message,
+  Uint8List signature,
+  Uint8List publicKey,
+) async {
+  if (signature.length != signatureLengthBytes ||
+      publicKey.length != signPublicKeyBytes) {
+    return false;
+  }
+  return Ed25519().verify(
+    message,
+    signature: Signature(
+      signature,
+      publicKey: SimplePublicKey(publicKey, type: KeyPairType.ed25519),
+    ),
   );
-  input.setRange(_signingDomainBytes.length + headerBytes.length, input.length, body);
-  return input;
 }
 
 /// `(header bytes, body, signature)`, or a truncation refusal.
@@ -486,20 +541,33 @@ Uint8List signingInput(Uint8List headerBytes, Uint8List body) {
 
 /// Ed25519 over the domain-separated signing input, using the raw 32-byte seed.
 class EnvelopeSigner {
-  EnvelopeSigner._(this._keyPair, this.signPublicKey);
+  EnvelopeSigner._(this._keyPair, this.seed, this.signPublicKey);
 
   static final Ed25519 _algorithm = Ed25519();
 
   final SimpleKeyPair _keyPair;
+
+  /// The 32 raw seed bytes. Retained so a Device can persist its identity
+  /// through `DeviceKeyStore` and come back as the same Member after a
+  /// relaunch — an Ed25519 keypair is exactly its seed.
+  final Uint8List seed;
   final Uint8List signPublicKey;
 
   static Future<EnvelopeSigner> fromSeed(Uint8List seed) async {
     final keyPair = await _algorithm.newKeyPairFromSeed(seed);
     final publicKey = await keyPair.extractPublicKey();
-    return EnvelopeSigner._(keyPair, Uint8List.fromList(publicKey.bytes));
+    return EnvelopeSigner._(
+      keyPair,
+      Uint8List.fromList(seed),
+      Uint8List.fromList(publicKey.bytes),
+    );
   }
 
   Uint8List get keyId => deriveKeyId(signPublicKey);
+
+  /// Sign already-domain-separated bytes — a challenge, not an envelope.
+  Future<Uint8List> signBytes(Uint8List message) =>
+      signDomainSeparated(_keyPair, message);
 
   Future<Uint8List> buildEnvelope(OpHeader header, Uint8List body) async {
     final headerBytes = header.serialize();

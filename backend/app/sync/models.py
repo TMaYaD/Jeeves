@@ -1,8 +1,9 @@
-"""Storage for the content-blind op log.
+"""Storage for the op log, the Member registry and the recovery escrow.
 
-Two tables and nothing domain-shaped: an append-only ``ops`` log per Workspace,
-and a stub ``members`` registry of public keys.  Neither changes when the domain
-model does — that is the whole point of ADR-0026.
+Nothing domain-shaped: an append-only ``ops`` log per Workspace, a ``members``
+registry of public keys, and the per-User ``recovery_escrows`` slot with its
+append-only fetch audit.  None of them change when the domain model does — that
+is the whole point of ADR-0026.
 """
 
 from __future__ import annotations
@@ -28,13 +29,14 @@ from app.database import Base
 
 
 class Member(Base):
-    """A Member's registered signing key.
+    """A Member's registered public keys.
 
-    Enrolment only: a row here confers **no authority**.  #548 adds the
-    Root-signed MemberRegister control op that makes membership mean something;
-    until then this is the proposal's ``POST /members`` row verbatim — pubkeys
-    and nothing else — and clients verifying against it are knowingly trusting
-    the server (review F1, accepted for pre-launch dev data).
+    ``POST /members`` creates the row and it confers **no authority**: an
+    unchained row is a shell.  Authority arrives when a Root-signed
+    MemberRegister control op lands in the log and ``chained_at`` is stamped
+    (ADR-0028).  Clients do not read this table to decide anything — they
+    chain-gate off the log itself — so the column is the server's own index and
+    is authoritative for nobody.
     """
 
     __tablename__ = "members"
@@ -47,6 +49,12 @@ class Member(Base):
     sign_pk: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     #: First 8 bytes of SHA-256(sign_pk).  **Server-derived**, never a client claim.
     key_id: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    #: Raw 32-byte X25519 public key.  Separate from the signing key (F8/F19);
+    #: nullable because rows predating #548 have no KEX key and nothing reads it
+    #: until #554's KeyWraps.
+    kex_pk: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    #: When a Root-signed MemberRegister for this member was materialised.
+    chained_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
@@ -107,5 +115,63 @@ class Op(Base):
         BigInteger().with_variant(Integer, "sqlite"), nullable=True
     )
     received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class RecoveryEscrow(Base):
+    """One User's passphrase-wrapped Root, as four opaque fields.
+
+    Keyed ``(workspace_id, user_id)``: the escrow is per-User content, and
+    carrying the Workspace in the key means the shape survives shared Workspaces
+    without a migration.  ``root_pk`` is what makes the slot defensible — once a
+    record exists, a ``PUT`` must be signed by *that* Root, so a stolen user
+    credential cannot overwrite the escrow (review F16).  ``blob`` is never
+    parsed here; its layout is documented in ``app.sync.escrow`` for the
+    vectors' benefit and belongs to the client.
+    """
+
+    __tablename__ = "recovery_escrows"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    #: Strictly increasing per slot.  A passphrase change is a re-wrap at v+1,
+    #: and a client refuses anything below the highest version it has seen.
+    version: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=False
+    )
+    blob: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    root_sig: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    #: Raw 32-byte Ed25519 Root public key.  Established by the first write and
+    #: never changed by a later one — that is the whole point of the slot.
+    root_pk: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class RecoveryEscrowFetch(Base):
+    """Append-only audit of every escrow read.
+
+    A silent read is the one thing an escrow attack needs; recording each one
+    is what turns it into something the User can be shown.
+    """
+
+    __tablename__ = "recovery_escrow_fetches"
+    __table_args__ = (Index("ix_recovery_escrow_fetches_user", "user_id", "fetched_at"),)
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    user_id: Mapped[str] = mapped_column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )

@@ -30,6 +30,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from nacl.signing import SigningKey  # noqa: E402
 
+from app.sync.control_payload import (  # noqa: E402
+    CONTROL_TYPE_MEMBER_REGISTER,
+    KEX_PUBLIC_KEY_BYTES,
+    MEMBER_KIND_DEVICE,
+    PREV_CONTROL_HASH_BYTES,
+    SERVED_CONTROL_TYPES,
+    SIGNING_DOMAIN_MEMBER_REGISTER_V1,
+    ZERO_PREV_CONTROL_HASH,
+    ControlPayload,
+    RegistrationCertificate,
+    control_payload_hash,
+    sign_registration_certificate,
+)
 from app.sync.envelope import (  # noqa: E402
     BODY_OVERSIZE_MULTIPLE_BYTES,
     BODY_SIZE_CLASSES_BYTES,
@@ -39,6 +52,7 @@ from app.sync.envelope import (  # noqa: E402
     KNOWN_OP_CLASSES,
     OP_CLASS_COMPACTION,
     OP_CLASS_CONTENT,
+    OP_CLASS_CONTROL,
     PAYLOAD_LENGTH_PREFIX_BYTES,
     SERVED_OP_CLASSES,
     SERVED_SUITES,
@@ -52,11 +66,32 @@ from app.sync.envelope import (  # noqa: E402
     envelope_hash,
     frame_body,
 )
+from app.sync.escrow import (  # noqa: E402
+    ARGON2ID_FLOOR_MEMORY_KIB,
+    ARGON2ID_FLOOR_PARALLELISM,
+    ARGON2ID_FLOOR_TIME_COST,
+    ESCROW_BLOB_BYTES,
+    ESCROW_BLOB_HEADER_BYTES,
+    ESCROW_BLOB_MAGIC,
+    ESCROW_NONCE_BYTES,
+    ESCROW_SALT_BYTES,
+    ESCROW_SECRET_BYTES,
+    FIRST_ESCROW_VERSION,
+    POLY1305_TAG_BYTES,
+    SIGNING_DOMAIN_ESCROW_V1,
+    escrow_signing_input,
+    sign_escrow,
+)
 from app.sync.ids import (  # noqa: E402
     JEEVES_WORKSPACE_NAMESPACE,
     USER_PREFERENCES_COLLECTION,
     implicit_workspace_id,
     preference_entity_id,
+)
+from app.sync.member_auth import (  # noqa: E402
+    MEMBER_CHALLENGE_NONCE_BYTES,
+    SIGNING_DOMAIN_AUTH_CHALLENGE_V1,
+    member_challenge_signing_input,
 )
 from app.sync.op_payload import FieldWrite, Hlc, OpPayload  # noqa: E402
 
@@ -92,6 +127,19 @@ def _op_id(name: str) -> uuid.UUID:
 
 SIGNING_KEYS = {label: SigningKey(_seed(label)) for label in KEY_LABELS}
 MEMBER_IDS = {label: _member_id(label) for label in KEY_LABELS}
+
+#: The spec Workspace's Root.  Never a member, never an envelope author: it signs
+#: registration certificates and the escrow record, and nothing else.  In
+#: production Root is random and lives only in the escrow (review F1); here it is
+#: seeded so the certificates below are reproducible.
+ROOT_SIGNING_KEY = SigningKey(_seed("root"))
+ROOT_PUBLIC_KEY = bytes(ROOT_SIGNING_KEY.verify_key)
+
+#: X25519 keys are pinned as raw bytes rather than derived from a seed: the two
+#: codecs only ever carry them, and neither derives one.
+KEX_PUBLIC_KEYS = {
+    label: hashlib.sha256(f"jeeves/spec/sync/kex/{label}".encode()).digest() for label in KEY_LABELS
+}
 
 THEME_KEY = "theme"
 THEME_ENTITY_ID = preference_entity_id(WORKSPACE_ID, THEME_KEY)
@@ -602,6 +650,264 @@ def _negative_vectors() -> list[dict[str, Any]]:
     return vectors
 
 
+# --- Control vectors (op_class = 2) -----------------------------------------
+
+
+def _certificate(label: str, *, wall_ms: int) -> RegistrationCertificate:
+    return RegistrationCertificate(
+        workspace_id=WORKSPACE_ID,
+        member_id=MEMBER_IDS[label],
+        sign_pk=bytes(SIGNING_KEYS[label].verify_key),
+        kex_pk=KEX_PUBLIC_KEYS[label],
+        registered_at_hlc=Hlc.for_member(MEMBER_IDS[label], wall_ms),
+        member_kind=MEMBER_KIND_DEVICE,
+    )
+
+
+def _control_vector(
+    name: str,
+    *,
+    key: str,
+    payload: ControlPayload,
+    certificate: RegistrationCertificate,
+    note: str,
+) -> dict[str, Any]:
+    payload_bytes = payload.encode()
+    body = frame_body(payload_bytes)
+    header = _header(
+        op_id_name=f"control/{name}",
+        key=key,
+        author_seq=1,
+        op_class=OP_CLASS_CONTROL,
+    )
+    envelope = build_envelope(header, body, SIGNING_KEYS[key])
+    return {
+        "name": name,
+        "note": note,
+        "key": key,
+        "header": _header_json(header),
+        "header_hex": header.serialize().hex(),
+        "control_type": payload.control_type,
+        "prev_control_hash_hex": payload.prev_control_hash.hex(),
+        "cert_json": certificate.encode().decode("utf-8"),
+        "cert_hex": payload.cert_bytes.hex(),
+        "root_sig_hex": payload.root_sig.hex(),
+        "payload_json": payload_bytes.decode("utf-8"),
+        "payload_length_bytes": len(payload_bytes),
+        # The cross-author chain link a successor names: SHA-256 over these
+        # payload bytes, not over the envelope.
+        "payload_sha256_hex": control_payload_hash(payload_bytes).hex(),
+        "body_length_bytes": len(body),
+        "body_hex": body.hex(),
+        "envelope_hex": envelope.hex(),
+        "envelope_sha256_hex": envelope_hash(envelope).hex(),
+    }
+
+
+def _control_vectors() -> list[dict[str, Any]]:
+    first_cert = _certificate("device_a", wall_ms=BASE_WALL_MS)
+    first_payload = ControlPayload(
+        control_type=CONTROL_TYPE_MEMBER_REGISTER,
+        prev_control_hash=ZERO_PREV_CONTROL_HASH,
+        cert_bytes=first_cert.encode(),
+        root_sig=sign_registration_certificate(first_cert.encode(), ROOT_SIGNING_KEY),
+    )
+    first = _control_vector(
+        "member_register_first",
+        key="device_a",
+        payload=first_payload,
+        certificate=first_cert,
+        note=(
+            "The first device's registration: author_seq 1, an all-zero "
+            "prev_control_hash because no control op has been applied yet, and a "
+            "certificate signed by Root under jeeves/member-register/v1."
+        ),
+    )
+
+    second_cert = _certificate("device_b", wall_ms=BASE_WALL_MS + 1000)
+    second_payload = ControlPayload(
+        control_type=CONTROL_TYPE_MEMBER_REGISTER,
+        prev_control_hash=bytes.fromhex(first["payload_sha256_hex"]),
+        cert_bytes=second_cert.encode(),
+        root_sig=sign_registration_certificate(second_cert.encode(), ROOT_SIGNING_KEY),
+    )
+    second = _control_vector(
+        "member_register_chained",
+        key="device_b",
+        payload=second_payload,
+        certificate=second_cert,
+        note=(
+            "The second device chains by payload hash: prev_control_hash is "
+            "SHA-256 over member_register_first's *payload bytes*, so the link "
+            "is computable from the unencrypted payload alone and survives any "
+            "future envelope-level re-framing."
+        ),
+    )
+    return [first, second]
+
+
+def _negative_control_vectors() -> list[dict[str, Any]]:
+    """Codec-level control rejections only.
+
+    The position rule (``author_seq == 1``) and the chain rule
+    (``prev_control_hash`` against what has been applied) are receive-pipeline
+    facts, not codec facts — they need state a vector cannot carry, so they are
+    pinned by the route and harness tests instead.
+    """
+    cert = _certificate("device_a", wall_ms=BASE_WALL_MS)
+    cert_bytes = cert.encode()
+    good_signature = sign_registration_certificate(cert_bytes, ROOT_SIGNING_KEY)
+
+    tampered = bytearray(good_signature)
+    tampered[-1] ^= 0x01
+    vectors = [
+        _negative(
+            "control_bad_root_signature",
+            key="device_a",
+            reason="bad_root_signature",
+            envelope=build_envelope(
+                _header(
+                    op_id_name="control/bad_root_signature",
+                    key="device_a",
+                    author_seq=1,
+                    op_class=OP_CLASS_CONTROL,
+                ),
+                frame_body(
+                    ControlPayload(
+                        control_type=CONTROL_TYPE_MEMBER_REGISTER,
+                        prev_control_hash=ZERO_PREV_CONTROL_HASH,
+                        cert_bytes=cert_bytes,
+                        root_sig=bytes(tampered),
+                    ).encode()
+                ),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "Last byte of the Root signature flipped; the envelope itself is "
+                "validly signed by the device. Without Root behind it a "
+                "certificate is a claim, not a registration."
+            ),
+        ),
+        _negative(
+            "control_unsupported_type",
+            key="device_a",
+            reason="unsupported_control_type",
+            envelope=build_envelope(
+                _header(
+                    op_id_name="control/unsupported_type",
+                    key="device_a",
+                    author_seq=1,
+                    op_class=OP_CLASS_CONTROL,
+                ),
+                frame_body(
+                    ControlPayload(
+                        control_type="grant",
+                        prev_control_hash=ZERO_PREV_CONTROL_HASH,
+                    ).encode()
+                ),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "A control type this build does not serve. #549 turns this one "
+                "into a positive vector; until then every type but "
+                "member_register is fail-closed."
+            ),
+        ),
+        _negative(
+            "control_malformed_payload",
+            key="device_a",
+            reason="malformed_control_payload",
+            envelope=build_envelope(
+                _header(
+                    op_id_name="control/malformed_payload",
+                    key="device_a",
+                    author_seq=1,
+                    op_class=OP_CLASS_CONTROL,
+                ),
+                frame_body(b'{"prev_control_hash":"00"}'),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "No `type` field and a short chain hash. Every control payload "
+                "must be self-identifying: a chain link points at bare payload "
+                "bytes, so nothing outside the payload can say what it is."
+            ),
+        ),
+    ]
+    return vectors
+
+
+# --- Escrow and challenge preimages -----------------------------------------
+
+#: A deterministic stand-in for a real wrapped blob.  The server never parses a
+#: blob and neither does this file — what the vectors pin is the *signature
+#: preimage* around it, so the bytes only have to be reproducible.
+_SPEC_ESCROW_BLOB = (
+    ESCROW_BLOB_MAGIC
+    + ARGON2ID_FLOOR_MEMORY_KIB.to_bytes(4, "big")
+    + ARGON2ID_FLOOR_TIME_COST.to_bytes(4, "big")
+    + bytes([ARGON2ID_FLOOR_PARALLELISM])
+    + hashlib.sha256(b"jeeves/spec/sync/escrow/salt").digest()[:ESCROW_SALT_BYTES]
+    + hashlib.sha256(b"jeeves/spec/sync/escrow/nonce").digest()[:ESCROW_NONCE_BYTES]
+    + hashlib.sha512(b"jeeves/spec/sync/escrow/ciphertext").digest()[
+        : ESCROW_SECRET_BYTES + POLY1305_TAG_BYTES
+    ]
+)
+
+
+def _escrow_vectors() -> list[dict[str, Any]]:
+    vectors: list[dict[str, Any]] = []
+    for version, note in (
+        (
+            FIRST_ESCROW_VERSION,
+            "The first write. workspace_id sits inside the signed bytes, so a "
+            "blob signed for one Workspace can never be replayed into another.",
+        ),
+        (
+            2,
+            "A passphrase change re-wraps at v+1. The version is inside the "
+            "preimage too, so a signature does not transfer between versions.",
+        ),
+    ):
+        vectors.append(
+            {
+                "name": f"escrow_v1_signature_version_{version}",
+                "note": note,
+                "workspace_id": str(WORKSPACE_ID),
+                "version": version,
+                "blob_hex": _SPEC_ESCROW_BLOB.hex(),
+                "signing_input_hex": escrow_signing_input(
+                    WORKSPACE_ID, version, _SPEC_ESCROW_BLOB
+                ).hex(),
+                "root_sig_hex": sign_escrow(
+                    WORKSPACE_ID, version, _SPEC_ESCROW_BLOB, ROOT_SIGNING_KEY
+                ).hex(),
+            }
+        )
+    return vectors
+
+
+def _member_challenge_vectors() -> list[dict[str, Any]]:
+    nonce = hashlib.sha256(b"jeeves/spec/sync/challenge/nonce").digest()[
+        :MEMBER_CHALLENGE_NONCE_BYTES
+    ]
+    signing_input = member_challenge_signing_input(MEMBER_IDS["device_a"], nonce)
+    return [
+        {
+            "name": "auth_challenge_v1",
+            "note": (
+                "The member id is inside the signed bytes, so a captured "
+                "signature cannot be replayed into another member's slot."
+            ),
+            "key": "device_a",
+            "member_id": str(MEMBER_IDS["device_a"]),
+            "nonce_hex": nonce.hex(),
+            "signing_input_hex": signing_input.hex(),
+            "signature_hex": SIGNING_KEYS["device_a"].sign(signing_input).signature.hex(),
+        }
+    ]
+
+
 def _envelope_vectors_document() -> dict[str, Any]:
     return {
         "$frozen": FROZEN_NOTICE,
@@ -633,6 +939,58 @@ def _envelope_vectors_document() -> dict[str, Any]:
             "body_size_classes_bytes": list(BODY_SIZE_CLASSES_BYTES),
             "body_oversize_multiple_bytes": BODY_OVERSIZE_MULTIPLE_BYTES,
             "workspace_namespace_uuid": str(JEEVES_WORKSPACE_NAMESPACE),
+            # Every signing use of every key is domain-separated (review F7).
+            "signing_domains": {
+                "op_v1": SIGNING_DOMAIN_OP_V1.decode("ascii"),
+                "member_register_v1": SIGNING_DOMAIN_MEMBER_REGISTER_V1.decode("ascii"),
+                "auth_challenge_v1": SIGNING_DOMAIN_AUTH_CHALLENGE_V1.decode("ascii"),
+                "escrow_v1": SIGNING_DOMAIN_ESCROW_V1.decode("ascii"),
+            },
+            "control": {
+                "member_register_type": CONTROL_TYPE_MEMBER_REGISTER,
+                "served_control_types": sorted(SERVED_CONTROL_TYPES),
+                "member_kind_device": MEMBER_KIND_DEVICE,
+                "prev_control_hash_bytes": PREV_CONTROL_HASH_BYTES,
+                "zero_prev_control_hash_hex": ZERO_PREV_CONTROL_HASH.hex(),
+                "kex_public_key_bytes": KEX_PUBLIC_KEY_BYTES,
+                "chain_link": (
+                    "SHA-256 over the predecessor control op's unframed payload "
+                    "bytes — not the envelope, not a re-serialization."
+                ),
+            },
+            "escrow": {
+                "blob_magic": ESCROW_BLOB_MAGIC.decode("ascii"),
+                "blob_magic_hex": ESCROW_BLOB_MAGIC.hex(),
+                "salt_bytes": ESCROW_SALT_BYTES,
+                "nonce_bytes": ESCROW_NONCE_BYTES,
+                "secret_bytes": ESCROW_SECRET_BYTES,
+                "poly1305_tag_bytes": POLY1305_TAG_BYTES,
+                "blob_header_bytes": ESCROW_BLOB_HEADER_BYTES,
+                "blob_bytes": ESCROW_BLOB_BYTES,
+                "first_version": FIRST_ESCROW_VERSION,
+                # Enforced on read *and* write, before any KDF work runs (F12).
+                "argon2id_floor": {
+                    "memory_kib": ARGON2ID_FLOOR_MEMORY_KIB,
+                    "time_cost": ARGON2ID_FLOOR_TIME_COST,
+                    "parallelism": ARGON2ID_FLOOR_PARALLELISM,
+                },
+                "signing_preimage": (
+                    'b"jeeves/escrow/v1" || workspace_id (16 raw bytes) || '
+                    "version (u64 big-endian) || blob"
+                ),
+                "blob_layout": (
+                    'magic "JVE1" 4B || m_cost_kib u32 || t_cost u32 || '
+                    "parallelism u8 || salt 16B || nonce 24B || "
+                    "XChaCha20-Poly1305(Argon2id(passphrase, salt, params), nonce, "
+                    "aad = the 53 header bytes, root_sk 32B || master_wrap_key 32B)"
+                ),
+            },
+            "member_challenge": {
+                "nonce_bytes": MEMBER_CHALLENGE_NONCE_BYTES,
+                "signing_preimage": (
+                    'b"jeeves/auth-challenge/v1" || member_id (16 raw bytes) || nonce'
+                ),
+            },
         },
         "identities": {
             "user_id": SPEC_USER_ID,
@@ -641,6 +999,13 @@ def _envelope_vectors_document() -> dict[str, Any]:
             "other_workspace_id": str(OTHER_WORKSPACE_ID),
             "preference_key": THEME_KEY,
             "preference_entity_id": str(THEME_ENTITY_ID),
+            # Root is random in production and lives only inside the escrow blob
+            # (review F1).  Seeding it here is what makes the certificates below
+            # reproducible; nothing derives Root from anything.
+            "root": {
+                "seed_hex": _seed("root").hex(),
+                "root_pk_hex": ROOT_PUBLIC_KEY.hex(),
+            },
             "keys": [
                 {
                     "label": label,
@@ -648,6 +1013,7 @@ def _envelope_vectors_document() -> dict[str, Any]:
                     "seed_hex": _seed(label).hex(),
                     "sign_pk_hex": bytes(SIGNING_KEYS[label].verify_key).hex(),
                     "key_id_hex": derive_key_id(bytes(SIGNING_KEYS[label].verify_key)).hex(),
+                    "kex_pk_hex": KEX_PUBLIC_KEYS[label].hex(),
                 }
                 for label in KEY_LABELS
             ],
@@ -655,6 +1021,10 @@ def _envelope_vectors_document() -> dict[str, Any]:
         "header_vectors": _header_vectors(),
         "vectors": _positive_vectors(),
         "negative_vectors": _negative_vectors(),
+        "control_vectors": _control_vectors(),
+        "negative_control_vectors": _negative_control_vectors(),
+        "escrow_vectors": _escrow_vectors(),
+        "member_challenge_vectors": _member_challenge_vectors(),
     }
 
 

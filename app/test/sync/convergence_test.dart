@@ -1,10 +1,15 @@
 /// End-to-end: two simulated devices converge through the op log.
 ///
-/// This file is the acceptance criteria of #546. Every case runs the whole
-/// spine — local write → signed envelope → server log → pull → verify →
-/// reduce — in one process, on a fake clock, with no PowerSync engine in sight.
-/// That last part is the point: `docs/SYNC.md` records zero automated coverage
-/// of the engine path, and closing that gap is one of ADR-0026's motivations.
+/// This file is the acceptance criteria of #546 and, since #548, the trust half
+/// too. Every case runs the whole spine — enrol → local write → signed envelope
+/// → server log → pull → verify → reduce — in one process, on a fake clock,
+/// with no PowerSync engine in sight. That last part is the point: `docs/SYNC.md`
+/// records zero automated coverage of the engine path, and closing that gap is
+/// one of ADR-0026's motivations.
+///
+/// The devices here enrol for real: device A generates the passphrase and Root,
+/// device B is given the passphrase string and nothing else. No test hands a
+/// key from one device to another.
 library;
 
 import 'dart:convert';
@@ -13,9 +18,11 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart' show Ed25519;
 import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/root_authority.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 
 import 'harness/author_fixture.dart';
@@ -44,6 +51,13 @@ Future<List<Uint8List>> _opLogEnvelopes(SimDevice device) async {
   return [for (final row in rows) row.envelope];
 }
 
+/// The envelopes in a device's log that carry content — the registers every
+/// device now also holds are chain evidence, not data.
+Future<List<Uint8List>> _contentEnvelopes(SimDevice device) async => [
+      for (final envelope in await _opLogEnvelopes(device))
+        if (OpHeader.parse(envelope).opClass == opClassContent) envelope,
+    ];
+
 void main() {
   late SimWorkspace workspace;
 
@@ -53,7 +67,62 @@ void main() {
 
   tearDown(() => workspace.close());
 
-  // --- AC 1 -----------------------------------------------------------------
+  // --- AC 1: enrolment ------------------------------------------------------
+
+  test('a second device enrols with the passphrase alone and converges',
+      () async {
+    // Device B was handed a string. Not a key, not a store, not a session.
+    expect(workspace.b.outcome.isFirstDevice, isFalse);
+    expect(workspace.b.outcome.passphrase, workspace.a.outcome.passphrase);
+    expect(workspace.b.outcome.rootPk, workspace.a.outcome.rootPk);
+    expect(await workspace.b.client.pinnedRootPk(), workspace.a.outcome.rootPk);
+
+    // Each device registered itself, and each did it as its own op 1.
+    for (final device in workspace.devices) {
+      final authored = await device.client.authoredEnvelopes();
+      final register = OpHeader.parse(authored.first);
+      expect(register.opClass, opClassControl);
+      expect(register.authorSeq, 1);
+      expect(register.authorMemberId, device.identity.memberId);
+    }
+
+    // B enrolled against a populated control log, so its register names A's
+    // rather than claiming to start the chain.
+    final registers = [
+      for (final op in workspace.server.storedOps)
+        if (op.header?.opClass == opClassControl) op,
+    ];
+    expect(registers.length, 2);
+    final first = parseBody(splitEnvelope(registers[0].envelope).body);
+    final second = ControlPayload.decode(
+      parseBody(splitEnvelope(registers[1].envelope).body),
+    );
+    expect(second.prevControlHash, controlPayloadHash(first));
+
+    await workspace.a.preferences.set('theme', '"dark"');
+    await workspace.syncAll();
+    expect(await workspace.b.preferences.get('theme'), '"dark"');
+
+    workspace.clock.advance(1000);
+    await workspace.b.preferences.set('theme', '"light"');
+    await workspace.syncAll();
+    expect(await workspace.a.preferences.get('theme'), '"light"');
+  });
+
+  test('each device learns the other only from a verified MemberRegister',
+      () async {
+    await workspace.syncAll();
+    for (final device in workspace.devices) {
+      for (final peer in workspace.devices) {
+        expect(
+          device.client.directory.isChained(peer.identity.memberId),
+          isTrue,
+          reason: '${device.label} should have chained ${peer.label}',
+        );
+      }
+      expect(await device.client.quarantined(), isEmpty);
+    }
+  });
 
   test('two devices converge a user_preferences edit in both directions',
       () async {
@@ -158,7 +227,7 @@ void main() {
 
     await workspace.syncAll();
     expect(await workspace.b.preferences.getAll(), {'theme': '"dark"'});
-    expect((await _opLogEnvelopes(workspace.b)).length, 1);
+    expect((await _contentEnvelopes(workspace.b)).length, 1);
   });
 
   // --- AC 5 -----------------------------------------------------------------
@@ -222,21 +291,35 @@ void main() {
     );
   });
 
-  // --- AC 4 -----------------------------------------------------------------
+  // --- AC 4: nothing the server says is trusted -----------------------------
 
   test('the golden negative vectors quarantine and never apply', () async {
     final document = envelopeVectors();
     final identities = document['identities'] as Map<String, dynamic>;
-    // The spec keys must be in the registry, or every vector would stop at the
-    // unknown-key check instead of reaching the rule it exists to exercise.
-    final adminSession = workspace.server.connectAs(_specUserId);
+
+    // The spec keys must be chained, or every vector would stop at the
+    // not-chained check instead of reaching the rule it exists to exercise.
+    // Chaining them means real Root-signed registers — the only way in.
+    await workspace.syncAll();
+    final root = await workspace.recoverRoot();
     for (final entry in identities['keys'] as List<dynamic>) {
       final key = entry as Map<String, dynamic>;
-      await adminSession.registerMember(
+      final fixture = await AuthorFixture.create(
         memberId: key['member_id'] as String,
-        signPk: _fromHex(key['sign_pk_hex'] as String),
+        seed: _fromHex(key['seed_hex'] as String),
+      );
+      workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        await memberRegisterEnvelope(
+          device: fixture,
+          workspaceId: workspace.workspaceId,
+          root: root,
+          prevControlHash: workspace.controlChainHead(),
+          wallMs: workspace.clock.nowMs,
+        ),
       );
     }
+    root.drop();
 
     final negatives = vectorList(document, 'negative_vectors');
     for (final vector in negatives) {
@@ -260,8 +343,169 @@ void main() {
       );
       expect(await device.preferences.getAll(), {'theme': '"dark"'});
       // Nothing refused reached the log: quarantine is not a soft filter.
-      expect((await _opLogEnvelopes(device)).length, 1);
+      expect((await _contentEnvelopes(device)).length, 1);
     }
+  });
+
+  test('the golden negative control vectors fail closed', () async {
+    // Signed by the *spec* Root, which is not this workspace's Root — so
+    // `control_bad_root_signature` is not the only one that would fail. Each is
+    // injected on its own and asserted for its own reason.
+    await workspace.syncAll();
+    final document = envelopeVectors();
+    for (final vector in vectorList(document, 'negative_control_vectors')) {
+      final device = await SimDevice.create(
+        label: 'X',
+        userId: _specUserId,
+        server: workspace.server,
+        clock: workspace.clock,
+        passphrase: workspace.passphrase,
+      );
+      addTearDown(device.close);
+      workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        _fromHex(vector['envelope_hex'] as String),
+      );
+      await device.sync();
+      final quarantined = await device.client.quarantined();
+      expect(
+        quarantined.map((row) => row.reason),
+        contains(vector['reason']),
+        reason: vector['name'] as String,
+      );
+    }
+  });
+
+  test('an op from a member not chained to Root quarantines', () async {
+    // Registered with the server, and therefore in `GET /members` — and still
+    // refused, because the registry is not what a client believes.
+    final stranger = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 11)),
+    );
+    workspace.server.poisonRegistry(
+      _specUserId,
+      MemberRecord(
+        memberId: stranger.memberId,
+        signPk: stranger.signPk,
+        keyId: deriveKeyId(stranger.signPk),
+        kexPk: stranger.kexPk,
+        chained: true,
+      ),
+    );
+    workspace.server.injectUnchecked(
+      workspace.workspaceId,
+      await stranger.nextEnvelope(workspace.workspaceId),
+    );
+
+    await workspace.a.sync();
+    final quarantined = await workspace.a.client.quarantined();
+    expect(
+      quarantined.single.reason,
+      SyncRejectionReason.memberNotChainedToRoot.code,
+    );
+  });
+
+  test('a fabricated MemberRegister with a foreign certificate is refused',
+      () async {
+    // The poisoned-registry attack, aimed at the log instead: a server can
+    // serve any control op it likes, and without Root behind the certificate it
+    // is a claim rather than a registration.
+    await workspace.syncAll();
+    final impostor = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 61)),
+    );
+    final foreignRoot = await RootAuthority.generate();
+    workspace.server.injectUnchecked(
+      workspace.workspaceId,
+      await memberRegisterEnvelope(
+        device: impostor,
+        workspaceId: workspace.workspaceId,
+        root: foreignRoot,
+        prevControlHash: workspace.controlChainHead(),
+        wallMs: workspace.clock.nowMs,
+      ),
+    );
+
+    await workspace.a.sync();
+    expect(
+      (await workspace.a.client.quarantined()).single.reason,
+      SyncRejectionReason.badRootSignature.code,
+    );
+    expect(workspace.a.client.directory.isChained(impostor.memberId), isFalse);
+  });
+
+  test('a genuine certificate around a forged envelope is refused', () async {
+    // Step 4 of the verification, and the reason it exists: a certificate is
+    // public once it is in the log, so without checking the envelope signature
+    // against the certificate's own key anyone could wrap a copy around
+    // self-signed envelopes and fork the victim's chain.
+    await workspace.syncAll();
+    final victim = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 71)),
+    );
+    final root = await workspace.recoverRoot();
+    final certificate = RegistrationCertificate(
+      workspaceId: workspace.workspaceId,
+      memberId: victim.memberId,
+      signPk: victim.signPk,
+      kexPk: victim.kexPk,
+      registeredAtHlc: Hlc.forMember(victim.memberId, workspace.clock.nowMs),
+    );
+    // The forger authors the envelope under its *own* key, wrapping the
+    // victim's genuine certificate.
+    final forger = await AuthorFixture.create(
+      memberId: victim.memberId,
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 81)),
+    );
+    final certBytes = certificate.encode();
+    workspace.server.injectUnchecked(
+      workspace.workspaceId,
+      await forger.nextEnvelope(
+        workspace.workspaceId,
+        opClass: opClassControl,
+        payload: ControlPayload(
+          controlType: controlTypeMemberRegister,
+          prevControlHash: workspace.controlChainHead(),
+          certBytes: certBytes,
+          rootSig: await root.signCertificateBytes(certBytes),
+        ).encode(),
+      ),
+    );
+    root.drop();
+
+    await workspace.a.sync();
+    expect(
+      (await workspace.a.client.quarantined()).single.reason,
+      SyncRejectionReason.badSignature.code,
+    );
+  });
+
+  test('a zero prev_control_hash into a populated chain is a chain break',
+      () async {
+    await workspace.syncAll();
+    final newcomer = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 91)),
+    );
+    final root = await workspace.recoverRoot();
+    workspace.server.injectUnchecked(
+      workspace.workspaceId,
+      await memberRegisterEnvelope(
+        device: newcomer,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        // A device that skipped the pull would emit exactly this.
+        prevControlHash: zeroPrevControlHash,
+        wallMs: workspace.clock.nowMs,
+      ),
+    );
+    root.drop();
+
+    await workspace.a.sync();
+    expect(
+      (await workspace.a.client.quarantined()).single.reason,
+      SyncRejectionReason.controlChainBreak.code,
+    );
+    expect(workspace.a.client.directory.isChained(newcomer.memberId), isFalse);
   });
 
   test('an author_seq beyond 2^53 quarantines as unrepresentable', () async {
@@ -272,9 +516,7 @@ void main() {
     // read a chain slot its peers never wrote.
     final seed = Uint8List.fromList(List<int>.generate(32, (index) => index + 41));
     final author = await AuthorFixture.create(seed: seed);
-    await workspace.server
-        .connectAs(_specUserId)
-        .registerMember(memberId: author.memberId, signPk: author.signPk);
+    await workspace.enrolFixture(author);
 
     // The 158 header bytes are assembled by hand because `OpHeader.serialize`
     // refuses to *write* a value it could not read back. That asymmetry is the
@@ -309,24 +551,8 @@ void main() {
       quarantined.single.reason,
       SyncRejectionReason.unrepresentableAuthorSeq.code,
     );
-    // Nothing was applied and nothing was logged: a refusal is not a soft filter.
+    // Nothing was applied: a refusal is not a soft filter.
     expect(await workspace.a.preferences.getAll(), isEmpty);
-    expect(await _opLogEnvelopes(workspace.a), isEmpty);
-  });
-
-  test('an op from an unregistered key quarantines rather than being trusted',
-      () async {
-    final stranger = await AuthorFixture.create(
-      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 11)),
-    );
-    workspace.server.injectUnchecked(
-      workspace.workspaceId,
-      await stranger.nextEnvelope(workspace.workspaceId),
-    );
-
-    await workspace.a.sync();
-    final quarantined = await workspace.a.client.quarantined();
-    expect(quarantined.single.reason, SyncRejectionReason.unknownAuthorKey.code);
   });
 
   test('the quarantine count is watchable so a refusal can be surfaced',
@@ -347,32 +573,32 @@ void main() {
   // --- Reducer guards over the full path ---------------------------------------
 
   group('reducer guards', () {
-    /// The server is content-blind, so these bodies go through the *real* POST
-    /// path: nothing server-side could have caught them, which is exactly why
-    /// the guards live on the receiving client.
-    Future<AuthorFixture> registerRogue() async {
+    /// The server is content-blind for content ops, so these bodies go through
+    /// the *real* POST path: nothing server-side could have caught them, which
+    /// is exactly why the guards live on the receiving client.
+    Future<(AuthorFixture, SyncTransport)> registerRogue() async {
       final rogue = await AuthorFixture.create(
         seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 21)),
       );
-      await workspace.server
-          .connectAs(_specUserId)
-          .registerMember(memberId: rogue.memberId, signPk: rogue.signPk);
-      return rogue;
+      return (rogue, await workspace.enrolFixture(rogue));
     }
 
-    Future<void> postPayload(AuthorFixture rogue, Map<String, Object?> payload) async {
-      final envelope = await rogue.nextEnvelope(
-        workspace.workspaceId,
-        payloadJson: jsonEncode(payload),
-      );
-      await workspace.server
-          .connectAs(_specUserId)
-          .postOps(workspace.workspaceId, [envelope]);
+    Future<void> postPayload(
+      AuthorFixture rogue,
+      SyncTransport session,
+      Map<String, Object?> payload,
+    ) async {
+      await session.postOps(workspace.workspaceId, [
+        await rogue.nextEnvelope(
+          workspace.workspaceId,
+          payloadJson: jsonEncode(payload),
+        ),
+      ]);
     }
 
     test('an op-level HLC far in the future quarantines', () async {
-      final rogue = await registerRogue();
-      await postPayload(rogue, {
+      final (rogue, session) = await registerRogue();
+      await postPayload(rogue, session, {
         'collection': _harnessCollection,
         'id': preferenceEntityId(workspace.workspaceId, 'harness-doc'),
         'fields': {
@@ -396,8 +622,8 @@ void main() {
 
     test('an op whose HLC member is not the header author quarantines',
         () async {
-      final rogue = await registerRogue();
-      await postPayload(rogue, {
+      final (rogue, session) = await registerRogue();
+      await postPayload(rogue, session, {
         'collection': _harnessCollection,
         'id': preferenceEntityId(workspace.workspaceId, 'harness-doc'),
         'fields': {
@@ -422,9 +648,9 @@ void main() {
         () async {
       // The F15 exemption, end to end: this is the shape a compaction op
       // (#555) has, and quarantining it would make compaction impossible.
-      final rogue = await registerRogue();
+      final (rogue, session) = await registerRogue();
       final docId = preferenceEntityId(workspace.workspaceId, 'harness-doc');
-      await postPayload(rogue, {
+      await postPayload(rogue, session, {
         'collection': _harnessCollection,
         'id': docId,
         'fields': {
@@ -457,7 +683,8 @@ void main() {
       await workspace.a.preferences.set('key$index', '"$index"');
     }
     final authored = await workspace.a.client.authoredEnvelopes();
-    expect(authored.length, 3);
+    // The register is op 1; the three preference writes follow it.
+    expect(authored.length, 4);
 
     var expectedPrevHash = Uint8List(prevAuthorHashBytes);
     for (var index = 0; index < authored.length; index++) {
@@ -473,9 +700,11 @@ void main() {
   test('the op log keeps received envelopes byte-identical', () async {
     await workspace.a.preferences.set('theme', '"dark"');
     await workspace.syncAll();
-    expect(
-      await _opLogEnvelopes(workspace.b),
-      await workspace.a.client.authoredEnvelopes(),
-    );
+    final fromA = [
+      for (final envelope in await _opLogEnvelopes(workspace.b))
+        if (OpHeader.parse(envelope).authorMemberId == workspace.a.identity.memberId)
+          envelope,
+    ];
+    expect(fromA, await workspace.a.client.authoredEnvelopes());
   });
 }
