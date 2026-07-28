@@ -112,19 +112,42 @@ void main() {
       expect(server.isChained(first.identity.memberId), isTrue);
     });
 
+    test('generates six words when it is asked for nothing', () async {
+      final first = await device('A');
+      addTearDown(first.close);
+      expect(first.outcome.passphrase.split(' ').length, 6);
+      expect(first.outcome.strength.isGenerated, isTrue);
+      expect(first.outcome.strength.warning, isNull);
+    });
+
     test('accepts a user-chosen passphrase behind its warning', () async {
+      // Weak on purpose, and accepted anyway: the policy's job is to attach the
+      // warning a screen must show, not to refuse. The estimator's own numbers
+      // are covered in passphrase_policy_test.
+      const chosen = 'letmein';
       final first = await SimDevice.create(
         label: 'A',
         userId: _userId,
         server: server,
         clock: clock,
-        passphrase: null,
+        chosenPassphrase: chosen,
       );
       addTearDown(first.close);
-      // The generated default is what a first device gets when it asks for
-      // nothing; the chosen-passphrase path is the same code with the estimate
-      // attached, and the estimator is covered in passphrase_policy_test.
-      expect(first.outcome.passphrase.split(' ').length, 6);
+
+      expect(first.outcome.passphrase, chosen);
+      expect(first.outcome.isFirstDevice, isTrue);
+      expect(first.outcome.strength.isGenerated, isFalse);
+      expect(first.outcome.strength.warning, isNotNull);
+      // Enrolled for real behind that warning: Root is pinned and escrowed.
+      expect(await first.client.pinnedRootPk(), first.outcome.rootPk);
+      final escrowed = await server
+          .connectAsUser(_userId)
+          .fetchRecoveryEscrow(first.client.workspaceId);
+      expect(escrowed!.rootPk, first.outcome.rootPk);
+      // And the chosen passphrase is what a later device enrols on.
+      final second = await device('B', passphrase: chosen);
+      addTearDown(second.close);
+      expect(second.outcome.rootPk, first.outcome.rootPk);
     });
   });
 
@@ -156,10 +179,13 @@ void main() {
     });
 
     test('cannot enrol against an account with no escrow', () async {
-      // Nothing has written the slot, so there is no Root to recover.
+      // Nothing has written the slot, so there is no Root to recover — and an
+      // absent slot is its own outcome, not a malformed blob: #553's screens
+      // branch on "this account was never enrolled" versus "what the server
+      // served is not an escrow".
       await expectLater(
         device('B', passphrase: 'anything at all'),
-        throwsEscrow(RecoveryEscrowFailure.malformedBlob),
+        throwsEscrow(RecoveryEscrowFailure.noEscrowStored),
       );
     });
   });
@@ -184,8 +210,8 @@ void main() {
       expect(await first.client.highestEscrowVersionSeen(), 2);
 
       // The server refuses the older version outright.
-      expect(
-        () => server
+      await expectLater(
+        server
             .connectAsUser(_userId)
             .putRecoveryEscrow(first.client.workspaceId, original!),
         throwsA(
@@ -228,8 +254,11 @@ void main() {
       final rolledBack = FakeSyncServer().connectAsUser(_userId);
       await rolledBack.putRecoveryEscrow(first.client.workspaceId, original!);
 
-      expect(
-        () => _recoverAgainst(first, rolledBack),
+      await expectLater(
+        first.enrolmentAgainst(rolledBack).changePassphrase(
+              currentPassphrase: first.outcome.passphrase,
+              newPassphrase: 'a passphrase this rotation never reaches',
+            ),
         throwsEscrow(RecoveryEscrowFailure.versionRollback),
       );
     });
@@ -257,8 +286,11 @@ void main() {
         ),
       );
 
-      expect(
-        () => _recoverAgainst(first, substituted),
+      await expectLater(
+        first.enrolmentAgainst(substituted).changePassphrase(
+              currentPassphrase: first.outcome.passphrase,
+              newPassphrase: 'a passphrase this rotation never reaches',
+            ),
         throwsEscrow(RecoveryEscrowFailure.rootMismatch),
       );
     });
@@ -289,23 +321,8 @@ void main() {
         () => readEscrowBlobParameters(blob, floor: harnessKdfParameters),
         throwsEscrow(RecoveryEscrowFailure.kdfBelowFloor),
       );
+      // Synchronous on purpose: reading the parameters is what refuses the blob
+      // *before* any KDF work, so there is no future here to await.
     });
   });
-}
-
-/// Run the recovery half of the ceremony against a different server.
-///
-/// The device's own link is bound to its server; pointing the *check* at
-/// another one is how a "the server rolled the escrow back" case is staged
-/// without teaching the harness a second network.
-Future<void> _recoverAgainst(SimDevice device, UserTransport transport) async {
-  final record = await transport.fetchRecoveryEscrow(device.client.workspaceId);
-  final pinned = await device.client.pinnedRootPk();
-  await verifyEscrowRecordSignature(record!, device.client.workspaceId, pinned!);
-  if (record.version < await device.client.highestEscrowVersionSeen()) {
-    throw RecoveryEscrowException(
-      RecoveryEscrowFailure.versionRollback,
-      'served escrow version ${record.version} is below the highest seen',
-    );
-  }
 }

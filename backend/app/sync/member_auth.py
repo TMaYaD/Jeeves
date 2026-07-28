@@ -34,6 +34,7 @@ from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
 from app.config import settings
+from app.redis import increment_in_window
 
 #: Every signing use of a member key is domain-separated (review F7).
 SIGNING_DOMAIN_AUTH_CHALLENGE_V1: Final = b"jeeves/auth-challenge/v1"
@@ -96,16 +97,16 @@ def member_challenge_counter_key(member_id: uuid.UUID) -> str:
 async def count_member_challenge(redis: object, member_id: uuid.UUID) -> int:
     """Increment and return this member's challenge count inside the window.
 
-    Same Redis-counter shape as the escrow fetch limiter: the first increment
-    starts the window, and the key expires with it rather than being swept.
-    Keyed by member id because that is all an unauthenticated caller supplies —
-    there is no user to attribute the request to until the signature verifies.
+    The same one-round-trip counter as the escrow fetch limiter, through the same
+    helper.  Keyed by member id because that is all an unauthenticated caller
+    supplies — there is no user to attribute the request to until the signature
+    verifies.
     """
-    key = member_challenge_counter_key(member_id)
-    count: int = await redis.incr(key)  # type: ignore[attr-defined]
-    if count == 1:
-        await redis.expire(key, settings.member_challenge_window_seconds)  # type: ignore[attr-defined]
-    return count
+    return await increment_in_window(
+        redis,
+        member_challenge_counter_key(member_id),
+        settings.member_challenge_window_seconds,
+    )
 
 
 async def member_challenge_retry_after_seconds(redis: object, member_id: uuid.UUID) -> int:

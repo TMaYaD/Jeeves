@@ -70,10 +70,40 @@ class InMemoryDeviceKeyStore implements DeviceKeyStore {
   }
 }
 
+/// The storage policy a signing seed is held under, stated rather than inherited.
+///
+/// A Device's seeds *are* its Member identity, so two properties are named here
+/// instead of left to the plugin's defaults:
+///
+/// - **Apple platforms: `first_unlock_this_device`.** The default is
+///   `KeychainAccessibility.unlocked`, which migrates the item to a new device
+///   through an encrypted backup — restoring a backup onto a second handset
+///   would then produce two Devices signing as one Member, which is precisely
+///   the fork the per-author chain refuses. `first_unlock_this_device` keeps a
+///   relaunched Device the same Member and keeps the seed on the one device.
+/// - **Android: `resetOnError: false`.** The default silently *deletes* the
+///   entry when it cannot be decrypted, which would turn a Keystore hiccup into
+///   a Device that quietly loses its identity and re-enrols as a stranger. A
+///   loud read failure is the recoverable outcome. The cipher choice is left at
+///   the plugin's default (AES-GCM data, RSA-OAEP key wrapping, Keystore
+///   backed); `encryptedSharedPreferences` is deprecated and ignored from
+///   plugin v10, so passing it would document a hardening that no longer exists.
+const IOSOptions _seedIosOptions = IOSOptions(
+  accessibility: KeychainAccessibility.first_unlock_this_device,
+);
+const MacOsOptions _seedMacOsOptions = MacOsOptions(
+  accessibility: KeychainAccessibility.first_unlock_this_device,
+);
+const AndroidOptions _seedAndroidOptions = AndroidOptions(resetOnError: false);
+
 /// The production store: Keychain on iOS/macOS, Keystore-backed on Android.
 class SecureStorageDeviceKeyStore implements DeviceKeyStore {
   const SecureStorageDeviceKeyStore([
-    this._storage = const FlutterSecureStorage(),
+    this._storage = const FlutterSecureStorage(
+      iOptions: _seedIosOptions,
+      mOptions: _seedMacOsOptions,
+      aOptions: _seedAndroidOptions,
+    ),
   ]);
 
   final FlutterSecureStorage _storage;

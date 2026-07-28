@@ -11,10 +11,10 @@ import base64
 import uuid
 
 from httpx import AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.sync.escrow import RECOVERY_FETCH_DAILY_LIMIT
+from app.sync.escrow import MAX_ESCROW_VERSION, RECOVERY_FETCH_DAILY_LIMIT
 from app.sync.ids import default_workspace_id
 from app.sync.models import RecoveryEscrow, RecoveryEscrowFetch
 from tests.conftest import auth_header, register
@@ -203,6 +203,74 @@ async def test_the_escrow_requires_authentication(client: AsyncClient) -> None:
     assert (await client.put(f"/w/{workspace_id}/recovery", json={})).status_code == 401
 
 
+async def test_a_version_above_the_columns_range_is_refused_at_the_edge(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """A ``BIGINT`` overflow is the caller's error, not a driver crash."""
+    escrow = await _open(client, "escrow-version-ceiling@example.com")
+    response = await client.put(
+        f"/w/{escrow.workspace_id}/recovery",
+        json=escrow.root.escrow_body(escrow.workspace_id, version=MAX_ESCROW_VERSION + 1),
+        headers=escrow.headers,
+    )
+    assert response.status_code == 422, response.text
+    assert detail_of(response)["code"] == "malformed_escrow_version"
+    assert (await db.execute(select(RecoveryEscrow))).scalars().all() == []
+
+
+async def test_a_write_decided_against_a_stale_version_loses_rather_than_overwrites(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """The version a re-wrap was decided against is part of its WHERE clause.
+
+    Two devices re-wrapping the same slot at v+1 both pass the read-side version
+    check; only the one whose observed version is still in the row may write, or
+    the loser silently overwrites a blob its client never saw while believing it
+    stored.  Staged here by moving the row underneath a session that has already
+    read it — the same stale read a concurrent writer gets, without needing two
+    connections.
+    """
+    escrow = await _open(client, "escrow-stale-update@example.com")
+    assert (
+        await client.put(
+            f"/w/{escrow.workspace_id}/recovery",
+            json=escrow.root.escrow_body(escrow.workspace_id),
+            headers=escrow.headers,
+        )
+    ).status_code == 200
+
+    # Held on purpose: while this instance is live the session answers the
+    # route's read from its identity map, so the raw UPDATE below moves the row
+    # without moving what the next request sees — exactly the stale read a
+    # concurrent writer gets, with no second connection needed.
+    stale = await db.get(RecoveryEscrow, (escrow.workspace_id, user_id_from_token(escrow.token)))
+    assert stale is not None and stale.version == 1
+
+    # The winner's write, applied straight to the row.
+    winner_blob = escrow_blob()
+    await db.execute(
+        text("UPDATE recovery_escrows SET version = 2, blob = :blob"),
+        {"blob": winner_blob},
+    )
+
+    loser_body = escrow.root.escrow_body(escrow.workspace_id, version=2)
+    loser = await client.put(
+        f"/w/{escrow.workspace_id}/recovery",
+        json=loser_body,
+        headers=escrow.headers,
+    )
+    assert loser.status_code == 409, loser.text
+    # Told what the slot held when the decision was made, not handed a 200.
+    assert detail_of(loser) == {"code": "escrow_version_regression", "stored_version": 1}
+
+    # The loser's bytes are nowhere in the slot. (Its refusal rolls the request's
+    # transaction back, and the suite shares one session, so the *winner's*
+    # staged bytes go with it — what this can assert, and what matters, is that
+    # the losing write did not land.)
+    stored_blob = (await db.execute(text("SELECT blob FROM recovery_escrows"))).scalar_one()
+    assert base64.b64encode(stored_blob).decode("ascii") != loser_body["blob_b64"]
+
+
 # --- GET /w/{w}/recovery ------------------------------------------------------
 
 
@@ -231,6 +299,31 @@ async def test_fetching_an_empty_slot_is_a_404(client: AsyncClient) -> None:
     response = await client.get(f"/w/{escrow.workspace_id}/recovery", headers=escrow.headers)
     assert response.status_code == 404, response.text
     assert detail_of(response) == {"code": "no_recovery_escrow"}
+
+
+async def test_a_fetch_of_an_empty_slot_does_not_spend_the_quota(
+    client: AsyncClient,
+) -> None:
+    """The limit bounds bytes leaving the slot, so a 404 must not consume it.
+
+    Otherwise a run of attempts against an account that has not been enrolled yet
+    — a mistyped login, a device pointed at the wrong user — locks the one fetch
+    that matters out for a day.
+    """
+    escrow = await _open(client, "escrow-404-quota@example.com")
+    for _ in range(RECOVERY_FETCH_DAILY_LIMIT + 5):
+        probe = await client.get(f"/w/{escrow.workspace_id}/recovery", headers=escrow.headers)
+        assert probe.status_code == 404, probe.text
+
+    assert (
+        await client.put(
+            f"/w/{escrow.workspace_id}/recovery",
+            json=escrow.root.escrow_body(escrow.workspace_id),
+            headers=escrow.headers,
+        )
+    ).status_code == 200
+    served = await client.get(f"/w/{escrow.workspace_id}/recovery", headers=escrow.headers)
+    assert served.status_code == 200, served.text
 
 
 async def test_the_fetch_is_rate_limited(client: AsyncClient, db: AsyncSession) -> None:

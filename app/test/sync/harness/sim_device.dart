@@ -357,6 +357,8 @@ class SimDevice {
     required this.projector,
     required this.keyStore,
     required this.enrolment,
+    required this.kdfParameters,
+    required this.passphrasePolicy,
     required this.outcome,
     required this.storeDirectory,
     required this.workspaceClientFactory,
@@ -375,6 +377,11 @@ class SimDevice {
   /// [passphrase] is null for the very first device of an account — the
   /// ceremony generates one and hands it back on [outcome], which is the only
   /// thing any later device is given.
+  ///
+  /// [chosenPassphrase] is the *first* device taking the user's own passphrase
+  /// instead of a generated one. It is a different path from [passphrase], which
+  /// enrols against an escrow that already exists, and the two are mutually
+  /// exclusive.
   static Future<SimDevice> create({
     required String label,
     required String userId,
@@ -384,6 +391,7 @@ class SimDevice {
     Uint8List? seed,
     MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
     String? passphrase,
+    String? chosenPassphrase,
     Random? random,
     Argon2idParameters kdf = harnessKdfParameters,
     PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
@@ -392,6 +400,12 @@ class SimDevice {
     int pullPageLimit = defaultPullPageLimit,
     bool fileBacked = false,
   }) async {
+    if (passphrase != null && chosenPassphrase != null) {
+      throw ArgumentError(
+        'passphrase enrols against an existing escrow and chosenPassphrase '
+        'founds one; a device does exactly one of the two',
+      );
+    }
     // N devices means N stores, which is the whole premise. Drift's warning is
     // about several databases sharing one executor; each device here has its
     // own in-memory one, so there is nothing to race.
@@ -496,7 +510,7 @@ class SimDevice {
       random: random ?? Random(label.codeUnitAt(0)),
     );
     final outcome = passphrase == null
-        ? await enrolment.enrolFirstDevice()
+        ? await enrolment.enrolFirstDevice(passphrase: chosenPassphrase)
         : await enrolment.enrolWithPassphrase(passphrase);
 
     return SimDevice._(
@@ -513,6 +527,8 @@ class SimDevice {
       projector: projector,
       keyStore: keyStore,
       enrolment: enrolment,
+      kdfParameters: kdf,
+      passphrasePolicy: passphrasePolicy,
       outcome: outcome,
       storeDirectory: storeDirectory,
       workspaceClientFactory: workspaceClientFactory,
@@ -541,6 +557,12 @@ class SimDevice {
   final DeviceKeyStore keyStore;
   final EnrolmentService enrolment;
 
+  /// The costs this device's ceremony ran at, injected as both the parameters
+  /// and the floor — kept so [enrolmentAgainst] can build a second service that
+  /// reads the same blobs.
+  final Argon2idParameters kdfParameters;
+  final PassphrasePolicy passphrasePolicy;
+
   /// What this device's enrolment produced — including the passphrase, which
   /// for the first device is the only copy that will ever exist.
   final EnrolmentOutcome outcome;
@@ -560,6 +582,25 @@ class SimDevice {
   /// custom registry has to keep reducing under it across a restart, or the
   /// restart itself becomes the divergence the test is trying to rule out.
   final MergeStrategyRegistry strategies;
+
+  /// The real [EnrolmentService], with its *recovery* fetch pointed elsewhere.
+  ///
+  /// Everything else — this device's client, key store, pin and high-water mark —
+  /// stays as it is; only the User transport the escrow is read through changes.
+  /// That is how "the server rolled the escrow back" and "the server substituted
+  /// a blob signed by another Root" are staged against the production recovery
+  /// path (`changePassphrase` -> `_recoverRoot`) instead of a test-local copy of
+  /// it, without teaching the harness a second network.
+  EnrolmentService enrolmentAgainst(UserTransport transport) => EnrolmentService(
+        client: client,
+        userTransport: transport,
+        keyStore: keyStore,
+        workspaceClientFactory: workspaceClientFactory,
+        nowMs: () => clock.nowMs,
+        passphrasePolicy: passphrasePolicy,
+        kdfParameters: kdfParameters,
+        kdfFloor: kdfParameters,
+      );
 
   /// This device's client for the User-global preferences Workspace.
   Future<SyncClient> get preferencesClient =>

@@ -59,7 +59,16 @@ def upgrade() -> None:
         ),
         # Strictly increasing per slot: a passphrase change re-wraps at v+1 and
         # the server refuses anything at or below what it holds.
-        sa.Column("version", sa.BigInteger(), nullable=False),
+        #
+        # The SQLite variant mirrors ``models.py``: these tables are exercised on
+        # SQLite, where BIGINT is not a rowid alias, so migration and ORM have to
+        # declare the same type or the schema the tests run against is not the
+        # schema the ORM describes.
+        sa.Column(
+            "version",
+            sa.BigInteger().with_variant(sa.Integer, "sqlite"),
+            nullable=False,
+        ),
         sa.Column("blob", sa.LargeBinary(), nullable=False),
         sa.Column("root_sig", sa.LargeBinary(), nullable=False),
         # Established by the first write and never changed by a later one: this
@@ -81,7 +90,14 @@ def upgrade() -> None:
 
     op.create_table(
         "recovery_escrow_fetches",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        # ``INTEGER PRIMARY KEY AUTOINCREMENT`` on SQLite — a BIGINT primary key
+        # there is not a rowid alias and so does not autoincrement at all.
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer, "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column("workspace_id", sa.Uuid(), nullable=False),
         sa.Column(
             "user_id",

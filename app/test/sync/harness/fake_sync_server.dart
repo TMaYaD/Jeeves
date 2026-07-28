@@ -218,7 +218,12 @@ class FakeSyncServer {
   /// what actually went over the wire.
   final List<List<Uint8List>> receivedBatches = [];
 
-  /// Every escrow read, in order: the append-only audit the real server keeps.
+  /// Every escrow read that **served bytes**, in order: the append-only audit
+  /// the real server keeps, which records a read of a slot rather than a request
+  /// for one. A probe against an empty slot leaves no row here because it leaves
+  /// none there either — nothing left the server, and with a 404 no longer
+  /// spending the daily fetch quota, auditing probes would be an unbounded
+  /// audit-row mill for anyone holding a stolen User credential.
   final List<({String userId, String workspaceId})> escrowFetches = [];
 
   /// Every frame the signal socket put on the wire, per Workspace, in order —
@@ -612,6 +617,11 @@ class FakeSyncServer {
 
   RecoveryEscrowRecord? _fetchRecoveryEscrow(String userId, String workspaceId) {
     _authorizeWorkspace(userId, workspaceId);
+    // The existence check comes before the quota, as it does on the real server:
+    // the limit bounds bytes leaving the slot, so an absent slot must not be
+    // able to lock the account's real recovery fetch out for a day.
+    final stored = _escrows[_slot(workspaceId, userId)];
+    if (stored == null) return null;
     final count = (_escrowFetchCounts[userId] ?? 0) + 1;
     _escrowFetchCounts[userId] = count;
     if (count > fakeServerRecoveryFetchLimit) {
@@ -621,8 +631,6 @@ class FakeSyncServer {
         code: 'escrow_fetch_rate_limited',
       );
     }
-    final stored = _escrows[_slot(workspaceId, userId)];
-    if (stored == null) return null;
     escrowFetches.add((userId: userId, workspaceId: workspaceId));
     return stored.record;
   }

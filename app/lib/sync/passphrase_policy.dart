@@ -124,9 +124,24 @@ class PassphrasePolicy {
     );
   }
 
-  Set<String> get _wordSet => _wordSetCache[wordlist] ??= wordlist.toSet();
+  /// The wordlist as a set, memoised for the *current* list only.
+  ///
+  /// Static because the class is const — `const PassphrasePolicy()` is a default
+  /// argument in the enrolment service, and a default argument has to be a
+  /// constant expression, so the set cannot be an instance field. One slot
+  /// rather than a map keyed by list identity: a map would retain every list any
+  /// caller ever passed for the life of the process, and the only thing the hot
+  /// path needs is not to rebuild the set on consecutive calls with one list.
+  Set<String> get _wordSet {
+    if (!identical(_cachedWordlist, wordlist)) {
+      _cachedWordlist = wordlist;
+      _cachedWordSet = wordlist.toSet();
+    }
+    return _cachedWordSet!;
+  }
 
-  static final Map<List<String>, Set<String>> _wordSetCache = {};
+  static List<String>? _cachedWordlist;
+  static Set<String>? _cachedWordSet;
 
   static int _alphabetSize(String passphrase) {
     var size = 0;

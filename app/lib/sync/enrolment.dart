@@ -219,7 +219,7 @@ class EnrolmentService {
 
   /// Enrol a further Device with nothing but the passphrase.
   Future<EnrolmentOutcome> enrolWithPassphrase(String passphrase) async {
-    final (record, root) = await _recoverRoot(passphrase);
+    final (record, root, _) = await _recoverRoot(passphrase);
     try {
       await client.pinRoot(root.rootPk, record.version);
       await _registerThisDevice(root);
@@ -240,17 +240,23 @@ class EnrolmentService {
   /// Explicitly **not** a remediation for a compromised passphrase: whoever
   /// copied the old blob can still open it, and no version bump takes that
   /// back. It is a rotation of the wrapper, not of Root.
+  ///
+  /// **Both escrowed secrets survive the rotation.** The new blob carries the
+  /// master wrap key that came out of the old one rather than a fresh draw:
+  /// minting a new one here would orphan every KeyWrap made under the previous
+  /// key the moment #554 starts wrapping under it, and a passphrase change is a
+  /// re-wrap of the wrapper, not a key rotation.
   Future<EnrolmentOutcome> changePassphrase({
     required String currentPassphrase,
     required String newPassphrase,
   }) async {
-    final (record, root) = await _recoverRoot(currentPassphrase);
+    final (record, root, secrets) = await _recoverRoot(currentPassphrase);
     try {
       final blob = await wrapEscrowBlob(
         passphrase: newPassphrase,
         secrets: EscrowedSecrets(
           rootSecretKey: root.secretKey,
-          masterWrapKey: _randomBytes(masterWrapKeyBytes),
+          masterWrapKey: secrets.masterWrapKey,
         ),
         parameters: kdfParameters,
         floor: kdfFloor,
@@ -278,11 +284,17 @@ class EnrolmentService {
   }
 
   /// Fetch, check and unwrap the escrow — the alarm-not-prompt half of F12.
-  Future<(RecoveryEscrowRecord, RootAuthority)> _recoverRoot(String passphrase) async {
+  ///
+  /// Returns the secrets as well as Root: [changePassphrase] re-wraps the
+  /// *recovered* master wrap key, so discarding it here is what would silently
+  /// rotate it.
+  Future<(RecoveryEscrowRecord, RootAuthority, EscrowedSecrets)> _recoverRoot(
+    String passphrase,
+  ) async {
     final record = await userTransport.fetchRecoveryEscrow(client.workspaceId);
     if (record == null) {
       throw const RecoveryEscrowException(
-        RecoveryEscrowFailure.malformedBlob,
+        RecoveryEscrowFailure.noEscrowStored,
         'this account has no recovery escrow to enrol against',
       );
     }
@@ -318,7 +330,7 @@ class EnrolmentService {
       // be signed by the Root the passphrase produced.
       await verifyEscrowRecordSignature(record, client.workspaceId, root.rootPk);
     }
-    return (record, root);
+    return (record, root, secrets);
   }
 
   /// Steps 2 through 7 — everything after Root is in hand.

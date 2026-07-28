@@ -41,7 +41,9 @@ class RootAuthority {
     );
   }
 
-  final SimpleKeyPair _keyPair;
+  /// Null once [drop] has run — which is what makes a use-after-drop a loud
+  /// [StateError] rather than a valid Root signature made after the ceremony.
+  SimpleKeyPair? _keyPair;
   Uint8List _secretKey;
 
   /// The 32 raw public bytes a Device pins on first successful unwrap.
@@ -49,17 +51,25 @@ class RootAuthority {
 
   /// The secret half, for escrowing it. Throws once [drop] has run.
   Uint8List get secretKey {
-    if (_secretKey.isEmpty) {
-      throw StateError('Root was dropped at the end of the ceremony');
-    }
+    if (_secretKey.isEmpty) _refuseDropped();
     return _secretKey;
   }
+
+  /// The keypair every signing path goes through, or a [StateError].
+  ///
+  /// Root's whole contract is that it exists for the length of one ceremony, so
+  /// *every* signature has to be gated on the same liveness check rather than
+  /// only the paths that happen to touch [secretKey].
+  SimpleKeyPair get _liveKeyPair => _keyPair ?? _refuseDropped();
+
+  Never _refuseDropped() =>
+      throw StateError('Root was dropped at the end of the ceremony');
 
   Future<Uint8List> signCertificate(RegistrationCertificate certificate) async =>
       signCertificateBytes(certificate.encode());
 
   Future<Uint8List> signCertificateBytes(Uint8List certBytes) =>
-      signDomainSeparated(_keyPair, registrationSigningInput(certBytes));
+      signDomainSeparated(_liveKeyPair, registrationSigningInput(certBytes));
 
   /// Sign a Workspace genesis certificate.
   ///
@@ -67,20 +77,20 @@ class RootAuthority {
   /// registration must never verify over a genesis, or a captured registration
   /// could be replayed as the founding of a Workspace (F7).
   Future<Uint8List> signGenesisCertificateBytes(Uint8List certBytes) =>
-      signDomainSeparated(_keyPair, genesisSigningInput(certBytes));
+      signDomainSeparated(_liveKeyPair, genesisSigningInput(certBytes));
 
   /// Sign a Grant certificate as Root — the only authority that may mint an
   /// `owner` role (ADR-0031).
   Future<Uint8List> signGrantCertificateBytes(Uint8List certBytes) =>
-      signDomainSeparated(_keyPair, grantSigningInput(certBytes));
+      signDomainSeparated(_liveKeyPair, grantSigningInput(certBytes));
 
   /// Sign a Revoke certificate as Root — the only authority that may revoke an
   /// `owner` Grant, which is why removing a Device takes the passphrase.
   Future<Uint8List> signRevokeCertificateBytes(Uint8List certBytes) =>
-      signDomainSeparated(_keyPair, revokeSigningInput(certBytes));
+      signDomainSeparated(_liveKeyPair, revokeSigningInput(certBytes));
 
   Future<Uint8List> signEscrow(String workspaceId, int version, Uint8List blob) =>
-      signDomainSeparated(_keyPair, escrowSigningInput(workspaceId, version, blob));
+      signDomainSeparated(_liveKeyPair, escrowSigningInput(workspaceId, version, blob));
 
   /// Build and sign the record the escrow slot stores.
   Future<RecoveryEscrowRecord> escrowRecord({
@@ -95,16 +105,18 @@ class RootAuthority {
         rootPk: rootPk,
       );
 
-  /// End of ceremony: forget the secret bytes we can reach.
+  /// End of ceremony: forget the secret bytes we can reach, and stop signing.
   ///
-  /// Best-effort by necessity. Dart gives no way to guarantee a buffer is not
-  /// still sitting in a copy the VM made — full at-rest and in-memory hardening
-  /// is review F22 and is not claimed here. Overwriting what we *can* reach
-  /// still shortens the window, and makes a use-after-drop a loud [StateError]
-  /// rather than a quiet signature with a key that should be gone.
+  /// Two halves, and both are needed. Zeroing [secretKey] is best-effort by
+  /// necessity — Dart gives no way to guarantee a buffer is not still sitting in
+  /// a copy the VM made, and full at-rest and in-memory hardening is review F22,
+  /// not claimed here. Releasing the keypair is not best-effort: it is what
+  /// makes every signing path above throw a [StateError] afterwards instead of
+  /// quietly producing a valid Root signature once the ceremony is over.
   void drop() {
     _secretKey.fillRange(0, _secretKey.length, 0);
     _secretKey = Uint8List(0);
+    _keyPair = null;
   }
 }
 
