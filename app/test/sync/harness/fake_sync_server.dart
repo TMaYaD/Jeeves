@@ -167,6 +167,34 @@ class FakeSyncServer {
     _log.firstWhere((op) => op.seq == seq).compactedBy = by;
   }
 
+  // --- Serving-side hostility ------------------------------------------------
+  //
+  // Fault injection lives here rather than in the client's link because the
+  // faults #551 defends against are *serving* faults: a server that drops,
+  // reorders, rewinds or replays. The client path stays production-real, which
+  // is the only way an alarm it raises is evidence of anything.
+
+  /// Seqs that pulls pretend do not exist — a withheld op.
+  final Set<int> omitSeqs = {};
+
+  /// Serve a pull page in this seq order instead of ascending. Seqs the log has
+  /// and this list does not keep their ascending place behind the listed ones.
+  List<int>? serveOrder;
+
+  /// Serve from seq 1 whatever `since` the client asked with. `since` is a pure
+  /// client parameter, so no honest server can do this.
+  bool ignoreSinceParameter = false;
+
+  /// Truncate the log above [seq] and hand the freed seqs back out.
+  ///
+  /// The rollback and stale-prefix stage in one hook: history the client has
+  /// already seen and acknowledged simply stops existing, and the next append
+  /// reuses its transport positions.
+  void rollbackToSeq(int seq) {
+    _log.removeWhere((op) => op.seq > seq);
+    _nextSeq = seq + 1;
+  }
+
   /// Append bytes without running any of the server's own checks.
   ///
   /// This is the *hostile or broken server*: the fail-closed rules on the
@@ -566,10 +594,11 @@ class FakeSyncServer {
       }
       final expected = (lastAuthorSeq[header.authorMemberId] ?? 0) + 1;
       if (header.authorSeq != expected) {
-        throw SyncTransportException(
-          409,
+        throw AuthorChainConflictException(
           'ops[$index]: author_seq ${header.authorSeq}, expected $expected',
-          code: 'author_chain_gap',
+          opIndex: index,
+          submittedAuthorSeq: header.authorSeq,
+          expectedAuthorSeq: expected,
         );
       }
       final op = StoredOp(
@@ -676,11 +705,28 @@ class FakeSyncServer {
       throw const SyncTransportException(401, 'unknown member', code: 'unknown_member');
     }
     _authorizeWorkspace(member.userId, workspaceId);
+    final floor = ignoreSinceParameter ? 0 : since;
     final matching = [
       for (final op in _log)
-        if (op.workspaceId == workspaceId && op.seq > since && op.compactedBy == null)
+        if (op.workspaceId == workspaceId &&
+            op.seq > floor &&
+            op.compactedBy == null &&
+            !omitSeqs.contains(op.seq))
           op,
     ]..sort((a, b) => a.seq.compareTo(b.seq));
+    final order = serveOrder;
+    if (order != null) {
+      // Listed seqs first, in the listed order; everything else keeps its
+      // ascending place behind them.
+      matching.sort((a, b) {
+        final left = order.indexOf(a.seq);
+        final right = order.indexOf(b.seq);
+        if (left == right) return a.seq.compareTo(b.seq);
+        if (left < 0) return 1;
+        if (right < 0) return -1;
+        return left.compareTo(right);
+      });
+    }
     final page = matching.take(limit).toList();
     return PullPage(
       ops: [for (final op in page) PulledOp(seq: op.seq, envelope: op.envelope)],

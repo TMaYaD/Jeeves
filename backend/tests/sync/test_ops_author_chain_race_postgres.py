@@ -163,6 +163,14 @@ async def test_a_raced_fork_of_the_author_chain_is_a_409_not_a_500(
         with pytest.raises(HTTPException) as refusal:
             await post_ops(workspace_id, PostOpsRequest(ops=[encode(loser)]), losing, member)
         assert refusal.value.status_code == 409
+        # The code alone.  A raced constraint violation names no batch index, and
+        # a guessed ``expected_author_seq`` would read on the client as a verdict
+        # that the server rolled its writes back; omitting it says "no verdict".
+        # ``HTTPException.detail`` is annotated ``str`` upstream while the routes
+        # raise structured objects through it, so the comparison is widened here
+        # rather than the assertion weakened to a substring match.
+        detail: object = refusal.value.detail
+        assert detail == {"code": "author_chain_conflict"}
 
     async with sessions() as reader:
         stored = (await reader.execute(select(Op))).scalars().all()

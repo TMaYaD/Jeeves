@@ -3,7 +3,7 @@
 /// ADR-0026 requires the received log to be *the client's*, immutable evidence:
 /// per-author chains only make server truncation and rollback detectable if the
 /// client keeps what it received. So [OpLog] holds full envelope bytes, and
-/// #551's chain verification reads them back.
+/// `chain_verifier.dart` reads them back to derive each author's verified head.
 ///
 /// This database is deliberately separate from `lib/database/gtd_database.dart`
 /// and shares nothing with it. The production app still runs on PowerSync until
@@ -16,6 +16,19 @@ import 'package:drift/drift.dart';
 part 'sync_database.g.dart';
 
 /// Every envelope this device has received, byte for byte, in arrival order.
+///
+/// The unique index over `(workspace, author, author_seq)` mirrors the server's
+/// own per-author constraint, and it is deliberately a *constraint* rather than
+/// a convenience: one slot of an author's chain holds one op, so a bug that
+/// double-logs a position throws instead of quietly corrupting the evidence the
+/// chain verdict is derived from. The `(workspace, author, op_id)` index is what
+/// makes the divergent-duplicate check (F13) a lookup rather than a scan.
+@TableIndex(
+  name: 'op_log_author_chain',
+  columns: {#workspaceId, #authorMemberId, #authorSeq},
+  unique: true,
+)
+@TableIndex(name: 'op_log_author_op_id', columns: {#workspaceId, #authorMemberId, #opId})
 @DataClassName('OpLogRow')
 class OpLog extends Table {
   /// The server's transport cursor. Never causality, never a merge input.
@@ -26,6 +39,19 @@ class OpLog extends Table {
   TextColumn get authorMemberId => text()();
   IntColumn get authorSeq => integer()();
   DateTimeColumn get receivedAt => dateTime()();
+
+  /// When the reducer applied this op. Null means "logged as chain evidence and
+  /// never applied" — see [refusedReason]. Exactly one of the two is set.
+  DateTimeColumn get appliedAt => dateTime().nullable()();
+
+  /// The `SyncRejectionReason.code` of the reducer guard that refused this op.
+  ///
+  /// A signature-or-chain-valid envelope is logged even when a reducer guard
+  /// then refuses its payload, because withholding it would make the author's
+  /// *next* op look like a chain gap. Recording *which* guard fired is what
+  /// keeps a later replay (#555) from re-evaluating a time-dependent rule like
+  /// `hlc_in_the_future` hours later and reaching a different answer.
+  TextColumn get refusedReason => text().nullable()();
 
   @override
   Set<Column<Object>> get primaryKey => {workspaceId, seq};
@@ -48,8 +74,8 @@ class Outbox extends Table {
 
   /// Set once the server has acknowledged the op (including as a duplicate).
   /// Acknowledged rows are kept rather than deleted: they are this device's
-  /// record of what it authored, and #551's chain verification compares them
-  /// against what the server later serves back.
+  /// record of what it *authored*, and comparing them against what the server
+  /// later serves back is the whole own-writes divergence check.
   DateTimeColumn get sentAt => dateTime().nullable()();
 }
 
@@ -82,6 +108,14 @@ class SyncCursors extends Table {
 }
 
 /// Ops that failed a fail-closed rule: never applied, always surfaced.
+///
+/// [authorMemberId] and [authorSeq] are populated for chain refusals so the
+/// release scan can look up the one row that could now be chain-valid — the op
+/// at the author's head + 1 — instead of walking the table on every accepted op.
+@TableIndex(
+  name: 'quarantined_ops_author_chain',
+  columns: {#workspaceId, #authorMemberId, #authorSeq},
+)
 @DataClassName('QuarantineRow')
 class QuarantinedOps extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -91,6 +125,53 @@ class QuarantinedOps extends Table {
   TextColumn get detail => text()();
   BlobColumn get envelope => blob()();
   DateTimeColumn get detectedAt => dateTime()();
+
+  /// The refused envelope's author, when its header parsed. Null for bytes so
+  /// malformed that there was no author to record.
+  TextColumn get authorMemberId => text().nullable()();
+  IntColumn get authorSeq => integer().nullable()();
+
+  /// When a quarantined op became chain-valid and was re-admitted.
+  ///
+  /// Rows are kept rather than deleted: a hostile reorder that healed is still
+  /// something the user gets to inspect, and the timestamp is what separates
+  /// "reordered and converged" from "withheld and still missing".
+  DateTimeColumn get releasedAt => dateTime().nullable()();
+}
+
+/// What the server or an author stands accused of — the per-event vocabulary,
+/// distinct from [QuarantinedOps]' per-op refusal reasons.
+///
+/// The two are not 1:1 in either direction. `own_writes_rollback` is detected on
+/// a POST refusal and has no received envelope to quarantine at all; one chain
+/// gap covers however many successors the gap refused. Rows are upserted by
+/// `(workspaceId, kind, authorMemberId)` so a server re-serving the same evil on
+/// every sync bumps [occurrenceCount] instead of flooding the table.
+///
+/// [resolvedAt] marks an accusation that no longer stands — a gap alarm whose
+/// every refused row was later released. `SyncHealth.unresolvedAlarmCount`
+/// counts the rows where it is null, which is why a heal has to clear it rather
+/// than merely add a second row.
+@DataClassName('IntegrityAlarmRow')
+class IntegrityAlarms extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get workspaceId => text()();
+
+  /// An `IntegrityAlarmKind.code` — see `chain_verifier.dart`.
+  TextColumn get kind => text()();
+
+  /// The author whose stream the alarm is about. Null when the accusation is
+  /// against the server alone.
+  TextColumn get authorMemberId => text().nullable()();
+  TextColumn get detail => text()();
+
+  /// The [QuarantinedOps] row this alarm was first raised for, when there was
+  /// one. Null for alarms with no received envelope behind them.
+  IntColumn get quarantineOpRowId => integer().nullable()();
+  IntColumn get occurrenceCount => integer()();
+  DateTimeColumn get firstDetectedAt => dateTime()();
+  DateTimeColumn get lastDetectedAt => dateTime()();
+  DateTimeColumn get resolvedAt => dateTime().nullable()();
 }
 
 /// The reduced value of one field of one entity. Visibility is decided at read
@@ -182,6 +263,7 @@ class ControlChainState extends Table {
     AuthorState,
     SyncCursors,
     QuarantinedOps,
+    IntegrityAlarms,
     ReducedFields,
     FieldClocks,
     RowTombstones,
@@ -193,17 +275,18 @@ class SyncDatabase extends _$SyncDatabase {
   SyncDatabase(super.executor);
 
   /// v2 adds the pinned-Root and control-chain tables (#548); v3 adds
-  /// `sync_cursors.last_sync_completed_at` (#550). #551's integrity tables are
-  /// the next step; whichever slice merges second rebases its migration onto
-  /// the other's version rather than sharing a step.
+  /// `sync_cursors.last_sync_completed_at` (#550); v4 adds the integrity-alarm
+  /// store, the quarantine and op-log columns the chain verdict needs, and the
+  /// three indexes it reads through (#551).
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
-  /// each step is `CREATE TABLE`s or an `ADD COLUMN` and no data movement.
+  /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
+  /// data movement.
   ///
   /// The steps are sequential `if (from < n)` rather than exclusive branches so
-  /// that a device upgrading straight from v1 runs both of them, in order.
+  /// that a device upgrading straight from v1 runs all of them, in order.
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (migrator) => migrator.createAll(),
@@ -214,6 +297,24 @@ class SyncDatabase extends _$SyncDatabase {
           }
           if (from < 3) {
             await migrator.addColumn(syncCursors, syncCursors.lastSyncCompletedAt);
+          }
+          if (from < 4) {
+            await migrator.createTable(integrityAlarms);
+            await migrator.addColumn(quarantinedOps, quarantinedOps.authorMemberId);
+            await migrator.addColumn(quarantinedOps, quarantinedOps.authorSeq);
+            await migrator.addColumn(quarantinedOps, quarantinedOps.releasedAt);
+            await migrator.addColumn(opLog, opLog.appliedAt);
+            await migrator.addColumn(opLog, opLog.refusedReason);
+            // Everything logged before v4 was logged *after* a successful
+            // apply, so the backfill is exact rather than a guess: leaving
+            // `applied_at` null would make every pre-existing row read as
+            // "logged, never applied".
+            await customStatement(
+              'UPDATE op_log SET applied_at = received_at WHERE applied_at IS NULL',
+            );
+            await migrator.create(opLogAuthorChain);
+            await migrator.create(opLogAuthorOpId);
+            await migrator.create(quarantinedOpsAuthorChain);
           }
         },
       );

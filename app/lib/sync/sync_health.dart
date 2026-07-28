@@ -1,11 +1,10 @@
 /// What the sync surface reports — the replacement for the PowerSync
 /// `SyncStatus` indicator.
 ///
-/// **One class, one file**, shared verbatim with #551's integrity work: that
-/// slice fills [unresolvedAlarmCount] and [alarmKinds] from its IntegrityAlarms
-/// rows (`resolved_at IS NULL`), this one fills [pendingOpCount],
-/// [quarantineCount] and [lastSyncedAt], and #553 swaps the provider. Whichever
-/// merges second reconciles to this shape.
+/// **One class, one file.** [unresolvedAlarmCount] and [alarmKinds] come from the
+/// `integrity_alarms` rows with `resolved_at IS NULL`; [pendingOpCount],
+/// [quarantineCount] and [lastSyncedAt] from the outbox, the still-unreleased
+/// quarantine rows and the pull cursor. #553 swaps the provider behind it.
 ///
 /// Two rules the shape encodes deliberately:
 ///
@@ -33,11 +32,12 @@ class SyncHealth {
   /// Outbox rows this device authored that the server has not acknowledged.
   final int pendingOpCount;
 
-  /// #551's IntegrityAlarms rows with `resolved_at IS NULL`. Reads 0 until that
-  /// slice lands; [quarantineCount] carries the signal meanwhile.
+  /// Accusations that still stand: `integrity_alarms` with `resolved_at IS NULL`.
   final int unresolvedAlarmCount;
 
-  /// Ops refused by a fail-closed rule: never applied, always surfaced.
+  /// Ops still refused by a fail-closed rule: never applied, always surfaced.
+  /// A refusal that was later re-admitted (a reorder that healed) stops counting
+  /// here and stays inspectable.
   final int quarantineCount;
 
   /// The distinct kinds of the unresolved alarms.

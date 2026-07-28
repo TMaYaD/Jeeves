@@ -13,6 +13,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -363,7 +364,9 @@ class SimDevice {
     required this.keyStore,
     required this.enrolment,
     required this.outcome,
-  }) : preferences = PreferencesStore(client: client, registry: registry);
+    required this.storeDirectory,
+  })  : _syncStore = database,
+        preferences = PreferencesStore(client: client, registry: registry);
 
   /// Build a device and run the enrolment ceremony on it.
   ///
@@ -384,12 +387,22 @@ class SimDevice {
     PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
     SimTimers? timers,
     Duration keepaliveInterval = signalKeepaliveInterval,
+    int pullPageLimit = defaultPullPageLimit,
+    bool fileBacked = false,
   }) async {
     // N devices means N stores, which is the whole premise. Drift's warning is
     // about several databases sharing one executor; each device here has its
     // own in-memory one, so there is nothing to race.
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
-    final database = SyncDatabase(NativeDatabase.memory());
+    // A memory store cannot demonstrate that anything survives a restart, so a
+    // device that has to prove it gets a real file it can be reopened over.
+    final storeDirectory =
+        fileBacked ? Directory.systemTemp.createTempSync('jeeves-sim-device-') : null;
+    final database = SyncDatabase(
+      storeDirectory == null
+          ? NativeDatabase.memory()
+          : NativeDatabase(File('${storeDirectory.path}/sync.sqlite')),
+    );
     final identity = await MemberIdentity.generate(
       memberId: memberId,
       signSeed: seed,
@@ -427,6 +440,7 @@ class SimDevice {
         nowMs: () => clock.nowMs,
         strategies: strategies,
       ),
+      pullPageLimit: pullPageLimit,
       now: () => clock.asDateTime,
     );
     // The two stores and the wiring #553 flips on, in the order the cycle
@@ -473,6 +487,7 @@ class SimDevice {
       keyStore: keyStore,
       enrolment: enrolment,
       outcome: outcome,
+      storeDirectory: storeDirectory,
     );
   }
 
@@ -501,7 +516,39 @@ class SimDevice {
 
   final PreferencesStore preferences;
 
+  /// Where a file-backed device's sync store lives, or null for a memory one.
+  final Directory? storeDirectory;
+
+  /// The live sync store — [database] until [reopenSyncStore] replaces it.
+  SyncDatabase _syncStore;
+
   SimTimers get timers => link.timers;
+
+  /// Close this device's sync store and open it again over the same file.
+  ///
+  /// Process death, as far as the store is concerned. The returned client is a
+  /// reader over the reopened database: it can inspect quarantine rows and
+  /// alarms, which is what "survives restart" has to mean to be worth asserting.
+  /// Enrolment is deliberately not re-run — a real relaunch reloads its identity
+  /// from the key store rather than registering itself a second time.
+  Future<SyncClient> reopenSyncStore() async {
+    final directory = storeDirectory;
+    if (directory == null) {
+      throw StateError('a memory-backed device has no file to reopen');
+    }
+    await _syncStore.close();
+    final reopened = SyncDatabase(NativeDatabase(File('${directory.path}/sync.sqlite')));
+    _syncStore = reopened;
+    return SyncClient(
+      workspaceId: client.workspaceId,
+      userId: userId,
+      identity: identity,
+      database: reopened,
+      clock: hlc,
+      reducer: Reducer(reopened, nowMs: () => clock.nowMs),
+      now: () => clock.asDateTime,
+    );
+  }
 
   /// The subscription lifecycle, on this device's deterministic hooks: the
   /// harness's timer wheel for backoff and a jitter that always picks the
@@ -541,6 +588,7 @@ class SimDevice {
   Future<void> close() async {
     await listener.dispose();
     await domain.close();
-    await database.close();
+    await _syncStore.close();
+    storeDirectory?.deleteSync(recursive: true);
   }
 }

@@ -17,6 +17,7 @@ import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/root_authority.dart';
 import 'package:jeeves/sync/signal_socket.dart';
+import 'package:jeeves/sync/sync_client.dart';
 import 'package:uuid/uuid.dart';
 
 import 'author_fixture.dart';
@@ -76,6 +77,7 @@ class SimWorkspace {
     MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
     SimTimers? timers,
     Duration keepaliveInterval = signalKeepaliveInterval,
+    int pullPageLimit = defaultPullPageLimit,
   }) async {
     final sharedServer = server ?? FakeSyncServer();
     final sharedClock = clock ?? FakeClock(simulationStartWallMs);
@@ -94,6 +96,7 @@ class SimWorkspace {
           strategies: strategies,
           timers: sharedTimers,
           keepaliveInterval: keepaliveInterval,
+          pullPageLimit: pullPageLimit,
           // Deterministic identity: HLC ties break on the member id, so a
           // random one would make the tie-break cases reproduce differently
           // from run to run.

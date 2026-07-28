@@ -593,9 +593,9 @@ async def post_ops(
     if not parsed:
         return PostOpsResponse(results=[])
 
-    # Control verification runs before the chain-gap check below, so a
+    # Control verification runs before the chain-conflict check below, so a
     # mispositioned register yields `member_register_not_first` and never the
-    # 409 — #551's chain verdict only ever sees registers already at seq 1.
+    # 409 — a client's chain verdict only ever sees registers already at seq 1.
     chained_members = await _verify_control_ops(db, workspace_id, current_member, parsed)
 
     try:
@@ -612,6 +612,9 @@ async def post_ops(
             results = await _append_batch(db, workspace_id, parsed)
         except IntegrityError as exc:
             await db.rollback()
+            # The code alone: a constraint violation names no batch index, and a
+            # guessed ``expected_author_seq`` here would be read as a rollback
+            # verdict on the client.  Omitting it says "no verdict" exactly.
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={"code": "author_chain_conflict"},
@@ -747,10 +750,17 @@ async def _append_batch(
         if header.author_seq != expected_author_seq:
             # The whole batch fails: a gap means the client's chain is broken,
             # and accepting the tail would make the break permanent.
+            #
+            # ``expected_author_seq`` is the load-bearing field, not a courtesy:
+            # a single-writer client compares it against the head this server has
+            # already acknowledged to tell an ordinary conflict from a server that
+            # rolled its writes back.  The race-retry path below cannot attribute
+            # the conflict to one op and so sends the code alone, which the client
+            # reads as "no verdict".
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
-                    "code": "author_chain_gap",
+                    "code": "author_chain_conflict",
                     "index": index,
                     "author_seq": header.author_seq,
                     "expected_author_seq": expected_author_seq,
