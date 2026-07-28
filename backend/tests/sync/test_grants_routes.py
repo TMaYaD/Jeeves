@@ -512,6 +512,72 @@ async def test_a_member_cannot_revoke_an_owner_grant(
     assert still_live is not None and still_live.revoked_by_seq is None
 
 
+async def test_a_member_cannot_revoke_an_owner_grant_staged_in_the_same_batch(
+    client: AsyncClient, session: Session, db: AsyncSession
+) -> None:
+    """The ceiling holds against a Grant that has no ``grants`` row yet.
+
+    The revoke half of the ceiling is the one that needs *state*: the frozen
+    certificate names a ``grant_id``, not a role, so only a reader holding the
+    Grant can tell an owner revocation from any other.  Within one batch that
+    reader is ``_GrantIndex``'s in-memory walk rather than the table — nothing is
+    flushed between ops — so a rule that consulted the database directly would let
+    a mint-then-revoke pair slip the ceiling in a single POST.
+
+    Which would be the whole ceiling gone: a member who can mint an owner Grant to
+    a device it controls and revoke it in the same breath does not need Root for
+    anything.  Both ops are refused together, because the batch is atomic.
+    """
+    sibling, sibling_token = await _join_sibling(client, session)
+    register = session.root.member_register_envelope(
+        sibling, session.workspace_id, prev_control_hash=session.control_head
+    )
+    posted = await _post(client, session, register, token=sibling_token)
+    assert posted.status_code == 200, posted.text
+    session.control_head = _chain_after(register)
+
+    # Index 0: a genuine Root-signed owner Grant, which is legal on its own — and
+    # authored by the sibling, because one POST speaks for exactly one Member (F10)
+    # and a Root-signed control payload lands whatever Grants its author holds.
+    minted = session.root.grant_certificate(
+        session.workspace_id, member_id=sibling.member_id, role=ROLE_OWNER
+    )
+    grant = session.root.grant_envelope(
+        sibling,
+        session.workspace_id,
+        certificate=minted,
+        prev_control_hash=session.control_head,
+    )
+    # Index 1: the sibling revoking it under its own authority — an owner revoking
+    # an owner, which is exactly what only Root may do.
+    revoke = session.root.revoke_envelope(
+        sibling,
+        session.workspace_id,
+        certificate=session.root.revoke_certificate(
+            session.workspace_id,
+            grant_id=minted.grant_id,
+            revoker=str(sibling.member_id),
+        ),
+        prev_control_hash=_chain_after(grant),
+        signing_key=sibling.signing_key,
+    )
+
+    response = await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(grant, revoke),
+        headers=auth_header(sibling_token),
+    )
+    assert response.status_code == 422, response.text
+    assert detail_of(response) == {"code": "owner_revoke_requires_root", "index": 1}
+
+    # Neither op landed: the refusal is the batch's, not the second op's. Three
+    # ops stand — the founding genesis and Grant, and the sibling's register.
+    assert await db.get(Grant, (session.workspace_id, minted.grant_id)) is None
+    assert len(await all_ops(db)) == 3
+    still_live = await db.get(Grant, (session.workspace_id, session.owner_grant_id))
+    assert still_live is not None and still_live.revoked_by_seq is None
+
+
 # --- Fail-closed grantees ---------------------------------------------------
 
 

@@ -90,6 +90,28 @@ const Set<int> _slotTakenResultCodes = {
 /// Whether an arriving control op takes its position, or loses a fork.
 enum _ControlPosition { accept, quarantineThis }
 
+/// What one [SyncClient.flushOutbox] concluded.
+///
+/// A return value rather than an exception because none of the three is an
+/// error the caller should be forced to catch: only the enrolment ceremony acts
+/// on the distinction, and [SyncClient.sync] is right to ignore it.
+enum FlushOutcome {
+  /// The queue was empty, or the server now holds everything that was in it.
+  flushed,
+
+  /// Nothing moved and the queue is retained: a 409 on our own chain, which
+  /// re-numbers nothing and is recorded as a verdict instead (see
+  /// [SyncClient.flushOutbox]). An unreachable server is not this — it throws,
+  /// because "offline" is the caller's to see.
+  retained,
+
+  /// A queued `workspace_genesis` lost the founding race: another Root-holder
+  /// founded this Workspace first. The staged ops are dropped and the author
+  /// chain is rewound, so the queue is *not* wedged — the ceremony has to pull
+  /// and claim its place on the register path instead.
+  genesisSuperseded,
+}
+
 class SyncClient {
   SyncClient({
     required this.workspaceId,
@@ -351,24 +373,79 @@ class SyncClient {
   /// device's chain. But a wedged *outbox* must never wedge the *pull*: reads keep
   /// working, and the wedge surfaces through [SyncHealth.pendingOpCount], which by
   /// construction makes `clean` false for as long as the queue is stuck.
-  Future<void> flushOutbox() async {
+  ///
+  /// **`genesis_not_first` is the one refusal that is not a wedge and not an
+  /// accusation.** It says another Root-holder founded this Workspace between our
+  /// pull and our POST, which is a race the log-state-conditioned ceremony is
+  /// *allowed* to lose (ADR-0031): both devices held Root, both observed an empty
+  /// log, and exactly one genesis may exist. Retaining the queue here would wedge
+  /// it for ever — our genesis can never become acceptable — so the staged ops go
+  /// and the author chain rewinds to what the log actually acknowledges. See
+  /// [_dropSupersededGenesis].
+  Future<FlushOutcome> flushOutbox() async {
     final pending = await (_db.select(_db.outbox)
           ..where((row) => row.workspaceId.equals(workspaceId) & row.sentAt.isNull())
           ..orderBy([(row) => OrderingTerm(expression: row.authorSeq)]))
         .get();
-    if (pending.isEmpty) return;
+    if (pending.isEmpty) return FlushOutcome.flushed;
 
     try {
       // A duplicate result is still an acknowledgement: the server holds the op.
       await transport.postOps(workspaceId, [for (final row in pending) row.envelope]);
     } on AuthorChainConflictException catch (conflict) {
       await _recordOwnWritesVerdict(conflict);
-      return;
+      return FlushOutcome.retained;
+    } on SyncTransportException catch (refusal) {
+      if (refusal.code != genesisNotFirstCode) rethrow;
+      await _dropSupersededGenesis(pending);
+      return FlushOutcome.genesisSuperseded;
     }
     final sentAt = _now();
     for (final row in pending) {
       await (_db.update(_db.outbox)..where((r) => r.id.equals(row.id)))
           .write(OutboxCompanion(sentAt: Value(sentAt)));
+    }
+    return FlushOutcome.flushed;
+  }
+
+  /// Discard a genesis the race is already lost, and everything queued behind it.
+  ///
+  /// **This is not the outbox being edited as evidence.** The outbox is authored
+  /// truth about what the *server holds* — that is what the own-writes comparison
+  /// reads it for — and none of these rows were accepted: the batch failed whole,
+  /// so the positions they claim are unspent. Keeping them would leave the queue
+  /// re-posting a genesis that can never be accepted, and leave the author chain
+  /// numbered past a slot the server still says is free, which is the second half
+  /// of the wedge: the register that has to follow *must* be this author's op 1.
+  ///
+  /// So the chain is rewound to the head the **log** attests rather than to a
+  /// remembered number — after a pull that is the winner's view of us, which for
+  /// a device that has just lost a founding race is nothing at all.
+  ///
+  /// No alarm. A lost race is two honest devices doing the same correct thing.
+  Future<void> _dropSupersededGenesis(List<OutboxRow> superseded) async {
+    await _db.transaction(() async {
+      for (final row in superseded) {
+        await (_db.delete(_db.outbox)..where((r) => r.id.equals(row.id))).go();
+      }
+      await (_db.delete(_db.authorState)
+            ..where((row) =>
+                row.workspaceId.equals(workspaceId) &
+                row.memberId.equals(identity.memberId)))
+          .go();
+    });
+    // Whatever of ours the log *does* hold still owns its positions, so the
+    // rewind is a re-derivation and not a reset to one.
+    final head = await _chainHead(identity.memberId);
+    if (head != null) {
+      await _db.into(_db.authorState).insertOnConflictUpdate(
+            AuthorStateCompanion.insert(
+              workspaceId: workspaceId,
+              memberId: identity.memberId,
+              nextAuthorSeq: head.authorSeq + 1,
+              lastEnvelopeHash: head.envelopeHash,
+            ),
+          );
     }
   }
 
@@ -496,12 +573,24 @@ class SyncClient {
   /// **Idempotent**: running it twice from the same winning chain is a no-op, so
   /// the recovery path can never oscillate. #555 inherits this entry point, since
   /// compaction needs the same one and must keep it correct under pruning.
+  ///
+  /// **Entities the rebuild *un*-reduces are surfaced too**, which is the whole
+  /// reason [_reducedEntities] is read before the wipe. An entity whose every op
+  /// became refused reduces to nothing, so the replay never names it — and a
+  /// projector told only about what re-applied would leave its domain row
+  /// standing as the last visible trace of a quarantined branch. The pre-wipe set
+  /// is unioned into the return value, so such an entity reaches
+  /// [DomainProjector.project] with no live field and is deleted there.
   Future<Set<AffectedEntity>> rebuildFromOpLog() async {
     _rebuildRequired = false;
     final rows = await (_db.select(_db.opLog)
           ..where((row) => row.workspaceId.equals(workspaceId))
           ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
         .get();
+
+    // Read before the wipe: after it there is no way to tell an entity that
+    // reduced to nothing from one this device never held.
+    final reducedBefore = await _reducedEntities();
 
     // Derived state only. The op log, the outbox, the applied control log and the
     // quarantine are all evidence, and evidence is not edited.
@@ -557,7 +646,30 @@ class SyncClient {
         await _stampRefused(row.seq, rejection.reason);
       }
     }
-    return affected;
+    // Everything that *was* reduced, whether or not it reduced again: an entity
+    // whose ops all became refused is exactly the case the projector has to hear
+    // about, and it is the one the replay above can never name.
+    return affected..addAll(reducedBefore);
+  }
+
+  /// Every entity the reduced substrate currently holds any trace of.
+  ///
+  /// Both tables, because either alone is a partial answer: an entity may hold
+  /// fields with no tombstone, or a tombstone whose fields a compaction already
+  /// took away.
+  Future<Set<AffectedEntity>> _reducedEntities() async {
+    final rows = await _db.customSelect(
+      'SELECT collection, entity_id FROM reduced_fields '
+      'UNION SELECT collection, entity_id FROM row_tombstones',
+      readsFrom: {_db.reducedFields, _db.rowTombstones},
+    ).get();
+    return {
+      for (final row in rows)
+        (
+          collection: row.read<String>('collection'),
+          entityId: row.read<String>('entity_id'),
+        ),
+    };
   }
 
   Future<void> _clearRefused(int seq) async {

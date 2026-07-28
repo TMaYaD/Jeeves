@@ -34,7 +34,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from httpx_ws import AsyncWebSocketSession, WebSocketDisconnect, aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 from redis.asyncio import Redis
@@ -424,6 +424,91 @@ async def _next_text_frame(ws: AsyncWebSocketSession, timeout: float = 0.1) -> s
     assert not isinstance(event, BytesMessage), "the signal socket never sends bytes"
     assert isinstance(event, TextMessage), f"unexpected frame {event!r}"
     return event.data
+
+
+# --- Revocation --------------------------------------------------------------
+
+
+async def _revoke_own_owner_grant(client: AsyncClient, session: Session) -> Response:
+    """Post a Root-signed Revoke of this device's own owner Grant.
+
+    Root-signed because only Root may unmake an ``owner`` Grant (ADR-0031) — which
+    is the same reason revoking a Device takes the passphrase.  Authored by the
+    device itself, which is fine and is the point: the authority is Root's, and the
+    envelope author only has to be a Member the log knows.
+    """
+    certificate = session.root.revoke_certificate(
+        session.workspace_id, grant_id=session.owner_grant_id
+    )
+    envelope = session.advance_control_head(
+        session.root.revoke_envelope(
+            session.device,
+            session.workspace_id,
+            certificate=certificate,
+            prev_control_hash=session.control_head,
+        )
+    )
+    return await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(envelope),
+        headers=session.headers,
+    )
+
+
+async def test_a_revocation_closes_the_live_socket_with_4403(
+    http_client: AsyncClient, hub: SignalHub, session: Session
+) -> None:
+    """The third branch of the pump, over a real socket.
+
+    A socket is authenticated once, at the handshake, and never re-checked — so
+    losing the last live Grant has to reach an *already open* one, or a revoked
+    subscriber goes on learning that activity exists in the Workspace, which is
+    exactly the metadata the payload-free poke exists not to leak.
+
+    ``4403`` and not a bare disconnect: a revoked subscriber should learn why its
+    socket ended, and the code is the one the handshake would have refused it with,
+    so the client's reconnect ladder needs no new branch.
+    """
+    async with subscribe(session.workspace_id, session.member_token) as ws:
+        assert hub.subscriber_count(session.workspace_id) == 1
+
+        revoked = await _revoke_own_owner_grant(http_client, session)
+        assert revoked.status_code == 200, revoked.text
+
+        with pytest.raises(WebSocketDisconnect) as closed:
+            await ws.receive(timeout=FRAME_TIMEOUT_SECONDS)
+    assert closed.value.code == SIGNAL_CLOSE_FORBIDDEN
+
+    # The hub holds subscriptions and nothing else, so a closed socket must leave
+    # no handle behind — a revocation that leaked one would be a slow resource
+    # drain triggerable by an ordinary control op.
+    for _ in range(50):
+        if hub.subscriber_count(session.workspace_id) == 0:
+            break
+        await asyncio.sleep(0.02)
+    assert hub.subscriber_count(session.workspace_id) == 0
+
+
+async def test_a_revoked_member_cannot_open_a_socket(
+    http_client: AsyncClient, session: Session
+) -> None:
+    """The other half: the door stays shut, not just this one socket.
+
+    The handshake is held to the member-GET bar — an *unrevoked* member token —
+    which is what admits a pre-grant device during enrolment and refuses a revoked
+    one immediately.  The access token itself is still perfectly valid, so without
+    this check a revoked Device would simply reconnect and carry on.
+    """
+    revoked = await _revoke_own_owner_grant(http_client, session)
+    assert revoked.status_code == 200, revoked.text
+
+    async with subscribe(
+        session.workspace_id, session.member_token, expect_initial_poke=False
+    ) as ws:
+        with pytest.raises(WebSocketDisconnect) as refusal:
+            await ws.receive(timeout=FRAME_TIMEOUT_SECONDS)
+    # Not 4401: the credential authenticates fine, it simply authorizes nothing.
+    assert refusal.value.code == SIGNAL_CLOSE_FORBIDDEN
 
 
 # --- Lifecycle ---------------------------------------------------------------

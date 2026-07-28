@@ -765,7 +765,20 @@ async def post_ops(
     # is positional against `granted_seq`/`revoked_by_seq`, so those numbers have
     # to be the real ones.
     revoked_members = await _materialise_control(db, workspace_id, admissions, results)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # The retried block above covers the *ops* constraint; this covers the
+        # index rows materialisation writes, and the one of those a legal race can
+        # collide on is ``workspaces``.  Two Root-holding devices may both observe
+        # an empty control log and both author a genesis: ``_verify_genesis`` reads
+        # ``workspace_exists`` from this transaction's snapshot, so under a real
+        # concurrent interleave both see False and both reach here.  Exactly one
+        # primary key survives, and the loser must learn the same deterministic
+        # 409 the sequential case gives it — never a 500, which says nothing about
+        # what to do next.
+        await db.rollback()
+        raise await _resolve_commit_conflict(db, workspace_id, admissions, exc) from exc
 
     for member_id in revoked_members:
         # Two halves of one revocation, both after the commit.  The refresh
@@ -782,6 +795,38 @@ async def post_ops(
         # return nothing and burn the poke.  A pure-duplicate replay is not news.
         hub.notify(workspace_id)
     return PostOpsResponse(results=results)
+
+
+async def _resolve_commit_conflict(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    admissions: list[_ControlAdmission],
+    exc: IntegrityError,
+) -> BaseException:
+    """Name the constraint a rolled-back commit lost, or hand the failure back.
+
+    Resolved by *re-reading committed state* rather than by matching a driver's
+    error text: the batch carried a genesis and the Workspace now exists, so
+    somebody else founded it — which is exactly ``genesis_not_first``, and the
+    client's move is the one the sequential refusal already teaches it.
+
+    Anything else propagates unchanged.  Relabelling an unrecognised constraint
+    violation as a lost genesis race would send a client down a recovery path for
+    a problem it does not have, and hide a real bug behind a benign code.
+    """
+    genesis = next(
+        (
+            admission
+            for admission in admissions
+            if admission.control_type == CONTROL_TYPE_WORKSPACE_GENESIS
+        ),
+        None,
+    )
+    if genesis is None:
+        return exc
+    if await db.get(Workspace, workspace_id) is None:
+        return exc
+    return _conflict("genesis_not_first", index=genesis.index)
 
 
 @dataclass(slots=True)

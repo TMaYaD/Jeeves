@@ -169,6 +169,132 @@ void main() {
       );
     });
 
+    test('losing the race drops the genesis and claims a place instead',
+        () async {
+      // Log-state-conditioned genesis means two Root-holders can both observe an
+      // empty log and both author one. The server admits exactly one, and the
+      // loser is told `genesis_not_first` — which is not an accusation and must
+      // not be a wedge: its own genesis can *never* become acceptable, so a
+      // retained outbox would re-post it for ever and its author chain would sit
+      // numbered past a slot the server still says is free.
+      //
+      // The blindfolded pull is the faithful staging: the whole race is that a
+      // device pulled, the log was empty, and by the time it posted the winner's
+      // genesis was there. Nothing else about this server lies.
+      final server = FakeSyncServer();
+      final clock = FakeClock(simulationStartWallMs);
+      final a = await SimDevice.create(
+        label: 'A',
+        userId: 'genesis-race-user',
+        server: server,
+        clock: clock,
+      );
+      addTearDown(a.close);
+      final prefsWorkspaceId = userPreferencesWorkspaceId('genesis-race-user');
+
+      server.blindNextPullOf.add(prefsWorkspaceId);
+      final b = await SimDevice.create(
+        label: 'B',
+        userId: 'genesis-race-user',
+        server: server,
+        clock: clock,
+        passphrase: a.outcome.passphrase,
+      );
+      addTearDown(b.close);
+
+      // Exactly one genesis, and it is the winner's.
+      final prefsControl = [
+        for (final op in server.storedOps)
+          if (op.workspaceId == prefsWorkspaceId && op.header?.opClass == opClassControl)
+            (
+              type: ControlPayload.decode(parseBody(splitEnvelope(op.envelope).body))
+                  .controlType,
+              author: op.header!.authorMemberId,
+            ),
+      ];
+      expect(
+        prefsControl.where((op) => op.type == controlTypeWorkspaceGenesis).map((op) => op.author),
+        [a.identity.memberId],
+      );
+      // B took the *other* branch of the same method — register, then its Grant.
+      expect(
+        prefsControl.where((op) => op.author == b.identity.memberId).map((op) => op.type),
+        [controlTypeMemberRegister, controlTypeGrant],
+      );
+
+      final prefs = await b.preferencesClient;
+      expect(
+        (await prefs.grantsView()).liveRoles(b.identity.memberId),
+        contains(roleOwner),
+        reason: 'the loser is a full owner by the ordinary register path',
+      );
+      // The queue is empty rather than stuck, and the chain was rewound: B's
+      // register had to be its op 1 in this Workspace, which a queue still
+      // holding the superseded genesis could not have produced.
+      final health = await prefs.health();
+      expect(health.pendingOpCount, 0);
+      expect(
+        (await prefs.integrityAlarms()).map((alarm) => alarm.kind),
+        isEmpty,
+        reason: 'a lost race is two honest devices doing the same correct thing',
+      );
+      expect(
+        [for (final envelope in await prefs.authoredEnvelopes())
+          OpHeader.parse(splitEnvelope(envelope).header).authorSeq],
+        [1, 2],
+      );
+    });
+
+    test('losing it in the first Workspace leaves the second one intact',
+        () async {
+      // The other arrival order in the only sense the ceremony has one: it covers
+      // two Workspaces in a fixed order, so a race lost on the *first* must not
+      // leave the second mis-numbered. The rewind is per Workspace because the
+      // author chain is — and a rewind that reached across would take the second
+      // Workspace's honest chain state with it.
+      final server = FakeSyncServer();
+      final clock = FakeClock(simulationStartWallMs);
+      const userId = 'genesis-race-default-user';
+      final a = await SimDevice.create(
+        label: 'A',
+        userId: userId,
+        server: server,
+        clock: clock,
+      );
+      addTearDown(a.close);
+
+      server.blindNextPullOf.add(defaultWorkspaceId(userId));
+      final b = await SimDevice.create(
+        label: 'B',
+        userId: userId,
+        server: server,
+        clock: clock,
+        passphrase: a.outcome.passphrase,
+      );
+      addTearDown(b.close);
+
+      for (final scope in [defaultWorkspaceId(userId), userPreferencesWorkspaceId(userId)]) {
+        final genesisAuthors = [
+          for (final op in server.storedOps)
+            if (op.workspaceId == scope && op.header?.opClass == opClassControl)
+              if (ControlPayload.decode(parseBody(splitEnvelope(op.envelope).body))
+                      .controlType ==
+                  controlTypeWorkspaceGenesis)
+                op.header!.authorMemberId,
+        ];
+        expect(genesisAuthors, [a.identity.memberId], reason: scope);
+      }
+      // Both of B's Workspaces are healthy, and the second one never raced at all.
+      for (final client in [b.client, await b.preferencesClient]) {
+        expect((await client.health()).pendingOpCount, 0, reason: client.workspaceId);
+        expect(
+          (await client.grantsView()).liveRoles(b.identity.memberId),
+          contains(roleOwner),
+          reason: client.workspaceId,
+        );
+      }
+    });
+
     test('the ceremony pulls before it claims a place in the chain', () async {
       // A device that authored before pulling would emit a fork-lie
       // `prev_control_hash`. The pull runs while it holds a member credential and
@@ -306,6 +432,78 @@ void main() {
       expect(grant.revokedBySeq, isNotNull);
       expect(grant.wasLiveAt(appended.single.seq), isTrue);
       expect(grant.wasLiveAt(grant.revokedBySeq! + 1), isFalse);
+    });
+
+    test('a pre-revocation op arriving *after* the revoke still applies',
+        () async {
+      // The case that makes the positional verdict load-bearing rather than
+      // incidental. In the test above the content op arrives before the revoke,
+      // so a client that asked "does this author hold a live Grant *now*" would
+      // still let it through — the two rules only disagree once the revocation
+      // has already applied. Here it has: the page is served revoke-first, so the
+      // earlier op is judged by a device whose grants view already says *revoked*.
+      //
+      // Any verdict read off current state instead of the op's own seq refuses
+      // this op, and two devices that saw the same log in different orders then
+      // hold different content. Which is divergence, from an authorization rule.
+      final peer = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 101)),
+      );
+      final revoker = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 111)),
+      );
+      final peerSession = await workspace.enrolFixture(peer, role: roleParticipant);
+      final revokerSession = await workspace.enrolFixture(revoker);
+      // Everything above is settled history before the two racing ops are posted,
+      // so the page below carries exactly them and `since` sits under both.
+      await workspace.a.sync();
+
+      final grantId = _grantIdFor(workspace, peer.memberId);
+      final content = await _contentOp(workspace, peer, 'authored while granted');
+      final contentSeq = (await peerSession.postOps(
+        workspace.workspaceId,
+        [content],
+      )).single.seq;
+
+      final root = await workspace.recoverRoot();
+      // Authored by a *different* member, so nothing here rides on one author's
+      // chain order — the only thing being reordered is the transport page.
+      final revokeSeq = (await revokerSession.postOps(workspace.workspaceId, [
+        await revokeEnvelope(
+          device: revoker,
+          workspaceId: workspace.workspaceId,
+          root: root,
+          prevControlHash: workspace.controlChainHead(),
+          grantId: grantId,
+          wallMs: workspace.clock.nowMs,
+        ),
+      ])).single.seq;
+      root.drop();
+      expect(revokeSeq, greaterThan(contentSeq));
+
+      // The revocation first, its predecessor second — a late arrival, which is
+      // routine: a page is not a promise of ascending order.
+      workspace.server.serveOrder = [revokeSeq, contentSeq];
+      await workspace.a.sync();
+
+      final view = await workspace.a.client.grantsView();
+      expect(
+        view.isRevoked(peer.memberId),
+        isTrue,
+        reason: 'the revoke applied first, so the op was judged after it',
+      );
+      expect(
+        await _doc(workspace.a, workspace),
+        {'step': 'authored while granted'},
+        reason: 'its seq precedes revoked_by_seq, so the Grant was live at it',
+      );
+      expect(
+        (await workspace.a.client.quarantined())
+            .where((row) => row.seq == contentSeq)
+            .map((row) => row.reason),
+        isEmpty,
+        reason: 'nothing about this op was refusable',
+      );
     });
   });
 
@@ -559,6 +757,62 @@ void main() {
     expect(
       (await workspace.a.client.grantsView()).liveRoles(service.memberId),
       {roleSuggester},
+    );
+  });
+
+  // --- The owner ceiling ----------------------------------------------------
+
+  test('a client refuses a member-signed revoke of an owner Grant', () async {
+    // The revoke half of the ceiling (ADR-0031), enforced *independently* of the
+    // server — and the one half of it that needs state. The frozen revoke
+    // certificate names a `grant_id`, not a role, so only a receiver already
+    // holding the Grant can tell an owner revocation from any other; a client that
+    // took the server's word for which Grant is which could be told a different
+    // story per device.
+    //
+    // What it protects: devices are owners because the User acts through them, so
+    // an owner-revokes-owner rule would let one compromised device evict every
+    // other while re-admitting one still cost the passphrase.
+    final owner = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 181)),
+    );
+    final session = await workspace.enrolFixture(owner);
+    await workspace.a.sync();
+    final targetGrantId = workspace.ownerGrantIdOf(workspace.a.identity.memberId);
+
+    final root = await workspace.recoverRoot();
+    final memberSigned = await revokeEnvelope(
+      device: owner,
+      workspaceId: workspace.workspaceId,
+      root: root,
+      prevControlHash: workspace.controlChainHead(),
+      grantId: targetGrantId,
+      // Its own authority, and its own key over the certificate: a genuine
+      // owner-signed revoke, refused for what it names rather than how it is
+      // signed.
+      revoker: owner.memberId,
+      signer: owner,
+      wallMs: workspace.clock.nowMs,
+    );
+    root.drop();
+
+    // Server side first, so the client half is not the only thing standing here.
+    await expectLater(
+      () => session.postOps(workspace.workspaceId, [memberSigned]),
+      throwsStatus(422, 'owner_revoke_requires_root'),
+    );
+
+    // Client side, independently: injected past every server check, it still does
+    // not unmake the Grant.
+    workspace.server.injectUnchecked(workspace.workspaceId, memberSigned);
+    await workspace.b.sync();
+
+    final view = await workspace.b.client.grantsView();
+    expect(view.grants[targetGrantId]!.revokedBySeq, isNull);
+    expect(view.liveRoles(workspace.a.identity.memberId), contains(roleOwner));
+    expect(
+      (await workspace.b.client.quarantined()).map((row) => row.reason),
+      contains(SyncRejectionReason.ownerRevokeRequiresRoot.code),
     );
   });
 

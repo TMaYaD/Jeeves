@@ -423,7 +423,29 @@ class EnrolmentService {
   /// The branch is on **what the log said**, not on which device this is. A
   /// Workspace whose control log is observed empty gets a genesis from whoever is
   /// holding Root; one that is not gets an ordinary registration.
+  ///
+  /// **Observing an empty log does not win the race, it only enters it.** Another
+  /// Root-holder may found the Workspace between this pull and this POST, and the
+  /// server answers the loser with `genesis_not_first`. That is not a failure to
+  /// report: the loser drops its genesis, pulls the winner's, and takes the
+  /// register path — which is the *other* branch of this same method, so losing
+  /// costs one extra iteration and no extra code path.
+  ///
+  /// Two passes is the exact bound. A Workspace can be founded once, so a second
+  /// pass observes a non-empty log and cannot be racing anything.
   Future<void> _claimPlaceIn(String workspaceId, RootAuthority root) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (await _claimOnce(workspaceId, root) != FlushOutcome.genesisSuperseded) return;
+    }
+    throw StateError(
+      'lost the genesis race for $workspaceId twice, which cannot happen: a '
+      'Workspace is founded once, so the second attempt observed a log that was '
+      'empty after a genesis had already been refused into it',
+    );
+  }
+
+  /// One pass of the claim. Returns what its flush concluded.
+  Future<FlushOutcome> _claimOnce(String workspaceId, RootAuthority root) async {
     final scoped = client.workspaceId == workspaceId
         ? client
         : await workspaceClientFactory(workspaceId);
@@ -488,7 +510,13 @@ class EnrolmentService {
         authority: granterRoot,
       ).encode(),
     );
-    await scoped.flushOutbox();
+    final flushed = await scoped.flushOutbox();
+    if (flushed == FlushOutcome.genesisSuperseded) {
+      // The genesis and the Grant chained to it are both gone from the queue and
+      // the author chain is rewound; the caller's next pass pulls the winner's
+      // genesis and registers into it.
+      return flushed;
+    }
     // And pull them back, so this device *applies* the two ops it just authored.
     // Control ops have no optimistic local path — they reduce to nothing, and the
     // directory, the grants view and the epoch floor are all filled by the receive
@@ -496,6 +524,7 @@ class EnrolmentService {
     // authority until its next sync, which is a needlessly odd moment to leave it
     // in when the round-trip is already in hand.
     await scoped.pull();
+    return flushed;
   }
 
   String _newGrantId() => const Uuid().v4();

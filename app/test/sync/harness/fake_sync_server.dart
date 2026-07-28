@@ -292,6 +292,18 @@ class FakeSyncServer {
   /// Seqs that pulls pretend do not exist — a withheld op.
   final Set<int> omitSeqs = {};
 
+  /// Workspaces whose **next** pull serves an empty page, consumed by that pull.
+  ///
+  /// [omitSeqs] is a standing lie; this is one page's worth, and it exists because
+  /// the losing side of a genesis race cannot be staged any other way: the whole
+  /// race is that a device pulled, the log *was* empty, and by the time it posted
+  /// the winner's genesis was already there. A one-shot blindfold over the pull
+  /// reproduces exactly that view without needing two ceremonies to interleave.
+  ///
+  /// Keyed by Workspace because an enrolment pulls two of them in a fixed order,
+  /// and a race is a property of one.
+  final Set<String> blindNextPullOf = {};
+
   /// Serve a pull page in this seq order instead of ascending. Seqs the log has
   /// and this list does not keep their ascending place behind the listed ones.
   List<int>? serveOrder;
@@ -1250,6 +1262,11 @@ class FakeSyncServer {
     // observation the enrolment ceremony branches on. `workspace_not_created` is
     // a POST-path refusal only, and this route simply has nothing to serve yet.
     _refuseIfRevoked(workspaceId, memberId);
+    if (blindNextPullOf.remove(workspaceId)) {
+      // Spent by being read: the next pull sees the log as it is, which is what
+      // lets the losing device recover on its own.
+      return const PullPage(ops: [], hasMore: false);
+    }
     final floor = ignoreSinceParameter ? 0 : since;
     // Append order breaks every tie: [injectUnchecked] can spend one seq twice,
     // so seq alone is not a total order and a page would otherwise depend on the

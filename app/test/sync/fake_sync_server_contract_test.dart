@@ -59,15 +59,32 @@ import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/root_authority.dart';
 import 'package:jeeves/sync/signal_socket.dart';
 import 'package:jeeves/sync/sync_transport.dart';
+import 'package:uuid/uuid.dart';
 
 import 'harness/author_fixture.dart';
 import 'harness/fake_sync_server.dart';
 import 'harness/signal_probe.dart';
 import 'harness/sim_workspace.dart'
-    show grantEnvelope, simulationStartWallMs, workspaceGenesisEnvelope;
+    show
+        grantEnvelope,
+        memberRegisterEnvelope,
+        revokeEnvelope,
+        simulationStartWallMs,
+        workspaceGenesisEnvelope;
 
 const String _userId = 'contract-user';
 const String _otherUserId = 'contract-neighbour';
+const Uuid _uuid = Uuid();
+
+/// The chain link the next control op must name, computed the way a pulling
+/// client computes it: SHA-256 over the last control op's payload bytes.
+Uint8List controlHeadOf(FakeSyncServer server, String workspaceId) {
+  for (final op in server.storedOps.reversed) {
+    if (op.workspaceId != workspaceId || op.header?.opClass != opClassControl) continue;
+    return controlPayloadHash(parseBody(splitEnvelope(op.envelope).body));
+  }
+  return zeroPrevControlHash;
+}
 
 Matcher throwsStatus(int status, [String? code]) => throwsA(
       predicate<Object>(
@@ -480,6 +497,83 @@ void main() {
       await pumpEvents();
 
       expect(pokes.pokeCount, 1, reason: 'only its own subscribe ack');
+      await pokes.cancel();
+    });
+
+    test('revoking the last live Grant closes the open socket with 4403',
+        () async {
+      // A socket is authenticated once, at the handshake, and never re-checked —
+      // so losing the last live Grant has to reach an *already open* one, or a
+      // revoked subscriber keeps learning that activity exists in the Workspace.
+      // The close code is the same 4403 the handshake would have refused it with,
+      // so the client's reconnect ladder needs no new branch.
+      //
+      // The twin of `test_a_revocation_closes_the_live_socket_with_4403` in
+      // `backend/tests/sync/test_signal_socket.py`, which watches real frames.
+      final revoked = await AuthorFixture.create(seed: _seedOf(280));
+      final revokedSession = await enrol(userSession, revoked);
+      final register = await memberRegisterEnvelope(
+        device: revoked,
+        workspaceId: workspaceId,
+        root: root,
+        prevControlHash: controlHeadOf(server, workspaceId),
+        wallMs: simulationStartWallMs,
+      );
+      await revokedSession.postOps(workspaceId, [register]);
+      final grantId = _uuid.v4();
+      await revokedSession.postOps(workspaceId, [
+        await grantEnvelope(
+          device: revoked,
+          workspaceId: workspaceId,
+          root: root,
+          prevControlHash: controlPayloadHash(parseBody(splitEnvelope(register).body)),
+          memberId: revoked.memberId,
+          grantId: grantId,
+          wallMs: simulationStartWallMs,
+        ),
+      ]);
+
+      final pokes = PokeRecorder(revokedSession.newSeqSignals(workspaceId));
+      await pumpEvents();
+      expect(pokes.errors, isEmpty);
+      expect(server.signalSubscriberCount(workspaceId), 1);
+
+      // Root-signed, because only Root may unmake an owner Grant — which is also
+      // why revoking a Device takes the passphrase.
+      await session.postOps(workspaceId, [
+        await revokeEnvelope(
+          device: author,
+          workspaceId: workspaceId,
+          root: root,
+          prevControlHash: controlHeadOf(server, workspaceId),
+          grantId: grantId,
+          wallMs: simulationStartWallMs,
+        ),
+      ]);
+      await pumpEvents();
+
+      expect(
+        pokes.errors.single,
+        isA<SyncTransportException>()
+            .having((e) => e.statusCode, 'statusCode', signalCloseForbidden)
+            .having((e) => e.code, 'code', 'no_live_grant'),
+      );
+      expect(
+        server.signalSubscriberCount(workspaceId),
+        0,
+        reason: 'a closed socket leaves no handle behind',
+      );
+      // ...and the door stays shut: the handshake is held to the same bar.
+      final reconnect = PokeRecorder(revokedSession.newSeqSignals(workspaceId));
+      await pumpEvents();
+      expect(reconnect.pokeCount, 0);
+      expect(
+        reconnect.errors.single,
+        isA<SyncTransportException>()
+            .having((e) => e.statusCode, 'statusCode', signalCloseForbidden)
+            .having((e) => e.code, 'code', 'no_live_grant'),
+      );
+      await reconnect.cancel();
       await pokes.cancel();
     });
 
