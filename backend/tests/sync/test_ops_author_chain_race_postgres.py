@@ -16,6 +16,11 @@ than by the gap check.  That is the real thing, and what it must never be is a
 
 The endpoint is called as a plain coroutine rather than over HTTP because the
 point is to control which session sees what, and the ASGI client owns its own.
+A direct call resolves no ``Depends``, so **every** dependency is supplied by
+hand — the session, the authenticated Member and the signal hub alike.  The hub
+is a real one, subscribed to: the post-commit poke is part of what the recovery
+branch has to get right, and this is the only place a *raced* replay (all
+duplicates, so no news) is exercised at all.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ from app.sync.ids import implicit_workspace_id
 from app.sync.models import Member, Op
 from app.sync.routes import post_ops
 from app.sync.schemas import PostOpsRequest
+from app.sync.signal_hub import SignalHub
 from tests.sync.builders import SpecDevice, encode
 
 asyncpg = pytest.importorskip("asyncpg")
@@ -154,15 +160,23 @@ async def test_a_raced_fork_of_the_author_chain_is_a_409_not_a_500(
     loser = device.next_envelope(workspace_id, advance=False)
     assert winner != loser
 
+    hub = SignalHub()
     sessions = async_sessionmaker(race_engine, expire_on_commit=False)
-    async with sessions() as losing, sessions() as winning:
-        await _pin_snapshot_before_the_winner(losing)
+    with hub.subscribe(workspace_id) as subscriber:
+        async with sessions() as losing, sessions() as winning:
+            await _pin_snapshot_before_the_winner(losing)
 
-        await post_ops(workspace_id, PostOpsRequest(ops=[encode(winner)]), winning, member)
+            await post_ops(workspace_id, PostOpsRequest(ops=[encode(winner)]), winning, member, hub)
+            assert subscriber.pending()
+            subscriber.clear()
 
-        with pytest.raises(HTTPException) as refusal:
-            await post_ops(workspace_id, PostOpsRequest(ops=[encode(loser)]), losing, member)
-        assert refusal.value.status_code == 409
+            with pytest.raises(HTTPException) as refusal:
+                await post_ops(
+                    workspace_id, PostOpsRequest(ops=[encode(loser)]), losing, member, hub
+                )
+            assert refusal.value.status_code == 409
+        # A batch that stored nothing is not news, however it was refused.
+        assert not subscriber.pending()
 
     async with sessions() as reader:
         stored = (await reader.execute(select(Op))).scalars().all()
@@ -183,18 +197,24 @@ async def test_a_raced_replay_comes_back_as_the_idempotent_duplicate(
     workspace_id = implicit_workspace_id(user.id)
     replayed = device.next_envelope(workspace_id)
 
+    hub = SignalHub()
     sessions = async_sessionmaker(race_engine, expire_on_commit=False)
-    async with sessions() as losing, sessions() as winning:
-        await _pin_snapshot_before_the_winner(losing)
+    with hub.subscribe(workspace_id) as subscriber:
+        async with sessions() as losing, sessions() as winning:
+            await _pin_snapshot_before_the_winner(losing)
 
-        first = await post_ops(
-            workspace_id, PostOpsRequest(ops=[encode(replayed)]), winning, member
-        )
-        assert [result.duplicate for result in first.results] == [False]
+            first = await post_ops(
+                workspace_id, PostOpsRequest(ops=[encode(replayed)]), winning, member, hub
+            )
+            assert [result.duplicate for result in first.results] == [False]
+            assert subscriber.pending()
+            subscriber.clear()
 
-        second = await post_ops(
-            workspace_id, PostOpsRequest(ops=[encode(replayed)]), losing, member
-        )
+            second = await post_ops(
+                workspace_id, PostOpsRequest(ops=[encode(replayed)]), losing, member, hub
+            )
+        # The second resolution found the winner's row: a replay, not news.
+        assert not subscriber.pending()
 
     assert [result.duplicate for result in second.results] == [True]
     assert [result.seq for result in second.results] == [result.seq for result in first.results]
@@ -231,12 +251,23 @@ async def test_the_constraint_is_scoped_to_one_author_in_one_workspace(
     from_first = device.next_envelope(workspace_id)
     from_second = second_device.next_envelope(workspace_id)
 
-    async with sessions() as other, sessions() as one:
-        await _pin_snapshot_before_the_winner(other)
-        await post_ops(workspace_id, PostOpsRequest(ops=[encode(from_first)]), one, member)
-        accepted = await post_ops(
-            workspace_id, PostOpsRequest(ops=[encode(from_second)]), other, second_member
-        )
+    hub = SignalHub()
+    with hub.subscribe(workspace_id) as subscriber:
+        async with sessions() as other, sessions() as one:
+            await _pin_snapshot_before_the_winner(other)
+            await post_ops(workspace_id, PostOpsRequest(ops=[encode(from_first)]), one, member, hub)
+            assert subscriber.pending()
+            subscriber.clear()
+
+            accepted = await post_ops(
+                workspace_id,
+                PostOpsRequest(ops=[encode(from_second)]),
+                other,
+                second_member,
+                hub,
+            )
+        # Both authors stored an op, so both appends are news.
+        assert subscriber.pending()
     assert [result.duplicate for result in accepted.results] == [False]
 
     async with sessions() as reader:
