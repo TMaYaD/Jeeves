@@ -74,12 +74,14 @@ enum IntegrityAlarmKind {
   /// when #554 lands.
   signatureInvalid('signature_invalid'),
 
-  /// The unique chain-slot constraint fired on append.
+  /// An append found the slot it claims already taken.
   ///
-  /// Unreachable through [chainVerdict], which refuses a position the log
-  /// already holds. It exists because the alternative to naming the impossible
-  /// is a crash mid-page: a constraint violation here is recorded and the op
-  /// skipped, so one poisoned position cannot stall the rest of a pull.
+  /// [chainVerdict] cannot produce this — it refuses a *chain* position the log
+  /// already holds — but the *transport* can: a server that spends one `seq` on
+  /// two different chain-valid ops collides on the log's primary key, and the
+  /// append refuses rather than overwrites, because the log is evidence and
+  /// evidence is not edited. The op is skipped and this accusation raised, so one
+  /// poisoned position cannot stall the rest of a pull.
   authorChainSlotCollision('author_chain_slot_collision');
 
   const IntegrityAlarmKind(this.code);

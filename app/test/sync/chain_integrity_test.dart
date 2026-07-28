@@ -23,6 +23,7 @@ import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_transport.dart';
+import 'package:sqlite3/common.dart' show SqliteException;
 import 'package:uuid/uuid.dart';
 
 import 'harness/author_fixture.dart';
@@ -390,6 +391,113 @@ void main() {
       );
       expect(await a.cursor(), cursorBefore, reason: 'the cursor never regresses');
       expect(await _doc(a, workspace), {'step': 'two'});
+    });
+
+    test('bumps its accusation once per served op', () async {
+      // One page, one op, so the count is unambiguous: the page limit stops the
+      // pull after the crafted position, which `serveOrder` puts first.
+      final small = await SimWorkspace.create(pullPageLimit: 1);
+      addTearDown(small.close);
+      final author = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 23)),
+      );
+      final session = await small.enrolFixture(author);
+      await small.a.sync();
+      final first = await _op(small, author, 'one');
+      final second = await _op(small, author, 'two');
+      final appended =
+          await session.postOps(small.workspaceId, [first, second]);
+      await small.a.sync();
+      final cursorBefore = await small.a.cursor();
+
+      // The two ops swap transport positions, so the bytes served below the
+      // cursor are bytes the device holds — at a different seq. Nothing further
+      // is accusable about them, and the serving is one accusation about one op.
+      small.server.rollbackToSeq(appended.first.seq - 1);
+      small.server.injectUnchecked(small.workspaceId, second);
+      small.server.injectUnchecked(small.workspaceId, first);
+      small.server.ignoreSinceParameter = true;
+      small.server.serveOrder = [appended.first.seq];
+
+      await small.a.sync();
+
+      final alarms = await small.a.alarmsByKind();
+      expect(alarms.keys, {IntegrityAlarmKind.stalePrefixServed.code});
+      expect(alarms[IntegrityAlarmKind.stalePrefixServed.code]!.occurrenceCount, 1);
+      expect(await small.a.cursor(), cursorBefore);
+    });
+  });
+
+  // --- The log is evidence: appends never overwrite ---------------------------
+
+  group('the received log', () {
+    test('refuses a second op served under a seq it has already spent',
+        () async {
+      final first = await _op(workspace, peer, 'one');
+      final second = await _op(workspace, peer, 'two');
+      final appended = await peerSession.postOps(workspace.workspaceId, [first]);
+      final spentSeq = appended.single.seq;
+
+      // Both envelopes are chain-valid, so nothing before the append has any
+      // reason to refuse the second — the transport position is the only thing
+      // they contend for, and the log must keep the op it already holds there.
+      workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        second,
+        atSeq: spentSeq,
+      );
+
+      await a.sync();
+
+      expect(
+        (await a.alarmsByKind()).keys,
+        {IntegrityAlarmKind.authorChainSlotCollision.code},
+      );
+      final logged = await a.loggedOps();
+      expect(
+        [for (final row in logged) if (row.seq == spentSeq) row.envelope],
+        [first],
+        reason: 'the op already at that seq survives byte for byte',
+      );
+      expect(
+        [
+          for (final row in logged)
+            if (row.authorMemberId == peer.memberId) row.authorSeq,
+        ],
+        isNot(contains(OpHeader.parse(splitEnvelope(second).header).authorSeq)),
+        reason: 'the second claim on the slot is skipped, not logged',
+      );
+      expect(await _doc(a, workspace), {'step': 'one'});
+    });
+
+    test('aborts the pull on a database failure that is not a taken slot',
+        () async {
+      await peerSession.postOps(
+        workspace.workspaceId,
+        [await _op(workspace, peer, 'one')],
+      );
+      final cursorBefore = await a.cursor();
+      // A failure the append cannot read as "this slot is taken" is not the
+      // receive pipeline's to swallow: the op is still owed to the log, so the
+      // pull stops with the cursor short of it and the next sync retries.
+      await a.database.customStatement(
+        'CREATE TRIGGER op_log_append_fails BEFORE INSERT ON op_log '
+        "BEGIN SELECT RAISE(ABORT, 'op_log is unwritable'); END",
+      );
+
+      await expectLater(a.sync(), throwsA(isA<SqliteException>()));
+
+      expect(await a.cursor(), cursorBefore,
+          reason: 'the cursor never moves past an op that was not logged');
+      expect(await a.alarmsByKind(), isEmpty,
+          reason: 'a database failure is not an accusation against the server');
+
+      await a.database.customStatement('DROP TRIGGER op_log_append_fails');
+      await a.sync();
+
+      expect(await _doc(a, workspace), {'step': 'one'});
+      expect(await a.alarmsByKind(), isEmpty);
+      expect(await a.cursor(), greaterThan(cursorBefore));
     });
   });
 

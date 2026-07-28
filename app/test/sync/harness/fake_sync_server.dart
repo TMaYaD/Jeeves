@@ -201,7 +201,11 @@ class FakeSyncServer {
   /// client exist precisely because nothing stops a server from serving an
   /// envelope it should have refused, or one it forged. Returns the assigned
   /// seq.
-  int injectUnchecked(String workspaceId, Uint8List envelope) {
+  ///
+  /// [atSeq] spends a transport seq the log has already spent. The seq is the
+  /// server's own bookkeeping, so nothing but its honesty stops it handing one
+  /// position to two different ops — and the client's log is keyed by it.
+  int injectUnchecked(String workspaceId, Uint8List envelope, {int? atSeq}) {
     OpHeader? header;
     try {
       header = OpHeader.parse(envelope);
@@ -209,7 +213,7 @@ class FakeSyncServer {
       header = null;
     }
     final op = StoredOp(
-      seq: _nextSeq++,
+      seq: atSeq ?? _nextSeq++,
       workspaceId: workspaceId,
       envelope: envelope,
       header: header,
@@ -706,6 +710,12 @@ class FakeSyncServer {
     }
     _authorizeWorkspace(member.userId, workspaceId);
     final floor = ignoreSinceParameter ? 0 : since;
+    // Append order breaks every tie: [injectUnchecked] can spend one seq twice,
+    // so seq alone is not a total order and a page would otherwise depend on the
+    // sort's (unspecified) stability.
+    final appendOrder = {for (var index = 0; index < _log.length; index++) _log[index]: index};
+    int byAppendOrder(StoredOp a, StoredOp b) =>
+        appendOrder[a]!.compareTo(appendOrder[b]!);
     final matching = [
       for (final op in _log)
         if (op.workspaceId == workspaceId &&
@@ -713,7 +723,10 @@ class FakeSyncServer {
             op.compactedBy == null &&
             !omitSeqs.contains(op.seq))
           op,
-    ]..sort((a, b) => a.seq.compareTo(b.seq));
+    ]..sort((a, b) {
+      final bySeq = a.seq.compareTo(b.seq);
+      return bySeq != 0 ? bySeq : byAppendOrder(a, b);
+    });
     final order = serveOrder;
     if (order != null) {
       // Listed seqs first, in the listed order; everything else keeps its
@@ -721,7 +734,10 @@ class FakeSyncServer {
       matching.sort((a, b) {
         final left = order.indexOf(a.seq);
         final right = order.indexOf(b.seq);
-        if (left == right) return a.seq.compareTo(b.seq);
+        if (left == right) {
+          final bySeq = a.seq.compareTo(b.seq);
+          return bySeq != 0 ? bySeq : byAppendOrder(a, b);
+        }
         if (left < 0) return 1;
         if (right < 0) return -1;
         return left.compareTo(right);

@@ -49,6 +49,12 @@
 library;
 
 import 'package:drift/drift.dart';
+// The append to `op_log` is a plain insert whose uniqueness constraints are the
+// authority on a taken slot (see [SyncClient._logReceived]), so this file has to
+// be able to tell that one failure apart from every other database failure.
+// `common.dart` is the platform-neutral half of the package: the exception type
+// and the result codes, no FFI.
+import 'package:sqlite3/common.dart' show SqlExtendedError, SqliteException;
 import 'package:uuid/uuid.dart';
 
 import 'chain_verifier.dart';
@@ -67,6 +73,17 @@ import 'sync_transport.dart';
 /// not tunable per call: one page is a batch of ops, sized to keep a bootstrap
 /// pull to a handful of round-trips without an unbounded response body.
 const int defaultPullPageLimit = 500;
+
+/// The extended result codes that mean *the slot this row claims is taken*.
+///
+/// The only append failure the receive pipeline is allowed to swallow. Every
+/// other SQLite failure is a database problem rather than an accusation, and
+/// filing one as a slot collision would both mislabel it and permanently skip an
+/// op the next sync could have retried.
+const Set<int> _slotTakenResultCodes = {
+  SqlExtendedError.SQLITE_CONSTRAINT_PRIMARYKEY,
+  SqlExtendedError.SQLITE_CONSTRAINT_UNIQUE,
+};
 
 class SyncClient {
   SyncClient({
@@ -424,10 +441,11 @@ class SyncClient {
   /// without applying.
   ///
   /// The alarm fires whatever the bytes are, because the *serving* is the
-  /// accusation. What the bytes are decides how much more there is to say: the op
-  /// we already hold at that seq is nothing further, and anything else is a
-  /// second claim on a slot this device has spent — refused rather than written
-  /// over, because the log is evidence and evidence is not edited.
+  /// accusation — and it fires **once per served op**, however many accusations
+  /// those bytes then attract. What the bytes are decides how much more there is
+  /// to say: the op we already hold at that seq is nothing further, and anything
+  /// else is a second claim on a slot this device has spent — refused rather
+  /// than written over, because the log is evidence and evidence is not edited.
   Future<void> _refuseStaleServe(PulledOp pulled, int since) async {
     OpHeader? header;
     try {
@@ -435,15 +453,20 @@ class SyncClient {
     } on SyncRejection {
       header = null;
     }
-    await _raiseAlarm(
-      IntegrityAlarmKind.stalePrefixServed,
-      authorMemberId: header?.authorMemberId,
-      detail: 'seq ${pulled.seq} was served for a pull since $since',
-    );
+    final servedDetail = 'seq ${pulled.seq} was served for a pull since $since';
     final stored = await (_db.select(_db.opLog)
           ..where((row) => row.workspaceId.equals(workspaceId) & row.seq.equals(pulled.seq)))
         .getSingleOrNull();
-    if (stored != null && _sameBytes(stored.envelope, pulled.envelope)) return;
+    if (stored != null && _sameBytes(stored.envelope, pulled.envelope)) {
+      // Bytes we already hold: the serving is the whole accusation, and there is
+      // no envelope to quarantine.
+      await _raiseAlarm(
+        IntegrityAlarmKind.stalePrefixServed,
+        authorMemberId: header?.authorMemberId,
+        detail: servedDetail,
+      );
+      return;
+    }
 
     var rejection = SyncRejection(
       SyncRejectionReason.staleReplayedOp,
@@ -457,7 +480,15 @@ class SyncClient {
       final verdict = await _chainVerdictFor(header, pulled.envelope);
       if (verdict.isRefusal) rejection = verdict.rejection!;
     }
-    await _refuse(pulled, rejection, header);
+    await _refuse(
+      pulled,
+      rejection,
+      header,
+      servingAccusation: (
+        kind: IntegrityAlarmKind.stalePrefixServed,
+        detail: servedDetail,
+      ),
+    );
   }
 
   /// The fail-closed receive pipeline, in its normative order.
@@ -806,19 +837,28 @@ class SyncClient {
 
   /// Append to the log, or record that the append itself was refused.
   ///
-  /// Returns false when the op could not be logged and must be skipped. The only
-  /// way that happens is the unique chain-slot constraint firing — a position
-  /// double-logged past the verdict, which is either a bug here or a duplicate a
-  /// hostile server slipped through. Either way it is an integrity event to
-  /// surface and skip: throwing would abort the rest of the page, letting one
-  /// poisoned position stall every op behind it.
+  /// A **plain insert, never an upsert.** The log is evidence, and evidence is
+  /// not edited: a row already at this position is a second claim on a slot this
+  /// device has spent, so a server serving two different chain-valid ops under
+  /// one transport `seq` must not be able to replace the first with the second.
+  /// The uniqueness constraints are the authority on that — `(workspace, seq)`
+  /// for the transport position, the `op_log_author_chain` index for the chain
+  /// position.
+  ///
+  /// Returns false when the op could not be logged and must be skipped. A taken
+  /// slot is the only failure that ends there: it is an integrity event to
+  /// surface and skip, because throwing would abort the rest of the page and let
+  /// one poisoned position stall every op behind it. Every **other** database
+  /// failure propagates and aborts the pull with the cursor unmoved — a
+  /// transient `SQLITE_BUSY` is an op the next sync retries, not one permanently
+  /// skipped under a slot-collision label it never earned.
   Future<bool> _logReceived(
     PulledOp pulled,
     OpHeader header, {
     DateTime? appliedAt,
   }) async {
     try {
-      await _db.into(_db.opLog).insertOnConflictUpdate(
+      await _db.into(_db.opLog).insert(
             OpLogCompanion.insert(
               seq: pulled.seq,
               workspaceId: workspaceId,
@@ -831,9 +871,8 @@ class SyncClient {
             ),
           );
       return true;
-    } on Object catch (error) {
-      // Deliberately broad: whatever stopped this one op from being logged, the
-      // page must survive it, and the alarm is what makes the loss visible.
+    } on SqliteException catch (error) {
+      if (!_slotTakenResultCodes.contains(error.extendedResultCode)) rethrow;
       await _raiseAlarm(
         IntegrityAlarmKind.authorChainSlotCollision,
         authorMemberId: header.authorMemberId,
@@ -856,21 +895,33 @@ class SyncClient {
         .write(OpLogCompanion(refusedReason: Value(reason.code)));
   }
 
-  /// Quarantine a refusal and raise whatever accusation it escalates to.
+  /// Quarantine a refusal and raise whatever accusations it stands for.
+  ///
+  /// [servingAccusation] is what the *serving* is accused of independently of the
+  /// bytes — only [_refuseStaleServe] has one. Accusations are collected by kind
+  /// before any is raised, so one refused op bumps a kind's occurrence count once
+  /// even when both routes arrive at the same accusation.
   Future<void> _refuse(
     PulledOp pulled,
     SyncRejection rejection,
-    OpHeader? header,
-  ) async {
+    OpHeader? header, {
+    ({IntegrityAlarmKind kind, String detail})? servingAccusation,
+  }) async {
     final quarantineRowId = await _quarantine(pulled, rejection, header);
-    final alarm = alarmForRejection(rejection.reason);
-    if (alarm == null) return;
-    await _raiseAlarm(
-      alarm,
-      authorMemberId: header?.authorMemberId,
-      detail: rejection.message,
-      quarantineOpRowId: quarantineRowId,
-    );
+    final accusations = <IntegrityAlarmKind, String>{};
+    if (servingAccusation != null) {
+      accusations[servingAccusation.kind] = servingAccusation.detail;
+    }
+    final escalated = alarmForRejection(rejection.reason);
+    if (escalated != null) accusations.putIfAbsent(escalated, () => rejection.message);
+    for (final accusation in accusations.entries) {
+      await _raiseAlarm(
+        accusation.key,
+        authorMemberId: header?.authorMemberId,
+        detail: accusation.value,
+        quarantineOpRowId: quarantineRowId,
+      );
+    }
   }
 
   /// Record one refused envelope, or bump the accusation it already produced.
