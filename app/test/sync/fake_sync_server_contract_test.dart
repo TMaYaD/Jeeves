@@ -1,14 +1,20 @@
 /// The server contract, asserted against the in-process fake.
 ///
 /// This file is the twin of `backend/tests/sync/test_ops_routes.py`,
-/// `test_recovery_escrow_routes.py` and `test_member_auth_routes.py`: the same
-/// cases under the same names. The harness's convergence tests are only
-/// evidence about the real system if the double they run against behaves like
-/// the real server, and a missing or failing twin here is how a divergence
-/// announces itself.
+/// `test_recovery_escrow_routes.py`, `test_member_auth_routes.py` and, for the
+/// signal socket, `test_signal_socket.py`: the same cases under the same names.
+/// The harness's convergence tests are only evidence about the real system if
+/// the double they run against behaves like the real server, and a missing or
+/// failing twin here is how a divergence announces itself.
 ///
 /// Every assertion is on the structured `detail.code`, never on a message —
 /// the codes are the contract and the prose is not.
+///
+/// The signal socket's untwinned cases are the ones the fake cannot express: it
+/// has no token model (so no bad-token 4401, no user-token 4401 and no
+/// missing-auth-frame 4400) and no wall clock of its own on this path (so the
+/// keepalive cadence is asserted backend side). Those four, and the binding
+/// no-payload assertion, live in the backend file.
 ///
 /// Cases with no twin, and why. `POST /members` accepts an optional `key_id`
 /// claim the server must re-derive; [UserTransport] has no way to send one (a
@@ -50,10 +56,12 @@ import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/root_authority.dart';
+import 'package:jeeves/sync/signal_socket.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 
 import 'harness/author_fixture.dart';
 import 'harness/fake_sync_server.dart';
+import 'harness/signal_probe.dart';
 
 const String _userId = 'contract-user';
 const String _otherUserId = 'contract-neighbour';
@@ -337,6 +345,91 @@ void main() {
 
       final pulled = await session.pullOps(workspaceId, since: 0, limit: 10);
       expect(pulled.ops.map((op) => op.envelope), [envelopes[1]]);
+    });
+  });
+
+  group('WS /w/{w}/signal', () {
+    test('subscribe acks with an immediate poke', () async {
+      final pokes = PokeRecorder(session.newSeqSignals(workspaceId));
+      await pumpEvents();
+
+      expect(pokes.pokeCount, 1);
+      expect(pokes.errors, isEmpty);
+      await pokes.cancel();
+    });
+
+    test('subscribe to another workspace is refused with 4403', () async {
+      final pokes = PokeRecorder(session.newSeqSignals(implicitWorkspaceId(_otherUserId)));
+      await pumpEvents();
+
+      expect(pokes.pokeCount, 0);
+      expect(
+        pokes.errors.single,
+        isA<SyncTransportException>()
+            .having((e) => e.statusCode, 'statusCode', signalCloseForbidden)
+            // The structured code, not the prose: a close frame carries no body,
+            // so the client branches on the code — and the fake keeps it beside
+            // the close code rather than regressing to a bare string.
+            .having((e) => e.code, 'code', 'no_workspace_grant'),
+      );
+      await pokes.cancel();
+    });
+
+    test('an append pokes the subscriber', () async {
+      final pokes = PokeRecorder(session.newSeqSignals(workspaceId));
+      await pumpEvents();
+
+      await session.postOps(workspaceId, [await author.nextEnvelope(workspaceId)]);
+      await pumpEvents();
+
+      expect(pokes.pokeCount, 2);
+      await pokes.cancel();
+    });
+
+    test('a duplicate-only replay does not poke', () async {
+      final envelope = await author.nextEnvelope(workspaceId);
+      await session.postOps(workspaceId, [envelope]);
+
+      final pokes = PokeRecorder(session.newSeqSignals(workspaceId));
+      await pumpEvents();
+
+      final replay = await session.postOps(workspaceId, [envelope]);
+      await pumpEvents();
+
+      expect(replay.single.duplicate, isTrue);
+      // Nothing was appended, so there is no news — a replay is not activity.
+      expect(pokes.pokeCount, 1);
+      await pokes.cancel();
+    });
+
+    test('an append never pokes another workspace', () async {
+      // The neighbour has to *enrol*, not merely authenticate: the socket takes
+      // a member credential, so a user session cannot subscribe at all.
+      final neighbourUser = server.connectAsUser(_otherUserId);
+      final neighbourDevice = await AuthorFixture.create(seed: _seedOf(270));
+      final neighbour = await enrol(neighbourUser, neighbourDevice);
+      final neighbourWorkspaceId = implicitWorkspaceId(_otherUserId);
+      final pokes = PokeRecorder(neighbour.newSeqSignals(neighbourWorkspaceId));
+      await pumpEvents();
+
+      await session.postOps(workspaceId, [await author.nextEnvelope(workspaceId)]);
+      await pumpEvents();
+
+      expect(pokes.pokeCount, 1, reason: 'only its own subscribe ack');
+      await pokes.cancel();
+    });
+
+    test('the wire carries only empty pokes', () async {
+      final pokes = PokeRecorder(session.newSeqSignals(workspaceId));
+      await pumpEvents();
+      await session.postOps(workspaceId, [await author.nextEnvelope(workspaceId)]);
+      await pumpEvents();
+
+      // A fidelity smoke check on the fake. The binding assertion — that a real
+      // socket sends nothing but empty pokes and the keepalive literal — is
+      // `backend/tests/sync/test_signal_socket.py`, which watches real frames.
+      expect(server.emittedSignalFrames[workspaceId], ['', '']);
+      await pokes.cancel();
     });
   });
 

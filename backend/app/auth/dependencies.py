@@ -47,15 +47,18 @@ async def get_current_user(
     return user
 
 
-async def get_current_member(
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db),
-) -> Member:
-    """The Device behind a member-scoped token.
+async def resolve_member_token(token: str, db: AsyncSession) -> Member:
+    """Resolve a sync-transport bearer token to the Device it authorises.
 
-    The sync data routes authenticate through this rather than
-    ``get_current_user``, so ``header.author_member_id == jwt.member_id`` is one
-    comparison and no crypto.  #552's signal socket plugs into the same seam.
+    Takes the token as a *string* rather than through ``Depends(oauth2_scheme)``
+    because a browser cannot set an ``Authorization`` header on a WebSocket: the
+    signal socket receives the token as its first frame and calls this directly.
+
+    Every sync surface — the HTTP data routes and the signal socket alike —
+    resolves identity here and nowhere else.  That is deliberate: a socket that
+    accepted a plain user token while ``POST /w/{w}/ops`` demanded a member one
+    would be the weak door, and news of activity in a Workspace is not something
+    a stolen user session should be able to subscribe to either.
     """
     credentials_exception = _credentials_exception()
     try:
@@ -80,3 +83,17 @@ async def get_current_member(
     if owner is None or not owner.is_active:
         raise credentials_exception
     return member
+
+
+async def get_current_member(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> Member:
+    """The Device behind a member-scoped token.
+
+    The header-bearing wrapper over :func:`resolve_member_token`, so the sync
+    routes and the signal socket resolve identity through exactly one function.
+    Authenticating here rather than through ``get_current_user`` is what makes
+    ``header.author_member_id == jwt.member_id`` one comparison and no crypto.
+    """
+    return await resolve_member_token(token, db)

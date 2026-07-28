@@ -15,15 +15,20 @@
 /// Two sessions, two credentials, mirroring the real split: [connectAsUser]
 /// gives the User surface, [connectAsMember] the member-scoped one. There is no
 /// object here that offers both under one credential, because there is none
-/// there.
+/// there. The signal socket sits on the *member* session, since that is where it
+/// sits on the server — `WS /w/{w}/signal` resolves through the same
+/// member-scoped path as the ops routes, so a user session subscribes to
+/// nothing.
 library;
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
+import 'package:jeeves/sync/signal_socket.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 
 /// One appended op, plus the header fields the server indexes it by.
@@ -90,6 +95,10 @@ class FakeSyncServer {
   final Map<String, int> _challengeCounts = {};
   int _nextSeq = 1;
 
+  /// Dart mirror of `backend/app/sync/signal_hub.py`: subscribers per Workspace
+  /// and nothing else — no seqs, no cursors, no history.
+  final Map<String, List<void Function(String)>> _signalSubscribers = {};
+
   /// Every batch the server accepted for a POST, in order — lets a test assert
   /// what actually went over the wire.
   final List<List<Uint8List>> receivedBatches = [];
@@ -97,19 +106,61 @@ class FakeSyncServer {
   /// Every escrow read, in order: the append-only audit the real server keeps.
   final List<({String userId, String workspaceId})> escrowFetches = [];
 
+  /// Every frame the signal socket put on the wire, per Workspace, in order —
+  /// the same kind of recording as [receivedBatches], on the other direction.
+  /// A fidelity smoke check: the binding no-payload assertion is the backend's
+  /// `test_signal_socket.py`, which watches a real socket.
+  final Map<String, List<String>> emittedSignalFrames = {};
+
   List<StoredOp> get storedOps => List.unmodifiable(_log);
 
   bool isChained(String memberId) => _members[memberId]?.chained ?? false;
 
+  /// Live signal sockets on a Workspace. A client that leaks a subscription
+  /// shows up here as a count that never comes back down.
+  int signalSubscriberCount(String workspaceId) =>
+      _signalSubscribers[workspaceId]?.length ?? 0;
+
   /// The User-credential surface.
-  FakeSyncServerUserSession connectAsUser(String userId) =>
-      FakeSyncServerUserSession(this, userId);
+  ///
+  /// It takes the socket knobs without owning a socket: the member session it
+  /// mints at the end of the ceremony is the one that subscribes, and this is
+  /// where the harness gets to say which clock that session should run on.
+  FakeSyncServerUserSession connectAsUser(
+    String userId, {
+    SignalTimerFactory signalTimerFactory = Timer.new,
+    Duration keepaliveInterval = signalKeepaliveInterval,
+  }) =>
+      FakeSyncServerUserSession(
+        this,
+        userId,
+        signalTimerFactory: signalTimerFactory,
+        keepaliveInterval: keepaliveInterval,
+      );
 
   /// The member-credential surface, as the proof-of-possession exchange would
   /// have handed it out. Tests that do not care about the ceremony take it
   /// directly; nothing in production can.
-  FakeSyncServerMemberSession connectAsMember(String memberId) =>
-      FakeSyncServerMemberSession(this, memberId);
+  ///
+  /// The signal socket lives on *this* session and not on the User one, because
+  /// on the real server it does: `WS /w/{w}/signal` resolves through the same
+  /// member-scoped path as the ops routes, so a subscription is not something a
+  /// user session can open.
+  ///
+  /// [signalTimerFactory] and [keepaliveInterval] drive the socket's keepalives
+  /// off the harness's manually advanced clock, so an idle socket in a test is
+  /// distinguishable from a dead one without any real waiting.
+  FakeSyncServerMemberSession connectAsMember(
+    String memberId, {
+    SignalTimerFactory signalTimerFactory = Timer.new,
+    Duration keepaliveInterval = signalKeepaliveInterval,
+  }) =>
+      FakeSyncServerMemberSession(
+        this,
+        memberId,
+        signalTimerFactory: signalTimerFactory,
+        keepaliveInterval: keepaliveInterval,
+      );
 
   /// Test hook for #555's soft delete, which has no client-side emitter yet.
   void markCompacted(int seq, {required int by}) {
@@ -136,6 +187,9 @@ class FakeSyncServer {
       header: header,
     );
     _log.add(op);
+    // A hostile server pokes about ops it should never have stored. The client
+    // must survive that, and it does: a poke is only ever "go and sync".
+    _notify(workspaceId);
     return op.seq;
   }
 
@@ -145,6 +199,90 @@ class FakeSyncServer {
   /// devices are. Chain-gating is what makes the claim inert.
   void poisonRegistry(String userId, MemberRecord record) {
     _members[record.memberId] = _RegisteredMember(userId, record);
+  }
+
+  // --- The signal socket -----------------------------------------------------
+
+  /// Poke every subscriber of [workspaceId]. Never crosses Workspaces, and
+  /// holds no memory of what any subscriber has already seen.
+  void _notify(String workspaceId) {
+    for (final send in [...?_signalSubscribers[workspaceId]]) {
+      send('');
+    }
+  }
+
+  /// The frames the signal socket puts on the wire, server side.
+  ///
+  /// Deliberately raw: the idle deadline and the keepalive/poke grammar are the
+  /// *transport's* job on the client, so a link fault injected between the two
+  /// (see `DeviceLink.goSilent`) starves the deadline exactly as a half-open
+  /// socket would.
+  Stream<String> _signalFrames(
+    String memberId,
+    String workspaceId, {
+    required SignalTimerFactory timerFactory,
+    required Duration keepaliveInterval,
+  }) {
+    final controller = StreamController<String>();
+    Timer? keepalive;
+    late final void Function(String) send;
+
+    void armKeepalive() {
+      keepalive?.cancel();
+      // The keepalive is the timeout branch of the same wait that delivers
+      // pokes, so it only ever fires in the absence of news.
+      keepalive = timerFactory(keepaliveInterval, () => send(keepaliveFrame));
+    }
+
+    send = (String frame) {
+      if (controller.isClosed) return;
+      (emittedSignalFrames[workspaceId] ??= []).add(frame);
+      controller.add(frame);
+      armKeepalive();
+    };
+
+    controller.onListen = () {
+      // Member first, then the Workspace — the same order, and the same two
+      // questions, as `resolve_member_token` followed by `_authorize_workspace`
+      // on the real socket.
+      final member = _members[memberId];
+      if (member == null) {
+        controller.addError(
+          const SyncTransportException(
+            signalCloseUnauthenticated,
+            'unknown member',
+            code: 'unknown_member',
+          ),
+        );
+        unawaited(controller.close());
+        return;
+      }
+      try {
+        _authorizeWorkspace(member.userId, workspaceId);
+      } on SyncTransportException {
+        controller.addError(
+          const SyncTransportException(
+            signalCloseForbidden,
+            'No grant for this workspace',
+            // The structured code the real 403 carries. A close frame cannot
+            // hold a body, so the client branches on the close code — but the
+            // fake keeps the code alongside it rather than regressing to a bare
+            // string, so a twin can assert the same contract on both sides.
+            code: 'no_workspace_grant',
+          ),
+        );
+        unawaited(controller.close());
+        return;
+      }
+      _signalSubscribers.putIfAbsent(workspaceId, () => []).add(send);
+      // The initial poke is the subscribe ack *and* the catch-up trigger.
+      send('');
+    };
+    controller.onCancel = () {
+      keepalive?.cancel();
+      _signalSubscribers[workspaceId]?.remove(send);
+    };
+    return controller.stream;
   }
 
   // --- The endpoints ---------------------------------------------------------
@@ -303,8 +441,10 @@ class FakeSyncServer {
   Future<FakeSyncServerMemberSession> _completeMemberChallenge(
     String memberId,
     Uint8List nonce,
-    Uint8List signature,
-  ) async {
+    Uint8List signature, {
+    required SignalTimerFactory signalTimerFactory,
+    required Duration keepaliveInterval,
+  }) async {
     const unauthorized = SyncTransportException(
       401,
       'challenge did not verify',
@@ -323,7 +463,12 @@ class FakeSyncServer {
       member.record.signPk,
     );
     if (!ok) throw unauthorized;
-    return FakeSyncServerMemberSession(this, memberId);
+    return FakeSyncServerMemberSession(
+      this,
+      memberId,
+      signalTimerFactory: signalTimerFactory,
+      keepaliveInterval: keepaliveInterval,
+    );
   }
 
   // --- Op log ----------------------------------------------------------------
@@ -443,6 +588,11 @@ class FakeSyncServer {
       chained.chained = true;
     }
     receivedBatches.add(List.unmodifiable(envelopes));
+    if (staged.isNotEmpty) {
+      // Only non-duplicate appends are news: a pure replay changes nothing, so
+      // poking about it would send every subscriber on a pointless pull.
+      _notify(workspaceId);
+    }
     return [
       for (final entry in plan)
         OpAppendResult(
@@ -561,11 +711,24 @@ class FakeSyncServer {
 }
 
 /// A connection carrying the User's session credential.
+///
+/// No socket hangs off this one: `WS /w/{w}/signal` wants a member credential,
+/// so the subscription lives on [FakeSyncServerMemberSession].
 class FakeSyncServerUserSession implements UserTransport {
-  FakeSyncServerUserSession(this.server, this.userId);
+  FakeSyncServerUserSession(
+    this.server,
+    this.userId, {
+    this.signalTimerFactory = Timer.new,
+    this.keepaliveInterval = signalKeepaliveInterval,
+  });
 
   final FakeSyncServer server;
   final String userId;
+
+  /// Not used here — handed to the member session [completeMemberChallenge]
+  /// mints, which is the one that can open a socket.
+  final SignalTimerFactory signalTimerFactory;
+  final Duration keepaliveInterval;
 
   String get workspaceId => implicitWorkspaceId(userId);
 
@@ -602,15 +765,40 @@ class FakeSyncServerUserSession implements UserTransport {
     required Uint8List nonce,
     required Uint8List signature,
   }) =>
-      server._completeMemberChallenge(memberId, nonce, signature);
+      server._completeMemberChallenge(
+        memberId,
+        nonce,
+        signature,
+        signalTimerFactory: signalTimerFactory,
+        keepaliveInterval: keepaliveInterval,
+      );
 }
 
 /// A connection carrying one Member's transport credential.
+///
+/// Ops *and* the signal socket, because on the real server both live behind the
+/// same member-scoped token.
 class FakeSyncServerMemberSession implements SyncTransport {
-  FakeSyncServerMemberSession(this.server, this.memberId);
+  FakeSyncServerMemberSession(
+    this.server,
+    this.memberId, {
+    this.signalTimerFactory = Timer.new,
+    this.keepaliveInterval = signalKeepaliveInterval,
+  });
 
   final FakeSyncServer server;
   final String memberId;
+  final SignalTimerFactory signalTimerFactory;
+  final Duration keepaliveInterval;
+
+  /// The server side of the socket, before any client-side interpretation.
+  /// [DeviceLink] listens here so it can inject faults at frame level.
+  Stream<String> signalFrames(String workspaceId) => server._signalFrames(
+        memberId,
+        workspaceId,
+        timerFactory: signalTimerFactory,
+        keepaliveInterval: keepaliveInterval,
+      );
 
   @override
   Future<List<OpAppendResult>> postOps(
@@ -626,4 +814,14 @@ class FakeSyncServerMemberSession implements SyncTransport {
     required int limit,
   }) async =>
       server._pullOps(memberId, workspaceId, since: since, limit: limit);
+
+  @override
+  Stream<void> newSeqSignals(String workspaceId) => decodeSignalFrames(
+        () async => SignalSocket(
+          frames: signalFrames(workspaceId),
+          close: () async {},
+        ),
+        idleDeadline: keepaliveInterval * 3,
+        timerFactory: signalTimerFactory,
+      );
 }

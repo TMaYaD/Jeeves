@@ -12,6 +12,7 @@
 /// actually make.
 library;
 
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -26,11 +27,14 @@ import 'package:jeeves/sync/passphrase_policy.dart';
 import 'package:jeeves/sync/preferences_store.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/reducer.dart';
+import 'package:jeeves/sync/signal_listener.dart';
+import 'package:jeeves/sync/signal_socket.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 
 import 'fake_sync_server.dart';
+import 'signal_probe.dart';
 
 /// Argon2id costs for the harness.
 ///
@@ -57,6 +61,86 @@ class FakeClock {
   DateTime get asDateTime => DateTime.fromMillisecondsSinceEpoch(nowMs, isUtc: true);
 }
 
+/// A manually advanced timer wheel, plus an instant [delay].
+///
+/// Everything in the signal path that would otherwise wait — the server's
+/// keepalive cadence, the transport's idle deadline, the listener's backoff —
+/// is driven from here, so the whole reconnect ladder is exercised with no real
+/// sleeps and no timing flake.
+class SimTimers {
+  Duration _now = Duration.zero;
+  final List<_SimTimer> _pending = [];
+
+  /// Every backoff wait the listener asked for, in order — the schedule a test
+  /// asserts against.
+  final List<Duration> requestedDelays = [];
+
+  Timer create(Duration duration, void Function() callback) {
+    final timer = _SimTimer(_now + duration, callback);
+    _pending.add(timer);
+    return timer;
+  }
+
+  /// Waits on the wheel, not on the clock. Completing instantly instead would
+  /// let the reconnect ladder spin through a whole retry cycle in microtasks,
+  /// which is both untestable and a busy loop.
+  Future<void> delay(Duration duration) {
+    requestedDelays.add(duration);
+    final waited = Completer<void>();
+    create(duration, waited.complete);
+    return waited.future;
+  }
+
+  /// Fire every timer due within [by], in order, letting queued events settle
+  /// between fires — a timer callback that emits a frame must reach the
+  /// listener before the next one fires.
+  Future<void> advance(Duration by) async {
+    final target = _now + by;
+    while (true) {
+      _pending.removeWhere((timer) => !timer.isActive);
+      final due = _pending.where((timer) => timer.due <= target).toList()
+        ..sort((a, b) => a.due.compareTo(b.due));
+      if (due.isEmpty) break;
+      final next = due.first;
+      _pending.remove(next);
+      _now = next.due;
+      next.callback();
+      await pumpEvents(8);
+    }
+    _now = target;
+  }
+}
+
+class _SimTimer implements Timer {
+  _SimTimer(this.due, this.callback);
+
+  final Duration due;
+  final void Function() callback;
+  bool _active = true;
+
+  @override
+  bool get isActive => _active;
+
+  @override
+  void cancel() => _active = false;
+
+  @override
+  int get tick => 0;
+}
+
+/// Full jitter that always picks the ceiling, so the schedule a test asserts is
+/// the schedule the ladder defines rather than one sample from it.
+class CeilingJitter implements Random {
+  @override
+  int nextInt(int max) => max - 1;
+
+  @override
+  bool nextBool() => true;
+
+  @override
+  double nextDouble() => 1;
+}
+
 /// The device's link to the server: where offline and fault injection live, so
 /// [FakeSyncServer] stays a clean contract double.
 ///
@@ -64,17 +148,57 @@ class FakeClock {
 /// User's session and, after enrolment, its own. The server keeps them apart;
 /// this is just where the network switch lives.
 class DeviceLink implements SyncTransport, UserTransport {
-  DeviceLink(this._userSession);
+  DeviceLink(
+    this._userSession, {
+    SimTimers? timers,
+    this.keepaliveInterval = signalKeepaliveInterval,
+  }) : timers = timers ?? SimTimers();
 
   final FakeSyncServerUserSession _userSession;
-  SyncTransport? _memberSession;
+
+  /// Set by [completeMemberChallenge]. Typed as the concrete member session
+  /// because the socket lives there: the raw frame stream is what fault
+  /// injection needs, and only the member credential has one.
+  FakeSyncServerMemberSession? _memberSession;
+
+  /// Drives the transport's idle deadline, the half of the signal contract that
+  /// lives on this side of the wire.
+  final SimTimers timers;
+
+  /// Held here rather than read off [_memberSession] so the idle deadline is
+  /// known before enrolment — computing it must not be what reports that a
+  /// device has no member credential yet.
+  final Duration keepaliveInterval;
 
   bool online = true;
+
+  /// Half-open: the socket is up, the server is still sending, and not one
+  /// frame arrives — keepalives included. The failure mode the idle deadline
+  /// exists for, and the only one that never announces itself.
+  bool silent = false;
 
   /// Simulates a POST whose ops the server accepted but whose response never
   /// arrived. The device must re-send on the next sync, and that re-send must
   /// be a no-op — which is exactly what op-id dedupe is for.
   bool dropPostResponse = false;
+
+  /// Holds a pull mid-flight, so a test can decide what arrives while a sync is
+  /// already running.
+  Completer<void>? pullGate;
+
+  /// Fails the next [pullOps] — the poke-triggered sync failing on the one step
+  /// a poke exists to trigger.
+  Object? pullFailure;
+
+  /// Read once per signal socket, exactly as [HttpSyncTransport] reads its
+  /// injected provider: reassigning it and reconnecting is how a test proves a
+  /// refreshed token is picked up by construction.
+  Future<String> Function() bearerTokenProvider = () async => 'initial-token';
+
+  /// Every value [bearerTokenProvider] returned, one entry per socket opened.
+  final List<String> readBearerTokens = [];
+
+  final List<StreamController<String>> _liveSignals = [];
 
   void _requireOnline() {
     if (!online) {
@@ -82,8 +206,17 @@ class DeviceLink implements SyncTransport, UserTransport {
     }
   }
 
-  SyncTransport get _member =>
+  FakeSyncServerMemberSession get _member =>
       _memberSession ?? (throw StateError('device has not completed enrolment'));
+
+  /// The network died under any open socket, and refuses to carry a new one.
+  void dropSignals() {
+    for (final relay in [..._liveSignals]) {
+      if (!relay.isClosed) {
+        relay.addError(const SyncTransportException.unreachable('device is offline'));
+      }
+    }
+  }
 
   @override
   Future<MemberRecord> registerMember({
@@ -137,7 +270,7 @@ class DeviceLink implements SyncTransport, UserTransport {
       memberId: memberId,
       nonce: nonce,
       signature: signature,
-    );
+    ) as FakeSyncServerMemberSession;
     // The client syncs through the link, not around it, so `goOffline` keeps
     // working after enrolment.
     return this;
@@ -163,8 +296,50 @@ class DeviceLink implements SyncTransport, UserTransport {
     required int limit,
   }) async {
     _requireOnline();
+    final gate = pullGate;
+    if (gate != null) await gate.future;
+    final failure = pullFailure;
+    if (failure != null) {
+      pullFailure = null;
+      throw failure;
+    }
     return _member.pullOps(workspaceId, since: since, limit: limit);
   }
+
+  @override
+  Stream<void> newSeqSignals(String workspaceId) => decodeSignalFrames(
+        () async {
+          _requireOnline();
+          readBearerTokens.add(await bearerTokenProvider());
+          final relay = StreamController<String>();
+          // Through the member session: a device that has not enrolled has no
+          // credential the socket would accept, and saying so here is the same
+          // refusal the server makes at the handshake.
+          final upstream = _member.signalFrames(workspaceId).listen(
+            (frame) {
+              if (!silent && !relay.isClosed) relay.add(frame);
+            },
+            onError: (Object error) {
+              if (!relay.isClosed) relay.addError(error);
+            },
+            onDone: () {
+              if (!relay.isClosed) relay.close();
+            },
+          );
+          _liveSignals.add(relay);
+          return SignalSocket(
+            frames: relay.stream,
+            close: () async {
+              _liveSignals.remove(relay);
+              await upstream.cancel();
+              if (!relay.isClosed) await relay.close();
+            },
+          );
+        },
+        // The same three-missed-keepalives rule the real transport applies.
+        idleDeadline: keepaliveInterval * 3,
+        timerFactory: timers.create,
+      );
 }
 
 class SimDevice {
@@ -199,6 +374,8 @@ class SimDevice {
     Random? random,
     Argon2idParameters kdf = harnessKdfParameters,
     PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
+    SimTimers? timers,
+    Duration keepaliveInterval = signalKeepaliveInterval,
   }) async {
     // N devices means N stores, which is the whole premise. Drift's warning is
     // about several databases sharing one executor; each device here has its
@@ -219,7 +396,18 @@ class SimDevice {
       nowMs: () => clock.nowMs,
     );
     final registry = CollectionRegistry(database);
-    final link = DeviceLink(server.connectAsUser(userId));
+    final simTimers = timers ?? SimTimers();
+    final link = DeviceLink(
+      // The clock the socket will run on is chosen here, and travels through
+      // the ceremony onto the member session that actually subscribes.
+      server.connectAsUser(
+        userId,
+        signalTimerFactory: simTimers.create,
+        keepaliveInterval: keepaliveInterval,
+      ),
+      timers: simTimers,
+      keepaliveInterval: keepaliveInterval,
+    );
     final client = SyncClient(
       workspaceId: implicitWorkspaceId(userId),
       userId: userId,
@@ -278,9 +466,30 @@ class SimDevice {
 
   final PreferencesStore preferences;
 
-  void goOffline() => link.online = false;
+  SimTimers get timers => link.timers;
+
+  /// The subscription lifecycle, on this device's deterministic hooks: the
+  /// harness's timer wheel for backoff and a jitter that always picks the
+  /// ceiling, so an asserted schedule is the ladder's, not a sample of it.
+  late final SignalListener listener = SignalListener(
+    client: client,
+    transport: link,
+    delay: link.timers.delay,
+    random: CeilingJitter(),
+  );
+
+  void goOffline() {
+    link.online = false;
+    link.dropSignals();
+  }
 
   void goOnline() => link.online = true;
+
+  /// Half-open: the socket survives, and nothing crosses it. Distinguishable
+  /// from healthy-idle only because a healthy server keeps sending keepalives.
+  void goSilent() => link.silent = true;
+
+  void goAudible() => link.silent = false;
 
   /// Push, then pull. There is no directory refresh: a MemberRegister is its
   /// author's op 1, so the pull hydrates the directory in order by itself.
@@ -293,5 +502,8 @@ class SimDevice {
     await sync();
   }
 
-  Future<void> close() => database.close();
+  Future<void> close() async {
+    await listener.dispose();
+    await database.close();
+  }
 }

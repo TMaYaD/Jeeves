@@ -1,9 +1,10 @@
 /// Capture, push, pull, verify, reduce — the client half of the sync spine.
 ///
-/// `sync()` is explicit: there is no socket in this slice (#552 adds the
-/// payload-free "there's news" signal). Everything else is here — the offline
-/// queue is simply the outbox surviving a failed POST, and the pull loop runs
-/// the fail-closed receive pipeline before anything reaches the reducer.
+/// `sync()` is explicit and this class stays a verb-set: staying subscribed to
+/// the payload-free "there's news" signal is a policy, and it lives in
+/// `signal_listener.dart`. Everything else is here — the offline queue is
+/// simply the outbox surviving a failed POST, and the pull loop runs the
+/// fail-closed receive pipeline before anything reaches the reducer.
 ///
 /// **The receive order is normative** and shared with #551:
 ///

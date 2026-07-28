@@ -92,6 +92,15 @@ class Settings(BaseSettings):
     member_challenge_daily_limit: int = 120
     member_challenge_window_seconds: int = 86_400
 
+    # Realtime signal socket (`WS /w/{w}/signal`).  The keepalive interval sits
+    # below Dokku's default 60 s `proxy_read_timeout` so the proxy never reaps an
+    # idle-but-live subscription; the client's idle deadline is three intervals.
+    # The auth-frame deadline bounds how long an unauthenticated socket may sit
+    # open.  Both are Settings fields so the socket tests can run in
+    # milliseconds instead of waiting out the production values.
+    signal_keepalive_interval_seconds: float = 25.0
+    signal_auth_frame_deadline_seconds: float = 10.0
+
     # CORS — set to actual Flutter app origin(s) in production
     allowed_origins: list[str] = ["*"]
 

@@ -7,21 +7,45 @@
 /// [HttpUserTransport] carries the User's session; [HttpSyncTransport] carries
 /// a member token and is *only* reachable by completing the proof-of-possession
 /// exchange, so there is no way to hold one without having proved possession of
-/// the device key it speaks for.
+/// the device key it speaks for. The signal socket hangs off the *member*
+/// transport for exactly that reason: the server refuses a plain user token
+/// there, so a subscription is not something a session alone can open.
+///
+/// `package:web_socket_channel` carries the signal socket rather than dio,
+/// which does not speak WebSocket. It is cross-platform, so #553's platform
+/// wiring inherits a working web code path instead of a rewrite; there is no
+/// web adapter for the op-log stack in this slice, so the socket is exercised
+/// on IO and through the fake.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'signal_socket.dart';
 import 'sync_transport.dart';
 
 /// The member-credential surface.
 class HttpSyncTransport implements SyncTransport {
-  HttpSyncTransport(this._dio);
+  HttpSyncTransport(
+    this._dio, {
+    required Future<String> Function() bearerTokenProvider,
+    Duration idleDeadline = signalIdleDeadline,
+    SignalTimerFactory timerFactory = Timer.new,
+  })  : _bearerTokenProvider = bearerTokenProvider,
+        _idleDeadline = idleDeadline,
+        _timerFactory = timerFactory;
 
   final Dio _dio;
+
+  /// Read once per socket, so a token refreshed between reconnects is picked up
+  /// by construction rather than by anyone remembering to re-inject it.
+  final Future<String> Function() _bearerTokenProvider;
+  final Duration _idleDeadline;
+  final SignalTimerFactory _timerFactory;
 
   @override
   Future<List<OpAppendResult>> postOps(
@@ -65,6 +89,60 @@ class HttpSyncTransport implements SyncTransport {
           ),
       ],
       hasMore: response['has_more'] as bool,
+    );
+  }
+
+  @override
+  Stream<void> newSeqSignals(String workspaceId) => decodeSignalFrames(
+        () async {
+          final channel = WebSocketChannel.connect(_signalUri(workspaceId));
+          try {
+            await channel.ready;
+          } on Object catch (error) {
+            // A failed handshake can still leave a half-open socket, and no
+            // `SignalSocket` was handed back, so nothing downstream can close
+            // it. Here or never.
+            _discardSignalChannel(channel);
+            throw SyncTransportException.unreachable('$error');
+          }
+          // The token goes in the first frame, not a header and not the URL: a
+          // browser cannot set `Authorization` on a WebSocket, and a query
+          // string would put the token in every proxy and server log.
+          final String bearerToken;
+          try {
+            bearerToken = await _bearerTokenProvider();
+          } on Object {
+            // The socket is fully open by this point, so a throwing token
+            // provider would leak it outright. The error itself is rethrown
+            // unmapped: a credential failure is not an unreachable server.
+            _discardSignalChannel(channel);
+            rethrow;
+          }
+          channel.sink.add(bearerToken);
+          return SignalSocket(
+            frames: channel.stream,
+            close: () => channel.sink.close(),
+            closeCode: () => channel.closeCode,
+          );
+        },
+        idleDeadline: _idleDeadline,
+        timerFactory: _timerFactory,
+      );
+
+  /// Release a channel that never became a [SignalSocket]. Errors from the
+  /// close are discarded rather than swallowed silently by accident: we are
+  /// already unwinding a failure, and a close that fails on a socket nobody
+  /// holds has nothing left to report.
+  static void _discardSignalChannel(WebSocketChannel channel) {
+    unawaited(channel.sink.close().catchError((Object _) {}));
+  }
+
+  /// Same origin as the REST calls, `http(s)` swapped for `ws(s)`.
+  Uri _signalUri(String workspaceId) {
+    final base = Uri.parse(_dio.options.baseUrl);
+    return base.replace(
+      scheme: base.scheme == 'https' ? 'wss' : 'ws',
+      path: '${base.path}/w/$workspaceId/signal'.replaceAll('//', '/'),
     );
   }
 }
@@ -174,6 +252,16 @@ class HttpUserTransport implements UserTransport {
           },
         ),
       ),
+      // The socket's first frame is this same member token. The server resolves
+      // the signal socket through the member-scoped path that the ops routes
+      // use, so the credential that can post is the credential that can
+      // subscribe — a user session opens neither.
+      //
+      // A constant closure, not a live lookup: nothing rotates a member token
+      // yet (`POST /members/{m}/token/refresh` exists and no client calls it),
+      // so there is no fresher value to read. When something does, this is the
+      // one line that has to change, and the provider indirection is why.
+      bearerTokenProvider: () async => accessToken,
     );
   }
 
