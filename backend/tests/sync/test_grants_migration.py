@@ -14,6 +14,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import pytest
 import sqlalchemy as sa
 from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
@@ -126,18 +127,31 @@ def test_0033_leaves_existing_rows_untouched_and_unbackfilled() -> None:
         assert conn.execute(sa.text("SELECT id FROM users")).scalars().all() == ["u1"]
 
 
-def test_0033_downgrade_removes_only_what_it_added() -> None:
+def test_0033_refuses_to_downgrade_and_keeps_the_authorization_index() -> None:
+    """``workspaces`` and ``grants`` cannot be rebuilt from the op log server-side.
+
+    Same contract as 0031's refusal: the downgrade raises *before* touching any
+    schema, and the assertion is that everything it would have dropped is still
+    there — a refusal that had already dropped a table would be no better than
+    the drop.
+    """
     engine = _engine_at_0032()
     _apply_0033(engine)
-    _run(engine, _load("migration_0033", "0033_add_workspaces_and_grants.py"), downgrade=True)
+    with pytest.raises(RuntimeError, match="irreversible"):
+        _run(engine, _load("migration_0033", "0033_add_workspaces_and_grants.py"), downgrade=True)
 
     with engine.connect() as conn:
         inspector = sa.inspect(conn)
         remaining = set(inspector.get_table_names())
-        assert "workspaces" not in remaining
-        assert "grants" not in remaining
-        assert {"members", "ops", "recovery_escrows", "refresh_tokens", "users"} <= remaining
+        assert {
+            "workspaces",
+            "grants",
+            "members",
+            "ops",
+            "recovery_escrows",
+            "refresh_tokens",
+            "users",
+        } <= remaining
         member_columns = {column["name"] for column in inspector.get_columns("members")}
-        assert "member_kind" not in member_columns
-        assert {"kex_pk", "chained_at"} <= member_columns
+        assert "member_kind" in member_columns
         assert conn.execute(sa.text("SELECT member_id FROM members")).scalars().all() == ["m1"]
