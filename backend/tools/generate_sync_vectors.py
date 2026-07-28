@@ -230,6 +230,15 @@ def _header_json(header: OpHeader) -> dict[str, Any]:
     }
 
 
+#: Padding a size-class vector's body carries beyond its framed payload.
+#:
+#: Spelled out because the note text on those vectors states this number, and the
+#: payload length is ``size_class - PAYLOAD_LENGTH_PREFIX_BYTES - this``.  Left as
+#: a bare ``- 36`` the two halves could not move together: a change to the prefix
+#: width would silently produce vectors whose own notes were wrong.
+PADDING_BYTES_IN_SIZE_CLASS_VECTORS = 32
+
+
 def _sized_payload(base: OpPayload, target_payload_length: int) -> OpPayload:
     """``base`` grown with an ASCII filler field to exactly the target length."""
     probe = replace(base, fields={**base.fields, "filler": FieldWrite(value="")})
@@ -431,9 +440,12 @@ def _positive_vectors() -> list[dict[str, Any]]:
                 ),
                 payload=_sized_payload(
                     _theme_payload(key="device_a", value="dark", wall_ms=BASE_WALL_MS),
-                    size_class - 36,
+                    size_class - PAYLOAD_LENGTH_PREFIX_BYTES - PADDING_BYTES_IN_SIZE_CLASS_VECTORS,
                 ).encode(),
-                note=f"Body padded to the {size_class}-byte size class, 32 padding bytes.",
+                note=(
+                    f"Body padded to the {size_class}-byte size class, "
+                    f"{PADDING_BYTES_IN_SIZE_CLASS_VECTORS} padding bytes."
+                ),
             )
         )
 
@@ -445,7 +457,9 @@ def _positive_vectors() -> list[dict[str, Any]]:
             header=_header(op_id_name="oversize", key="device_a", author_seq=20),
             payload=_sized_payload(
                 _theme_payload(key="device_a", value="dark", wall_ms=BASE_WALL_MS),
-                oversize_body_length - 36,
+                oversize_body_length
+                - PAYLOAD_LENGTH_PREFIX_BYTES
+                - PADDING_BYTES_IN_SIZE_CLASS_VECTORS,
             ).encode(),
             note=(
                 "Above the largest size class a body rounds up to the next "

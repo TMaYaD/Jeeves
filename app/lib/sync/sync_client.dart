@@ -48,6 +48,8 @@
 /// client cannot have.
 library;
 
+import 'dart:math' show min;
+
 import 'package:drift/drift.dart';
 // The append to `op_log` is a plain insert whose uniqueness constraints are the
 // authority on a taken slot (see [SyncClient._logReceived]), so this file has to
@@ -279,10 +281,43 @@ class SyncClient {
   Future<String> captureControl(Uint8List payload) =>
       _authorAndQueue(opClass: opClassControl, payload: payload);
 
+  /// Tail of the authoring queue: every `_authorAndQueue` waits on it.
+  ///
+  /// The chain head is *read* by [_authorChain], the envelope is *signed*
+  /// against it, and only then does a transaction advance it — so the head
+  /// cannot be re-read under the write lock, and one transaction cannot cover
+  /// the whole ceremony. Two `capture()`/`captureControl()` calls that are not
+  /// awaited sequentially would otherwise both observe the same head and mint
+  /// two signed envelopes claiming one `author_seq` with one `prev_author_hash`:
+  /// a fork this device authored against itself, which the server refuses with
+  /// `author_chain_conflict` and which [chainVerdict] reads as an integrity
+  /// event. No constraint catches it either — `op_log`'s unique
+  /// `(workspace, author, author_seq)` index guards the *receive* path, while
+  /// `outbox` and `author_state` hold no such key. Serialising the ceremony is
+  /// therefore what makes one slot hold one op on the authoring side.
+  Future<void> _authoring = Future<void>.value();
+
   Future<String> _authorAndQueue({
     required int opClass,
     required Uint8List payload,
     int keyEpoch = 0,
+  }) {
+    final authored = _authoring.then((_) => _authorAndQueueLocked(
+          opClass: opClass,
+          payload: payload,
+          keyEpoch: keyEpoch,
+        ));
+    // A refused or failed author must not wedge the queue behind it: the next
+    // caller waits for this one to *finish*, not to succeed. The error still
+    // reaches the caller through the future returned here.
+    _authoring = authored.then<void>((_) {}, onError: (Object _) {});
+    return authored;
+  }
+
+  Future<String> _authorAndQueueLocked({
+    required int opClass,
+    required Uint8List payload,
+    required int keyEpoch,
   }) async {
     // The floor is consulted on **authoring**, which is where it bites: refusing
     // to build an envelope below it is what makes a rotation stick rather than
@@ -382,6 +417,13 @@ class SyncClient {
   /// it for ever — our genesis can never become acceptable — so the staged ops go
   /// and the author chain rewinds to what the log actually acknowledges. See
   /// [_dropSupersededGenesis].
+  /// The queue is posted in [maxOpsPerBatch] chunks, in `author_seq` order, each
+  /// acknowledged before the next goes out. Unchunked, a device that authored
+  /// more than the server's cap while offline would re-POST the same oversized
+  /// batch on every `sync()`, be refused 413 `batch_too_large` every time, and
+  /// never drain — a permanent outage in exactly the offline case the outbox is
+  /// for. Chunking in chain order is what keeps the server seeing this author's
+  /// positions in the order they were authored.
   Future<FlushOutcome> flushOutbox() async {
     final pending = await (_db.select(_db.outbox)
           ..where((row) => row.workspaceId.equals(workspaceId) & row.sentAt.isNull())
@@ -389,24 +431,34 @@ class SyncClient {
         .get();
     if (pending.isEmpty) return FlushOutcome.flushed;
 
-    try {
-      // A duplicate result is still an acknowledgement: the server holds the op.
-      await transport.postOps(workspaceId, [for (final row in pending) row.envelope]);
-    } on AuthorChainConflictException catch (conflict) {
-      await _recordOwnWritesVerdict(conflict);
-      return FlushOutcome.retained;
-    } on SyncTransportException catch (refusal) {
-      if (refusal.code != genesisNotFirstCode) rethrow;
-      await _dropSupersededGenesis(pending);
-      return FlushOutcome.genesisSuperseded;
-    }
-    final sentAt = _now();
-    for (final row in pending) {
-      await (_db.update(_db.outbox)..where((r) => r.id.equals(row.id)))
-          .write(OutboxCompanion(sentAt: Value(sentAt)));
+    for (var start = 0; start < pending.length; start += maxOpsPerBatch) {
+      final chunk = pending.sublist(
+        start,
+        min(start + maxOpsPerBatch, pending.length),
+      );
+      try {
+        // A duplicate result is still an acknowledgement: the server holds the op.
+        await transport.postOps(workspaceId, [for (final row in chunk) row.envelope]);
+      } on AuthorChainConflictException catch (conflict) {
+        await _recordOwnWritesVerdict(conflict);
+        return FlushOutcome.retained;
+      } on SyncTransportException catch (refusal) {
+        if (refusal.code != genesisNotFirstCode) rethrow;
+        // Genesis sits at the head of the queue, so everything still unsent is
+        // queued behind it and goes with it — not just this chunk.
+        await _dropSupersededGenesis(pending.sublist(start));
+        return FlushOutcome.genesisSuperseded;
+      }
+      await _markSent(chunk);
     }
     return FlushOutcome.flushed;
   }
+
+  /// Stamp one acknowledged chunk in a single UPDATE.
+  Future<void> _markSent(List<OutboxRow> acknowledged) =>
+      (_db.update(_db.outbox)
+            ..where((row) => row.id.isIn([for (final row in acknowledged) row.id])))
+          .write(OutboxCompanion(sentAt: Value(_now())));
 
   /// Discard a genesis the race is already lost, and everything queued behind it.
   ///
@@ -815,6 +867,27 @@ class SyncClient {
       return affected;
     } on SyncRejection catch (rejection) {
       await _refuse(pulled, rejection, header);
+      return const {};
+    } on SqliteException {
+      // Storage failures keep [_logReceived]'s contract: a transient
+      // `SQLITE_BUSY` is an op the next sync retries with the cursor unmoved,
+      // never one skipped for ever under a refusal label it did not earn. This
+      // is about *our* database, not about the envelope.
+      rethrow;
+    } catch (error) {
+      // The fail-closed guarantee has to be total, not best-effort. Anything
+      // else escaping the pipeline un-classified — a parse, verify or decode
+      // path throwing something that is not a `SyncRejection` — would otherwise
+      // propagate out of `pull()` before the cursor advances, so every later
+      // pull refetches the same op and throws on it again: one adversarial
+      // envelope, an indefinitely wedged receive. Quarantining under
+      // `unexpected_receive_failure` keeps the op unapplied and surfaced while
+      // the stream moves on, exactly as a named refusal does.
+      await _refuse(
+        pulled,
+        SyncRejection(SyncRejectionReason.unexpectedReceiveFailure, '$error'),
+        header,
+      );
       return const {};
     }
   }

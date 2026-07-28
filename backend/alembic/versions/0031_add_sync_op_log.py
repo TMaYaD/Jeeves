@@ -55,7 +55,18 @@ def upgrade() -> None:
 
     op.create_table(
         "ops",
-        sa.Column("seq", sa.BigInteger(), primary_key=True, autoincrement=True),
+        # Every BIGINT here carries the same SQLite variant its ORM column does
+        # (``app/sync/models.py``).  These tables are exercised through SQLite, and
+        # SQLite only gives a column rowid-autoincrement behaviour when it is
+        # declared ``INTEGER PRIMARY KEY`` — a plain BIGINT primary key is a
+        # different column type there, so a migration that omits the variant builds
+        # a schema the ORM would not have.
+        sa.Column(
+            "seq",
+            sa.BigInteger().with_variant(sa.Integer, "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column("workspace_id", sa.Uuid(), nullable=False),
         sa.Column("envelope", sa.LargeBinary(), nullable=False),
         sa.Column("op_class", sa.SmallInteger(), nullable=False),
@@ -63,8 +74,16 @@ def upgrade() -> None:
         sa.Column("op_id", sa.Uuid(), nullable=False),
         sa.Column("author_member_id", sa.Uuid(), nullable=False),
         sa.Column("author_key_id", sa.LargeBinary(), nullable=False),
-        sa.Column("author_seq", sa.BigInteger(), nullable=False),
-        sa.Column("compacted_by", sa.BigInteger(), nullable=True),
+        sa.Column(
+            "author_seq",
+            sa.BigInteger().with_variant(sa.Integer, "sqlite"),
+            nullable=False,
+        ),
+        sa.Column(
+            "compacted_by",
+            sa.BigInteger().with_variant(sa.Integer, "sqlite"),
+            nullable=True,
+        ),
         sa.Column(
             "received_at",
             sa.DateTime(timezone=True),
@@ -94,7 +113,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_ops_workspace_seq", table_name="ops")
-    op.drop_table("ops")
-    op.drop_index("ix_members_user_id", table_name="members")
-    op.drop_table("members")
+    # Irreversible: dropping ``ops`` destroys every synced envelope — the op log
+    # *is* the history, and the client's own copy is not a server backup — and
+    # dropping ``members`` destroys the public keys every one of those envelopes
+    # is verified against, so even a restored log would be unverifiable.  Fail
+    # loudly BEFORE touching any schema rather than silently lose it.  Recovery is
+    # a restore-from-backup + ``alembic stamp``, not a downgrade.
+    raise RuntimeError(
+        "Migration 0031 (add_sync_op_log) is irreversible: dropping the ops "
+        "table would destroy every synced envelope, and dropping members would "
+        "destroy the keys those envelopes are verified against. Restore from a "
+        "backup and `alembic stamp` the target revision instead of running "
+        "`alembic downgrade`."
+    )

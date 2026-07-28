@@ -104,6 +104,19 @@ class SyncTransportException implements Exception {
 /// The structured `detail.code` a `POST /w/{w}/ops` chain conflict carries.
 const String authorChainConflictCode = 'author_chain_conflict';
 
+/// Ops one `POST /w/{w}/ops` may carry, mirroring the server's
+/// `MAX_OPS_PER_BATCH`.
+///
+/// Chunking is the **caller's** contract, not the transport's: a batch appends
+/// in one server transaction, so splitting it is a decision about how much
+/// history to commit at a time and only the caller knows the chain order the
+/// chunks have to preserve. The limit is exported so both sides agree on one
+/// number instead of a client cap drifting from the server's — a device that
+/// authored more than this offline would otherwise re-POST the same oversized
+/// batch for ever, refused with 413 `batch_too_large`, and never drain the queue
+/// it exists for. `SyncClient.flushOutbox` is the caller that honours it.
+const int maxOpsPerBatch = 1000;
+
 /// A `workspace_genesis` posted into a Workspace that already has one.
 ///
 /// A 409 that is **not** an accusation and not a wedge: genesis authorship is

@@ -26,6 +26,14 @@ import 'hlc.dart';
 
 const Uuid _uuid = Uuid();
 
+/// Width of a private key *seed*, for both Ed25519 signing and X25519 kex.
+///
+/// Its own constant rather than a borrowed `signPublicKeyBytes`: seed width and
+/// public-key width are independent quantities that merely happen to be 32 for
+/// all three keys here, so sizing a seed with a public-key constant makes
+/// changing one silently change the others.
+const int keySeedBytes = 32;
+
 /// This device's Member id and its two keypairs.
 class MemberIdentity {
   MemberIdentity._(
@@ -108,7 +116,7 @@ class MemberIdentity {
       );
 
   static Uint8List _randomSeed(Random random) => Uint8List.fromList(
-        List<int>.generate(signPublicKeyBytes, (_) => random.nextInt(256)),
+        List<int>.generate(keySeedBytes, (_) => random.nextInt(256)),
       );
 }
 

@@ -19,6 +19,7 @@ from app.sync.ids import default_workspace_id
 from app.sync.models import RecoveryEscrow, RecoveryEscrowFetch
 from tests.conftest import auth_header, register
 from tests.sync.builders import SpecRoot, escrow_blob, user_id_from_token
+from tests.sync.helpers import detail_of
 
 
 class EscrowFixture:
@@ -35,12 +36,6 @@ class EscrowFixture:
 async def _open(client: AsyncClient, email: str) -> EscrowFixture:
     token = await register(client, email)
     return EscrowFixture(token, default_workspace_id(user_id_from_token(token)), SpecRoot())
-
-
-def detail_of(response: object) -> dict[str, object]:
-    detail = response.json()["detail"]  # type: ignore[attr-defined]
-    assert isinstance(detail, dict), detail
-    return detail
 
 
 # --- PUT /w/{w}/recovery ------------------------------------------------------

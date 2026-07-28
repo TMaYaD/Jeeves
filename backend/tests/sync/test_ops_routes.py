@@ -47,6 +47,7 @@ from tests.sync.builders import (
     encode_all,
     user_id_from_token,
 )
+from tests.sync.helpers import detail_of
 
 
 class Session:
@@ -186,14 +187,6 @@ async def session(client: AsyncClient) -> Session:
 async def ungranted_session(client: AsyncClient) -> Session:
     """Enrolled, credentialed, and holding no Grant — the pre-grant state."""
     return await _open_session(client, "ops-ungranted@example.com", genesis=False)
-
-
-def detail_of(response: object) -> dict[str, object]:
-    """The structured error object every route rejection carries."""
-    body = response.json()  # type: ignore[attr-defined]
-    detail = body["detail"]
-    assert isinstance(detail, dict), detail
-    return detail
 
 
 async def content_ops(db: AsyncSession) -> list[Op]:

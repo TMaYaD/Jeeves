@@ -24,12 +24,7 @@ from app.sync.models import RecoveryEscrowFetch
 from app.sync.routes import revoke_member_transport
 from tests.conftest import auth_header, register
 from tests.sync.builders import SpecDevice, SpecRoot, encode_all, user_id_from_token
-
-
-def detail_of(response: object) -> dict[str, object]:
-    detail = response.json()["detail"]  # type: ignore[attr-defined]
-    assert isinstance(detail, dict), detail
-    return detail
+from tests.sync.helpers import detail_of
 
 
 class Enrolled:

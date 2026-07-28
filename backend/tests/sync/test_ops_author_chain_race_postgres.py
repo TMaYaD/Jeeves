@@ -87,9 +87,25 @@ def _database_url() -> str:
     return url
 
 
-def _asyncpg_dsn(url: str, database: str) -> str:
+def _asyncpg_dsn(url: str, database: str, *, driver: str = "") -> str:
+    """Rewrite [url] to name [database], normalising the scheme on the way.
+
+    ``_database_url`` admits any URL containing ``postgres``, and ``postgres://``
+    is the common spelling — but SQLAlchemy has no dialect under that name, so
+    leaving it alone means the scratch engine dies in fixture setup instead of the
+    run skipping cleanly.  Normalising here rather than at each call site is what
+    keeps both consumers agreeing on one spelling.
+
+    [driver] appends SQLAlchemy's dialect driver (``asyncpg``); the bare form is
+    what ``asyncpg.connect`` itself wants.  Naming it beats rewriting the scheme
+    again at the call site, where a normalisation slip would silently miss.
+    """
     scheme, _, rest = url.partition("://")
     scheme = scheme.replace("+asyncpg", "")
+    if scheme == "postgres":
+        scheme = "postgresql"
+    if driver:
+        scheme = f"{scheme}+{driver}"
     host_part = rest.rpartition("/")[0] or rest
     return f"{scheme}://{host_part}/{database}"
 
@@ -107,13 +123,12 @@ async def race_engine() -> AsyncIterator[AsyncEngine]:
     """An empty scratch database with the ORM schema, dropped afterwards."""
     url = _database_url()
     admin_dsn = _asyncpg_dsn(url, "postgres")
-    scratch_dsn = _asyncpg_dsn(url, _SCRATCH_DB)
 
     # CREATE/DROP DATABASE cannot run inside a transaction block.
     await _admin_execute(admin_dsn, f'DROP DATABASE IF EXISTS "{_SCRATCH_DB}" WITH (FORCE)')
     await _admin_execute(admin_dsn, f'CREATE DATABASE "{_SCRATCH_DB}"')
 
-    engine = create_async_engine(scratch_dsn.replace("postgresql://", "postgresql+asyncpg://"))
+    engine = create_async_engine(_asyncpg_dsn(url, _SCRATCH_DB, driver="asyncpg"))
     try:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
