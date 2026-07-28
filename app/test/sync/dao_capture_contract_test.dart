@@ -479,6 +479,59 @@ void main() {
       expect(capture.recorded, isEmpty);
     });
 
+    test('an overlapping rollback discards only its own scope', () async {
+      // `capturing` awaits its own body, but nothing stops two un-awaited
+      // callers overlapping. Under a stack of marks, A's rollback popped *B's*
+      // mark: A's rolled-back write stayed in the buffer and B's commit signed
+      // it. Token-bound scopes make that unrepresentable.
+      final scopeA = capture.beginScope();
+      capture.write(
+        collection: todosCollection,
+        entityId: 'rolled-back',
+        fields: const {'title': 'never signed'},
+      );
+      final scopeB = capture.beginScope();
+      capture.write(
+        collection: todosCollection,
+        entityId: 'committed-before',
+        fields: const {'title': 'survives'},
+      );
+      capture.rollbackScope(scopeA);
+      capture.write(
+        collection: todosCollection,
+        entityId: 'committed-after',
+        fields: const {'title': 'also survives'},
+      );
+      await capture.commitScope(scopeB);
+
+      expect(capture.keys, [
+        '$todosCollection/committed-before',
+        '$todosCollection/committed-after',
+      ]);
+    });
+
+    test('a nested scope merges into its parent rather than emitting', () async {
+      final outer = capture.beginScope();
+      capture.write(
+        collection: todosCollection,
+        entityId: 'o1',
+        fields: const {'title': 'from the parent'},
+      );
+      final inner = capture.beginScope();
+      capture.write(
+        collection: todosCollection,
+        entityId: 'o1',
+        fields: const {'notes': 'from the child'},
+      );
+      await capture.commitScope(inner);
+      expect(capture.recorded, isEmpty, reason: 'only the outermost emits');
+
+      await capture.commitScope(outer);
+      expect(capture.keys, ['$todosCollection/o1']);
+      expect(only(todosCollection).fields,
+          {'title': 'from the parent', 'notes': 'from the child'});
+    });
+
     test('several writes to one entity in one transaction coalesce to one op',
         () async {
       final id = await seedOutcome();

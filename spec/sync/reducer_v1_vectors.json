@@ -1537,6 +1537,101 @@
       "expected_quarantine_reasons": []
     },
     {
+      "name": "set_merge_unsorted_first_write_is_canonical_and_replay_safe",
+      "note": "ADR-0030(a) idempotence on a *non-canonical* input. The first write into an empty field has nothing to union with, so it is the one path that could store a caller's array in arrival order; the third op re-asserts that same op verbatim. Both the reduced value and its clock must be unmoved by the re-assertion, because that re-assertion is precisely what a #555 compaction op does to every value it carries forward.",
+      "permute": true,
+      "strategy_overrides": {
+        "spec_set_merge": "set_merge"
+      },
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "2e249739-c180-573d-a1f3-bdf7f13f1db0",
+            "fields": {
+              "key": {
+                "v": "spec_set_merge"
+              },
+              "value": {
+                "v": "[\"c\",\"a\"]"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "2e249739-c180-573d-a1f3-bdf7f13f1db0",
+            "fields": {
+              "key": {
+                "v": "spec_set_merge"
+              },
+              "value": {
+                "v": "[\"b\",\"a\"]"
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "2e249739-c180-573d-a1f3-bdf7f13f1db0",
+            "fields": {
+              "key": {
+                "v": "spec_set_merge"
+              },
+              "value": {
+                "v": "[\"c\",\"a\"]"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "2e249739-c180-573d-a1f3-bdf7f13f1db0": {
+            "key": "spec_set_merge",
+            "value": "[\"a\",\"b\",\"c\"]"
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "2e249739-c180-573d-a1f3-bdf7f13f1db0": {
+            "key": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "value": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
       "name": "strategy_selection_falls_back_to_lww_without_a_key",
       "note": "A `user_preferences` op whose entity has no resolvable `key` \u2014 none carried, none stored \u2014 falls back to LWW. The newer clock wins even though its value is the earlier floor, which is the opposite of what max_timestamp_value would decide.",
       "permute": true,

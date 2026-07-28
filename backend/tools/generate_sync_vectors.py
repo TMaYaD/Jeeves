@@ -1380,6 +1380,62 @@ def _collection_and_strategy_cases(t: int) -> list[dict[str, Any]]:
             "expected_quarantine_reasons": [],
         },
         {
+            "name": "set_merge_unsorted_first_write_is_canonical_and_replay_safe",
+            "note": (
+                "ADR-0030(a) idempotence on a *non-canonical* input. The first "
+                "write into an empty field has nothing to union with, so it is "
+                "the one path that could store a caller's array in arrival "
+                "order; the third op re-asserts that same op verbatim. Both the "
+                "reduced value and its clock must be unmoved by the "
+                "re-assertion, because that re-assertion is precisely what a "
+                "#555 compaction op does to every value it carries forward."
+            ),
+            "permute": True,
+            "strategy_overrides": {_SET_MERGE_KEY: "set_merge"},
+            "ops": [
+                _pref_op(
+                    author=_MEMBER_A,
+                    wall_ms=t,
+                    entity_id=_SET_MERGE_ENTITY_ID,
+                    key=_SET_MERGE_KEY,
+                    value=json.dumps(["c", "a"], separators=(",", ":")),
+                ),
+                _pref_op(
+                    author=_MEMBER_B,
+                    wall_ms=t + 1000,
+                    entity_id=_SET_MERGE_ENTITY_ID,
+                    key=_SET_MERGE_KEY,
+                    value=json.dumps(["b", "a"], separators=(",", ":")),
+                ),
+                # Byte-identical to the first op, clock included: a replay, not a
+                # new write.
+                _pref_op(
+                    author=_MEMBER_A,
+                    wall_ms=t,
+                    entity_id=_SET_MERGE_ENTITY_ID,
+                    key=_SET_MERGE_KEY,
+                    value=json.dumps(["c", "a"], separators=(",", ":")),
+                ),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SET_MERGE_ENTITY_ID: {
+                        "key": _SET_MERGE_KEY,
+                        "value": json.dumps(["a", "b", "c"], separators=(",", ":")),
+                    }
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SET_MERGE_ENTITY_ID: {
+                        "key": [t + 1000, 0, _MEMBER_B],
+                        "value": [t + 1000, 0, _MEMBER_B],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
             "name": "strategy_selection_falls_back_to_lww_without_a_key",
             "note": (
                 "A `user_preferences` op whose entity has no resolvable `key` — "

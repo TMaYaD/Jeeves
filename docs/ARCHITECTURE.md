@@ -176,7 +176,7 @@ Every device holds **two** stores, by design. The `SyncDatabase` is the collecti
 
 | Piece | File | Role |
 |---|---|---|
-| Capture seam | `app/lib/sync/domain_op_capture.dart` | What every DAO write path describes its effect through. Buffered per transaction and coalesced per entity, so a rolled-back write is never signed and a method that touches one row three times authors one op. Production binding is `NoopDomainOpCapture`; #553's flip is `GtdDatabase(..., opCapture: SyncOpCapture(client))` at one construction site. |
+| Capture seam | `app/lib/sync/domain_op_capture.dart` | What every DAO write path describes its effect through. Buffered per transaction and coalesced per entity, so a rolled-back write is never signed and a method that touches one row three times authors one op. Each scope carries its own buffer and is closed by the token `beginScope` returned, not by stack position — two overlapping un-awaited `capturing` calls must not be able to close, or flush, each other's scope. A scope whose parent is already closed overlapped rather than nested, so it flushes on its own. Production binding is `NoopDomainOpCapture`; #553's flip is `GtdDatabase(..., opCapture: SyncOpCapture(client))` at one construction site. |
 | Per-collection codecs | `app/lib/sync/collection_codecs.dart` | Twelve collections named after their tables, their synced columns, and the one canonical value encoding. |
 | Merge strategies | `app/lib/sync/merge_strategy.dart` | ADR-0011's Conflict Strategy registry riding on the reducer, behind the ADR-0030 lattice requirement. |
 | Domain projector | `app/lib/sync/domain_projector.dart` | Turns reduced state into typed rows, once per pull batch, and fires the ADR-0010 self-notifies. |

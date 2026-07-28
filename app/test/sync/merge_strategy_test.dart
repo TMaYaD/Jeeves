@@ -143,12 +143,60 @@ void main() {
       expect(reduced.value, isA<String>());
     });
 
+    test('canonicalises the first write into an empty field', () {
+      // The first write has nothing to union with, so it is the one path that
+      // could store a caller's array raw. ADR-0030(a) forbids it: see the
+      // idempotence case below.
+      final reduced = _reduce(setMerge, [_w('["c","a","c"]', 1000)])!;
+      expect(reduced.value, '["a","c"]');
+    });
+
+    test('re-asserting an unsorted first write changes nothing', () {
+      // #555's compaction re-asserts stored values under their original clocks,
+      // so a re-assertion that moved the reduced bytes would make compaction
+      // diverge from the log it compacts.
+      final once = _reduce(setMerge, [_w('["c","a"]', 1000)])!;
+      final twice = _reduce(setMerge, [_w('["c","a"]', 1000), _w('["c","a"]', 1000)])!;
+      expect(twice.value, once.value);
+      expect(twice.clock, once.clock);
+    });
+
     test('is a lattice', () {
       _expectLattice(setMerge, [
         _w('["b"]', 1000),
         _w('["a","b"]', 2000, _memberB),
         _w('["c"]', 3000),
       ]);
+    });
+
+    test('is a lattice over unsorted inputs', () {
+      // Every multi-write fixture above arrives pre-sorted, which is why the law
+      // test used to pass over a first-write path that stored its input raw.
+      //
+      // A *single* unsorted write is the fixture that bites, and only through
+      // the idempotence leg: with two or more distinct writes the raw first
+      // write is unioned into sorted form before the reduction ends, so every
+      // order still agrees and the defect hides.
+      _expectLattice(setMerge, [_w('["c","a"]', 1000)]);
+      _expectLattice(setMerge, [
+        _w('["c","a"]', 1000),
+        _w('["b","a","b"]', 2000, _memberB),
+        _w('["d","c"]', 3000),
+      ]);
+    });
+
+    test('canonicalises an array that displaces a non-array', () {
+      // The one-sided union: nothing to merge with, and still not a licence to
+      // store the array in arrival order.
+      _expectLattice(setMerge, [
+        _w('"not-an-array"', 1000),
+        _w('["c","a"]', 2000, _memberB),
+      ]);
+      final reduced = _reduce(setMerge, [
+        _w('"not-an-array"', 1000),
+        _w('["c","a"]', 2000, _memberB),
+      ])!;
+      expect(reduced.value, '["a","c"]');
     });
   });
 

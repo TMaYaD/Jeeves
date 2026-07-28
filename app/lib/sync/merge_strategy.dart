@@ -147,6 +147,13 @@ class MaxTimestampValueMergeStrategy implements FieldMergeStrategy {
 ///
 /// The sort is by canonical JSON encoding, which is what makes the merged value
 /// byte-identical on every device rather than order-dependent.
+///
+/// **Every array-shaped value the strategy stores is canonical** — sorted-unique
+/// in the shape it arrived in — including the first write into an empty field,
+/// which has nothing to union with. Storing a caller's array raw there would
+/// break ADR-0030(a)'s idempotence law: re-asserting the identical op would then
+/// union the raw value into sorted form and change the reduced bytes, and #555's
+/// compaction re-assertions are exactly that re-assertion.
 class SetMergeStrategy implements FieldMergeStrategy {
   const SetMergeStrategy();
 
@@ -158,7 +165,7 @@ class SetMergeStrategy implements FieldMergeStrategy {
     required Hlc? storedClock,
   }) {
     if (storedClock == null) {
-      return MergeDecision.apply(incomingValue, incomingClock);
+      return MergeDecision.apply(canonicalize(incomingValue), incomingClock);
     }
     final clock = incomingClock > storedClock ? incomingClock : storedClock;
     final merged = _union(incomingValue, storedValue);
@@ -173,24 +180,49 @@ class SetMergeStrategy implements FieldMergeStrategy {
   /// [MaxTimestampValueMergeStrategy]-style byte order, which keeps the join
   /// total (and therefore associative) even on malformed input.
   ///
-  /// The merged value keeps the *shape* it arrived in: `user_preferences.value`
-  /// holds a JSON-encoded string, so a union of two encoded arrays is an
-  /// encoded array, not a bare list.
+  /// Whenever an array-shaped value survives it survives *canonicalised*, even
+  /// when only one side was an array and there was nothing to union — otherwise
+  /// the same unsorted value could reach the store unchanged and re-asserting it
+  /// would move it.
   static Object? _union(Object? a, Object? b) {
     final listA = _asList(a);
     final listB = _asList(b);
     if (listA == null && listB == null) {
       return jsonEncode(a).compareTo(jsonEncode(b)) >= 0 ? a : b;
     }
-    if (listA == null) return b;
-    if (listB == null) return a;
+    if (listA == null) return _sortedUnique(listB!, asEncodedString: b is String);
+    if (listB == null) return _sortedUnique(listA, asEncodedString: a is String);
+    return _sortedUnique(
+      [...listA, ...listB],
+      asEncodedString: a is String || b is String,
+    );
+  }
+
+  /// The canonical form of one value: sorted-unique when it is array-shaped,
+  /// unchanged when it is not. The single definition both the first write and
+  /// [_union] go through, so they cannot disagree about what "canonical" means.
+  static Object? canonicalize(Object? value) {
+    final list = _asList(value);
+    if (list == null) return value;
+    return _sortedUnique(list, asEncodedString: value is String);
+  }
+
+  /// Elements deduplicated and ordered by canonical JSON encoding.
+  ///
+  /// The result keeps the *shape* the value arrived in: `user_preferences.value`
+  /// holds a JSON-encoded string, so a set of encoded arrays reduces to an
+  /// encoded array, not a bare list.
+  static Object? _sortedUnique(
+    List<Object?> elements, {
+    required bool asEncodedString,
+  }) {
     final byEncoding = <String, Object?>{};
-    for (final element in [...listA, ...listB]) {
+    for (final element in elements) {
       byEncoding[jsonEncode(element)] = element;
     }
     final keys = byEncoding.keys.toList()..sort();
     final merged = [for (final key in keys) byEncoding[key]];
-    return (a is String || b is String) ? jsonEncode(merged) : merged;
+    return asEncodedString ? jsonEncode(merged) : merged;
   }
 
   static List<Object?>? _asList(Object? value) {

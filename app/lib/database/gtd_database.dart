@@ -50,18 +50,22 @@ class GtdDatabase extends _$GtdDatabase {
   /// once [body] has completed — so a rolled-back write is never signed and
   /// queued. Scopes nest; only the outermost emits.
   ///
+  /// The scope is identified by the token [DomainOpCapture.beginScope] returns,
+  /// not by stack position, so two overlapping un-awaited calls cannot close
+  /// each other's scope.
+  ///
   /// Every public DAO write method wraps its whole body (transaction, writes
   /// and post-commit view notifies) in this.
   Future<T> capturing<T>(Future<T> Function() body) async {
-    opCapture.beginScope();
+    final scope = opCapture.beginScope();
     T result;
     try {
       result = await body();
     } catch (_) {
-      opCapture.rollbackScope();
+      opCapture.rollbackScope(scope);
       rethrow;
     }
-    await opCapture.commitScope();
+    await opCapture.commitScope(scope);
     return result;
   }
 
