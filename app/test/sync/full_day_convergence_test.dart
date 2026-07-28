@@ -288,6 +288,11 @@ void main() {
         List<int>.generate(32, (byte) => (byte + 2 * 31 + 1) % 256),
       ),
       strategies: strategies,
+      // A later device enrols with the passphrase and nothing else — the Root in
+      // the escrow slot is A's, and minting a fresh one would be refused. This
+      // is also what makes the replay below a *bootstrap*: C has to verify every
+      // author's registration off the log before it can reduce their content.
+      passphrase: workspace.passphrase,
     );
     addTearDown(c.close);
     await c.sync();
@@ -310,6 +315,10 @@ void main() {
     for (final row in log.reversed) {
       final parts = splitEnvelope(row.envelope);
       final header = OpHeader.parse(parts.header);
+      // Control ops share the log but carry no content, so they reduce to
+      // nothing — the same split the receive pipeline makes. Order-independence
+      // is a claim about content, and a MemberRegister has no fields to merge.
+      if (header.opClass != opClassContent) continue;
       await reversedReducer.apply(
         OpPayload.decode(parseBody(parts.body)),
         authorMemberIdHex: memberIdToHex(header.authorMemberId),

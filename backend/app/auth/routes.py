@@ -69,6 +69,14 @@ async def refresh_session(body: RefreshRequest, db: AsyncSession = Depends(get_d
     now = datetime.now(UTC)
     invalid = (
         record is None
+        # A member-scoped refresh token is not a user session's, and this route
+        # mints a *user* session.  Without this, a Device's refresh token — the
+        # one credential a member-scoped token deliberately cannot be exchanged
+        # for a user session — could be laundered into exactly that here, and
+        # from there reach `POST /members` and the recovery escrow (review F10).
+        # Rotation of a member token lives on `/members/{m}/token/refresh`,
+        # which conversely refuses a record whose `member_id` is null.
+        or record.member_id is not None
         or record.revoked_at is not None
         or record.expires_at.replace(tzinfo=UTC) <= now
     )

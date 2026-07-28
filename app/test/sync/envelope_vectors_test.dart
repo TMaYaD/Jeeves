@@ -10,10 +10,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/member_identity.dart';
 import 'package:jeeves/sync/op_payload.dart';
+import 'package:jeeves/sync/recovery_escrow.dart';
+import 'package:jeeves/sync/root_authority.dart';
 
 import 'vectors.dart';
 
@@ -62,6 +66,42 @@ Future<OpPayload> _receive(
   return OpPayload.decode(parseBody(parts.body));
 }
 
+/// The control half of the receive pipeline, in D6's normative order.
+///
+/// Steps 1-5 of the six: the chain check needs state a vector cannot carry, so
+/// it is pinned by the harness tests instead. The envelope-signature check runs
+/// *here*, against the certificate's key — for a MemberRegister the author is
+/// by definition not yet in the directory, which is exactly why it defers into
+/// this path.
+Future<RegistrationCertificate> _receiveControl(
+  Uint8List envelope,
+  Uint8List rootPk,
+) async {
+  final parts = splitEnvelope(envelope);
+  final header = OpHeader.parse(parts.header);
+  header.checkServed();
+  expect(header.opClass, opClassControl);
+
+  final payload = ControlPayload.decode(parseBody(parts.body));
+  payload.requireServedType();
+  await verifyRegistrationCertificate(payload.certBytes, payload.rootSig, rootPk);
+  final certificate = payload.certificate();
+  if (certificate.memberId != header.authorMemberId) {
+    throw const SyncRejection(
+      SyncRejectionReason.badRootSignature,
+      'certificate names another member',
+    );
+  }
+  await verifyEnvelope(envelope, certificate.signPk);
+  if (_toHex(certificate.signKeyId) != _toHex(header.authorKeyId)) {
+    throw const SyncRejection(
+      SyncRejectionReason.badRootSignature,
+      'certificate key id is not the one the header names',
+    );
+  }
+  return certificate;
+}
+
 void main() {
   final document = envelopeVectors();
   final protocol = document['protocol'] as Map<String, dynamic>;
@@ -70,9 +110,15 @@ void main() {
     for (final entry in identities['keys'] as List<dynamic>)
       (entry as Map<String, dynamic>)['label'] as String: entry,
   };
+  final rootPk =
+      _fromHex((identities['root'] as Map<String, dynamic>)['root_pk_hex'] as String);
 
   Future<EnvelopeSigner> signerFor(String label) =>
       EnvelopeSigner.fromSeed(_fromHex(keysByLabel[label]!['seed_hex'] as String));
+
+  Future<RootAuthority> specRoot() => RootAuthority.fromSecretKey(
+        _fromHex((identities['root'] as Map<String, dynamic>)['seed_hex'] as String),
+      );
 
   group('protocol constants', () {
     test('match the frozen file', () {
@@ -326,6 +372,251 @@ void main() {
         );
       }
     });
+  });
+
+  group('control plane', () {
+    test('constants match the frozen file', () {
+      final domains = protocol['signing_domains'] as Map<String, dynamic>;
+      expect(domains['op_v1'], signingDomainOpV1);
+      expect(domains['member_register_v1'], signingDomainMemberRegisterV1);
+      expect(domains['auth_challenge_v1'], signingDomainAuthChallengeV1);
+      expect(domains['escrow_v1'], signingDomainEscrowV1);
+      // Four distinct domains, or a signature made for one use would verify
+      // for another (review F7).
+      expect(domains.values.toSet().length, domains.length);
+
+      final control = protocol['control'] as Map<String, dynamic>;
+      expect(control['member_register_type'], controlTypeMemberRegister);
+      expect(control['served_control_types'], servedControlTypes.toList()..sort());
+      expect(control['member_kind_device'], memberKindDevice);
+      expect(control['prev_control_hash_bytes'], prevControlHashBytes);
+      expect(control['zero_prev_control_hash_hex'], _toHex(zeroPrevControlHash));
+      expect(control['kex_public_key_bytes'], kexPublicKeyBytes);
+      // op_class 2 is served now: that is what this slice changed about the wire.
+      expect(servedOpClasses, contains(opClassControl));
+    });
+
+    for (final vector in vectorList(document, 'control_vectors')) {
+      test('${vector['name']} is byte-identical', () async {
+        final header = _headerFromJson(vector['header'] as Map<String, dynamic>);
+        final payload =
+            Uint8List.fromList(utf8.encode(vector['payload_json'] as String));
+
+        expect(header.opClass, opClassControl);
+        expect(header.authorSeq, 1, reason: 'a register is its author\'s first op');
+        expect(_toHex(header.serialize()), vector['header_hex']);
+        expect(payload.length, vector['payload_length_bytes']);
+
+        final body = frameBody(payload);
+        expect(_toHex(body), vector['body_hex']);
+        final signer = await signerFor(vector['key'] as String);
+        final envelope = await signer.buildEnvelope(header, body);
+        expect(_toHex(envelope), vector['envelope_hex']);
+        expect(_toHex(envelopeHash(envelope)), vector['envelope_sha256_hex']);
+
+        // The chain link is over the payload bytes, never the envelope.
+        expect(_toHex(controlPayloadHash(payload)), vector['payload_sha256_hex']);
+        expect(
+          _toHex(controlPayloadHash(payload)),
+          isNot(vector['envelope_sha256_hex']),
+        );
+      });
+
+      test('${vector['name']} round-trips through the receive pipeline',
+          () async {
+        final envelope = _fromHex(vector['envelope_hex'] as String);
+        final certificate = await _receiveControl(envelope, rootPk);
+
+        final key = keysByLabel[vector['key'] as String]!;
+        expect(_toHex(certificate.signPk), key['sign_pk_hex']);
+        expect(_toHex(certificate.kexPk), key['kex_pk_hex']);
+        expect(certificate.memberId, key['member_id']);
+        expect(certificate.memberKind, memberKindDevice);
+        // The signed artifact is the certificate's literal bytes; a lossy
+        // decode would break every verifier.
+        expect(utf8.decode(certificate.encode()), vector['cert_json']);
+        expect(_toHex(certificate.encode()), vector['cert_hex']);
+
+        final payload =
+            ControlPayload.decode(parseBody(splitEnvelope(envelope).body));
+        expect(_toHex(payload.prevControlHash), vector['prev_control_hash_hex']);
+        expect(_toHex(payload.rootSig), vector['root_sig_hex']);
+      });
+    }
+
+    test('the chained vector names its predecessors payload hash', () {
+      final vectors = vectorList(document, 'control_vectors');
+      expect(vectors.first['prev_control_hash_hex'], _toHex(zeroPrevControlHash));
+      expect(
+        vectors[1]['prev_control_hash_hex'],
+        vectors.first['payload_sha256_hex'],
+      );
+    });
+
+    for (final vector in vectorList(document, 'negative_control_vectors')) {
+      test('${vector['name']} fails closed as ${vector['reason']}', () async {
+        SyncRejection? rejection;
+        try {
+          await _receiveControl(_fromHex(vector['envelope_hex'] as String), rootPk);
+        } on SyncRejection catch (thrown) {
+          rejection = thrown;
+        }
+        expect(rejection, isNotNull, reason: 'vector was accepted');
+        expect(rejection!.reason.code, vector['reason']);
+      });
+    }
+
+    test('a certificate wrapped around another devices envelope is refused',
+        () async {
+      // Step 4, the load-bearing one. A genuine certificate is public once it
+      // is in the log; without this check anyone holding a copy could wrap it
+      // around self-signed envelopes and fork the victim's chain.
+      final genuine = vectorList(document, 'control_vectors').first;
+      final payload =
+          parseBody(splitEnvelope(_fromHex(genuine['envelope_hex'] as String)).body);
+      final header = _headerFromJson(genuine['header'] as Map<String, dynamic>);
+      final forger = await signerFor('device_b');
+      final forged = await forger.buildEnvelope(header, frameBody(payload));
+
+      expect(
+        () => _receiveControl(forged, rootPk),
+        throwsRejection(SyncRejectionReason.badSignature),
+      );
+    });
+  });
+
+  group('escrow and challenge preimages', () {
+    test('escrow constants match the frozen file', () {
+      final escrow = protocol['escrow'] as Map<String, dynamic>;
+      expect(escrow['blob_magic'], ascii.decode(escrowBlobMagic));
+      expect(escrow['salt_bytes'], escrowSaltBytes);
+      expect(escrow['nonce_bytes'], escrowNonceBytes);
+      expect(escrow['secret_bytes'], escrowSecretBytes);
+      expect(escrow['blob_header_bytes'], escrowBlobHeaderBytes);
+      expect(escrow['blob_bytes'], escrowBlobBytes);
+      expect(escrow['first_version'], firstEscrowVersion);
+      expect(escrow['argon2id_floor'], {
+        'memory_kib': argon2idFloorMemoryKib,
+        'time_cost': argon2idFloorTimeCost,
+        'parallelism': argon2idFloorParallelism,
+      });
+    });
+
+    for (final vector in vectorList(document, 'escrow_vectors')) {
+      test('${vector['name']} is byte-identical', () async {
+        final workspaceId = vector['workspace_id'] as String;
+        final blob = _fromHex(vector['blob_hex'] as String);
+        final signingInput =
+            escrowSigningInput(workspaceId, vector['version'] as int, blob);
+        expect(_toHex(signingInput), vector['signing_input_hex']);
+        // The slot is inside the signed bytes: workspace first, then version.
+        expect(
+          _toHex(signingInput).startsWith(
+            _toHex(Uint8List.fromList(ascii.encode(signingDomainEscrowV1))) +
+                _toHex(uuidToBytes(workspaceId)),
+          ),
+          isTrue,
+        );
+
+        final root = await specRoot();
+        expect(
+          _toHex(await root.signEscrow(workspaceId, vector['version'] as int, blob)),
+          vector['root_sig_hex'],
+        );
+        await verifyEscrowRecordSignature(
+          RecoveryEscrowRecord(
+            version: vector['version'] as int,
+            blob: blob,
+            rootSig: _fromHex(vector['root_sig_hex'] as String),
+            rootPk: rootPk,
+          ),
+          workspaceId,
+          rootPk,
+        );
+      });
+    }
+
+    test('an escrow signature does not transfer between slots or versions',
+        () async {
+      final vectors = vectorList(document, 'escrow_vectors');
+      final first = vectors.first;
+      final second = vectors[1];
+      expect(first['root_sig_hex'], isNot(second['root_sig_hex']));
+
+      final blob = _fromHex(first['blob_hex'] as String);
+      final signature = _fromHex(first['root_sig_hex'] as String);
+      Future<void> expectRefused(String workspaceId, int version) async {
+        await expectLater(
+          verifyEscrowRecordSignature(
+            RecoveryEscrowRecord(
+              version: version,
+              blob: blob,
+              rootSig: signature,
+              rootPk: rootPk,
+            ),
+            workspaceId,
+            rootPk,
+          ),
+          throwsA(
+            predicate<Object>(
+              (error) =>
+                  error is RecoveryEscrowException &&
+                  error.failure == RecoveryEscrowFailure.rootMismatch &&
+                  error.isAlarm,
+              'an escrow root-mismatch alarm',
+            ),
+          ),
+        );
+      }
+
+      await expectRefused(first['workspace_id'] as String, second['version'] as int);
+      await expectRefused(
+        identities['other_workspace_id'] as String,
+        first['version'] as int,
+      );
+    });
+
+    for (final vector in vectorList(document, 'member_challenge_vectors')) {
+      test('${vector['name']} is byte-identical', () async {
+        final memberId = vector['member_id'] as String;
+        final nonce = _fromHex(vector['nonce_hex'] as String);
+        final key = keysByLabel[vector['key'] as String]!;
+        final identity = await MemberIdentity.generate(
+          memberId: memberId,
+          signSeed: _fromHex(key['seed_hex'] as String),
+          kexSeed: _fromHex(key['seed_hex'] as String),
+        );
+
+        expect(
+          _toHex(
+            domainSeparated(
+              signingDomainAuthChallengeV1,
+              [uuidToBytes(memberId), nonce],
+            ),
+          ),
+          vector['signing_input_hex'],
+        );
+        expect(
+          _toHex(await identity.signTransportChallenge(nonce)),
+          vector['signature_hex'],
+        );
+
+        // The member id is inside the preimage, so the same nonce under
+        // another member's slot is a different signature.
+        final otherMemberId = keysByLabel['device_b']!['member_id'] as String;
+        expect(
+          await verifyDomainSeparated(
+            domainSeparated(
+              signingDomainAuthChallengeV1,
+              [uuidToBytes(otherMemberId), nonce],
+            ),
+            _fromHex(vector['signature_hex'] as String),
+            _fromHex(key['sign_pk_hex'] as String),
+          ),
+          isFalse,
+        );
+      });
+    }
   });
 
   group('member id hex', () {

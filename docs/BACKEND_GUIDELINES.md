@@ -30,7 +30,7 @@ The Jeeves FastAPI service is built following the [12-Factor App methodology](ht
 
 ### 6. Processes
 - **Principle:** Execute the app as one or more stateless processes.
-- **Application:** The FastAPI and Celery processes are entirely stateless. Any persistent state (sessions, cache, long-term data) is offloaded to PostgreSQL or Redis.
+- **Application:** The FastAPI and Celery processes are entirely stateless, with one deliberate exception: `app/sync/signal_hub.py` holds live signal-socket subscriptions in process memory. Nothing there is persistent — it is a set of connected sockets, which cannot be offloaded anywhere — but it does mean a poke reaches only subscribers attached to the process that handled the write. See §8 for the constraint that follows.
 
 ### 7. Port Binding
 - **Principle:** Export services via port binding.
@@ -38,7 +38,7 @@ The Jeeves FastAPI service is built following the [12-Factor App methodology](ht
 
 ### 8. Concurrency
 - **Principle:** Scale out via the process model.
-- **Application:** We scale HTTP traffic by adding more Uvicorn workers or horizontally scaling the FastAPI containers. We scale background jobs by adding Celery workers.
+- **Application:** We scale HTTP traffic by adding more Uvicorn workers or horizontally scaling the FastAPI containers. We scale background jobs by adding Celery workers. **Precondition for the HTTP half:** the op-log signal socket's in-process fan-out (§6) is correct only while uvicorn runs single-process, as it does in every deployment today (Dockerfile, Procfile, compose — no `--workers`). Replacing `SignalHub` with a Redis pub/sub implementation — the seam is that class, and redis is already a dependency — comes before the first extra worker, or realtime sync silently stops working for everyone not sharing a process with the writer.
 
 ### 9. Disposability
 - **Principle:** Maximize robustness with fast startup and graceful shutdown.

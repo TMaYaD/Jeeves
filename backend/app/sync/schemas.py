@@ -12,12 +12,20 @@ from pydantic import BaseModel, Field
 
 
 class MemberRegisterRequest(BaseModel):
-    """Enrol a signing key.  ``key_id`` is optional and, if sent, must match the
-    server's own derivation — the server stores what it derives, never a claim."""
+    """Enrol a Device's public keys.
+
+    ``key_id`` is optional and, if sent, must match the server's own derivation
+    — the server stores what it derives, never a claim.  ``kex_pk`` is optional
+    only because rows predating #548 have none; an enrolling Device always sends
+    it.  The row this creates confers **no authority**: it is an unchained shell
+    until the Root-signed MemberRegister control op lands.
+    """
 
     member_id: uuid.UUID
     #: Base64 of the raw 32-byte Ed25519 public key.
     sign_pk: str
+    #: Base64 of the raw 32-byte X25519 public key.
+    kex_pk: str | None = None
     key_id: str | None = None
 
 
@@ -27,10 +35,44 @@ class MemberOut(BaseModel):
     sign_pk: str
     #: Base64 of the server-derived 8-byte key id.
     key_id: str
+    #: Base64 of the raw 32-byte X25519 public key, when one is registered.
+    kex_pk: str | None = None
+    #: True once a Root-signed MemberRegister for this member was materialised.
+    #: A bootstrap hint: no client's verification reads it.
+    chained: bool = False
 
 
 class MemberListResponse(BaseModel):
     members: list[MemberOut]
+
+
+class MemberChallengeResponse(BaseModel):
+    """A single-use proof-of-possession nonce, base64-encoded."""
+
+    nonce: str
+
+
+class MemberTokenRequest(BaseModel):
+    nonce: str
+    #: Base64 Ed25519 over ``"jeeves/auth-challenge/v1" || member_id || nonce``.
+    signature: str
+
+
+class RecoveryEscrowRequest(BaseModel):
+    """Write the passphrase-wrapped Root.  Every field is opaque to the server
+    except ``root_sig``, which it verifies against the slot's Root."""
+
+    version: int
+    blob_b64: str
+    root_sig_b64: str
+    root_pk_b64: str
+
+
+class RecoveryEscrowResponse(BaseModel):
+    version: int
+    blob_b64: str
+    root_sig_b64: str
+    root_pk_b64: str
 
 
 class PostOpsRequest(BaseModel):
