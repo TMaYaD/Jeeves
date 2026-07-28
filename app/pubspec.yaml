@@ -44,6 +44,10 @@ dependencies:
   # HTTP / API
   dio: ^5.10.0
   retrofit: ^4.9.2
+  # The op-log sync stack's realtime signal socket (dio does not speak
+  # WebSocket). Already in the graph transitively via PowerSync, so making it
+  # direct adds no resolution risk — it only makes the import honest.
+  web_socket_channel: ^3.0.3
 
   # Sync (PowerSync — bidirectional offline-first sync)
   powersync: ^2.3.0

@@ -4,6 +4,7 @@ library;
 import 'dart:typed_data';
 
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/signal_socket.dart';
 import 'package:uuid/uuid.dart';
 
 import 'fake_sync_server.dart';
@@ -14,16 +15,22 @@ import 'sim_device.dart';
 const int simulationStartWallMs = 1800000000000;
 
 class SimWorkspace {
-  SimWorkspace._(this.server, this.clock, this.userId, this.devices);
+  SimWorkspace._(this.server, this.clock, this.timers, this.userId, this.devices);
 
   static Future<SimWorkspace> create({
     int deviceCount = 2,
     String userId = 'sim-user',
     FakeSyncServer? server,
     FakeClock? clock,
+    SimTimers? timers,
+    Duration keepaliveInterval = signalKeepaliveInterval,
   }) async {
     final sharedServer = server ?? FakeSyncServer();
     final sharedClock = clock ?? FakeClock(simulationStartWallMs);
+    // One wheel for the whole workspace, so `timers.advance` moves every
+    // device's keepalives and deadlines together — the same wall clock they
+    // would share in the field.
+    final sharedTimers = timers ?? SimTimers();
     final devices = <SimDevice>[];
     for (var index = 0; index < deviceCount; index++) {
       devices.add(
@@ -32,6 +39,8 @@ class SimWorkspace {
           userId: userId,
           server: sharedServer,
           clock: sharedClock,
+          timers: sharedTimers,
+          keepaliveInterval: keepaliveInterval,
           // Deterministic identity: HLC ties break on the member id, so a
           // random one would make the tie-break cases reproduce differently
           // from run to run.
@@ -42,11 +51,12 @@ class SimWorkspace {
         ),
       );
     }
-    return SimWorkspace._(sharedServer, sharedClock, userId, devices);
+    return SimWorkspace._(sharedServer, sharedClock, sharedTimers, userId, devices);
   }
 
   final FakeSyncServer server;
   final FakeClock clock;
+  final SimTimers timers;
   final String userId;
   final List<SimDevice> devices;
 
