@@ -213,7 +213,7 @@ class SyncClient {
   /// successful unwrap produced, and the version it came at.
   Future<void> pinRoot(Uint8List rootPk, int escrowVersion) async {
     final existing = await _rootPin();
-    if (existing != null && !_sameBytes(existing.rootPk, rootPk)) {
+    if (existing != null && !sameBytes(existing.rootPk, rootPk)) {
       // Reaching here means an unwrap succeeded under a *different* Root than
       // the one already pinned, which no honest server can produce.
       throw const RecoveryEscrowException(
@@ -698,7 +698,7 @@ class SyncClient {
     final stored = await (_db.select(_db.opLog)
           ..where((row) => row.workspaceId.equals(workspaceId) & row.seq.equals(pulled.seq)))
         .getSingleOrNull();
-    if (stored != null && _sameBytes(stored.envelope, pulled.envelope)) {
+    if (stored != null && sameBytes(stored.envelope, pulled.envelope)) {
       // Bytes we already hold: the serving is the whole accusation, and there is
       // no envelope to quarantine.
       await _raiseAlarm(
@@ -894,7 +894,7 @@ class SyncClient {
     // No local record of authoring at that position: nothing to compare, and an
     // accusation needs a comparison.
     if (authored == null) return;
-    if (_sameBytes(authored.envelope, envelope)) return;
+    if (sameBytes(authored.envelope, envelope)) return;
     throw SyncRejection(
       SyncRejectionReason.ownWritesDivergence,
       'the server served this device\'s own author_seq ${header.authorSeq} with '
@@ -1642,7 +1642,7 @@ class SyncClient {
               row.releasedAt.isNull()))
         .get();
     for (final row in existing) {
-      if (_sameBytes(row.envelope, pulled.envelope)) return row.id;
+      if (sameBytes(row.envelope, pulled.envelope)) return row.id;
     }
     return _db.into(_db.quarantinedOps).insert(
           QuarantinedOpsCompanion.insert(
@@ -1852,8 +1852,6 @@ SELECT
     return [for (final row in rows) row.envelope];
   }
 }
-
-bool _sameBytes(Uint8List a, Uint8List b) => sameBytes(a, b);
 
 String _hex(Uint8List bytes) =>
     bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
