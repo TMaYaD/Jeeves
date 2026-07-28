@@ -126,9 +126,16 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DOKKU_SSH_PRIVATE_KEY }}
 
+      # Every step below reaches the host through a DOKKU_HOST env var rather
+      # than expanding `vars.DOKKU_HOST` into `run:` directly.  The value is
+      # maintainer-set, so this is not closing a live hole; it keeps the whole
+      # template-injection class off the shell in the one place it could ever
+      # appear in this workflow.
       - name: Add Dokku host to known hosts
         if: steps.freshness.outputs.current == 'true'
-        run: ssh-keyscan -H "${{ vars.DOKKU_HOST }}" >> ~/.ssh/known_hosts
+        env:
+          DOKKU_HOST: ${{ vars.DOKKU_HOST }}
+        run: ssh-keyscan -H "${DOKKU_HOST}" >> ~/.ssh/known_hosts
 
       # Dokku builds from a git archive with no `.git`, so the running process
       # cannot derive its own version — it has to be handed one.  This is a
@@ -141,15 +148,18 @@ jobs:
         if: steps.freshness.outputs.current == 'true' && steps.backend-changes.outputs.changed == 'true'
         env:
           VERSION: ${{ steps.server-version.outputs.version }}
+          DOKKU_HOST: ${{ vars.DOKKU_HOST }}
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes "dokku@${{ vars.DOKKU_HOST }}" \
+          ssh -o BatchMode=yes "dokku@${DOKKU_HOST}" \
             config:set --no-restart jeeves "SERVER_VERSION=${VERSION}"
 
       - name: Deploy to Dokku
         if: steps.freshness.outputs.current == 'true' && steps.backend-changes.outputs.changed == 'true'
+        env:
+          DOKKU_HOST: ${{ vars.DOKKU_HOST }}
         run: |
-          git remote add dokku "ssh://dokku@${{ vars.DOKKU_HOST }}/jeeves"
+          git remote add dokku "ssh://dokku@${DOKKU_HOST}/jeeves"
           git push dokku HEAD:main --force
 
       # Migrations first, buckets second: the push above blocks until Dokku's
@@ -173,6 +183,8 @@ jobs:
       # could never see.
       - name: Publish PowerSync sync rules
         if: steps.freshness.outputs.current == 'true'
+        env:
+          DOKKU_HOST: ${{ vars.DOKKU_HOST }}
         run: |
-          DOKKU="ssh -o BatchMode=yes dokku@${{ vars.DOKKU_HOST }}" \
+          DOKKU="ssh -o BatchMode=yes dokku@${DOKKU_HOST}" \
             infra/dokku/publish-sync-config.sh jeeves-powersync jeeves
