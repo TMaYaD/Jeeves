@@ -25,6 +25,7 @@ import 'daos/tag_dao.dart';
 import 'daos/time_log_dao.dart';
 import 'daos/todo_dao.dart';
 import 'daos/user_preferences_dao.dart';
+import '../sync/domain_op_capture.dart';
 import 'tables.dart';
 
 export 'tables.dart';
@@ -36,7 +37,37 @@ part 'gtd_database.g.dart';
   daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
-  GtdDatabase(super.executor);
+  GtdDatabase(super.executor, {this.opCapture = const NoopDomainOpCapture()});
+
+  /// The op-log capture seam every DAO write path describes its effect
+  /// through. Defaults to the no-op: the live app still writes through
+  /// PowerSync until #553, and the flip is exactly this one construction-site
+  /// argument becoming `SyncOpCapture(syncClient)`.
+  final DomainOpCapture opCapture;
+
+  /// Runs [body] as one capture scope: everything the DAO describes through
+  /// [opCapture] inside it is buffered, coalesced per entity, and emitted only
+  /// once [body] has completed — so a rolled-back write is never signed and
+  /// queued. Scopes nest; only the outermost emits.
+  ///
+  /// The scope is identified by the token [DomainOpCapture.beginScope] returns,
+  /// not by stack position, so two overlapping un-awaited calls cannot close
+  /// each other's scope.
+  ///
+  /// Every public DAO write method wraps its whole body (transaction, writes
+  /// and post-commit view notifies) in this.
+  Future<T> capturing<T>(Future<T> Function() body) async {
+    final scope = opCapture.beginScope();
+    T result;
+    try {
+      result = await body();
+    } catch (_) {
+      opCapture.rollbackScope(scope);
+      rethrow;
+    }
+    await opCapture.commitScope(scope);
+    return result;
+  }
 
   /// Plain-class DAO for universal search (no code generation required).
   late final SearchDao searchDao = SearchDao(this);
@@ -647,6 +678,39 @@ class GtdDatabase extends _$GtdDatabase {
   /// time-spent watchers.
   void notifyTimeLogsViewWrite() => notifyUpdates({
         const TableUpdate('time_logs'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for the `tags` view.
+  ///
+  /// `tags` is a PowerSync view with INSTEAD OF triggers in production, so a
+  /// direct write reports `changes() == 0` and Drift's stream invalidation
+  /// never fires (ADR-0010). [TagDao] reaches `tags` through
+  /// `INSERT OR REPLACE`, which does report rows on the NativeDatabase path —
+  /// the explicit notify is what makes a *projected* Tag (one reduced in from
+  /// another device, #550) refresh the tag pickers and cloud.
+  void notifyTagsViewWrite() => notifyUpdates({
+        const TableUpdate('tags'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for the FocusSession views.
+  ///
+  /// `focus_sessions`, `focus_session_tasks` and `focus_session_dispositions`
+  /// are all PowerSync views in production, and every Plan / Focus / Review
+  /// surface reads across the three, so they notify as one group — the same
+  /// shape [notifyCapturesViewWrite] uses.
+  void notifyFocusSessionsViewWrite() => notifyUpdates({
+        const TableUpdate('focus_sessions'),
+        const TableUpdate('focus_session_tasks'),
+        const TableUpdate('focus_session_dispositions'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for the `user_preferences` view.
+  ///
+  /// [UserPreferencesDao] writes through `customUpdate` / `customInsert` with
+  /// an explicit `updates:` set, which notifies unconditionally; the projector
+  /// writes the same view without one, so it fires this instead.
+  void notifyUserPreferencesViewWrite() => notifyUpdates({
+        const TableUpdate('user_preferences'),
       });
 
   /// Runs [Migrator.addColumn] only when [table] is a real SQLite table.

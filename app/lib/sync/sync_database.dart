@@ -71,6 +71,12 @@ class SyncCursors extends Table {
   TextColumn get workspaceId => text()();
   IntColumn get lastSeq => integer()();
 
+  /// When the last pull completed, independent of flush state — the
+  /// `SyncHealth.lastSyncedAt` source. Deliberately not "last successful sync":
+  /// a wedged outbox is reported through `pendingOpCount`, never by withholding
+  /// a timestamp that would make a receiving device look unreachable.
+  DateTimeColumn get lastSyncCompletedAt => dateTime().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {workspaceId};
 }
@@ -186,12 +192,18 @@ class ControlChainState extends Table {
 class SyncDatabase extends _$SyncDatabase {
   SyncDatabase(super.executor);
 
+  /// v2 adds the pinned-Root and control-chain tables (#548); v3 adds
+  /// `sync_cursors.last_sync_completed_at` (#550). #551's integrity tables are
+  /// the next step; whichever slice merges second rebases its migration onto
+  /// the other's version rather than sharing a step.
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
-  /// v2 adds the pinned-Root and control-chain tables and touches nothing else,
-  /// so an upgrade is two `CREATE TABLE`s and no data movement.
+  /// each step is `CREATE TABLE`s or an `ADD COLUMN` and no data movement.
+  ///
+  /// The steps are sequential `if (from < n)` rather than exclusive branches so
+  /// that a device upgrading straight from v1 runs both of them, in order.
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (migrator) => migrator.createAll(),
@@ -199,6 +211,9 @@ class SyncDatabase extends _$SyncDatabase {
           if (from < 2) {
             await migrator.createTable(rootPins);
             await migrator.createTable(controlChainState);
+          }
+          if (from < 3) {
+            await migrator.addColumn(syncCursors, syncCursors.lastSyncCompletedAt);
           }
         },
       );

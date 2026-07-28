@@ -8,6 +8,7 @@ library;
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
+import '../../sync/ids.dart' show implicitWorkspaceId, preferenceEntityId, userPreferencesCollection;
 import '../gtd_database.dart';
 
 class UserPreferencesDao {
@@ -27,7 +28,7 @@ class UserPreferencesDao {
   /// UNIQUE(user_id, key) constraint.
   Future<void> set(String userId, String key, String? jsonValue) async {
     final now = DateTime.now().toUtc().toIso8601String();
-    await _db.transaction(() async {
+    await _db.capturing(() => _db.transaction(() async {
       final existing = await _db.customSelect(
         'SELECT id FROM user_preferences WHERE user_id = ? AND "key" = ?',
         variables: [Variable(userId), Variable(key)],
@@ -59,7 +60,21 @@ class UserPreferencesDao {
           updates: {_db.userPreferences},
         );
       }
-    });
+      // The KV entity id policy: `uuid5(workspace_id, key)`, so two devices
+      // that create the same preference offline converge as one entity under
+      // field-grain merge instead of forking. The `value` field is the one
+      // ADR-0011's Conflict Strategy registry arbitrates.
+      _db.opCapture.write(
+        collection: userPreferencesCollection,
+        entityId: preferenceEntityId(implicitWorkspaceId(userId), key),
+        fields: {
+          'user_id': userId,
+          'key': key,
+          'value': jsonValue,
+          'updated_at': now,
+        },
+      );
+    }));
   }
 
   /// Returns the raw JSON-encoded value for [key] and [userId], or null if
@@ -105,10 +120,10 @@ class UserPreferencesDao {
   /// Upserts multiple entries in a single transaction.
   Future<void> setAll(String userId, Map<String, String?> entries) async {
     if (entries.isEmpty) return;
-    await _db.transaction(() async {
+    await _db.capturing(() => _db.transaction(() async {
       for (final entry in entries.entries) {
         await set(userId, entry.key, entry.value);
       }
-    });
+    }));
   }
 }
