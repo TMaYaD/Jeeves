@@ -31,6 +31,27 @@ const String _userId = 'signal-user';
 /// manual, so the value only has to be a round number.
 const Duration _keepaliveInterval = Duration(seconds: 10);
 
+/// A shared doc in each device's **default** Workspace.
+///
+/// The signal is per Workspace — one socket, one log — so a test about pokes has
+/// to write into the Workspace whose socket it is watching. Preferences now live
+/// in the User-global preferences Workspace, which has a socket of its own, so
+/// they are the wrong instrument here.
+extension _Notes on SimDevice {
+  Future<void> note(String key, String value) => client.capture(
+        collection: _notesCollection,
+        entityId: _noteId,
+        fields: {key: value},
+      );
+
+  Future<Object?> readNote(String key) async =>
+      (await registry.register(_notesCollection).readEntity(_noteId))?[key];
+}
+
+const String _notesCollection = 'harness_docs';
+final String _noteId = preferenceEntityId(defaultWorkspaceId(_userId), 'signal-doc');
+
+
 void main() {
   late SimWorkspace workspace;
 
@@ -49,12 +70,12 @@ void main() {
     await workspace.b.listener.start();
     await pumpEvents();
 
-    await workspace.a.preferences.set('theme', '"dark"');
+    await workspace.a.note('theme', '"dark"');
     await workspace.a.sync();
     await pumpEvents();
 
     // No `b.sync()` anywhere: the poke did it.
-    expect(await workspace.b.preferences.get('theme'), '"dark"');
+    expect(await workspace.b.readNote('theme'), '"dark"');
   });
 
   test("a newly enrolled member's first ops land instead of quarantining",
@@ -82,11 +103,11 @@ void main() {
       // the escrow slot is A's, and minting a fresh one would be refused.
       passphrase: workspace.passphrase,
     );
-    await c.preferences.set('font', '"serif"');
+    await c.note('font', '"serif"');
     await c.sync();
     await pumpEvents();
 
-    expect(await workspace.b.preferences.get('font'), '"serif"');
+    expect(await workspace.b.readNote('font'), '"serif"');
     expect(await workspace.b.client.quarantined(), isEmpty);
     await c.close();
   });
@@ -105,12 +126,12 @@ void main() {
     final gate = Completer<void>();
     workspace.b.link.pullGate = gate;
 
-    await workspace.a.preferences.set('one', '1');
+    await workspace.a.note('one', '1');
     await workspace.a.sync();
     await pumpEvents();
 
     for (var index = 0; index < 5; index++) {
-      await workspace.a.preferences.set('key$index', '"$index"');
+      await workspace.a.note('key$index', '"$index"');
       await workspace.a.sync();
       await pumpEvents();
     }
@@ -124,7 +145,7 @@ void main() {
     // was. The initial poke's run is excluded by construction: it finished
     // before the gate went up.
     expect(workspace.b.listener.syncRunCount - runsBeforeGate, 2);
-    expect(await workspace.b.preferences.get('key4'), '"4"');
+    expect(await workspace.b.readNote('key4'), '"4"');
   });
 
   // --- Error policy ----------------------------------------------------------
@@ -138,7 +159,7 @@ void main() {
 
     workspace.b.link.pullFailure =
         const SyncTransportException(500, 'the server fell over');
-    await workspace.a.preferences.set('theme', '"dark"');
+    await workspace.a.note('theme', '"dark"');
     await workspace.a.sync();
     await pumpEvents();
 
@@ -150,11 +171,11 @@ void main() {
     expect(workspace.b.listener.syncRunCount, runsAfterFailure);
 
     // And the next poke runs cleanly — the single-flight flag was released.
-    await workspace.a.preferences.set('font', '"serif"');
+    await workspace.a.note('font', '"serif"');
     await workspace.a.sync();
     await pumpEvents();
     expect(workspace.b.listener.syncRunCount, runsAfterFailure + 1);
-    expect(await workspace.b.preferences.get('font'), '"serif"');
+    expect(await workspace.b.readNote('font'), '"serif"');
   });
 
   // --- Reconnect -------------------------------------------------------------
@@ -167,10 +188,10 @@ void main() {
     await pumpEvents();
     expect(workspace.b.listener.state, SignalListenerState.backingOff);
 
-    await workspace.a.preferences.set('theme', '"dark"');
+    await workspace.a.note('theme', '"dark"');
     await workspace.a.sync();
     await pumpEvents();
-    expect(await workspace.b.preferences.get('theme'), isNull,
+    expect(await workspace.b.readNote('theme'), isNull,
         reason: 'no poke can reach an offline device');
 
     workspace.b.goOnline();
@@ -180,7 +201,7 @@ void main() {
     // The resubscribe's initial poke is the catch-up trigger: nothing on the
     // server remembers what B missed, and nothing has to.
     expect(workspace.b.listener.state, SignalListenerState.live);
-    expect(await workspace.b.preferences.get('theme'), '"dark"');
+    expect(await workspace.b.readNote('theme'), '"dark"');
   });
 
   test('transport failures ride the backoff ladder and reset on success',
@@ -330,7 +351,7 @@ class _ForeignWorkspaceTransport extends _DelegatingTransport {
 
   @override
   Stream<void> newSeqSignals(String workspaceId) =>
-      inner.newSeqSignals(implicitWorkspaceId('someone-else'));
+      inner.newSeqSignals(defaultWorkspaceId('someone-else'));
 }
 
 /// A server that refuses the token until it is told the token was refreshed.

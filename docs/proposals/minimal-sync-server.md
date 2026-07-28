@@ -186,4 +186,4 @@ Multi-Area Outcomes are resolved before or during cutover per ADR-0025 (user cho
 
 ## Deferred (v2 by nature, hooks reserved in v1)
 
-OPRF-hardened escrow; cross-author fork-detection gossip (`observed_head` ships zeroed); member heartbeat ops; out-of-band member key verification (mandatory the moment two Users share a Workspace); shared-substrate co-ownership; Workspace UI/UX (one implicit Workspace until then).
+OPRF-hardened escrow; cross-author fork-detection gossip (`observed_head` ships zeroed); member heartbeat ops; out-of-band member key verification (mandatory the moment two Users share a Workspace); shared-substrate co-ownership; Workspace UI/UX (the two implicit Workspaces — the default GTD one and the User-global `user_preferences` one — until then).

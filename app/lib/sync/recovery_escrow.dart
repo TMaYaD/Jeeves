@@ -69,6 +69,15 @@ const int argon2idFloorParallelism = 1;
 /// A slot's first write. Anything else on create is a version regression.
 const int firstEscrowVersion = 1;
 
+/// The structured `detail.code` a `PUT /w/{w}/recovery` version conflict carries.
+///
+/// The enrolment ceremony reads it as *the slot is already written*: a v1 PUT into
+/// an occupied slot is refused precisely because the slot's contents are not this
+/// ceremony's to replace. Tolerating it is how the second slot's write stays
+/// idempotent without spending one of the escrow read path's audited,
+/// rate-limited fetches to ask first.
+const String escrowVersionRegressionCode = 'escrow_version_regression';
+
 /// Why an escrow operation was refused.
 ///
 /// A namespace of its own, deliberately: these are not quarantined ops, and

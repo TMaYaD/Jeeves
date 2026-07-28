@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.sync.control_payload import (
     CONTROL_TYPE_MEMBER_REGISTER,
+    MEMBER_KIND_DEVICE,
     ZERO_PREV_CONTROL_HASH,
     ControlPayload,
     control_payload_hash,
@@ -27,6 +28,7 @@ from app.sync.envelope import (
     HEADER_LENGTH_BYTES,
     MINIMUM_ENVELOPE_BYTES,
     OP_CLASS_COMPACTION,
+    OP_CLASS_CONTENT,
     OP_CLASS_CONTROL,
     OpHeader,
     build_envelope,
@@ -35,7 +37,7 @@ from app.sync.envelope import (
     parse_body,
     split_envelope,
 )
-from app.sync.ids import implicit_workspace_id
+from app.sync.ids import default_workspace_id
 from app.sync.models import Member, Op
 from tests.conftest import auth_header, register
 from tests.sync.builders import (
@@ -53,6 +55,10 @@ class Session:
     ``headers`` is the *member* credential — the sync data routes take nothing
     else.  ``user_headers`` is the User credential the registry and escrow
     routes take, and the two are deliberately not interchangeable.
+
+    ``control_head`` tracks the cross-author chain link the next control op must
+    name, exactly as a pulling client would compute it: SHA-256 over the previous
+    control op's payload bytes.
     """
 
     def __init__(
@@ -68,6 +74,12 @@ class Session:
         self.workspace_id = workspace_id
         self.device = device
         self.root = root
+        self.control_head = ZERO_PREV_CONTROL_HASH
+        #: The founding device's own owner Grant, for tests that revoke it.
+        self.owner_grant_id: uuid.UUID | None = None
+        #: The highest seq the founding ceremony spent, so a pull test can start
+        #: its cursor past the control ops rather than paging through them.
+        self.founded_through_seq = 0
 
     @property
     def headers(self) -> dict[str, str]:
@@ -76,6 +88,11 @@ class Session:
     @property
     def user_headers(self) -> dict[str, str]:
         return auth_header(self.token)
+
+    def advance_control_head(self, envelope: bytes) -> bytes:
+        """Record ``envelope`` as the new control head and return it unchanged."""
+        self.control_head = control_payload_hash(parse_body(split_envelope(envelope)[1]))
+        return envelope
 
 
 async def _member_token(client: AsyncClient, device: SpecDevice) -> str:
@@ -91,15 +108,27 @@ async def _member_token(client: AsyncClient, device: SpecDevice) -> str:
     return token
 
 
-async def _open_session(client: AsyncClient, email: str) -> Session:
+async def _open_session(
+    client: AsyncClient,
+    email: str,
+    *,
+    workspace_id: uuid.UUID | None = None,
+    genesis: bool = True,
+) -> Session:
+    """Enrol one device, and by default run its two-op founding ceremony.
+
+    ``genesis=False`` stops after the member credential, leaving a device that is
+    enrolled and holds **no Grant whatsoever** — the state the real ceremony pulls
+    the control log in, and the state every ``no_live_grant`` test needs.
+    """
     token = await register(client, email)
-    workspace_id = implicit_workspace_id(user_id_from_token(token))
+    resolved_workspace_id = workspace_id or default_workspace_id(user_id_from_token(token))
     root = SpecRoot()
     # Account creation writes the escrow in the same breath: without a stored
-    # root_pk the server has no Root to check a MemberRegister against.
+    # root_pk the server has no Root to check a control op against.
     escrow = await client.put(
-        f"/w/{workspace_id}/recovery",
-        json=root.escrow_body(workspace_id),
+        f"/w/{resolved_workspace_id}/recovery",
+        json=root.escrow_body(resolved_workspace_id),
         headers=auth_header(token),
     )
     assert escrow.status_code == 200, escrow.text
@@ -109,12 +138,54 @@ async def _open_session(client: AsyncClient, email: str) -> Session:
         "/members", json=device.registration_body(), headers=auth_header(token)
     )
     assert response.status_code == 201, response.text
-    return Session(token, await _member_token(client, device), workspace_id, device, root)
+    session = Session(
+        token, await _member_token(client, device), resolved_workspace_id, device, root
+    )
+    if genesis:
+        await _found_workspace(client, session)
+    return session
+
+
+async def _found_workspace(client: AsyncClient, session: Session) -> None:
+    """The founding ceremony: genesis, then a root-signed owner self-grant.
+
+    Two ops in one batch and in that order, exactly as ``EnrolmentService`` posts
+    them.  Genesis embeds the founder's registration, so there is no separate
+    ``member_register`` for the founding device.
+    """
+    genesis = session.advance_control_head(
+        session.root.genesis_envelope(session.device, session.workspace_id)
+    )
+    grant_certificate = session.root.grant_certificate(
+        session.workspace_id, member_id=session.device.member_id
+    )
+    grant = session.advance_control_head(
+        session.root.grant_envelope(
+            session.device,
+            session.workspace_id,
+            certificate=grant_certificate,
+            prev_control_hash=control_payload_hash(parse_body(split_envelope(genesis)[1])),
+        )
+    )
+    response = await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(genesis, grant),
+        headers=session.headers,
+    )
+    assert response.status_code == 200, response.text
+    session.owner_grant_id = grant_certificate.grant_id
+    session.founded_through_seq = max(result["seq"] for result in response.json()["results"])
 
 
 @pytest_asyncio.fixture
 async def session(client: AsyncClient) -> Session:
     return await _open_session(client, "ops-owner@example.com")
+
+
+@pytest_asyncio.fixture
+async def ungranted_session(client: AsyncClient) -> Session:
+    """Enrolled, credentialed, and holding no Grant — the pre-grant state."""
+    return await _open_session(client, "ops-ungranted@example.com", genesis=False)
 
 
 def detail_of(response: object) -> dict[str, object]:
@@ -123,6 +194,44 @@ def detail_of(response: object) -> dict[str, object]:
     detail = body["detail"]
     assert isinstance(detail, dict), detail
     return detail
+
+
+async def content_ops(db: AsyncSession) -> list[Op]:
+    """Only the content rows, in seq order.
+
+    Every founded Workspace's log opens with the two control ops of its founding
+    ceremony — the genesis and the owner self-grant — so a test about *content*
+    appends filters them out rather than counting them.
+    """
+    rows = await db.execute(select(Op).where(Op.op_class == OP_CLASS_CONTENT).order_by(Op.seq))
+    return list(rows.scalars().all())
+
+
+async def all_ops(db: AsyncSession) -> list[Op]:
+    """Every row, in seq order — the founding control ops included."""
+    rows = await db.execute(select(Op).order_by(Op.seq))
+    return list(rows.scalars().all())
+
+
+#: The founding ceremony spends the founding device's first two chain slots, so
+#: its first content op sits here.
+FIRST_CONTENT_AUTHOR_SEQ = 3
+
+
+async def _join_sibling(client: AsyncClient, session: Session) -> tuple[SpecDevice, str]:
+    """Register a second Device's keys and take its member credential.
+
+    It holds **no Grant**: a register-plus-grant batch is what it posts next.
+    Everything about a *bad* ``member_register`` is tested through a sibling
+    rather than through the founder, whose registration the genesis already
+    embedded — the founder has no separate register to get wrong.
+    """
+    sibling = SpecDevice()
+    response = await client.post(
+        "/members", json=sibling.registration_body(), headers=session.user_headers
+    )
+    assert response.status_code == 201, response.text
+    return sibling, await _member_token(client, sibling)
 
 
 # --- POST /w/{w}/ops ---------------------------------------------------------
@@ -144,7 +253,7 @@ async def test_post_assigns_increasing_seq_and_indexes_the_header(
     assert [r["duplicate"] for r in results] == [False, False]
     assert results[0]["seq"] < results[1]["seq"]
 
-    stored = (await db.execute(select(Op).order_by(Op.seq))).scalars().all()
+    stored = await content_ops(db)
     assert [op.envelope for op in stored] == [first, second]
     # Index columns come from the envelope, never from the request.
     for op, envelope in zip(stored, (first, second), strict=True):
@@ -176,7 +285,7 @@ async def test_replaying_the_exact_batch_is_all_duplicates_and_appends_nothing(
     assert [r["duplicate"] for r in replay.json()["results"]] == [True, True]
     # Same seqs, and no new rows: replay is a no-op, not a re-append.
     assert replay.json()["results"] == [{**r, "duplicate": True} for r in first.json()["results"]]
-    assert len((await db.execute(select(Op))).scalars().all()) == 2
+    assert len(await content_ops(db)) == 2
 
 
 async def test_partially_duplicate_batch_appends_only_the_new_ops(
@@ -197,7 +306,7 @@ async def test_partially_duplicate_batch_appends_only_the_new_ops(
     )
     assert response.status_code == 200, response.text
     assert [r["duplicate"] for r in response.json()["results"]] == [True, False]
-    assert len((await db.execute(select(Op))).scalars().all()) == 2
+    assert len(await content_ops(db)) == 2
 
 
 async def test_a_repeat_inside_one_batch_is_a_duplicate_of_its_first_appearance(
@@ -213,7 +322,7 @@ async def test_a_repeat_inside_one_batch_is_a_duplicate_of_its_first_appearance(
     results = response.json()["results"]
     assert [r["duplicate"] for r in results] == [False, True]
     assert results[0]["seq"] == results[1]["seq"]
-    assert len((await db.execute(select(Op))).scalars().all()) == 1
+    assert len(await content_ops(db)) == 1
 
 
 async def test_author_seq_gap_rejects_the_whole_batch(
@@ -225,7 +334,7 @@ async def test_author_seq_gap_rejects_the_whole_batch(
     from "the server is ahead of us" from "no verdict at all", so it is asserted
     here rather than left to the prose.
     """
-    session.device.next_envelope(session.workspace_id)  # burn author_seq 1
+    session.device.next_envelope(session.workspace_id)  # burn one chain slot
     valid_after_the_gap = session.device.next_envelope(session.workspace_id)
 
     response = await client.post(
@@ -237,10 +346,10 @@ async def test_author_seq_gap_rejects_the_whole_batch(
     assert response.json()["detail"] == {
         "code": "author_chain_conflict",
         "index": 0,
-        "author_seq": 2,
-        "expected_author_seq": 1,
+        "author_seq": FIRST_CONTENT_AUTHOR_SEQ + 1,
+        "expected_author_seq": FIRST_CONTENT_AUTHOR_SEQ,
     }
-    assert (await db.execute(select(Op))).scalars().all() == []
+    assert await content_ops(db) == []
 
 
 async def test_two_ops_claiming_the_same_author_seq_land_exactly_once(
@@ -270,12 +379,12 @@ async def test_two_ops_claiming_the_same_author_seq_land_exactly_once(
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"]["code"] == "author_chain_conflict"
 
-    stored = (await db.execute(select(Op))).scalars().all()
+    stored = await content_ops(db)
     assert [op.envelope for op in stored] == [first]
 
 
 async def test_header_workspace_mismatch_is_rejected(client: AsyncClient, session: Session) -> None:
-    foreign = session.device.next_envelope(implicit_workspace_id("someone-else"))
+    foreign = session.device.next_envelope(default_workspace_id("someone-else"))
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(foreign),
@@ -341,7 +450,7 @@ async def test_envelope_shorter_than_the_minimum_is_rejected(
     )
     assert response.status_code == 422, response.text
     assert detail_of(response) == {"code": "envelope_too_short", "index": 0}
-    assert (await db.execute(select(Op))).scalars().all() == []
+    assert await content_ops(db) == []
 
 
 async def test_foreign_author_is_rejected(client: AsyncClient, session: Session) -> None:
@@ -389,7 +498,7 @@ async def test_a_member_token_cannot_post_as_another_member_of_the_same_user(
     )
     assert response.status_code == 403, response.text
     assert detail_of(response) == {"code": "author_member_mismatch", "index": 0}
-    assert (await db.execute(select(Op))).scalars().all() == []
+    assert await content_ops(db) == []
 
 
 async def test_a_user_credential_cannot_post_ops(client: AsyncClient, session: Session) -> None:
@@ -441,10 +550,12 @@ async def test_pull_pages_by_seq_and_reports_has_more(
         headers=session.headers,
     )
 
+    # Past the founding ceremony's control ops: paging is what is under test, and
+    # the genesis and self-grant are not part of the page arithmetic.
     first_page = (
         await client.get(
             f"/w/{session.workspace_id}/ops",
-            params={"since": 0, "limit": 2},
+            params={"since": session.founded_through_seq, "limit": 2},
             headers=session.headers,
         )
     ).json()
@@ -475,11 +586,17 @@ async def test_pull_excludes_compacted_rows(
 
     # #555's prune op will set this; v1 prunes are soft deletes, so the row
     # stays and only the default pull hides it.
-    stored = (await db.execute(select(Op).order_by(Op.seq))).scalars().all()
+    stored = await content_ops(db)
     stored[0].compacted_by = stored[1].seq
     await db.commit()
 
-    pulled = (await client.get(f"/w/{session.workspace_id}/ops", headers=session.headers)).json()
+    pulled = (
+        await client.get(
+            f"/w/{session.workspace_id}/ops",
+            params={"since": session.founded_through_seq},
+            headers=session.headers,
+        )
+    ).json()
     assert [base64.b64decode(op["envelope"]) for op in pulled["ops"]] == [envelopes[1]]
 
 
@@ -491,7 +608,7 @@ async def test_empty_batch_is_accepted_and_appends_nothing(
     )
     assert response.status_code == 200, response.text
     assert response.json() == {"results": []}
-    assert (await db.execute(select(Op))).scalars().all() == []
+    assert await content_ops(db) == []
 
 
 # --- op_class=2: MemberRegister ----------------------------------------------
@@ -519,19 +636,56 @@ def _control_envelope_with_body(device: SpecDevice, workspace_id: uuid.UUID, bod
 async def test_a_root_signed_member_register_materialises_the_membership(
     client: AsyncClient, session: Session, db: AsyncSession
 ) -> None:
-    envelope = session.root.member_register_envelope(session.device, session.workspace_id)
+    """A sibling Device joining a founded Workspace.
+
+    The *founder* has no separate register — the genesis embedded it (ADR-0031) —
+    so this is the shape every Nth device's registration takes: a
+    ``member_register`` naming the observed control head as its ``prev``.
+    """
+    sibling, sibling_token = await _join_sibling(client, session)
+    envelope = session.root.member_register_envelope(
+        sibling, session.workspace_id, prev_control_hash=session.control_head
+    )
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(envelope),
-        headers=session.headers,
+        headers=auth_header(sibling_token),
     )
     assert response.status_code == 200, response.text
 
-    stored = (await db.execute(select(Op))).scalars().all()
-    assert [op.envelope for op in stored] == [envelope]
-    assert stored[0].op_class == OP_CLASS_CONTROL
-    member = await db.get(Member, session.device.member_id)
+    stored = await all_ops(db)
+    assert stored[-1].envelope == envelope
+    assert stored[-1].op_class == OP_CLASS_CONTROL
+    member = await db.get(Member, sibling.member_id)
     assert member is not None and member.chained_at is not None
+    # The kind is materialised from the certificate, never claimed by the shell
+    # row ``POST /members`` created.
+    assert member.member_kind == MEMBER_KIND_DEVICE
+
+
+async def test_a_member_register_with_a_zero_chain_link_is_rejected(
+    client: AsyncClient, session: Session, db: AsyncSession
+) -> None:
+    """An all-zero ``prev_control_hash`` is **genesis-only** (ADR-0031).
+
+    Refused even by a receiver whose control state is empty, which is what makes
+    a truncated history always detectable: the alternative — treating a zero link
+    as "fresh chain" — is exactly the claim a server serving a truncated log
+    makes.
+    """
+    sibling, sibling_token = await _join_sibling(client, session)
+    envelope = session.root.member_register_envelope(
+        sibling, session.workspace_id, prev_control_hash=ZERO_PREV_CONTROL_HASH
+    )
+    response = await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(envelope),
+        headers=auth_header(sibling_token),
+    )
+    assert response.status_code == 422, response.text
+    assert detail_of(response) == {"code": "control_chain_break", "index": 0}
+    member = await db.get(Member, sibling.member_id)
+    assert member is not None and member.chained_at is None
 
 
 async def test_the_control_chain_link_is_the_predecessors_payload_hash(
@@ -542,16 +696,22 @@ async def test_the_control_chain_link_is_the_predecessors_payload_hash(
     Recomputing it from what the log serves back is the whole point: a client
     that pulls the log can follow the chain without re-framing anything.
     """
-    first = session.root.member_register_envelope(session.device, session.workspace_id)
-    await client.post(
-        f"/w/{session.workspace_id}/ops", json=encode_all(first), headers=session.headers
+    before = len(await all_ops(db))
+    first_sibling, first_token = await _join_sibling(client, session)
+    first = session.root.member_register_envelope(
+        first_sibling, session.workspace_id, prev_control_hash=session.control_head
     )
+    accepted = await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(first),
+        headers=auth_header(first_token),
+    )
+    assert accepted.status_code == 200, accepted.text
 
-    sibling = SpecDevice()
-    await client.post("/members", json=sibling.registration_body(), headers=session.user_headers)
+    second_sibling, second_token = await _join_sibling(client, session)
     _header, body, _signature = split_envelope(first)
     chained = session.root.member_register_envelope(
-        sibling,
+        second_sibling,
         session.workspace_id,
         prev_control_hash=control_payload_hash(parse_body(body)),
     )
@@ -559,31 +719,34 @@ async def test_the_control_chain_link_is_the_predecessors_payload_hash(
     assert payload.prev_control_hash == control_payload_hash(parse_body(body))
     assert payload.prev_control_hash != ZERO_PREV_CONTROL_HASH
 
-    sibling_token = await _member_token(client, sibling)
     accepted = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(chained),
-        headers=auth_header(sibling_token),
+        headers=auth_header(second_token),
     )
     assert accepted.status_code == 200, accepted.text
-    assert len((await db.execute(select(Op))).scalars().all()) == 2
+    assert len(await all_ops(db)) == before + 2
 
 
 async def test_a_control_op_with_a_bad_root_signature_is_rejected(
     client: AsyncClient, session: Session, db: AsyncSession
 ) -> None:
     """AC3: a stolen user credential cannot register an *authoritative* member."""
+    sibling, sibling_token = await _join_sibling(client, session)
     envelope = session.root.member_register_envelope(
-        session.device, session.workspace_id, corrupt_signature=True
+        sibling,
+        session.workspace_id,
+        prev_control_hash=session.control_head,
+        corrupt_signature=True,
     )
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(envelope),
-        headers=session.headers,
+        headers=auth_header(sibling_token),
     )
     assert response.status_code == 422, response.text
     assert detail_of(response) == {"code": "bad_root_signature", "index": 0}
-    member = await db.get(Member, session.device.member_id)
+    member = await db.get(Member, sibling.member_id)
     assert member is not None and member.chained_at is None
 
 
@@ -591,21 +754,22 @@ async def test_a_control_op_signed_by_a_foreign_root_is_rejected(
     client: AsyncClient, session: Session
 ) -> None:
     """Only the Root in this slot's escrow can register into this Workspace."""
-    envelope = SpecRoot().member_register_envelope(session.device, session.workspace_id)
+    sibling, sibling_token = await _join_sibling(client, session)
+    envelope = SpecRoot().member_register_envelope(
+        sibling, session.workspace_id, prev_control_hash=session.control_head
+    )
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(envelope),
-        headers=session.headers,
+        headers=auth_header(sibling_token),
     )
     assert response.status_code == 422, response.text
     assert detail_of(response) == {"code": "bad_root_signature", "index": 0}
 
 
 async def test_an_unserved_control_type_is_rejected(client: AsyncClient, session: Session) -> None:
-    """#549's landing slot: every other control type stays fail-closed."""
-    payload = ControlPayload(
-        control_type="grant", prev_control_hash=ZERO_PREV_CONTROL_HASH
-    ).encode()
+    """#554's landing slot: every control type this build does not serve is closed."""
+    payload = ControlPayload(control_type="rotate", prev_control_hash=session.control_head).encode()
     envelope = session.device.next_envelope(
         session.workspace_id, op_class=OP_CLASS_CONTROL, payload=payload
     )
@@ -618,7 +782,7 @@ async def test_an_unserved_control_type_is_rejected(client: AsyncClient, session
     assert detail_of(response) == {
         "code": "unsupported_control_type",
         "index": 0,
-        "type": "grant",
+        "type": "rotate",
     }
 
 
@@ -666,18 +830,20 @@ async def test_a_member_register_away_from_author_seq_1_is_rejected(
 ) -> None:
     """The position rule, and its precedence over the chain-gap 409.
 
-    The existing chain check only guarantees that an author's *first* op is seq
-    1; it does not guarantee that seq 1 is the register.  A mispositioned
+    The chain check only guarantees that an author's *first* op is seq 1; it does
+    not guarantee that seq 1 is the registering control op.  A mispositioned
     register earns this 422 and never the 409, so #551's chain verdict only ever
     sees registers already at seq 1.
     """
+    sibling, sibling_token = await _join_sibling(client, session)
+    before = await all_ops(db)
     envelope = session.root.member_register_envelope(
-        session.device, session.workspace_id, author_seq=4
+        sibling, session.workspace_id, prev_control_hash=session.control_head, author_seq=4
     )
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(envelope),
-        headers=session.headers,
+        headers=auth_header(sibling_token),
     )
     assert response.status_code == 422, response.text
     assert detail_of(response) == {
@@ -685,22 +851,24 @@ async def test_a_member_register_away_from_author_seq_1_is_rejected(
         "index": 0,
         "author_seq": 4,
     }
-    assert (await db.execute(select(Op))).scalars().all() == []
+    assert len(await all_ops(db)) == len(before)
 
 
 async def test_a_certificate_naming_another_member_is_rejected(
     client: AsyncClient, session: Session
 ) -> None:
-    certificate = session.root.certificate(
-        session.device, session.workspace_id, member_id=uuid.uuid4()
-    )
+    sibling, sibling_token = await _join_sibling(client, session)
+    certificate = session.root.certificate(sibling, session.workspace_id, member_id=uuid.uuid4())
     envelope = session.root.member_register_envelope(
-        session.device, session.workspace_id, certificate=certificate
+        sibling,
+        session.workspace_id,
+        prev_control_hash=session.control_head,
+        certificate=certificate,
     )
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(envelope),
-        headers=session.headers,
+        headers=auth_header(sibling_token),
     )
     assert response.status_code == 422, response.text
     assert detail_of(response) == {"code": "cert_member_mismatch", "index": 0}
@@ -709,16 +877,20 @@ async def test_a_certificate_naming_another_member_is_rejected(
 async def test_a_certificate_naming_another_key_is_rejected(
     client: AsyncClient, session: Session
 ) -> None:
+    sibling, sibling_token = await _join_sibling(client, session)
     certificate = session.root.certificate(
-        session.device, session.workspace_id, sign_pk=SpecDevice().sign_pk
+        sibling, session.workspace_id, sign_pk=SpecDevice().sign_pk
     )
     envelope = session.root.member_register_envelope(
-        session.device, session.workspace_id, certificate=certificate
+        sibling,
+        session.workspace_id,
+        prev_control_hash=session.control_head,
+        certificate=certificate,
     )
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(envelope),
-        headers=session.headers,
+        headers=auth_header(sibling_token),
     )
     assert response.status_code == 422, response.text
     assert detail_of(response) == {"code": "cert_key_mismatch", "index": 0}
@@ -727,14 +899,20 @@ async def test_a_certificate_naming_another_key_is_rejected(
 async def test_a_control_op_without_a_stored_root_fails_closed(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    """No escrow means no Root the server can check against."""
+    """No escrow means no Root the server can check against.
+
+    Exercised through *genesis*, because that is the first control op a Workspace
+    ever sees and therefore the first place the missing slot bites.  It is also
+    why the ceremony's escrow PUT is strictly sequenced before its genesis post:
+    posting into a slotless Workspace is unverifiable by construction.
+    """
     token = await register(client, "ops-no-escrow@example.com")
-    workspace_id = implicit_workspace_id(user_id_from_token(token))
+    workspace_id = default_workspace_id(user_id_from_token(token))
     device = SpecDevice()
     await client.post("/members", json=device.registration_body(), headers=auth_header(token))
     member_token = await _member_token(client, device)
 
-    envelope = SpecRoot().member_register_envelope(device, workspace_id)
+    envelope = SpecRoot().genesis_envelope(device, workspace_id)
     response = await client.post(
         f"/w/{workspace_id}/ops",
         json=encode_all(envelope),
@@ -742,7 +920,7 @@ async def test_a_control_op_without_a_stored_root_fails_closed(
     )
     assert response.status_code == 422, response.text
     assert detail_of(response) == {"code": "bad_root_signature", "index": 0}
-    assert (await db.execute(select(Op))).scalars().all() == []
+    assert await all_ops(db) == []
 
 
 async def test_a_content_op_body_is_never_read(client: AsyncClient, session: Session) -> None:

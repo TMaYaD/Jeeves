@@ -52,6 +52,18 @@ class AuthorFixture {
         ),
       );
 
+  /// Sign a Grant certificate with this author's *own* key.
+  ///
+  /// What an owning Device does when it delegates a lesser role — and the reason
+  /// authority is checked against the envelope's author: a member-signed Grant is
+  /// only ever authored by the member whose authority it claims.
+  Future<Uint8List> signGrantCertificateBytes(Uint8List certBytes) =>
+      signer.signBytes(domainSeparated(signingDomainGrantV1, [certBytes]));
+
+  /// Sign a Revoke certificate with this author's own key.
+  Future<Uint8List> signRevokeCertificateBytes(Uint8List certBytes) =>
+      signer.signBytes(domainSeparated(signingDomainRevokeV1, [certBytes]));
+
   Future<Uint8List> nextEnvelope(
     String workspaceId, {
     String? opId,

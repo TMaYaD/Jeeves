@@ -26,7 +26,7 @@ import 'package:jeeves/models/todo.dart' show Intent, RoutingKind;
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/ids.dart'
-    show focusSessionTaskIdFor, implicitWorkspaceId, preferenceEntityId;
+    show focusSessionTaskIdFor, preferenceEntityId, userPreferencesWorkspaceId;
 
 import '../test_helpers.dart';
 
@@ -456,7 +456,7 @@ void main() {
       final op = only('user_preferences');
       expect(
         op.entityId,
-        preferenceEntityId(implicitWorkspaceId(_userId), 'theme'),
+        preferenceEntityId(userPreferencesWorkspaceId(_userId), 'theme'),
       );
       expect(op.fields['key'], 'theme');
       expect(op.fields['value'], '"dark"');

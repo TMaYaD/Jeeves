@@ -66,8 +66,103 @@ class _RegisteredMember {
   final String userId;
   MemberRecord record;
 
-  /// Stamped when a Root-signed MemberRegister for this member materialises.
+  /// Stamped when a Root-signed registration for this member materialises —
+  /// either its own `member_register` or the genesis that embedded it.
   bool chained = false;
+
+  /// Materialised from the registration certificate. Null until one lands: the
+  /// kind is a *signed* fact, so a shell row cannot claim one.
+  String? memberKind;
+}
+
+/// One materialised Grant — the fake's mirror of the server's own index.
+///
+/// Authoritative for nobody (ADR-0028). Clients derive their grants view from the
+/// signed control ops in the log, which is what makes tampering with this inert.
+class _StoredGrant {
+  _StoredGrant({
+    required this.grantId,
+    required this.memberId,
+    required this.role,
+    required this.granter,
+    required this.grantedSeq,
+  });
+
+  final String grantId;
+  final String memberId;
+
+  /// Mutable so a hostility hook can flip it — proving a client's verdict does
+  /// not move when the server's index lies.
+  String role;
+  final String granter;
+  final int grantedSeq;
+  int? revokedBySeq;
+}
+
+/// The grants index for one Workspace, walked forward in batch order.
+///
+/// The server materialises a batch's control ops in the order they arrive, so a
+/// Grant authored at index 1 counts for a content op at index 2 of the same POST.
+class _GrantIndex {
+  _GrantIndex(this._states);
+
+  final Map<String, _StoredGrant> _states;
+
+  _StoredGrant? state(String grantId) => _states[grantId];
+
+  Iterable<_StoredGrant> _of(String memberId) =>
+      _states.values.where((grant) => grant.memberId == memberId);
+
+  Set<String> liveRoles(String memberId) => {
+        for (final grant in _of(memberId))
+          if (grant.revokedBySeq == null) grant.role,
+      };
+
+  bool hasAnyGrant(String memberId) => _of(memberId).isNotEmpty;
+
+  void add(String grantId, String memberId, String role) {
+    _states[grantId] = _StoredGrant(
+      grantId: grantId,
+      memberId: memberId,
+      role: role,
+      granter: granterRoot,
+      grantedSeq: 0,
+    );
+  }
+
+  void revoke(String grantId) => _states[grantId]?.revokedBySeq = 0;
+}
+
+/// One live signal socket, server side: who it speaks for, and how to end it.
+class _SignalSubscriber {
+  _SignalSubscriber({
+    required this.memberId,
+    required this.send,
+    required this.close,
+  });
+
+  final String memberId;
+  final void Function(String frame) send;
+  final void Function(Object error) close;
+}
+
+/// One verified control op, and what it will materialise once it has a seq.
+class _ControlAdmission {
+  _ControlAdmission({
+    required this.index,
+    required this.controlType,
+    this.registration,
+    this.grant,
+    this.revoke,
+  });
+
+  final int index;
+  final String controlType;
+
+  /// Populated by `member_register` and by the registration a genesis embeds.
+  final RegistrationCertificate? registration;
+  final GrantCertificate? grant;
+  final RevokeCertificate? revoke;
 }
 
 class _EscrowSlot {
@@ -98,11 +193,26 @@ class FakeSyncServer {
   final Map<String, int> _escrowFetchCounts = {};
   final Map<String, String> _challenges = {};
   final Map<String, int> _challengeCounts = {};
+
+  /// `workspace_id -> genesis seq`. A Workspace exists once its genesis lands.
+  final Map<String, int> _workspaces = {};
+
+  /// `workspace_id -> grant_id -> grant`. The server's own authz index.
+  final Map<String, Map<String, _StoredGrant>> _grants = {};
+
+  /// Member ids whose transport credential a revocation killed, in order — the
+  /// fake's stand-in for `revoke_member_transport`.
+  final List<String> revokedTransports = [];
   int _nextSeq = 1;
 
-  /// Dart mirror of `backend/app/sync/signal_hub.py`: subscribers per Workspace
-  /// and nothing else — no seqs, no cursors, no history.
-  final Map<String, List<void Function(String)>> _signalSubscribers = {};
+  /// Dart mirror of `backend/app/sync/signal_hub.py`: subscribers per Workspace,
+  /// each tagged with the Member it speaks for — no seqs, no cursors, no history.
+  ///
+  /// The member id is the only thing the hub knows beyond the Workspace, and it
+  /// exists for exactly one reason: a socket is authenticated once, at the
+  /// handshake, so revoking a Member's last live Grant has to be able to *close*
+  /// its sockets rather than merely stop admitting new ones.
+  final Map<String, List<_SignalSubscriber>> _signalSubscribers = {};
 
   /// Every batch the server accepted for a POST, in order — lets a test assert
   /// what actually went over the wire.
@@ -182,6 +292,18 @@ class FakeSyncServer {
   /// Seqs that pulls pretend do not exist — a withheld op.
   final Set<int> omitSeqs = {};
 
+  /// Workspaces whose **next** pull serves an empty page, consumed by that pull.
+  ///
+  /// [omitSeqs] is a standing lie; this is one page's worth, and it exists because
+  /// the losing side of a genesis race cannot be staged any other way: the whole
+  /// race is that a device pulled, the log *was* empty, and by the time it posted
+  /// the winner's genesis was already there. A one-shot blindfold over the pull
+  /// reproduces exactly that view without needing two ceremonies to interleave.
+  ///
+  /// Keyed by Workspace because an enrolment pulls two of them in a fixed order,
+  /// and a race is a property of one.
+  final Set<String> blindNextPullOf = {};
+
   /// Serve a pull page in this seq order instead of ascending. Seqs the log has
   /// and this list does not keep their ascending place behind the listed ones.
   List<int>? serveOrder;
@@ -189,6 +311,18 @@ class FakeSyncServer {
   /// Serve from seq 1 whatever `since` the client asked with. `since` is a pure
   /// client parameter, so no honest server can do this.
   bool ignoreSinceParameter = false;
+
+  /// Forget a Workspace entirely: its log rows, its genesis, and its Grants.
+  ///
+  /// A **crash simulation**, not a hostility: it stands for a ceremony that wrote
+  /// one Workspace's escrow slot and died before posting that Workspace's genesis.
+  /// The state it produces is the one the log-state-conditioned genesis rule
+  /// exists to recover from, and the only way to reach it is from outside.
+  void forgetWorkspace(String workspaceId) {
+    _log.removeWhere((op) => op.workspaceId == workspaceId);
+    _workspaces.remove(workspaceId);
+    _grants.remove(workspaceId);
+  }
 
   /// Truncate the log above [seq] and hand the freed seqs back out.
   ///
@@ -243,8 +377,26 @@ class FakeSyncServer {
   /// Poke every subscriber of [workspaceId]. Never crosses Workspaces, and
   /// holds no memory of what any subscriber has already seen.
   void _notify(String workspaceId) {
-    for (final send in [...?_signalSubscribers[workspaceId]]) {
-      send('');
+    for (final subscriber in [...?_signalSubscribers[workspaceId]]) {
+      subscriber.send('');
+    }
+  }
+
+  /// Close every live socket [memberId] holds on [workspaceId], with `4403`.
+  ///
+  /// The same close code the handshake would have refused it with, so the
+  /// client's reconnect ladder needs no new branch: it already treats 4403 as
+  /// "do not retry blindly".
+  void _closeSignals(String workspaceId, String memberId) {
+    for (final subscriber in [...?_signalSubscribers[workspaceId]]) {
+      if (subscriber.memberId != memberId) continue;
+      subscriber.close(
+        const SyncTransportException(
+          signalCloseForbidden,
+          'no live Grant (revoked)',
+          code: 'no_live_grant',
+        ),
+      );
     }
   }
 
@@ -263,6 +415,7 @@ class FakeSyncServer {
     final controller = StreamController<String>();
     Timer? keepalive;
     late final void Function(String) send;
+    _SignalSubscriber? subscriber;
 
     void armKeepalive() {
       keepalive?.cancel();
@@ -296,28 +449,43 @@ class FakeSyncServer {
       }
       try {
         _authorizeWorkspace(member.userId, workspaceId);
-      } on SyncTransportException {
+        // Held to the member-GET bar: a pre-grant device may subscribe during
+        // enrolment, and a revoked one is refused at the door as well as having
+        // its live sockets closed under it.
+        _refuseIfRevoked(workspaceId, memberId);
+      } on SyncTransportException catch (refusal) {
         controller.addError(
-          const SyncTransportException(
+          SyncTransportException(
             signalCloseForbidden,
-            'No grant for this workspace',
+            refusal.detail,
             // The structured code the real 403 carries. A close frame cannot
             // hold a body, so the client branches on the close code — but the
             // fake keeps the code alongside it rather than regressing to a bare
             // string, so a twin can assert the same contract on both sides.
-            code: 'no_workspace_grant',
+            code: refusal.code,
           ),
         );
         unawaited(controller.close());
         return;
       }
-      _signalSubscribers.putIfAbsent(workspaceId, () => []).add(send);
+      subscriber = _SignalSubscriber(
+        memberId: memberId,
+        send: send,
+        close: (error) {
+          if (controller.isClosed) return;
+          controller.addError(error);
+          keepalive?.cancel();
+          _signalSubscribers[workspaceId]?.remove(subscriber);
+          unawaited(controller.close());
+        },
+      );
+      _signalSubscribers.putIfAbsent(workspaceId, () => []).add(subscriber!);
       // The initial poke is the subscribe ack *and* the catch-up trigger.
       send('');
     };
     controller.onCancel = () {
       keepalive?.cancel();
-      _signalSubscribers[workspaceId]?.remove(send);
+      if (subscriber != null) _signalSubscribers[workspaceId]?.remove(subscriber);
     };
     return controller.stream;
   }
@@ -573,7 +741,7 @@ class FakeSyncServer {
 
     // Before the chain-gap check below, so a mispositioned register yields
     // `member_register_not_first` and never the 409.
-    final chains = await _verifyControlOps(member, workspaceId, envelopes, parsed);
+    final admissions = await _verifyControlOps(member, workspaceId, envelopes, parsed);
 
     final lastAuthorSeq = <String, int>{};
     for (final op in _log) {
@@ -634,16 +802,8 @@ class FakeSyncServer {
     }
 
     _log.addAll(staged.values);
-    for (final chained in chains) {
-      chained.chained = true;
-    }
     receivedBatches.add(List.unmodifiable(envelopes));
-    if (staged.isNotEmpty) {
-      // Only non-duplicate appends are news: a pure replay changes nothing, so
-      // poking about it would send every subscriber on a pointless pull.
-      _notify(workspaceId);
-    }
-    return [
+    final results = [
       for (final entry in plan)
         OpAppendResult(
           opId: entry.opId,
@@ -651,19 +811,64 @@ class FakeSyncServer {
           duplicate: entry.duplicate,
         ),
     ];
+
+    // Materialisation runs *after* the append because every index row it writes
+    // is anchored to a transport seq, and a seq does not exist until the op is
+    // stored. The authorization verdict is positional against those numbers, so
+    // they have to be the real ones.
+    for (final memberId in _materialiseControl(workspaceId, admissions, results)) {
+      // Two halves of one revocation: the credential dies so nothing can
+      // authenticate a *new* socket or POST, and the live sockets close so an
+      // already-authenticated subscriber stops learning that activity exists.
+      revokedTransports.add(memberId);
+      _closeSignals(workspaceId, memberId);
+    }
+
+    if (staged.isNotEmpty) {
+      // Only non-duplicate appends are news: a pure replay changes nothing, so
+      // poking about it would send every subscriber on a pointless pull.
+      _notify(workspaceId);
+    }
+    return results;
   }
 
-  /// The six server-side control checks, in the same order as the real route.
-  Future<List<_RegisteredMember>> _verifyControlOps(
+  /// The control plane, dispatched per type, in the same order as the real route.
+  ///
+  /// Returns what each verified control op will materialise once seqs are known.
+  /// Verification and materialisation are two passes for the same reason they are
+  /// on the server: the first can refuse the whole batch, the second needs
+  /// transport seqs that do not exist until the ops are stored.
+  Future<List<_ControlAdmission>> _verifyControlOps(
     _RegisteredMember member,
     String workspaceId,
     List<Uint8List> envelopes,
     List<OpHeader> parsed,
   ) async {
-    final toChain = <_RegisteredMember>[];
+    final grants = _GrantIndex(_grants[workspaceId] ?? {});
+    var workspaceExists = _workspaces.containsKey(workspaceId);
+    // Which of this batch's ops the log already holds. A replay must not read as
+    // a *reuse* of the grant id it carries: the id belongs to the op that first
+    // asserted it, and re-posting that same op asserts nothing new.
+    final replayedOpIds = {
+      for (final op in _log)
+        if (op.workspaceId == workspaceId &&
+            op.header?.authorMemberId == member.record.memberId)
+          op.header!.opId,
+    };
+    final rootPk = _escrows[_slot(workspaceId, member.userId)]?.record.rootPk ?? Uint8List(0);
+    final isPreferences = workspaceId == userPreferencesWorkspaceId(member.userId);
+    final stagedKinds = <String, String>{};
+    final admissions = <_ControlAdmission>[];
+
     for (var index = 0; index < parsed.length; index++) {
       final header = parsed[index];
-      if (header.opClass != opClassControl) continue;
+      if (header.opClass != opClassControl) {
+        if (!workspaceExists) {
+          throw SyncTransportException(409, 'ops[$index]', code: 'workspace_not_created');
+        }
+        _requireRole(grants, member.record.memberId, header.opClass, index);
+        continue;
+      }
 
       final Uint8List payloadBytes;
       try {
@@ -675,45 +880,372 @@ class FakeSyncServer {
       try {
         payload = ControlPayload.decode(payloadBytes);
         payload.requireServedType();
+        payload.requireChainLinkShape();
       } on SyncRejection catch (rejection) {
         throw SyncTransportException(422, 'ops[$index]', code: rejection.reason.code);
       }
 
-      if (header.authorSeq != 1) {
-        throw SyncTransportException(
-          422,
-          'ops[$index]: author_seq ${header.authorSeq}',
-          code: 'member_register_not_first',
-        );
+      if (payload.controlType == controlTypeWorkspaceGenesis) {
+        admissions.add(await _verifyGenesis(
+          payload,
+          header,
+          envelope: envelopes[index],
+          index: index,
+          workspaceId: workspaceId,
+          member: member,
+          rootPk: rootPk,
+          workspaceExists: workspaceExists,
+        ));
+        workspaceExists = true;
+        stagedKinds[admissions.last.registration!.memberId] =
+            admissions.last.registration!.memberKind;
+        continue;
       }
 
-      final escrow = _escrows[_slot(workspaceId, member.userId)];
-      // No escrow means no Root the server can check against.
-      final rootPk = escrow?.record.rootPk ?? Uint8List(0);
-      final signed = await verifyDomainSeparated(
-        registrationSigningInput(payload.certBytes),
-        payload.rootSig,
-        rootPk,
-      );
-      if (!signed) {
-        throw SyncTransportException(422, 'ops[$index]', code: 'bad_root_signature');
+      if (!workspaceExists) {
+        throw SyncTransportException(409, 'ops[$index]', code: 'workspace_not_created');
       }
-      final RegistrationCertificate certificate;
-      try {
-        certificate = payload.certificate();
-      } on SyncRejection catch (rejection) {
-        throw SyncTransportException(422, 'ops[$index]', code: rejection.reason.code);
+      // A root-signed control payload lands regardless of Grants: that is how an
+      // ungranted device's register-plus-grant batch gets in at all.
+      if (!payload.isRootSigned) {
+        _requireRole(grants, member.record.memberId, opClassControl, index);
       }
-      if (certificate.memberId != header.authorMemberId) {
-        throw SyncTransportException(422, 'ops[$index]', code: 'cert_member_mismatch');
+
+      switch (payload.controlType) {
+        case controlTypeMemberRegister:
+          final registration = await _verifyMemberRegister(
+            payload,
+            header,
+            index: index,
+            workspaceId: workspaceId,
+            member: member,
+            rootPk: rootPk,
+          );
+          stagedKinds[registration.memberId] = registration.memberKind;
+          admissions.add(_ControlAdmission(
+            index: index,
+            controlType: payload.controlType,
+            registration: registration,
+          ));
+        case controlTypeGrant:
+          final grant = await _verifyGrant(
+            payload,
+            header,
+            index: index,
+            workspaceId: workspaceId,
+            member: member,
+            rootPk: rootPk,
+            grants: grants,
+            stagedKinds: stagedKinds,
+            isPreferences: isPreferences,
+            isReplay: replayedOpIds.contains(header.opId),
+          );
+          grants.add(grant.grantId, grant.memberId, grant.role);
+          admissions.add(_ControlAdmission(
+            index: index,
+            controlType: payload.controlType,
+            grant: grant,
+          ));
+        case controlTypeRevoke:
+          final revoke = await _verifyRevoke(
+            payload,
+            header,
+            index: index,
+            workspaceId: workspaceId,
+            member: member,
+            rootPk: rootPk,
+            grants: grants,
+          );
+          grants.revoke(revoke.grantId);
+          admissions.add(_ControlAdmission(
+            index: index,
+            controlType: payload.controlType,
+            revoke: revoke,
+          ));
       }
-      if (!_sameBytes(certificate.signPk, member.record.signPk)) {
-        throw SyncTransportException(422, 'ops[$index]', code: 'cert_key_mismatch');
-      }
-      toChain.add(member);
     }
-    return toChain;
+    return admissions;
   }
+
+  /// The `(grant.role, header.op_class)` matrix, content-blind as ever.
+  void _requireRole(_GrantIndex grants, String memberId, int opClass, int index) {
+    final roles = grants.liveRoles(memberId);
+    if (roles.isEmpty) {
+      // `revoked` separates "never granted" from "granted and taken away".
+      throw SyncTransportException(
+        403,
+        'ops[$index]${grants.hasAnyGrant(memberId) ? ' revoked' : ''}',
+        code: 'no_live_grant',
+      );
+    }
+    final allowed = roleOpClassMatrix[opClass] ?? const <String>{};
+    if (roles.intersection(allowed).isEmpty) {
+      throw SyncTransportException(403, 'ops[$index]', code: 'role_forbids_op_class');
+    }
+  }
+
+  Future<_ControlAdmission> _verifyGenesis(
+    ControlPayload payload,
+    OpHeader header, {
+    required Uint8List envelope,
+    required int index,
+    required String workspaceId,
+    required _RegisteredMember member,
+    required Uint8List rootPk,
+    required bool workspaceExists,
+  }) async {
+    if (index != 0 || workspaceExists) {
+      // First in the log and first in the batch. A second genesis is not a fork
+      // for the server to resolve: it holds no control chain.
+      throw SyncTransportException(409, 'ops[$index]', code: 'genesis_not_first');
+    }
+    if (!derivableWorkspaceIds(member.userId).contains(workspaceId)) {
+      throw SyncTransportException(403, 'ops[$index]', code: 'workspace_not_derivable');
+    }
+    if (header.authorSeq != 1) {
+      throw SyncTransportException(
+        422,
+        'ops[$index]: author_seq ${header.authorSeq}',
+        code: 'member_register_not_first',
+      );
+    }
+    if (!await verifyDomainSeparated(
+      genesisSigningInput(payload.certBytes),
+      payload.rootSig,
+      rootPk,
+    )) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'bad_root_signature');
+    }
+    final GenesisCertificate genesis;
+    try {
+      genesis = payload.genesisCertificate();
+    } on SyncRejection catch (rejection) {
+      throw SyncTransportException(422, 'ops[$index]', code: rejection.reason.code);
+    }
+    if (genesis.workspaceId != workspaceId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_workspace_mismatch');
+    }
+    if (!_sameBytes(genesis.rootPk, rootPk)) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_root_pk_mismatch');
+    }
+    if (genesis.founder.memberId != header.authorMemberId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_member_mismatch');
+    }
+    if (!_sameBytes(genesis.founder.signPk, member.record.signPk)) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_key_mismatch');
+    }
+    return _ControlAdmission(
+      index: index,
+      controlType: payload.controlType,
+      registration: genesis.asRegistration(),
+    );
+  }
+
+  Future<RegistrationCertificate> _verifyMemberRegister(
+    ControlPayload payload,
+    OpHeader header, {
+    required int index,
+    required String workspaceId,
+    required _RegisteredMember member,
+    required Uint8List rootPk,
+  }) async {
+    if (header.authorSeq != 1) {
+      throw SyncTransportException(
+        422,
+        'ops[$index]: author_seq ${header.authorSeq}',
+        code: 'member_register_not_first',
+      );
+    }
+    if (!await verifyDomainSeparated(
+      registrationSigningInput(payload.certBytes),
+      payload.rootSig,
+      rootPk,
+    )) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'bad_root_signature');
+    }
+    final RegistrationCertificate certificate;
+    try {
+      certificate = payload.certificate();
+    } on SyncRejection catch (rejection) {
+      throw SyncTransportException(422, 'ops[$index]', code: rejection.reason.code);
+    }
+    if (certificate.workspaceId != workspaceId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_workspace_mismatch');
+    }
+    if (certificate.memberId != header.authorMemberId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_member_mismatch');
+    }
+    if (!_sameBytes(certificate.signPk, member.record.signPk)) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_key_mismatch');
+    }
+    return certificate;
+  }
+
+  Future<GrantCertificate> _verifyGrant(
+    ControlPayload payload,
+    OpHeader header, {
+    required int index,
+    required String workspaceId,
+    required _RegisteredMember member,
+    required Uint8List rootPk,
+    required _GrantIndex grants,
+    required Map<String, String> stagedKinds,
+    required bool isPreferences,
+    required bool isReplay,
+  }) async {
+    final GrantCertificate certificate;
+    try {
+      certificate = payload.grantCertificate();
+    } on SyncRejection catch (rejection) {
+      throw SyncTransportException(422, 'ops[$index]', code: rejection.reason.code);
+    }
+    if (certificate.workspaceId != workspaceId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_workspace_mismatch');
+    }
+    if (certificate.granter != payload.authority) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_granter_mismatch');
+    }
+    final granterPk = _authorityPublicKey(payload.authority, header, index, rootPk, member);
+    if (!await verifyDomainSeparated(
+      grantSigningInput(payload.certBytes),
+      payload.signature,
+      granterPk,
+    )) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'bad_grant_signature');
+    }
+    if (certificate.role == roleOwner && payload.authority != granterRoot) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'owner_grant_requires_root');
+    }
+
+    final grantee = _members[certificate.memberId];
+    if (grantee == null || grantee.userId != member.userId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'unknown_grantee');
+    }
+    final String memberKind;
+    if (stagedKinds.containsKey(certificate.memberId)) {
+      memberKind = stagedKinds[certificate.memberId]!;
+    } else if (grantee.chained) {
+      memberKind = grantee.memberKind ?? memberKindDevice;
+    } else {
+      // Fail closed on an unmaterialised grantee: never a dangling forward
+      // reference, and the bar is the one the client's directory applies.
+      throw SyncTransportException(422, 'ops[$index]', code: 'unknown_grantee');
+    }
+    if (isPreferences && memberKind != memberKindDevice) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'service_grant_forbidden');
+    }
+    if (!isReplay && grants.state(certificate.grantId) != null) {
+      // A *different* op reusing a grant id. A replay of the op that minted the id
+      // is excluded: it asserts nothing new, and dedupe is its business.
+      throw SyncTransportException(409, 'ops[$index]', code: 'grant_id_already_used');
+    }
+    return certificate;
+  }
+
+  Future<RevokeCertificate> _verifyRevoke(
+    ControlPayload payload,
+    OpHeader header, {
+    required int index,
+    required String workspaceId,
+    required _RegisteredMember member,
+    required Uint8List rootPk,
+    required _GrantIndex grants,
+  }) async {
+    final RevokeCertificate certificate;
+    try {
+      certificate = payload.revokeCertificate();
+    } on SyncRejection catch (rejection) {
+      throw SyncTransportException(422, 'ops[$index]', code: rejection.reason.code);
+    }
+    if (certificate.workspaceId != workspaceId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_workspace_mismatch');
+    }
+    if (certificate.revoker != payload.authority) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_granter_mismatch');
+    }
+    final revokerPk = _authorityPublicKey(payload.authority, header, index, rootPk, member);
+    if (!await verifyDomainSeparated(
+      revokeSigningInput(payload.certBytes),
+      payload.signature,
+      revokerPk,
+    )) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'bad_revoke_signature');
+    }
+    final target = grants.state(certificate.grantId);
+    if (target == null) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'unknown_grantee');
+    }
+    if (target.role == roleOwner && payload.authority != granterRoot) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'owner_revoke_requires_root');
+    }
+    return certificate;
+  }
+
+  /// Root, or the authoring Member itself — authority does not travel by courier.
+  Uint8List _authorityPublicKey(
+    String authority,
+    OpHeader header,
+    int index,
+    Uint8List rootPk,
+    _RegisteredMember member,
+  ) {
+    if (authority == granterRoot) return rootPk;
+    if (authority != header.authorMemberId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_granter_mismatch');
+    }
+    return member.record.signPk;
+  }
+
+  /// Write the index rows the batch's control ops stand for, once seqs exist.
+  ///
+  /// Returns the Members that lost their last live Grant, whose transport
+  /// credentials and live sockets the caller then closes.
+  List<String> _materialiseControl(
+    String workspaceId,
+    List<_ControlAdmission> admissions,
+    List<OpAppendResult> results,
+  ) {
+    final index = _grants.putIfAbsent(workspaceId, () => {});
+    final revokedFrom = <String>{};
+    for (final admission in admissions) {
+      final result = results[admission.index];
+      if (result.duplicate) {
+        // A verbatim replay: re-materialising would move `grantedSeq` off the op
+        // that actually created the Grant.
+        continue;
+      }
+      final registration = admission.registration;
+      if (registration != null) {
+        final row = _members[registration.memberId];
+        if (row != null) {
+          row.chained = true;
+          row.memberKind = registration.memberKind;
+        }
+      }
+      if (admission.controlType == controlTypeWorkspaceGenesis) {
+        _workspaces[workspaceId] = result.seq;
+      } else if (admission.grant != null) {
+        index[admission.grant!.grantId] = _StoredGrant(
+          grantId: admission.grant!.grantId,
+          memberId: admission.grant!.memberId,
+          role: admission.grant!.role,
+          granter: admission.grant!.granter,
+          grantedSeq: result.seq,
+        );
+      } else if (admission.revoke != null) {
+        final target = index[admission.revoke!.grantId];
+        if (target == null) continue;
+        target.revokedBySeq = result.seq;
+        revokedFrom.add(target.memberId);
+      }
+    }
+    final stillLive = _GrantIndex(index);
+    return [
+      for (final memberId in revokedFrom)
+        if (stillLive.liveRoles(memberId).isEmpty) memberId,
+    ];
+  }
+
 
   PullPage _pullOps(
     String memberId,
@@ -726,6 +1258,15 @@ class FakeSyncServer {
       throw const SyncTransportException(401, 'unknown member', code: 'unknown_member');
     }
     _authorizeWorkspace(member.userId, workspaceId);
+    // A **pre-genesis GET returns an empty page**, never an error: that is the
+    // observation the enrolment ceremony branches on. `workspace_not_created` is
+    // a POST-path refusal only, and this route simply has nothing to serve yet.
+    _refuseIfRevoked(workspaceId, memberId);
+    if (blindNextPullOf.remove(workspaceId)) {
+      // Spent by being read: the next pull sees the log as it is, which is what
+      // lets the losing device recover on its own.
+      return const PullPage(ops: [], hasMore: false);
+    }
     final floor = ignoreSinceParameter ? 0 : since;
     // Append order breaks every tie: [injectUnchecked] can spend one seq twice,
     // so seq alone is not a total order and a page would otherwise depend on the
@@ -767,15 +1308,64 @@ class FakeSyncServer {
     );
   }
 
+  /// The outermost gate on every Workspace route: a User reaches the two
+  /// Workspaces their id derives, and nothing else.
   void _authorizeWorkspace(String userId, String workspaceId) {
-    if (workspaceId != implicitWorkspaceId(userId)) {
+    if (!derivableWorkspaceIds(userId).contains(workspaceId)) {
       throw const SyncTransportException(
         403,
-        'No grant for this workspace',
-        code: 'no_workspace_grant',
+        'this User derives no such workspace',
+        code: 'workspace_not_derivable',
       );
     }
   }
+
+  /// The member-GET gate: an **unrevoked** member token is enough.
+  ///
+  /// Revocation is index-defined — at least one grant row and none live — so a
+  /// *pre-grant* Member is admitted and a revoked one is refused immediately, on
+  /// reads as well as writes. Admitting the pre-grant case is what lets the
+  /// enrolment ceremony pull and apply the control log before it holds any Grant.
+  void _refuseIfRevoked(String workspaceId, String memberId) {
+    final index = _GrantIndex(_grants[workspaceId] ?? {});
+    if (index.hasAnyGrant(memberId) && index.liveRoles(memberId).isEmpty) {
+      throw const SyncTransportException(
+        403,
+        'no live Grant (revoked)',
+        code: 'no_live_grant',
+      );
+    }
+  }
+
+  /// A live Grant's role, as the server's index holds it — the tamper hook.
+  ///
+  /// Flipping a role here and watching every client's verdict stay put is how
+  /// "role elevation via server tables is impossible" is demonstrated rather than
+  /// asserted: clients derive roles from the signed control ops in the log.
+  void poisonGrantRole(String workspaceId, String grantId, String role) {
+    final grant = _grants[workspaceId]?[grantId];
+    if (grant == null) {
+      throw StateError('no grant $grantId in $workspaceId to poison');
+    }
+    grant.role = role;
+  }
+
+  /// Un-revoke a Grant in the index without a control op behind it.
+  ///
+  /// The *served pre-revocation grant row*: a server can keep claiming a member
+  /// is live after the log says otherwise. Chain-gating is what makes the claim
+  /// inert on every client.
+  void poisonGrantLiveness(String workspaceId, String grantId) {
+    final grant = _grants[workspaceId]?[grantId];
+    if (grant == null) {
+      throw StateError('no grant $grantId in $workspaceId to poison');
+    }
+    grant.revokedBySeq = null;
+  }
+
+  /// Whether the index still shows a live Grant for [memberId].
+  bool hasLiveGrant(String workspaceId, String memberId) =>
+      _GrantIndex(_grants[workspaceId] ?? {}).liveRoles(memberId).isNotEmpty;
 
   static String _hex(Uint8List bytes) =>
       bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
@@ -809,7 +1399,7 @@ class FakeSyncServerUserSession implements UserTransport {
   final SignalTimerFactory signalTimerFactory;
   final Duration keepaliveInterval;
 
-  String get workspaceId => implicitWorkspaceId(userId);
+  String get workspaceId => defaultWorkspaceId(userId);
 
   @override
   Future<MemberRecord> registerMember({

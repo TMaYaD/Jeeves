@@ -123,6 +123,13 @@ class MemberDirectory {
   final Map<String, Uint8List> _keys = {};
   final Set<String> _chainedMembers = {};
 
+  /// The `member_kind` each chained Member's certificate asserted.
+  ///
+  /// A *signed* fact, so it is learned the same way keys are — never from the
+  /// server's registry. The `user_preferences` Workspace reads it to refuse Grants
+  /// to anything that is not a Device.
+  final Map<String, String> _kinds = {};
+
   static String _slot(String memberId, Uint8List keyId) => '$memberId/${_hex(keyId)}';
 
   static String _hex(Uint8List bytes) =>
@@ -133,6 +140,9 @@ class MemberDirectory {
   void rememberSelf(MemberIdentity identity) {
     _keys[_slot(identity.memberId, identity.keyId)] = identity.signPk;
     _chainedMembers.add(identity.memberId);
+    // This device is a Device. The one kind that does not come from the log,
+    // for the same reason its keys do not.
+    _kinds[identity.memberId] = memberKindDevice;
   }
 
   /// Learn a Member's key from a certificate that has already been verified.
@@ -142,9 +152,15 @@ class MemberDirectory {
   void rememberChained(RegistrationCertificate certificate) {
     _keys[_slot(certificate.memberId, certificate.signKeyId)] = certificate.signPk;
     _chainedMembers.add(certificate.memberId);
+    _kinds[certificate.memberId] = certificate.memberKind;
   }
 
   bool isChained(String memberId) => _chainedMembers.contains(memberId);
+
+  /// The kind a verified certificate asserted for [memberId], or null for a
+  /// member this device has never chained. Null is the fail-closed answer: a
+  /// caller that cannot resolve a kind must refuse rather than assume one.
+  String? kindOf(String memberId) => _kinds[memberId];
 
   /// The public key for this author and key id, or a fail-closed refusal.
   Uint8List publicKeyFor(String memberId, Uint8List keyId) {

@@ -180,7 +180,14 @@ class DomainProjector {
     // last asserted fields are still on record — which is how a junction, whose
     // identity is its pair rather than its id, can still be located.
     final hidden = await view.readEntityIncludingHidden(entityId);
-    final identity = _identity(codec, entityId, hidden);
+    // ...except after a rebuild from the op log, which *does* clear them: an
+    // entity whose every op became refused reduces to nothing, so a junction has
+    // no pair left to be found by. Falling back to the sync row identifier is
+    // exact rather than a guess — this projector sets `id` to the entity id on
+    // every row it writes, including the two collections whose domain key is not
+    // their `id` column.
+    final identity =
+        _identity(codec, entityId, hidden) ?? (hidden.isEmpty ? _byRowId(entityId) : null);
     if (identity == null) return false;
     await domain.customUpdate(
       'DELETE FROM "${codec.table}" WHERE ${identity.sql}',
@@ -189,14 +196,15 @@ class DomainProjector {
     return true;
   }
 
+  static ({String sql, List<Variable<Object>> variables}) _byRowId(String entityId) =>
+      (sql: '"id" = ?', variables: [Variable<String>(entityId)]);
+
   ({String sql, List<Variable<Object>> variables})? _identity(
     CollectionCodec codec,
     String entityId,
     Map<String, Object?> fields,
   ) {
-    if (codec.identifiedById) {
-      return (sql: '"id" = ?', variables: [Variable<String>(entityId)]);
-    }
+    if (codec.identifiedById) return _byRowId(entityId);
     final clauses = <String>[];
     final variables = <Variable<Object>>[];
     for (final column in codec.identityColumns) {

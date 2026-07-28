@@ -31,17 +31,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from nacl.signing import SigningKey  # noqa: E402
 
 from app.sync.control_payload import (  # noqa: E402
+    COMPACTION_EXEMPT_OP_CLASSES,
+    CONTROL_TYPE_GRANT,
     CONTROL_TYPE_MEMBER_REGISTER,
+    CONTROL_TYPE_REVOKE,
+    CONTROL_TYPE_WORKSPACE_GENESIS,
+    GRANTER_ROOT,
     KEX_PUBLIC_KEY_BYTES,
+    KNOWN_ROLES,
     MEMBER_KIND_DEVICE,
+    MEMBER_KIND_SERVICE,
     PREV_CONTROL_HASH_BYTES,
+    ROLE_OP_CLASS_MATRIX,
+    ROLE_OWNER,
+    ROLE_PARTICIPANT,
+    ROLE_SUGGESTER,
     SERVED_CONTROL_TYPES,
+    SIGNING_DOMAIN_GRANT_V1,
     SIGNING_DOMAIN_MEMBER_REGISTER_V1,
+    SIGNING_DOMAIN_REVOKE_V1,
+    SIGNING_DOMAIN_WORKSPACE_GENESIS_V1,
     ZERO_PREV_CONTROL_HASH,
     ControlPayload,
+    GenesisCertificate,
+    GrantCertificate,
+    MemberKeys,
     RegistrationCertificate,
+    RevokeCertificate,
     control_payload_hash,
+    sign_genesis_certificate,
+    sign_grant_certificate,
     sign_registration_certificate,
+    sign_revoke_certificate,
 )
 from app.sync.envelope import (  # noqa: E402
     BODY_OVERSIZE_MULTIPLE_BYTES,
@@ -85,8 +106,10 @@ from app.sync.escrow import (  # noqa: E402
 from app.sync.ids import (  # noqa: E402
     JEEVES_WORKSPACE_NAMESPACE,
     USER_PREFERENCES_COLLECTION,
-    implicit_workspace_id,
+    USER_PREFERENCES_WORKSPACE_NAMESPACE,
+    default_workspace_id,
     preference_entity_id,
+    user_preferences_workspace_id,
 )
 from app.sync.member_auth import (  # noqa: E402
     MEMBER_CHALLENGE_NONCE_BYTES,
@@ -107,8 +130,10 @@ FROZEN_NOTICE = (
 
 SPEC_USER_ID = "spec-user-1"
 SPEC_OTHER_USER_ID = "spec-user-2"
-WORKSPACE_ID = implicit_workspace_id(SPEC_USER_ID)
-OTHER_WORKSPACE_ID = implicit_workspace_id(SPEC_OTHER_USER_ID)
+WORKSPACE_ID = default_workspace_id(SPEC_USER_ID)
+OTHER_WORKSPACE_ID = default_workspace_id(SPEC_OTHER_USER_ID)
+#: The implicit User-global preferences Workspace: every Device, no Service ever.
+PREFERENCES_WORKSPACE_ID = user_preferences_workspace_id(SPEC_USER_ID)
 
 KEY_LABELS = ("device_a", "device_b")
 
@@ -123,6 +148,21 @@ def _member_id(label: str) -> uuid.UUID:
 
 def _op_id(name: str) -> uuid.UUID:
     return uuid.uuid5(JEEVES_WORKSPACE_NAMESPACE, f"spec/op/{name}")
+
+
+def _grant_id(name: str) -> uuid.UUID:
+    return uuid.uuid5(JEEVES_WORKSPACE_NAMESPACE, f"spec/grant/{name}")
+
+
+def _revoke_id(name: str) -> uuid.UUID:
+    return uuid.uuid5(JEEVES_WORKSPACE_NAMESPACE, f"spec/revoke/{name}")
+
+
+#: A Grant carries **no key material** — that is the whole point of the
+#: Grant/KeyWrap split (F19) — so a grantee the vectors only ever *name* needs no
+#: keypair.  This one stands in for a Service that an owning Device grants the
+#: suggester role to, and it is deliberately synthetic: nothing here signs.
+SUGGESTER_MEMBER_ID = _member_id("suggester_service")
 
 
 SIGNING_KEYS = {label: SigningKey(_seed(label)) for label in KEY_LABELS}
@@ -653,9 +693,11 @@ def _negative_vectors() -> list[dict[str, Any]]:
 # --- Control vectors (op_class = 2) -----------------------------------------
 
 
-def _certificate(label: str, *, wall_ms: int) -> RegistrationCertificate:
+def _certificate(
+    label: str, *, wall_ms: int, workspace_id: uuid.UUID = WORKSPACE_ID
+) -> RegistrationCertificate:
     return RegistrationCertificate(
-        workspace_id=WORKSPACE_ID,
+        workspace_id=workspace_id,
         member_id=MEMBER_IDS[label],
         sign_pk=bytes(SIGNING_KEYS[label].verify_key),
         kex_pk=KEX_PUBLIC_KEYS[label],
@@ -664,12 +706,23 @@ def _certificate(label: str, *, wall_ms: int) -> RegistrationCertificate:
     )
 
 
+def _member_keys(label: str, *, member_kind: str = MEMBER_KIND_DEVICE) -> MemberKeys:
+    return MemberKeys(
+        member_id=MEMBER_IDS[label],
+        sign_pk=bytes(SIGNING_KEYS[label].verify_key),
+        kex_pk=KEX_PUBLIC_KEYS[label],
+        member_kind=member_kind,
+    )
+
+
 def _control_vector(
     name: str,
     *,
     key: str,
     payload: ControlPayload,
-    certificate: RegistrationCertificate,
+    cert_json: str,
+    author_seq: int,
+    prev_author_hash: bytes | None = None,
     note: str,
 ) -> dict[str, Any]:
     payload_bytes = payload.encode()
@@ -677,8 +730,9 @@ def _control_vector(
     header = _header(
         op_id_name=f"control/{name}",
         key=key,
-        author_seq=1,
+        author_seq=author_seq,
         op_class=OP_CLASS_CONTROL,
+        prev_author_hash=prev_author_hash,
     )
     envelope = build_envelope(header, body, SIGNING_KEYS[key])
     return {
@@ -689,9 +743,16 @@ def _control_vector(
         "header_hex": header.serialize().hex(),
         "control_type": payload.control_type,
         "prev_control_hash_hex": payload.prev_control_hash.hex(),
-        "cert_json": certificate.encode().decode("utf-8"),
+        # "root" for the two Root-only types and for a root-signed grant/revoke;
+        # a member uuid when an owning Device signed it.  Which key verifies the
+        # signature is decided by this field and nothing else.  Read back off the
+        # decoded payload rather than off what was passed in, so the vector pins
+        # what a *receiver* resolves — for the Root-only types that is "root"
+        # whether or not the field is on the wire.
+        "authority": ControlPayload.decode(payload_bytes).authority,
+        "cert_json": cert_json,
         "cert_hex": payload.cert_bytes.hex(),
-        "root_sig_hex": payload.root_sig.hex(),
+        "signature_hex": payload.signature.hex(),
         "payload_json": payload_bytes.decode("utf-8"),
         "payload_length_bytes": len(payload_bytes),
         # The cross-author chain link a successor names: SHA-256 over these
@@ -704,83 +765,368 @@ def _control_vector(
     }
 
 
-def _control_vectors() -> list[dict[str, Any]]:
-    first_cert = _certificate("device_a", wall_ms=BASE_WALL_MS)
-    first_payload = ControlPayload(
-        control_type=CONTROL_TYPE_MEMBER_REGISTER,
-        prev_control_hash=ZERO_PREV_CONTROL_HASH,
-        cert_bytes=first_cert.encode(),
-        root_sig=sign_registration_certificate(first_cert.encode(), ROOT_SIGNING_KEY),
+def _genesis_payload(
+    label: str, *, wall_ms: int, prev_control_hash: bytes = ZERO_PREV_CONTROL_HASH
+) -> tuple[ControlPayload, str]:
+    certificate = GenesisCertificate(
+        workspace_id=WORKSPACE_ID,
+        root_pk=ROOT_PUBLIC_KEY,
+        founder=_member_keys(label),
+        created_at_hlc=Hlc.for_member(MEMBER_IDS[label], wall_ms),
     )
-    first = _control_vector(
-        "member_register_first",
+    cert_bytes = certificate.encode()
+    return (
+        ControlPayload(
+            control_type=CONTROL_TYPE_WORKSPACE_GENESIS,
+            prev_control_hash=prev_control_hash,
+            cert_bytes=cert_bytes,
+            signature=sign_genesis_certificate(cert_bytes, ROOT_SIGNING_KEY),
+        ),
+        cert_bytes.decode("utf-8"),
+    )
+
+
+def _grant_payload(
+    *,
+    grant_name: str,
+    member_id: uuid.UUID,
+    role: str,
+    granter: str,
+    prev_control_hash: bytes,
+    wall_ms: int,
+    signing_key: SigningKey = ROOT_SIGNING_KEY,
+    corrupt_signature: bool = False,
+) -> tuple[ControlPayload, str]:
+    certificate = GrantCertificate(
+        workspace_id=WORKSPACE_ID,
+        grant_id=_grant_id(grant_name),
+        member_id=member_id,
+        role=role,
+        granter=granter,
+        granted_at_hlc=Hlc.for_member(member_id, wall_ms),
+    )
+    cert_bytes = certificate.encode()
+    signature = bytearray(sign_grant_certificate(cert_bytes, signing_key))
+    if corrupt_signature:
+        signature[-1] ^= 0x01
+    return (
+        ControlPayload(
+            control_type=CONTROL_TYPE_GRANT,
+            prev_control_hash=prev_control_hash,
+            cert_bytes=cert_bytes,
+            signature=bytes(signature),
+            authority=granter,
+        ),
+        cert_bytes.decode("utf-8"),
+    )
+
+
+def _revoke_payload(
+    *,
+    revoke_name: str,
+    grant_id: uuid.UUID,
+    revoker: str,
+    prev_control_hash: bytes,
+    wall_ms: int,
+    signing_key: SigningKey = ROOT_SIGNING_KEY,
+    corrupt_signature: bool = False,
+) -> tuple[ControlPayload, str]:
+    revoke_id = _revoke_id(revoke_name)
+    certificate = RevokeCertificate(
+        workspace_id=WORKSPACE_ID,
+        revoke_id=revoke_id,
+        grant_id=grant_id,
+        revoker=revoker,
+        revoked_at_hlc=Hlc.for_member(revoke_id, wall_ms),
+    )
+    cert_bytes = certificate.encode()
+    signature = bytearray(sign_revoke_certificate(cert_bytes, signing_key))
+    if corrupt_signature:
+        signature[-1] ^= 0x01
+    return (
+        ControlPayload(
+            control_type=CONTROL_TYPE_REVOKE,
+            prev_control_hash=prev_control_hash,
+            cert_bytes=cert_bytes,
+            signature=bytes(signature),
+            authority=revoker,
+        ),
+        cert_bytes.decode("utf-8"),
+    )
+
+
+def _control_vectors() -> list[dict[str, Any]]:
+    """One canonical control chain, in the order a real Workspace produces it.
+
+    genesis -> the founder's root-signed owner Grant -> the second Device's
+    ``member_register`` -> its root-signed owner Grant -> an owner-signed
+    suggester Grant to a Service -> a root-signed Revoke of that Grant.
+
+    Every link is pinned twice over: ``prev_control_hash`` chains the *control*
+    ops across authors by payload hash, and ``prev_author_hash`` chains each
+    author's own ops by envelope hash.  The two are deliberately different hashes
+    over different bytes, and a codec that confused them would fail here.
+    """
+    vectors: list[dict[str, Any]] = []
+    #: Per-author envelope-hash heads, so each author's chain is truthful.
+    author_heads: dict[str, bytes] = {}
+    author_seqs: dict[str, int] = {}
+
+    def append(
+        name: str,
+        *,
+        key: str,
+        payload: ControlPayload,
+        cert_json: str,
+        note: str,
+    ) -> dict[str, Any]:
+        author_seqs[key] = author_seqs.get(key, 0) + 1
+        vector = _control_vector(
+            name,
+            key=key,
+            payload=payload,
+            cert_json=cert_json,
+            author_seq=author_seqs[key],
+            prev_author_hash=author_heads.get(key),
+            note=note,
+        )
+        author_heads[key] = bytes.fromhex(vector["envelope_sha256_hex"])
+        vectors.append(vector)
+        return vector
+
+    genesis_payload, genesis_cert_json = _genesis_payload("device_a", wall_ms=BASE_WALL_MS)
+    genesis = append(
+        "workspace_genesis",
         key="device_a",
-        payload=first_payload,
-        certificate=first_cert,
+        payload=genesis_payload,
+        cert_json=genesis_cert_json,
         note=(
-            "The first device's registration: author_seq 1, an all-zero "
-            "prev_control_hash because no control op has been applied yet, and a "
-            "certificate signed by Root under jeeves/member-register/v1."
+            "The Workspace comes into being: author_seq 1, an all-zero "
+            "prev_control_hash — the only op that may carry one — and a Root "
+            "signature under jeeves/workspace-genesis/v1. The certificate embeds "
+            "the founding Device's registration, because the envelope's author "
+            "key is unknowable before the certificate parses and there is no "
+            "earlier op to learn it from (ADR-0031). root_pk sits inside the "
+            "signed bytes so every later verifier can cross-check the Root it "
+            "pinned."
         ),
     )
 
-    second_cert = _certificate("device_b", wall_ms=BASE_WALL_MS + 1000)
-    second_payload = ControlPayload(
-        control_type=CONTROL_TYPE_MEMBER_REGISTER,
-        prev_control_hash=bytes.fromhex(first["payload_sha256_hex"]),
-        cert_bytes=second_cert.encode(),
-        root_sig=sign_registration_certificate(second_cert.encode(), ROOT_SIGNING_KEY),
+    founder_grant_payload, founder_grant_cert_json = _grant_payload(
+        grant_name="founder_owner",
+        member_id=MEMBER_IDS["device_a"],
+        role=ROLE_OWNER,
+        granter=GRANTER_ROOT,
+        prev_control_hash=bytes.fromhex(genesis["payload_sha256_hex"]),
+        wall_ms=BASE_WALL_MS + 100,
     )
-    second = _control_vector(
-        "member_register_chained",
-        key="device_b",
-        payload=second_payload,
-        certificate=second_cert,
+    founder_grant = append(
+        "grant_founder_owner",
+        key="device_a",
+        payload=founder_grant_payload,
+        cert_json=founder_grant_cert_json,
         note=(
-            "The second device chains by payload hash: prev_control_hash is "
-            "SHA-256 over member_register_first's *payload bytes*, so the link "
-            "is computable from the unencrypted payload alone and survives any "
-            "future envelope-level re-framing."
+            "Roles are one materialisation path: no implied grants, genesis "
+            "included. The founder is an owner because Root said so in a "
+            "separate signed fact, and revoking it later invalidates nothing "
+            '(F14d). An owner role may only be minted with granter "root" — the '
+            "mint half of the ceiling ADR-0031 records."
         ),
     )
-    return [first, second]
+
+    register_certificate = _certificate("device_b", wall_ms=BASE_WALL_MS + 1000)
+    register_cert_bytes = register_certificate.encode()
+    register = append(
+        "member_register_second_device",
+        key="device_b",
+        payload=ControlPayload(
+            control_type=CONTROL_TYPE_MEMBER_REGISTER,
+            prev_control_hash=bytes.fromhex(founder_grant["payload_sha256_hex"]),
+            cert_bytes=register_cert_bytes,
+            signature=sign_registration_certificate(register_cert_bytes, ROOT_SIGNING_KEY),
+        ),
+        cert_json=register_cert_bytes.decode("utf-8"),
+        note=(
+            "The Nth Device's registration: its own author_seq 1, chained to the "
+            "control head it observed by SHA-256 over that op's *payload bytes*, "
+            "so the link is computable from the unencrypted payload alone and "
+            "survives any future envelope-level re-framing. A zero link here "
+            "would be refused even by an empty receiver — that is genesis-only."
+        ),
+    )
+
+    second_grant_payload, second_grant_cert_json = _grant_payload(
+        grant_name="second_device_owner",
+        member_id=MEMBER_IDS["device_b"],
+        role=ROLE_OWNER,
+        granter=GRANTER_ROOT,
+        prev_control_hash=bytes.fromhex(register["payload_sha256_hex"]),
+        wall_ms=BASE_WALL_MS + 1100,
+    )
+    second_grant = append(
+        "grant_second_device_owner",
+        key="device_b",
+        payload=second_grant_payload,
+        cert_json=second_grant_cert_json,
+        note=(
+            "Devices are owners because the User acts through them, and the "
+            "corollary is deliberate: revoking a Device takes the passphrase, "
+            "because only Root can revoke an owner Grant."
+        ),
+    )
+
+    suggester_grant_payload, suggester_grant_cert_json = _grant_payload(
+        grant_name="service_suggester",
+        member_id=SUGGESTER_MEMBER_ID,
+        role=ROLE_SUGGESTER,
+        granter=str(MEMBER_IDS["device_a"]),
+        prev_control_hash=bytes.fromhex(second_grant["payload_sha256_hex"]),
+        wall_ms=BASE_WALL_MS + 2000,
+        signing_key=SIGNING_KEYS["device_a"],
+    )
+    suggester_grant = append(
+        "grant_service_suggester_owner_signed",
+        key="device_a",
+        payload=suggester_grant_payload,
+        cert_json=suggester_grant_cert_json,
+        note=(
+            "An owning Device granting a *non-owner* role, signed with its own "
+            "key rather than Root's: the envelope author, the payload's granter "
+            "and the certificate's granter are all the same member, because "
+            "authority does not travel by courier. A Grant carries no key "
+            "material, which is why the grantee here needs no keypair at all."
+        ),
+    )
+
+    revoke_payload, revoke_cert_json = _revoke_payload(
+        revoke_name="service_suggester",
+        grant_id=_grant_id("service_suggester"),
+        revoker=GRANTER_ROOT,
+        prev_control_hash=bytes.fromhex(suggester_grant["payload_sha256_hex"]),
+        wall_ms=BASE_WALL_MS + 3000,
+    )
+    append(
+        "revoke_service_suggester",
+        key="device_a",
+        payload=revoke_payload,
+        cert_json=revoke_cert_json,
+        note=(
+            "Revocation is grant-granular: the certificate names one grant_id, "
+            "never a member (F19). Revoking the granter would not cascade — a "
+            "fact valid at the position it was signed at stands, because nothing "
+            "re-evaluates it (F14c)."
+        ),
+    )
+
+    return vectors
 
 
 def _negative_control_vectors() -> list[dict[str, Any]]:
     """Codec-level control rejections only.
 
-    The position rule (``author_seq == 1``) and the chain rule
-    (``prev_control_hash`` against what has been applied) are receive-pipeline
-    facts, not codec facts — they need state a vector cannot carry, so they are
-    pinned by the route and harness tests instead.
+    Anything needing receiver *state* is pinned by the route and harness tests
+    instead: the position rule (``author_seq == 1``), the chain rule
+    (``prev_control_hash`` against what has been applied), an unmaterialised
+    grantee, a Service grant into the preferences Workspace, and the revoke half
+    of the owner ceiling — that last one because the frozen revoke certificate
+    names a ``grant_id``, so the target's role is state these bytes cannot carry.
     """
     cert = _certificate("device_a", wall_ms=BASE_WALL_MS)
     cert_bytes = cert.encode()
     good_signature = sign_registration_certificate(cert_bytes, ROOT_SIGNING_KEY)
-
     tampered = bytearray(good_signature)
     tampered[-1] ^= 0x01
-    vectors = [
-        _negative(
-            "control_bad_root_signature",
-            key="device_a",
-            reason="bad_root_signature",
+
+    def control_negative(
+        name: str,
+        *,
+        reason: str,
+        payload: ControlPayload,
+        note: str,
+        key: str = "device_a",
+        author_seq: int = 1,
+    ) -> dict[str, Any]:
+        return _negative(
+            name,
+            key=key,
+            reason=reason,
             envelope=build_envelope(
                 _header(
-                    op_id_name="control/bad_root_signature",
-                    key="device_a",
-                    author_seq=1,
+                    op_id_name=f"control/{name}",
+                    key=key,
+                    author_seq=author_seq,
                     op_class=OP_CLASS_CONTROL,
                 ),
-                frame_body(
-                    ControlPayload(
-                        control_type=CONTROL_TYPE_MEMBER_REGISTER,
-                        prev_control_hash=ZERO_PREV_CONTROL_HASH,
-                        cert_bytes=cert_bytes,
-                        root_sig=bytes(tampered),
-                    ).encode()
-                ),
-                SIGNING_KEYS["device_a"],
+                frame_body(payload.encode()),
+                SIGNING_KEYS[key],
+            ),
+            note=note,
+        )
+
+    genesis_payload, _ = _genesis_payload(
+        "device_a", wall_ms=BASE_WALL_MS, prev_control_hash=hashlib.sha256(b"not-zero").digest()
+    )
+    non_root_owner_grant = GrantCertificate(
+        workspace_id=WORKSPACE_ID,
+        grant_id=_grant_id("member_minted_owner"),
+        member_id=MEMBER_IDS["device_b"],
+        role=ROLE_OWNER,
+        granter=str(MEMBER_IDS["device_a"]),
+        granted_at_hlc=Hlc.for_member(MEMBER_IDS["device_b"], BASE_WALL_MS + 4000),
+    )
+    # Built by hand: `GrantCertificate.decode` refuses this document, so
+    # `encode()` is unreachable through the dataclass for exactly the shape the
+    # vector has to carry.
+    non_root_owner_cert_bytes = json.dumps(
+        non_root_owner_grant.to_json_dict(), separators=(",", ":")
+    ).encode("utf-8")
+    unknown_role_cert_bytes = json.dumps(
+        {
+            **non_root_owner_grant.to_json_dict(),
+            "grant_id": str(_grant_id("unknown_role")),
+            "role": "archivist",
+            "granter": GRANTER_ROOT,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    missing_field_cert_bytes = json.dumps(
+        {
+            "workspace_id": str(WORKSPACE_ID),
+            "grant_id": str(_grant_id("missing_member")),
+            "role": ROLE_PARTICIPANT,
+            "granter": GRANTER_ROOT,
+            "granted_at_hlc": Hlc.for_member(MEMBER_IDS["device_b"], BASE_WALL_MS).to_json(),
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    good_grant_payload, _ = _grant_payload(
+        grant_name="bad_granter_signature",
+        member_id=MEMBER_IDS["device_b"],
+        role=ROLE_PARTICIPANT,
+        granter=GRANTER_ROOT,
+        prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+        wall_ms=BASE_WALL_MS + 5000,
+        corrupt_signature=True,
+    )
+    bad_revoke_payload, _ = _revoke_payload(
+        revoke_name="bad_revoker_signature",
+        grant_id=_grant_id("service_suggester"),
+        revoker=GRANTER_ROOT,
+        prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+        wall_ms=BASE_WALL_MS + 6000,
+        corrupt_signature=True,
+    )
+
+    return [
+        control_negative(
+            "control_bad_root_signature",
+            reason="bad_root_signature",
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_MEMBER_REGISTER,
+                prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+                cert_bytes=cert_bytes,
+                signature=bytes(tampered),
             ),
             note=(
                 "Last byte of the Root signature flipped; the envelope itself is "
@@ -788,38 +1134,38 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
                 "certificate is a claim, not a registration."
             ),
         ),
-        _negative(
+        control_negative(
             "control_unsupported_type",
-            key="device_a",
             reason="unsupported_control_type",
-            envelope=build_envelope(
-                _header(
-                    op_id_name="control/unsupported_type",
-                    key="device_a",
-                    author_seq=1,
-                    op_class=OP_CLASS_CONTROL,
-                ),
-                frame_body(
-                    ControlPayload(
-                        control_type="grant",
-                        prev_control_hash=ZERO_PREV_CONTROL_HASH,
-                    ).encode()
-                ),
-                SIGNING_KEYS["device_a"],
+            payload=ControlPayload(
+                control_type="rotate",
+                prev_control_hash=hashlib.sha256(b"predecessor").digest(),
             ),
             note=(
-                "A control type this build does not serve. #549 turns this one "
-                "into a positive vector; until then every type but "
-                "member_register is fail-closed."
+                "A control type this build does not serve. #554 turns `rotate` "
+                "into a positive vector; until then every type outside the four "
+                "served ones is fail-closed."
+            ),
+        ),
+        control_negative(
+            "control_malformed_payload",
+            reason="malformed_control_payload",
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_MEMBER_REGISTER,
+                prev_control_hash=ZERO_PREV_CONTROL_HASH,
+            ),
+            note=(
+                "A served type with an empty certificate and an empty signature: "
+                "the self-identifying fields parse and nothing else does."
             ),
         ),
         _negative(
-            "control_malformed_payload",
+            "control_no_type_field",
             key="device_a",
             reason="malformed_control_payload",
             envelope=build_envelope(
                 _header(
-                    op_id_name="control/malformed_payload",
+                    op_id_name="control/no_type_field",
                     key="device_a",
                     author_seq=1,
                     op_class=OP_CLASS_CONTROL,
@@ -833,8 +1179,107 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
                 "bytes, so nothing outside the payload can say what it is."
             ),
         ),
+        control_negative(
+            "control_member_register_with_zero_chain_link",
+            reason="control_chain_break",
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_MEMBER_REGISTER,
+                prev_control_hash=ZERO_PREV_CONTROL_HASH,
+                cert_bytes=cert_bytes,
+                signature=good_signature,
+            ),
+            note=(
+                "An all-zero prev_control_hash is **genesis-only** (ADR-0031). "
+                "Refused even by a receiver whose control state is empty, which "
+                "is what makes a truncated history always detectable: treating a "
+                "zero link as 'fresh chain' is exactly the claim a server "
+                "serving a truncated log makes."
+            ),
+        ),
+        control_negative(
+            "control_genesis_with_a_non_zero_chain_link",
+            reason="control_chain_break",
+            payload=genesis_payload,
+            note=(
+                "The mirror rule: genesis is the Workspace's *first* control op, "
+                "so it must carry the zero link and nothing else. A genesis "
+                "naming a predecessor is a second genesis wearing a chain."
+            ),
+        ),
+        control_negative(
+            "control_grant_bad_granter_signature",
+            reason="bad_grant_signature",
+            payload=good_grant_payload,
+            note=(
+                "Last byte of the granter's signature flipped. Authority rides "
+                "in the signed certificate bytes, so an unsigned Grant is a "
+                "request rather than a fact."
+            ),
+        ),
+        control_negative(
+            "control_revoke_bad_revoker_signature",
+            reason="bad_revoke_signature",
+            payload=bad_revoke_payload,
+            note=(
+                "The same rule on the unmaking side, under its own domain: a "
+                "signature made over a Grant must never verify over a Revoke."
+            ),
+        ),
+        control_negative(
+            "control_grant_unknown_role",
+            reason="unknown_role",
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_GRANT,
+                prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+                cert_bytes=unknown_role_cert_bytes,
+                signature=sign_grant_certificate(unknown_role_cert_bytes, ROOT_SIGNING_KEY),
+                authority=GRANTER_ROOT,
+            ),
+            note=(
+                "A role outside owner/participant/compactor/suggester, validly "
+                "Root-signed. It still fails closed: a role a verifier cannot "
+                "interpret must never be read as a permissive default."
+            ),
+        ),
+        control_negative(
+            "control_grant_owner_role_minted_by_a_member",
+            reason="owner_grant_requires_root",
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_GRANT,
+                prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+                cert_bytes=non_root_owner_cert_bytes,
+                signature=sign_grant_certificate(
+                    non_root_owner_cert_bytes, SIGNING_KEYS["device_a"]
+                ),
+                authority=str(MEMBER_IDS["device_a"]),
+            ),
+            note=(
+                "The mint half of the owner ceiling, and a pure document "
+                "invariant: `role: owner` under any granter but Root is refused "
+                "at decode, wherever the bytes are held. ADR-0031 records why "
+                "the ceiling is symmetric with revocation — an owner-mints-owner "
+                "rule would let a compromised device create an attacker-owner "
+                "cheaply while removing one still cost the passphrase, and that "
+                "asymmetry favours the attacker."
+            ),
+        ),
+        control_negative(
+            "control_grant_certificate_missing_member_id",
+            reason="malformed_control_payload",
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_GRANT,
+                prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+                cert_bytes=missing_field_cert_bytes,
+                signature=sign_grant_certificate(missing_field_cert_bytes, ROOT_SIGNING_KEY),
+                authority=GRANTER_ROOT,
+            ),
+            note=(
+                "A Root-signed Grant with no grantee. A valid signature over an "
+                "incomplete document authenticates the bytes and says nothing "
+                "about their meaning, so the field rules run anyway."
+            ),
+        ),
     ]
-    return vectors
 
 
 # --- Escrow and challenge preimages -----------------------------------------
@@ -939,23 +1384,62 @@ def _envelope_vectors_document() -> dict[str, Any]:
             "body_size_classes_bytes": list(BODY_SIZE_CLASSES_BYTES),
             "body_oversize_multiple_bytes": BODY_OVERSIZE_MULTIPLE_BYTES,
             "workspace_namespace_uuid": str(JEEVES_WORKSPACE_NAMESPACE),
+            "user_preferences_workspace_namespace_uuid": str(USER_PREFERENCES_WORKSPACE_NAMESPACE),
             # Every signing use of every key is domain-separated (review F7).
             "signing_domains": {
                 "op_v1": SIGNING_DOMAIN_OP_V1.decode("ascii"),
                 "member_register_v1": SIGNING_DOMAIN_MEMBER_REGISTER_V1.decode("ascii"),
+                "workspace_genesis_v1": SIGNING_DOMAIN_WORKSPACE_GENESIS_V1.decode("ascii"),
+                "grant_v1": SIGNING_DOMAIN_GRANT_V1.decode("ascii"),
+                "revoke_v1": SIGNING_DOMAIN_REVOKE_V1.decode("ascii"),
                 "auth_challenge_v1": SIGNING_DOMAIN_AUTH_CHALLENGE_V1.decode("ascii"),
                 "escrow_v1": SIGNING_DOMAIN_ESCROW_V1.decode("ascii"),
             },
             "control": {
                 "member_register_type": CONTROL_TYPE_MEMBER_REGISTER,
+                "workspace_genesis_type": CONTROL_TYPE_WORKSPACE_GENESIS,
+                "grant_type": CONTROL_TYPE_GRANT,
+                "revoke_type": CONTROL_TYPE_REVOKE,
                 "served_control_types": sorted(SERVED_CONTROL_TYPES),
                 "member_kind_device": MEMBER_KIND_DEVICE,
+                "member_kind_service": MEMBER_KIND_SERVICE,
                 "prev_control_hash_bytes": PREV_CONTROL_HASH_BYTES,
                 "zero_prev_control_hash_hex": ZERO_PREV_CONTROL_HASH.hex(),
                 "kex_public_key_bytes": KEX_PUBLIC_KEY_BYTES,
                 "chain_link": (
                     "SHA-256 over the predecessor control op's unframed payload "
                     "bytes — not the envelope, not a re-serialization."
+                ),
+                "zero_chain_link_rule": (
+                    "An all-zero prev_control_hash is legal only on a "
+                    "workspace_genesis. Every other control type carrying one is "
+                    "refused as control_chain_break, even by a receiver whose "
+                    "control state is empty — which is what makes a truncated "
+                    "history always detectable."
+                ),
+                "granter_root": GRANTER_ROOT,
+                "roles": list(KNOWN_ROLES),
+                # Rows for op classes this build does not *serve* are defined
+                # anyway, so #555 and #557 turn a class on by widening
+                # SERVED_OP_CLASSES rather than by inventing a policy.
+                "role_op_class_matrix": {
+                    str(op_class): sorted(roles)
+                    for op_class, roles in sorted(ROLE_OP_CLASS_MATRIX.items())
+                },
+                "owner_authority_ceiling": (
+                    'An owner Grant may only be minted with granter "root" and '
+                    'only be revoked with revoker "root". The symmetry is '
+                    "deliberate (ADR-0031): an owner-mints-owner rule would let a "
+                    "compromised device create an attacker-owner cheaply while "
+                    "removing one still cost the passphrase."
+                ),
+                "compaction_exempt_op_classes": sorted(COMPACTION_EXEMPT_OP_CLASSES),
+                "compaction_exemption_rule": (
+                    "Control ops are never folded into a compaction op, and "
+                    "neither are prune ops: compacting a control op away would "
+                    "delete the evidence a Grant ever existed, and a prune op is "
+                    "itself the attestation that history was removed. #555 "
+                    "enforces this."
                 ),
             },
             "escrow": {
@@ -995,10 +1479,18 @@ def _envelope_vectors_document() -> dict[str, Any]:
         "identities": {
             "user_id": SPEC_USER_ID,
             "workspace_id": str(WORKSPACE_ID),
+            # The second implicit Workspace of the same User: User-global
+            # preferences, every Device granted and no Service ever.  Derivation
+            # keeps N devices agreeing on the id with no round-trip; the genesis
+            # op is what makes its existence a signed fact.
+            "user_preferences_workspace_id": str(PREFERENCES_WORKSPACE_ID),
             "other_user_id": SPEC_OTHER_USER_ID,
             "other_workspace_id": str(OTHER_WORKSPACE_ID),
             "preference_key": THEME_KEY,
             "preference_entity_id": str(THEME_ENTITY_ID),
+            # Named by a Grant and nothing else: a Grant carries no key material,
+            # so a grantee the vectors only name needs no keypair (F19).
+            "suggester_member_id": str(SUGGESTER_MEMBER_ID),
             # Root is random in production and lives only inside the escrow blob
             # (review F1).  Seeding it here is what makes the certificates below
             # reproducible; nothing derives Root from anything.

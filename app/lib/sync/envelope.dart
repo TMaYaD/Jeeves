@@ -104,6 +104,16 @@ const String signingDomainOpV1 = 'jeeves/op/v1';
 /// Root over a registration certificate — see `control_payload.dart`.
 const String signingDomainMemberRegisterV1 = 'jeeves/member-register/v1';
 
+/// Root over a Workspace genesis certificate.
+const String signingDomainWorkspaceGenesisV1 = 'jeeves/workspace-genesis/v1';
+
+/// Root, or an owning Member, over a Grant certificate.
+const String signingDomainGrantV1 = 'jeeves/grant/v1';
+
+/// Root, or an owning Member, over a Revoke certificate. Separate from the Grant
+/// domain so an unmaking can never be replayed as a making.
+const String signingDomainRevokeV1 = 'jeeves/revoke/v1';
+
 /// A device over a transport proof-of-possession challenge.
 const String signingDomainAuthChallengeV1 = 'jeeves/auth-challenge/v1';
 
@@ -154,12 +164,51 @@ enum SyncRejectionReason {
   /// author, whatever the server's registry says.
   memberNotChainedToRoot('member_not_chained_to_root'),
   badRootSignature('bad_root_signature'),
+
+  /// A Grant's granter did not sign it, under the Grant's own domain.
+  badGrantSignature('bad_grant_signature'),
+
+  /// A Revoke's revoker did not sign it, under the Revoke's own domain.
+  badRevokeSignature('bad_revoke_signature'),
+
+  /// A role outside owner/participant/compactor/suggester. Fails closed: a role
+  /// a verifier cannot interpret is never read as a permissive default.
+  unknownRole('unknown_role'),
+
+  /// An `owner` Grant minted by anything but Root — a pure document invariant,
+  /// so it is refused at decode wherever the bytes are held (ADR-0031).
+  ownerGrantRequiresRoot('owner_grant_requires_root'),
+
+  /// An `owner` Grant revoked by anything but Root. Needs the target Grant's
+  /// role, so unlike its mint counterpart this one is a *stateful* verdict.
+  ownerRevokeRequiresRoot('owner_revoke_requires_root'),
+
+  /// A Grant or Revoke naming a grantee or Grant this device cannot resolve.
+  /// Fail-closed: never held as a dangling forward reference.
+  unknownGrantee('unknown_grantee'),
+
+  /// A Grant to a non-Device member in the `user_preferences` Workspace — the
+  /// client-side half of "every Device, no Service ever".
+  serviceGrantForbidden('service_grant_forbidden'),
+
+  /// The author of a content op holds no Grant permitting its `op_class` at the
+  /// op's own server seq. Logged-but-refused: the row is written and advances
+  /// per-author accounting, and the payload never applies.
+  noLiveGrant('no_live_grant'),
+
+  /// A content op built against a `key_epoch` below the Workspace's persisted
+  /// monotone floor. Authoring-side today; #554's rotate ops raise the floor.
+  keyEpochBelowFloor('key_epoch_below_floor'),
   malformedControlPayload('malformed_control_payload'),
   unsupportedControlType('unsupported_control_type'),
 
-  /// The control chain forked, skipped, or restarted under our feet. Detection
-  /// only in this slice; fork tie-break resolution is #549 (F14).
+  /// The control chain skipped or restarted under our feet — including the
+  /// genesis-only zero-link rule in both directions.
   controlChainBreak('control_chain_break'),
+
+  /// Two control ops name the same predecessor. The tie-break picks a winner and
+  /// this quarantines the losing branch, and everything chaining through it.
+  controlChainFork('control_chain_fork'),
   unrepresentableAuthorSeq('unrepresentable_author_seq'),
   malformedPayload('malformed_payload'),
   malformedMemberIdHex('malformed_member_id_hex'),
@@ -357,6 +406,19 @@ final RegExp _canonicalUuidPattern = RegExp(
 /// member id is rejected. A spelling the two codecs disagree about is a
 /// convergence bug, not a leniency.
 bool isCanonicalUuid(String value) => _canonicalUuidPattern.hasMatch(value);
+
+/// Length-then-content byte comparison.
+///
+/// Shared rather than re-declared per file: half the sync spine compares hashes,
+/// key ids and envelopes, and a private copy per module is how one of them ends
+/// up subtly different from the rest.
+bool sameBytes(Uint8List a, Uint8List b) {
+  if (a.length != b.length) return false;
+  for (var index = 0; index < a.length; index++) {
+    if (a[index] != b[index]) return false;
+  }
+  return true;
+}
 
 /// The 16 raw bytes of a canonical lowercase UUID string.
 ///

@@ -34,7 +34,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 from httpx_ws import AsyncWebSocketSession, WebSocketDisconnect, aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 from redis.asyncio import Redis
@@ -45,7 +45,9 @@ from app.config import settings
 from app.database import get_db
 from app.main import app
 from app.redis import get_redis
-from app.sync.ids import implicit_workspace_id
+from app.sync.control_payload import ZERO_PREV_CONTROL_HASH, control_payload_hash
+from app.sync.envelope import parse_body, split_envelope
+from app.sync.ids import default_workspace_id
 from app.sync.routes import (
     KEEPALIVE_FRAME,
     SIGNAL_CLOSE_FORBIDDEN,
@@ -54,7 +56,7 @@ from app.sync.routes import (
 )
 from app.sync.signal_hub import SignalHub, get_signal_hub
 from tests.conftest import auth_header, register
-from tests.sync.builders import SpecDevice, encode_all, user_id_from_token
+from tests.sync.builders import SpecDevice, SpecRoot, encode_all, user_id_from_token
 
 #: Long enough that a healthy socket never emits one mid-test, so a keepalive
 #: only ever shows up where a test asked for it by shortening the interval.
@@ -87,16 +89,30 @@ class Session:
         member_token: str,
         workspace_id: uuid.UUID,
         device: SpecDevice,
+        root: SpecRoot,
+        owner_grant_id: uuid.UUID,
     ) -> None:
         self.user_token = user_token
         self.member_token = member_token
         self.workspace_id = workspace_id
         self.device = device
+        self.root = root
+        #: The device's own owner Grant — what a revocation test takes away.
+        self.owner_grant_id = owner_grant_id
+        self.control_head = ZERO_PREV_CONTROL_HASH
 
     @property
     def headers(self) -> dict[str, str]:
         """The ops routes' credential — the member token, never the user's."""
         return auth_header(self.member_token)
+
+    @property
+    def user_headers(self) -> dict[str, str]:
+        return auth_header(self.user_token)
+
+    def advance_control_head(self, envelope: bytes) -> bytes:
+        self.control_head = control_payload_hash(parse_body(split_envelope(envelope)[1]))
+        return envelope
 
 
 @pytest.fixture(autouse=True)
@@ -138,8 +154,22 @@ async def http_client(db: AsyncSession, redis: Redis, hub: SignalHub) -> AsyncIt
 
 
 async def _open_session(client: AsyncClient, email: str) -> Session:
-    """Run the whole enrolment ceremony: register, then prove possession."""
+    """Run the whole ceremony: escrow, register, prove possession, found.
+
+    The founding batch — genesis then a root-signed owner self-grant — is part of
+    the ceremony rather than test scaffolding: a content POST needs a live Grant,
+    so a device that skipped it could not produce the append these tests poke on.
+    """
     user_token = await register(client, email)
+    workspace_id = default_workspace_id(user_id_from_token(user_token))
+    root = SpecRoot()
+    escrow = await client.put(
+        f"/w/{workspace_id}/recovery",
+        json=root.escrow_body(workspace_id),
+        headers=auth_header(user_token),
+    )
+    assert escrow.status_code == 200, escrow.text
+
     device = SpecDevice()
     registered = await client.post(
         "/members", json=device.registration_body(), headers=auth_header(user_token)
@@ -154,13 +184,34 @@ async def _open_session(client: AsyncClient, email: str) -> Session:
         json={"nonce": nonce, "signature": device.challenge_signature(nonce)},
     )
     assert issued.status_code == 200, issued.text
+    member_token: str = issued.json()["access_token"]
 
-    return Session(
-        user_token=user_token,
-        member_token=issued.json()["access_token"],
-        workspace_id=implicit_workspace_id(user_id_from_token(user_token)),
-        device=device,
+    genesis = root.genesis_envelope(device, workspace_id)
+    grant_certificate = root.grant_certificate(workspace_id, member_id=device.member_id)
+    grant = root.grant_envelope(
+        device,
+        workspace_id,
+        certificate=grant_certificate,
+        prev_control_hash=control_payload_hash(parse_body(split_envelope(genesis)[1])),
     )
+    founded = await client.post(
+        f"/w/{workspace_id}/ops",
+        json=encode_all(genesis, grant),
+        headers=auth_header(member_token),
+    )
+    assert founded.status_code == 200, founded.text
+
+    session = Session(
+        user_token=user_token,
+        member_token=member_token,
+        workspace_id=workspace_id,
+        device=device,
+        root=root,
+        owner_grant_id=grant_certificate.grant_id,
+    )
+    session.advance_control_head(genesis)
+    session.advance_control_head(grant)
+    return session
 
 
 @pytest_asyncio.fixture
@@ -373,6 +424,91 @@ async def _next_text_frame(ws: AsyncWebSocketSession, timeout: float = 0.1) -> s
     assert not isinstance(event, BytesMessage), "the signal socket never sends bytes"
     assert isinstance(event, TextMessage), f"unexpected frame {event!r}"
     return event.data
+
+
+# --- Revocation --------------------------------------------------------------
+
+
+async def _revoke_own_owner_grant(client: AsyncClient, session: Session) -> Response:
+    """Post a Root-signed Revoke of this device's own owner Grant.
+
+    Root-signed because only Root may unmake an ``owner`` Grant (ADR-0031) — which
+    is the same reason revoking a Device takes the passphrase.  Authored by the
+    device itself, which is fine and is the point: the authority is Root's, and the
+    envelope author only has to be a Member the log knows.
+    """
+    certificate = session.root.revoke_certificate(
+        session.workspace_id, grant_id=session.owner_grant_id
+    )
+    envelope = session.advance_control_head(
+        session.root.revoke_envelope(
+            session.device,
+            session.workspace_id,
+            certificate=certificate,
+            prev_control_hash=session.control_head,
+        )
+    )
+    return await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(envelope),
+        headers=session.headers,
+    )
+
+
+async def test_a_revocation_closes_the_live_socket_with_4403(
+    http_client: AsyncClient, hub: SignalHub, session: Session
+) -> None:
+    """The third branch of the pump, over a real socket.
+
+    A socket is authenticated once, at the handshake, and never re-checked — so
+    losing the last live Grant has to reach an *already open* one, or a revoked
+    subscriber goes on learning that activity exists in the Workspace, which is
+    exactly the metadata the payload-free poke exists not to leak.
+
+    ``4403`` and not a bare disconnect: a revoked subscriber should learn why its
+    socket ended, and the code is the one the handshake would have refused it with,
+    so the client's reconnect ladder needs no new branch.
+    """
+    async with subscribe(session.workspace_id, session.member_token) as ws:
+        assert hub.subscriber_count(session.workspace_id) == 1
+
+        revoked = await _revoke_own_owner_grant(http_client, session)
+        assert revoked.status_code == 200, revoked.text
+
+        with pytest.raises(WebSocketDisconnect) as closed:
+            await ws.receive(timeout=FRAME_TIMEOUT_SECONDS)
+    assert closed.value.code == SIGNAL_CLOSE_FORBIDDEN
+
+    # The hub holds subscriptions and nothing else, so a closed socket must leave
+    # no handle behind — a revocation that leaked one would be a slow resource
+    # drain triggerable by an ordinary control op.
+    for _ in range(50):
+        if hub.subscriber_count(session.workspace_id) == 0:
+            break
+        await asyncio.sleep(0.02)
+    assert hub.subscriber_count(session.workspace_id) == 0
+
+
+async def test_a_revoked_member_cannot_open_a_socket(
+    http_client: AsyncClient, session: Session
+) -> None:
+    """The other half: the door stays shut, not just this one socket.
+
+    The handshake is held to the member-GET bar — an *unrevoked* member token —
+    which is what admits a pre-grant device during enrolment and refuses a revoked
+    one immediately.  The access token itself is still perfectly valid, so without
+    this check a revoked Device would simply reconnect and carry on.
+    """
+    revoked = await _revoke_own_owner_grant(http_client, session)
+    assert revoked.status_code == 200, revoked.text
+
+    async with subscribe(
+        session.workspace_id, session.member_token, expect_initial_poke=False
+    ) as ws:
+        with pytest.raises(WebSocketDisconnect) as refusal:
+            await ws.receive(timeout=FRAME_TIMEOUT_SECONDS)
+    # Not 4401: the credential authenticates fine, it simply authorizes nothing.
+    assert refusal.value.code == SIGNAL_CLOSE_FORBIDDEN
 
 
 # --- Lifecycle ---------------------------------------------------------------

@@ -183,7 +183,7 @@ void main() {
   });
 
   group('record signature', () {
-    final workspaceId = implicitWorkspaceId('escrow-test-user');
+    final workspaceId = defaultWorkspaceId('escrow-test-user');
 
     test('binds the workspace and the version', () async {
       final root = await RootAuthority.fromSecretKey(_bytes(0x33));
@@ -200,7 +200,7 @@ void main() {
       expect(
         () => verifyEscrowRecordSignature(
           record,
-          implicitWorkspaceId('somebody-else'),
+          defaultWorkspaceId('somebody-else'),
           root.rootPk,
         ),
         throwsEscrow(RecoveryEscrowFailure.rootMismatch),

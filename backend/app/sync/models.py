@@ -53,6 +53,11 @@ class Member(Base):
     #: nullable because rows predating #548 have no KEX key and nothing reads it
     #: until #554's KeyWraps.
     kex_pk: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    #: ``device`` or ``service``, materialised from the registration certificate.
+    #: Nullable because a row created by ``POST /members`` has no certificate
+    #: behind it yet — the kind is a *signed* fact, so the shell row cannot claim
+    #: one.  The ``user_preferences`` Workspace reads it to refuse Service Grants.
+    member_kind: Mapped[str | None] = mapped_column(String, nullable=True)
     #: When a Root-signed MemberRegister for this member was materialised.
     chained_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -115,6 +120,68 @@ class Op(Base):
         BigInteger().with_variant(Integer, "sqlite"), nullable=True
     )
     received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class Workspace(Base):
+    """A Workspace whose ``workspace_genesis`` control op the server has seen.
+
+    A **materialised index, authoritative for nobody** (ADR-0028): the signed
+    genesis in the log is the fact, this row is the server's own note of it.  It
+    exists so a content POST into a Workspace nobody ever created can be refused
+    (``workspace_not_created``) without walking the log on every request.
+
+    There is no owner column.  Participation *is* the Grants — an owner is a
+    Member holding a live ``owner`` Grant, and nothing else.
+    """
+
+    __tablename__ = "workspaces"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    #: The transport seq of the genesis op, so the row can always be traced back
+    #: to the evidence that produced it.
+    genesis_seq: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class Grant(Base):
+    """One materialised Grant — the server's index for its own authz.
+
+    Authoritative for nobody (ADR-0028): a client derives its grants view from
+    the applied control log and never from this table, which is what makes "role
+    elevation via server tables is impossible" true rather than aspirational.
+
+    ``granted_seq``/``revoked_by_seq`` are the **transport seqs** of the control
+    ops that made and unmade the Grant, and the authorization verdict is
+    positional against them: an op at seq S is authorized iff
+    ``granted_seq < S`` and (``revoked_by_seq`` is null or ``S < revoked_by_seq``).
+    Anchoring on seq rather than on the certificate HLC is deliberate — HLC
+    anchoring would let a revoked author backdate ops under the boundary.
+    """
+
+    __tablename__ = "grants"
+    __table_args__ = (Index("ix_grants_workspace_member", "workspace_id", "member_id"),)
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    grant_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    member_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    #: One of ``owner``/``participant``/``compactor``/``suggester``.
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    #: ``root`` or the granting Member's id, verbatim from the signed cert.
+    granter: Mapped[str] = mapped_column(String, nullable=False)
+    granted_seq: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=False
+    )
+    #: Null while the Grant is live.
+    revoked_by_seq: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 

@@ -104,6 +104,15 @@ class SyncTransportException implements Exception {
 /// The structured `detail.code` a `POST /w/{w}/ops` chain conflict carries.
 const String authorChainConflictCode = 'author_chain_conflict';
 
+/// A `workspace_genesis` posted into a Workspace that already has one.
+///
+/// A 409 that is **not** an accusation and not a wedge: genesis authorship is
+/// log-state-conditioned, so two Root-holding devices may both observe an empty
+/// log and both author one. Losing is a legal outcome of a legal race, and the
+/// loser's move is to drop the queued genesis and claim its place with a
+/// `member_register` instead (see `SyncClient.flushOutbox`).
+const String genesisNotFirstCode = 'genesis_not_first';
+
 /// The server disagrees with our own acknowledged history.
 ///
 /// Single-writer-per-member means this is never a co-author's fault: either the

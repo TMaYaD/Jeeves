@@ -19,11 +19,24 @@ from nacl.signing import SigningKey
 
 from app.config import settings
 from app.sync.control_payload import (
+    CONTROL_TYPE_GRANT,
     CONTROL_TYPE_MEMBER_REGISTER,
+    CONTROL_TYPE_REVOKE,
+    CONTROL_TYPE_WORKSPACE_GENESIS,
+    GRANTER_ROOT,
+    MEMBER_KIND_DEVICE,
+    ROLE_OWNER,
     ZERO_PREV_CONTROL_HASH,
     ControlPayload,
+    GenesisCertificate,
+    GrantCertificate,
+    MemberKeys,
     RegistrationCertificate,
+    RevokeCertificate,
+    sign_genesis_certificate,
+    sign_grant_certificate,
     sign_registration_certificate,
+    sign_revoke_certificate,
 )
 from app.sync.envelope import (
     OP_CLASS_CONTENT,
@@ -164,7 +177,7 @@ class SpecRoot:
             control_type=CONTROL_TYPE_MEMBER_REGISTER,
             prev_control_hash=prev_control_hash,
             cert_bytes=cert_bytes,
-            root_sig=bytes(root_sig),
+            signature=bytes(root_sig),
         )
 
     def member_register_envelope(
@@ -187,6 +200,164 @@ class SpecRoot:
             workspace_id,
             op_class=OP_CLASS_CONTROL,
             payload=payload.encode(),
+            author_seq=author_seq,
+            advance=advance,
+        )
+
+    # --- Workspace genesis ---------------------------------------------------
+
+    def genesis_certificate(
+        self,
+        device: SpecDevice,
+        workspace_id: uuid.UUID,
+        *,
+        member_id: uuid.UUID | None = None,
+        sign_pk: bytes | None = None,
+        root_pk: bytes | None = None,
+        member_kind: str = MEMBER_KIND_DEVICE,
+        wall_ms: int = BASE_WALL_MS,
+    ) -> GenesisCertificate:
+        founder_id = member_id or device.member_id
+        return GenesisCertificate(
+            workspace_id=workspace_id,
+            root_pk=root_pk if root_pk is not None else self.root_pk,
+            founder=MemberKeys(
+                member_id=founder_id,
+                sign_pk=sign_pk if sign_pk is not None else device.sign_pk,
+                kex_pk=device.kex_pk,
+                member_kind=member_kind,
+            ),
+            created_at_hlc=Hlc.for_member(founder_id, wall_ms),
+        )
+
+    def genesis_envelope(
+        self,
+        device: SpecDevice,
+        workspace_id: uuid.UUID,
+        *,
+        certificate: GenesisCertificate | None = None,
+        prev_control_hash: bytes = ZERO_PREV_CONTROL_HASH,
+        corrupt_signature: bool = False,
+        author_seq: int | None = None,
+        advance: bool = True,
+    ) -> bytes:
+        cert_bytes = (certificate or self.genesis_certificate(device, workspace_id)).encode()
+        root_sig = bytearray(sign_genesis_certificate(cert_bytes, self.signing_key))
+        if corrupt_signature:
+            root_sig[-1] ^= 0x01
+        return device.next_envelope(
+            workspace_id,
+            op_class=OP_CLASS_CONTROL,
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_WORKSPACE_GENESIS,
+                prev_control_hash=prev_control_hash,
+                cert_bytes=cert_bytes,
+                signature=bytes(root_sig),
+            ).encode(),
+            author_seq=author_seq,
+            advance=advance,
+        )
+
+    # --- Grant and Revoke ----------------------------------------------------
+
+    def grant_certificate(
+        self,
+        workspace_id: uuid.UUID,
+        *,
+        member_id: uuid.UUID,
+        role: str = ROLE_OWNER,
+        granter: str = GRANTER_ROOT,
+        grant_id: uuid.UUID | None = None,
+        wall_ms: int = BASE_WALL_MS,
+    ) -> GrantCertificate:
+        return GrantCertificate(
+            workspace_id=workspace_id,
+            grant_id=grant_id or uuid.uuid4(),
+            member_id=member_id,
+            role=role,
+            granter=granter,
+            granted_at_hlc=Hlc.for_member(member_id, wall_ms),
+        )
+
+    def grant_envelope(
+        self,
+        device: SpecDevice,
+        workspace_id: uuid.UUID,
+        *,
+        certificate: GrantCertificate,
+        prev_control_hash: bytes,
+        signing_key: SigningKey | None = None,
+        corrupt_signature: bool = False,
+        author_seq: int | None = None,
+        advance: bool = True,
+    ) -> bytes:
+        """``signing_key`` defaults to Root; pass a device's to mint under it.
+
+        The two are not interchangeable: an ``owner`` role may only be minted
+        under Root, which is the ceiling ADR-0031 records.
+        """
+        cert_bytes = certificate.encode()
+        signature = bytearray(sign_grant_certificate(cert_bytes, signing_key or self.signing_key))
+        if corrupt_signature:
+            signature[-1] ^= 0x01
+        return device.next_envelope(
+            workspace_id,
+            op_class=OP_CLASS_CONTROL,
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_GRANT,
+                prev_control_hash=prev_control_hash,
+                cert_bytes=cert_bytes,
+                signature=bytes(signature),
+                authority=certificate.granter,
+            ).encode(),
+            author_seq=author_seq,
+            advance=advance,
+        )
+
+    def revoke_certificate(
+        self,
+        workspace_id: uuid.UUID,
+        *,
+        grant_id: uuid.UUID,
+        revoker: str = GRANTER_ROOT,
+        revoke_id: uuid.UUID | None = None,
+        wall_ms: int = BASE_WALL_MS,
+    ) -> RevokeCertificate:
+        resolved_revoke_id = revoke_id or uuid.uuid4()
+        return RevokeCertificate(
+            workspace_id=workspace_id,
+            revoke_id=resolved_revoke_id,
+            grant_id=grant_id,
+            revoker=revoker,
+            revoked_at_hlc=Hlc.for_member(resolved_revoke_id, wall_ms),
+        )
+
+    def revoke_envelope(
+        self,
+        device: SpecDevice,
+        workspace_id: uuid.UUID,
+        *,
+        certificate: RevokeCertificate,
+        prev_control_hash: bytes,
+        signing_key: SigningKey | None = None,
+        corrupt_signature: bool = False,
+        author_seq: int | None = None,
+        advance: bool = True,
+    ) -> bytes:
+        cert_bytes = certificate.encode()
+        signature = bytearray(sign_revoke_certificate(cert_bytes, signing_key or self.signing_key))
+        if corrupt_signature:
+            signature[-1] ^= 0x01
+        return device.next_envelope(
+            workspace_id,
+            op_class=OP_CLASS_CONTROL,
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_REVOKE,
+                prev_control_hash=prev_control_hash,
+                cert_bytes=cert_bytes,
+                signature=bytes(signature),
+                authority=certificate.revoker,
+            ).encode(),
             author_seq=author_seq,
             advance=advance,
         )

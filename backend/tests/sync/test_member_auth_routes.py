@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import RefreshToken
 from app.config import settings
-from app.sync.ids import implicit_workspace_id
+from app.sync.ids import default_workspace_id
 from app.sync.member_auth import TOKEN_USE_MEMBER, member_challenge_counter_key
 from app.sync.models import RecoveryEscrowFetch
 from app.sync.routes import revoke_member_transport
@@ -37,7 +37,7 @@ class Enrolled:
         self.token = token
         self.user_id = user_id
         self.device = device
-        self.workspace_id = implicit_workspace_id(user_id)
+        self.workspace_id = default_workspace_id(user_id)
 
 
 async def _enrol(client: AsyncClient, email: str) -> Enrolled:
@@ -97,15 +97,24 @@ async def test_the_member_token_reaches_the_sync_routes(client: AsyncClient) -> 
         )
     ).json()["access_token"]
 
+    # The pull is the unambiguous proof: a **pre-genesis GET on a derivable
+    # Workspace returns an empty page**, which is precisely the state the
+    # enrolment ceremony reads before it decides whether to author a genesis.  A
+    # token that had not reached the route would 401, not page.
+    pulled = await client.get(f"/w/{enrolled.workspace_id}/ops", headers=auth_header(token))
+    assert pulled.status_code == 200, pulled.text
+    assert pulled.json() == {"ops": [], "has_more": False}
+
+    # And the POST reaches the route too: it is refused on the Workspace's own
+    # state — nobody has signed this Workspace into existence — rather than on the
+    # credential, which is what separates a 409 here from a 401 or a 403.
     posted = await client.post(
         f"/w/{enrolled.workspace_id}/ops",
         json=encode_all(enrolled.device.next_envelope(enrolled.workspace_id)),
         headers=auth_header(token),
     )
-    assert posted.status_code == 200, posted.text
-    pulled = await client.get(f"/w/{enrolled.workspace_id}/ops", headers=auth_header(token))
-    assert pulled.status_code == 200, pulled.text
-    assert len(pulled.json()["ops"]) == 1
+    assert posted.status_code == 409, posted.text
+    assert detail_of(posted) == {"code": "workspace_not_created", "index": 0}
 
 
 async def test_a_nonce_is_single_use(client: AsyncClient) -> None:

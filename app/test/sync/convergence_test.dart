@@ -44,8 +44,15 @@ Uint8List _fromHex(String hex) {
   return bytes;
 }
 
-Future<List<Uint8List>> _opLogEnvelopes(SimDevice device) async {
+/// A device's log for one Workspace, defaulting to the GTD one.
+///
+/// Scoped, because a device holds two Workspaces over the same store now — the GTD
+/// one and the User-global preferences one — and every sync table is keyed by
+/// workspace id.
+Future<List<Uint8List>> _opLogEnvelopes(SimDevice device, {String? workspaceId}) async {
+  final scope = workspaceId ?? device.client.workspaceId;
   final rows = await (device.database.select(device.database.opLog)
+        ..where((row) => row.workspaceId.equals(scope))
         ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
       .get();
   return [for (final row in rows) row.envelope];
@@ -53,8 +60,8 @@ Future<List<Uint8List>> _opLogEnvelopes(SimDevice device) async {
 
 /// The envelopes in a device's log that carry content — the registers every
 /// device now also holds are chain evidence, not data.
-Future<List<Uint8List>> _contentEnvelopes(SimDevice device) async => [
-      for (final envelope in await _opLogEnvelopes(device))
+Future<List<Uint8List>> _contentEnvelopes(SimDevice device, {String? workspaceId}) async => [
+      for (final envelope in await _opLogEnvelopes(device, workspaceId: workspaceId))
         if (OpHeader.parse(envelope).opClass == opClassContent) envelope,
     ];
 
@@ -77,27 +84,71 @@ void main() {
     expect(workspace.b.outcome.rootPk, workspace.a.outcome.rootPk);
     expect(await workspace.b.client.pinnedRootPk(), workspace.a.outcome.rootPk);
 
-    // Each device registered itself, and each did it as its own op 1.
+    // Each device's **first** op is the control op that registers it — a
+    // `member_register`, or the `workspace_genesis` that embeds one (ADR-0031) —
+    // and each did it as its own op 1.
     for (final device in workspace.devices) {
       final authored = await device.client.authoredEnvelopes();
-      final register = OpHeader.parse(authored.first);
-      expect(register.opClass, opClassControl);
-      expect(register.authorSeq, 1);
-      expect(register.authorMemberId, device.identity.memberId);
+      final registering = OpHeader.parse(authored.first);
+      expect(registering.opClass, opClassControl);
+      expect(registering.authorSeq, 1);
+      expect(registering.authorMemberId, device.identity.memberId);
+      final payload =
+          ControlPayload.decode(parseBody(splitEnvelope(authored.first).body));
+      expect(registeringControlTypes, contains(payload.controlType));
+      // Op 2 is the explicit root-signed owner Grant: roles are one
+      // materialisation path, so nothing is implied — genesis included.
+      final grant = ControlPayload.decode(
+        parseBody(splitEnvelope(authored[1]).body),
+      );
+      expect(grant.controlType, controlTypeGrant);
+      expect(grant.authority, granterRoot);
+      expect(grant.grantCertificate().role, roleOwner);
+      expect(grant.grantCertificate().memberId, device.identity.memberId);
     }
 
-    // B enrolled against a populated control log, so its register names A's
-    // rather than claiming to start the chain.
-    final registers = [
+    // The default Workspace's control chain: A founds it and grants itself, then
+    // B registers against what it observed and grants itself. Four ops, each
+    // naming its predecessor by payload hash.
+    final control = [
       for (final op in workspace.server.storedOps)
-        if (op.header?.opClass == opClassControl) op,
+        if (op.workspaceId == workspace.workspaceId &&
+            op.header?.opClass == opClassControl)
+          parseBody(splitEnvelope(op.envelope).body),
     ];
-    expect(registers.length, 2);
-    final first = parseBody(splitEnvelope(registers[0].envelope).body);
-    final second = ControlPayload.decode(
-      parseBody(splitEnvelope(registers[1].envelope).body),
+    expect(control.length, 4);
+    expect(
+      [for (final bytes in control) ControlPayload.decode(bytes).controlType],
+      [
+        controlTypeWorkspaceGenesis,
+        controlTypeGrant,
+        controlTypeMemberRegister,
+        controlTypeGrant,
+      ],
     );
-    expect(second.prevControlHash, controlPayloadHash(first));
+    // Genesis is the only op that may carry the zero link, and every successor
+    // names the payload bytes of the one before it.
+    expect(ControlPayload.decode(control.first).prevControlHash, zeroPrevControlHash);
+    for (var index = 1; index < control.length; index++) {
+      expect(
+        ControlPayload.decode(control[index]).prevControlHash,
+        controlPayloadHash(control[index - 1]),
+        reason: 'control op $index does not name its predecessor',
+      );
+    }
+    // The same shape, independently, in the preferences Workspace: two implicit
+    // Workspaces per User, each with its own genesis.
+    final prefsControl = [
+      for (final op in workspace.server.storedOps)
+        if (op.workspaceId == workspace.preferencesWorkspaceId &&
+            op.header?.opClass == opClassControl)
+          parseBody(splitEnvelope(op.envelope).body),
+    ];
+    expect(prefsControl.length, 4);
+    expect(
+      ControlPayload.decode(prefsControl.first).controlType,
+      controlTypeWorkspaceGenesis,
+    );
 
     await workspace.a.preferences.set('theme', '"dark"');
     await workspace.syncAll();
@@ -217,17 +268,27 @@ void main() {
     workspace.clock.advance(100);
     await workspace.a.preferences.set('theme', '"dark"');
 
-    // The server appended; the acknowledgement never came back.
+    // The server appended; the acknowledgement never came back. Flushed through
+    // the *preferences* client, because that is the Workspace the write landed
+    // in — a flush of the GTD Workspace has nothing pending to lose.
+    final prefs = await workspace.a.preferencesClient;
     workspace.a.link.dropPostResponse = true;
     await expectLater(
-      workspace.a.client.flushOutbox(),
+      prefs.flushOutbox(),
       throwsA(isA<SyncTransportException>()),
     );
     workspace.a.link.dropPostResponse = false;
 
     await workspace.syncAll();
     expect(await workspace.b.preferences.getAll(), {'theme': '"dark"'});
-    expect((await _contentEnvelopes(workspace.b)).length, 1);
+    expect(
+      (await _contentEnvelopes(
+        workspace.b,
+        workspaceId: workspace.preferencesWorkspaceId,
+      ))
+          .length,
+      1,
+    );
   });
 
   // --- AC 5 -----------------------------------------------------------------
@@ -342,8 +403,18 @@ void main() {
         reason: 'device ${device.label}',
       );
       expect(await device.preferences.getAll(), {'theme': '"dark"'});
-      // Nothing refused reached the log: quarantine is not a soft filter.
-      expect((await _contentEnvelopes(device)).length, 1);
+      // Nothing refused reached the log: quarantine is not a soft filter. The
+      // preference write is the only content op, and it is in the preferences
+      // Workspace — the injected vectors went into the GTD one and stayed out.
+      expect(
+        (await _contentEnvelopes(
+          device,
+          workspaceId: workspace.preferencesWorkspaceId,
+        ))
+            .length,
+        1,
+      );
+      expect(await _contentEnvelopes(device), isEmpty);
     }
   });
 
@@ -351,7 +422,30 @@ void main() {
     // Signed by the *spec* Root, which is not this workspace's Root — so
     // `control_bad_root_signature` is not the only one that would fail. Each is
     // injected on its own and asserted for its own reason.
+    //
+    // Two refusals a *stateful* receiver reaches before the codec's are accepted
+    // alongside the vector's own, and both are strictly stronger:
+    //
+    // * `member_not_chained_to_root` — a Grant or Revoke is authored by an
+    //   already-registered member, so this device verifies the envelope against
+    //   its chain-gated directory first. The spec's authors are strangers to it,
+    //   and refusing a stranger before examining the authority it claims is the
+    //   whole point of chain-gating.
+    // * `control_chain_break` — the vector names a predecessor this device's
+    //   applied control log does not hold. A codec has no chain state to check
+    //   against; a receiver does, and a control op that does not fit its chain is
+    //   refused whatever its certificate says.
+    const strongerRefusals = {
+      SyncRejectionReason.memberNotChainedToRoot,
+      SyncRejectionReason.controlChainBreak,
+    };
     await workspace.syncAll();
+    // Every device this loop enrols grants itself, so the set of legitimate
+    // grantees grows as it runs. Accumulating them is what keeps the assertion
+    // below about *strangers* rather than about a count.
+    final enrolledMembers = {
+      for (final peer in workspace.devices) peer.identity.memberId,
+    };
     final document = envelopeVectors();
     for (final vector in vectorList(document, 'negative_control_vectors')) {
       final device = await SimDevice.create(
@@ -367,12 +461,29 @@ void main() {
         _fromHex(vector['envelope_hex'] as String),
       );
       await device.sync();
-      final quarantined = await device.client.quarantined();
+      final refusals = (await device.client.quarantined())
+          .map((row) => SyncRejectionReason.byCode(row.reason))
+          .toSet();
       expect(
-        quarantined.map((row) => row.reason),
-        contains(vector['reason']),
-        reason: vector['name'] as String,
+        refusals.any((reason) =>
+            reason.code == vector['reason'] || strongerRefusals.contains(reason)),
+        isTrue,
+        reason: '${vector['name']} produced $refusals, '
+            'not ${vector['reason']} nor a stronger refusal',
       );
+      // Whatever the reason, nothing was applied: the whole family fails closed.
+      // Asserted by *identity* rather than by a count — a count would pass if one
+      // Grant were swapped for another. Every Grant this device holds must name
+      // one of the Workspace's own devices, so a vector's synthetic grantee
+      // entering the view would show up here.
+      enrolledMembers.add(device.identity.memberId);
+      for (final grant in await device.client.grants()) {
+        expect(
+          enrolledMembers,
+          contains(grant.memberId),
+          reason: '${vector['name']} put a stranger in the grants view',
+        );
+      }
     }
   });
 
@@ -467,7 +578,7 @@ void main() {
           controlType: controlTypeMemberRegister,
           prevControlHash: workspace.controlChainHead(),
           certBytes: certBytes,
-          rootSig: await root.signCertificateBytes(certBytes),
+          signature: await root.signCertificateBytes(certBytes),
         ).encode(),
       ),
     );
@@ -678,13 +789,17 @@ void main() {
   // --- Chain and evidence ---------------------------------------------------
 
   test('authored envelopes chain by author_seq and prev_author_hash', () async {
+    // The **preferences** Workspace, because that is where preference writes go
+    // now. A device's chain is per Workspace, so this asserts the chain of the log
+    // the ops actually land in rather than of a log they never touch.
+    final prefs = await workspace.a.preferencesClient;
     for (var index = 0; index < 3; index++) {
       workspace.clock.advance(100);
       await workspace.a.preferences.set('key$index', '"$index"');
     }
-    final authored = await workspace.a.client.authoredEnvelopes();
-    // The register is op 1; the three preference writes follow it.
-    expect(authored.length, 4);
+    final authored = await prefs.authoredEnvelopes();
+    // Genesis is op 1 and the owner self-grant op 2; the three writes follow.
+    expect(authored.length, 5);
 
     var expectedPrevHash = Uint8List(prevAuthorHashBytes);
     for (var index = 0; index < authored.length; index++) {
@@ -692,7 +807,7 @@ void main() {
       expect(header.authorSeq, index + 1);
       expect(header.prevAuthorHash, expectedPrevHash);
       expect(header.authorMemberId, workspace.a.identity.memberId);
-      expect(header.workspaceId, workspace.workspaceId);
+      expect(header.workspaceId, workspace.preferencesWorkspaceId);
       expectedPrevHash = envelopeHash(authored[index]);
     }
   });
@@ -700,11 +815,17 @@ void main() {
   test('the op log keeps received envelopes byte-identical', () async {
     await workspace.a.preferences.set('theme', '"dark"');
     await workspace.syncAll();
-    final fromA = [
-      for (final envelope in await _opLogEnvelopes(workspace.b))
-        if (OpHeader.parse(envelope).authorMemberId == workspace.a.identity.memberId)
-          envelope,
-    ];
-    expect(fromA, await workspace.a.client.authoredEnvelopes());
+    // Both Workspaces: the guarantee is per log, and A authors in each of them.
+    for (final scope in [workspace.workspaceId, workspace.preferencesWorkspaceId]) {
+      final fromA = [
+        for (final envelope in await _opLogEnvelopes(workspace.b, workspaceId: scope))
+          if (OpHeader.parse(envelope).authorMemberId == workspace.a.identity.memberId)
+            envelope,
+      ];
+      final authored = scope == workspace.workspaceId
+          ? await workspace.a.client.authoredEnvelopes()
+          : await (await workspace.a.preferencesClient).authoredEnvelopes();
+      expect(fromA, authored, reason: scope);
+    }
   });
 }

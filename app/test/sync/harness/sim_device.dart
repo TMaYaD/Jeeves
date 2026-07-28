@@ -359,8 +359,15 @@ class SimDevice {
     required this.enrolment,
     required this.outcome,
     required this.storeDirectory,
+    required this.workspaceClientFactory,
+    required SyncClient preferencesWorkspaceClient,
   })  : _syncStore = database,
-        preferences = PreferencesStore(client: client, registry: registry);
+        // Preferences are authored into the **preferences** Workspace, not the
+        // GTD one: the entity id is `uuid5(workspace_id, key)`, so the id and the
+        // Workspace the op lands in have to be the same Workspace or two devices
+        // would converge on an id nobody's log holds.
+        preferences =
+            PreferencesStore(client: preferencesWorkspaceClient, registry: registry);
 
   /// Build a device and run the enrolment ceremony on it.
   ///
@@ -424,7 +431,7 @@ class SimDevice {
       keepaliveInterval: keepaliveInterval,
     );
     final client = SyncClient(
-      workspaceId: implicitWorkspaceId(userId),
+      workspaceId: defaultWorkspaceId(userId),
       userId: userId,
       identity: identity,
       database: database,
@@ -451,11 +458,36 @@ class SimDevice {
     final projector = DomainProjector(registry: registry, domain: domain);
     client.projector = projector;
 
+    // One client per Workspace, over the *same* store, identity and transport.
+    // A real device is exactly this: two Workspaces of one User, one set of keys,
+    // one credential — and the sync tables are all keyed by workspace id, so a
+    // second client is a second scope rather than a second device.
+    final workspaceClients = <String, SyncClient>{client.workspaceId: client};
+    Future<SyncClient> workspaceClientFactory(String scopedWorkspaceId) async =>
+        workspaceClients.putIfAbsent(
+          scopedWorkspaceId,
+          () => SyncClient(
+            workspaceId: scopedWorkspaceId,
+            userId: userId,
+            identity: identity,
+            database: database,
+            clock: hlc,
+            reducer: Reducer(database, nowMs: () => clock.nowMs, strategies: strategies),
+            transport: link,
+            // The one directory, so a Member chained in one Workspace is not a
+            // stranger in the other. Real devices share it for the same reason.
+            directory: client.directory,
+            pullPageLimit: pullPageLimit,
+            now: () => clock.asDateTime,
+          )..projector = projector,
+        );
+
     final keyStore = InMemoryDeviceKeyStore();
     final enrolment = EnrolmentService(
       client: client,
       userTransport: link,
       keyStore: keyStore,
+      workspaceClientFactory: workspaceClientFactory,
       nowMs: () => clock.nowMs,
       passphrasePolicy: passphrasePolicy,
       kdfParameters: kdf,
@@ -482,6 +514,9 @@ class SimDevice {
       enrolment: enrolment,
       outcome: outcome,
       storeDirectory: storeDirectory,
+      workspaceClientFactory: workspaceClientFactory,
+      preferencesWorkspaceClient:
+          await workspaceClientFactory(userPreferencesWorkspaceId(userId)),
     );
   }
 
@@ -512,6 +547,15 @@ class SimDevice {
 
   /// Where a file-backed device's sync store lives, or null for a memory one.
   final Directory? storeDirectory;
+
+  /// The per-Workspace client the ceremony used, memoised. A test that wants to
+  /// drive the preferences Workspace asks for it here rather than building a
+  /// second client with its own directory.
+  final Future<SyncClient> Function(String workspaceId) workspaceClientFactory;
+
+  /// This device's client for the User-global preferences Workspace.
+  Future<SyncClient> get preferencesClient =>
+      workspaceClientFactory(userPreferencesWorkspaceId(userId));
 
   /// The live sync store — [database] until [reopenSyncStore] replaces it.
   SyncDatabase _syncStore;
@@ -554,6 +598,28 @@ class SimDevice {
     random: CeilingJitter(),
   );
 
+  /// The same lifecycle over the preferences Workspace.
+  ///
+  /// One listener per Workspace, because one socket is per Workspace: a poke on
+  /// `/w/{default}/signal` says nothing about the preferences log, and syncing it
+  /// on that poke would be reading news out of a channel that carries none.
+  SignalListener? _preferencesListener;
+
+  /// Start the subscription for **every** Workspace this device holds.
+  ///
+  /// What a real device does at launch. A test that only wants the default
+  /// Workspace's ladder still uses [listener] directly.
+  Future<void> startListeners() async {
+    await listener.start();
+    _preferencesListener ??= SignalListener(
+      client: await preferencesClient,
+      transport: link,
+      delay: link.timers.delay,
+      random: CeilingJitter(),
+    );
+    await _preferencesListener!.start();
+  }
+
   void goOffline() {
     link.online = false;
     link.dropSignals();
@@ -567,10 +633,23 @@ class SimDevice {
 
   void goAudible() => link.silent = false;
 
-  /// Push, then pull, reporting the post-sync health. There is no directory
-  /// refresh: a MemberRegister is its author's op 1, so the pull hydrates the
-  /// directory in order by itself.
-  Future<SyncHealth> sync() => client.sync();
+  /// Push, then pull **every Workspace this device holds**, reporting the health
+  /// of the default one.
+  ///
+  /// A device is enrolled into two Workspaces, so syncing one of them is not
+  /// syncing the device. The reported health is the default Workspace's because
+  /// every health query is workspace-scoped — a merged number would hide which
+  /// Workspace is wedged, which is the one thing the indicator has to say.
+  ///
+  /// There is no directory refresh: a registering control op is its author's op 1,
+  /// so the pull hydrates the directory in order by itself.
+  Future<SyncHealth> sync() async {
+    for (final scopedWorkspaceId in derivableWorkspaceIds(userId)) {
+      if (scopedWorkspaceId == client.workspaceId) continue;
+      await (await workspaceClientFactory(scopedWorkspaceId)).sync();
+    }
+    return client.sync();
+  }
 
   /// Sync, tolerating the offline case — for tests that just want everyone as
   /// converged as the network allows.
@@ -581,6 +660,7 @@ class SimDevice {
 
   Future<void> close() async {
     await listener.dispose();
+    await _preferencesListener?.dispose();
     await domain.close();
     await _syncStore.close();
     storeDirectory?.deleteSync(recursive: true);

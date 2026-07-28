@@ -61,6 +61,24 @@ class RootAuthority {
   Future<Uint8List> signCertificateBytes(Uint8List certBytes) =>
       signDomainSeparated(_keyPair, registrationSigningInput(certBytes));
 
+  /// Sign a Workspace genesis certificate.
+  ///
+  /// Its own domain, like every other use of this key: a signature made over a
+  /// registration must never verify over a genesis, or a captured registration
+  /// could be replayed as the founding of a Workspace (F7).
+  Future<Uint8List> signGenesisCertificateBytes(Uint8List certBytes) =>
+      signDomainSeparated(_keyPair, genesisSigningInput(certBytes));
+
+  /// Sign a Grant certificate as Root — the only authority that may mint an
+  /// `owner` role (ADR-0031).
+  Future<Uint8List> signGrantCertificateBytes(Uint8List certBytes) =>
+      signDomainSeparated(_keyPair, grantSigningInput(certBytes));
+
+  /// Sign a Revoke certificate as Root — the only authority that may revoke an
+  /// `owner` Grant, which is why removing a Device takes the passphrase.
+  Future<Uint8List> signRevokeCertificateBytes(Uint8List certBytes) =>
+      signDomainSeparated(_keyPair, revokeSigningInput(certBytes));
+
   Future<Uint8List> signEscrow(String workspaceId, int version, Uint8List blob) =>
       signDomainSeparated(_keyPair, escrowSigningInput(workspaceId, version, blob));
 
