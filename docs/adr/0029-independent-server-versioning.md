@@ -1,4 +1,4 @@
-# 25. The server is versioned independently of the app, on a four-segment pre-1.0 scheme
+# 29. The server is versioned independently of the app, on a four-segment pre-1.0 scheme
 
 ## Status
 
