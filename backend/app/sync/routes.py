@@ -206,9 +206,28 @@ async def _refuse_if_revoked(db: AsyncSession, workspace_id: uuid.UUID, member: 
     *pre-grant* Member is admitted and a revoked one is refused immediately, on
     reads as well as writes.  That immediacy is half of AC 1; the other half is
     the client's own authorization stage, which does not consult the server.
+
+    Scoped to the calling Member rather than going through :func:`_grant_index`:
+    the verdict needs only "any row" and "any live row", both of which
+    ``ix_grants_workspace_member`` answers directly.  Loading every Grant in the
+    Workspace would make this a full scan on every pull and every socket
+    handshake, growing with the Workspace's member and rotation count.  The
+    whole-workspace walk stays where it is genuinely needed, in
+    :func:`_verify_and_authorize`, which judges a batch positionally.
     """
-    index = await _grant_index(db, workspace_id)
-    if index.is_revoked(member.member_id):
+    live_by_grant = (
+        (
+            await db.execute(
+                select(Grant.revoked_by_seq).where(
+                    Grant.workspace_id == workspace_id,
+                    Grant.member_id == member.member_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if live_by_grant and all(revoked_by_seq is not None for revoked_by_seq in live_by_grant):
         raise _forbidden("no_live_grant", revoked=True)
 
 
@@ -1040,6 +1059,7 @@ async def _verify_and_authorize(
                 current_member=current_member,
                 root_pk=root_pk,
                 grants=grants,
+                is_replay=header.op_id in replayed_op_ids,
             )
             grants.revoke(revoke.grant_id)
             admissions.append(
@@ -1244,6 +1264,7 @@ def _verify_revoke(
     current_member: Member,
     root_pk: bytes,
     grants: _GrantIndex,
+    is_replay: bool,
 ) -> RevokeCertificate:
     """Revocation is **grant-granular**: a Revoke names one ``grant_id``.
 
@@ -1268,7 +1289,23 @@ def _verify_revoke(
         raise _unprocessable(exc.reason, index=index) from exc
     target = grants.state(certificate.grant_id)
     if target is None:
-        raise _unprocessable("unknown_grantee", index=index)
+        # A Revoke names a ``grant_id``, so a missing target is a missing *Grant* —
+        # distinct from ``unknown_grantee``, which a Grant earns by naming a member
+        # nobody registered.  Conflating them would leave a client unable to tell a
+        # failed revocation from an invalid grantee.
+        raise _unprocessable("unknown_grant", index=index)
+    if target.revoked and not is_replay:
+        # The revocation boundary is immutable once stamped.  The authorization
+        # verdict is positional — ``granted_seq < S < revoked_by_seq`` — so moving
+        # ``revoked_by_seq`` forward would *widen* the window an already-revoked
+        # Grant covers.  Refused rather than silently ignored, so the client learns
+        # the Grant is already gone instead of believing it just revoked it.
+        #
+        # A verbatim replay is exempt, on the same reasoning as ``_verify_grant``'s:
+        # re-posting the op that *did* the revoking asserts nothing new, and it must
+        # come back as the idempotent duplicate a retried POST expects rather than as
+        # a refusal.  Materialisation skips duplicates, so the boundary stays put.
+        raise _unprocessable("already_revoked", index=index)
     if target.role == ROLE_OWNER and payload.authority != GRANTER_ROOT:
         raise _unprocessable("owner_revoke_requires_root", index=index)
     return certificate
@@ -1342,6 +1379,10 @@ async def _materialise_control(
                 Grant, (workspace_id, admission.revoke.grant_id)
             )
             if target is None:  # pragma: no cover — verification proved it exists
+                continue
+            if target.revoked_by_seq is not None:
+                # Belt to ``_verify_revoke``'s braces: the stamp is written once and
+                # never moved, because the verdict window it closes is positional.
                 continue
             target.revoked_by_seq = result.seq
             revoked_from.add(target.member_id)

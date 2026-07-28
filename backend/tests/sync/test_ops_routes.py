@@ -41,152 +41,27 @@ from app.sync.ids import default_workspace_id
 from app.sync.models import Member, Op
 from tests.conftest import auth_header, register
 from tests.sync.builders import (
+    Session,
     SpecDevice,
     SpecRoot,
     encode,
     encode_all,
+    member_token,
+    open_session,
     user_id_from_token,
 )
 from tests.sync.helpers import detail_of
 
 
-class Session:
-    """One user, one Root, one registered device holding a member token.
-
-    ``headers`` is the *member* credential — the sync data routes take nothing
-    else.  ``user_headers`` is the User credential the registry and escrow
-    routes take, and the two are deliberately not interchangeable.
-
-    ``control_head`` tracks the cross-author chain link the next control op must
-    name, exactly as a pulling client would compute it: SHA-256 over the previous
-    control op's payload bytes.
-    """
-
-    def __init__(
-        self,
-        token: str,
-        member_token: str,
-        workspace_id: uuid.UUID,
-        device: SpecDevice,
-        root: SpecRoot,
-    ) -> None:
-        self.token = token
-        self.member_token = member_token
-        self.workspace_id = workspace_id
-        self.device = device
-        self.root = root
-        self.control_head = ZERO_PREV_CONTROL_HASH
-        #: The founding device's own owner Grant, for tests that revoke it.
-        self.owner_grant_id: uuid.UUID | None = None
-        #: The highest seq the founding ceremony spent, so a pull test can start
-        #: its cursor past the control ops rather than paging through them.
-        self.founded_through_seq = 0
-
-    @property
-    def headers(self) -> dict[str, str]:
-        return auth_header(self.member_token)
-
-    @property
-    def user_headers(self) -> dict[str, str]:
-        return auth_header(self.token)
-
-    def advance_control_head(self, envelope: bytes) -> bytes:
-        """Record ``envelope`` as the new control head and return it unchanged."""
-        self.control_head = control_payload_hash(parse_body(split_envelope(envelope)[1]))
-        return envelope
-
-
-async def _member_token(client: AsyncClient, device: SpecDevice) -> str:
-    challenge = await client.post(f"/members/{device.member_id}/challenge")
-    assert challenge.status_code == 200, challenge.text
-    nonce = challenge.json()["nonce"]
-    exchanged = await client.post(
-        f"/members/{device.member_id}/token",
-        json={"nonce": nonce, "signature": device.challenge_signature(nonce)},
-    )
-    assert exchanged.status_code == 200, exchanged.text
-    token: str = exchanged.json()["access_token"]
-    return token
-
-
-async def _open_session(
-    client: AsyncClient,
-    email: str,
-    *,
-    workspace_id: uuid.UUID | None = None,
-    genesis: bool = True,
-) -> Session:
-    """Enrol one device, and by default run its two-op founding ceremony.
-
-    ``genesis=False`` stops after the member credential, leaving a device that is
-    enrolled and holds **no Grant whatsoever** — the state the real ceremony pulls
-    the control log in, and the state every ``no_live_grant`` test needs.
-    """
-    token = await register(client, email)
-    resolved_workspace_id = workspace_id or default_workspace_id(user_id_from_token(token))
-    root = SpecRoot()
-    # Account creation writes the escrow in the same breath: without a stored
-    # root_pk the server has no Root to check a control op against.
-    escrow = await client.put(
-        f"/w/{resolved_workspace_id}/recovery",
-        json=root.escrow_body(resolved_workspace_id),
-        headers=auth_header(token),
-    )
-    assert escrow.status_code == 200, escrow.text
-
-    device = SpecDevice()
-    response = await client.post(
-        "/members", json=device.registration_body(), headers=auth_header(token)
-    )
-    assert response.status_code == 201, response.text
-    session = Session(
-        token, await _member_token(client, device), resolved_workspace_id, device, root
-    )
-    if genesis:
-        await _found_workspace(client, session)
-    return session
-
-
-async def _found_workspace(client: AsyncClient, session: Session) -> None:
-    """The founding ceremony: genesis, then a root-signed owner self-grant.
-
-    Two ops in one batch and in that order, exactly as ``EnrolmentService`` posts
-    them.  Genesis embeds the founder's registration, so there is no separate
-    ``member_register`` for the founding device.
-    """
-    genesis = session.advance_control_head(
-        session.root.genesis_envelope(session.device, session.workspace_id)
-    )
-    grant_certificate = session.root.grant_certificate(
-        session.workspace_id, member_id=session.device.member_id
-    )
-    grant = session.advance_control_head(
-        session.root.grant_envelope(
-            session.device,
-            session.workspace_id,
-            certificate=grant_certificate,
-            prev_control_hash=control_payload_hash(parse_body(split_envelope(genesis)[1])),
-        )
-    )
-    response = await client.post(
-        f"/w/{session.workspace_id}/ops",
-        json=encode_all(genesis, grant),
-        headers=session.headers,
-    )
-    assert response.status_code == 200, response.text
-    session.owner_grant_id = grant_certificate.grant_id
-    session.founded_through_seq = max(result["seq"] for result in response.json()["results"])
-
-
 @pytest_asyncio.fixture
 async def session(client: AsyncClient) -> Session:
-    return await _open_session(client, "ops-owner@example.com")
+    return await open_session(client, "ops-owner@example.com")
 
 
 @pytest_asyncio.fixture
 async def ungranted_session(client: AsyncClient) -> Session:
     """Enrolled, credentialed, and holding no Grant — the pre-grant state."""
-    return await _open_session(client, "ops-ungranted@example.com", genesis=False)
+    return await open_session(client, "ops-ungranted@example.com", genesis=False)
 
 
 async def content_ops(db: AsyncSession) -> list[Op]:
@@ -224,7 +99,7 @@ async def _join_sibling(client: AsyncClient, session: Session) -> tuple[SpecDevi
         "/members", json=sibling.registration_body(), headers=session.user_headers
     )
     assert response.status_code == 201, response.text
-    return sibling, await _member_token(client, sibling)
+    return sibling, await member_token(client, sibling)
 
 
 # --- POST /w/{w}/ops ---------------------------------------------------------
@@ -448,7 +323,7 @@ async def test_envelope_shorter_than_the_minimum_is_rejected(
 
 async def test_foreign_author_is_rejected(client: AsyncClient, session: Session) -> None:
     """A member registered to another user cannot author into this workspace."""
-    other = await _open_session(client, "ops-stranger@example.com")
+    other = await open_session(client, "ops-stranger@example.com")
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(other.device.next_envelope(session.workspace_id)),
@@ -514,7 +389,7 @@ async def test_a_member_token_is_not_a_user_session(client: AsyncClient, session
 
 
 async def test_another_users_workspace_is_rejected(client: AsyncClient, session: Session) -> None:
-    other = await _open_session(client, "ops-neighbour@example.com")
+    other = await open_session(client, "ops-neighbour@example.com")
     response = await client.post(
         f"/w/{other.workspace_id}/ops",
         json=encode_all(session.device.next_envelope(other.workspace_id)),
@@ -903,13 +778,13 @@ async def test_a_control_op_without_a_stored_root_fails_closed(
     workspace_id = default_workspace_id(user_id_from_token(token))
     device = SpecDevice()
     await client.post("/members", json=device.registration_body(), headers=auth_header(token))
-    member_token = await _member_token(client, device)
+    device_token = await member_token(client, device)
 
     envelope = SpecRoot().genesis_envelope(device, workspace_id)
     response = await client.post(
         f"/w/{workspace_id}/ops",
         json=encode_all(envelope),
-        headers=auth_header(member_token),
+        headers=auth_header(device_token),
     )
     assert response.status_code == 422, response.text
     assert detail_of(response) == {"code": "bad_root_signature", "index": 0}

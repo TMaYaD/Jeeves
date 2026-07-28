@@ -106,6 +106,26 @@ class _StoredGrant {
 class _GrantIndex {
   _GrantIndex(this._states);
 
+  /// A **detached** copy of one Workspace's live grants.
+  ///
+  /// Verification walks a batch forward by staging [add]s and [revoke]s under
+  /// sentinel seqs, and a batch that later refuses must leave the stored index
+  /// exactly as it found it. Wrapping the live map would let a speculative revoke
+  /// survive a refused POST — a member revoked by an op that never landed, tripping
+  /// the revocation gate on every subsequent pull and socket handshake. The copy is
+  /// per `_StoredGrant` and not just per map, because [revoke] mutates the entry.
+  /// `_materialiseControl` remains the only writer that owns real seqs.
+  factory _GrantIndex.detachedCopyOf(Map<String, _StoredGrant>? live) => _GrantIndex({
+        for (final entry in (live ?? const <String, _StoredGrant>{}).entries)
+          entry.key: _StoredGrant(
+            grantId: entry.value.grantId,
+            memberId: entry.value.memberId,
+            role: entry.value.role,
+            granter: entry.value.granter,
+            grantedSeq: entry.value.grantedSeq,
+          )..revokedBySeq = entry.value.revokedBySeq,
+      });
+
   final Map<String, _StoredGrant> _states;
 
   _StoredGrant? state(String grantId) => _states[grantId];
@@ -854,7 +874,7 @@ class FakeSyncServer {
     List<Uint8List> envelopes,
     List<OpHeader> parsed,
   ) async {
-    final grants = _GrantIndex(_grants[workspaceId] ?? {});
+    final grants = _GrantIndex.detachedCopyOf(_grants[workspaceId]);
     var workspaceExists = _workspaces.containsKey(workspaceId);
     // Which of this batch's ops the log already holds. A replay must not read as
     // a *reuse* of the grant id it carries: the id belongs to the op that first
@@ -965,6 +985,7 @@ class FakeSyncServer {
             member: member,
             rootPk: rootPk,
             grants: grants,
+            isReplay: replayedOpIds.contains(header.opId),
           );
           grants.revoke(revoke.grantId);
           admissions.add(_ControlAdmission(
@@ -1160,6 +1181,7 @@ class FakeSyncServer {
     required _RegisteredMember member,
     required Uint8List rootPk,
     required _GrantIndex grants,
+    required bool isReplay,
   }) async {
     final RevokeCertificate certificate;
     try {
@@ -1183,7 +1205,16 @@ class FakeSyncServer {
     }
     final target = grants.state(certificate.grantId);
     if (target == null) {
-      throw SyncTransportException(422, 'ops[$index]', code: 'unknown_grantee');
+      // A Revoke names a grant id, so the missing thing is a Grant — not the
+      // grantee an unresolvable *Grant* names.
+      throw SyncTransportException(422, 'ops[$index]', code: 'unknown_grant');
+    }
+    if (target.revokedBySeq != null && !isReplay) {
+      // The boundary is immutable once stamped: the verdict is positional, so
+      // moving `revoked_by_seq` forward would widen the window it closes. A
+      // verbatim replay is exempt — re-posting the op that did the revoking
+      // asserts nothing new and comes back as the idempotent duplicate.
+      throw SyncTransportException(422, 'ops[$index]', code: 'already_revoked');
     }
     if (target.role == roleOwner && payload.authority != granterRoot) {
       throw SyncTransportException(422, 'ops[$index]', code: 'owner_revoke_requires_root');
@@ -1245,6 +1276,8 @@ class FakeSyncServer {
       } else if (admission.revoke != null) {
         final target = index[admission.revoke!.grantId];
         if (target == null) continue;
+        // Stamped once, never moved: the verdict window it closes is positional.
+        if (target.revokedBySeq != null) continue;
         target.revokedBySeq = result.seq;
         revokedFrom.add(target.memberId);
       }
@@ -1337,7 +1370,7 @@ class FakeSyncServer {
   /// reads as well as writes. Admitting the pre-grant case is what lets the
   /// enrolment ceremony pull and apply the control log before it holds any Grant.
   void _refuseIfRevoked(String workspaceId, String memberId) {
-    final index = _GrantIndex(_grants[workspaceId] ?? {});
+    final index = _GrantIndex.detachedCopyOf(_grants[workspaceId]);
     if (index.hasAnyGrant(memberId) && index.liveRoles(memberId).isEmpty) {
       throw const SyncTransportException(
         403,
@@ -1375,7 +1408,7 @@ class FakeSyncServer {
 
   /// Whether the index still shows a live Grant for [memberId].
   bool hasLiveGrant(String workspaceId, String memberId) =>
-      _GrantIndex(_grants[workspaceId] ?? {}).liveRoles(memberId).isNotEmpty;
+      _GrantIndex.detachedCopyOf(_grants[workspaceId]).liveRoles(memberId).isNotEmpty;
 
   static String _hex(Uint8List bytes) =>
       bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();

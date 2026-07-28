@@ -280,7 +280,10 @@ class ControlChainState extends Table {
 /// [certHlc] fields are the *certificate's* clock, not the op's: the fork
 /// tie-break is "earliest cert HLC, then lowest author member id", and an op-level
 /// clock would let a forking author move the tie by re-signing an envelope.
-@TableIndex(name: 'applied_control_log_workspace', columns: {#workspaceId, #seq})
+/// No secondary index: the `(workspaceId, seq)` primary key below already covers
+/// the one read here — `WHERE workspace_id = ? AND quarantined_at IS NULL ORDER BY
+/// seq` — and a declared index over the same two columns would only add a write
+/// per control op.
 @DataClassName('AppliedControlRow')
 class AppliedControlLog extends Table {
   TextColumn get workspaceId => text()();
@@ -414,13 +417,13 @@ class SyncDatabase extends _$SyncDatabase {
             await migrator.create(quarantinedOpsAuthorChain);
           }
           if (from < 5) {
-            // Two new tables and one index. Nothing is backfilled: a device
-            // upgrading here has applied no control op under the #549 rules, and
-            // its `epoch_floor` is genuinely unset rather than zero-by-decree —
-            // the raise-only API reads an absent row as the 0 floor genesis fixes.
+            // Two new tables, no index — each carries the primary key its own
+            // reads are served by. Nothing is backfilled: a device upgrading here
+            // has applied no control op under the #549 rules, and its
+            // `epoch_floor` is genuinely unset rather than zero-by-decree — the
+            // raise-only API reads an absent row as the 0 floor genesis fixes.
             await migrator.createTable(appliedControlLog);
             await migrator.createTable(epochFloors);
-            await migrator.create(appliedControlLogWorkspace);
           }
           if (from < 6) {
             // The alarm upsert key was documented from v4 and honoured only by
