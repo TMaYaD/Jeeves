@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(
     title="Jeeves API",
-    version="0.1.0",
+    version=settings.server_version,
     lifespan=lifespan,
 )
 

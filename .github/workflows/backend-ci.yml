@@ -47,6 +47,9 @@ jobs:
     env:
       SECRET_KEY: ci-test-secret-not-for-production
       DATABASE_URL: postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves_test
+      # Matches the value tests/conftest.py seeds locally, so the health test
+      # asserts the same version here and on a developer machine.
+      SERVER_VERSION: 1.2.3-test
 
     # The Postgres service is load-bearing for pytest, not just for the
     # `python -m app.migrate` smoke check below: tests/test_migration_chain_postgres.py
@@ -94,12 +97,14 @@ jobs:
       # Covers the extensionless test stubs as well as the *.sh scripts.
       - name: shellcheck
         run: |
-          find infra/dokku -type f \( -name '*.sh' -o -path '*/stubs/*' \) -print0 \
+          find infra/dokku infra/ci -type f \( -name '*.sh' -o -path '*/stubs/*' \) -print0 \
             | xargs -0 shellcheck --severity=style
       - name: publish-sync-config.sh tests
         run: ./infra/dokku/tests/test-publish-sync-config.sh
       - name: deploy-powersync.sh bootstrap ordering test
         run: ./infra/dokku/tests/test-deploy-powersync.sh
+      - name: compute-server-version.sh tests
+        run: ./infra/ci/tests/test-compute-server-version.sh
 
   sync-config:
     name: PowerSync boots from POWERSYNC_CONFIG_B64

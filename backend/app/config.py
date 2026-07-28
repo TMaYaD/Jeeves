@@ -18,6 +18,13 @@ class Settings(BaseSettings):
         validation_alias="APP_ENV",
     )
 
+    # Server version.  Backend CD sets SERVER_VERSION on the Dokku app before
+    # every push, from the tag it just cut (infra/ci/compute-server-version.sh);
+    # Dokku builds from a git archive with no `.git`, so deploy-time env is the
+    # only place the running process can learn it.  The default names a local or
+    # otherwise un-deployed build honestly rather than claiming a release.
+    server_version: str = "0.0.0-dev"
+
     # Database.  Dokku-postgres (and Heroku) inject `postgres://...`, but
     # SQLAlchemy 2.x only accepts `postgresql://`; we also need the `+asyncpg`
     # driver suffix.  Both are handled by `_normalize_database_url` below.
