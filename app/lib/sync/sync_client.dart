@@ -9,12 +9,14 @@ library;
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
+import 'domain_projector.dart';
 import 'envelope.dart';
 import 'hlc.dart';
 import 'member_identity.dart';
 import 'op_payload.dart';
 import 'reducer.dart';
 import 'sync_database.dart';
+import 'sync_health.dart';
 import 'sync_transport.dart';
 
 /// not tunable per call: one page is a batch of ops, sized to keep a bootstrap
@@ -48,6 +50,13 @@ class SyncClient {
   final HlcClock _clock;
   final Reducer _reducer;
   final DateTime Function() _now;
+
+  /// Feeds reduced state into the domain read model. Assigned after
+  /// construction because the projector needs a `GtdDatabase` whose capture
+  /// seam needs this client — the cycle is broken here rather than by giving
+  /// either store a reference to the other. Null leaves reduction headless,
+  /// which is what the collection-generic reducer tests want.
+  DomainProjector? projector;
 
   // --- Enrolment ------------------------------------------------------------
 
@@ -122,7 +131,12 @@ class SyncClient {
             ),
           );
     });
-    await _reducer.apply(payload, authorMemberIdHex: identity.memberIdHex);
+    final affected =
+        await _reducer.apply(payload, authorMemberIdHex: identity.memberIdHex);
+    // The authoring device projects its own op too: that is what applies the
+    // widened cascade and the `focus_session_tasks.id` realignment locally,
+    // rather than leaving the author as the one device whose rows differ.
+    await projector?.project(affected);
     return header.opId;
   }
 
@@ -147,9 +161,13 @@ class SyncClient {
 
   /// Flush the outbox, then pull. A transport failure on either half leaves the
   /// queue and the cursor exactly where they were.
-  Future<void> sync() async {
+  ///
+  /// Returns the post-sync [SyncHealth] — the surface that replaces PowerSync's
+  /// status indicator.
+  Future<SyncHealth> sync() async {
     await flushOutbox();
     await pull();
+    return health();
   }
 
   Future<void> flushOutbox() async {
@@ -171,6 +189,7 @@ class SyncClient {
   Future<void> pull() async {
     var cursor = await _cursor();
     var hasMore = true;
+    final affected = <AffectedEntity>{};
     while (hasMore) {
       final page = await transport.pullOps(
         workspaceId,
@@ -178,12 +197,17 @@ class SyncClient {
         limit: pullPageLimit,
       );
       for (final pulled in page.ops) {
-        await _receive(pulled);
+        affected.addAll(await _receive(pulled));
         cursor = pulled.seq;
         await _saveCursor(cursor);
       }
       hasMore = page.hasMore && page.ops.isNotEmpty;
     }
+    // Projection is the tail of the receive order, one pass per batch: an
+    // entity touched by three ops in one pull is projected once, from the
+    // reduced state all three produced.
+    await projector?.project(affected);
+    await _stampPullCompleted();
   }
 
   /// The fail-closed receive pipeline, in its normative order.
@@ -192,7 +216,7 @@ class SyncClient {
   /// against the same negative vectors, so the two stay in step. A refusal
   /// quarantines the op and the stream continues: one bad op from a server
   /// must not be able to stall a device.
-  Future<void> _receive(PulledOp pulled) async {
+  Future<Set<AffectedEntity>> _receive(PulledOp pulled) async {
     try {
       final parts = splitEnvelope(pulled.envelope);
       final header = OpHeader.parse(parts.header);
@@ -208,7 +232,7 @@ class SyncClient {
       final signPk = directory.publicKeyFor(header.authorMemberId, header.authorKeyId);
       await verifyEnvelope(pulled.envelope, signPk);
       final payload = OpPayload.decode(parseBody(parts.body));
-      await _reducer.apply(
+      final affected = await _reducer.apply(
         payload,
         authorMemberIdHex: memberIdToHex(header.authorMemberId),
       );
@@ -224,8 +248,10 @@ class SyncClient {
               receivedAt: _now(),
             ),
           );
+      return affected;
     } on SyncRejection catch (rejection) {
       await _quarantine(pulled, rejection);
+      return const {};
     }
   }
 
@@ -254,6 +280,68 @@ class SyncClient {
           SyncCursorsCompanion.insert(workspaceId: workspaceId, lastSeq: seq),
         );
   }
+
+  /// Rewind the pull cursor so the next [pull] replays the whole log.
+  ///
+  /// Replay is not a special mode: a bootstrap *is* a pull from zero, and an
+  /// already-populated device replaying is how the idempotence of reduction is
+  /// checked. Nothing is cleared — re-applying an op whose HLC equals the
+  /// stored one is a no-op, and tombstones cannot un-tombstone.
+  Future<void> resetCursorForReplay() async {
+    await (_db.update(_db.syncCursors)
+          ..where((row) => row.workspaceId.equals(workspaceId)))
+        .write(const SyncCursorsCompanion(lastSeq: Value(0)));
+  }
+
+  /// Stamped on pull completion, independent of flush state (see [SyncHealth]).
+  Future<void> _stampPullCompleted() async {
+    await _db.into(_db.syncCursors).insertOnConflictUpdate(
+          SyncCursorsCompanion.insert(
+            workspaceId: workspaceId,
+            lastSeq: await _cursor(),
+            lastSyncCompletedAt: Value(_now()),
+          ),
+        );
+  }
+
+  // --- Health ----------------------------------------------------------------
+
+  /// SQL behind both [health] and [watchSyncHealth], so the one-shot and the
+  /// stream cannot report different numbers.
+  static const String _healthSql = '''
+SELECT
+  (SELECT COUNT(*) FROM outbox
+    WHERE workspace_id = ? AND sent_at IS NULL) AS pending_op_count,
+  (SELECT COUNT(*) FROM quarantined_ops
+    WHERE workspace_id = ?) AS quarantine_count,
+  (SELECT last_sync_completed_at FROM sync_cursors
+    WHERE workspace_id = ?) AS last_synced_at
+''';
+
+  Selectable<QueryRow> _healthQuery() => _db.customSelect(
+        _healthSql,
+        variables: [
+          Variable<String>(workspaceId),
+          Variable<String>(workspaceId),
+          Variable<String>(workspaceId),
+        ],
+        readsFrom: {_db.outbox, _db.quarantinedOps, _db.syncCursors},
+      );
+
+  static SyncHealth _readHealth(QueryRow row) => SyncHealth(
+        pendingOpCount: row.read<int>('pending_op_count'),
+        quarantineCount: row.read<int>('quarantine_count'),
+        // #551 fills these from its IntegrityAlarms rows with
+        // `resolved_at IS NULL`; until then quarantineCount carries the signal.
+        unresolvedAlarmCount: 0,
+        alarmKinds: const <String>{},
+        lastSyncedAt: row.read<DateTime?>('last_synced_at'),
+      );
+
+  Future<SyncHealth> health() async => _readHealth(await _healthQuery().getSingle());
+
+  Stream<SyncHealth> watchSyncHealth() =>
+      _healthQuery().watchSingle().map(_readHealth);
 
   // --- Quarantine surface ----------------------------------------------------
 

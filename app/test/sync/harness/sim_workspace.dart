@@ -4,6 +4,7 @@ library;
 import 'dart:typed_data';
 
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:uuid/uuid.dart';
 
 import 'fake_sync_server.dart';
@@ -21,6 +22,7 @@ class SimWorkspace {
     String userId = 'sim-user',
     FakeSyncServer? server,
     FakeClock? clock,
+    MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
   }) async {
     final sharedServer = server ?? FakeSyncServer();
     final sharedClock = clock ?? FakeClock(simulationStartWallMs);
@@ -32,6 +34,7 @@ class SimWorkspace {
           userId: userId,
           server: sharedServer,
           clock: sharedClock,
+          strategies: strategies,
           // Deterministic identity: HLC ties break on the member id, so a
           // random one would make the tie-break cases reproduce differently
           // from run to run.

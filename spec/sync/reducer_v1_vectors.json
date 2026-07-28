@@ -3,6 +3,7 @@
   "local_now_ms": 1800000000000,
   "future_skew_bound_ms": 300000,
   "$note": "Ops here are payload-level, paired with the header author the reducer's guards check against. Envelope framing is envelope_v1_vectors.json's job. 'expected_entities' lists the live fields of every live entity after applying the ops in order; an entity with no live field is absent from the map.",
+  "$case_schema": "Optional per-case keys, both added by #550 and honoured by every runner. 'permute': apply the ops in every order and assert the reduced state is identical across all of them \u2014 a values-only pairwise case cannot catch an associativity failure. 'expected_clocks': the stored per-field HLC as {collection: {entity_id: {field: [wall_ms, counter, member_hex]}}}, asserted against `field_clocks` regardless of tombstone visibility, because a non-LWW strategy joins the clock independently of the value and nothing else observes that. 'strategy_overrides': {preference_key: strategy_name} for keys with no production strategy \u2014 today only 'set_merge', which is provisioned but unregistered.",
   "cases": [
     {
       "name": "single_write",
@@ -579,6 +580,1090 @@
       "expected_quarantine_reasons": [
         "hlc_in_the_future"
       ]
+    },
+    {
+      "name": "junction_revive_after_unassign",
+      "note": "A junction's entity id is the uuid5 of its pair, so re-assigning the same tag after an unassign revives the *same* entity rather than forking. The re-assertion is newer than the tombstone, so the row is live again.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "todo_tags",
+            "id": "0f7bb3af-e85c-53d9-aeca-26a116ad1e92",
+            "fields": {
+              "todo_id": {
+                "v": "9325b6c2-6184-5021-bf10-d2cde62a081f"
+              },
+              "tag_id": {
+                "v": "effe168d-2c01-51fc-bcd8-54ee087fad78"
+              },
+              "user_id": {
+                "v": "spec-user-1"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "todo_tags",
+            "id": "0f7bb3af-e85c-53d9-aeca-26a116ad1e92",
+            "fields": {},
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "tombstone": true
+          }
+        },
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "todo_tags",
+            "id": "0f7bb3af-e85c-53d9-aeca-26a116ad1e92",
+            "fields": {
+              "todo_id": {
+                "v": "9325b6c2-6184-5021-bf10-d2cde62a081f"
+              },
+              "tag_id": {
+                "v": "effe168d-2c01-51fc-bcd8-54ee087fad78"
+              },
+              "user_id": {
+                "v": "spec-user-1"
+              }
+            },
+            "hlc": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "todo_tags": {
+          "0f7bb3af-e85c-53d9-aeca-26a116ad1e92": {
+            "todo_id": "9325b6c2-6184-5021-bf10-d2cde62a081f",
+            "tag_id": "effe168d-2c01-51fc-bcd8-54ee087fad78",
+            "user_id": "spec-user-1"
+          }
+        }
+      },
+      "expected_clocks": {
+        "todo_tags": {
+          "0f7bb3af-e85c-53d9-aeca-26a116ad1e92": {
+            "todo_id": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "tag_id": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "user_id": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "junction_unassign_is_a_tombstone_not_absence",
+      "note": "Unassignment tombstones the pair. A replayed assertion older than the tombstone cannot resurrect it, in either arrival order.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "todo_tags",
+            "id": "0f7bb3af-e85c-53d9-aeca-26a116ad1e92",
+            "fields": {
+              "todo_id": {
+                "v": "9325b6c2-6184-5021-bf10-d2cde62a081f"
+              },
+              "tag_id": {
+                "v": "effe168d-2c01-51fc-bcd8-54ee087fad78"
+              },
+              "user_id": {
+                "v": "spec-user-1"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "todo_tags",
+            "id": "0f7bb3af-e85c-53d9-aeca-26a116ad1e92",
+            "fields": {},
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "tombstone": true
+          }
+        }
+      ],
+      "expected_entities": {
+        "todo_tags": {}
+      },
+      "expected_clocks": {
+        "todo_tags": {
+          "0f7bb3af-e85c-53d9-aeca-26a116ad1e92": {
+            "todo_id": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "tag_id": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "user_id": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "max_timestamp_value_stale_later_value_wins",
+      "note": "The snooze floor: the value join is a total order on the value alone, so the later floor survives a newer write carrying an earlier one. The clock joins independently as the HLC max, which is why it belongs to the *losing* value here.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-06-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"2026-06-01T00:00:00.000Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "value": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "max_timestamp_value_instant_tie_breaks_on_canonical_bytes",
+      "note": "Two spellings of one instant. The tie falls to the greater canonical JSON encoding, byte-wise \u2014 '\"\u2026:00Z\"' beats '\"\u2026:00.000Z\"' because 'Z' > '.'. Total, so associative.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00Z\""
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"2026-01-01T00:00:00Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "value": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "max_timestamp_value_unparseable_loses_to_parseable",
+      "note": "Any parseable timestamp outranks any unparseable value, whatever the clocks say \u2014 the newer write here is the unparseable one and still loses the value.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"zebra\""
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"2026-01-01T00:00:00.000Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "value": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "max_timestamp_value_all_unparseable_orders_by_bytes",
+      "note": "With nothing parseable the order is the canonical byte order, which keeps the join total rather than falling back to LWW \u2014 the fallback was the non-associative part.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"aardvark\""
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"zebra\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"zebra\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "value": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "max_timestamp_value_clear_then_later_resnooze_revives",
+      "note": "Clear (a tombstone) then a re-snooze whose clock is newer: tombstone visibility still arbitrates by plain HLC, so the floor is live again.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {},
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "tombstone": true
+          }
+        },
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-06-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"2026-06-01T00:00:00.000Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "value": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "max_timestamp_value_stale_clear_loses_to_resnooze",
+      "note": "A clear older than the re-snooze cannot silence it.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {},
+            "hlc": [
+              1800000000000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "tombstone": true
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"2026-01-01T00:00:00.000Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "value": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "max_timestamp_value_clear_then_earlier_resnooze_keeps_preclear_floor",
+      "note": "The owned divergence from ADR-0011's pairwise matrix (ADR-0030): the value join is a max over every value ever asserted, so a re-snooze carrying an *earlier* value after a clear revives the field at the pre-clear floor. The floor never shrinks through a clear \u2014 it errs toward longer silence and never re-fires early.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-06-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {},
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "tombstone": true
+          }
+        },
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"2026-06-01T00:00:00.000Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "value": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "max_timestamp_value_three_op_associativity",
+      "note": "Mandatory associativity probe: three writes carrying a parsed-instant tie *and* an unparseable member, applied in all six orders. A pairwise vector cannot catch a non-associative join; this one can.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"zebra\""
+              }
+            },
+            "hlc": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"2026-01-01T00:00:00Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "value": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "set_merge_unions_concurrent_additions",
+      "note": "Concurrent additions on two devices both survive, sorted by canonical JSON encoding so the merged value is byte-identical everywhere rather than order-dependent.",
+      "permute": true,
+      "strategy_overrides": {
+        "spec_set_merge": "set_merge"
+      },
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "2e249739-c180-573d-a1f3-bdf7f13f1db0",
+            "fields": {
+              "key": {
+                "v": "spec_set_merge"
+              },
+              "value": {
+                "v": "[\"a\",\"c\"]"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "2e249739-c180-573d-a1f3-bdf7f13f1db0",
+            "fields": {
+              "key": {
+                "v": "spec_set_merge"
+              },
+              "value": {
+                "v": "[\"b\",\"a\"]"
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "2e249739-c180-573d-a1f3-bdf7f13f1db0": {
+            "key": "spec_set_merge",
+            "value": "[\"a\",\"b\",\"c\"]"
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "2e249739-c180-573d-a1f3-bdf7f13f1db0": {
+            "key": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "value": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "set_merge_three_op_associativity",
+      "note": "Three additions with an overlapping member, in all six orders \u2014 the same associativity requirement the timestamp join carries.",
+      "permute": true,
+      "strategy_overrides": {
+        "spec_set_merge": "set_merge"
+      },
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "2e249739-c180-573d-a1f3-bdf7f13f1db0",
+            "fields": {
+              "key": {
+                "v": "spec_set_merge"
+              },
+              "value": {
+                "v": "[\"b\"]"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "2e249739-c180-573d-a1f3-bdf7f13f1db0",
+            "fields": {
+              "key": {
+                "v": "spec_set_merge"
+              },
+              "value": {
+                "v": "[\"a\",\"b\"]"
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "2e249739-c180-573d-a1f3-bdf7f13f1db0",
+            "fields": {
+              "key": {
+                "v": "spec_set_merge"
+              },
+              "value": {
+                "v": "[\"c\"]"
+              }
+            },
+            "hlc": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "2e249739-c180-573d-a1f3-bdf7f13f1db0": {
+            "key": "spec_set_merge",
+            "value": "[\"a\",\"b\",\"c\"]"
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "2e249739-c180-573d-a1f3-bdf7f13f1db0": {
+            "key": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "value": [
+              1800000002000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "strategy_selection_falls_back_to_lww_without_a_key",
+      "note": "A `user_preferences` op whose entity has no resolvable `key` \u2014 none carried, none stored \u2014 falls back to LWW. The newer clock wins even though its value is the earlier floor, which is the opposite of what max_timestamp_value would decide.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "value": {
+                "v": "\"2026-06-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "value": "\"2026-01-01T00:00:00.000Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "value": [
+              1800000001000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "strategy_selection_reads_the_stored_key",
+      "note": "The strategy is selected per entity by its `key` field: an op that carries only `value` resolves the key from reduced state, and the floor still wins. Converges in either arrival order.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-06-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": "nudge_snoozed_until",
+            "value": "\"2026-06-01T00:00:00.000Z\""
+          }
+        }
+      },
+      "expected_clocks": {
+        "user_preferences": {
+          "34736729-93ca-55f0-8bf9-0ab5eca99873": {
+            "key": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "value": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
     }
   ]
 }

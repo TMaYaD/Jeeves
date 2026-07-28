@@ -15,6 +15,10 @@
 ///   legitimately re-asserts *other authors'* older clocks per field, and
 ///   checking those would make compaction impossible. The exemption is *from
 ///   the guards, not from LWW* — a re-asserted older clock still loses.
+/// - LWW is the *default* rule, not the only one. A field may be governed by a
+///   non-LWW [FieldMergeStrategy] — ADR-0011's Conflict Strategy registry rides
+///   here — and every such strategy must be a join-semilattice so reduction
+///   stays order-independent (ADR-0030).
 library;
 
 import 'dart:convert';
@@ -23,8 +27,12 @@ import 'package:drift/drift.dart';
 
 import 'envelope.dart';
 import 'hlc.dart';
+import 'merge_strategy.dart';
 import 'op_payload.dart';
 import 'sync_database.dart';
+
+/// One entity the reducer touched — what the domain projector consumes.
+typedef AffectedEntity = ({String collection, String entityId});
 
 /// How far ahead of local time an op-level `wall_ms` may be before the op is
 /// quarantined. Without a bound, any member could pin a field against every
@@ -36,14 +44,23 @@ class Reducer {
     this._db, {
     required int Function() nowMs,
     this.futureSkewBoundMs = defaultFutureSkewBoundMs,
+    this.strategies = const MergeStrategyRegistry(),
   }) : _nowMs = nowMs;
 
   final SyncDatabase _db;
   final int Function() _nowMs;
   final int futureSkewBoundMs;
 
+  /// Which [FieldMergeStrategy] governs each field. The default is ADR-0011's
+  /// registry adapter; every collection but `user_preferences` resolves to LWW.
+  final MergeStrategyRegistry strategies;
+
   /// Apply [payload], or throw [SyncRejection] so the caller quarantines it.
-  Future<void> apply(
+  ///
+  /// Returns the entities this op touched. `SyncClient` accumulates them over a
+  /// pull batch and hands them to the domain projector once the batch is
+  /// applied — projection hangs off the tail of the receive order, after apply.
+  Future<Set<AffectedEntity>> apply(
     OpPayload payload, {
     required String authorMemberIdHex,
   }) async {
@@ -52,10 +69,31 @@ class Reducer {
       if (payload.tombstone) {
         await _applyTombstone(payload);
       }
+      final preferenceKey = await _preferenceKeyFor(payload);
       for (final entry in payload.fields.entries) {
-        await _applyField(payload, entry.key, entry.value);
+        await _applyField(payload, entry.key, entry.value, preferenceKey);
       }
     });
+    return {(collection: payload.collection, entityId: payload.entityId)};
+  }
+
+  /// The `user_preferences` key this entity holds — from the op's own fields
+  /// when it carries one, else from the stored reduced `key`. Null (and so a
+  /// plain-LWW fallback) for every other collection and for an entity whose key
+  /// this device has never seen.
+  Future<String?> _preferenceKeyFor(OpPayload payload) async {
+    if (payload.collection != 'user_preferences') return null;
+    final carried = payload.fields['key']?.value;
+    if (carried is String) return carried;
+    final stored = await (_db.select(_db.reducedFields)
+          ..where((row) =>
+              row.collection.equals(payload.collection) &
+              row.entityId.equals(payload.entityId) &
+              row.field.equals('key')))
+        .getSingleOrNull();
+    if (stored == null) return null;
+    final decoded = jsonDecode(stored.valueJson);
+    return decoded is String ? decoded : null;
   }
 
   void _guard(OpPayload payload, String authorMemberIdHex) {
@@ -101,24 +139,52 @@ class Reducer {
     OpPayload payload,
     String field,
     FieldWrite write,
+    String? preferenceKey,
   ) async {
     final clock = write.hlc ?? payload.hlc;
-    final stored = await (_db.select(_db.fieldClocks)
+    final storedClockRow = await (_db.select(_db.fieldClocks)
           ..where((row) =>
               row.collection.equals(payload.collection) &
               row.entityId.equals(payload.entityId) &
               row.field.equals(field)))
         .getSingleOrNull();
-    if (stored != null &&
-        !(clock > Hlc(stored.wallMs, stored.counter, stored.memberIdHex))) {
-      return;
+    final storedClock = storedClockRow == null
+        ? null
+        : Hlc(storedClockRow.wallMs, storedClockRow.counter,
+            storedClockRow.memberIdHex);
+    final strategy = strategies.resolve(
+      collection: payload.collection,
+      field: field,
+      preferenceKey: preferenceKey,
+    );
+    // The default path reads no stored value at all, so the extra SELECT is
+    // paid only by the collections that actually register a non-LWW strategy.
+    Object? storedValue;
+    if (storedClock != null && !identical(strategy, lww)) {
+      final storedValueRow = await (_db.select(_db.reducedFields)
+            ..where((row) =>
+                row.collection.equals(payload.collection) &
+                row.entityId.equals(payload.entityId) &
+                row.field.equals(field)))
+          .getSingleOrNull();
+      if (storedValueRow != null) {
+        storedValue = jsonDecode(storedValueRow.valueJson);
+      }
     }
+    final decision = strategy.merge(
+      incomingValue: write.value,
+      incomingClock: clock,
+      storedValue: storedValue,
+      storedClock: storedClock,
+    );
+    if (!decision.apply) return;
+    final winningClock = decision.clock!;
     await _db.into(_db.reducedFields).insertOnConflictUpdate(
           ReducedFieldsCompanion.insert(
             collection: payload.collection,
             entityId: payload.entityId,
             field: field,
-            valueJson: jsonEncode(write.value),
+            valueJson: jsonEncode(decision.value),
           ),
         );
     await _db.into(_db.fieldClocks).insertOnConflictUpdate(
@@ -126,9 +192,9 @@ class Reducer {
             collection: payload.collection,
             entityId: payload.entityId,
             field: field,
-            wallMs: clock.wallMs,
-            counter: clock.counter,
-            memberIdHex: clock.memberIdHex,
+            wallMs: winningClock.wallMs,
+            counter: winningClock.counter,
+            memberIdHex: winningClock.memberIdHex,
           ),
         );
   }
@@ -136,9 +202,10 @@ class Reducer {
 
 /// Typed reads over one collection's reduced state.
 ///
-/// ADR-0011's per-collection Conflict Strategy registry is not wired in here:
-/// every collection in this slice uses plain field-grain LWW, and #550 is where
-/// the strategies plug into this seam.
+/// Visibility is decided here, at read time, against the tombstone table — see
+/// [readAll]. [readEntityIncludingHidden] deliberately bypasses that rule: it
+/// is what the domain projector uses to learn *which* row a tombstoned entity
+/// occupied, since nothing in the reduced store is ever deleted.
 class CollectionView {
   CollectionView(this._db, this.collection);
 
@@ -189,6 +256,27 @@ ORDER BY f.entity_id, f.field
 
   Future<Map<String, Object?>?> readEntity(String entityId) async =>
       (await readAll())[entityId];
+
+  /// Every field ever reduced for [entityId], tombstone or not.
+  ///
+  /// The projector needs it to delete a tombstoned entity's domain row: a
+  /// junction's identity is its pair, and once the entity is hidden there is no
+  /// *live* field left to read the pair from. Nothing here is deleted by a
+  /// tombstone, so the last asserted values are still on record.
+  Future<Map<String, Object?>> readEntityIncludingHidden(
+    String entityId,
+  ) async {
+    final rows = await _db.customSelect(
+      'SELECT field, value_json FROM reduced_fields '
+      'WHERE collection = ? AND entity_id = ? ORDER BY field',
+      variables: [Variable<String>(collection), Variable<String>(entityId)],
+      readsFrom: {_db.reducedFields},
+    ).get();
+    return {
+      for (final row in rows)
+        row.read<String>('field'): jsonDecode(row.read<String>('value_json')),
+    };
+  }
 
   Stream<Map<String, Object?>?> watchEntity(String entityId) =>
       watchAll().map((entities) => entities[entityId]);

@@ -4,8 +4,10 @@ library;
 import 'package:drift/drift.dart';
 
 import '../../models/todo.dart' show Intent, RoutingKind;
+import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'action_dao.dart' show ActionDao;
+import 'capture_dao.dart' show captureOutcomeIdFor;
 import 'tag_dao.dart' show todoTagIdFor;
 import 'time_log_dao.dart' show TimeLogDao;
 
@@ -14,6 +16,19 @@ part 'todo_dao.g.dart';
 @DriftAccessor(tables: [Todos, Tags, TodoTags, Actions])
 class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   TodoDao(super.db);
+
+  /// Describe an Outcome write on the op-log seam. Only the columns this act
+  /// actually changed: field-grain merge is what lets one device's `notes` edit
+  /// and another's Action write both survive, and a whole-row re-assertion
+  /// under a fresh clock would destroy that.
+  void _captureTodo(String todoId, Map<String, Object?> fields) {
+    if (fields.isEmpty) return;
+    attachedDatabase.opCapture.write(
+      collection: todosCollection,
+      entityId: todoId,
+      fields: fields,
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // Shared Todo read projection (ADR-0001 story 7 — Action-grain metadata)
@@ -334,7 +349,7 @@ EXISTS (
     late final int affected;
     var actionTerminated = false;
     var logChanged = false;
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
       affected = await customUpdate(
         'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
         'WHERE id = ?',
@@ -347,11 +362,20 @@ EXISTS (
         updates: {todos},
         updateKind: UpdateKind.update,
       );
+      if (affected > 0) {
+        _captureTodo(todoId, {
+          // `done_at` is a TEXT column: its stored string travels opaque.
+          'done_at': tsIso,
+          'updated_at': encodeInstant(ts),
+          'clarified': true,
+          'last_clarified_at': encodeInstant(ts),
+        });
+      }
       final effect = await attachedDatabase.actionDao
           .applyCompleteCurrentAction(todoId, ts: ts);
       actionTerminated = effect.changed;
       logChanged = effect.logChanged;
-    });
+    }));
     if (actionTerminated) attachedDatabase.notifyActionsViewWrite();
     // Completing the Outcome closes the current Action's open TimeLog (#476);
     // the `time_logs` view needs the same explicit post-commit notify (ADR-0010).
@@ -432,16 +456,23 @@ EXISTS (
   Future<void> rescheduleTask(String id, DateTime newDueDate,
       {DateTime? now}) async {
     final ts = now ?? DateTime.now();
-    await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
-      // Store UTC so Drift's storeDateTimeAsText path emits a standard
-      // ISO-8601 string (no leading-space offset).  Otherwise PowerSync
-      // uploads "...000 +05:30" which asyncpg's TIMESTAMPTZ encoder
-      // rejects, poisoning the CRUD queue.
-      dueDate: Value(newDueDate.toUtc()),
-      lastClarifiedAt: Value(ts.toUtc()),
-      updatedAt: Value(ts),
-    ));
-    attachedDatabase.notifyTodosViewWrite();
+    await attachedDatabase.capturing(() async {
+      await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
+        // Store UTC so Drift's storeDateTimeAsText path emits a standard
+        // ISO-8601 string (no leading-space offset).  Otherwise PowerSync
+        // uploads "...000 +05:30" which asyncpg's TIMESTAMPTZ encoder
+        // rejects, poisoning the CRUD queue.
+        dueDate: Value(newDueDate.toUtc()),
+        lastClarifiedAt: Value(ts.toUtc()),
+        updatedAt: Value(ts),
+      ));
+      _captureTodo(id, {
+        'due_date': encodeInstant(newDueDate),
+        'last_clarified_at': encodeInstant(ts),
+        'updated_at': encodeInstant(ts),
+      });
+      attachedDatabase.notifyTodosViewWrite();
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -454,18 +485,28 @@ EXISTS (
   /// [intent] must be one of: next | maybe | trash.
   /// [now] overrides the timestamp used for [updatedAt]; defaults to [DateTime.now()].
   Future<void> setIntent(String todoId, Intent intent, {DateTime? now}) async {
-    final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
-    await customUpdate(
-      'UPDATE todos SET intent = ?, updated_at = ?, last_clarified_at = ? WHERE id = ?',
-      variables: [
-        Variable(intent.value),
-        Variable(ts),
-        Variable(ts),
-        Variable(todoId),
-      ],
-      updates: {todos},
-      updateKind: UpdateKind.update,
-    );
+    final tsInstant = (now ?? DateTime.now()).toUtc();
+    final ts = tsInstant.toIso8601String();
+    await attachedDatabase.capturing(() async {
+      await customUpdate(
+        'UPDATE todos SET intent = ?, updated_at = ?, last_clarified_at = ? WHERE id = ?',
+        variables: [
+          Variable(intent.value),
+          Variable(ts),
+          Variable(ts),
+          Variable(todoId),
+        ],
+        updates: {todos},
+        updateKind: UpdateKind.update,
+      );
+      // Trash is a plain field write on a live entity — the Outcome stays
+      // alive, in Trash. The only hard delete is [deleteOutcome].
+      _captureTodo(todoId, {
+        'intent': intent.value,
+        'updated_at': encodeInstant(tsInstant),
+        'last_clarified_at': encodeInstant(tsInstant),
+      });
+    });
   }
 
   /// Defers a todo to the "maybe" list by setting intent = 'maybe'.
@@ -485,12 +526,18 @@ EXISTS (
   /// [now] overrides the timestamp for deterministic testing.
   Future<void> stampLastClarifiedAt(String todoId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    await (update(todos)..where((t) => t.id.equals(todoId))).write(
-        TodosCompanion(
-      lastClarifiedAt: Value(ts),
-      updatedAt: Value(ts),
-    ));
-    attachedDatabase.notifyTodosViewWrite();
+    await attachedDatabase.capturing(() async {
+      await (update(todos)..where((t) => t.id.equals(todoId))).write(
+          TodosCompanion(
+        lastClarifiedAt: Value(ts),
+        updatedAt: Value(ts),
+      ));
+      _captureTodo(todoId, {
+        'last_clarified_at': encodeInstant(ts),
+        'updated_at': encodeInstant(ts),
+      });
+      attachedDatabase.notifyTodosViewWrite();
+    });
   }
 
   /// Writes the Outcome's `current` Action from a single phrase and stamps
@@ -509,8 +556,8 @@ EXISTS (
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final normalized = text.trim();
-    final logChanged = await transaction(
-        () => _applySetCurrentActionText(todoId, normalized, ts));
+    final logChanged = await attachedDatabase.capturing(() => transaction(
+        () => _applySetCurrentActionText(todoId, normalized, ts)));
     // Both `todos` and `actions` are PowerSync views in production, so the
     // writes report changes()==0; notify Drift explicitly so watchers refresh
     // without relying solely on the async bridge (#342, ADR-0010).
@@ -552,13 +599,13 @@ EXISTS (
       );
     }
     var logChanged = false;
-    final wrote = await transaction(() async {
+    final wrote = await attachedDatabase.capturing(() => transaction(() async {
       final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
       if (current != null) return false;
       // Non-blank text here, so this never supersedes — logChanged stays false.
       logChanged = await _applySetCurrentActionText(todoId, normalized, ts);
       return true;
-    });
+    }));
     if (wrote) {
       // See [setCurrentActionText]: view writes report changes()==0 (#342, ADR-0010).
       attachedDatabase.notifyTodosViewWrite();
@@ -589,6 +636,10 @@ EXISTS (
       lastClarifiedAt: Value(ts),
       updatedAt: Value(ts),
     ));
+    _captureTodo(todoId, {
+      'last_clarified_at': encodeInstant(ts),
+      'updated_at': encodeInstant(ts),
+    });
     if (normalized.isEmpty) {
       final effect = await attachedDatabase.actionDao
           .applySupersedeCurrentAction(todoId, ts: ts);
@@ -765,7 +816,7 @@ AND (
     Set<String> targetPersonTagIds,
     String userId,
   ) async {
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
       final allPersonTagIds = await (select(tags)
             ..where((t) => t.type.equals('person')))
           .map((t) => t.id)
@@ -791,6 +842,13 @@ AND (
                 (tt) => tt.todoId.equals(todoId) & tt.tagId.isIn(toRemove),
               ))
             .go();
+        for (final tagId in toRemove) {
+          // Unassignment is a tombstone op, never row absence.
+          attachedDatabase.opCapture.tombstone(
+            collection: todoTagsCollection,
+            entityId: todoTagIdFor(todoId, tagId),
+          );
+        }
       }
       for (final tagId in toAdd) {
         await into(todoTags).insert(
@@ -802,8 +860,13 @@ AND (
           ),
           mode: InsertMode.insertOrReplace,
         );
+        attachedDatabase.opCapture.write(
+          collection: todoTagsCollection,
+          entityId: todoTagIdFor(todoId, tagId),
+          fields: {'todo_id': todoId, 'tag_id': tagId, 'user_id': userId},
+        );
       }
-    });
+    }));
   }
 
   /// [setPersonTagsForTodo] plus a `last_clarified_at` stamp, in one
@@ -818,21 +881,28 @@ AND (
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    await transaction(() async {
-      await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
-      // Stamped inline rather than through [stampLastClarifiedAt]: that method
-      // notifies view watchers itself, and firing that mid-transaction would
-      // have them re-read pre-commit state. Notify once below, after commit.
-      await (update(todos)..where((t) => t.id.equals(todoId))).write(
-        TodosCompanion(
-          lastClarifiedAt: Value(ts),
-          updatedAt: Value(ts),
-        ),
-      );
+    await attachedDatabase.capturing(() async {
+      await transaction(() async {
+        await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
+        // Stamped inline rather than through [stampLastClarifiedAt]: that
+        // method notifies view watchers itself, and firing that mid-transaction
+        // would have them re-read pre-commit state. Notify once below, after
+        // commit.
+        await (update(todos)..where((t) => t.id.equals(todoId))).write(
+          TodosCompanion(
+            lastClarifiedAt: Value(ts),
+            updatedAt: Value(ts),
+          ),
+        );
+        _captureTodo(todoId, {
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        });
+      });
+      // `todos` / `todo_tags` are PowerSync views in production, so the writes
+      // above report `changes() == 0` and Drift skips its own invalidation.
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
     });
-    // `todos` / `todo_tags` are PowerSync views in production, so the writes
-    // above report `changes() == 0` and Drift skips its own invalidation.
-    attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
   }
 
   /// Single source of truth for routing-transition writes across inbox-clarify
@@ -887,7 +957,35 @@ AND (
         actionText != null;
     var actionTerminated = false;
     var logChanged = false;
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
+      final captured = switch (to) {
+        RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
+            'clarified': true,
+            'intent': 'next',
+            'done_at': null,
+            'last_clarified_at': encodeInstant(ts),
+            'updated_at': encodeInstant(ts),
+          },
+        RoutingKind.maybe => <String, Object?>{
+            'clarified': true,
+            'intent': 'maybe',
+            'done_at': null,
+            'last_clarified_at': encodeInstant(ts),
+            'updated_at': encodeInstant(ts),
+          },
+        RoutingKind.done => <String, Object?>{
+            'clarified': true,
+            'done_at': tsIso,
+            'last_clarified_at': encodeInstant(ts),
+            'updated_at': encodeInstant(ts),
+          },
+        RoutingKind.trash => <String, Object?>{
+            'clarified': true,
+            'intent': 'trash',
+            'last_clarified_at': encodeInstant(ts),
+            'updated_at': encodeInstant(ts),
+          },
+      };
       final companion = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
             clarified: const Value(true),
@@ -917,6 +1015,7 @@ AND (
           ),
       };
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
+      _captureTodo(todoId, captured);
 
       if (touchesAction) {
         final normalised = _normaliseText(actionText);
@@ -948,7 +1047,7 @@ AND (
         }
         await setPersonTagsForTodo(todoId, personTagIds, userId);
       }
-    });
+    }));
 
     // `todos` is a PowerSync view in production, so the INSTEAD OF trigger makes
     // the write above report `changes() == 0` and Drift skips its own stream
@@ -1050,9 +1149,22 @@ AND (
               ? Value(dueDate.toUtc())
               : const Value.absent(),
     );
+    final captured = <String, Object?>{
+      'updated_at': encodeInstant(ts),
+      if (hasMutation) 'last_clarified_at': encodeInstant(ts),
+      'title': ?title,
+      if (clearNotes) 'notes': null else 'notes': ?notes,
+      if (clearEnergyLevel) 'energy_level': null else 'energy_level': ?energyLevel,
+      if (clearTimeEstimate)
+        'time_estimate': null
+      else
+        'time_estimate': ?timeEstimate,
+      if (clearDueDate) 'due_date': null else 'due_date': ?encodeInstant(dueDate),
+    };
     var actionTouched = false;
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
+      _captureTodo(todoId, captured);
       if (touchesMetadata) {
         // Mirror onto the current Action, if one exists. Actionless
         // Outcomes keep the values as draft on the columns above (D3); the
@@ -1073,7 +1185,7 @@ AND (
           actionTouched = effect.changed;
         }
       }
-    });
+    }));
     attachedDatabase.notifyTodosViewWrite();
     if (actionTouched) attachedDatabase.notifyActionsViewWrite();
   }
@@ -1110,21 +1222,43 @@ AND (
     // emitting standard ISO-8601 strings PowerSync can upload (see
     // rescheduleTask for the offset-string rationale).
     final ts = (now ?? DateTime.now()).toUtc();
-    await into(todos).insert(TodosCompanion(
-      id: Value(id),
-      title: Value(title),
-      notes: Value(notes),
-      energyLevel: Value(energyLevel),
-      timeEstimate: Value(timeEstimate),
-      dueDate: dueDate != null ? Value(dueDate.toUtc()) : const Value.absent(),
-      captureSource: Value(captureSource),
-      userId: Value(userId),
-      createdAt: Value(ts),
-      updatedAt: Value(ts),
-      clarified: const Value(true),
-      lastClarifiedAt: Value(ts),
-    ));
-    attachedDatabase.notifyTodosViewWrite();
+    await attachedDatabase.capturing(() async {
+      await into(todos).insert(TodosCompanion(
+        id: Value(id),
+        title: Value(title),
+        notes: Value(notes),
+        energyLevel: Value(energyLevel),
+        timeEstimate: Value(timeEstimate),
+        dueDate: dueDate != null ? Value(dueDate.toUtc()) : const Value.absent(),
+        captureSource: Value(captureSource),
+        userId: Value(userId),
+        createdAt: Value(ts),
+        updatedAt: Value(ts),
+        clarified: const Value(true),
+        lastClarifiedAt: Value(ts),
+      ));
+      // Creation asserts the whole row (minus the dead `time_spent_minutes`
+      // cache) so a peer that has never seen this Outcome can build it.
+      _captureTodo(id, {
+        'title': title,
+        'notes': notes,
+        'priority': null,
+        'due_date': encodeInstant(dueDate),
+        'created_at': encodeInstant(ts),
+        'updated_at': encodeInstant(ts),
+        'done_at': null,
+        'clarified': true,
+        'intent': 'next',
+        'time_estimate': timeEstimate,
+        'energy_level': energyLevel,
+        'capture_source': captureSource,
+        'location_id': null,
+        'user_id': userId,
+        'last_clarified_at': encodeInstant(ts),
+        'last_next_action_completion_at': null,
+      });
+      attachedDatabase.notifyTodosViewWrite();
+    });
   }
 
   /// Hard-deletes an Outcome by [id]. Used by the Capture clarify flow to
@@ -1138,11 +1272,58 @@ AND (
   /// whose INSTEAD OF trigger makes every write report `changes() == 0`, so
   /// `delete(...).go()` can't distinguish "deleted one row" from "matched
   /// nothing". Both run in one transaction so the count can't race the delete.
+  /// The cascade set this delete enumerates on the op log, which is **wider
+  /// than the local delete above**. The shipped path removes only the `actions`
+  /// rows and the todo, leaving `todo_tags`, `capture_outcomes` and
+  /// `time_logs.action_id` to the *server's* `ON DELETE CASCADE` / `SET NULL`
+  /// on replication. The op log has no server cascade, so capture enumerates at
+  /// authoring time exactly what the server used to do — and the projector then
+  /// applies that widened set to the authoring device's own rows.
+  ///
+  /// TimeLogs are never destroyed: their `action_id` is nulled (SET NULL), and
+  /// they keep Outcome-grain `task_id` attribution, rendering as *elsewhere*
+  /// once the Outcome is gone.
+  Future<void> _captureDeleteOutcomeCascade(String id) async {
+    final capture = attachedDatabase.opCapture;
+    final actionRows =
+        await (select(actions)..where((a) => a.outcomeId.equals(id))).get();
+    for (final row in actionRows) {
+      capture.tombstone(collection: actionsCollection, entityId: row.id);
+    }
+    final junctionRows =
+        await (select(todoTags)..where((tt) => tt.todoId.equals(id))).get();
+    for (final row in junctionRows) {
+      capture.tombstone(
+        collection: todoTagsCollection,
+        entityId: todoTagIdFor(row.todoId, row.tagId),
+      );
+    }
+    final linkRows = await attachedDatabase.captureDao.captureIdsForOutcome(id);
+    for (final captureId in linkRows) {
+      capture.tombstone(
+        collection: captureOutcomesCollection,
+        entityId: captureOutcomeIdFor(captureId, id),
+      );
+    }
+    final logRows = await (select(attachedDatabase.timeLogs)
+          ..where((t) => t.taskId.equals(id) & t.actionId.isNotNull()))
+        .get();
+    for (final row in logRows) {
+      capture.write(
+        collection: timeLogsCollection,
+        entityId: row.id,
+        fields: {'action_id': null},
+      );
+    }
+    capture.tombstone(collection: todosCollection, entityId: id);
+  }
+
   Future<int> deleteOutcome(String id) async {
-    return transaction(() async {
+    return attachedDatabase.capturing(() => transaction(() async {
       final existed = await (select(todos)..where((t) => t.id.equals(id)))
               .getSingleOrNull() !=
           null;
+      await _captureDeleteOutcomeCascade(id);
       // Cascade the Outcome's Action rows explicitly (ADR-0001 story 2): the
       // local PowerSync `actions` view enforces no FK cascade, so carve-undo
       // must remove them itself to leave no orphans — mirroring the
@@ -1156,6 +1337,6 @@ AND (
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();
       return existed ? 1 : 0;
-    });
+    }));
   }
 }

@@ -71,6 +71,12 @@ class SyncCursors extends Table {
   TextColumn get workspaceId => text()();
   IntColumn get lastSeq => integer()();
 
+  /// When the last pull completed, independent of flush state — the
+  /// `SyncHealth.lastSyncedAt` source. Deliberately not "last successful sync":
+  /// a wedged outbox is reported through `pendingOpCount`, never by withholding
+  /// a timestamp that would make a receiving device look unreachable.
+  DateTimeColumn get lastSyncCompletedAt => dateTime().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {workspaceId};
 }
@@ -144,6 +150,19 @@ class RowTombstones extends Table {
 class SyncDatabase extends _$SyncDatabase {
   SyncDatabase(super.executor);
 
+  /// v2 adds `sync_cursors.last_sync_completed_at` (#550). #551's integrity
+  /// tables are the next step; whichever slice merges second rebases its
+  /// migration onto the other's version rather than sharing a step.
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) => m.createAll(),
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.addColumn(syncCursors, syncCursors.lastSyncCompletedAt);
+          }
+        },
+      );
 }

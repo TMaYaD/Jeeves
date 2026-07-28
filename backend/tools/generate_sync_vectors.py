@@ -667,6 +667,69 @@ _MEMBER_B = MEMBER_IDS["device_b"].hex
 # device_a and device_b must sort in a known direction for the tie-break case.
 _LOWER_MEMBER, _HIGHER_MEMBER = sorted((_MEMBER_A, _MEMBER_B))
 
+# --- #550: junction identity and the merge-strategy lattice ------------------
+
+_TODO_TAGS_COLLECTION = "todo_tags"
+_JUNCTION_TODO_ID = str(uuid.uuid5(JEEVES_WORKSPACE_NAMESPACE, "spec/entity/junction_todo"))
+_JUNCTION_TAG_ID = str(uuid.uuid5(JEEVES_WORKSPACE_NAMESPACE, "spec/entity/junction_tag"))
+_JUNCTION_USER_ID = "spec-user-1"
+# The shipped `todoTagIdFor` derivation: uuid5(NAMESPACE_URL, "jeeves://todo_tag/<todo>/<tag>").
+_JUNCTION_ID = str(
+    uuid.uuid5(uuid.NAMESPACE_URL, f"jeeves://todo_tag/{_JUNCTION_TODO_ID}/{_JUNCTION_TAG_ID}")
+)
+_JUNCTION_FIELDS = {
+    "todo_id": {"v": _JUNCTION_TODO_ID},
+    "tag_id": {"v": _JUNCTION_TAG_ID},
+    "user_id": {"v": _JUNCTION_USER_ID},
+}
+_JUNCTION_LIVE = {
+    "todo_id": _JUNCTION_TODO_ID,
+    "tag_id": _JUNCTION_TAG_ID,
+    "user_id": _JUNCTION_USER_ID,
+}
+
+# Any key ending in `snoozed_until` arbitrates by `max_timestamp_value`
+# (`strategyForKey`, ADR-0011); `spec_set_merge` has no production strategy and
+# is pinned through the per-case `strategy_overrides` escape hatch.
+_SNOOZE_KEY = "nudge_snoozed_until"
+_SNOOZE_ENTITY_ID = str(preference_entity_id(WORKSPACE_ID, _SNOOZE_KEY))
+_SET_MERGE_KEY = "spec_set_merge"
+_SET_MERGE_ENTITY_ID = str(preference_entity_id(WORKSPACE_ID, _SET_MERGE_KEY))
+
+# Preference values are JSON-encoded strings, so the reduced value of a snooze
+# floor is a string that itself holds JSON.
+_FLOOR_EARLY = json.dumps("2026-01-01T00:00:00.000Z")
+_FLOOR_LATE = json.dumps("2026-06-01T00:00:00.000Z")
+_FLOOR_COMPACT = json.dumps("2026-01-01T00:00:00Z")
+_FLOOR_PADDED = json.dumps("2026-01-01T00:00:00.000Z")
+_UNPARSEABLE_LOW = json.dumps("aardvark")
+_UNPARSEABLE_HIGH = json.dumps("zebra")
+
+
+def _pref_op(
+    *,
+    author: str,
+    wall_ms: int,
+    counter: int = 0,
+    entity_id: str = _SNOOZE_ENTITY_ID,
+    key: str | None = _SNOOZE_KEY,
+    value: str | None = None,
+    tombstone: bool = False,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    if key is not None:
+        fields["key"] = {"v": key}
+    if value is not None:
+        fields["value"] = {"v": value}
+    return _reduce_op(
+        author=author,
+        collection=USER_PREFERENCES_COLLECTION,
+        entity_id=entity_id,
+        hlc=[wall_ms, counter, author],
+        fields=fields,
+        tombstone=tombstone,
+    )
+
 
 def _reduce_op(
     *,
@@ -893,6 +956,7 @@ def _reducer_vectors_document() -> dict[str, Any]:
             "expected_quarantine_reasons": ["hlc_in_the_future"],
         },
     ]
+    cases.extend(_collection_and_strategy_cases(t))
     return {
         "$frozen": FROZEN_NOTICE,
         "local_now_ms": BASE_WALL_MS,
@@ -904,8 +968,468 @@ def _reducer_vectors_document() -> dict[str, Any]:
             "fields of every live entity after applying the ops in order; an "
             "entity with no live field is absent from the map."
         ),
+        "$case_schema": (
+            "Optional per-case keys, both added by #550 and honoured by every "
+            "runner. 'permute': apply the ops in every order and assert the "
+            "reduced state is identical across all of them — a values-only "
+            "pairwise case cannot catch an associativity failure. "
+            "'expected_clocks': the stored per-field HLC as "
+            "{collection: {entity_id: {field: [wall_ms, counter, member_hex]}}}, "
+            "asserted against `field_clocks` regardless of tombstone "
+            "visibility, because a non-LWW strategy joins the clock "
+            "independently of the value and nothing else observes that. "
+            "'strategy_overrides': {preference_key: strategy_name} for keys "
+            "with no production strategy — today only 'set_merge', which is "
+            "provisioned but unregistered."
+        ),
         "cases": cases,
     }
+
+
+def _collection_and_strategy_cases(t: int) -> list[dict[str, Any]]:
+    """Junction identity, tombstone revival, and the ADR-0030 merge lattice."""
+    return [
+        {
+            "name": "junction_revive_after_unassign",
+            "note": (
+                "A junction's entity id is the uuid5 of its pair, so re-assigning "
+                "the same tag after an unassign revives the *same* entity rather "
+                "than forking. The re-assertion is newer than the tombstone, so "
+                "the row is live again."
+            ),
+            "permute": True,
+            "ops": [
+                _reduce_op(
+                    author=_MEMBER_A,
+                    collection=_TODO_TAGS_COLLECTION,
+                    entity_id=_JUNCTION_ID,
+                    hlc=[t, 0, _MEMBER_A],
+                    fields=_JUNCTION_FIELDS,
+                ),
+                _reduce_op(
+                    author=_MEMBER_B,
+                    collection=_TODO_TAGS_COLLECTION,
+                    entity_id=_JUNCTION_ID,
+                    hlc=[t + 1000, 0, _MEMBER_B],
+                    tombstone=True,
+                ),
+                _reduce_op(
+                    author=_MEMBER_A,
+                    collection=_TODO_TAGS_COLLECTION,
+                    entity_id=_JUNCTION_ID,
+                    hlc=[t + 2000, 0, _MEMBER_A],
+                    fields=_JUNCTION_FIELDS,
+                ),
+            ],
+            "expected_entities": {_TODO_TAGS_COLLECTION: {_JUNCTION_ID: _JUNCTION_LIVE}},
+            "expected_clocks": {
+                _TODO_TAGS_COLLECTION: {
+                    _JUNCTION_ID: {
+                        "todo_id": [t + 2000, 0, _MEMBER_A],
+                        "tag_id": [t + 2000, 0, _MEMBER_A],
+                        "user_id": [t + 2000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "junction_unassign_is_a_tombstone_not_absence",
+            "note": (
+                "Unassignment tombstones the pair. A replayed assertion older "
+                "than the tombstone cannot resurrect it, in either arrival order."
+            ),
+            "permute": True,
+            "ops": [
+                _reduce_op(
+                    author=_MEMBER_A,
+                    collection=_TODO_TAGS_COLLECTION,
+                    entity_id=_JUNCTION_ID,
+                    hlc=[t, 0, _MEMBER_A],
+                    fields=_JUNCTION_FIELDS,
+                ),
+                _reduce_op(
+                    author=_MEMBER_B,
+                    collection=_TODO_TAGS_COLLECTION,
+                    entity_id=_JUNCTION_ID,
+                    hlc=[t + 1000, 0, _MEMBER_B],
+                    tombstone=True,
+                ),
+            ],
+            "expected_entities": {_TODO_TAGS_COLLECTION: {}},
+            "expected_clocks": {
+                _TODO_TAGS_COLLECTION: {
+                    _JUNCTION_ID: {
+                        "todo_id": [t, 0, _MEMBER_A],
+                        "tag_id": [t, 0, _MEMBER_A],
+                        "user_id": [t, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "max_timestamp_value_stale_later_value_wins",
+            "note": (
+                "The snooze floor: the value join is a total order on the value "
+                "alone, so the later floor survives a newer write carrying an "
+                "earlier one. The clock joins independently as the HLC max, "
+                "which is why it belongs to the *losing* value here."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t, value=_FLOOR_LATE),
+                _pref_op(author=_MEMBER_B, wall_ms=t + 1000, value=_FLOOR_EARLY),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_LATE}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 1000, 0, _MEMBER_B],
+                        "value": [t + 1000, 0, _MEMBER_B],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "max_timestamp_value_instant_tie_breaks_on_canonical_bytes",
+            "note": (
+                "Two spellings of one instant. The tie falls to the greater "
+                "canonical JSON encoding, byte-wise — '\"…:00Z\"' beats "
+                "'\"…:00.000Z\"' because 'Z' > '.'. Total, so associative."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t, value=_FLOOR_PADDED),
+                _pref_op(author=_MEMBER_B, wall_ms=t + 1000, value=_FLOOR_COMPACT),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_COMPACT}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 1000, 0, _MEMBER_B],
+                        "value": [t + 1000, 0, _MEMBER_B],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "max_timestamp_value_unparseable_loses_to_parseable",
+            "note": (
+                "Any parseable timestamp outranks any unparseable value, "
+                "whatever the clocks say — the newer write here is the "
+                "unparseable one and still loses the value."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t + 1000, value=_UNPARSEABLE_HIGH),
+                _pref_op(author=_MEMBER_B, wall_ms=t, value=_FLOOR_EARLY),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_EARLY}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 1000, 0, _MEMBER_A],
+                        "value": [t + 1000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "max_timestamp_value_all_unparseable_orders_by_bytes",
+            "note": (
+                "With nothing parseable the order is the canonical byte order, "
+                "which keeps the join total rather than falling back to LWW — "
+                "the fallback was the non-associative part."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t + 1000, value=_UNPARSEABLE_LOW),
+                _pref_op(author=_MEMBER_B, wall_ms=t, value=_UNPARSEABLE_HIGH),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _UNPARSEABLE_HIGH}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 1000, 0, _MEMBER_A],
+                        "value": [t + 1000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "max_timestamp_value_clear_then_later_resnooze_revives",
+            "note": (
+                "Clear (a tombstone) then a re-snooze whose clock is newer: "
+                "tombstone visibility still arbitrates by plain HLC, so the "
+                "floor is live again."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t, value=_FLOOR_EARLY),
+                _pref_op(author=_MEMBER_B, wall_ms=t + 1000, key=None, tombstone=True),
+                _pref_op(author=_MEMBER_A, wall_ms=t + 2000, value=_FLOOR_LATE),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_LATE}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 2000, 0, _MEMBER_A],
+                        "value": [t + 2000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "max_timestamp_value_stale_clear_loses_to_resnooze",
+            "note": "A clear older than the re-snooze cannot silence it.",
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t + 1000, value=_FLOOR_EARLY),
+                _pref_op(author=_MEMBER_B, wall_ms=t, key=None, tombstone=True),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_EARLY}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 1000, 0, _MEMBER_A],
+                        "value": [t + 1000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "max_timestamp_value_clear_then_earlier_resnooze_keeps_preclear_floor",
+            "note": (
+                "The owned divergence from ADR-0011's pairwise matrix (ADR-0030): "
+                "the value join is a max over every value ever asserted, so a "
+                "re-snooze carrying an *earlier* value after a clear revives the "
+                "field at the pre-clear floor. The floor never shrinks through a "
+                "clear — it errs toward longer silence and never re-fires early."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t, value=_FLOOR_LATE),
+                _pref_op(author=_MEMBER_B, wall_ms=t + 1000, key=None, tombstone=True),
+                _pref_op(author=_MEMBER_A, wall_ms=t + 2000, value=_FLOOR_EARLY),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_LATE}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 2000, 0, _MEMBER_A],
+                        "value": [t + 2000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "max_timestamp_value_three_op_associativity",
+            "note": (
+                "Mandatory associativity probe: three writes carrying a "
+                "parsed-instant tie *and* an unparseable member, applied in all "
+                "six orders. A pairwise vector cannot catch a non-associative "
+                "join; this one can."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t, value=_FLOOR_COMPACT),
+                _pref_op(author=_MEMBER_B, wall_ms=t + 1000, value=_FLOOR_PADDED),
+                _pref_op(author=_MEMBER_A, wall_ms=t + 2000, value=_UNPARSEABLE_HIGH),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_COMPACT}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 2000, 0, _MEMBER_A],
+                        "value": [t + 2000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "set_merge_unions_concurrent_additions",
+            "note": (
+                "Concurrent additions on two devices both survive, sorted by "
+                "canonical JSON encoding so the merged value is byte-identical "
+                "everywhere rather than order-dependent."
+            ),
+            "permute": True,
+            "strategy_overrides": {_SET_MERGE_KEY: "set_merge"},
+            "ops": [
+                _pref_op(
+                    author=_MEMBER_A,
+                    wall_ms=t,
+                    entity_id=_SET_MERGE_ENTITY_ID,
+                    key=_SET_MERGE_KEY,
+                    value=json.dumps(["a", "c"], separators=(",", ":")),
+                ),
+                _pref_op(
+                    author=_MEMBER_B,
+                    wall_ms=t + 1000,
+                    entity_id=_SET_MERGE_ENTITY_ID,
+                    key=_SET_MERGE_KEY,
+                    value=json.dumps(["b", "a"], separators=(",", ":")),
+                ),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SET_MERGE_ENTITY_ID: {
+                        "key": _SET_MERGE_KEY,
+                        "value": json.dumps(["a", "b", "c"], separators=(",", ":")),
+                    }
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SET_MERGE_ENTITY_ID: {
+                        "key": [t + 1000, 0, _MEMBER_B],
+                        "value": [t + 1000, 0, _MEMBER_B],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "set_merge_three_op_associativity",
+            "note": (
+                "Three additions with an overlapping member, in all six orders — "
+                "the same associativity requirement the timestamp join carries."
+            ),
+            "permute": True,
+            "strategy_overrides": {_SET_MERGE_KEY: "set_merge"},
+            "ops": [
+                _pref_op(
+                    author=_MEMBER_A,
+                    wall_ms=t,
+                    entity_id=_SET_MERGE_ENTITY_ID,
+                    key=_SET_MERGE_KEY,
+                    value=json.dumps(["b"], separators=(",", ":")),
+                ),
+                _pref_op(
+                    author=_MEMBER_B,
+                    wall_ms=t + 1000,
+                    entity_id=_SET_MERGE_ENTITY_ID,
+                    key=_SET_MERGE_KEY,
+                    value=json.dumps(["a", "b"], separators=(",", ":")),
+                ),
+                _pref_op(
+                    author=_MEMBER_A,
+                    wall_ms=t + 2000,
+                    entity_id=_SET_MERGE_ENTITY_ID,
+                    key=_SET_MERGE_KEY,
+                    value=json.dumps(["c"], separators=(",", ":")),
+                ),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SET_MERGE_ENTITY_ID: {
+                        "key": _SET_MERGE_KEY,
+                        "value": json.dumps(["a", "b", "c"], separators=(",", ":")),
+                    }
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SET_MERGE_ENTITY_ID: {
+                        "key": [t + 2000, 0, _MEMBER_A],
+                        "value": [t + 2000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "strategy_selection_falls_back_to_lww_without_a_key",
+            "note": (
+                "A `user_preferences` op whose entity has no resolvable `key` — "
+                "none carried, none stored — falls back to LWW. The newer clock "
+                "wins even though its value is the earlier floor, which is the "
+                "opposite of what max_timestamp_value would decide."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t + 1000, key=None, value=_FLOOR_EARLY),
+                _pref_op(author=_MEMBER_B, wall_ms=t, key=None, value=_FLOOR_LATE),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {_SNOOZE_ENTITY_ID: {"value": _FLOOR_EARLY}}
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"value": [t + 1000, 0, _MEMBER_A]}
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "strategy_selection_reads_the_stored_key",
+            "note": (
+                "The strategy is selected per entity by its `key` field: an op "
+                "that carries only `value` resolves the key from reduced state, "
+                "and the floor still wins. Converges in either arrival order."
+            ),
+            "permute": True,
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t, value=_FLOOR_LATE),
+                _pref_op(author=_MEMBER_B, wall_ms=t + 1000, key=None, value=_FLOOR_EARLY),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_LATE}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t, 0, _MEMBER_A],
+                        "value": [t + 1000, 0, _MEMBER_B],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+    ]
 
 
 def main() -> None:

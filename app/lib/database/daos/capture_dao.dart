@@ -14,6 +14,7 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
+import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'action_dao.dart' show ActionDao;
 
@@ -143,8 +144,32 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
 
   /// Insert a new Capture (Inbox: `clarified_at` stays NULL).
   Future<void> insertCapture(CapturesCompanion companion) async {
-    await into(captures).insert(companion);
-    attachedDatabase.notifyCapturesViewWrite();
+    await attachedDatabase.capturing(() async {
+      await into(captures).insert(companion);
+      attachedDatabase.notifyCapturesViewWrite();
+      // Read back rather than trust the companion: `id` and `created_at` can
+      // come from client defaults, and the create assertion must carry the full
+      // field set a peer will build the row from.
+      final id = companion.id.present ? companion.id.value : null;
+      final row = id == null
+          ? null
+          : await (select(captures)..where((c) => c.id.equals(id)))
+              .getSingleOrNull();
+      if (row == null) return;
+      attachedDatabase.opCapture.write(
+        collection: capturesCollection,
+        entityId: row.id,
+        fields: {
+          'title': row.title,
+          'notes': row.notes,
+          'capture_source': row.captureSource,
+          'created_at': encodeInstant(row.createdAt),
+          'clarified_at': encodeInstant(row.clarifiedAt),
+          'updated_at': encodeInstant(row.updatedAt),
+          'user_id': row.userId,
+        },
+      );
+    });
   }
 
   /// Persist text edits made on a Capture's clarify card.
@@ -167,18 +192,30 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
     bool clearNotes = false,
   }) async {
     if (title == null && notes == null && !clearNotes) return;
-    await (update(captures)..where((c) => c.id.equals(id))).write(
-      CapturesCompanion(
-        title: title != null ? Value(title) : const Value.absent(),
-        notes: clearNotes
-            ? const Value(null)
-            : notes != null
-                ? Value(notes)
-                : const Value.absent(),
-        updatedAt: Value(DateTime.now().toUtc()),
-      ),
-    );
-    attachedDatabase.notifyCapturesViewWrite();
+    final ts = DateTime.now().toUtc();
+    await attachedDatabase.capturing(() async {
+      await (update(captures)..where((c) => c.id.equals(id))).write(
+        CapturesCompanion(
+          title: title != null ? Value(title) : const Value.absent(),
+          notes: clearNotes
+              ? const Value(null)
+              : notes != null
+                  ? Value(notes)
+                  : const Value.absent(),
+          updatedAt: Value(ts),
+        ),
+      );
+      attachedDatabase.opCapture.write(
+        collection: capturesCollection,
+        entityId: id,
+        fields: {
+          'title': ?title,
+          if (clearNotes) 'notes': null else 'notes': ?notes,
+          'updated_at': encodeInstant(ts),
+        },
+      );
+      attachedDatabase.notifyCapturesViewWrite();
+    });
   }
 
   /// Stamp `clarified_at` — completes the clarify act for [id]. In 1-1 mode
@@ -191,24 +228,52 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   /// afresh.
   Future<void> stampClarified(String id, {DateTime? at}) async {
     final ts = (at ?? DateTime.now()).toUtc();
-    await (update(captures)
-          ..where((c) => c.id.equals(id) & c.clarifiedAt.isNull()))
-        .write(
-      CapturesCompanion(clarifiedAt: Value(ts), updatedAt: Value(ts)),
-    );
-    attachedDatabase.notifyCapturesViewWrite();
+    await attachedDatabase.capturing(() => transaction(() async {
+      // The stamp is conditional on the row being unstamped, so the op is
+      // captured only when the write actually moved it — otherwise a repeat
+      // call would author an op that re-asserts the original moment.
+      final unstamped = await (select(captures)
+            ..where((c) => c.id.equals(id) & c.clarifiedAt.isNull()))
+          .getSingleOrNull();
+      await (update(captures)
+            ..where((c) => c.id.equals(id) & c.clarifiedAt.isNull()))
+          .write(
+        CapturesCompanion(clarifiedAt: Value(ts), updatedAt: Value(ts)),
+      );
+      if (unstamped != null) {
+        attachedDatabase.opCapture.write(
+          collection: capturesCollection,
+          entityId: id,
+          fields: {
+            'clarified_at': encodeInstant(ts),
+            'updated_at': encodeInstant(ts),
+          },
+        );
+      }
+      attachedDatabase.notifyCapturesViewWrite();
+    }));
   }
 
   /// Reverse a stamp (Ceremony Back / in-session undo): return the Capture to
   /// the Inbox by clearing `clarified_at`.
   Future<void> unstampClarified(String id) async {
-    await (update(captures)..where((c) => c.id.equals(id))).write(
-      CapturesCompanion(
-        clarifiedAt: const Value(null),
-        updatedAt: Value(DateTime.now().toUtc()),
-      ),
-    );
-    attachedDatabase.notifyCapturesViewWrite();
+    final ts = DateTime.now().toUtc();
+    await attachedDatabase.capturing(() async {
+      await (update(captures)..where((c) => c.id.equals(id))).write(
+        CapturesCompanion(
+          clarifiedAt: const Value(null),
+          updatedAt: Value(ts),
+        ),
+      );
+      // A nullable field write, not a tombstone: the Capture is alive and back
+      // in the Inbox.
+      attachedDatabase.opCapture.write(
+        collection: capturesCollection,
+        entityId: id,
+        fields: {'clarified_at': null, 'updated_at': encodeInstant(ts)},
+      );
+      attachedDatabase.notifyCapturesViewWrite();
+    });
   }
 
   // --- Capture ↔ Outcome provenance links -----------------------------------
@@ -224,29 +289,53 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
     String userId, {
     DateTime? at,
   }) async {
-    await into(captureOutcomes).insert(
-      CaptureOutcomesCompanion(
-        id: Value(captureOutcomeIdFor(captureId, outcomeId)),
-        captureId: Value(captureId),
-        outcomeId: Value(outcomeId),
-        createdAt: Value((at ?? DateTime.now()).toUtc()),
-        userId: Value(userId),
-      ),
-      mode: InsertMode.insertOrIgnore,
-    );
-    attachedDatabase.notifyCapturesViewWrite();
+    final ts = (at ?? DateTime.now()).toUtc();
+    await attachedDatabase.capturing(() async {
+      await into(captureOutcomes).insert(
+        CaptureOutcomesCompanion(
+          id: Value(captureOutcomeIdFor(captureId, outcomeId)),
+          captureId: Value(captureId),
+          outcomeId: Value(outcomeId),
+          createdAt: Value(ts),
+          userId: Value(userId),
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
+      // Deliberate divergence from the local INSERT-OR-IGNORE nuance: on the
+      // log a re-link re-asserts `created_at` at the new clarifying act's time.
+      // A re-link *is* a new clarifying micro-act, and a junction whose fields
+      // depended on whether the local row happened to exist could not converge.
+      attachedDatabase.opCapture.write(
+        collection: captureOutcomesCollection,
+        entityId: captureOutcomeIdFor(captureId, outcomeId),
+        fields: {
+          'capture_id': captureId,
+          'outcome_id': outcomeId,
+          'created_at': encodeInstant(ts),
+          'user_id': userId,
+        },
+      );
+      attachedDatabase.notifyCapturesViewWrite();
+    });
   }
 
   /// Remove a Capture↔Outcome link (merge-unlink; the pre-existing Outcome is
   /// left intact — deleting a session-created Outcome is the caller's job).
   Future<int> unlinkOutcome(String captureId, String outcomeId) async {
-    final rows = await (delete(captureOutcomes)
-          ..where(
-            (l) => l.captureId.equals(captureId) & l.outcomeId.equals(outcomeId),
-          ))
-        .go();
-    attachedDatabase.notifyCapturesViewWrite();
-    return rows;
+    return attachedDatabase.capturing(() async {
+      final rows = await (delete(captureOutcomes)
+            ..where(
+              (l) =>
+                  l.captureId.equals(captureId) & l.outcomeId.equals(outcomeId),
+            ))
+          .go();
+      attachedDatabase.opCapture.tombstone(
+        collection: captureOutcomesCollection,
+        entityId: captureOutcomeIdFor(captureId, outcomeId),
+      );
+      attachedDatabase.notifyCapturesViewWrite();
+      return rows;
+    });
   }
 
   /// The Outcome ids a Capture has clarified into.
@@ -338,27 +427,44 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
     String tagId,
     String userId,
   ) async {
-    await into(captureTags).insert(
-      CaptureTagsCompanion(
-        id: Value(captureTagIdFor(captureId, tagId)),
-        captureId: Value(captureId),
-        tagId: Value(tagId),
-        userId: Value(userId),
-      ),
-      mode: InsertMode.insertOrReplace,
-    );
-    attachedDatabase.notifyCapturesViewWrite();
+    await attachedDatabase.capturing(() async {
+      await into(captureTags).insert(
+        CaptureTagsCompanion(
+          id: Value(captureTagIdFor(captureId, tagId)),
+          captureId: Value(captureId),
+          tagId: Value(tagId),
+          userId: Value(userId),
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+      attachedDatabase.opCapture.write(
+        collection: captureTagsCollection,
+        entityId: captureTagIdFor(captureId, tagId),
+        fields: {
+          'capture_id': captureId,
+          'tag_id': tagId,
+          'user_id': userId,
+        },
+      );
+      attachedDatabase.notifyCapturesViewWrite();
+    });
   }
 
   /// Remove a tag hint from a Capture.
   Future<int> removeTagHint(String captureId, String tagId) async {
-    final rows = await (delete(captureTags)
-          ..where(
-            (t) => t.captureId.equals(captureId) & t.tagId.equals(tagId),
-          ))
-        .go();
-    attachedDatabase.notifyCapturesViewWrite();
-    return rows;
+    return attachedDatabase.capturing(() async {
+      final rows = await (delete(captureTags)
+            ..where(
+              (t) => t.captureId.equals(captureId) & t.tagId.equals(tagId),
+            ))
+          .go();
+      attachedDatabase.opCapture.tombstone(
+        collection: captureTagsCollection,
+        entityId: captureTagIdFor(captureId, tagId),
+      );
+      attachedDatabase.notifyCapturesViewWrite();
+      return rows;
+    });
   }
 
   /// Live tag hints on a Capture, alphabetical — drives the clarify card's
@@ -405,16 +511,18 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
     String tagId,
     String userId,
   ) async {
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
       await _deleteHintsOfType(captureId, 'project');
       await assignTagHint(captureId, tagId, userId);
-    });
+    }));
   }
 
   /// Drop the Capture's project-typed tag hint, if any.
   Future<void> clearProjectHint(String captureId) async {
-    await _deleteHintsOfType(captureId, 'project');
-    attachedDatabase.notifyCapturesViewWrite();
+    await attachedDatabase.capturing(() async {
+      await _deleteHintsOfType(captureId, 'project');
+      attachedDatabase.notifyCapturesViewWrite();
+    });
   }
 
   Future<void> _deleteHintsOfType(String captureId, String type) async {

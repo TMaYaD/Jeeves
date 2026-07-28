@@ -10,13 +10,18 @@ import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/sync/domain_op_capture.dart';
+import 'package:jeeves/sync/domain_projector.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/member_identity.dart';
+import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/preferences_store.dart';
 import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
+import 'package:jeeves/sync/sync_health.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 
 import 'fake_sync_server.dart';
@@ -98,12 +103,14 @@ class SimDevice {
     required this.label,
     required this.userId,
     required this.database,
+    required this.domain,
     required this.identity,
     required this.clock,
     required this.hlc,
     required this.registry,
     required this.client,
     required this.link,
+    required this.projector,
   }) : preferences = PreferencesStore(client: client, registry: registry);
 
   static Future<SimDevice> create({
@@ -113,6 +120,7 @@ class SimDevice {
     required FakeClock clock,
     String? memberId,
     Uint8List? seed,
+    MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
   }) async {
     // N devices means N stores, which is the whole premise. Drift's warning is
     // about several databases sharing one executor; each device here has its
@@ -132,19 +140,34 @@ class SimDevice {
       transport: link,
       database: database,
       clock: hlc,
-      reducer: Reducer(database, nowMs: () => clock.nowMs),
+      reducer: Reducer(
+        database,
+        nowMs: () => clock.nowMs,
+        strategies: strategies,
+      ),
       now: () => clock.asDateTime,
     );
+    // The two stores and the wiring #553 flips on, in the order the cycle
+    // allows: the capture seam needs the client, the domain store needs the
+    // seam, and the projector needs the domain store.
+    final domain = GtdDatabase(
+      NativeDatabase.memory(),
+      opCapture: SyncOpCapture(client),
+    );
+    final projector = DomainProjector(registry: registry, domain: domain);
+    client.projector = projector;
     final device = SimDevice._(
       label: label,
       userId: userId,
       database: database,
+      domain: domain,
       identity: identity,
       clock: clock,
       hlc: hlc,
       registry: registry,
       client: client,
       link: link,
+      projector: projector,
     );
     await client.enrol();
     return device;
@@ -152,13 +175,20 @@ class SimDevice {
 
   final String label;
   final String userId;
+
+  /// The convergence substrate: reduced fields, clocks, tombstones, the log.
   final SyncDatabase database;
+
+  /// The domain read model the projector feeds, and the DAOs write through.
+  final GtdDatabase domain;
+
   final MemberIdentity identity;
   final FakeClock clock;
   final HlcClock hlc;
   final CollectionRegistry registry;
   final SyncClient client;
   final DeviceLink link;
+  final DomainProjector projector;
   final PreferencesStore preferences;
 
   void goOffline() => link.online = false;
@@ -167,9 +197,9 @@ class SimDevice {
 
   /// A real client learns about new members before it can verify their ops, so
   /// the directory refresh is part of a sync, not a one-off at enrolment.
-  Future<void> sync() async {
+  Future<SyncHealth> sync() async {
     await client.refreshMemberDirectory();
-    await client.sync();
+    return client.sync();
   }
 
   /// Sync, tolerating the offline case — for tests that just want everyone as
@@ -179,5 +209,8 @@ class SimDevice {
     await sync();
   }
 
-  Future<void> close() => database.close();
+  Future<void> close() async {
+    await domain.close();
+    await database.close();
+  }
 }
