@@ -455,7 +455,10 @@ EXISTS (
   /// [DateTime.now()]. Pass an explicit value in tests for determinism.
   Future<void> rescheduleTask(String id, DateTime newDueDate,
       {DateTime? now}) async {
-    final ts = now ?? DateTime.now();
+    // Normalised once: the op carries `encodeInstant(ts)`, which is UTC, so a
+    // caller passing a local `now` would otherwise leave `updated_at` and its
+    // op disagreeing.
+    final ts = (now ?? DateTime.now()).toUtc();
     await attachedDatabase.capturing(() async {
       await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
         // Store UTC so Drift's storeDateTimeAsText path emits a standard
@@ -463,7 +466,7 @@ EXISTS (
         // uploads "...000 +05:30" which asyncpg's TIMESTAMPTZ encoder
         // rejects, poisoning the CRUD queue.
         dueDate: Value(newDueDate.toUtc()),
-        lastClarifiedAt: Value(ts.toUtc()),
+        lastClarifiedAt: Value(ts),
         updatedAt: Value(ts),
       ));
       _captureTodo(id, {

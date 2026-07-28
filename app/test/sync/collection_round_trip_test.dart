@@ -269,6 +269,22 @@ void main() {
         expect(rows.map((r) => r.read<String>('tag_id')), isNot(contains(tagId)));
       }
       await expectTableConverges('todo_tags');
+
+      // The revival half. The junction entity was tombstoned, so re-assigning
+      // the same pair has to bring the row back on both devices rather than
+      // losing to the tombstone. The merged-away tag row itself is gone — the
+      // junction is dangling by the same tolerance the TimeLog case above
+      // relies on, and it is the junction entity's revival being asserted.
+      a.clock.advance(1000);
+      await a.domain.tagDao.assignTag(id, tagId, _userId);
+      await workspace.syncAll();
+      for (final device in [a, b]) {
+        final rows = await device.domain
+            .customSelect('SELECT tag_id FROM todo_tags')
+            .get();
+        expect(rows.map((r) => r.read<String>('tag_id')), contains(tagId));
+      }
+      await expectTableConverges('todo_tags');
     });
   });
 

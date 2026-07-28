@@ -105,21 +105,21 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         },
       );
 
-      // Insert task rows.
+      // Insert task rows. The row id is the pair derivation the log carries, so
+      // the local row and the op address one entity from the start rather than
+      // relying on the projector to realign a random id afterwards.
       for (var i = 0; i < taskIds.length; i++) {
+        final planEntityId = focusSessionTaskIdFor(newId, taskIds[i]);
         await into(focusSessionTasks).insert(FocusSessionTasksCompanion(
-          id: Value(uuid.v4()),
+          id: Value(planEntityId),
           focusSessionId: Value(newId),
           taskId: Value(taskIds[i]),
           position: Value(i),
           userId: Value(userId),
         ));
-        // The local `id` stays random; the entity id on the log is the pair
-        // derivation, and the projector realigns the column to it on every
-        // device — including this one.
         attachedDatabase.opCapture.write(
           collection: focusSessionTasksCollection,
-          entityId: focusSessionTaskIdFor(newId, taskIds[i]),
+          entityId: planEntityId,
           fields: {
             'focus_session_id': newId,
             'task_id': taskIds[i],
@@ -379,6 +379,13 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }) async {
     final tsInstant = (now ?? DateTime.now()).toUtc();
     final ts = tsInstant.toIso8601String();
+    // `todos.updated_at`, `last_clarified_at` and `last_next_action_completion_at`
+    // are `FieldKind.instant`, so their wire form is the millisecond-truncated
+    // encoding. Writing the raw microsecond ISO string to the column instead
+    // would leave the local row differing from the op until the projector
+    // rewrote it. The TEXT timestamp columns below (`focus_sessions.ended_at`,
+    // the time logs) pass through opaque and keep [ts].
+    final tsCanonical = encodeInstant(tsInstant)!;
 
     await attachedDatabase.capturing(() => transaction(() async {
       final session = await (select(focusSessions)
@@ -462,8 +469,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
             'last_clarified_at = ? WHERE id = ?',
             variables: [
               Variable('maybe'),
-              Variable(ts),
-              Variable(ts),
+              Variable(tsCanonical),
+              Variable(tsCanonical),
               Variable(entry.key),
             ],
             updates: {todos},
@@ -511,7 +518,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         '  WHERE focus_session_id = ?'
         ') AND done_at IS NULL AND user_id = ?',
         variables: [
-          Variable(ts),
+          Variable(tsCanonical),
           Variable(sessionId),
           Variable(sessionId),
           Variable(session.userId),

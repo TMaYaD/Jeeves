@@ -25,6 +25,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 
+import 'collection_codecs.dart' show userPreferencesCollection;
 import 'envelope.dart';
 import 'hlc.dart';
 import 'merge_strategy.dart';
@@ -82,7 +83,7 @@ class Reducer {
   /// plain-LWW fallback) for every other collection and for an entity whose key
   /// this device has never seen.
   Future<String?> _preferenceKeyFor(OpPayload payload) async {
-    if (payload.collection != 'user_preferences') return null;
+    if (payload.collection != userPreferencesCollection) return null;
     final carried = payload.fields['key']?.value;
     if (carried is String) return carried;
     final stored = await (_db.select(_db.reducedFields)

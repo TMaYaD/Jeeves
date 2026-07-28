@@ -16,6 +16,7 @@
 ///   delete-on-absent reconciliation window structurally impossible.
 library;
 
+import 'collection_codecs.dart' show userPreferencesCollection;
 import 'ids.dart';
 import 'reducer.dart';
 import 'sync_client.dart';

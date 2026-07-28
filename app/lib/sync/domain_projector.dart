@@ -110,7 +110,7 @@ class DomainProjector {
         collections.contains(focusSessionDispositionsCollection)) {
       domain.notifyFocusSessionsViewWrite();
     }
-    if (collections.contains('user_preferences')) {
+    if (collections.contains(userPreferencesCollection)) {
       domain.notifyUserPreferencesViewWrite();
     }
   }
@@ -213,6 +213,10 @@ class DomainProjector {
       clauses.add('"$column" = ?');
       variables.add(Variable<String>(value));
     }
+    // A codec with no identity columns would join to an empty WHERE clause —
+    // a syntax error on the SELECT and an unbounded DELETE. Fail closed rather
+    // than emit either; the entity is held back like any unlocatable row.
+    if (clauses.isEmpty) return null;
     return (sql: clauses.join(' AND '), variables: variables);
   }
 

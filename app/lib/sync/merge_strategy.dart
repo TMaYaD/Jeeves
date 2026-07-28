@@ -21,6 +21,7 @@ import 'dart:convert';
 
 import '../services/user_preferences_conflict.dart'
     show ConflictStrategy, strategyForKey;
+import 'collection_codecs.dart' show userPreferencesCollection;
 import 'hlc.dart';
 
 /// What a strategy decides for one field.
@@ -280,7 +281,7 @@ class MergeStrategyRegistry {
     required String field,
     String? preferenceKey,
   }) {
-    if (collection != 'user_preferences') return lww;
+    if (collection != userPreferencesCollection) return lww;
     if (field != preferenceValueField) return lww;
     if (preferenceKey == null) return lww;
     return preferenceKeyOverrides[preferenceKey] ??

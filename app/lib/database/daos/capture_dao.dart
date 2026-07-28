@@ -329,10 +329,17 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
                   l.captureId.equals(captureId) & l.outcomeId.equals(outcomeId),
             ))
           .go();
-      attachedDatabase.opCapture.tombstone(
-        collection: captureOutcomesCollection,
-        entityId: captureOutcomeIdFor(captureId, outcomeId),
-      );
+      // Only a delete that matched authors a tombstone. An idempotent or
+      // stale-state call holds no such junction, and a delete op for the
+      // deterministic id would bury a link another device created concurrently.
+      // (`linkOutcome` authors unconditionally on purpose — a re-link is a new
+      // clarifying act — so the asymmetry is deliberate.)
+      if (rows > 0) {
+        attachedDatabase.opCapture.tombstone(
+          collection: captureOutcomesCollection,
+          entityId: captureOutcomeIdFor(captureId, outcomeId),
+        );
+      }
       attachedDatabase.notifyCapturesViewWrite();
       return rows;
     });
@@ -458,10 +465,14 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
               (t) => t.captureId.equals(captureId) & t.tagId.equals(tagId),
             ))
           .go();
-      attachedDatabase.opCapture.tombstone(
-        collection: captureTagsCollection,
-        entityId: captureTagIdFor(captureId, tagId),
-      );
+      // Gated for the same reason as `unlinkOutcome`: a delete that matched
+      // nothing has no effect to describe on the log.
+      if (rows > 0) {
+        attachedDatabase.opCapture.tombstone(
+          collection: captureTagsCollection,
+          entityId: captureTagIdFor(captureId, tagId),
+        );
+      }
       attachedDatabase.notifyCapturesViewWrite();
       return rows;
     });
