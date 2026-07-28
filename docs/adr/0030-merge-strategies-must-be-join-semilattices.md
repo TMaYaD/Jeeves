@@ -56,11 +56,24 @@ way to reconcile it is to recompute it from its source collection, not to
 arbitrate two copies. The one existing column, `todos.time_spent_minutes`, is
 already dead — nothing has written it since the `transitionState` recompute was
 retired, and time-spent is derived from `SUM(time_logs)` at read time with open
-logs valued at `now()` (#480). So it is excluded from capture, from reduction,
-and from projection: recomputing it during projection would buy nondeterminism
-(the open-log-at-`now()` term) for a column nothing reads, and it is excluded
-from every cross-device equality assertion. Its retirement — the actual column
-drop — rides #556 with the PowerSync removal.
+logs valued at `now()` (#480). So it is excluded from capture and from
+reduction: recomputing it would buy nondeterminism (the open-log-at-`now()`
+term) for a column nothing reads, it never travels on the wire, and it is
+excluded from every cross-device equality assertion.
+
+**Unsynced is not the same as unwritten**, and conflating the two was a real
+bug: the column is declared NOT NULL, so a projected row that omitted it read
+back as null and threw on the first plain `select(todos)` — `SearchDao` among
+them. On the stores where a default happened to apply (a Drift real table, or a
+Postgres-replicated value) the trap was invisible; on a store the server had
+never replicated into it was not. So the projector supplies the column's
+declared default when it **creates** a row, and never touches it again: the
+value is not a merge input, and the update path leaves whatever a local row
+holds. The mechanism is `CollectionCodec.unsyncedInsertDefaults`, deliberately a
+declared per-collection list rather than a special case, so a future NOT NULL
+column the log does not carry has an obvious home. Its retirement — the actual
+column drop — rides #556 with the PowerSync removal, which is what makes this a
+seam to satisfy rather than a cache to maintain.
 
 ## Consequences
 

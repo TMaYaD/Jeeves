@@ -15,7 +15,7 @@
 ///    idempotent, and tombstones never resurrect;
 /// 4. every domain projection agrees per collection group, as **full rows**,
 ///    with `todos.time_spent_minutes` the single excluded column (a dead cache
-///    the projector never touches — ADR-0030).
+///    the log never carries — ADR-0030).
 @TestOn('!browser')
 library;
 

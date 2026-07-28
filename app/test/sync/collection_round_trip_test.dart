@@ -31,8 +31,9 @@ const _userId = 'sim-user';
 /// keeps the harness reproducible without hand-writing UUID literals.
 String _id(String label) => const Uuid().v5(jeevesWorkspaceNamespace, 'sim/$label');
 
-/// `todos.time_spent_minutes` is a dead cache the projector never touches, so
-/// it is excluded from every cross-device comparison (ADR-0030).
+/// `todos.time_spent_minutes` never travels on the wire — a dead cache
+/// (ADR-0030) the projector only ever fills with its declared default at create
+/// time — so it is excluded from every cross-device comparison.
 const _deadCache = {'time_spent_minutes'};
 
 void main() {
