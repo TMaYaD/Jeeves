@@ -95,6 +95,16 @@ dependencies:
   flutter_markdown_plus: ^1.0.7
   url_launcher: ^6.3.0
 
+  # Minimal Sync Server envelope signing (lib/sync/): Ed25519 over the v1 op
+  # envelope. Pure Dart, so `flutter test` signs and verifies for real with no
+  # FFI or native-assets step — the golden vectors in spec/sync/ are byte-
+  # compared against the backend's PyNaCl output.
+  cryptography: ^2.9.0
+  # SHA-256 for the author-key id and the per-author envelope chain. Imported
+  # directly by lib/sync/, so it is a declared dependency rather than the
+  # transitive one it used to be.
+  crypto: ^3.0.6
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

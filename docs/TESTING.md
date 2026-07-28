@@ -98,6 +98,25 @@ Until that harness exists, verify these acceptance criteria manually against a r
 - **Snooze floors never regress (`maxTimestampValue`).** Snooze a notification further into the future on device A, then let an older write carrying a nearer snooze value sync from device B; confirm the later "until" survives and the notification stays silenced. Confirm an explicit un-snooze (tombstone) clears the floor even against a live value.
 - **Set/list keys merge (`setMerge`).** No production key uses this today; when one is added, add two concurrent additions on two devices and confirm both survive.
 
+## The Minimal Sync Server harness (automated)
+
+The manual checklist above exists because the PowerSync engine cannot run in a Dart test. The op-log stack (`app/lib/sync/`, `backend/app/sync/`) is built so that it can, and `app/test/sync/` is where that pays off — N simulated devices, each with its own in-memory store and keypair, on a shared manually advanced clock, against an in-process server double. It covers the new stack only; PowerSync's reconciliation windows stay manual until #553 retires them.
+
+- `harness/` — `FakeSyncServer` (the in-process contract double, plus `injectUnchecked` for playing a hostile server), `SimDevice` (store, identity, HLC, `goOffline()`, and a lost-POST-response fault), `SimWorkspace` (N devices of one User).
+- `fake_sync_server_contract_test.dart` — the twin of `backend/tests/sync/test_ops_routes.py`, case-for-case under the same names. **Keep them in step:** a convergence test is only evidence about the real system if the double behaves like the real server, and a missing twin is how that stops being true. The file's header lists the handful of backend cases that deliberately have none, and why.
+- `backend/tests/sync/test_ops_author_chain_race_postgres.py` — the author-chain uniqueness constraint under a genuine concurrent write, and so the one part of the op-log contract the Dart double cannot mirror. It needs a Postgres `DATABASE_URL`: SQLite turns a write behind a stale read into a lock error rather than a constraint violation, which leaves the handler's recovery branch unreachable. Skips without one and fails rather than skips when `CI` is set.
+- `convergence_test.dart` — both-directions convergence, tombstones, offline queue and reconnect, replay idempotence, field-grain merge, the fail-closed quarantine surface, and the reducer guards, each end to end through the spine.
+- `envelope_vectors_test.dart` / `reducer_vectors_test.dart` — byte equality against the frozen fixtures in `spec/sync/`, which the Python suite asserts against too. **Never regenerate the vectors to make a test pass**: `backend/tools/generate_sync_vectors.py` is a hand-run tool, and a changed vector file is a protocol change to be reviewed as one.
+
+Local verification for the whole slice:
+
+```bash
+cd backend && uv run ruff check . && uv run mypy . && uv run pytest
+cd app && fvm flutter analyze && fvm flutter test
+```
+
+`flutter test` must run from `app/`: the vector loader reaches the repo-root `spec/` by relative path.
+
 ## Manual testing on the Android emulator (for agents)
 
 For flows that are impractical to cover with `flutter_test` / integration tests — in particular the Sign-In With Solana round-trip, which requires a real MWA-compatible wallet — drive the running emulator via `adb`. This section captures the stable coordinates and navigation paths so successive sessions don't have to re-discover them.
