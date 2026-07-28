@@ -74,6 +74,11 @@ class FakeSyncServer {
 
   List<StoredOp> get storedOps => List.unmodifiable(_log);
 
+  /// Live signal sockets on a Workspace. A client that leaks a subscription
+  /// shows up here as a count that never comes back down.
+  int signalSubscriberCount(String workspaceId) =>
+      _signalSubscribers[workspaceId]?.length ?? 0;
+
   /// A connection authenticated as [userId]. The real server derives the same
   /// scope from the JWT; #548 narrows both to a member-scoped token.
   ///

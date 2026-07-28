@@ -434,6 +434,19 @@ async def signal_socket(
         await _close_quietly(websocket, SIGNAL_CLOSE_FORBIDDEN)
         return
 
+    # The handshake is the only part of this endpoint that may hold a database
+    # session.  ``Depends(get_db)`` checks one out for the lifetime of the
+    # endpoint, and here that lifetime is the *connection's* — so left open it
+    # parks a pooled connection idle-in-transaction for as long as the
+    # subscriber stays connected, and roughly fifteen subscribers (pool 5 +
+    # overflow 10) starve every HTTP request in the process.
+    #
+    # Constraint for anything added below this line: the session must not
+    # outlive the handshake, and the signal pump must never touch the database.
+    # ``principal`` is deliberately not read again — the authorization decision
+    # it feeds is already made above.
+    await db.close()
+
     with hub.subscribe(workspace_id) as subscription:
         # FastAPI only observes a client close while a read is pending, so the
         # socket is drained concurrently with the send loop.  Inbound frames

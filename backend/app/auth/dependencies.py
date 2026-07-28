@@ -46,10 +46,11 @@ async def resolve_member_token(token: str, db: AsyncSession) -> User:
     because a browser cannot set an ``Authorization`` header on a WebSocket: the
     signal socket receives the token as its first frame and calls this directly.
 
-    This is the one site #548 swaps to member-scoped semantics — deliberately
-    not shared with :func:`get_current_user`, which #548 patches to *reject*
-    member tokens.  Until then it resolves the user token the sync routes
-    already accept.
+    Today this delegates to the same helper as :func:`get_current_user` and
+    accepts exactly the user tokens the sync routes already accept.  The seam is
+    that #548 rewrites *this* function's body to member-scoped semantics and
+    leaves :func:`get_current_user` alone — patching it to *reject* member
+    tokens instead.
     """
     return await _principal_from_token(token, db)
 

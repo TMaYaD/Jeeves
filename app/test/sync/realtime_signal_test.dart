@@ -212,6 +212,22 @@ void main() {
     expect(workspace.timers.requestedDelays, [const Duration(milliseconds: 500)]);
   });
 
+  test('restarting without a stop leaves one socket, not two', () async {
+    await workspace.b.listener.start();
+    await pumpEvents();
+    expect(workspace.server.signalSubscriberCount(workspace.workspaceId), 1);
+
+    // A restart is legal — `failed` names a fresh `start` as its only exit — so
+    // it has to drop the socket in hand rather than orphan it. Bumping the
+    // generation only silences the old subscription's callbacks; the socket
+    // underneath would stay open and keep taking pokes.
+    await workspace.b.listener.start();
+    await pumpEvents();
+
+    expect(workspace.server.signalSubscriberCount(workspace.workspaceId), 1);
+    expect(workspace.b.listener.state, SignalListenerState.live);
+  });
+
   test('a 4403 refusal is terminal and schedules nothing', () async {
     // A grant that is gone cannot be retried into existence.
     final probe = SignalListener(

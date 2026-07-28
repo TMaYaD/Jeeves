@@ -116,12 +116,26 @@ class HttpSyncTransport implements SyncTransport {
           try {
             await channel.ready;
           } on Object catch (error) {
+            // A failed handshake can still leave a half-open socket, and no
+            // `SignalSocket` was handed back, so nothing downstream can close
+            // it. Here or never.
+            _discardSignalChannel(channel);
             throw SyncTransportException.unreachable('$error');
           }
           // The token goes in the first frame, not a header and not the URL: a
           // browser cannot set `Authorization` on a WebSocket, and a query
           // string would put the token in every proxy and server log.
-          channel.sink.add(await _bearerTokenProvider());
+          final String bearerToken;
+          try {
+            bearerToken = await _bearerTokenProvider();
+          } on Object {
+            // The socket is fully open by this point, so a throwing token
+            // provider would leak it outright. The error itself is rethrown
+            // unmapped: a credential failure is not an unreachable server.
+            _discardSignalChannel(channel);
+            rethrow;
+          }
+          channel.sink.add(bearerToken);
           return SignalSocket(
             frames: channel.stream,
             close: () => channel.sink.close(),
@@ -131,6 +145,14 @@ class HttpSyncTransport implements SyncTransport {
         idleDeadline: _idleDeadline,
         timerFactory: _timerFactory,
       );
+
+  /// Release a channel that never became a [SignalSocket]. Errors from the
+  /// close are discarded rather than swallowed silently by accident: we are
+  /// already unwinding a failure, and a close that fails on a socket nobody
+  /// holds has nothing left to report.
+  static void _discardSignalChannel(WebSocketChannel channel) {
+    unawaited(channel.sink.close().catchError((Object _) {}));
+  }
 
   /// Same origin as the REST calls, `http(s)` swapped for `ws(s)`.
   Uri _signalUri(String workspaceId) {

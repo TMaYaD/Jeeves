@@ -100,8 +100,15 @@ class SignalListener {
   /// The immediate sync is the poll-on-foreground fallback, and it is
   /// unconditional: it must not depend on the socket coming up, because the
   /// case it exists for is the socket never coming up.
+  ///
+  /// Calling [start] again without an intervening [stop] restarts rather than
+  /// throws: [SignalListenerState.failed] documents a fresh [start] as its only
+  /// exit, so a restart has to be legal. Any socket in hand is dropped first —
+  /// the generation bump only orphans the old subscription's callbacks, it does
+  /// not close the socket underneath them.
   Future<void> start() {
     _generation++;
+    unawaited(_dropSocket());
     _backoffCeiling = _initialBackoff;
     _subscribe();
     return _runOrQueueSync();
