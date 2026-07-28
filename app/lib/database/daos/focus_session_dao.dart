@@ -6,8 +6,11 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
+import '../../sync/collection_codecs.dart';
+import '../../sync/ids.dart' show focusSessionTaskIdFor;
 import '../gtd_database.dart';
 import 'action_dao.dart';
+import 'time_log_dao.dart' show TimeLogDao;
 import 'todo_dao.dart' show TodoDao;
 
 part 'focus_session_dao.g.dart';
@@ -59,7 +62,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
     final newId = uuid.v4();
 
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
       // Single-open-session invariant (ADR-0020): never auto-close a prior
       // session — that would silently destroy it without recording Review
       // dispositions. Refuse to open a second session; the UI gates on this by
@@ -91,6 +94,16 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         endedAt: const Value(null),
         currentTaskId: const Value(null),
       ));
+      attachedDatabase.opCapture.write(
+        collection: focusSessionsCollection,
+        entityId: newId,
+        fields: {
+          'user_id': userId,
+          'started_at': ts,
+          'ended_at': null,
+          'current_task_id': null,
+        },
+      );
 
       // Insert task rows.
       for (var i = 0; i < taskIds.length; i++) {
@@ -101,8 +114,22 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           position: Value(i),
           userId: Value(userId),
         ));
+        // The local `id` stays random; the entity id on the log is the pair
+        // derivation, and the projector realigns the column to it on every
+        // device — including this one.
+        attachedDatabase.opCapture.write(
+          collection: focusSessionTasksCollection,
+          entityId: focusSessionTaskIdFor(newId, taskIds[i]),
+          fields: {
+            'focus_session_id': newId,
+            'task_id': taskIds[i],
+            'position': i,
+            'disposition': null,
+            'user_id': userId,
+          },
+        );
       }
-    });
+    }));
 
     return newId;
   }
@@ -114,25 +141,46 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   Future<void> closeSession({required String sessionId, DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
 
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
       if (session == null) return;
 
       // Close only the open time log that belongs to this session.
-      await (update(timeLogs)
-            ..where((t) =>
-                t.endedAt.isNull() &
-                t.focusSessionId.equals(sessionId)))
-          .write(TimeLogsCompanion(endedAt: Value(ts)));
+      await _closeSessionLogs(sessionId, ts);
 
       await (update(focusSessions)..where((s) => s.id.equals(sessionId)))
           .write(FocusSessionsCompanion(
         endedAt: Value(ts),
         currentTaskId: const Value(null),
       ));
-    });
+      attachedDatabase.opCapture.write(
+        collection: focusSessionsCollection,
+        entityId: sessionId,
+        fields: {'ended_at': ts, 'current_task_id': null},
+      );
+    }));
+  }
+
+  /// Close every open log attributed to [sessionId], capturing an `ended_at`
+  /// field write per row. Shared by [closeSession] and [reviewAndCloseSession].
+  Future<void> _closeSessionLogs(String sessionId, String tsIso) async {
+    final open = await (select(timeLogs)
+          ..where((t) =>
+              t.endedAt.isNull() & t.focusSessionId.equals(sessionId)))
+        .get();
+    await (update(timeLogs)
+          ..where((t) =>
+              t.endedAt.isNull() & t.focusSessionId.equals(sessionId)))
+        .write(TimeLogsCompanion(endedAt: Value(tsIso)));
+    for (final row in open) {
+      attachedDatabase.opCapture.write(
+        collection: timeLogsCollection,
+        entityId: row.id,
+        fields: {'ended_at': tsIso},
+      );
+    }
   }
 
   /// Atomically closes any open time log for the session, optionally opens a
@@ -154,7 +202,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
 
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
@@ -163,8 +211,17 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // Close any open time log. The single-open-log invariant is global,
       // so we close defensively rather than scoping to this session — a stray
       // open log from elsewhere would otherwise coexist with the new one.
+      final stillOpen =
+          await (select(timeLogs)..where((t) => t.endedAt.isNull())).get();
       await (update(timeLogs)..where((t) => t.endedAt.isNull()))
           .write(TimeLogsCompanion(endedAt: Value(ts)));
+      for (final row in stillOpen) {
+        TimeLogDao.captureLogClosedOn(
+          attachedDatabase,
+          row.id,
+          DateTime.parse(ts),
+        );
+      }
 
       // Open a new time log if a task is being focused, attributing it to the
       // Outcome's current Action resolved inside this transaction (issue #476).
@@ -173,8 +230,9 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // task-attributed.
       if (taskId != null) {
         final actionId = await ActionDao.currentActionIdFor(this, taskId);
+        final logId = uuid.v4();
         await into(timeLogs).insert(TimeLogsCompanion(
-          id: Value(uuid.v4()),
+          id: Value(logId),
           userId: Value(session.userId),
           taskId: Value(taskId),
           actionId: Value(actionId),
@@ -182,12 +240,26 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           endedAt: const Value(null),
           focusSessionId: Value(sessionId),
         ));
+        TimeLogDao.captureLogOpened(
+          attachedDatabase,
+          id: logId,
+          userId: session.userId,
+          taskId: taskId,
+          actionId: actionId,
+          startedAtIso: ts,
+          focusSessionId: sessionId,
+        );
       }
 
       // Update the session pointer.
       await (update(focusSessions)..where((s) => s.id.equals(sessionId)))
           .write(FocusSessionsCompanion(currentTaskId: Value(taskId)));
-    });
+      attachedDatabase.opCapture.write(
+        collection: focusSessionsCollection,
+        entityId: sessionId,
+        fields: {'current_task_id': taskId},
+      );
+    }));
   }
 
   /// Stream that emits the currently open session, or null.
@@ -270,11 +342,18 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     if (membership == null) {
       throw StateError('Task $taskId is not part of session $sessionId');
     }
-    await (update(focusSessionTasks)
-          ..where((fst) =>
-              fst.focusSessionId.equals(sessionId) &
-              fst.taskId.equals(taskId)))
-        .write(FocusSessionTasksCompanion(disposition: Value(disposition)));
+    await attachedDatabase.capturing(() async {
+      await (update(focusSessionTasks)
+            ..where((fst) =>
+                fst.focusSessionId.equals(sessionId) &
+                fst.taskId.equals(taskId)))
+          .write(FocusSessionTasksCompanion(disposition: Value(disposition)));
+      attachedDatabase.opCapture.write(
+        collection: focusSessionTasksCollection,
+        entityId: focusSessionTaskIdFor(sessionId, taskId),
+        fields: {'disposition': disposition},
+      );
+    });
   }
 
   /// Atomically records per-task dispositions and closes [sessionId].
@@ -298,9 +377,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     required Map<String, String> dispositions,
     DateTime? now,
   }) async {
-    final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
+    final tsInstant = (now ?? DateTime.now()).toUtc();
+    final ts = tsInstant.toIso8601String();
 
-    await transaction(() async {
+    await attachedDatabase.capturing(() => transaction(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
@@ -339,6 +419,11 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
               .write(FocusSessionTasksCompanion(
             disposition: Value(entry.value),
           ));
+          attachedDatabase.opCapture.write(
+            collection: focusSessionTasksCollection,
+            entityId: focusSessionTaskIdFor(sessionId, entry.key),
+            fields: {'disposition': entry.value},
+          );
         } else {
           // Off-Plan engaged Outcome — no Plan row exists, so its Disposition
           // goes to the separate store. Deterministic id + INSERT OR REPLACE so
@@ -352,6 +437,16 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
               userId: Value(session.userId),
             ),
             mode: InsertMode.insertOrReplace,
+          );
+          attachedDatabase.opCapture.write(
+            collection: focusSessionDispositionsCollection,
+            entityId: focusSessionDispositionIdFor(sessionId, entry.key),
+            fields: {
+              'focus_session_id': sessionId,
+              'task_id': entry.key,
+              'disposition': entry.value,
+              'user_id': session.userId,
+            },
           );
         }
       }
@@ -374,6 +469,15 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
             updates: {todos},
             updateKind: UpdateKind.update,
           );
+          attachedDatabase.opCapture.write(
+            collection: todosCollection,
+            entityId: entry.key,
+            fields: {
+              'intent': 'maybe',
+              'updated_at': encodeInstant(tsInstant),
+              'last_clarified_at': encodeInstant(tsInstant),
+            },
+          );
         }
       }
 
@@ -382,6 +486,21 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // TimeLog for this session). This marks them as "worked on in a session"
       // for the re-clarification predicate; off-Plan engaged Outcomes were
       // worked on too, so they earn the stamp.
+      final stampedRows = await customSelect(
+        'SELECT id FROM todos WHERE id IN ('
+        '  SELECT task_id FROM focus_session_tasks '
+        '  WHERE focus_session_id = ?'
+        '  UNION '
+        '  SELECT task_id FROM time_logs '
+        '  WHERE focus_session_id = ?'
+        ') AND done_at IS NULL AND user_id = ?',
+        variables: [
+          Variable(sessionId),
+          Variable(sessionId),
+          Variable(session.userId),
+        ],
+        readsFrom: {todos, focusSessionTasks, timeLogs},
+      ).get();
       await customUpdate(
         'UPDATE todos SET last_next_action_completion_at = ? '
         'WHERE id IN ('
@@ -400,13 +519,18 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         updates: {todos},
         updateKind: UpdateKind.update,
       );
+      for (final row in stampedRows) {
+        attachedDatabase.opCapture.write(
+          collection: todosCollection,
+          entityId: row.read<String>('id'),
+          fields: {
+            'last_next_action_completion_at': encodeInstant(tsInstant),
+          },
+        );
+      }
 
       // Close any open time log for this session.
-      await (update(timeLogs)
-            ..where((t) =>
-                t.endedAt.isNull() &
-                t.focusSessionId.equals(sessionId)))
-          .write(TimeLogsCompanion(endedAt: Value(ts)));
+      await _closeSessionLogs(sessionId, ts);
 
       // Close the session.
       await (update(focusSessions)..where((s) => s.id.equals(sessionId)))
@@ -414,7 +538,12 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         endedAt: Value(ts),
         currentTaskId: const Value(null),
       ));
-    });
+      attachedDatabase.opCapture.write(
+        collection: focusSessionsCollection,
+        entityId: sessionId,
+        fields: {'ended_at': ts, 'current_task_id': null},
+      );
+    }));
   }
 
   /// Returns the task IDs with [disposition] = 'rollover' from the most

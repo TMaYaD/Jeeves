@@ -16,8 +16,8 @@ Four things this migration must get right, all verifiable on SQLite:
   nullable and empty.  ADR-0024 accepts that the text is unrecoverable; this
   test pins that the downgrade does not pretend otherwise.
 
-Plus one structural check: 0030 chains from 0029 and leaves a single Alembic
-head, so ``alembic upgrade head`` is unambiguous.
+Plus one structural check: 0030 chains from 0029 and the revision graph stays
+linear, so ``alembic upgrade head`` is unambiguous.
 """
 
 import importlib.util
@@ -173,9 +173,11 @@ def test_downgrade_rerun_is_a_noop() -> None:
 # --- Chain -------------------------------------------------------------------
 
 
-def test_0030_chains_from_0029_and_is_the_single_head() -> None:
+def test_0030_chains_from_0029_and_the_graph_stays_linear() -> None:
     module = _load_migration_0030()
     assert module.revision == "0030"
     assert module.down_revision == "0029"
+    # One head, whatever the latest revision happens to be: a branch would make
+    # ``alembic upgrade head`` ambiguous, which is the failure worth catching.
     script = ScriptDirectory.from_config(migrate._alembic_config())
-    assert script.get_heads() == ["0030"]
+    assert len(script.get_heads()) == 1

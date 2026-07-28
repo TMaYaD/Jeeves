@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 import 'package:uuid/enums.dart' show Namespace;
 
+import '../../sync/collection_codecs.dart';
 import '../../utils/tag_colors.dart';
 import '../gtd_database.dart';
 
@@ -66,7 +67,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// crash `getSingleOrNull`.
   Future<String> findOrCreateTag(String name, String type, String userId) {
     final trimmed = name.trim();
-    return transaction(() async {
+    return attachedDatabase.capturing(() => transaction(() async {
       final existing = await (select(tags)
             ..where((t) => t.name.equals(trimmed) & t.type.equals(type))
             ..orderBy([(t) => OrderingTerm.asc(t.id)])
@@ -83,7 +84,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         userId: Value(userId),
       ));
       return id;
-    });
+    }));
   }
 
   /// Create a new person-typed tag with the given [name] for [userId].
@@ -156,7 +157,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// SELECT and INSERT run inside a single transaction to prevent two
   /// concurrent partial updates from racing and clobbering each other.
   Future<void> upsertTag(TagsCompanion tag) {
-    return transaction(() async {
+    return attachedDatabase.capturing(() => transaction(() async {
       if (tag.id.present) {
         final existing = await (select(tags)
               ..where((t) => t.id.equals(tag.id.value)))
@@ -172,11 +173,61 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
             ),
             mode: InsertMode.insertOrReplace,
           );
+          // Only the fields the caller actually set: re-asserting the whole row
+          // on a colour change would carry a stale `name` under a fresh clock
+          // and clobber a concurrent rename from another device.
+          _captureTag(tag.id.value, {
+            if (tag.name.present) 'name': tag.name.value,
+            if (tag.color.present) 'color': tag.color.value,
+            if (tag.type.present) 'type': tag.type.value,
+            if (tag.userId.present) 'user_id': tag.userId.value,
+          });
           return;
         }
       }
       await into(tags).insert(tag, mode: InsertMode.insertOrReplace);
-    });
+      if (tag.id.present) {
+        // Creation asserts the full field set, so a peer that has never seen
+        // the entity can build the whole row.
+        final created = await (select(tags)
+              ..where((t) => t.id.equals(tag.id.value)))
+            .getSingleOrNull();
+        if (created != null) {
+          _captureTag(created.id, {
+            'name': created.name,
+            'color': created.color,
+            'type': created.type,
+            'user_id': created.userId,
+          });
+        }
+      }
+    }));
+  }
+
+  void _captureTag(String tagId, Map<String, Object?> fields) {
+    if (fields.isEmpty) return;
+    attachedDatabase.opCapture.write(
+      collection: tagsCollection,
+      entityId: tagId,
+      fields: fields,
+    );
+  }
+
+  void _captureTodoTag(String todoId, String tagId, String userId) {
+    attachedDatabase.opCapture.write(
+      collection: todoTagsCollection,
+      entityId: todoTagIdFor(todoId, tagId),
+      fields: {'todo_id': todoId, 'tag_id': tagId, 'user_id': userId},
+    );
+  }
+
+  /// Unassignment is a tombstone op, never row absence — that is what stops a
+  /// replayed or reordered assignment from silently re-attaching the tag.
+  void _tombstoneTodoTag(String todoId, String tagId) {
+    attachedDatabase.opCapture.tombstone(
+      collection: todoTagsCollection,
+      entityId: todoTagIdFor(todoId, tagId),
+    );
   }
 
   /// Rename a tag in-place, preserving all other fields.
@@ -188,7 +239,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Silently returns when [tagId] is unknown or the name is unchanged.
   Future<void> rename(String tagId, String newName) {
     final trimmed = newName.trim();
-    return transaction(() async {
+    return attachedDatabase.capturing(() => transaction(() async {
       final current = await (select(tags)..where((t) => t.id.equals(tagId)))
           .getSingleOrNull();
       if (current == null) return;
@@ -208,7 +259,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       }
 
       await upsertTag(TagsCompanion(id: Value(tagId), name: Value(trimmed)));
-    });
+    }));
   }
 
   /// Update the colour of a tag; pass null to clear it.
@@ -223,14 +274,14 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// every startup — so intentional NULLs set via [updateColor] after the
   /// migration are never overwritten.
   Future<void> backfillAllMissingColors() {
-    return transaction(() async {
+    return attachedDatabase.capturing(() => transaction(() async {
       final nullColorTags =
           await (select(tags)..where((t) => t.color.isNull())).get();
       for (final tag in nullColorTags) {
         final colorHex = tagColorToHex(tagColorForName(tag.name));
         await upsertTag(TagsCompanion(id: Value(tag.id), color: Value(colorHex)));
       }
-    });
+    }));
   }
 
   /// Merge [sourceTagId] into [targetTagId].
@@ -249,7 +300,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         'Source and target tags must differ',
       );
     }
-    return transaction(() async {
+    return attachedDatabase.capturing(() => transaction(() async {
       final sourceTodoTags = await (select(todoTags)
             ..where((tt) => tt.tagId.equals(sourceTagId)))
           .get();
@@ -259,8 +310,16 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       await (delete(todoTags)
             ..where((tt) => tt.tagId.equals(sourceTagId)))
           .go();
+      // Cascade set, enumerated at capture time: the log has no FK cascade, so
+      // every junction the source tag held is tombstoned explicitly alongside
+      // the tag itself.
+      for (final tt in sourceTodoTags) {
+        _tombstoneTodoTag(tt.todoId, sourceTagId);
+      }
       await (delete(tags)..where((t) => t.id.equals(sourceTagId))).go();
-    });
+      attachedDatabase.opCapture
+          .tombstone(collection: tagsCollection, entityId: sourceTagId);
+    }));
   }
 
   /// Associate a tag with a todo (idempotent).
@@ -275,15 +334,18 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// [todoTagIdFor] so repeated calls collapse on the PowerSync view's
   /// backing table instead of accumulating rows.
   Future<void> assignTag(String todoId, String tagId, String userId) {
-    return into(todoTags).insert(
-      TodoTagsCompanion(
-        id: Value(todoTagIdFor(todoId, tagId)),
-        todoId: Value(todoId),
-        tagId: Value(tagId),
-        userId: Value(userId),
-      ),
-      mode: InsertMode.insertOrReplace,
-    );
+    return attachedDatabase.capturing(() async {
+      await into(todoTags).insert(
+        TodoTagsCompanion(
+          id: Value(todoTagIdFor(todoId, tagId)),
+          todoId: Value(todoId),
+          tagId: Value(tagId),
+          userId: Value(userId),
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+      _captureTodoTag(todoId, tagId, userId);
+    });
   }
 
   /// Returns the set of person-typed tag IDs currently assigned to [todoId].
@@ -314,7 +376,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Idempotent: a no-op when there are no duplicates, so it is safe to run on
   /// every startup without a version gate.
   Future<void> dedupeTags() {
-    return transaction(() async {
+    return attachedDatabase.capturing(() => transaction(() async {
       final groups = await customSelect(
         'SELECT name, type FROM tags GROUP BY name, type HAVING COUNT(*) > 1',
         readsFrom: {tags},
@@ -356,14 +418,18 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
               ),
               mode: InsertMode.insertOrReplace,
             );
+            _captureTodoTag(row.todoId, keepId, row.userId);
             if (row.id != newJunctionId) {
               await (delete(todoTags)..where((tt) => tt.id.equals(row.id))).go();
             }
+            _tombstoneTodoTag(row.todoId, dupId);
           }
           await (delete(tags)..where((t) => t.id.equals(dupId))).go();
+          attachedDatabase.opCapture
+              .tombstone(collection: tagsCollection, entityId: dupId);
         }
       }
-    });
+    }));
   }
 
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].
@@ -372,25 +438,37 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Silently returns without changes if [todoId] does not exist.
   Future<void> enforceSingleProject(
       String todoId, String userId, String newProjectTagId) async {
-    // Verify the todo exists before mutating
-    final todo = await (select(todos)..where((t) => t.id.equals(todoId)))
-        .getSingleOrNull();
-    if (todo == null) return;
+    await attachedDatabase.capturing(() async {
+      // Verify the todo exists before mutating
+      final todo = await (select(todos)..where((t) => t.id.equals(todoId)))
+          .getSingleOrNull();
+      if (todo == null) return;
 
-    // Find IDs of all project-typed tags
-    final projectTagIds = await (select(tags)..where((t) => t.type.equals('project')))
-        .map((t) => t.id)
-        .get();
+      // Find IDs of all project-typed tags
+      final projectTagIds =
+          await (select(tags)..where((t) => t.type.equals('project')))
+              .map((t) => t.id)
+              .get();
 
-    if (projectTagIds.isNotEmpty) {
-      // Remove existing project associations for this todo
-      await (delete(todoTags)
-            ..where(
-              (jt) => jt.todoId.equals(todoId) & jt.tagId.isIn(projectTagIds),
-            ))
-          .go();
-    }
+      if (projectTagIds.isNotEmpty) {
+        final displaced = await (select(todoTags)
+              ..where(
+                (jt) => jt.todoId.equals(todoId) & jt.tagId.isIn(projectTagIds),
+              ))
+            .get();
+        // Remove existing project associations for this todo
+        await (delete(todoTags)
+              ..where(
+                (jt) => jt.todoId.equals(todoId) & jt.tagId.isIn(projectTagIds),
+              ))
+            .go();
+        for (final row in displaced) {
+          if (row.tagId == newProjectTagId) continue;
+          _tombstoneTodoTag(todoId, row.tagId);
+        }
+      }
 
-    await assignTag(todoId, newProjectTagId, userId);
+      await assignTag(todoId, newProjectTagId, userId);
+    });
   }
 }

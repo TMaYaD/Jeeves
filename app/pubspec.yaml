@@ -44,6 +44,10 @@ dependencies:
   # HTTP / API
   dio: ^5.10.0
   retrofit: ^4.9.2
+  # The op-log sync stack's realtime signal socket (dio does not speak
+  # WebSocket). Already in the graph transitively via PowerSync, so making it
+  # direct adds no resolution risk — it only makes the import honest.
+  web_socket_channel: ^3.0.3
 
   # Sync (PowerSync — bidirectional offline-first sync)
   powersync: ^2.3.0
@@ -95,12 +99,26 @@ dependencies:
   flutter_markdown_plus: ^1.0.7
   url_launcher: ^6.3.0
 
+  # Minimal Sync Server envelope signing (lib/sync/): Ed25519 over the v1 op
+  # envelope. Pure Dart, so `flutter test` signs and verifies for real with no
+  # FFI or native-assets step — the golden vectors in spec/sync/ are byte-
+  # compared against the backend's PyNaCl output.
+  cryptography: ^2.9.0
+  # SHA-256 for the author-key id and the per-author envelope chain. Imported
+  # directly by lib/sync/, so it is a declared dependency rather than the
+  # transitive one it used to be.
+  crypto: ^3.0.6
+  # The op-log append in lib/sync/sync_client.dart tells a taken slot apart from
+  # every other database failure by SQLite's extended result code, so it imports
+  # the exception type directly. Already in the graph under drift, so making it
+  # direct adds no resolution risk.
+  sqlite3: ^3.3.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
   integration_test:
     sdk: flutter
-  sqlite3: ^3.3.3
   fake_async: ^1.3.3
   flutter_lints: ^6.0.0
   build_runner: ^2.15.0

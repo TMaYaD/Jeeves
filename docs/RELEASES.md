@@ -1,6 +1,10 @@
 # Releases
 
-How Jeeves versions and tags builds. Distribution channel wiring (Firebase App Distribution groups, Play Store tracks) is **not** covered here yet — see follow-up work.
+How the Jeeves **app** versions and tags builds. Distribution channel wiring (Firebase App Distribution groups, Play Store tracks) is **not** covered here yet — see follow-up work.
+
+## Server releases
+
+The backend is versioned and released independently of the app, on its own tag namespace, its own scheme and its own pipeline. Nothing in this document applies to it — see `docs/BACKEND_GUIDELINES.md`, "Server versioning & releases", and the script it links to.
 
 ## Versioning model
 

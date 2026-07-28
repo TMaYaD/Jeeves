@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -24,17 +25,23 @@ def create_access_token(data: dict[str, object], expires_delta: timedelta | None
     )
 
 
-def create_refresh_token(user_id: str) -> tuple[str, RefreshToken]:
+def create_refresh_token(
+    user_id: str, *, member_id: uuid.UUID | None = None
+) -> tuple[str, RefreshToken]:
     """Create a long-lived refresh token.
 
     Returns (raw_token, orm_record).  The raw token is sent to the client
     exactly once and never stored.  Only the SHA-256 hash is persisted so a
     database breach cannot expose live tokens.
+
+    ``member_id`` scopes the token to one Device: rotating it re-issues a member
+    access token, and revoking that Member kills it (ADR-0028).
     """
     raw = secrets.token_urlsafe(32)
     token_hash = hash_refresh_token(raw)
     record = RefreshToken(
         user_id=user_id,
+        member_id=member_id,
         token_hash=token_hash,
         expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
     )

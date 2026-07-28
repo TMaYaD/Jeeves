@@ -27,6 +27,12 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key")
 # the suite's ~150 register() calls no longer dominate the run.  Production keeps
 # the default 12 (see app.config.Settings.bcrypt_rounds).
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
+# Settings bind at import time, so this is the only injection point that reaches
+# the real Settings object — monkeypatching after the import below would be a
+# silent no-op.  Seeding it here is what lets the health test prove the whole
+# env → Settings → endpoint path without mocking anything.  Backend CI sets the
+# same value on its test job; `setdefault` means an explicit env always wins.
+os.environ.setdefault("SERVER_VERSION", "1.2.3-test")
 
 from app.database import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402

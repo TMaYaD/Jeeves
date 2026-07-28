@@ -4,7 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jeeves-backend"
-version = "0.1.0"
+# Not the server version, and deliberately not kept in step with it: nothing
+# consumes this wheel's version, and a second copy of the number would only
+# drift.  The deployed server version comes from SERVER_VERSION — see
+# docs/BACKEND_GUIDELINES.md, "Server versioning & releases".
+version = "0.0.0"
 description = "Jeeves — FastAPI backend"
 requires-python = ">=3.12"
 
@@ -37,6 +41,7 @@ dev = [
     "ruff>=0.4.7",
     "mypy>=1.10.0",
     "fakeredis>=2.23.0",
+    "httpx-ws>=0.7.0",
 ]
 
 [tool.hatch.build.targets.wheel]

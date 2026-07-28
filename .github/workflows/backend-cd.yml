@@ -16,7 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     permissions:
-      contents: read
+      # write, not read: the release step below cuts the server/v* tag.
+      contents: write
 
     steps:
       # Backend CI runs per push and two of them finish in whatever order their
@@ -64,12 +65,58 @@ jobs:
         run: |
           if ! git rev-parse --verify --quiet HEAD^2 >/dev/null; then
             echo "Tip is not a merge commit — pushed range is unbounded, deploying."
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only HEAD^ HEAD | grep -q '^backend/'; then
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # The version is computed from the commits since the last server/v* tag
+      # that touch backend/ — a finer filter than the HEAD^..HEAD grep above,
+      # and the one that actually decides whether a release exists.  The
+      # checkout's fetch-depth: 0 brings the tags along with the history, so no
+      # extra fetch option is needed.  The script only reads, and hard-fails if
+      # the baseline tag was never seeded, so a forgotten seed stops the
+      # pipeline instead of silently mislabelling a deploy.
+      - name: Compute server version
+        id: server-version
+        if: steps.freshness.outputs.current == 'true'
+        run: |
+          set -euo pipefail
+          ./infra/ci/compute-server-version.sh | tee -a "$GITHUB_OUTPUT"
+
+      # Tag before deploy: the version names the release cut, which is a
+      # property of the commit, not of deploy success — /health is what reports
+      # deployed reality.  A failed deploy therefore leaves a tag for code that
+      # never ran, which is visible and is corrected by the next deploy;
+      # tagging afterwards would instead let a failed sync-rules publish
+      # withhold a tag from a backend that did ship.
+      #
+      # Creating the release also creates the tag, so nothing has to push over
+      # the checkout's deliberately credential-less git remote.  Re-runs are
+      # inert twice over: a re-run's range starts at the tag it already cut and
+      # so computes bump=none, and the existence check below covers the window
+      # where the tag has not yet propagated to the fresh checkout.
+      - name: Tag and release the server version
+        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.bump != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.server-version.outputs.tag }}
+          VERSION: ${{ steps.server-version.outputs.version }}
+          NOTES: ${{ steps.server-version.outputs.notes }}
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; nothing to do."
+            exit 0
+          fi
+          gh release create "${TAG}" \
+            --target "${TARGET_SHA}" \
+            --title "Server ${VERSION}" \
+            --notes "${NOTES}"
 
       # Not gated on backend-changes: the sync-rules publish below runs on
       # every CD, including infra-only commits that skip the Dokku push.
@@ -79,14 +126,40 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DOKKU_SSH_PRIVATE_KEY }}
 
+      # Every step below reaches the host through a DOKKU_HOST env var rather
+      # than expanding `vars.DOKKU_HOST` into `run:` directly.  The value is
+      # maintainer-set, so this is not closing a live hole; it keeps the whole
+      # template-injection class off the shell in the one place it could ever
+      # appear in this workflow.
       - name: Add Dokku host to known hosts
         if: steps.freshness.outputs.current == 'true'
-        run: ssh-keyscan -H "${{ vars.DOKKU_HOST }}" >> ~/.ssh/known_hosts
+        env:
+          DOKKU_HOST: ${{ vars.DOKKU_HOST }}
+        run: ssh-keyscan -H "${DOKKU_HOST}" >> ~/.ssh/known_hosts
+
+      # Dokku builds from a git archive with no `.git`, so the running process
+      # cannot derive its own version — it has to be handed one.  This is a
+      # convergence step, not a release step, so it is gated only on the push
+      # that follows and not on a tag having been cut: a defensive deploy of an
+      # already-tagged range, or a re-run after a failed push, still lands
+      # /health on the version the tags claim.  --no-restart because the push
+      # below rebuilds and restarts with the new env anyway.
+      - name: Inject the server version into Dokku
+        if: steps.freshness.outputs.current == 'true' && steps.backend-changes.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.server-version.outputs.version }}
+          DOKKU_HOST: ${{ vars.DOKKU_HOST }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes "dokku@${DOKKU_HOST}" \
+            config:set --no-restart jeeves "SERVER_VERSION=${VERSION}"
 
       - name: Deploy to Dokku
         if: steps.freshness.outputs.current == 'true' && steps.backend-changes.outputs.changed == 'true'
+        env:
+          DOKKU_HOST: ${{ vars.DOKKU_HOST }}
         run: |
-          git remote add dokku "ssh://dokku@${{ vars.DOKKU_HOST }}/jeeves"
+          git remote add dokku "ssh://dokku@${DOKKU_HOST}/jeeves"
           git push dokku HEAD:main --force
 
       # Migrations first, buckets second: the push above blocks until Dokku's
@@ -110,6 +183,8 @@ jobs:
       # could never see.
       - name: Publish PowerSync sync rules
         if: steps.freshness.outputs.current == 'true'
+        env:
+          DOKKU_HOST: ${{ vars.DOKKU_HOST }}
         run: |
-          DOKKU="ssh -o BatchMode=yes dokku@${{ vars.DOKKU_HOST }}" \
+          DOKKU="ssh -o BatchMode=yes dokku@${DOKKU_HOST}" \
             infra/dokku/publish-sync-config.sh jeeves-powersync jeeves

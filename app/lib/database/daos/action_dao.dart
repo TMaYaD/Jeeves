@@ -76,6 +76,7 @@ library;
 import 'package:drift/drift.dart';
 import 'package:powersync/powersync.dart' show uuid;
 
+import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'time_log_dao.dart' show TimeLogDao;
 
@@ -103,6 +104,35 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   ActionDao(super.db);
 
   // ---------------------------------------------------------------------------
+  // Op-log capture (#550). Capture rides at the *effect* level: the `apply*`
+  // transaction bodies and the private row mutations they share
+  // (`_promoteRow`, `_retire`, `_insertCurrentAction`, `_stampOutcome`,
+  // `_closeOpenLogFor` / `_reopenLogAgainst`, `_shiftPlannedFrom`) each
+  // describe what they wrote, so every public wrapper inherits coverage from
+  // the effect it delegates to. The public wrappers open the capture scope.
+  //
+  // The multi-current repair (`_resolveCurrentAction`) goes through the seam
+  // like any other write: the reducer never knows the single-current
+  // invariant, so a repair has to be an ordinary op.
+  // ---------------------------------------------------------------------------
+
+  void _captureAction(String actionId, Map<String, Object?> fields) {
+    attachedDatabase.opCapture.write(
+      collection: actionsCollection,
+      entityId: actionId,
+      fields: fields,
+    );
+  }
+
+  void _captureOutcome(String outcomeId, Map<String, Object?> fields) {
+    attachedDatabase.opCapture.write(
+      collection: todosCollection,
+      entityId: outcomeId,
+      fields: fields,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Public primitives — each opens a transaction and notifies after commit.
   // ---------------------------------------------------------------------------
 
@@ -122,7 +152,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applySetCurrentAction(
         outcomeId,
         text,
@@ -130,7 +160,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         timeEstimate: timeEstimate,
         ts: ts,
       ),
-    );
+    ));
     _notify(effect);
   }
 
@@ -156,7 +186,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applyEditAction(
         actionId,
         text: text,
@@ -166,7 +196,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         clearTimeEstimate: clearTimeEstimate,
         ts: ts,
       ),
-    );
+    ));
     _notify(effect);
   }
 
@@ -187,7 +217,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applySupersedeCurrentAction(
         outcomeId,
         newActionText: newActionText,
@@ -195,7 +225,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         newTimeEstimate: newTimeEstimate,
         ts: ts,
       ),
-    );
+    ));
     _notify(effect);
   }
 
@@ -219,9 +249,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// rows or push the completion timestamp forward.
   Future<void> completeCurrentAction(String outcomeId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applyCompleteCurrentAction(outcomeId, ts: ts),
-    );
+    ));
     if (effect.changed) {
       attachedDatabase.notifyActionsViewWrite();
       // Deliberately notify the `todos` view even though this transaction no
@@ -255,7 +285,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applyAddPlannedAction(
         outcomeId,
         text,
@@ -264,7 +294,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         position: position,
         ts: ts,
       ),
-    );
+    ));
     _notify(effect);
   }
 
@@ -280,9 +310,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applyReorderPlannedActions(outcomeId, orderedIds, ts: ts),
-    );
+    ));
     _notify(effect);
   }
 
@@ -293,9 +323,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// or is already `current` (idempotent under double-tap / replay). Stamps.
   Future<void> promotePlannedAction(String actionId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applyPromotePlannedAction(actionId, ts: ts),
-    );
+    ));
     _notify(effect);
   }
 
@@ -306,9 +336,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// Stamps once.
   Future<void> supersedeAndPromote(String actionId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applySupersedeAndPromote(actionId, ts: ts),
-    );
+    ));
     _notify(effect);
   }
 
@@ -322,9 +352,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applyDemoteCurrentAction(actionId, position: position, ts: ts),
-    );
+    ));
     _notify(effect);
   }
 
@@ -334,9 +364,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// gone or is not `planned`. Stamps.
   Future<void> removePlannedAction(String actionId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await transaction(
+    final effect = await attachedDatabase.capturing(() => transaction(
       () => applyRemovePlannedAction(actionId, ts: ts),
-    );
+    ));
     _notify(effect);
   }
 
@@ -638,6 +668,12 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureAction(current.id, {
+      'text': normalized,
+      'energy_level': ?energyLevel,
+      'time_estimate': ?timeEstimate,
+      'updated_at': encodeInstant(ts),
+    });
     await _stampOutcome(outcomeId, ts);
     return (changed: true, stamped: true, logChanged: false);
   }
@@ -692,6 +728,18 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureAction(actionId, {
+      if (textDiffers) 'text': normalized,
+      if (clearEnergyLevel)
+        'energy_level': null
+      else if (energyDiffers)
+        'energy_level': energyLevel,
+      if (clearTimeEstimate)
+        'time_estimate': null
+      else if (timeDiffers)
+        'time_estimate': timeEstimate,
+      'updated_at': encodeInstant(ts),
+    });
     if (row.role == 'current') {
       // D1, by construction rather than by caller discipline. Mirror the
       // *post-write* effort values (not the diffs) so the columns cannot be
@@ -709,6 +757,13 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
           updatedAt: Value(ts),
         ),
       );
+      _captureOutcome(row.outcomeId, {
+        'energy_level':
+            clearEnergyLevel ? null : energyLevel ?? row.energyLevel,
+        'time_estimate':
+            clearTimeEstimate ? null : timeEstimate ?? row.timeEstimate,
+        'updated_at': encodeInstant(ts),
+      });
     }
     await _stampOutcome(row.outcomeId, ts);
     return (changed: true, stamped: true, logChanged: false);
@@ -762,6 +817,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
           updatedAt: Value(ts),
         ),
       );
+      _captureOutcome(outcomeId, {
+        'energy_level': newEnergyLevel,
+        'time_estimate': newTimeEstimate,
+        'updated_at': encodeInstant(ts),
+      });
       changed = true;
       if (closedLog != null) {
         await _reopenLogAgainst(closed: closedLog, newActionId: newActionId, ts: ts);
@@ -805,6 +865,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureAction(current.id, {
+      'role': 'done',
+      'done_at': encodeInstant(ts),
+      'updated_at': encodeInstant(ts),
+    });
     // Engagement on this Action ended at Done — close its open TimeLog here
     // (issue #476), not at a later endFocus(). No reopen: a finished Action has
     // no successor to continue against (CONTEXT.md § Switching Actions).
@@ -851,9 +916,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       await _shiftPlannedFrom(planned, insertAt, ts);
     }
     final userId = await _userIdForOutcome(outcomeId);
+    final plannedId = uuid.v4();
     await into(actions).insert(
       ActionsCompanion(
-        id: Value(uuid.v4()),
+        id: Value(plannedId),
         outcomeId: Value(outcomeId),
         userId: Value(userId),
         actionText: Value(normalized),
@@ -865,6 +931,18 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureAction(plannedId, {
+      'outcome_id': outcomeId,
+      'user_id': userId,
+      'text': normalized,
+      'role': 'planned',
+      'position': insertAt,
+      'energy_level': energyLevel,
+      'time_estimate': timeEstimate,
+      'created_at': encodeInstant(ts),
+      'updated_at': encodeInstant(ts),
+      'done_at': null,
+    });
     await _stampOutcome(outcomeId, ts);
     return (changed: true, stamped: true, logChanged: false);
   }
@@ -906,6 +984,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         await (update(actions)..where((a) => a.id.equals(target[i].id))).write(
           ActionsCompanion(position: Value(i), updatedAt: Value(ts)),
         );
+        _captureAction(target[i].id, {
+          'position': i,
+          'updated_at': encodeInstant(ts),
+        });
       }
     }
     await _stampOutcome(outcomeId, ts);
@@ -979,6 +1061,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureAction(row.id, {
+      'role': 'planned',
+      'position': insertAt,
+      'updated_at': encodeInstant(ts),
+    });
     await _stampOutcome(row.outcomeId, ts);
     return (changed: true, stamped: true, logChanged: false);
   }
@@ -992,6 +1079,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     if (row == null || row.role != 'planned') return _noEffect;
 
     await (delete(actions)..where((a) => a.id.equals(actionId))).go();
+    // A hard delete on the log is a tombstone op, never row absence — that is
+    // what stops a replayed create from resurrecting the removed row.
+    attachedDatabase.opCapture
+        .tombstone(collection: actionsCollection, entityId: actionId);
     // The gap the delete leaves in `position` is display-only: the read
     // tie-break covers it and the next reorder re-densifies.
     await _stampOutcome(row.outcomeId, ts);
@@ -1035,6 +1126,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         await (update(actions)..where((a) => a.id.equals(row.id))).write(
           ActionsCompanion(position: Value(desired), updatedAt: Value(ts)),
         );
+        _captureAction(row.id, {
+          'position': desired,
+          'updated_at': encodeInstant(ts),
+        });
       }
     }
   }
@@ -1052,6 +1147,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureAction(row.id, {
+      'role': 'current',
+      'position': null,
+      'updated_at': encodeInstant(ts),
+    });
     await (update(todos)..where((t) => t.id.equals(row.outcomeId))).write(
       TodosCompanion(
         energyLevel: Value(row.energyLevel),
@@ -1059,6 +1159,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureOutcome(row.outcomeId, {
+      'energy_level': row.energyLevel,
+      'time_estimate': row.timeEstimate,
+      'updated_at': encodeInstant(ts),
+    });
   }
 
   /// The single surviving `current` Action for [outcomeId], converging an
@@ -1121,6 +1226,18 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureAction(id, {
+      'outcome_id': outcomeId,
+      'user_id': userId,
+      'text': text,
+      'role': 'current',
+      'position': null,
+      'energy_level': energyLevel,
+      'time_estimate': timeEstimate,
+      'created_at': encodeInstant(ts),
+      'updated_at': encodeInstant(ts),
+      'done_at': null,
+    });
     return id;
   }
 
@@ -1140,6 +1257,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     await (update(timeLogs)
           ..where((t) => t.actionId.equals(actionId) & t.endedAt.isNull()))
         .write(TimeLogsCompanion(endedAt: Value(ts.toIso8601String())));
+    for (final row in open) {
+      TimeLogDao.captureLogClosedOn(attachedDatabase, row.id, ts);
+    }
     return open.first;
   }
 
@@ -1152,9 +1272,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     required String newActionId,
     required DateTime ts,
   }) async {
+    final id = uuid.v4();
     await into(timeLogs).insert(
       TimeLogsCompanion(
-        id: Value(uuid.v4()),
+        id: Value(id),
         userId: Value(closed.userId),
         taskId: Value(closed.taskId),
         actionId: Value(newActionId),
@@ -1162,6 +1283,15 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         endedAt: const Value(null),
         focusSessionId: Value(closed.focusSessionId),
       ),
+    );
+    TimeLogDao.captureLogOpened(
+      attachedDatabase,
+      id: id,
+      userId: closed.userId,
+      taskId: closed.taskId,
+      actionId: newActionId,
+      startedAtIso: ts.toIso8601String(),
+      focusSessionId: closed.focusSessionId,
     );
   }
 
@@ -1174,6 +1304,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureAction(actionId, {
+      'role': 'superseded',
+      'updated_at': encodeInstant(ts),
+    });
   }
 
   /// The stamping rule, encoded once: an Action mutation is a clarifying
@@ -1185,6 +1319,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         updatedAt: Value(ts),
       ),
     );
+    _captureOutcome(outcomeId, {
+      'last_clarified_at': encodeInstant(ts),
+      'updated_at': encodeInstant(ts),
+    });
   }
 
   Future<String> _userIdForOutcome(String outcomeId) async {

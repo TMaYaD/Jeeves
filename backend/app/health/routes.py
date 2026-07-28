@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from sqlalchemy import text
 
+from app.config import settings
 from app.database import AsyncSessionLocal
 
 router = APIRouter()
@@ -8,7 +9,9 @@ router = APIRouter()
 
 @router.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok"}
+    # The version is what lets a client say which server it talked to, so it
+    # rides on the endpoint that is always reachable rather than behind auth.
+    return {"status": "ok", "version": settings.server_version}
 
 
 @router.get("/health/db")
