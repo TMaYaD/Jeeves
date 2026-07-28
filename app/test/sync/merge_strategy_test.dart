@@ -11,6 +11,8 @@ import 'package:jeeves/services/user_preferences_conflict.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/merge_strategy.dart';
 
+import 'harness/permutations.dart';
+
 const _memberA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _memberB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
@@ -34,20 +36,8 @@ _Write? _reduce(FieldMergeStrategy strategy, List<_Write> writes) {
   return stored;
 }
 
-List<List<T>> _permutations<T>(List<T> items) {
-  if (items.length <= 1) return [List<T>.of(items)];
-  final result = <List<T>>[];
-  for (var index = 0; index < items.length; index++) {
-    final rest = [...items]..removeAt(index);
-    for (final tail in _permutations(rest)) {
-      result.add([items[index], ...tail]);
-    }
-  }
-  return result;
-}
-
 void _expectLattice(FieldMergeStrategy strategy, List<_Write> writes) {
-  final orders = _permutations(writes);
+  final orders = permutations(writes);
   final first = _reduce(strategy, orders.first)!;
   for (final order in orders) {
     final result = _reduce(strategy, order)!;

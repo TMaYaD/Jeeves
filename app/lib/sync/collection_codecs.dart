@@ -55,6 +55,7 @@ const String captureOutcomesCollection = 'capture_outcomes';
 const String captureTagsCollection = 'capture_tags';
 const String focusSessionTasksCollection = 'focus_session_tasks';
 const String focusSessionDispositionsCollection = 'focus_session_dispositions';
+const String userPreferencesCollection = 'user_preferences';
 
 /// How a column's SQL value maps to and from its JSON field value.
 enum FieldKind {
@@ -119,9 +120,10 @@ class CollectionCodec {
   final Set<String> requiredColumns;
 
   /// How the projector locates the row this entity already occupies. `id` for
-  /// owned entities; the domain pair for junctions, whose `id` column is the
-  /// sync row identifier rather than the domain key — which is what lets
-  /// `focus_session_tasks.id` be realigned onto its derivation.
+  /// owned entities; the domain pair for junctions and for the KV collection,
+  /// whose `id` column is the sync row identifier rather than the domain key —
+  /// which is what lets a `focus_session_tasks.id` or `user_preferences.id` a
+  /// pre-#550 device minted at random be realigned onto its derivation.
   final List<String> identityColumns;
 
   /// Columns the op log never carries, whose declared NOT NULL the projector
@@ -304,11 +306,12 @@ const Map<String, CollectionCodec> collectionCodecs = {
   // The KV collection. Its entity id is `preferenceEntityId(workspace, key)`
   // (the shipped KV policy), and its `value` field is the one the ADR-0011
   // Conflict Strategy registry arbitrates. Identity is the domain key
-  // `(user_id, key)` rather than `id`, because the DAO still mints a random
-  // `id` locally — so the projector realigns the column onto the derivation,
-  // the same correction it applies to `focus_session_tasks.id`.
-  'user_preferences': CollectionCodec(
-    collection: 'user_preferences',
+  // `(user_id, key)` rather than `id`: the DAO now mints the row under the
+  // derivation, and locating by the domain key is what still realigns a row a
+  // pre-#550 device created at random — the same correction it applies to
+  // `focus_session_tasks.id`.
+  userPreferencesCollection: CollectionCodec(
+    collection: userPreferencesCollection,
     table: 'user_preferences',
     columns: {
       'user_id': FieldKind.text,

@@ -1831,8 +1831,8 @@ def _reducer_vectors_document() -> dict[str, Any]:
             "entity with no live field is absent from the map."
         ),
         "$case_schema": (
-            "Optional per-case keys, both added by #550 and honoured by every "
-            "runner. 'permute': apply the ops in every order and assert the "
+            "Three optional per-case keys, all added by #550 and honoured by "
+            "every runner. 'permute': apply the ops in every order and assert the "
             "reduced state is identical across all of them — a values-only "
             "pairwise case cannot catch an associativity failure. "
             "'expected_clocks': the stored per-field HLC as "

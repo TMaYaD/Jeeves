@@ -16,11 +16,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.sync.vectors import reducer_vectors
+from tests.sync.vectors import dart_merge_strategy_names, reducer_vectors
 
 CASE_REQUIRED_KEYS = {"name", "note", "ops", "expected_entities", "expected_quarantine_reasons"}
 CASE_OPTIONAL_KEYS = {"permute", "expected_clocks", "strategy_overrides"}
-KNOWN_STRATEGIES = {"lww", "max_timestamp_value", "set_merge"}
 
 
 def _cases() -> list[dict[str, Any]]:
@@ -83,9 +82,15 @@ def test_expected_clocks_match_the_entities_they_describe() -> None:
 
 
 def test_strategy_overrides_name_known_strategies() -> None:
+    """A named strategy has to be one the Dart runner can actually resolve.
+
+    The accepted set is read off ``mergeStrategiesByName`` rather than restated
+    here, so registering a strategy on the Dart side widens this guard by itself.
+    """
+    known = dart_merge_strategy_names()
     for case in _cases():
         for key, strategy in (case.get("strategy_overrides") or {}).items():
-            assert strategy in KNOWN_STRATEGIES, f"{case['name']} overrides {key} to {strategy}"
+            assert strategy in known, f"{case['name']} overrides {key} to {strategy}"
 
 
 def test_the_lattice_cases_are_present() -> None:

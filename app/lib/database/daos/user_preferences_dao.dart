@@ -1,15 +1,17 @@
 /// DAO for cross-device synced key-value user preferences.
 ///
-/// Each preference row has a client-generated UUID primary key and a
-/// UNIQUE(user_id, key) constraint for upsert semantics. NULL value is a
+/// A row's primary key is the KV collection's derived entity id
+/// (`preferenceEntityId(userPreferencesWorkspaceId(userId), key)`), so the local
+/// row and the op log address one entity from the moment it is created. The
+/// UNIQUE(user_id, key) constraint gives upsert semantics. NULL value is a
 /// tombstone — excluded from getAll()/get()/watch() results.
 library;
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
 
+import '../../sync/collection_codecs.dart' show userPreferencesCollection;
 import '../../sync/ids.dart'
-    show preferenceEntityId, userPreferencesCollection, userPreferencesWorkspaceId;
+    show preferenceEntityId, userPreferencesWorkspaceId;
 import '../gtd_database.dart';
 
 class UserPreferencesDao {
@@ -24,11 +26,24 @@ class UserPreferencesDao {
   /// production (only [NativeDatabase] tests see a real table). To stay
   /// compatible with both, the row is looked up first and then either UPDATEd
   /// in place (preserving the existing `id` so PowerSync's CRUD queue stays
-  /// clean) or INSERTed with a fresh UUID. The select / write pair runs
-  /// inside a transaction so concurrent setters cannot race past the
+  /// clean) or INSERTed under the derived entity id. The select / write pair
+  /// runs inside a transaction so concurrent setters cannot race past the
   /// UNIQUE(user_id, key) constraint.
   Future<void> set(String userId, String key, String? jsonValue) async {
     final now = DateTime.now().toUtc().toIso8601String();
+    // The KV entity id policy: `uuid5(workspace_id, key)`, so two devices that
+    // create the same preference offline converge as one entity under
+    // field-grain merge instead of forking. The `value` field is the one
+    // ADR-0011's Conflict Strategy registry arbitrates.
+    //
+    // The workspace is the **User-global preferences one**, not the default GTD
+    // Workspace: preferences live behind a boundary that no Service is ever
+    // granted, and the derivation is keyed off that Workspace's id.
+    //
+    // The local row is minted under this id too, so local state and the op log
+    // address one row from the start rather than waiting for the projector to
+    // realign a random one.
+    final entityId = preferenceEntityId(userPreferencesWorkspaceId(userId), key);
     await _db.capturing(() => _db.transaction(() async {
       final existing = await _db.customSelect(
         'SELECT id FROM user_preferences WHERE user_id = ? AND "key" = ?',
@@ -40,7 +55,7 @@ class UserPreferencesDao {
           'INSERT INTO user_preferences (id, user_id, "key", value, updated_at) '
           'VALUES (?, ?, ?, ?, ?)',
           variables: [
-            Variable(uuid.v4()),
+            Variable(entityId),
             Variable(userId),
             Variable(key),
             Variable(jsonValue),
@@ -61,17 +76,9 @@ class UserPreferencesDao {
           updates: {_db.userPreferences},
         );
       }
-      // The KV entity id policy: `uuid5(workspace_id, key)`, so two devices
-      // that create the same preference offline converge as one entity under
-      // field-grain merge instead of forking. The `value` field is the one
-      // ADR-0011's Conflict Strategy registry arbitrates.
-      //
-      // The workspace is the **User-global preferences one**, not the default
-      // GTD Workspace: preferences live behind a boundary that no Service is
-      // ever granted, and the derivation is keyed off that Workspace's id.
       _db.opCapture.write(
         collection: userPreferencesCollection,
-        entityId: preferenceEntityId(userPreferencesWorkspaceId(userId), key),
+        entityId: entityId,
         fields: {
           'user_id': userId,
           'key': key,

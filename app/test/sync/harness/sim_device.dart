@@ -360,6 +360,7 @@ class SimDevice {
     required this.outcome,
     required this.storeDirectory,
     required this.workspaceClientFactory,
+    required this.strategies,
     required SyncClient preferencesWorkspaceClient,
   })  : _syncStore = database,
         // Preferences are authored into the **preferences** Workspace, not the
@@ -515,6 +516,7 @@ class SimDevice {
       outcome: outcome,
       storeDirectory: storeDirectory,
       workspaceClientFactory: workspaceClientFactory,
+      strategies: strategies,
       preferencesWorkspaceClient:
           await workspaceClientFactory(userPreferencesWorkspaceId(userId)),
     );
@@ -553,6 +555,12 @@ class SimDevice {
   /// second client with its own directory.
   final Future<SyncClient> Function(String workspaceId) workspaceClientFactory;
 
+  /// The merge-strategy registry every [Reducer] on this device is built with —
+  /// including the one [reopenSyncStore] builds. A device that reduced under a
+  /// custom registry has to keep reducing under it across a restart, or the
+  /// restart itself becomes the divergence the test is trying to rule out.
+  final MergeStrategyRegistry strategies;
+
   /// This device's client for the User-global preferences Workspace.
   Future<SyncClient> get preferencesClient =>
       workspaceClientFactory(userPreferencesWorkspaceId(userId));
@@ -583,7 +591,7 @@ class SimDevice {
       identity: identity,
       database: reopened,
       clock: hlc,
-      reducer: Reducer(reopened, nowMs: () => clock.nowMs),
+      reducer: Reducer(reopened, nowMs: () => clock.nowMs, strategies: strategies),
       now: () => clock.asDateTime,
     );
   }

@@ -79,17 +79,13 @@ class SyncHealthIndicator extends StatelessWidget {
   }
 
   static IconData _icon(SyncHealth health) {
-    if (health.unresolvedAlarmCount > 0 || health.quarantineCount > 0) {
-      return Icons.gpp_maybe;
-    }
+    if (health.degraded) return Icons.gpp_maybe;
     if (health.pendingOpCount > 0) return Icons.cloud_upload_outlined;
     return health.lastSyncedAt == null ? Icons.cloud_off_outlined : Icons.cloud_done;
   }
 
   static Color _color(SyncHealth health) {
-    if (health.unresolvedAlarmCount > 0 || health.quarantineCount > 0) {
-      return _alarm;
-    }
+    if (health.degraded) return _alarm;
     if (health.pendingOpCount > 0) return _pending;
     return health.lastSyncedAt == null ? _idle : _healthy;
   }

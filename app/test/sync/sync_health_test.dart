@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/sync_health.dart';
 import 'package:jeeves/widgets/sync_health_indicator.dart';
 
+import 'harness/signal_probe.dart';
 import 'harness/sim_device.dart';
 import 'harness/sim_workspace.dart';
 
@@ -72,7 +73,10 @@ void main() {
       final seen = <SyncHealth>[];
       final subscription = a.client.watchSyncHealth().listen(seen.add);
       addTearDown(subscription.cancel);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      // The stream is Drift-driven, so every wait here is a condition rather
+      // than a duration: a fixed sleep can expire before the re-emission lands
+      // and leave the assertion reading the previous value.
+      await waitUntil(() => seen.any((health) => health.pendingOpCount == 0));
       expect(seen.last.pendingOpCount, 0);
 
       a.goOffline();
@@ -82,7 +86,7 @@ void main() {
         userId: _userId,
         now: a.clock.asDateTime,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await waitUntil(() => seen.last.pendingOpCount == 1);
       expect(seen.last.pendingOpCount, 1);
     });
   });
