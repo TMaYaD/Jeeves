@@ -195,7 +195,7 @@ ChainVerdict chainVerdict({
   // bytes is exactly how that gets missed (review F13).
   if (storedUnderOpId != null &&
       (storedUnderOpId.authorSeq != header.authorSeq ||
-          !_sameBytes(storedUnderOpId.envelope, envelope))) {
+          !sameBytes(storedUnderOpId.envelope, envelope))) {
     return ChainVerdict.refuse(
       SyncRejection(
         SyncRejectionReason.duplicateOpIdDivergence,
@@ -214,7 +214,7 @@ ChainVerdict chainVerdict({
   final headHash = head?.envelopeHash ?? verifiedFloor?.envelopeHash ?? _zeroPrevAuthorHash;
 
   if (header.authorSeq == headSeq + 1) {
-    if (_sameBytes(header.prevAuthorHash, headHash)) return const ChainVerdict.accept();
+    if (sameBytes(header.prevAuthorHash, headHash)) return const ChainVerdict.accept();
     return ChainVerdict.refuse(
       SyncRejection(
         SyncRejectionReason.prevAuthorHashMismatch,
@@ -237,7 +237,7 @@ ChainVerdict chainVerdict({
   // At or below the head. Identical bytes are the honest re-serve; anything else
   // claims a slot this device has already verified something different into —
   // including a header claiming seq 0, which no author ever writes.
-  if (storedAtAuthorSeq != null && _sameBytes(storedAtAuthorSeq.envelope, envelope)) {
+  if (storedAtAuthorSeq != null && sameBytes(storedAtAuthorSeq.envelope, envelope)) {
     return const ChainVerdict.idempotentSkip();
   }
   return ChainVerdict.refuse(
@@ -273,11 +273,3 @@ IntegrityAlarmKind? alarmForRejection(SyncRejectionReason reason) => switch (rea
       SyncRejectionReason.noLiveGrant => IntegrityAlarmKind.noLiveGrant,
       _ => null,
     };
-
-bool _sameBytes(Uint8List a, Uint8List b) {
-  if (a.length != b.length) return false;
-  for (var index = 0; index < a.length; index++) {
-    if (a[index] != b[index]) return false;
-  }
-  return true;
-}

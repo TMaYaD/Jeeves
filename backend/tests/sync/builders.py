@@ -14,6 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 
 import jwt
+from httpx import AsyncClient
 from nacl.public import PrivateKey
 from nacl.signing import SigningKey
 
@@ -33,6 +34,7 @@ from app.sync.control_payload import (
     MemberKeys,
     RegistrationCertificate,
     RevokeCertificate,
+    control_payload_hash,
     sign_genesis_certificate,
     sign_grant_certificate,
     sign_registration_certificate,
@@ -47,6 +49,8 @@ from app.sync.envelope import (
     derive_key_id,
     envelope_hash,
     frame_body,
+    parse_body,
+    split_envelope,
 )
 from app.sync.escrow import (
     ARGON2ID_FLOOR_MEMORY_KIB,
@@ -59,8 +63,10 @@ from app.sync.escrow import (
     POLY1305_TAG_BYTES,
     sign_escrow,
 )
+from app.sync.ids import default_workspace_id
 from app.sync.member_auth import member_challenge_signing_input
 from app.sync.op_payload import Hlc
+from tests.conftest import auth_header, register
 
 BASE_WALL_MS = 1_800_000_000_000
 
@@ -319,17 +325,25 @@ class SpecRoot:
         workspace_id: uuid.UUID,
         *,
         grant_id: uuid.UUID,
+        revoker_member_id: uuid.UUID,
         revoker: str = GRANTER_ROOT,
         revoke_id: uuid.UUID | None = None,
         wall_ms: int = BASE_WALL_MS,
     ) -> RevokeCertificate:
-        resolved_revoke_id = revoke_id or uuid.uuid4()
+        """``revoker_member_id`` is the *device* authoring the revocation.
+
+        The HLC's tie-breaker node is a member id — that is what ``Hlc.for_member``
+        stores and what the control-fork tie-break compares — so passing the freshly
+        minted ``revoke_id`` would order revocations by a certificate id rather than
+        by the device behind them.  Mirrors
+        ``app/test/sync/harness/sim_workspace.dart``.
+        """
         return RevokeCertificate(
             workspace_id=workspace_id,
-            revoke_id=resolved_revoke_id,
+            revoke_id=revoke_id or uuid.uuid4(),
             grant_id=grant_id,
             revoker=revoker,
-            revoked_at_hlc=Hlc.for_member(resolved_revoke_id, wall_ms),
+            revoked_at_hlc=Hlc.for_member(revoker_member_id, wall_ms),
         )
 
     def revoke_envelope(
@@ -406,3 +420,154 @@ def encode(envelope: bytes) -> str:
 
 def encode_all(*envelopes: bytes) -> dict[str, list[str]]:
     return {"ops": [encode(envelope) for envelope in envelopes]}
+
+
+# ── The enrolment ceremony, shared ────────────────────────────────────────────
+#
+# Every sync route test needs the same founded Workspace, and it is a *long*
+# ceremony: escrow the Root, register the device, prove possession for a member
+# credential, then post genesis plus a root-signed owner self-grant as one batch.
+# It lives here rather than in whichever test module happened to need it first, so
+# ``test_ops_routes``, ``test_grants_routes`` and ``test_signal_socket`` cannot
+# drift apart on what "a founded Workspace" means.
+
+
+class Session:
+    """One user, one Root, one registered device holding a member token.
+
+    ``headers`` is the *member* credential — the sync data routes take nothing
+    else.  ``user_headers`` is the User credential the registry and escrow routes
+    take, and the two are deliberately not interchangeable.
+
+    ``control_head`` tracks the cross-author chain link the next control op must
+    name, exactly as a pulling client would compute it: SHA-256 over the previous
+    control op's payload bytes.
+    """
+
+    def __init__(
+        self,
+        user_token: str,
+        member_token: str,
+        workspace_id: uuid.UUID,
+        device: SpecDevice,
+        root: SpecRoot,
+    ) -> None:
+        self.user_token = user_token
+        self.member_token = member_token
+        self.workspace_id = workspace_id
+        self.device = device
+        self.root = root
+        self.control_head = ZERO_PREV_CONTROL_HASH
+        #: The founding device's own owner Grant, for tests that revoke it.  None
+        #: until the founding ceremony runs, which ``genesis=False`` skips.
+        self.owner_grant_id: uuid.UUID | None = None
+        #: The highest seq the founding ceremony spent, so a pull test can start
+        #: its cursor past the control ops rather than paging through them.
+        self.founded_through_seq = 0
+
+    @property
+    def headers(self) -> dict[str, str]:
+        """The ops routes' credential — the member token, never the user's."""
+        return auth_header(self.member_token)
+
+    @property
+    def user_headers(self) -> dict[str, str]:
+        return auth_header(self.user_token)
+
+    def advance_control_head(self, envelope: bytes) -> bytes:
+        """Record ``envelope`` as the new control head and return it unchanged."""
+        self.control_head = control_payload_hash(parse_body(split_envelope(envelope)[1]))
+        return envelope
+
+
+async def member_token(client: AsyncClient, device: SpecDevice) -> str:
+    """A member-scoped credential, by proof of possession of the device key."""
+    challenge = await client.post(f"/members/{device.member_id}/challenge")
+    assert challenge.status_code == 200, challenge.text
+    nonce = challenge.json()["nonce"]
+    exchanged = await client.post(
+        f"/members/{device.member_id}/token",
+        json={"nonce": nonce, "signature": device.challenge_signature(nonce)},
+    )
+    assert exchanged.status_code == 200, exchanged.text
+    token: str = exchanged.json()["access_token"]
+    return token
+
+
+async def found_workspace(client: AsyncClient, session: Session) -> None:
+    """The founding ceremony: genesis, then a root-signed owner self-grant.
+
+    Two ops in **one** batch and in that order, exactly as ``EnrolmentService``
+    posts them — a Grant at index 1 authorizing against the genesis at index 0
+    within one atomic append is the path the batch walk has to get right.  Genesis
+    embeds the founder's registration, so there is no separate ``member_register``
+    for the founding device.
+    """
+    genesis = session.advance_control_head(
+        session.root.genesis_envelope(session.device, session.workspace_id)
+    )
+    grant_certificate = session.root.grant_certificate(
+        session.workspace_id, member_id=session.device.member_id
+    )
+    grant = session.advance_control_head(
+        session.root.grant_envelope(
+            session.device,
+            session.workspace_id,
+            certificate=grant_certificate,
+            # ``advance_control_head(genesis)`` already stored exactly this hash;
+            # recomputing it would let the two drift if the head derivation ever
+            # changed what it hashes.
+            prev_control_hash=session.control_head,
+        )
+    )
+    response = await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(genesis, grant),
+        headers=session.headers,
+    )
+    assert response.status_code == 200, response.text
+    session.owner_grant_id = grant_certificate.grant_id
+    session.founded_through_seq = max(result["seq"] for result in response.json()["results"])
+
+
+async def open_session(
+    client: AsyncClient,
+    email: str,
+    *,
+    workspace_id: uuid.UUID | None = None,
+    genesis: bool = True,
+) -> Session:
+    """Enrol one device, and by default run its two-op founding ceremony.
+
+    ``genesis=False`` stops after the member credential, leaving a device that is
+    enrolled and holds **no Grant whatsoever** — the state the real ceremony pulls
+    the control log in, and the state every ``no_live_grant`` test needs.
+    """
+    user_token = await register(client, email)
+    resolved_workspace_id = workspace_id or default_workspace_id(user_id_from_token(user_token))
+    root = SpecRoot()
+    # Account creation writes the escrow in the same breath: without a stored
+    # root_pk the server has no Root to check a control op against.
+    escrow = await client.put(
+        f"/w/{resolved_workspace_id}/recovery",
+        json=root.escrow_body(resolved_workspace_id),
+        headers=auth_header(user_token),
+    )
+    assert escrow.status_code == 200, escrow.text
+
+    device = SpecDevice()
+    registered = await client.post(
+        "/members", json=device.registration_body(), headers=auth_header(user_token)
+    )
+    assert registered.status_code == 201, registered.text
+
+    session = Session(
+        user_token,
+        await member_token(client, device),
+        resolved_workspace_id,
+        device,
+        root,
+    )
+    if genesis:
+        await found_workspace(client, session)
+    return session

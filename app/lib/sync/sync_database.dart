@@ -152,6 +152,19 @@ class QuarantinedOps extends Table {
 /// every refused row was later released. `SyncHealth.unresolvedAlarmCount`
 /// counts the rows where it is null, which is why a heal has to clear it rather
 /// than merely add a second row.
+///
+/// The unique index makes that upsert key a real constraint rather than a
+/// convention `_raiseAlarm` happens to honour. It does not cover the
+/// server-only alarms: SQLite reads distinct NULLs as distinct, so a null
+/// [authorMemberId] is unconstrained and `_raiseAlarm`'s select-then-write stays
+/// the mechanism for those. A sentinel author id would buy the constraint at the
+/// cost of making "accused of nothing in particular" a member id, which is a
+/// worse trade in a table whose whole content is an accusation about a member.
+@TableIndex(
+  name: 'integrity_alarms_key',
+  columns: {#workspaceId, #kind, #authorMemberId},
+  unique: true,
+)
 @DataClassName('IntegrityAlarmRow')
 class IntegrityAlarms extends Table {
   IntColumn get id => integer().autoIncrement()();
@@ -267,7 +280,10 @@ class ControlChainState extends Table {
 /// [certHlc] fields are the *certificate's* clock, not the op's: the fork
 /// tie-break is "earliest cert HLC, then lowest author member id", and an op-level
 /// clock would let a forking author move the tie by re-signing an envelope.
-@TableIndex(name: 'applied_control_log_workspace', columns: {#workspaceId, #seq})
+/// No secondary index: the `(workspaceId, seq)` primary key below already covers
+/// the one read here — `WHERE workspace_id = ? AND quarantined_at IS NULL ORDER BY
+/// seq` — and a declared index over the same two columns would only add a write
+/// per control op.
 @DataClassName('AppliedControlRow')
 class AppliedControlLog extends Table {
   TextColumn get workspaceId => text()();
@@ -348,9 +364,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// `sync_cursors.last_sync_completed_at` (#550); v4 adds the integrity-alarm
   /// store, the quarantine and op-log columns the chain verdict needs, and the
   /// three indexes it reads through (#551); v5 adds the applied-control log the
-  /// grants view is derived from and the per-Workspace `epoch_floor` (#549).
+  /// grants view is derived from and the per-Workspace `epoch_floor` (#549);
+  /// v6 turns the documented integrity-alarm upsert key into a constraint.
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -383,19 +400,81 @@ class SyncDatabase extends _$SyncDatabase {
             await customStatement(
               'UPDATE op_log SET applied_at = received_at WHERE applied_at IS NULL',
             );
+            // Before v4 nothing enforced one op per chain slot, so a server that
+            // re-served one author position under two transport seqs left two
+            // rows that were both legal under the `(workspace_id, seq)` primary
+            // key. Creating the unique index on such a store throws, and because
+            // the whole `onUpgrade` is one migration the store then fails to open
+            // on every launch — with a bare SQLite message naming only the index.
+            await _refuseDuplicateKeysBeforeUniqueIndex(
+              table: 'op_log',
+              keyColumns: const ['workspace_id', 'author_member_id', 'author_seq'],
+              invariant: 'one op per (workspace, author, author_seq) chain slot',
+              recovery: 'delete and recreate this sync store',
+            );
             await migrator.create(opLogAuthorChain);
             await migrator.create(opLogAuthorOpId);
             await migrator.create(quarantinedOpsAuthorChain);
           }
           if (from < 5) {
-            // Two new tables and one index. Nothing is backfilled: a device
-            // upgrading here has applied no control op under the #549 rules, and
-            // its `epoch_floor` is genuinely unset rather than zero-by-decree —
-            // the raise-only API reads an absent row as the 0 floor genesis fixes.
+            // Two new tables, no index — each carries the primary key its own
+            // reads are served by. Nothing is backfilled: a device upgrading here
+            // has applied no control op under the #549 rules, and its
+            // `epoch_floor` is genuinely unset rather than zero-by-decree — the
+            // raise-only API reads an absent row as the 0 floor genesis fixes.
             await migrator.createTable(appliedControlLog);
             await migrator.createTable(epochFloors);
-            await migrator.create(appliedControlLogWorkspace);
+          }
+          if (from < 6) {
+            // The alarm upsert key was documented from v4 and honoured only by
+            // `_raiseAlarm`'s select-then-write, so a store carrying a duplicate
+            // is possible even though no code path aims for one.
+            await _refuseDuplicateKeysBeforeUniqueIndex(
+              table: 'integrity_alarms',
+              keyColumns: const ['workspace_id', 'kind', 'author_member_id'],
+              invariant: 'one standing accusation per (workspace, kind, author)',
+              recovery: 'delete and recreate this sync store',
+            );
+            await migrator.create(integrityAlarmsKey);
           }
         },
       );
+
+  /// Fail the migration with the invariant and the recovery spelled out, rather
+  /// than letting `CREATE UNIQUE INDEX` fail on rows that predate the rule.
+  ///
+  /// Failing loud is the deliberate choice over de-duplicating first. ADR-0026
+  /// makes the received log *the client's* evidence, and evidence is not edited
+  /// to make a schema change succeed — a `DELETE … GROUP BY` here would silently
+  /// destroy the very second row that proves the server re-served a spent slot.
+  /// The cost is bounded because no store the server has ever seen exists before
+  /// the #553 cutover: stores ship empty, and the dev and harness stores that can
+  /// hold pre-rule rows are disposable. So the honest answer is to name what is
+  /// wrong and stop, not to quietly launder it.
+  ///
+  /// Rows with a null key column are skipped, matching SQLite's unique-index
+  /// semantics — distinct NULLs are distinct there, so grouping them would refuse
+  /// a store the index would have accepted.
+  Future<void> _refuseDuplicateKeysBeforeUniqueIndex({
+    required String table,
+    required List<String> keyColumns,
+    required String invariant,
+    required String recovery,
+  }) async {
+    final quoted = [for (final column in keyColumns) '"$column"'];
+    final notNull = quoted.map((column) => '$column IS NOT NULL').join(' AND ');
+    final duplicateKeyRows = await customSelect(
+      'SELECT COUNT(*) AS duplicate_key_count FROM ('
+      'SELECT 1 FROM "$table" WHERE $notNull '
+      'GROUP BY ${quoted.join(', ')} HAVING COUNT(*) > 1)',
+    ).get();
+    final duplicateKeyCount = duplicateKeyRows.first.read<int>('duplicate_key_count');
+    if (duplicateKeyCount == 0) return;
+    throw StateError(
+      'sync store migration refused: "$table" holds $duplicateKeyCount key(s) '
+      'with more than one row, violating the invariant this migration makes a '
+      'constraint — $invariant. The rows are evidence and are not de-duplicated '
+      'to let the migration through; to recover, $recovery.',
+    );
+  }
 }

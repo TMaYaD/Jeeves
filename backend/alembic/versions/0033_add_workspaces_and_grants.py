@@ -76,7 +76,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_grants_workspace_member", table_name="grants")
-    op.drop_table("grants")
-    op.drop_table("workspaces")
-    op.drop_column("members", "member_kind")
+    # Irreversible, same mechanism as 0031: ``workspaces`` and ``grants`` are the
+    # server's authorization index over the control log, and no tool exists to
+    # re-derive them from ``ops`` — dropping them leaves every content POST
+    # refused and every genesis forgotten while the log itself survives.
+    # ``members.member_kind`` records what a signed registration certificate
+    # asserted, equally unrecoverable server-side.  Fail loudly BEFORE touching
+    # any schema; recovery is a restore-from-backup + ``alembic stamp``, not a
+    # downgrade.
+    raise RuntimeError(
+        "Migration 0033 (add_workspaces_and_grants) is irreversible: dropping "
+        "workspaces and grants would destroy the server's authorization index, "
+        "which nothing can rebuild from the op log. Restore from a backup and "
+        "`alembic stamp` the target revision instead of running "
+        "`alembic downgrade`."
+    )

@@ -30,22 +30,8 @@ import 'package:jeeves/sync/op_payload.dart';
 import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_database.dart';
 
+import 'harness/permutations.dart';
 import 'vectors.dart';
-
-/// Every ordering of [items]. Cases carrying `permute` are small by
-/// construction — three ops is six orders — so the factorial blow-up is bounded
-/// by review rather than by code.
-List<List<T>> permutations<T>(List<T> items) {
-  if (items.length <= 1) return [List<T>.of(items)];
-  final result = <List<T>>[];
-  for (var index = 0; index < items.length; index++) {
-    final rest = [...items]..removeAt(index);
-    for (final tail in permutations(rest)) {
-      result.add([items[index], ...tail]);
-    }
-  }
-  return result;
-}
 
 MergeStrategyRegistry _registryFor(Map<String, dynamic> testCase) {
   final overrides = testCase['strategy_overrides'] as Map<String, dynamic>?;

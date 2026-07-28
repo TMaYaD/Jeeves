@@ -48,6 +48,12 @@ class SyncHealth {
 
   bool get clean => pendingOpCount == 0 && unresolvedAlarmCount == 0;
 
+  /// Something the user is owed an explanation for: an accusation that still
+  /// stands, or an op the device refused to apply. Derived for the same reason
+  /// [clean] is — the indicator renders this state from two counts, and a
+  /// stored flag would be free to disagree with them.
+  bool get degraded => unresolvedAlarmCount > 0 || quarantineCount > 0;
+
   SyncHealth copyWith({
     int? pendingOpCount,
     int? unresolvedAlarmCount,

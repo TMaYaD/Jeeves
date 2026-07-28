@@ -221,10 +221,6 @@ Hlc _decodeHlc(Object? raw, String what) {
   }
 }
 
-Uint8List _kexKeyId(Uint8List kexPk) => Uint8List.fromList(
-      crypto.sha256.convert(kexPk).bytes.sublist(0, authorKeyIdBytes),
-    );
-
 /// One Member's certified public keys — the block a registration carries.
 ///
 /// Shared verbatim by `member_register` (at the top level of its cert) and by
@@ -246,9 +242,10 @@ class MemberKeys {
 
   Uint8List get signKeyId => deriveKeyId(signPk);
 
-  /// The same derivation as the signing key id, over the KEX key. Carried
+  /// The same derivation as the signing key id, over the KEX key — literally
+  /// the same function, so the two key ids cannot drift apart. Carried
   /// explicitly so #554 can rotate either key without changing the shape.
-  Uint8List get kexKeyId => _kexKeyId(kexPk);
+  Uint8List get kexKeyId => deriveKeyId(kexPk);
 
   Map<String, Object?> toJson() => {
         'member_id': memberId,
@@ -323,7 +320,7 @@ class RegistrationCertificate {
 
   Uint8List get signKeyId => deriveKeyId(signPk);
 
-  Uint8List get kexKeyId => _kexKeyId(kexPk);
+  Uint8List get kexKeyId => deriveKeyId(kexPk);
 
   MemberKeys get keys => MemberKeys(
         memberId: memberId,

@@ -19,7 +19,6 @@
 @TestOn('!browser')
 library;
 
-import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
@@ -40,24 +39,13 @@ import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:uuid/uuid.dart';
 
+import 'harness/signal_probe.dart';
+
 const _userId = 'user-1';
 const _member = 'dddddddddddddddddddddddddddddddd';
 const _baseWallMs = 1800000000000;
 
 String _id(String label) => const Uuid().v5(jeevesWorkspaceNamespace, 'notify/$label');
-
-Future<void> _waitUntil(
-  bool Function() condition, {
-  Duration timeout = const Duration(seconds: 8),
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  while (!condition()) {
-    if (DateTime.now().isAfter(deadline)) {
-      throw TimeoutException('condition not met within $timeout', timeout);
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-  }
-}
 
 /// Rewrites [table] from a real table into a PowerSync-style view over a
 /// `<table>_data` backing table with INSTEAD OF triggers.
@@ -191,7 +179,7 @@ void main() {
     final seen = <List<Todo>>[];
     final subscription = domain.todoDao.watchNext().listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty);
+    await waitUntil(() => seen.isNotEmpty);
     expect(seen.last, isEmpty);
 
     // The negative case first: the same INSERT the projector runs, with no
@@ -215,7 +203,7 @@ void main() {
     // along with the projected one — the store held it all along, the watcher
     // simply had no reason to look.
     await projector.project(await reduce('todos', id, outcomeFields('Ship it')));
-    await _waitUntil(() => seen.last.length == 2);
+    await waitUntil(() => seen.last.length == 2);
     expect(seen.last.map((todo) => todo.id), containsAll([id, _id('silent')]));
   });
 
@@ -227,7 +215,7 @@ void main() {
     final subscription =
         domain.actionDao.watchCurrentAction(outcome).listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty);
+    await waitUntil(() => seen.isNotEmpty);
     expect(seen.last, isNull);
 
     await projector.project(await reduce(actionsCollection, actionId, {
@@ -237,7 +225,7 @@ void main() {
       'role': 'current',
       'created_at': '2026-07-28T09:00:00.000Z',
     }));
-    await _waitUntil(() => seen.last != null);
+    await waitUntil(() => seen.last != null);
     expect(seen.last!.actionText, 'Draft the memo');
   });
 
@@ -245,14 +233,14 @@ void main() {
     final seen = <List<Tag>>[];
     final subscription = domain.tagDao.watchByType('context').listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty);
+    await waitUntil(() => seen.isNotEmpty);
 
     await projector.project(await reduce(tagsCollection, _id('tag'), {
       'name': 'errand',
       'type': 'context',
       'user_id': _userId,
     }));
-    await _waitUntil(() => seen.last.length == 1);
+    await waitUntil(() => seen.last.length == 1);
     expect(seen.last.single.name, 'errand');
   });
 
@@ -260,14 +248,14 @@ void main() {
     final seen = <List<Capture>>[];
     final subscription = domain.captureDao.watchInbox().listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty);
+    await waitUntil(() => seen.isNotEmpty);
 
     await projector.project(await reduce(capturesCollection, _id('capture'), {
       'title': 'a stray thought',
       'created_at': '2026-07-28T09:00:00.000Z',
       'user_id': _userId,
     }));
-    await _waitUntil(() => seen.last.length == 1);
+    await waitUntil(() => seen.last.length == 1);
     expect(seen.last.single.title, 'a stray thought');
   });
 
@@ -277,7 +265,7 @@ void main() {
     final seen = <TimeLog?>[];
     final subscription = domain.timeLogDao.watchActiveLog().listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty);
+    await waitUntil(() => seen.isNotEmpty);
 
     await projector.project(await reduce(timeLogsCollection, _id('log'), {
       'user_id': _userId,
@@ -285,7 +273,7 @@ void main() {
       'started_at': '2026-07-28T09:00:00.000Z',
       'ended_at': null,
     }));
-    await _waitUntil(() => seen.last != null);
+    await waitUntil(() => seen.last != null);
     expect(seen.last!.taskId, outcome);
   });
 
@@ -298,7 +286,7 @@ void main() {
     final subscription =
         domain.focusSessionDao.watchActiveSessionTasks().listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty);
+    await waitUntil(() => seen.isNotEmpty);
     expect(seen.last, isEmpty);
 
     await projector.project(await reduce(focusSessionsCollection, sessionId, {
@@ -317,7 +305,7 @@ void main() {
         'user_id': _userId,
       },
     ));
-    await _waitUntil(() => seen.last.length == 1);
+    await waitUntil(() => seen.last.length == 1);
     expect(seen.last.single.id, outcome);
   });
 
@@ -326,7 +314,7 @@ void main() {
     final subscription =
         domain.userPreferencesDao.watchAll(_userId).listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty);
+    await waitUntil(() => seen.isNotEmpty);
 
     await projector.project(await reduce('user_preferences', _id('pref'), {
       'user_id': _userId,
@@ -334,7 +322,7 @@ void main() {
       'value': '"dark"',
       'updated_at': '2026-07-28T09:00:00.000Z',
     }));
-    await _waitUntil(() => seen.last.length == 1);
+    await waitUntil(() => seen.last.length == 1);
     expect(seen.last.single.key, 'theme');
   });
 
@@ -349,12 +337,12 @@ void main() {
         .search(const SearchQuery(text: 'Quarterly'))
         .listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty);
+    await waitUntil(() => seen.isNotEmpty);
     expect(seen.last, isEmpty);
 
     await projector.project(
         await reduce('todos', id, outcomeFields('Quarterly plan')));
-    await _waitUntil(() => seen.last.any((hit) => hit.todo?.id == id));
+    await waitUntil(() => seen.last.any((hit) => hit.todo?.id == id));
   });
 
   test('a projected row survives a plain select(todos) — the unsynced NOT NULL '
@@ -398,9 +386,9 @@ void main() {
     final seen = <List<Todo>>[];
     final subscription = domain.todoDao.watchNext().listen(seen.add);
     addTearDown(subscription.cancel);
-    await _waitUntil(() => seen.isNotEmpty && seen.last.length == 1);
+    await waitUntil(() => seen.isNotEmpty && seen.last.length == 1);
 
     await projector.project(await reduce('todos', id, const {}, tombstone: true));
-    await _waitUntil(() => seen.last.isEmpty);
+    await waitUntil(() => seen.last.isEmpty);
   });
 }

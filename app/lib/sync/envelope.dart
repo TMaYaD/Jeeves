@@ -183,9 +183,14 @@ enum SyncRejectionReason {
   /// role, so unlike its mint counterpart this one is a *stateful* verdict.
   ownerRevokeRequiresRoot('owner_revoke_requires_root'),
 
-  /// A Grant or Revoke naming a grantee or Grant this device cannot resolve.
-  /// Fail-closed: never held as a dangling forward reference.
+  /// A Grant naming a grantee this device cannot resolve. Fail-closed: never held
+  /// as a dangling forward reference.
   unknownGrantee('unknown_grantee'),
+
+  /// A Revoke naming a Grant this device cannot resolve. Distinct from
+  /// [unknownGrantee] because a Revoke names a `grant_id`: conflating the two
+  /// leaves a client unable to tell a failed revocation from an invalid grantee.
+  unknownGrant('unknown_grant'),
 
   /// A Grant to a non-Device member in the `user_preferences` Workspace — the
   /// client-side half of "every Device, no Service ever".
@@ -493,14 +498,16 @@ int _readUint64(ByteData view, int offset) {
   return high * 0x100000000 + view.getUint32(offset + 4, Endian.big);
 }
 
-/// First 8 bytes of SHA-256 over the raw 32-byte Ed25519 public key.
+/// First 8 bytes of SHA-256 over a raw 32-byte public key.
 ///
-/// The server derives this the same way and stores what it derived, never a
-/// client's claim; the client recomputes it locally for the header.
-Uint8List deriveKeyId(Uint8List signPublicKey) {
-  _requireLength(signPublicKey, signPublicKeyBytes, 'sign_pk');
+/// The one key-id derivation in the protocol, used for both key ids a Member
+/// carries — the Ed25519 signing key's and the X25519 KEX key's, which are the
+/// same width. The server derives this the same way and stores what it derived,
+/// never a client's claim; the client recomputes it locally for the header.
+Uint8List deriveKeyId(Uint8List publicKey) {
+  _requireLength(publicKey, signPublicKeyBytes, 'public key');
   return Uint8List.fromList(
-    crypto.sha256.convert(signPublicKey).bytes.sublist(0, authorKeyIdBytes),
+    crypto.sha256.convert(publicKey).bytes.sublist(0, authorKeyIdBytes),
   );
 }
 

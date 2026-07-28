@@ -127,6 +127,7 @@ from app.sync.envelope import (
 )
 from app.sync.escrow import (
     FIRST_ESCROW_VERSION,
+    MAX_ESCROW_VERSION,
     NO_ESCROW_STORED_VERSION,
     RECOVERY_FETCH_DAILY_LIMIT,
     ROOT_PUBLIC_KEY_BYTES,
@@ -205,9 +206,28 @@ async def _refuse_if_revoked(db: AsyncSession, workspace_id: uuid.UUID, member: 
     *pre-grant* Member is admitted and a revoked one is refused immediately, on
     reads as well as writes.  That immediacy is half of AC 1; the other half is
     the client's own authorization stage, which does not consult the server.
+
+    Scoped to the calling Member rather than going through :func:`_grant_index`:
+    the verdict needs only "any row" and "any live row", both of which
+    ``ix_grants_workspace_member`` answers directly.  Loading every Grant in the
+    Workspace would make this a full scan on every pull and every socket
+    handshake, growing with the Workspace's member and rotation count.  The
+    whole-workspace walk stays where it is genuinely needed, in
+    :func:`_verify_and_authorize`, which judges a batch positionally.
     """
-    index = await _grant_index(db, workspace_id)
-    if index.is_revoked(member.member_id):
+    live_by_grant = (
+        (
+            await db.execute(
+                select(Grant.revoked_by_seq).where(
+                    Grant.workspace_id == workspace_id,
+                    Grant.member_id == member.member_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if live_by_grant and all(revoked_by_seq is not None for revoked_by_seq in live_by_grant):
         raise _forbidden("no_live_grant", revoked=True)
 
 
@@ -442,14 +462,19 @@ async def issue_member_token(
     if owner is None or not owner.is_active:
         raise unauthorized
 
+    # GETDEL first, and *before* either field is decoded: a challenge is spent by
+    # the attempt, win or lose, so a signature-guessing loop needs a fresh
+    # round-trip for every guess — and an attempt this handler cannot even read
+    # must not be the one shape that leaves the nonce alive to try again.
+    stored = await consume_member_challenge(redis, body.nonce)
+    # Undecodable base64 stays a 422 (see `test_a_nonce_that_is_not_base64...`):
+    # every malformed *request* in this module answers 422 with a structured code,
+    # and the distinction leaks nothing about the member or its key — only that
+    # the bytes offered were not base64.
     nonce = _decode_base64(body.nonce, "bad_member_challenge")
     if len(nonce) != MEMBER_CHALLENGE_NONCE_BYTES:
         raise unauthorized
     signature = _decode_base64(body.signature, "bad_member_challenge")
-
-    # GETDEL first: a challenge is spent by the attempt, win or lose, so a
-    # signature-guessing loop needs a fresh round-trip for every guess.
-    stored = await consume_member_challenge(redis, body.nonce)
     if stored is None or stored.get("member_id") != str(member_id):
         raise unauthorized
     try:
@@ -567,7 +592,7 @@ async def put_recovery_escrow(
         raise _unprocessable("malformed_escrow_signature", expected_bytes=ROOT_SIGNATURE_BYTES)
     if len(root_pk) != ROOT_PUBLIC_KEY_BYTES:
         raise _unprocessable("malformed_root_pk", expected_bytes=ROOT_PUBLIC_KEY_BYTES)
-    if body.version < FIRST_ESCROW_VERSION:
+    if not FIRST_ESCROW_VERSION <= body.version <= MAX_ESCROW_VERSION:
         raise _unprocessable("malformed_escrow_version", version=body.version)
 
     stored = await db.get(RecoveryEscrow, (workspace_id, current_user.id))
@@ -589,43 +614,67 @@ async def put_recovery_escrow(
             detail={"code": "bad_escrow_signature"},
         ) from exc
 
+    # Both branches below are read-then-write, so both need the write itself to
+    # be conditional — two devices enrolling at once, or two re-wraps of the same
+    # version, otherwise resolve as a 500 and as a silently lost blob.
     if stored is None:
         # Deliberately the same code as the regression case: `stored_version: 0`
         # reads unambiguously as "no record exists; create must be v1", and a
         # client gets one version-rule code to handle rather than two.
         if body.version != FIRST_ESCROW_VERSION:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "escrow_version_regression",
-                    "stored_version": NO_ESCROW_STORED_VERSION,
-                },
-            )
+            raise _escrow_version_conflict(NO_ESCROW_STORED_VERSION)
         now = datetime.now(UTC)
-        stored = RecoveryEscrow(
-            workspace_id=workspace_id,
-            user_id=current_user.id,
-            version=body.version,
-            blob=blob,
-            root_sig=root_sig,
-            root_pk=root_pk,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(stored)
-    else:
-        if body.version <= stored.version:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"code": "escrow_version_regression", "stored_version": stored.version},
+        db.add(
+            RecoveryEscrow(
+                workspace_id=workspace_id,
+                user_id=current_user.id,
+                version=body.version,
+                blob=blob,
+                root_sig=root_sig,
+                root_pk=root_pk,
+                created_at=now,
+                updated_at=now,
             )
-        stored.version = body.version
-        stored.blob = blob
-        stored.root_sig = root_sig
-        stored.updated_at = datetime.now(UTC)
+        )
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            # The slot was created between the read above and this insert. The
+            # loser learns "already written" rather than a 500 — which is exactly
+            # what the enrolment ceremony's blind second-slot write reads as.
+            await db.rollback()
+            raise _escrow_version_conflict(NO_ESCROW_STORED_VERSION) from exc
+        return _escrow_out(version=body.version, blob=blob, root_sig=root_sig, root_pk=root_pk)
 
+    if body.version <= stored.version:
+        raise _escrow_version_conflict(stored.version)
+    # The version this update was decided against is part of its WHERE clause, so
+    # two concurrent re-wraps at v+1 cannot both land: the loser matches no row
+    # and is told what the slot now holds instead of overwriting the winner.
+    observed_version = stored.version
+    root_pk_in_slot = stored.root_pk
+    updated = cast(
+        CursorResult[Any],
+        await db.execute(
+            update(RecoveryEscrow)
+            .where(
+                RecoveryEscrow.workspace_id == workspace_id,
+                RecoveryEscrow.user_id == current_user.id,
+                RecoveryEscrow.version == observed_version,
+            )
+            .values(
+                version=body.version,
+                blob=blob,
+                root_sig=root_sig,
+                updated_at=datetime.now(UTC),
+            )
+        ),
+    )
+    if updated.rowcount != 1:
+        await db.rollback()
+        raise _escrow_version_conflict(observed_version)
     await db.commit()
-    return _escrow_out(stored)
+    return _escrow_out(version=body.version, blob=blob, root_sig=root_sig, root_pk=root_pk_in_slot)
 
 
 @router.get("/w/{workspace_id}/recovery", response_model=RecoveryEscrowResponse)
@@ -641,6 +690,17 @@ async def get_recovery_escrow(
     reaches the server, so there is nothing for it to accept.
     """
     _require_derivable_workspace(workspace_id, current_user.id)
+    # Existence before the quota. The limit bounds *bytes leaving the slot*, so a
+    # slot that holds nothing must not be able to spend it: twenty requests
+    # against an unenrolled account would otherwise lock its real recovery fetch
+    # out for a day — the one fetch that matters, refused because of attempts
+    # that returned nothing.
+    stored = await db.get(RecoveryEscrow, (workspace_id, current_user.id))
+    if stored is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "no_recovery_escrow"},
+        )
     if await count_recovery_fetch(redis, current_user.id) > RECOVERY_FETCH_DAILY_LIMIT:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -651,15 +711,8 @@ async def get_recovery_escrow(
                 ),
             },
         )
-
-    stored = await db.get(RecoveryEscrow, (workspace_id, current_user.id))
-    if stored is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "no_recovery_escrow"},
-        )
     # Audited before the bytes leave: a silent read is what an escrow attack
-    # needs, so every read is a row the User can be shown.
+    # needs, so every read that serves the slot is a row the User can be shown.
     db.add(
         RecoveryEscrowFetch(
             workspace_id=workspace_id,
@@ -668,15 +721,35 @@ async def get_recovery_escrow(
         )
     )
     await db.commit()
-    return _escrow_out(stored)
+    return _escrow_out(
+        version=stored.version,
+        blob=stored.blob,
+        root_sig=stored.root_sig,
+        root_pk=stored.root_pk,
+    )
 
 
-def _escrow_out(record: RecoveryEscrow) -> RecoveryEscrowResponse:
+def _escrow_version_conflict(stored_version: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": "escrow_version_regression", "stored_version": stored_version},
+    )
+
+
+def _escrow_out(
+    *, version: int, blob: bytes, root_sig: bytes, root_pk: bytes
+) -> RecoveryEscrowResponse:
+    """The record as the caller gets it back, built from the bytes just stored.
+
+    Values rather than the ORM object: the update path writes through a
+    version-guarded ``UPDATE``, so the loaded instance still carries the version
+    that update was decided against.
+    """
     return RecoveryEscrowResponse(
-        version=record.version,
-        blob_b64=base64.b64encode(record.blob).decode("ascii"),
-        root_sig_b64=base64.b64encode(record.root_sig).decode("ascii"),
-        root_pk_b64=base64.b64encode(record.root_pk).decode("ascii"),
+        version=version,
+        blob_b64=base64.b64encode(blob).decode("ascii"),
+        root_sig_b64=base64.b64encode(root_sig).decode("ascii"),
+        root_pk_b64=base64.b64encode(root_pk).decode("ascii"),
     )
 
 
@@ -986,6 +1059,7 @@ async def _verify_and_authorize(
                 current_member=current_member,
                 root_pk=root_pk,
                 grants=grants,
+                is_replay=header.op_id in replayed_op_ids,
             )
             grants.revoke(revoke.grant_id)
             admissions.append(
@@ -1190,6 +1264,7 @@ def _verify_revoke(
     current_member: Member,
     root_pk: bytes,
     grants: _GrantIndex,
+    is_replay: bool,
 ) -> RevokeCertificate:
     """Revocation is **grant-granular**: a Revoke names one ``grant_id``.
 
@@ -1214,7 +1289,23 @@ def _verify_revoke(
         raise _unprocessable(exc.reason, index=index) from exc
     target = grants.state(certificate.grant_id)
     if target is None:
-        raise _unprocessable("unknown_grantee", index=index)
+        # A Revoke names a ``grant_id``, so a missing target is a missing *Grant* —
+        # distinct from ``unknown_grantee``, which a Grant earns by naming a member
+        # nobody registered.  Conflating them would leave a client unable to tell a
+        # failed revocation from an invalid grantee.
+        raise _unprocessable("unknown_grant", index=index)
+    if target.revoked and not is_replay:
+        # The revocation boundary is immutable once stamped.  The authorization
+        # verdict is positional — ``granted_seq < S < revoked_by_seq`` — so moving
+        # ``revoked_by_seq`` forward would *widen* the window an already-revoked
+        # Grant covers.  Refused rather than silently ignored, so the client learns
+        # the Grant is already gone instead of believing it just revoked it.
+        #
+        # A verbatim replay is exempt, on the same reasoning as ``_verify_grant``'s:
+        # re-posting the op that *did* the revoking asserts nothing new, and it must
+        # come back as the idempotent duplicate a retried POST expects rather than as
+        # a refusal.  Materialisation skips duplicates, so the boundary stays put.
+        raise _unprocessable("already_revoked", index=index)
     if target.role == ROLE_OWNER and payload.authority != GRANTER_ROOT:
         raise _unprocessable("owner_revoke_requires_root", index=index)
     return certificate
@@ -1288,6 +1379,10 @@ async def _materialise_control(
                 Grant, (workspace_id, admission.revoke.grant_id)
             )
             if target is None:  # pragma: no cover — verification proved it exists
+                continue
+            if target.revoked_by_seq is not None:
+                # Belt to ``_verify_revoke``'s braces: the stamp is written once and
+                # never moved, because the verdict window it closes is positional.
                 continue
             target.revoked_by_seq = result.seq
             revoked_from.add(target.member_id)

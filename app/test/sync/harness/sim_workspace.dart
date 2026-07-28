@@ -168,7 +168,11 @@ Future<Uint8List> revokeEnvelope({
     revokeId: revokeId,
     grantId: grantId,
     revoker: resolvedRevoker,
-    revokedAtHlc: Hlc.forMember(revokeId, wallMs),
+    // The HLC's tie-breaker node is a *member* id — that is what `Hlc.forMember`
+    // stores and what the fork tie-break compares. Passing the freshly minted
+    // `revoke_id` would order revocations by a certificate id instead of by the
+    // device that authored them. Mirrors `backend/tests/sync/builders.py`.
+    revokedAtHlc: Hlc.forMember(device.memberId, wallMs),
   );
   final certBytes = certificate.encode();
   final signature = signer == null
@@ -283,7 +287,7 @@ class SimWorkspace {
   /// holds none. Not a server capability — the real server never walks the
   /// control chain — but the harness needs to author ops a pulling client will
   /// accept, and this is how a pulling client sees it.
-  Uint8List controlChainHead([String? workspace]) {
+  Uint8List controlChainHead({String? workspace}) {
     final target = workspace ?? workspaceId;
     for (final op in server.storedOps.reversed) {
       final header = op.header;
@@ -293,12 +297,14 @@ class SimWorkspace {
     return zeroPrevControlHash;
   }
 
-  /// The grant id of a device's own owner Grant, read off the log.
+  /// The grant id of [memberId]'s Grant, read off the log.
   ///
   /// Read from the *signed control ops* rather than from any server table, which
   /// is the only way a test can name a Grant without borrowing the server's word
-  /// for it.
-  String ownerGrantIdOf(String memberId, {String? workspace}) {
+  /// for it — so the scan lives here once and not per test file.
+  ///
+  /// [role] null matches the first Grant for the member whatever its role.
+  String grantIdOf(String memberId, {String? role, String? workspace}) {
     final target = workspace ?? workspaceId;
     for (final op in server.storedOps) {
       final header = op.header;
@@ -306,10 +312,18 @@ class SimWorkspace {
       final payload = ControlPayload.decode(parseBody(splitEnvelope(op.envelope).body));
       if (payload.controlType != controlTypeGrant) continue;
       final grant = payload.grantCertificate();
-      if (grant.memberId == memberId && grant.role == roleOwner) return grant.grantId;
+      if (grant.memberId != memberId) continue;
+      if (role != null && grant.role != role) continue;
+      return grant.grantId;
     }
-    throw StateError('no owner Grant for $memberId in $target');
+    throw StateError(
+      'no ${role ?? 'any-role'} Grant for $memberId in $target',
+    );
   }
+
+  /// The device's own owner Grant — what a revocation test takes away.
+  String ownerGrantIdOf(String memberId, {String? workspace}) =>
+      grantIdOf(memberId, role: roleOwner, workspace: workspace);
 
   /// Bring an [AuthorFixture] in as a genuinely chained, genuinely granted Member.
   ///
@@ -342,29 +356,39 @@ class SimWorkspace {
     ) as FakeSyncServerMemberSession;
 
     final root = await recoverRoot();
-    final register = await memberRegisterEnvelope(
-      device: device,
-      workspaceId: target,
-      root: root,
-      prevControlHash: controlChainHead(target),
-      wallMs: clock.nowMs,
-    );
-    await session.postOps(target, [register]);
-    if (grant) {
-      await session.postOps(target, [
-        await grantEnvelope(
-          device: device,
-          workspaceId: target,
-          root: root,
-          prevControlHash: controlPayloadHash(parseBody(splitEnvelope(register).body)),
-          memberId: device.memberId,
-          role: role,
-          wallMs: clock.nowMs,
-        ),
-      ]);
+    try {
+      final register = await memberRegisterEnvelope(
+        device: device,
+        workspaceId: target,
+        root: root,
+        prevControlHash: controlChainHead(workspace: target),
+        wallMs: clock.nowMs,
+      );
+      // **One** POST, register at index 0 and the Grant at index 1 — the batch shape
+      // `EnrolmentService` actually posts. Two POSTs would leave the real path
+      // untested: a Grant authorizing against a register that landed in the *same*
+      // atomic append is precisely what the batch walk has to get right.
+      final founding = [
+        register,
+        if (grant)
+          await grantEnvelope(
+            device: device,
+            workspaceId: target,
+            root: root,
+            prevControlHash: controlPayloadHash(parseBody(splitEnvelope(register).body)),
+            memberId: device.memberId,
+            role: role,
+            wallMs: clock.nowMs,
+          ),
+      ];
+      await session.postOps(target, founding);
+      return session;
+    } finally {
+      // Every other Root-holding path in the harness drops in a `finally`, and a
+      // refused post is exactly what the negative tests stage: without this a
+      // failing ceremony would leave Root live for the rest of the test.
+      root.drop();
     }
-    root.drop();
-    return session;
   }
 
   /// Push everyone, then pull everyone, twice — one pass would leave the first

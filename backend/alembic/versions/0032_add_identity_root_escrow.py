@@ -59,7 +59,16 @@ def upgrade() -> None:
         ),
         # Strictly increasing per slot: a passphrase change re-wraps at v+1 and
         # the server refuses anything at or below what it holds.
-        sa.Column("version", sa.BigInteger(), nullable=False),
+        #
+        # The SQLite variant mirrors ``models.py``: these tables are exercised on
+        # SQLite, where BIGINT is not a rowid alias, so migration and ORM have to
+        # declare the same type or the schema the tests run against is not the
+        # schema the ORM describes.
+        sa.Column(
+            "version",
+            sa.BigInteger().with_variant(sa.Integer, "sqlite"),
+            nullable=False,
+        ),
         sa.Column("blob", sa.LargeBinary(), nullable=False),
         sa.Column("root_sig", sa.LargeBinary(), nullable=False),
         # Established by the first write and never changed by a later one: this
@@ -81,7 +90,14 @@ def upgrade() -> None:
 
     op.create_table(
         "recovery_escrow_fetches",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        # ``INTEGER PRIMARY KEY AUTOINCREMENT`` on SQLite — a BIGINT primary key
+        # there is not a rowid alias and so does not autoincrement at all.
+        sa.Column(
+            "id",
+            sa.BigInteger().with_variant(sa.Integer, "sqlite"),
+            primary_key=True,
+            autoincrement=True,
+        ),
         sa.Column("workspace_id", sa.Uuid(), nullable=False),
         sa.Column(
             "user_id",
@@ -104,12 +120,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_recovery_escrow_fetches_user", table_name="recovery_escrow_fetches")
-    op.drop_table("recovery_escrow_fetches")
-    op.drop_table("recovery_escrows")
-    op.drop_index("ix_refresh_tokens_member_id", table_name="refresh_tokens")
-    with op.batch_alter_table("refresh_tokens") as batch:
-        batch.drop_constraint("fk_refresh_tokens_member_id", type_="foreignkey")
-        batch.drop_column("member_id")
-    op.drop_column("members", "chained_at")
-    op.drop_column("members", "kex_pk")
+    # Irreversible, same mechanism as 0031: dropping ``recovery_escrows`` destroys
+    # the passphrase-recovery blob — for a User with no enrolled device left, that
+    # blob *is* the account, and no client can re-upload what only the escrow
+    # held.  Dropping ``members.kex_pk``/``chained_at`` and the member binding on
+    # ``refresh_tokens`` would sever live sessions from the identities the op log
+    # verifies against.  Fail loudly BEFORE touching any schema; recovery is a
+    # restore-from-backup + ``alembic stamp``, not a downgrade.
+    raise RuntimeError(
+        "Migration 0032 (add_identity_root_escrow) is irreversible: dropping "
+        "recovery_escrows would destroy the passphrase-recovery blob that is "
+        "the only way back into an account with no enrolled device. Restore "
+        "from a backup and `alembic stamp` the target revision instead of "
+        "running `alembic downgrade`."
+    )

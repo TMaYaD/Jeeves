@@ -313,6 +313,10 @@ void main() {
         Reducer(reversed, nowMs: () => clock.nowMs, strategies: strategies);
     final log = await a.database.select(a.database.opLog).get();
     for (final row in log.reversed) {
+      // Refused ops stay in the log as evidence, never applied. Replaying one
+      // here would compare a state no device holds — and would do it for a
+      // reason that has nothing to do with order-independence.
+      if (row.refusedReason != null) continue;
       final parts = splitEnvelope(row.envelope);
       final header = OpHeader.parse(parts.header);
       // Control ops share the log but carry no content, so they reduce to

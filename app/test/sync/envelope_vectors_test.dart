@@ -729,8 +729,8 @@ void main() {
       final forger = await signerFor('device_b');
       final forged = await forger.buildEnvelope(header, frameBody(payload));
 
-      expect(
-        () => _receiveControl(forged, rootPk, identities),
+      await expectLater(
+        _receiveControl(forged, rootPk, identities),
         throwsRejection(SyncRejectionReason.badSignature),
       );
     });

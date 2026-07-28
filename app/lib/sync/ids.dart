@@ -25,9 +25,9 @@
 ///    siblings) precisely so concurrent or replayed assignment collapses onto
 ///    one row. The op log carries that identity forward: two devices assigning
 ///    the same tag offline converge as one junction entity rather than forking.
-///    Only [focusSessionTaskIdFor] is new — the table's local `id` column is
-///    random today, and the domain projector rewrites it to this derivation on
-///    every device (#550).
+///    Only [focusSessionTaskIdFor] is new (#550); the DAO mints the row under it
+///    like its four siblings, and the domain projector still rewrites the column
+///    for rows a pre-#550 device created at random.
 ///
 /// Every other collection — Outcomes, Actions, Tags, Captures, FocusSessions,
 /// TimeLogs — keeps client-generated random UUIDs and must not copy either
@@ -50,13 +50,12 @@ const String jeevesWorkspaceNamespace = 'e9d4afd3-87e4-5450-bd7d-4fc191ff3857';
 /// frozen. A namespace of its own rather than a second key inside the default
 /// one: the two ids must be independent, so neither can be computed from the
 /// other by a client that only knows one.
-final String userPreferencesWorkspaceNamespace = _uuid.v5(
-  Namespace.url.value,
-  'https://jeeves.app/sync/workspace/user-preferences/v1',
-);
-
-/// The collection the `user_preferences` Workspace carries.
-const String userPreferencesCollection = 'user_preferences';
+///
+/// A literal, like its sibling above, rather than the `uuid5` call that produced
+/// it: Workspace identity is protocol, and recomputing it at runtime would make
+/// it depend on the `uuid` package's v5 implementation staying byte-stable
+/// forever. The URL it derives from stays in the doc as the derivation of record.
+const String userPreferencesWorkspaceNamespace = 'c2b38d21-5518-5ad6-88b1-cc253ab3495f';
 
 /// The GTD Workspace every Device of [userId] is granted.
 String defaultWorkspaceId(String userId) => _uuid.v5(jeevesWorkspaceNamespace, userId);
@@ -81,9 +80,9 @@ String preferenceEntityId(String workspaceId, String preferenceKey) =>
 ///
 /// The new member of the junction family, derived on the same scheme as the
 /// shipped `todoTagIdFor` / `captureOutcomeIdFor` / `captureTagIdFor` /
-/// `focusSessionDispositionIdFor`. Unlike those four, the local `id` column is
-/// still minted at random by `FocusSessionDao.openSession`; the domain
-/// projector rewrites it to this value on every device so a Plan authored on
-/// one device and replayed on another carries byte-identical rows.
+/// `focusSessionDispositionIdFor`, and minted into the local `id` column by
+/// `FocusSessionDao.openSession` exactly as those four are. The domain
+/// projector realigns the column as well, which is what carries a Plan row a
+/// pre-#550 device created at random onto the same id every other device holds.
 String focusSessionTaskIdFor(String sessionId, String taskId) =>
     _uuid.v5(Namespace.url.value, 'jeeves://focus_session_task/$sessionId/$taskId');

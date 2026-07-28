@@ -376,6 +376,14 @@ void main() {
 
       await db.captureDao.removeTagHint('c1', tag);
       expect(only(captureTagsCollection).tombstone, isTrue);
+      capture.clear();
+
+      // A delete that matches nothing describes no effect: authoring the
+      // tombstone anyway would let an idempotent call bury a link another
+      // device created concurrently under the same deterministic id.
+      await db.captureDao.removeTagHint('c1', tag);
+      await db.captureDao.unlinkOutcome('c1', outcome);
+      expect(capture.recorded, isEmpty);
     });
   });
 
@@ -460,6 +468,11 @@ void main() {
       );
       expect(op.fields['key'], 'theme');
       expect(op.fields['value'], '"dark"');
+      // The local row is minted under the same id, so local state and the log
+      // address one entity without waiting for the projector to realign it.
+      final rows =
+          await db.customSelect('SELECT id FROM user_preferences').get();
+      expect(rows.single.read<String>('id'), op.entityId);
     });
   });
 
