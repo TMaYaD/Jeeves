@@ -16,11 +16,28 @@ import 'package:uuid/uuid.dart';
 
 const Uuid _uuid = Uuid();
 
+/// How many seedless [AuthorFixture]s have been made, so each gets its own keys.
+int _seedlessFixtureCount = 0;
+
 class AuthorFixture {
   AuthorFixture._(this.memberId, this.signer, this.kexPk);
 
+  /// An omitted [seed] is derived from a per-instance counter, not from a
+  /// constant. Two seedless fixtures would otherwise share `signPk`, `keyId` and
+  /// `kexPk` while holding different `memberId`s — so any case meaning "two
+  /// distinct authors" (impersonation, wrong key id, per-author chain isolation)
+  /// could pass because the keys happened to match rather than because the rule
+  /// held. The counter keeps them distinct and the run reproducible.
   static Future<AuthorFixture> create({String? memberId, Uint8List? seed}) async {
-    final signSeed = seed ?? Uint8List.fromList(List<int>.generate(32, (index) => index + 1));
+    final Uint8List signSeed;
+    if (seed != null) {
+      signSeed = seed;
+    } else {
+      final ordinal = _seedlessFixtureCount++;
+      signSeed = Uint8List.fromList(
+        List<int>.generate(32, (index) => (index + 1 + ordinal) % 256),
+      );
+    }
     final signer = await EnvelopeSigner.fromSeed(signSeed);
     // A distinct KEX seed derived from the same one: separate keys per F8/F19,
     // still reproducible run to run.

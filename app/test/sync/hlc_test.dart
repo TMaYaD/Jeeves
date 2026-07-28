@@ -55,12 +55,16 @@ void main() {
     });
 
     test('receive of an older remote clock does not rewind', () {
-      var now = 9000;
+      const now = 9000;
       final clock = HlcClock(memberIdHex: _memberA, nowMs: () => now);
       final local = clock.send();
-      now = 9000;
       clock.receive(Hlc(1000, 0, _memberB));
-      expect(clock.send() > local, isTrue);
+      final next = clock.send();
+      expect(next > local, isTrue);
+      // The "no rewind" property itself: the merge with an older remote leaves
+      // the wall time where it was rather than dragging it back to 1000. Ordering
+      // alone would still hold on a rewound clock, via the counter.
+      expect(next.wallMs, now);
     });
   });
 }

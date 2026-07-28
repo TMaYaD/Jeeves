@@ -33,3 +33,19 @@ Map<String, dynamic> reducerVectors() =>
 
 List<Map<String, dynamic>> vectorList(Map<String, dynamic> document, String key) =>
     [for (final entry in document[key] as List<dynamic>) entry as Map<String, dynamic>];
+
+/// Byte offset of [fieldName] within the 158-byte header, read off the frozen
+/// `header_field_layout`.
+///
+/// Every offset is published there and asserted contiguous, so a test that pokes
+/// header bytes reads the layout rather than hand-copying a literal that will not
+/// move when a field width does.
+int headerFieldOffset(String fieldName) {
+  for (final field in vectorList(
+    envelopeVectors()['protocol'] as Map<String, dynamic>,
+    'header_field_layout',
+  )) {
+    if (field['name'] == fieldName) return field['offset'] as int;
+  }
+  throw StateError('no header field named $fieldName in header_field_layout');
+}

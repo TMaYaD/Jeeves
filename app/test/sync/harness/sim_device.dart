@@ -186,6 +186,11 @@ class DeviceLink implements SyncTransport, UserTransport {
   /// Simulates a POST whose ops the server accepted but whose response never
   /// arrived. The device must re-send on the next sync, and that re-send must
   /// be a no-op — which is exactly what op-id dedupe is for.
+  ///
+  /// **One-shot**, like [pullFailure]: it clears itself as it fires. Latched on,
+  /// the re-send would throw too, so the flush could never observe the duplicate
+  /// result and the assertion the flag exists for would be unreachable unless
+  /// every test remembered to reset it.
   bool dropPostResponse = false;
 
   /// Holds a pull mid-flight, so a test can decide what arrives while a sync is
@@ -284,6 +289,7 @@ class DeviceLink implements SyncTransport, UserTransport {
     _requireOnline();
     final results = await _member.postOps(workspaceId, envelopes);
     if (dropPostResponse) {
+      dropPostResponse = false;
       throw const SyncTransportException.unreachable('response lost after append');
     }
     return results;

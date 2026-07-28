@@ -25,8 +25,15 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:collection/collection.dart' show DeepCollectionEquality;
+
 import 'envelope.dart';
 import 'hlc.dart';
+
+/// Structural equality over decoded JSON values, which are arbitrarily nested
+/// lists and maps — so `==` on [FieldWrite.value] has to recurse rather than
+/// compare identities.
+const DeepCollectionEquality _valueEquality = DeepCollectionEquality();
 
 /// One field's new value, optionally carrying its own (older) HLC.
 class FieldWrite {
@@ -38,11 +45,11 @@ class FieldWrite {
   @override
   bool operator ==(Object other) =>
       other is FieldWrite &&
-      jsonEncode(other.value) == jsonEncode(value) &&
+      _valueEquality.equals(other.value, value) &&
       other.hlc == hlc;
 
   @override
-  int get hashCode => Object.hash(jsonEncode(value), hlc);
+  int get hashCode => Object.hash(_valueEquality.hash(value), hlc);
 }
 
 class OpPayload {

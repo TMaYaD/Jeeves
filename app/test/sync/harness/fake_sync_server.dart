@@ -171,8 +171,10 @@ class _EscrowSlot {
   RecoveryEscrowRecord record;
 }
 
-/// Guards the single-transaction batch, mirroring `MAX_OPS_PER_BATCH`.
-const int fakeServerMaxOpsPerBatch = 1000;
+/// Guards the single-transaction batch. The cap is [maxOpsPerBatch] — the one
+/// number the client chunks against and the server's `MAX_OPS_PER_BATCH`
+/// mirrors — so the harness cannot accept a batch the real server would refuse.
+const int fakeServerMaxOpsPerBatch = maxOpsPerBatch;
 
 /// Mirrors `RECOVERY_FETCH_DAILY_LIMIT`.
 const int fakeServerRecoveryFetchLimit = 20;

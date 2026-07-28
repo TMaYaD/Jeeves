@@ -150,7 +150,15 @@ class OpPayload:
             raise MalformedPayloadError("id must be a canonical lowercase UUID string")
         entity_id = uuid.UUID(raw_id)
 
-        raw_fields = raw.get("fields", {})
+        # `if x is None` rather than a `.get` default, because the Dart codec this
+        # module mirrors writes `raw['fields'] ?? {}` — which substitutes for an
+        # explicit `null` as well as for a missing key.  A `.get` default only
+        # covers the missing key, so `{"fields": null}` would be accepted by one
+        # codec and refused by the other: one device applying an op its peer
+        # quarantines.  Same for `tombstone` below.
+        raw_fields = raw.get("fields")
+        if raw_fields is None:
+            raw_fields = {}
         if not isinstance(raw_fields, dict):
             raise MalformedPayloadError("fields must be an object")
         fields: dict[str, FieldWrite] = {}
@@ -160,7 +168,9 @@ class OpPayload:
             field_hlc = Hlc.from_json(entry["hlc"]) if "hlc" in entry else None
             fields[name] = FieldWrite(value=entry["v"], hlc=field_hlc)
 
-        tombstone = raw.get("tombstone", False)
+        tombstone = raw.get("tombstone")
+        if tombstone is None:
+            tombstone = False
         if not isinstance(tombstone, bool):
             raise MalformedPayloadError("tombstone must be a boolean")
 

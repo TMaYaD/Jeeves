@@ -10,35 +10,13 @@ production.
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-from types import ModuleType
-
 import sqlalchemy as sa
-from alembic.operations import Operations
-from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy.pool import StaticPool
 
 from app import migrate
 from app.sync.models import Grant, Member, Workspace
-
-_VERSIONS = Path(__file__).resolve().parents[2] / "alembic" / "versions"
-
-
-def _load(name: str, filename: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, _VERSIONS / filename)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _run(engine: sa.engine.Engine, module: ModuleType, *, downgrade: bool = False) -> None:
-    with engine.begin() as conn:
-        ctx = MigrationContext.configure(conn)
-        with Operations.context(ctx):
-            (module.downgrade if downgrade else module.upgrade)()
+from tests.sync.helpers import load_migration, run_migration
 
 
 def _engine_at_0032() -> sa.engine.Engine:
@@ -59,8 +37,8 @@ def _engine_at_0032() -> sa.engine.Engine:
             )
         )
         conn.execute(sa.text("INSERT INTO users (id) VALUES ('u1')"))
-    _run(engine, _load("migration_0031", "0031_add_sync_op_log.py"))
-    _run(engine, _load("migration_0032", "0032_add_identity_root_escrow.py"))
+    run_migration(engine, load_migration("migration_0031", "0031_add_sync_op_log.py"))
+    run_migration(engine, load_migration("migration_0032", "0032_add_identity_root_escrow.py"))
     with engine.begin() as conn:
         conn.execute(
             sa.text(
@@ -72,11 +50,11 @@ def _engine_at_0032() -> sa.engine.Engine:
 
 
 def _apply_0033(engine: sa.engine.Engine) -> None:
-    _run(engine, _load("migration_0033", "0033_add_workspaces_and_grants.py"))
+    run_migration(engine, load_migration("migration_0033", "0033_add_workspaces_and_grants.py"))
 
 
 def test_0033_chains_from_0032_and_is_the_current_head() -> None:
-    module = _load("migration_0033", "0033_add_workspaces_and_grants.py")
+    module = load_migration("migration_0033", "0033_add_workspaces_and_grants.py")
     assert module.revision == "0033"
     assert module.down_revision == "0032"
     script = ScriptDirectory.from_config(migrate._alembic_config())
@@ -129,7 +107,11 @@ def test_0033_leaves_existing_rows_untouched_and_unbackfilled() -> None:
 def test_0033_downgrade_removes_only_what_it_added() -> None:
     engine = _engine_at_0032()
     _apply_0033(engine)
-    _run(engine, _load("migration_0033", "0033_add_workspaces_and_grants.py"), downgrade=True)
+    run_migration(
+        engine,
+        load_migration("migration_0033", "0033_add_workspaces_and_grants.py"),
+        downgrade=True,
+    )
 
     with engine.connect() as conn:
         inspector = sa.inspect(conn)
