@@ -18,6 +18,13 @@ on:
     branches: [main]
     paths: ["backend/**", "infra/**", ".github/workflows/backend-ci.yml"]
 
+# Every job here checks out the repo and runs local tools — none writes to the
+# repository, publishes a package, or touches a check or comment.  Declared at
+# the workflow level rather than per job so a new job inherits the floor instead
+# of silently getting the default token scope.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint

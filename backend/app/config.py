@@ -1,10 +1,22 @@
 import logging
+import re
 from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _logger = logging.getLogger(__name__)
+
+# Deliberately not textbook SemVer.  The server scheme — owned by
+# infra/ci/compute-server-version.sh, which documents it — is ordinary semver
+# hidden behind a `0.` prefix, so the version CD computes has a fourth segment
+# once an inner patch exists (`0.1.0.1`).  A strict `X.Y.Z` validator would
+# reject the exact strings the pipeline produces.  This pattern therefore
+# accepts three or four numeric segments plus an optional prerelease suffix,
+# which is what makes the `0.0.0-dev` default and the `1.2.3-test` the suites
+# inject legal.  It is a shape check, not a policy check: naming the scheme's
+# bump rules belongs to the script, not here.
+_VERSION_SHAPED = re.compile(r"^\d+\.\d+\.\d+(\.\d+)?(-[0-9A-Za-z.-]+)?$")
 
 
 class Settings(BaseSettings):
@@ -23,6 +35,8 @@ class Settings(BaseSettings):
     # Dokku builds from a git archive with no `.git`, so deploy-time env is the
     # only place the running process can learn it.  The default names a local or
     # otherwise un-deployed build honestly rather than claiming a release.
+    # Validated below: /health and the OpenAPI document publish this verbatim,
+    # so a malformed deploy-time value must fail startup, not go public.
     server_version: str = "0.0.0-dev"
 
     # Database.  Dokku-postgres (and Heroku) inject `postgres://...`, but
@@ -46,6 +60,15 @@ class Settings(BaseSettings):
         scheme, _, rest = self.database_url.partition("://")
         if scheme == "postgres" or scheme == "postgresql":
             self.database_url = f"postgresql+asyncpg://{rest}"
+        return self
+
+    @model_validator(mode="after")
+    def _validate_server_version(self) -> "Settings":
+        if not _VERSION_SHAPED.match(self.server_version):
+            raise ValueError(
+                f"SERVER_VERSION must be 0.X.Y or 0.X.Y.Z, optionally with a "
+                f"-prerelease suffix; got {self.server_version!r}"
+            )
         return self
 
     @model_validator(mode="after")
