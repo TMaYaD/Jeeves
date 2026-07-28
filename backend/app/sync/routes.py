@@ -1,31 +1,49 @@
-"""The three endpoints of the Minimal Sync Server walking skeleton.
+"""The endpoints of the Minimal Sync Server walking skeleton.
 
 Every check here is content-blind: the server reads the 158-byte header and the
 Member registry, and never a body.  Body-level rules (padding, payload shape)
 are the pulling client's duty — under suite 0x01 the server could not run them
-even if it wanted to, so it does not run them now either.
+even if it wanted to, so it does not run them now either.  The realtime signal
+socket is content-blind in the strongest sense available: a poke is a
+zero-length frame, so the channel carries no seq, no author and no count.
 
 Authorization is the stub #549 replaces: a User has exactly one implicit
 Workspace, derived from the user id, and the Grants index that will decide this
-question does not exist yet.  Transport auth is the existing user JWT; #548
-replaces it with member-scoped tokens and turns
-``header.author_member_id in user's members`` into ``jwt.member == header.author``.
+question does not exist yet.  Transport auth is the existing user JWT resolved
+through ``resolve_member_token``; #548 swaps that one function to member-scoped
+tokens and turns ``header.author_member_id in user's members`` into
+``jwt.member == header.author``.  Signal sockets are authenticated once, at the
+handshake, and never re-checked: #549 therefore owes not only the Grants index
+but **closing live signal sockets when a grant is revoked**, since until it does
+a revoked subscriber keeps learning that activity exists in the Workspace.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_member, resolve_member_token
 from app.auth.models import User
+from app.config import settings
 from app.database import get_db
 from app.sync.envelope import (
     MINIMUM_ENVELOPE_BYTES,
@@ -48,6 +66,7 @@ from app.sync.schemas import (
     PulledOp,
     PullOpsResponse,
 )
+from app.sync.signal_hub import SignalHub, SignalSubscription, get_signal_hub
 
 router = APIRouter()
 
@@ -57,6 +76,18 @@ DEFAULT_OPS_PAGE_LIMIT = 500
 MAX_OPS_PAGE_LIMIT = 1000
 #: Guards the single-transaction batch from an unbounded request body.
 MAX_OPS_PER_BATCH = 1000
+
+#: The only non-empty frame the signal socket ever sends.  Application-level
+#: rather than a WebSocket protocol PING because protocol pings are unobservable
+#: from a browser client, and the client needs to see liveness on every platform.
+KEEPALIVE_FRAME = "ping"
+
+# not configurable: application close codes for the signal socket, mirroring the
+# HTTP statuses their causes would produce.  The client's reconnect ladder
+# branches on these exact numbers, so they are protocol, not policy.
+SIGNAL_CLOSE_PROTOCOL_ERROR = 4400
+SIGNAL_CLOSE_UNAUTHENTICATED = 4401
+SIGNAL_CLOSE_FORBIDDEN = 4403
 
 
 def _authorize_workspace(workspace_id: uuid.UUID, user: User) -> None:
@@ -83,7 +114,7 @@ async def register_member(
     body: MemberRegisterRequest,
     response: Response,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_member),
 ) -> MemberOut:
     sign_pk = _decode_base64(body.sign_pk, "sign_pk")
     if len(sign_pk) != SIGN_PUBLIC_KEY_BYTES:
@@ -131,7 +162,7 @@ def _member_out(member: Member) -> MemberOut:
 async def list_workspace_members(
     workspace_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_member),
 ) -> MemberListResponse:
     _authorize_workspace(workspace_id, current_user)
     rows = (
@@ -145,7 +176,8 @@ async def post_ops(
     workspace_id: uuid.UUID,
     body: PostOpsRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_member),
+    hub: SignalHub = Depends(get_signal_hub),
 ) -> PostOpsResponse:
     _authorize_workspace(workspace_id, current_user)
     if len(body.ops) > MAX_OPS_PER_BATCH:
@@ -222,6 +254,11 @@ async def post_ops(
             ) from exc
 
     await db.commit()
+    if any(not result.duplicate for result in results):
+        # After the commit, never before: a subscriber woken by a poke pulls
+        # immediately, and pulling against an uncommitted transaction would
+        # return nothing and burn the poke.  A pure-duplicate replay is not news.
+        hub.notify(workspace_id)
     return PostOpsResponse(results=results)
 
 
@@ -321,7 +358,7 @@ async def pull_ops(
     since: int = Query(default=0, ge=0),
     limit: int = Query(default=DEFAULT_OPS_PAGE_LIMIT, ge=1, le=MAX_OPS_PAGE_LIMIT),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_member),
 ) -> PullOpsResponse:
     """``since`` is a pure client parameter — no cursor is persisted (review F17)."""
     _authorize_workspace(workspace_id, current_user)
@@ -349,3 +386,131 @@ async def pull_ops(
         ],
         has_more=has_more,
     )
+
+
+@router.websocket("/w/{workspace_id}/signal")
+async def signal_socket(
+    websocket: WebSocket,
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    hub: SignalHub = Depends(get_signal_hub),
+) -> None:
+    """Payload-free "there is news" push for one Workspace.
+
+    A poke is a **zero-length text frame** and always means the same thing: run
+    a sync from your cursor now.  The Workspace lives in the URL path, so no
+    frame ever carries an envelope, a seq, an author or a count — the socket
+    reveals only that activity happened, which is strictly less than the pull
+    the client then performs already reveals.
+
+    The client sends the bearer token as its **first frame**: a browser cannot
+    set an ``Authorization`` header on a WebSocket, and a query string would put
+    the token in proxy and server logs.  A successful handshake is acknowledged
+    with an immediate poke, which doubles as the catch-up trigger — whatever was
+    appended while this client was away is swept up by the pull it provokes, so
+    the server needs no memory of who has seen what.
+    """
+    await websocket.accept()
+
+    try:
+        token = await asyncio.wait_for(
+            websocket.receive_text(),
+            timeout=settings.signal_auth_frame_deadline_seconds,
+        )
+    except (TimeoutError, WebSocketDisconnect, KeyError):
+        # No auth frame in time, a close instead of one, or a binary frame where
+        # text was required — all the same protocol violation.
+        await _close_quietly(websocket, SIGNAL_CLOSE_PROTOCOL_ERROR)
+        return
+
+    try:
+        principal = await resolve_member_token(token, db)
+    except HTTPException:
+        await _close_quietly(websocket, SIGNAL_CLOSE_UNAUTHENTICATED)
+        return
+    try:
+        _authorize_workspace(workspace_id, principal)
+    except HTTPException:
+        await _close_quietly(websocket, SIGNAL_CLOSE_FORBIDDEN)
+        return
+
+    # The handshake is the only part of this endpoint that may hold a database
+    # session.  ``Depends(get_db)`` checks one out for the lifetime of the
+    # endpoint, and here that lifetime is the *connection's* — so left open it
+    # parks a pooled connection idle-in-transaction for as long as the
+    # subscriber stays connected, and roughly fifteen subscribers (pool 5 +
+    # overflow 10) starve every HTTP request in the process.
+    #
+    # Constraint for anything added below this line: the session must not
+    # outlive the handshake, and the signal pump must never touch the database.
+    # ``principal`` is deliberately not read again — the authorization decision
+    # it feeds is already made above.
+    await db.close()
+
+    with hub.subscribe(workspace_id) as subscription:
+        # FastAPI only observes a client close while a read is pending, so the
+        # socket is drained concurrently with the send loop.  Inbound frames
+        # after the handshake are ignored: the client has nothing to say here.
+        reader = asyncio.create_task(_drain_until_disconnect(websocket))
+        try:
+            await websocket.send_text("")
+            await _pump_signals(websocket, subscription, reader)
+        except (WebSocketDisconnect, RuntimeError):
+            # The peer went away mid-send; nothing left to do but stop.
+            pass
+        finally:
+            reader.cancel()
+            with suppress(asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+                await reader
+
+
+async def _close_quietly(websocket: WebSocket, code: int) -> None:
+    with suppress(RuntimeError, WebSocketDisconnect):
+        await websocket.close(code=code)
+
+
+async def _drain_until_disconnect(websocket: WebSocket) -> None:
+    """Read and discard until the peer goes away.
+
+    Its completion is how the send loop learns the socket is gone: Starlette
+    only surfaces a close while a read is pending.
+    """
+    with suppress(WebSocketDisconnect, RuntimeError):
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                return
+
+
+async def _pump_signals(
+    websocket: WebSocket,
+    subscription: SignalSubscription,
+    reader: asyncio.Task[None],
+) -> None:
+    """One loop, two frame kinds, nothing else — ever.
+
+    The keepalive is the *timeout branch* of the same wait that delivers pokes,
+    so it fires only in the absence of news.  That makes it the exact complement
+    of what a poke reveals ("no activity right now"), which is why an
+    application-level heartbeat adds nothing to the leak surface.
+    """
+    while not reader.done():
+        waiter = asyncio.create_task(subscription.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {waiter, reader},
+                timeout=settings.signal_keepalive_interval_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            if not waiter.done():
+                waiter.cancel()
+        if reader in done:
+            return
+        if waiter in done:
+            # Cleared before the send, so an append racing this line pokes again
+            # rather than being swallowed by the frame already on its way.
+            subscription.clear()
+            await websocket.send_text("")
+        else:
+            await websocket.send_text(KEEPALIVE_FRAME)

@@ -3,19 +3,41 @@
 /// The production seam. Nothing in the app wires it up yet — the walking
 /// skeleton is exercised entirely through the in-process double in
 /// `test/sync/harness/`, and the live app stays on PowerSync until #553.
+///
+/// `package:web_socket_channel` carries the signal socket rather than dio,
+/// which does not speak WebSocket. It is cross-platform, so #553's platform
+/// wiring inherits a working web code path instead of a rewrite; there is no
+/// web adapter for the op-log stack in this slice, so the socket is exercised
+/// on IO and through the fake.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'signal_socket.dart';
 import 'sync_transport.dart';
 
 class HttpSyncTransport implements SyncTransport {
-  HttpSyncTransport(this._dio);
+  HttpSyncTransport(
+    this._dio, {
+    required Future<String> Function() bearerTokenProvider,
+    Duration idleDeadline = signalIdleDeadline,
+    SignalTimerFactory timerFactory = Timer.new,
+  })  : _bearerTokenProvider = bearerTokenProvider,
+        _idleDeadline = idleDeadline,
+        _timerFactory = timerFactory;
 
   final Dio _dio;
+
+  /// Read once per socket, so a token refreshed between reconnects is picked up
+  /// by construction rather than by anyone remembering to re-inject it.
+  final Future<String> Function() _bearerTokenProvider;
+  final Duration _idleDeadline;
+  final SignalTimerFactory _timerFactory;
 
   @override
   Future<MemberRecord> registerMember({
@@ -84,6 +106,60 @@ class HttpSyncTransport implements SyncTransport {
           ),
       ],
       hasMore: response['has_more'] as bool,
+    );
+  }
+
+  @override
+  Stream<void> newSeqSignals(String workspaceId) => decodeSignalFrames(
+        () async {
+          final channel = WebSocketChannel.connect(_signalUri(workspaceId));
+          try {
+            await channel.ready;
+          } on Object catch (error) {
+            // A failed handshake can still leave a half-open socket, and no
+            // `SignalSocket` was handed back, so nothing downstream can close
+            // it. Here or never.
+            _discardSignalChannel(channel);
+            throw SyncTransportException.unreachable('$error');
+          }
+          // The token goes in the first frame, not a header and not the URL: a
+          // browser cannot set `Authorization` on a WebSocket, and a query
+          // string would put the token in every proxy and server log.
+          final String bearerToken;
+          try {
+            bearerToken = await _bearerTokenProvider();
+          } on Object {
+            // The socket is fully open by this point, so a throwing token
+            // provider would leak it outright. The error itself is rethrown
+            // unmapped: a credential failure is not an unreachable server.
+            _discardSignalChannel(channel);
+            rethrow;
+          }
+          channel.sink.add(bearerToken);
+          return SignalSocket(
+            frames: channel.stream,
+            close: () => channel.sink.close(),
+            closeCode: () => channel.closeCode,
+          );
+        },
+        idleDeadline: _idleDeadline,
+        timerFactory: _timerFactory,
+      );
+
+  /// Release a channel that never became a [SignalSocket]. Errors from the
+  /// close are discarded rather than swallowed silently by accident: we are
+  /// already unwinding a failure, and a close that fails on a socket nobody
+  /// holds has nothing left to report.
+  static void _discardSignalChannel(WebSocketChannel channel) {
+    unawaited(channel.sink.close().catchError((Object _) {}));
+  }
+
+  /// Same origin as the REST calls, `http(s)` swapped for `ws(s)`.
+  Uri _signalUri(String workspaceId) {
+    final base = Uri.parse(_dio.options.baseUrl);
+    return base.replace(
+      scheme: base.scheme == 'https' ? 'wss' : 'ws',
+      path: '${base.path}/w/$workspaceId/signal'.replaceAll('//', '/'),
     );
   }
 
