@@ -13,6 +13,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
@@ -354,7 +355,7 @@ void main() {
     /// the old schema rather than the current classes' idea of it. Timestamps are
     /// ISO-8601 text because that is what `store_date_time_values_as_text` makes
     /// every date in this store, v3 rows included.
-    void writeV3Store() {
+    void writeV3Store({bool withDuplicateChainSlot = false}) {
       final database = raw.sqlite3.open(file.path);
       database
         ..execute('''
@@ -389,7 +390,24 @@ CREATE TABLE quarantined_ops (
             4,
             receivedAt.toIso8601String(),
           ],
-        )
+        );
+      if (withDuplicateChainSlot) {
+        // Legal under the v3 `(workspace_id, seq)` primary key: a server that
+        // re-served member-1's position 4 under a second transport seq.
+        database.execute(
+          'INSERT INTO op_log VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [
+            8,
+            _workspaceId,
+            Uint8List.fromList([1, 2, 3]),
+            'op-7',
+            'member-1',
+            4,
+            receivedAt.toIso8601String(),
+          ],
+        );
+      }
+      database
         ..execute(
           'INSERT INTO quarantined_ops (workspace_id, seq, reason, detail, '
           'envelope, detected_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -448,7 +466,151 @@ CREATE TABLE quarantined_ops (
                 receivedAt: receivedAt,
               ),
             ),
-        throwsA(anything),
+        // Matched specifically: `anything` would also be satisfied by a missing
+        // column or a closed database, so the assertion would still pass on a
+        // store where the constraint had quietly stopped existing.
+        throwsA(
+          isA<raw.SqliteException>().having(
+            (exception) => exception.message,
+            'message',
+            contains('UNIQUE'),
+          ),
+        ),
+      );
+    });
+
+    test('refuses a store whose chain slots already collide, naming the recovery',
+        () async {
+      writeV3Store(withDuplicateChainSlot: true);
+      final database = SyncDatabase(NativeDatabase(file));
+      addTearDown(database.close);
+      // Failing loud is the decision, not an oversight: the duplicate row is the
+      // evidence that the server re-served a spent slot, so de-duplicating to let
+      // the index through would destroy the thing worth keeping. What the message
+      // owes the reader is the invariant and a way out.
+      await expectLater(
+        database.select(database.opLog).get(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            allOf(
+              contains('one op per (workspace, author, author_seq) chain slot'),
+              contains('delete and recreate this sync store'),
+            ),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('the v5 to v6 migration', () {
+    final detectedAt = DateTime.utc(2026, 7, 2, 11);
+    late Directory directory;
+    late File file;
+
+    setUp(() {
+      directory = Directory.systemTemp.createTempSync('jeeves-alarm-migration-');
+      file = File('${directory.path}/sync.sqlite');
+    });
+    tearDown(() => directory.deleteSync(recursive: true));
+
+    /// The v5 shape of the one table v6 constrains, plus the rows asked for.
+    ///
+    /// Only `integrity_alarms` is written: v6 touches nothing else, so a store
+    /// carrying just this table is enough to exercise the leg, and building the
+    /// rest would assert the v5 schema twice.
+    void writeV5Alarms(List<String?> authorMemberIds) {
+      final database = raw.sqlite3.open(file.path);
+      database.execute('''
+CREATE TABLE integrity_alarms (
+  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  author_member_id TEXT,
+  detail TEXT NOT NULL,
+  quarantine_op_row_id INTEGER,
+  occurrence_count INTEGER NOT NULL,
+  first_detected_at TEXT NOT NULL,
+  last_detected_at TEXT NOT NULL,
+  resolved_at TEXT
+)''');
+      for (final authorMemberId in authorMemberIds) {
+        database.execute(
+          'INSERT INTO integrity_alarms (workspace_id, kind, author_member_id, '
+          'detail, occurrence_count, first_detected_at, last_detected_at) '
+          'VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [
+            _workspaceId,
+            'chain_gap',
+            authorMemberId,
+            'nope',
+            1,
+            detectedAt.toIso8601String(),
+            detectedAt.toIso8601String(),
+          ],
+        );
+      }
+      database
+        ..execute('PRAGMA user_version = 5')
+        ..close();
+    }
+
+    test('makes the documented alarm upsert key a constraint', () async {
+      writeV5Alarms(['member-1']);
+      final database = SyncDatabase(NativeDatabase(file));
+      addTearDown(database.close);
+
+      await expectLater(
+        database.into(database.integrityAlarms).insert(
+              IntegrityAlarmsCompanion.insert(
+                workspaceId: _workspaceId,
+                kind: 'chain_gap',
+                authorMemberId: const Value('member-1'),
+                detail: 'again',
+                occurrenceCount: 1,
+                firstDetectedAt: detectedAt,
+                lastDetectedAt: detectedAt,
+              ),
+            ),
+        throwsA(
+          isA<raw.SqliteException>().having(
+            (exception) => exception.message,
+            'message',
+            contains('UNIQUE'),
+          ),
+        ),
+      );
+    });
+
+    test('leaves server-only alarms to the select path', () async {
+      // SQLite reads distinct NULLs as distinct, so the index cannot constrain
+      // the accusations that name no author. The pre-flight has to agree with the
+      // index about that or it would refuse a store the index would accept.
+      writeV5Alarms([null, null]);
+      final database = SyncDatabase(NativeDatabase(file));
+      addTearDown(database.close);
+
+      expect((await database.select(database.integrityAlarms).get()).length, 2);
+    });
+
+    test('refuses a store whose alarm keys already collide', () async {
+      writeV5Alarms(['member-1', 'member-1']);
+      final database = SyncDatabase(NativeDatabase(file));
+      addTearDown(database.close);
+
+      await expectLater(
+        database.select(database.integrityAlarms).get(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            allOf(
+              contains('one standing accusation per (workspace, kind, author)'),
+              contains('delete and recreate this sync store'),
+            ),
+          ),
+        ),
       );
     });
   });
