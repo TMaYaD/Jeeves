@@ -292,8 +292,38 @@ Future<Map<String, dynamic>?> _send(
     if (status == null) {
       throw SyncTransportException.unreachable(error.message ?? 'no response');
     }
-    throw SyncTransportException(status, '${error.response?.data}', code: _codeOf(error));
+    throw _failureFor(status, error);
   }
+}
+
+/// The typed failure for one HTTP status and its structured detail.
+///
+/// A chain conflict is the one rejection a caller has to read *fields* off and
+/// not merely a code: the own-writes-rollback verdict turns on whether the
+/// server's expected position is behind or ahead of what it already
+/// acknowledged. Everything else stays a generic [SyncTransportException],
+/// including other 409s.
+SyncTransportException _failureFor(int status, DioException error) {
+  final detail = '${error.response?.data}';
+  final code = _codeOf(error);
+  if (status == 409 && code == authorChainConflictCode) {
+    final fields = _detailOf(error);
+    return AuthorChainConflictException(
+      detail,
+      opIndex: _intOrNull(fields['index']),
+      submittedAuthorSeq: _intOrNull(fields['author_seq']),
+      expectedAuthorSeq: _intOrNull(fields['expected_author_seq']),
+    );
+  }
+  return SyncTransportException(status, detail, code: code);
+}
+
+/// The server's structured `detail` object, or empty when it sent prose.
+Map<Object?, Object?> _detailOf(DioException error) {
+  final data = error.response?.data;
+  if (data is! Map) return const {};
+  final detail = data['detail'];
+  return detail is Map ? detail : const {};
 }
 
 /// The server's structured `detail.code`, when it sent one.
@@ -302,10 +332,11 @@ Future<Map<String, dynamic>?> _send(
 /// the code rather than the prose is what lets a client branch on *which* rule
 /// fired without parsing a sentence.
 String? _codeOf(DioException error) {
-  final data = error.response?.data;
-  if (data is! Map) return null;
-  final detail = data['detail'];
-  if (detail is! Map) return null;
-  final code = detail['code'];
+  final code = _detailOf(error)['code'];
   return code is String ? code : null;
 }
+
+/// JSON numbers arrive as `num` from some adapters and `int` from others; a
+/// silent null here would read as the no-verdict case, so the coercion is
+/// explicit.
+int? _intOrNull(Object? value) => value is num ? value.toInt() : null;

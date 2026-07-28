@@ -101,6 +101,44 @@ class SyncTransportException implements Exception {
       '${code == null ? '' : ', $code'}): $detail';
 }
 
+/// The structured `detail.code` a `POST /w/{w}/ops` chain conflict carries.
+const String authorChainConflictCode = 'author_chain_conflict';
+
+/// The server disagrees with our own acknowledged history.
+///
+/// Single-writer-per-member means this is never a co-author's fault: either the
+/// server rolled our writes back, or this device came back from an older local
+/// backup, or something is authoring under our key. The client cannot tell those
+/// apart from one 409, which is exactly why the fields are parsed out rather than
+/// the prose read: `SyncClient` needs to know *which* position the server
+/// expected before it can say anything at all.
+///
+/// Every field is nullable because the race-retry path on the server resolves a
+/// raced insert without being able to attribute it to one op in the batch. An
+/// absent [expectedAuthorSeq] is the "no verdict" case: an ordinary transient
+/// conflict, not evidence of a rollback.
+class AuthorChainConflictException extends SyncTransportException {
+  const AuthorChainConflictException(
+    String detail, {
+    this.opIndex,
+    this.submittedAuthorSeq,
+    this.expectedAuthorSeq,
+  }) : super(409, detail, code: authorChainConflictCode);
+
+  /// Which op of the posted batch the server refused.
+  final int? opIndex;
+
+  /// The `author_seq` we posted at that index.
+  final int? submittedAuthorSeq;
+
+  /// The `author_seq` the server believes comes next for this author.
+  final int? expectedAuthorSeq;
+
+  @override
+  String toString() => 'AuthorChainConflictException(index: $opIndex, '
+      'author_seq: $submittedAuthorSeq, expected: $expectedAuthorSeq): $detail';
+}
+
 /// The User-credential surface: everything a Device needs *before* it holds a
 /// member credential, and nothing that speaks for a Device.
 abstract class UserTransport {

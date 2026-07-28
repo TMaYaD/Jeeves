@@ -167,13 +167,45 @@ class FakeSyncServer {
     _log.firstWhere((op) => op.seq == seq).compactedBy = by;
   }
 
+  // --- Serving-side hostility ------------------------------------------------
+  //
+  // Fault injection lives here rather than in the client's link because the
+  // faults #551 defends against are *serving* faults: a server that drops,
+  // reorders, rewinds or replays. The client path stays production-real, which
+  // is the only way an alarm it raises is evidence of anything.
+
+  /// Seqs that pulls pretend do not exist — a withheld op.
+  final Set<int> omitSeqs = {};
+
+  /// Serve a pull page in this seq order instead of ascending. Seqs the log has
+  /// and this list does not keep their ascending place behind the listed ones.
+  List<int>? serveOrder;
+
+  /// Serve from seq 1 whatever `since` the client asked with. `since` is a pure
+  /// client parameter, so no honest server can do this.
+  bool ignoreSinceParameter = false;
+
+  /// Truncate the log above [seq] and hand the freed seqs back out.
+  ///
+  /// The rollback and stale-prefix stage in one hook: history the client has
+  /// already seen and acknowledged simply stops existing, and the next append
+  /// reuses its transport positions.
+  void rollbackToSeq(int seq) {
+    _log.removeWhere((op) => op.seq > seq);
+    _nextSeq = seq + 1;
+  }
+
   /// Append bytes without running any of the server's own checks.
   ///
   /// This is the *hostile or broken server*: the fail-closed rules on the
   /// client exist precisely because nothing stops a server from serving an
   /// envelope it should have refused, or one it forged. Returns the assigned
   /// seq.
-  int injectUnchecked(String workspaceId, Uint8List envelope) {
+  ///
+  /// [atSeq] spends a transport seq the log has already spent. The seq is the
+  /// server's own bookkeeping, so nothing but its honesty stops it handing one
+  /// position to two different ops — and the client's log is keyed by it.
+  int injectUnchecked(String workspaceId, Uint8List envelope, {int? atSeq}) {
     OpHeader? header;
     try {
       header = OpHeader.parse(envelope);
@@ -181,7 +213,7 @@ class FakeSyncServer {
       header = null;
     }
     final op = StoredOp(
-      seq: _nextSeq++,
+      seq: atSeq ?? _nextSeq++,
       workspaceId: workspaceId,
       envelope: envelope,
       header: header,
@@ -566,10 +598,11 @@ class FakeSyncServer {
       }
       final expected = (lastAuthorSeq[header.authorMemberId] ?? 0) + 1;
       if (header.authorSeq != expected) {
-        throw SyncTransportException(
-          409,
+        throw AuthorChainConflictException(
           'ops[$index]: author_seq ${header.authorSeq}, expected $expected',
-          code: 'author_chain_gap',
+          opIndex: index,
+          submittedAuthorSeq: header.authorSeq,
+          expectedAuthorSeq: expected,
         );
       }
       final op = StoredOp(
@@ -676,11 +709,40 @@ class FakeSyncServer {
       throw const SyncTransportException(401, 'unknown member', code: 'unknown_member');
     }
     _authorizeWorkspace(member.userId, workspaceId);
+    final floor = ignoreSinceParameter ? 0 : since;
+    // Append order breaks every tie: [injectUnchecked] can spend one seq twice,
+    // so seq alone is not a total order and a page would otherwise depend on the
+    // sort's (unspecified) stability.
+    final appendOrder = {for (var index = 0; index < _log.length; index++) _log[index]: index};
+    int byAppendOrder(StoredOp a, StoredOp b) =>
+        appendOrder[a]!.compareTo(appendOrder[b]!);
     final matching = [
       for (final op in _log)
-        if (op.workspaceId == workspaceId && op.seq > since && op.compactedBy == null)
+        if (op.workspaceId == workspaceId &&
+            op.seq > floor &&
+            op.compactedBy == null &&
+            !omitSeqs.contains(op.seq))
           op,
-    ]..sort((a, b) => a.seq.compareTo(b.seq));
+    ]..sort((a, b) {
+      final bySeq = a.seq.compareTo(b.seq);
+      return bySeq != 0 ? bySeq : byAppendOrder(a, b);
+    });
+    final order = serveOrder;
+    if (order != null) {
+      // Listed seqs first, in the listed order; everything else keeps its
+      // ascending place behind them.
+      matching.sort((a, b) {
+        final left = order.indexOf(a.seq);
+        final right = order.indexOf(b.seq);
+        if (left == right) {
+          final bySeq = a.seq.compareTo(b.seq);
+          return bySeq != 0 ? bySeq : byAppendOrder(a, b);
+        }
+        if (left < 0) return 1;
+        if (right < 0) return -1;
+        return left.compareTo(right);
+      });
+    }
     final page = matching.take(limit).toList();
     return PullPage(
       ops: [for (final op in page) PulledOp(seq: op.seq, envelope: op.envelope)],

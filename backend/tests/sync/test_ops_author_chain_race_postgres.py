@@ -175,6 +175,23 @@ async def test_a_raced_fork_of_the_author_chain_is_a_409_not_a_500(
                     workspace_id, PostOpsRequest(ops=[encode(loser)]), losing, member, hub
                 )
             assert refusal.value.status_code == 409
+            # The *full* gap verdict, which is the whole point of the retry: it
+            # resolved against committed state, so ``expected_author_seq`` is a
+            # read rather than a guess, and the loser learns it sent a position
+            # the winner now holds.  The bare ``{"code": ...}`` belongs to the
+            # one case that resolves nothing — a retry that loses the constraint
+            # a second time — and this interleaving cannot stage it.
+            # ``HTTPException.detail`` is annotated ``str`` upstream while the
+            # routes raise structured objects through it, so the comparison is
+            # widened here rather than the assertion weakened to a substring
+            # match.
+            detail: object = refusal.value.detail
+            assert detail == {
+                "code": "author_chain_conflict",
+                "index": 0,
+                "author_seq": 1,
+                "expected_author_seq": 2,
+            }
         # A batch that stored nothing is not news, however it was refused.
         assert not subscriber.pending()
 

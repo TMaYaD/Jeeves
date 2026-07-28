@@ -108,13 +108,17 @@ dependencies:
   # directly by lib/sync/, so it is a declared dependency rather than the
   # transitive one it used to be.
   crypto: ^3.0.6
+  # The op-log append in lib/sync/sync_client.dart tells a taken slot apart from
+  # every other database failure by SQLite's extended result code, so it imports
+  # the exception type directly. Already in the graph under drift, so making it
+  # direct adds no resolution risk.
+  sqlite3: ^3.3.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   integration_test:
     sdk: flutter
-  sqlite3: ^3.3.3
   fake_async: ^1.3.3
   flutter_lints: ^6.0.0
   build_runner: ^2.15.0

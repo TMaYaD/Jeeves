@@ -164,7 +164,35 @@ enum SyncRejectionReason {
   malformedPayload('malformed_payload'),
   malformedMemberIdHex('malformed_member_id_hex'),
   hlcInTheFuture('hlc_in_the_future'),
-  hlcMemberIsNotAuthor('hlc_member_is_not_author');
+  hlcMemberIsNotAuthor('hlc_member_is_not_author'),
+
+  // --- Per-author chain rules (client-only) ---------------------------------
+  //
+  // These six are *stateful receiver policy*, not per-envelope codec rules: the
+  // same envelope is chain-valid for one device and a gap for another, depending
+  // on what each has already received. The server never quarantines and the
+  // Python codec has no chain state, so — unlike every code above — these carry
+  // no golden vector and no backend twin. See `chain_verifier.dart`.
+
+  /// `author_seq` is beyond the verified head + 1.
+  authorChainGap('author_chain_gap'),
+
+  /// Right position, wrong `prev_author_hash`.
+  prevAuthorHashMismatch('prev_author_hash_mismatch'),
+
+  /// A position already held, served with different bytes.
+  authorChainRewrite('author_chain_rewrite'),
+
+  /// The same `(author, op_id)` under a different position or different bytes.
+  duplicateOpIdDivergence('duplicate_op_id_divergence'),
+
+  /// A pull served an op at or below the cursor, in a slot this device does not
+  /// already hold byte-identically.
+  staleReplayedOp('stale_replayed_op'),
+
+  /// An envelope this device authored, served back with different bytes than the
+  /// outbox row it was signed into. The local copy stands.
+  ownWritesDivergence('own_writes_divergence');
 
   const SyncRejectionReason(this.code);
 

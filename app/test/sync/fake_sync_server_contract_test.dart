@@ -181,12 +181,20 @@ void main() {
       expect(server.storedOps.length, 1);
     });
 
-    test('author_seq gap rejects the whole batch', () async {
+    test('author_seq gap rejects the whole batch with the structured conflict',
+        () async {
       await author.nextEnvelope(workspaceId); // burn author_seq 1
       final afterTheGap = await author.nextEnvelope(workspaceId);
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [afterTheGap]),
-        throwsStatus(409, 'author_chain_gap'),
+        throwsA(
+          isA<AuthorChainConflictException>()
+              .having((error) => error.statusCode, 'statusCode', 409)
+              .having((error) => error.code, 'code', authorChainConflictCode)
+              .having((error) => error.opIndex, 'opIndex', 0)
+              .having((error) => error.submittedAuthorSeq, 'submittedAuthorSeq', 2)
+              .having((error) => error.expectedAuthorSeq, 'expectedAuthorSeq', 1),
+        ),
       );
       expect(server.storedOps, isEmpty);
     });
@@ -199,7 +207,7 @@ void main() {
       await session.postOps(workspaceId, [first]);
       expect(
         () => session.postOps(workspaceId, [second]),
-        throwsStatus(409, 'author_chain_gap'),
+        throwsStatus(409, authorChainConflictCode),
       );
       expect(server.storedOps.map((op) => op.envelope), [first]);
     });

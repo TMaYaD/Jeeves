@@ -219,6 +219,12 @@ async def test_a_repeat_inside_one_batch_is_a_duplicate_of_its_first_appearance(
 async def test_author_seq_gap_rejects_the_whole_batch(
     client: AsyncClient, session: Session, db: AsyncSession
 ) -> None:
+    """The gap 409, and the fields a single-writer client's verdict turns on.
+
+    ``expected_author_seq`` is what lets a client tell "the server is behind us"
+    from "the server is ahead of us" from "no verdict at all", so it is asserted
+    here rather than left to the prose.
+    """
     session.device.next_envelope(session.workspace_id)  # burn author_seq 1
     valid_after_the_gap = session.device.next_envelope(session.workspace_id)
 
@@ -228,6 +234,12 @@ async def test_author_seq_gap_rejects_the_whole_batch(
         headers=session.headers,
     )
     assert response.status_code == 409, response.text
+    assert response.json()["detail"] == {
+        "code": "author_chain_conflict",
+        "index": 0,
+        "author_seq": 2,
+        "expected_author_seq": 1,
+    }
     assert (await db.execute(select(Op))).scalars().all() == []
 
 
@@ -256,6 +268,7 @@ async def test_two_ops_claiming_the_same_author_seq_land_exactly_once(
         f"/w/{session.workspace_id}/ops", json=encode_all(second), headers=session.headers
     )
     assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["code"] == "author_chain_conflict"
 
     stored = (await db.execute(select(Op))).scalars().all()
     assert [op.envelope for op in stored] == [first]

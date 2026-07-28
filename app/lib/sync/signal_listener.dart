@@ -87,8 +87,11 @@ class SignalListener {
 
   /// Failures of a poke-triggered sync. The listener does not retry — the next
   /// poke or a manual sync retries naturally — so this is how a caller learns
-  /// that a sync it never asked for went wrong. #551's integrity alarms are the
-  /// eventual consumer.
+  /// that a sync it never asked for went wrong.
+  ///
+  /// Distinct from an integrity alarm, which is a persisted accusation about what
+  /// the server served; this is a transport-level failure of one attempt, and it
+  /// is not persisted anywhere.
   Stream<Object> get syncFailures => _syncFailures.stream;
 
   /// How many sync sequences have run since construction, counted as they
@@ -244,9 +247,10 @@ class SignalListener {
   /// before any of that author's content. The pull hydrates the directory in
   /// order by itself, which is why `SyncClient` has no `refreshMemberDirectory`
   /// for this to call. Ops from a Member whose registration has not been
-  /// verified still quarantine as `member_not_chained_to_root`, and still do so
-  /// terminally in this slice — but that is #551's quarantine heal to close, not
-  /// something a refresh here could have prevented.
+  /// verified still quarantine as `member_not_chained_to_root`, and terminally:
+  /// the release scan re-admits chain-gap refusals only, so an unchained author's
+  /// content stays refused until #549 opens membership up. A refresh here could
+  /// not have prevented it either way.
   Future<void> _runSync() async {
     _syncRunCount++;
     await _client.pull();
