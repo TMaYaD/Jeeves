@@ -173,17 +173,6 @@ class HttpUserTransport implements UserTransport {
   }
 
   @override
-  Future<List<MemberRecord>> fetchMembers(String workspaceId) async {
-    final response = await _send(
-      () => _dio.get<Map<String, dynamic>>('/w/$workspaceId/members'),
-    );
-    return [
-      for (final member in response!['members'] as List<dynamic>)
-        _memberFromJson(member as Map<String, dynamic>),
-    ];
-  }
-
-  @override
   Future<RecoveryEscrowRecord?> fetchRecoveryEscrow(String workspaceId) async {
     try {
       final response = await _send(

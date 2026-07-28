@@ -111,9 +111,6 @@ abstract class UserTransport {
     required Uint8List kexPk,
   });
 
-  /// A bootstrap hint. Verification never reads it.
-  Future<List<MemberRecord>> fetchMembers(String workspaceId);
-
   /// Read the passphrase-wrapped Root. Rate-limited and audited server-side;
   /// null when the slot is empty.
   Future<RecoveryEscrowRecord?> fetchRecoveryEscrow(String workspaceId);
@@ -138,6 +135,18 @@ abstract class UserTransport {
 
 /// The member-credential surface. Every op posted through it must name the
 /// token's own Member as its author.
+///
+/// **There is no members-registry read here, and that is not an omission.** The
+/// server serves `GET /w/{w}/members` behind this credential, but no client
+/// calls it: a Member's key is learned only from a MemberRegister the device
+/// verified itself, and `MemberDirectory.rememberChained` takes a parsed
+/// certificate precisely so there is no way to feed it something the server
+/// merely asserted. The registry is a bootstrap hint that verification never
+/// reads (ADR-0028 — the server's tables are "authoritative for nobody"), so a
+/// client method for it would be an unused seam whose only effect would be to
+/// suggest the directory can be populated over HTTP. If a future slice does need
+/// the read, it belongs on *this* interface and not on [UserTransport]: the
+/// route requires an unrevoked member JWT.
 abstract class SyncTransport {
   /// Append in order, in one transaction. Idempotent by author-namespaced op id.
   Future<List<OpAppendResult>> postOps(
