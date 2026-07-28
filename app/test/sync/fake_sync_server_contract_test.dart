@@ -270,7 +270,7 @@ void main() {
       expect(first, isNot(second));
 
       await session.postOps(workspaceId, [first]);
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [second]),
         throwsStatus(409, authorChainConflictCode),
       );
@@ -279,7 +279,7 @@ void main() {
 
     test('header workspace mismatch is rejected', () async {
       final foreign = await author.nextEnvelope(defaultWorkspaceId('someone-else'));
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [foreign]),
         throwsStatus(422, 'workspace_mismatch'),
       );
@@ -287,7 +287,7 @@ void main() {
 
     test('unserved suite is rejected', () async {
       final envelope = await author.nextEnvelope(workspaceId, suite: 0x7F);
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'unsupported_suite'),
       );
@@ -298,7 +298,7 @@ void main() {
         // Unknown (9) and known-but-unimplemented (4) fail closed identically.
         // op_class 2 is no longer among them: this slice serves control.
         final envelope = await author.nextEnvelope(workspaceId, opClass: opClass);
-        expect(
+        await expectLater(
           () => session.postOps(workspaceId, [envelope]),
           throwsStatus(422, 'unsupported_op_class'),
         );
@@ -307,7 +307,7 @@ void main() {
 
     test('truncated envelope is rejected', () async {
       final envelope = await author.nextEnvelope(workspaceId);
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [Uint8List.sublistView(envelope, 0, 100)]),
         throwsStatus(422, 'truncated_envelope'),
       );
@@ -318,7 +318,7 @@ void main() {
       final tooShort = Uint8List.sublistView(envelope, 0, minimumEnvelopeBytes - 1);
       // Long enough to parse as a header: not the truncated-header case.
       expect(tooShort.length, greaterThan(headerLengthBytes));
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [tooShort]),
         throwsStatus(422, 'envelope_too_short'),
       );
@@ -334,7 +334,7 @@ void main() {
         kexPk: stranger.kexPk,
       );
       final envelope = await stranger.nextEnvelope(workspaceId);
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [envelope]),
         throwsStatus(403, 'author_member_mismatch'),
       );
@@ -343,7 +343,7 @@ void main() {
     test('unregistered author is rejected', () async {
       final stranger = await AuthorFixture.create(seed: _seedOf(70));
       final envelope = await stranger.nextEnvelope(workspaceId);
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [envelope]),
         throwsStatus(403, 'author_member_mismatch'),
       );
@@ -360,7 +360,7 @@ void main() {
         kexPk: sibling.kexPk,
       );
       final envelope = await sibling.nextEnvelope(workspaceId);
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [envelope]),
         throwsStatus(403, 'author_member_mismatch'),
       );
@@ -370,11 +370,11 @@ void main() {
     test("another user's workspace is rejected", () async {
       final otherWorkspaceId = defaultWorkspaceId(_otherUserId);
       final envelope = await author.nextEnvelope(otherWorkspaceId);
-      expect(
+      await expectLater(
         () => session.postOps(otherWorkspaceId, [envelope]),
         throwsStatus(403, 'workspace_not_derivable'),
       );
-      expect(
+      await expectLater(
         () => session.pullOps(otherWorkspaceId, since: 0, limit: 10),
         throwsStatus(403, 'workspace_not_derivable'),
       );
@@ -665,7 +665,7 @@ void main() {
       final (sibling, siblingSession) = await joinSibling(142);
       final envelope =
           await registerFor(sibling, prevControlHash: zeroPrevControlHash);
-      expect(
+      await expectLater(
         () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'control_chain_break'),
       );
@@ -695,7 +695,7 @@ void main() {
     test('a control op with a bad Root signature is rejected', () async {
       final (sibling, siblingSession) = await joinSibling(143);
       final envelope = await registerFor(sibling, corruptSignature: true);
-      expect(
+      await expectLater(
         () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'bad_root_signature'),
       );
@@ -708,7 +708,7 @@ void main() {
         sibling,
         signer: await RootAuthority.fromSecretKey(_seedOf(77)),
       );
-      expect(
+      await expectLater(
         () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'bad_root_signature'),
       );
@@ -725,7 +725,7 @@ void main() {
           prevControlHash: controlHead(),
         ).encode(),
       );
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'unsupported_control_type'),
       );
@@ -737,7 +737,7 @@ void main() {
         opClass: opClassControl,
         payloadJson: 'not json at all',
       );
-      expect(
+      await expectLater(
         () => session.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'malformed_control_payload'),
       );
@@ -753,7 +753,7 @@ void main() {
           body,
           opClass: opClassControl,
         );
-        expect(
+        await expectLater(
           () => session.postOps(workspaceId, [envelope]),
           throwsStatus(422, code),
         );
@@ -765,7 +765,7 @@ void main() {
       final (sibling, siblingSession) = await joinSibling(145);
       final before = server.storedOps.length;
       final envelope = await registerFor(sibling, authorSeq: 4);
-      expect(
+      await expectLater(
         () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'member_register_not_first'),
       );
@@ -784,7 +784,7 @@ void main() {
           registeredAtHlc: Hlc.forMember(sibling.memberId, 1800000000000),
         ),
       );
-      expect(
+      await expectLater(
         () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'cert_member_mismatch'),
       );
@@ -803,7 +803,7 @@ void main() {
           registeredAtHlc: Hlc.forMember(sibling.memberId, 1800000000000),
         ),
       );
-      expect(
+      await expectLater(
         () => siblingSession.postOps(workspaceId, [envelope]),
         throwsStatus(422, 'cert_key_mismatch'),
       );
@@ -882,7 +882,7 @@ void main() {
         memberId: author.memberId,
         seed: _seedOf(33),
       );
-      expect(
+      await expectLater(
         () => userSession.registerMember(
           memberId: impostor.memberId,
           signPk: impostor.signPk,
@@ -907,7 +907,7 @@ void main() {
     });
 
     test("another user's registry is unreachable", () async {
-      expect(
+      await expectLater(
         () => session.fetchMembers(defaultWorkspaceId(_otherUserId)),
         throwsStatus(403, 'workspace_not_derivable'),
       );
@@ -939,7 +939,7 @@ void main() {
         nonce: nonce,
         signature: signature,
       );
-      expect(
+      await expectLater(
         () => userSession.completeMemberChallenge(
           memberId: device.memberId,
           nonce: nonce,
@@ -975,7 +975,7 @@ void main() {
         kexPk: attacker.kexPk,
       );
       final nonce = await userSession.requestMemberChallenge(attacker.memberId);
-      expect(
+      await expectLater(
         () async => userSession.completeMemberChallenge(
           memberId: author.memberId,
           nonce: nonce,
@@ -986,7 +986,7 @@ void main() {
     });
 
     test('an unknown member has no challenge', () async {
-      expect(
+      await expectLater(
         () => userSession.requestMemberChallenge(defaultWorkspaceId('nobody')),
         throwsStatus(404, 'unknown_member'),
       );
@@ -1004,7 +1004,7 @@ void main() {
       for (var index = 0; index < fakeServerMemberChallengeLimit; index++) {
         expect(await userSession.requestMemberChallenge(device.memberId), hasLength(32));
       }
-      expect(
+      await expectLater(
         () => userSession.requestMemberChallenge(device.memberId),
         throwsStatus(429, 'member_challenge_rate_limited'),
       );
@@ -1024,7 +1024,7 @@ void main() {
       for (var index = 0; index < fakeServerMemberChallengeLimit; index++) {
         await userSession.requestMemberChallenge(exhausted.memberId);
       }
-      expect(
+      await expectLater(
         () => userSession.requestMemberChallenge(exhausted.memberId),
         throwsStatus(429, 'member_challenge_rate_limited'),
       );
@@ -1035,7 +1035,7 @@ void main() {
       // The 404 precedes the counter, so enumeration cannot exhaust anything.
       final stranger = defaultWorkspaceId('never-registered');
       for (var index = 0; index < fakeServerMemberChallengeLimit + 5; index++) {
-        expect(
+        await expectLater(
           () => userSession.requestMemberChallenge(stranger),
           throwsStatus(404, 'unknown_member'),
         );
@@ -1114,7 +1114,7 @@ void main() {
       final first = await record(1);
       await bareUser.putRecoveryEscrow(workspaceId, first);
       await bareUser.putRecoveryEscrow(workspaceId, await record(2));
-      expect(
+      await expectLater(
         () => bareUser.putRecoveryEscrow(workspaceId, first),
         throwsStatus(409, 'escrow_version_regression'),
       );
@@ -1141,7 +1141,7 @@ void main() {
     test('a bad Root signature is refused on the first write too', () async {
       final good = await record(1);
       final corrupted = Uint8List.fromList(good.rootSig)..[63] ^= 0x01;
-      expect(
+      await expectLater(
         () => bareUser.putRecoveryEscrow(
           workspaceId,
           RecoveryEscrowRecord(
@@ -1161,7 +1161,7 @@ void main() {
         version: 1,
         blob: harnessEscrowBlob(),
       );
-      expect(
+      await expectLater(
         () => bareUser.putRecoveryEscrow(workspaceId, foreign),
         throwsStatus(403, 'bad_escrow_signature'),
       );
@@ -1169,7 +1169,7 @@ void main() {
 
     test('a signature for another version does not transfer', () async {
       final signedForV1 = await record(1);
-      expect(
+      await expectLater(
         () => bareUser.putRecoveryEscrow(
           workspaceId,
           RecoveryEscrowRecord(
@@ -1185,11 +1185,11 @@ void main() {
 
     test("another user's escrow slot is unreachable", () async {
       final neighbour = bare.connectAsUser(_otherUserId);
-      expect(
+      await expectLater(
         () async => neighbour.putRecoveryEscrow(workspaceId, await record(1)),
         throwsStatus(403, 'workspace_not_derivable'),
       );
-      expect(
+      await expectLater(
         () => neighbour.fetchRecoveryEscrow(workspaceId),
         throwsStatus(403, 'workspace_not_derivable'),
       );
@@ -1216,7 +1216,7 @@ void main() {
       for (var index = 0; index < fakeServerRecoveryFetchLimit; index++) {
         expect(await bareUser.fetchRecoveryEscrow(workspaceId), isNotNull);
       }
-      expect(
+      await expectLater(
         () => bareUser.fetchRecoveryEscrow(workspaceId),
         throwsStatus(429, 'escrow_fetch_rate_limited'),
       );

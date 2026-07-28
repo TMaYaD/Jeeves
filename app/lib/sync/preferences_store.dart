@@ -56,13 +56,22 @@ class PreferencesStore {
     );
   }
 
-  Future<String?> get(String key) async {
-    final entity = await _view.readEntity(entityIdFor(key));
-    return entity?[valueField] as String?;
-  }
+  Future<String?> get(String key) async =>
+      _stringValue(await _view.readEntity(entityIdFor(key)));
 
   Stream<String?> watch(String key) =>
-      _view.watchEntity(entityIdFor(key)).map((entity) => entity?[valueField] as String?);
+      _view.watchEntity(entityIdFor(key)).map(_stringValue);
+
+  /// Read the reduced value, treating a non-`String` as absent.
+  ///
+  /// The value arrives from whatever another device reduced, so a cast is a
+  /// `TypeError` on a read the caller could have recovered from — and on
+  /// [watch] it would kill the stream rather than yield null once. [getAll]
+  /// type-checks for the same reason.
+  static String? _stringValue(Map<String, Object?>? entity) {
+    final value = entity?[valueField];
+    return value is String ? value : null;
+  }
 
   Future<Map<String, String>> getAll() async => _asKeyValueMap(await _view.readAll());
 

@@ -92,6 +92,11 @@ dependencies:
   flutter_svg: ^2.3.0
 
   # Utilities
+  # `DeepCollectionEquality` for op-payload field values, which are arbitrarily
+  # nested decoded JSON — so `FieldWrite ==` has to recurse. Imported directly by
+  # lib/sync/, and already in the graph under flutter, so declaring it adds no
+  # resolution risk and only makes the import honest.
+  collection: ^1.19.0
   uuid: ^4.4.0
   freezed_annotation: ^3.1.0
   json_annotation: ^4.12.0

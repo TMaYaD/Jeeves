@@ -241,7 +241,17 @@ enum SyncRejectionReason {
 
   /// An envelope this device authored, served back with different bytes than the
   /// outbox row it was signed into. The local copy stands.
-  ownWritesDivergence('own_writes_divergence');
+  ownWritesDivergence('own_writes_divergence'),
+
+  /// A receive-path failure that was not itself a [SyncRejection] — a parse,
+  /// verify or decode path throwing something unclassified.
+  ///
+  /// Client-only, and the backstop that makes "fail closed" total rather than
+  /// best-effort: without it an adversarial envelope whose error escapes the
+  /// pipeline would leave the cursor pinned, so every subsequent `pull()`
+  /// refetches and throws on the same op for ever. Quarantining under this code
+  /// keeps the op unapplied and surfaced while the stream continues.
+  unexpectedReceiveFailure('unexpected_receive_failure');
 
   const SyncRejectionReason(this.code);
 
@@ -265,11 +275,13 @@ class SyncRejection implements Exception {
 
 // --- Header ----------------------------------------------------------------------
 
-final Uint8List _zero32 = Uint8List(32);
-final Uint8List _zero24 = Uint8List(24);
-
 /// The 158 fixed bytes every op carries in the clear.
 class OpHeader {
+  /// An omitted [prevAuthorHash]/[observedHead]/[nonce] gets its *own* zero
+  /// buffer, not a shared one: `Uint8List` is mutable, so a single in-place
+  /// write through one header's default would otherwise silently rewrite the
+  /// defaults of every other header in the process. Caller-provided values are
+  /// taken as given — the caller owns those bytes.
   OpHeader({
     required this.workspaceId,
     required this.opId,
@@ -282,9 +294,9 @@ class OpHeader {
     Uint8List? prevAuthorHash,
     Uint8List? observedHead,
     Uint8List? nonce,
-  })  : prevAuthorHash = prevAuthorHash ?? _zero32,
-        observedHead = observedHead ?? _zero32,
-        nonce = nonce ?? _zero24;
+  })  : prevAuthorHash = prevAuthorHash ?? Uint8List(prevAuthorHashBytes),
+        observedHead = observedHead ?? Uint8List(observedHeadBytes),
+        nonce = nonce ?? Uint8List(nonceBytes);
 
   final int suite;
   final int opClass;
@@ -676,14 +688,18 @@ class EnvelopeSigner {
 }
 
 /// Throws [SyncRejection] unless the Ed25519 signature checks out.
+///
+/// Goes through [verifyDomainSeparated] rather than calling `Ed25519().verify`
+/// directly, so a signature or key of the wrong width is a fail-closed refusal
+/// here instead of an unclassified throw out of the `cryptography` package —
+/// which is what a caller passing a key from outside [MemberDirectory] would
+/// otherwise get.
 Future<void> verifyEnvelope(Uint8List envelope, Uint8List signPublicKey) async {
   final parts = splitEnvelope(envelope);
-  final ok = await Ed25519().verify(
+  final ok = await verifyDomainSeparated(
     signingInput(parts.header, parts.body),
-    signature: Signature(
-      parts.signature,
-      publicKey: SimplePublicKey(signPublicKey, type: KeyPairType.ed25519),
-    ),
+    parts.signature,
+    signPublicKey,
   );
   if (!ok) {
     throw const SyncRejection(

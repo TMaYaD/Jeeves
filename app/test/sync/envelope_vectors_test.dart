@@ -415,8 +415,9 @@ void main() {
       final bytes = Uint8List(headerLengthBytes);
       final view = ByteData.view(bytes.buffer);
       bytes[1] = opClassContent;
-      view.setUint32(62, high, Endian.big);
-      view.setUint32(66, low, Endian.big);
+      final offset = headerFieldOffset('author_seq');
+      view.setUint32(offset, high, Endian.big);
+      view.setUint32(offset + 4, low, Endian.big);
       return bytes;
     }
 

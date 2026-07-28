@@ -15,6 +15,11 @@ from typing import Any
 
 SPEC_SYNC_DIR = Path(__file__).resolve().parents[3] / "spec" / "sync"
 
+#: Stated explicitly rather than left to the platform default.  The Dart suite
+#: parses these same bytes as UTF-8, so a non-UTF-8 locale is the one way the two
+#: suites could disagree about a file neither of them is allowed to regenerate.
+SPEC_ENCODING = "utf-8"
+
 MERGE_STRATEGY_DART = (
     Path(__file__).resolve().parents[3] / "app" / "lib" / "sync" / "merge_strategy.dart"
 )
@@ -25,13 +30,17 @@ _STRATEGY_NAME = re.compile(r"'(?P<name>[^']+)'\s*:")
 
 @cache
 def envelope_vectors() -> dict[str, Any]:
-    document: dict[str, Any] = json.loads((SPEC_SYNC_DIR / "envelope_v1_vectors.json").read_text())
+    document: dict[str, Any] = json.loads(
+        (SPEC_SYNC_DIR / "envelope_v1_vectors.json").read_text(encoding=SPEC_ENCODING)
+    )
     return document
 
 
 @cache
 def reducer_vectors() -> dict[str, Any]:
-    document: dict[str, Any] = json.loads((SPEC_SYNC_DIR / "reducer_v1_vectors.json").read_text())
+    document: dict[str, Any] = json.loads(
+        (SPEC_SYNC_DIR / "reducer_v1_vectors.json").read_text(encoding=SPEC_ENCODING)
+    )
     return document
 
 

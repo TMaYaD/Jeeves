@@ -10,36 +10,14 @@ production.
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-from types import ModuleType
-
 import sqlalchemy as sa
-from alembic.operations import Operations
-from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy.pool import StaticPool
 
 from app import migrate
 from app.auth.models import RefreshToken
 from app.sync.models import Member, RecoveryEscrow, RecoveryEscrowFetch
-
-_VERSIONS = Path(__file__).resolve().parents[2] / "alembic" / "versions"
-
-
-def _load(name: str, filename: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, _VERSIONS / filename)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _run(engine: sa.engine.Engine, module: ModuleType, *, downgrade: bool = False) -> None:
-    with engine.begin() as conn:
-        ctx = MigrationContext.configure(conn)
-        with Operations.context(ctx):
-            (module.downgrade if downgrade else module.upgrade)()
+from tests.sync.helpers import load_migration, run_migration
 
 
 def _engine_at_0031() -> sa.engine.Engine:
@@ -67,7 +45,7 @@ def _engine_at_0031() -> sa.engine.Engine:
                 "VALUES ('t1', 'u1', 'hash', '2030-01-01', '2026-01-01')"
             )
         )
-    _run(engine, _load("migration_0031", "0031_add_sync_op_log.py"))
+    run_migration(engine, load_migration("migration_0031", "0031_add_sync_op_log.py"))
     with engine.begin() as conn:
         conn.execute(
             sa.text(
@@ -79,11 +57,11 @@ def _engine_at_0031() -> sa.engine.Engine:
 
 
 def _apply_0032(engine: sa.engine.Engine) -> None:
-    _run(engine, _load("migration_0032", "0032_add_identity_root_escrow.py"))
+    run_migration(engine, load_migration("migration_0032", "0032_add_identity_root_escrow.py"))
 
 
 def test_0032_chains_from_0031() -> None:
-    module = _load("migration_0032", "0032_add_identity_root_escrow.py")
+    module = load_migration("migration_0032", "0032_add_identity_root_escrow.py")
     assert module.revision == "0032"
     assert module.down_revision == "0031"
     # 0032 is no longer the head — 0033 adds the control-plane indexes on top of
@@ -144,7 +122,9 @@ def test_0032_leaves_existing_rows_untouched_and_unbackfilled() -> None:
 def test_0032_downgrade_removes_only_what_it_added() -> None:
     engine = _engine_at_0031()
     _apply_0032(engine)
-    _run(engine, _load("migration_0032", "0032_add_identity_root_escrow.py"), downgrade=True)
+    run_migration(
+        engine, load_migration("migration_0032", "0032_add_identity_root_escrow.py"), downgrade=True
+    )
 
     with engine.connect() as conn:
         inspector = sa.inspect(conn)

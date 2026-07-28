@@ -37,6 +37,7 @@ from app.sync.ids import default_workspace_id, user_preferences_workspace_id
 from app.sync.models import Grant, Member, Workspace
 from tests.conftest import auth_header
 from tests.sync.builders import SpecDevice, SpecRoot, encode_all, user_id_from_token
+from tests.sync.helpers import detail_of
 from tests.sync.test_ops_routes import (
     Session,
     _found_workspace,
@@ -44,7 +45,6 @@ from tests.sync.test_ops_routes import (
     _member_token,
     _open_session,
     all_ops,
-    detail_of,
 )
 
 

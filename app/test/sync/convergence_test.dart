@@ -277,7 +277,9 @@ void main() {
       prefs.flushOutbox(),
       throwsA(isA<SyncTransportException>()),
     );
-    workspace.a.link.dropPostResponse = false;
+    // The flag is one-shot, so the re-send below reaches the server and observes
+    // the duplicate result — the thing this case is actually about.
+    expect(workspace.a.link.dropPostResponse, isFalse);
 
     await workspace.syncAll();
     expect(await workspace.b.preferences.getAll(), {'theme': '"dark"'});
@@ -342,13 +344,13 @@ void main() {
     // that both devices decide the same way, not which one wins.
     final winner = (await viewA.readEntity(docId))!['a'];
     expect(await viewB.readEntity(docId), {'a': winner});
-    final higherMember = [
+    final membersAscending = [
       workspace.a.identity.memberIdHex,
       workspace.b.identity.memberIdHex,
     ]..sort();
     expect(
       winner,
-      higherMember.last == workspace.a.identity.memberIdHex ? 'from_a' : 'from_b',
+      membersAscending.last == workspace.a.identity.memberIdHex ? 'from_a' : 'from_b',
     );
   });
 
@@ -635,7 +637,7 @@ void main() {
     // raw bytes can stage the case.
     final template = await author.nextEnvelope(workspace.workspaceId);
     final header = Uint8List.fromList(template.sublist(0, headerLengthBytes));
-    const authorSeqOffset = 62;
+    final authorSeqOffset = headerFieldOffset('author_seq');
     final view = ByteData.view(header.buffer);
     // 0x0020000000000000 == 2^53, one past the largest representable value.
     view.setUint32(authorSeqOffset, 0x00200000, Endian.big);
@@ -810,6 +812,45 @@ void main() {
       expect(header.workspaceId, workspace.preferencesWorkspaceId);
       expectedPrevHash = envelopeHash(authored[index]);
     }
+  });
+
+  test('two un-awaited captures claim two chain slots, not one', () async {
+    // The chain head is read before the envelope is signed and advanced after,
+    // so authoring has to be serialised or two interleaved `capture()` calls
+    // both observe the same head — a fork this device signs against itself,
+    // which no constraint catches on the authoring side (`op_log`'s unique
+    // `(workspace, author, author_seq)` index guards the *receive* path, and
+    // neither `outbox` nor `author_state` constrains the slot).
+    final docId = preferenceEntityId(workspace.workspaceId, 'harness-doc');
+    await Future.wait([
+      workspace.a.client.capture(
+        collection: _harnessCollection,
+        entityId: docId,
+        fields: {'a': 'first'},
+      ),
+      workspace.a.client.capture(
+        collection: _harnessCollection,
+        entityId: docId,
+        fields: {'b': 'second'},
+      ),
+    ]);
+
+    final authored = await workspace.a.client.authoredEnvelopes();
+    final headers = [for (final envelope in authored) OpHeader.parse(envelope)];
+    expect(
+      headers.map((header) => header.authorSeq),
+      List<int>.generate(authored.length, (index) => index + 1),
+      reason: 'every authored op holds its own slot',
+    );
+    var expectedPrevHash = Uint8List(prevAuthorHashBytes);
+    for (var index = 0; index < authored.length; index++) {
+      expect(headers[index].prevAuthorHash, expectedPrevHash);
+      expectedPrevHash = envelopeHash(authored[index]);
+    }
+    // And the server takes the whole chain: a fork would be refused at the
+    // second envelope with `author_chain_conflict`.
+    await workspace.syncAll();
+    expect(await workspace.a.client.health().then((health) => health.pendingOpCount), 0);
   });
 
   test('the op log keeps received envelopes byte-identical', () async {

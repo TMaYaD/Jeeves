@@ -9,41 +9,26 @@ only in production.
 
 from __future__ import annotations
 
-import importlib.util
 import uuid
-from pathlib import Path
 from types import ModuleType
 
 import pytest
 import sqlalchemy as sa
-from alembic.operations import Operations
-from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import orm
 from sqlalchemy.pool import StaticPool
 
 from app import migrate
 from app.sync.models import Member, Op
-
-_MIGRATION_0031_PATH = (
-    Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0031_add_sync_op_log.py"
-)
+from tests.sync.helpers import load_migration, run_migration
 
 
 def _load_migration_0031() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("migration_0031", _MIGRATION_0031_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_migration("migration_0031", "0031_add_sync_op_log.py")
 
 
 def _apply_upgrade(engine: sa.engine.Engine) -> None:
-    module = _load_migration_0031()
-    with engine.begin() as conn:
-        ctx = MigrationContext.configure(conn)
-        with Operations.context(ctx):
-            module.upgrade()
+    run_migration(engine, _load_migration_0031())
 
 
 def _engine_with_users() -> sa.engine.Engine:
@@ -159,16 +144,20 @@ def test_0031_leaves_existing_tables_untouched() -> None:
         assert conn.execute(sa.text("SELECT id FROM users")).scalars().all() == ["u1"]
 
 
-def test_0031_downgrade_removes_only_what_it_added() -> None:
+def test_0031_refuses_to_downgrade_and_keeps_the_log() -> None:
+    """The log is the history, and the keys are what make it verifiable.
+
+    Dropping ``ops`` would destroy every synced envelope and dropping ``members``
+    the public keys those envelopes verify against, so the downgrade raises
+    *before* touching any schema rather than losing them.  The assertion is that
+    both tables are still there afterwards: a refusal that had already dropped one
+    of them would be no better than the drop.
+    """
     engine = _engine_with_users()
     _apply_upgrade(engine)
     module = _load_migration_0031()
-    with engine.begin() as conn:
-        ctx = MigrationContext.configure(conn)
-        with Operations.context(ctx):
-            module.downgrade()
+    with pytest.raises(RuntimeError, match="irreversible"):
+        run_migration(engine, module, downgrade=True)
     with engine.connect() as conn:
         remaining = set(sa.inspect(conn).get_table_names())
-    assert "ops" not in remaining
-    assert "members" not in remaining
-    assert "users" in remaining
+    assert {"ops", "members", "users"} <= remaining
