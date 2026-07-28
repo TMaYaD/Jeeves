@@ -63,26 +63,15 @@ Future<void> _waitUntil(
 /// `<table>_data` backing table with INSTEAD OF triggers.
 ///
 /// The backing table is deliberately **unconstrained** beyond its primary key,
-/// which is what PowerSync's `ps_data__*` really is (an id and a JSON blob).
-/// Carrying the Drift table's NOT NULL / DEFAULT clauses over would make the
-/// emulation stricter than production and fail on exactly the column the
-/// projector is required *not* to write — `todos.time_spent_minutes`.
+/// which is what PowerSync's `ps_data__*` really is (an id and a JSON blob), and
+/// the view projects it verbatim. That is what makes this emulation able to
+/// catch a projector that leaves a NOT NULL column null: nothing downstream
+/// supplies a default, so the null reaches the Drift row read exactly as it
+/// would on a store the server has never replicated into.
 Future<void> _convertToView(SqliteDatabase raw, String table) async {
   final info = await raw.getAll('PRAGMA table_info($table)');
   final cols = info.map((r) => r['name'] as String).toList();
   final colList = cols.map((c) => '"$c"').join(', ');
-  // `todos.time_spent_minutes` is NOT NULL DEFAULT 0 in Postgres and arrives
-  // replicated, so the production view never yields NULL for it — even though
-  // the projector deliberately never writes it (ADR-0030). The emulation has to
-  // reproduce that or a Drift row read would fail on a column the op log has
-  // nothing to say about. The column is dropped outright in #556.
-  final viewList = table == 'todos'
-      ? cols
-          .map((c) => c == 'time_spent_minutes'
-              ? 'COALESCE("$c", 0) AS "$c"'
-              : '"$c"')
-          .join(', ')
-      : colList;
   final newValues = cols.map((c) => 'NEW."$c"').join(', ');
   final setClause =
       cols.where((c) => c != 'id').map((c) => '"$c" = NEW."$c"').join(', ');
@@ -96,7 +85,7 @@ Future<void> _convertToView(SqliteDatabase raw, String table) async {
     await tx.execute('INSERT INTO ${table}_data ($colList) '
         'SELECT $colList FROM $table');
     await tx.execute('DROP TABLE $table');
-    await tx.execute('CREATE VIEW $table AS SELECT $viewList FROM ${table}_data');
+    await tx.execute('CREATE VIEW $table AS SELECT $colList FROM ${table}_data');
     await tx.execute('''
 CREATE TRIGGER ${table}_insert INSTEAD OF INSERT ON $table BEGIN
   INSERT INTO ${table}_data ($colList) VALUES ($newValues);
@@ -366,6 +355,40 @@ void main() {
     await projector.project(
         await reduce('todos', id, outcomeFields('Quarterly plan')));
     await _waitUntil(() => seen.last.any((hit) => hit.todo?.id == id));
+  });
+
+  test('a projected row survives a plain select(todos) — the unsynced NOT NULL '
+      'column is filled at create time', () async {
+    // The trap this closes: `todos.time_spent_minutes` is a dead cache the log
+    // carries nothing about (ADR-0030), but it is declared NOT NULL, so a
+    // projected row that omitted it read back as null and threw on the null
+    // check the moment anything did a raw row read — `SearchDao` among them.
+    // Nothing downstream of this emulation supplies a default: the backing
+    // table is unconstrained and the view projects it verbatim, exactly like a
+    // store the server has never replicated into.
+    final id = _id('outcome');
+    await projector.project(await reduce('todos', id, outcomeFields('Ship it')));
+
+    final row = await (domain.select(domain.todos)
+          ..where((todo) => todo.id.equals(id)))
+        .getSingle();
+    expect(row.timeSpentMinutes, 0);
+    expect(row.title, 'Ship it');
+
+    // Projecting again must not touch the column — it is not a merge input, so
+    // whatever the local row holds is what it keeps.
+    await domain.customUpdate(
+      'UPDATE "todos" SET "time_spent_minutes" = 42 WHERE "id" = ?',
+      variables: [Variable<String>(id)],
+    );
+    await projector.project(
+        await reduce('todos', id, {'title': 'Ship it, revised'}));
+    final reread = await (domain.select(domain.todos)
+          ..where((todo) => todo.id.equals(id)))
+        .getSingle();
+    expect(reread.title, 'Ship it, revised');
+    expect(reread.timeSpentMinutes, 42,
+        reason: 'projection overwrote a column it does not own');
   });
 
   test('a projected tombstone deletes the row and refreshes the watcher',

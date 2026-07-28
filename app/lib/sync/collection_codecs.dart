@@ -25,15 +25,22 @@
 ///   `dateTime` columns *only*.
 /// * **Text, int, bool and null pass through** as JSON natives.
 ///
-/// ## `todos.time_spent_minutes` is absent on purpose
+/// ## `todos.time_spent_minutes` is unsynced, not unwritten
 ///
 /// It is a dead denormalised cache: nothing has written it since the
 /// `transitionState` recompute was retired, and time-spent is derived from
 /// `SUM(time_logs)` at read time with open logs valued at `now()` (#480).
-/// Capture never emits it, the reducer never sees it, and the projector leaves
-/// the column alone — recomputing it would buy nondeterminism (the
-/// open-log-at-`now()` term) for a column nothing reads. Its retirement rides
-/// #556; see ADR-0030.
+/// Capture never emits it and the reducer never sees it — recomputing it would
+/// buy nondeterminism (the open-log-at-`now()` term) for a column nothing
+/// reads.
+///
+/// It is nonetheless declared **NOT NULL**, so a projected row still has to
+/// carry a value or a plain `select(todos)` row read throws on the null. That
+/// is what [CollectionCodec.unsyncedInsertDefaults] is for: the projector
+/// supplies the column's declared default when it *creates* a row, and never
+/// touches it again. The value is not a merge input, it is excluded from every
+/// cross-device equality assertion, and the column's retirement rides #556 —
+/// see ADR-0030.
 library;
 
 /// The twelve collections this slice carries, named after their tables.
@@ -94,6 +101,7 @@ class CollectionCodec {
     required this.columns,
     required this.requiredColumns,
     required this.identityColumns,
+    this.unsyncedInsertDefaults = const <String, Object?>{},
   });
 
   /// Collection name; also the domain table name.
@@ -115,6 +123,17 @@ class CollectionCodec {
   /// sync row identifier rather than the domain key — which is what lets
   /// `focus_session_tasks.id` be realigned onto its derivation.
   final List<String> identityColumns;
+
+  /// Columns the op log never carries, whose declared NOT NULL the projector
+  /// still has to satisfy when it **creates** a row.
+  ///
+  /// Applied on INSERT only, never on UPDATE: the value is not a merge input,
+  /// so it must never overwrite what a local row already holds — a device that
+  /// authored the row keeps whatever it had. The only member is
+  /// `todos.time_spent_minutes` (see the library doc); without it a projected
+  /// row would leave the column null on a store whose backing table imposes no
+  /// default, and the next plain `select(todos)` read would throw.
+  final Map<String, Object?> unsyncedInsertDefaults;
 
   bool get identifiedById =>
       identityColumns.length == 1 && identityColumns.single == 'id';
@@ -148,6 +167,8 @@ const Map<String, CollectionCodec> collectionCodecs = {
     },
     requiredColumns: {'title', 'created_at', 'user_id'},
     identityColumns: ['id'],
+    // Never on the wire, but NOT NULL on the row.
+    unsyncedInsertDefaults: {'time_spent_minutes': 0},
   ),
   actionsCollection: CollectionCodec(
     collection: actionsCollection,
