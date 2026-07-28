@@ -41,6 +41,7 @@ from app.auth.dependencies import get_current_member, get_current_user
 from app.auth.models import RefreshToken, User
 from app.auth.schemas import RefreshRequest, Token
 from app.auth.tokens import create_access_token, create_refresh_token, hash_refresh_token
+from app.config import settings
 from app.database import get_db
 from app.redis import get_redis
 from app.sync.control_payload import (
@@ -79,7 +80,9 @@ from app.sync.member_auth import (
     TOKEN_USE_MEMBER,
     MemberChallengeError,
     consume_member_challenge,
+    count_member_challenge,
     create_member_challenge,
+    member_challenge_retry_after_seconds,
     verify_member_challenge,
 )
 from app.sync.models import Member, Op, RecoveryEscrow, RecoveryEscrowFetch
@@ -230,12 +233,27 @@ async def issue_member_challenge(
     """Hand out a single-use nonce for a Device to sign.
 
     Unauthenticated on purpose: possession of the Device's signing key *is* the
-    credential being proved, and a random nonce discloses nothing.
+    credential being proved, and a random nonce discloses nothing.  Being
+    unauthenticated is also why it is rate-limited: nothing else bounds how many
+    nonces one member id can mint, and each one is a Redis key held for
+    ``MEMBER_CHALLENGE_TTL_SECONDS``.
+
+    The existence check runs first, so the counter is only ever created for a
+    member that exists — an id-enumeration sweep cannot fill Redis with counters
+    for uuids that were never registered.
     """
     if await db.get(Member, member_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "unknown_member"},
+        )
+    if await count_member_challenge(redis, member_id) > settings.member_challenge_daily_limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "member_challenge_rate_limited",
+                "retry_after_seconds": await member_challenge_retry_after_seconds(redis, member_id),
+            },
         )
     return MemberChallengeResponse(nonce=await create_member_challenge(redis, member_id))
 

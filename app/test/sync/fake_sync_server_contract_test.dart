@@ -13,10 +13,32 @@
 /// Cases with no twin, and why. `POST /members` accepts an optional `key_id`
 /// claim the server must re-derive; [UserTransport] has no way to send one (a
 /// client has no reason to), and the derivation itself is covered below.
-/// `test_ops_require_authentication` has no twin because the fake has no
-/// unauthenticated state to be in: a session *is* the credential here. The
-/// author-chain race in `test_ops_author_chain_race_postgres.py` is a statement
-/// about a database under concurrency, and the fake is a single-threaded list.
+/// `test_ops_require_authentication` and `test_the_escrow_requires_authentication`
+/// have no twin because the fake has no unauthenticated state to be in: a
+/// session *is* the credential here. The author-chain race in
+/// `test_ops_author_chain_race_postgres.py` is a statement about a database
+/// under concurrency, and the fake is a single-threaded list.
+///
+/// The refresh-rotation cases — `test_a_member_refresh_token_rotates`,
+/// `test_a_user_refresh_token_cannot_be_rotated_as_a_member`,
+/// `test_a_member_refresh_token_cannot_mint_a_user_session` — have no twin
+/// because the fake issues no refresh tokens at all: a session here is an
+/// object, not a bearer token with a row behind it, so there is nothing to
+/// rotate and nothing to launder. That is a real gap in what the harness can
+/// witness, and it is the gap the *server* suite has to cover — which is why
+/// `test_member_auth_routes.py` walks the whole laundering graph itself rather
+/// than trusting this file to notice.
+///
+/// The two credential-separation cases the fake *can* speak to,
+/// `test_a_member_token_is_not_a_user_session` and
+/// `test_a_user_credential_cannot_post_ops`, are twinned in the
+/// `credential separation` group below — but as assertions about the type split
+/// rather than about a 401, because that is the form the guarantee takes here.
+/// The real server refuses the wrong credential at runtime; the fake makes the
+/// wrong credential unrepresentable. Pinning the split matters precisely because
+/// nothing else would notice if a later "harness simplification" gave one object
+/// both surfaces, and the fake would then be looser than the server in the one
+/// place the server had a hole.
 library;
 
 import 'dart:typed_data';
@@ -634,6 +656,84 @@ void main() {
         () => userSession.requestMemberChallenge(implicitWorkspaceId('nobody')),
         throwsStatus(404, 'unknown_member'),
       );
+    });
+
+    test('the challenge is rate limited', () async {
+      // Unauthenticated on the real route, so this ceiling is the only thing
+      // bounding how many nonces one member id can mint.
+      final device = await AuthorFixture.create(seed: _seedOf(215));
+      await userSession.registerMember(
+        memberId: device.memberId,
+        signPk: device.signPk,
+        kexPk: device.kexPk,
+      );
+      for (var index = 0; index < fakeServerMemberChallengeLimit; index++) {
+        expect(await userSession.requestMemberChallenge(device.memberId), hasLength(32));
+      }
+      expect(
+        () => userSession.requestMemberChallenge(device.memberId),
+        throwsStatus(429, 'member_challenge_rate_limited'),
+      );
+    });
+
+    test('the challenge limit is per member', () async {
+      // One exhausted Device must not lock its siblings out of enrolling.
+      final exhausted = await AuthorFixture.create(seed: _seedOf(216));
+      final sibling = await AuthorFixture.create(seed: _seedOf(217));
+      for (final device in [exhausted, sibling]) {
+        await userSession.registerMember(
+          memberId: device.memberId,
+          signPk: device.signPk,
+          kexPk: device.kexPk,
+        );
+      }
+      for (var index = 0; index < fakeServerMemberChallengeLimit; index++) {
+        await userSession.requestMemberChallenge(exhausted.memberId);
+      }
+      expect(
+        () => userSession.requestMemberChallenge(exhausted.memberId),
+        throwsStatus(429, 'member_challenge_rate_limited'),
+      );
+      expect(await userSession.requestMemberChallenge(sibling.memberId), hasLength(32));
+    });
+
+    test('an unknown member does not get a counter', () async {
+      // The 404 precedes the counter, so enumeration cannot exhaust anything.
+      final stranger = implicitWorkspaceId('never-registered');
+      for (var index = 0; index < fakeServerMemberChallengeLimit + 5; index++) {
+        expect(
+          () => userSession.requestMemberChallenge(stranger),
+          throwsStatus(404, 'unknown_member'),
+        );
+      }
+    });
+  });
+
+  group('credential separation', () {
+    test('the ceremony hands back a member credential and not a user one', () async {
+      // The twin of `test_a_member_token_is_not_a_user_session`. Over there the
+      // member token reaches `GET /user` and `POST /members` and is refused with
+      // a 401; here the credential has no such surface to offer at all, and this
+      // is what pins that it never grows one.
+      final device = await AuthorFixture.create(seed: _seedOf(260));
+      final transport = await enrol(userSession, device);
+      expect(transport, isA<SyncTransport>());
+      expect(transport, isNot(isA<UserTransport>()));
+    });
+
+    test('the user credential has no ops surface', () async {
+      // The twin of `test_a_user_credential_cannot_post_ops`: a User session
+      // cannot post or pull, and the reason it cannot is not a runtime check.
+      expect(userSession, isA<UserTransport>());
+      expect(userSession, isNot(isA<SyncTransport>()));
+    });
+
+    test('a member session cannot reach the escrow', () async {
+      // The structural half of `test_a_member_credential_can_never_reach_the_
+      // escrow_blob`. The laundering paths that test walks are token-shaped and
+      // have no analogue here; what does have one is the end state — the object
+      // a Device is left holding has no escrow method on it.
+      expect(session, isNot(isA<UserTransport>()));
     });
   });
 

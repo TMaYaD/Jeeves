@@ -33,6 +33,8 @@ from typing import Any, Final, cast
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
+from app.config import settings
+
 #: Every signing use of a member key is domain-separated (review F7).
 SIGNING_DOMAIN_AUTH_CHALLENGE_V1: Final = b"jeeves/auth-challenge/v1"
 
@@ -85,3 +87,28 @@ async def consume_member_challenge(redis: object, nonce_b64: str) -> dict[str, A
     if raw is None:
         return None
     return cast(dict[str, Any], json.loads(raw))
+
+
+def member_challenge_counter_key(member_id: uuid.UUID) -> str:
+    return f"member_challenge_issued:{member_id}"
+
+
+async def count_member_challenge(redis: object, member_id: uuid.UUID) -> int:
+    """Increment and return this member's challenge count inside the window.
+
+    Same Redis-counter shape as the escrow fetch limiter: the first increment
+    starts the window, and the key expires with it rather than being swept.
+    Keyed by member id because that is all an unauthenticated caller supplies —
+    there is no user to attribute the request to until the signature verifies.
+    """
+    key = member_challenge_counter_key(member_id)
+    count: int = await redis.incr(key)  # type: ignore[attr-defined]
+    if count == 1:
+        await redis.expire(key, settings.member_challenge_window_seconds)  # type: ignore[attr-defined]
+    return count
+
+
+async def member_challenge_retry_after_seconds(redis: object, member_id: uuid.UUID) -> int:
+    """Seconds until the current window rolls over, for the 429's detail."""
+    ttl: int = await redis.ttl(member_challenge_counter_key(member_id))  # type: ignore[attr-defined]
+    return ttl if ttl > 0 else settings.member_challenge_window_seconds

@@ -75,12 +75,19 @@ const int fakeServerRecoveryFetchLimit = 20;
 /// Mirrors the window the real counter expires with.
 const int fakeServerRecoveryFetchWindowSeconds = 86400;
 
+/// Mirrors `Settings.member_challenge_daily_limit`.
+const int fakeServerMemberChallengeLimit = 120;
+
+/// Mirrors `Settings.member_challenge_window_seconds`.
+const int fakeServerMemberChallengeWindowSeconds = 86400;
+
 class FakeSyncServer {
   final List<StoredOp> _log = [];
   final Map<String, _RegisteredMember> _members = {};
   final Map<String, _EscrowSlot> _escrows = {};
   final Map<String, int> _escrowFetchCounts = {};
   final Map<String, String> _challenges = {};
+  final Map<String, int> _challengeCounts = {};
   int _nextSeq = 1;
 
   /// Every batch the server accepted for a POST, in order — lets a test assert
@@ -272,6 +279,18 @@ class FakeSyncServer {
   Uint8List _requestMemberChallenge(String memberId) {
     if (!_members.containsKey(memberId)) {
       throw const SyncTransportException(404, 'unknown member', code: 'unknown_member');
+    }
+    // The existence check comes first on purpose, exactly as it does on the real
+    // route: an id-enumeration sweep must not be able to create a counter for a
+    // member that was never registered.
+    final count = (_challengeCounts[memberId] ?? 0) + 1;
+    _challengeCounts[memberId] = count;
+    if (count > fakeServerMemberChallengeLimit) {
+      throw const SyncTransportException(
+        429,
+        'retry_after_seconds $fakeServerMemberChallengeWindowSeconds',
+        code: 'member_challenge_rate_limited',
+      );
     }
     // Deterministic rather than random: the harness must reproduce, and a nonce
     // only has to be unique and single-use, which a counter is.

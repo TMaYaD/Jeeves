@@ -72,6 +72,8 @@ class EnrolmentService {
     this.passphrasePolicy = const PassphrasePolicy(),
     this.kdfParameters = Argon2idParameters.floor,
     this.kdfFloor = Argon2idParameters.floor,
+    // Seeds Root, the master wrap key, the salt, the nonce and the generated
+    // passphrase — see [_random]. Pass `Random.secure()` or nothing.
     Random? random,
   })  : _nowMs = nowMs,
         _random = random ?? Random.secure();
@@ -91,6 +93,20 @@ class EnrolmentService {
   final Argon2idParameters kdfFloor;
 
   final int Function() _nowMs;
+
+  /// The single source of randomness for the whole ceremony.
+  ///
+  /// **Every secret this class mints comes out of this one object**: the Root
+  /// secret key, the master wrap key, the escrow blob's Argon2id salt and its
+  /// XChaCha20 nonce, and — when one is not supplied — the diceware passphrase.
+  /// Seed it deterministically and you have not weakened one of those, you have
+  /// published all five at once, and the escrow they protect is the account.
+  ///
+  /// So callers pass `Random.secure()` or nothing at all (the constructor
+  /// defaults to `Random.secure()`). The seam exists for the test harness,
+  /// which needs reproducible devices; there is no production reason to use it,
+  /// and a seeded `Random` reaching this constructor outside a test is a
+  /// catastrophic bug rather than a weak-crypto one.
   final Random _random;
 
   /// Enrol the first Device of an account: mint Root and escrow it.
