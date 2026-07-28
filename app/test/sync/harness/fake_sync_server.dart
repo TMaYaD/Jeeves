@@ -15,10 +15,15 @@
 /// Two sessions, two credentials, mirroring the real split: [connectAsUser]
 /// gives the User surface, [connectAsMember] the member-scoped one. There is no
 /// object here that offers both under one credential, because there is none
-/// there. The signal socket sits on the *member* session, since that is where it
-/// sits on the server — `WS /w/{w}/signal` resolves through the same
-/// member-scoped path as the ops routes, so a user session subscribes to
-/// nothing.
+/// there. The signal socket and the `GET /w/{w}/members` read both sit on the
+/// *member* session, since that is where they sit on the server — both resolve
+/// through the same member-scoped path as the ops routes, so a user session
+/// neither subscribes nor reads the registry.
+///
+/// This class doubles the **server**, not the client, so it models endpoints no
+/// client calls (the registry read is one). Dropping such an endpoint is how the
+/// double came to be looser than the server on the credential it requires, which
+/// is exactly the divergence the contract twin exists to catch.
 library;
 
 import 'dart:async';
@@ -511,7 +516,19 @@ class FakeSyncServer {
     return record;
   }
 
-  List<MemberRecord> _listMembers(String userId, String workspaceId) {
+  /// `GET /w/{w}/members`, keyed the way the real route keys it.
+  ///
+  /// Takes a **member** id, not a user id: the route authenticates through
+  /// `get_current_member` and derives the owner from the token's Member, so a
+  /// caller holding only a User credential cannot reach it. Resolving the owner
+  /// here rather than accepting one is what keeps the double from being looser
+  /// than the server on that point.
+  List<MemberRecord> _listMembers(String memberId, String workspaceId) {
+    final caller = _members[memberId];
+    if (caller == null) {
+      throw const SyncTransportException(401, 'unknown member', code: 'unknown_member');
+    }
+    final userId = caller.userId;
     _authorizeWorkspace(userId, workspaceId);
     return [
       for (final member in _members.values)
@@ -1376,10 +1393,6 @@ class FakeSyncServerUserSession implements UserTransport {
       server._registerMember(userId, memberId, signPk, kexPk);
 
   @override
-  Future<List<MemberRecord>> fetchMembers(String workspaceId) async =>
-      server._listMembers(userId, workspaceId);
-
-  @override
   Future<RecoveryEscrowRecord?> fetchRecoveryEscrow(String workspaceId) async =>
       server._fetchRecoveryEscrow(userId, workspaceId);
 
@@ -1434,6 +1447,18 @@ class FakeSyncServerMemberSession implements SyncTransport {
         timerFactory: signalTimerFactory,
         keepaliveInterval: keepaliveInterval,
       );
+
+  /// `GET /w/{w}/members` — deliberately **not** on [SyncTransport].
+  ///
+  /// This class doubles the server, so it models every endpoint the server
+  /// serves; [SyncTransport] describes what a client calls, and nothing calls
+  /// this one (see the note on [SyncTransport] for why the directory cannot be
+  /// populated over HTTP). Keeping it here, on the member session, is what lets
+  /// the contract twin pin the credential the route actually requires — the
+  /// alternative was dropping the endpoint from the double, which is how the
+  /// double came to be looser than the server in the first place.
+  Future<List<MemberRecord>> fetchMembers(String workspaceId) async =>
+      server._listMembers(memberId, workspaceId);
 
   @override
   Future<List<OpAppendResult>> postOps(

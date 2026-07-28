@@ -239,12 +239,6 @@ class DeviceLink implements SyncTransport, UserTransport {
   }
 
   @override
-  Future<List<MemberRecord>> fetchMembers(String workspaceId) async {
-    _requireOnline();
-    return _userSession.fetchMembers(workspaceId);
-  }
-
-  @override
   Future<RecoveryEscrowRecord?> fetchRecoveryEscrow(String workspaceId) async {
     _requireOnline();
     return _userSession.fetchRecoveryEscrow(workspaceId);
