@@ -11,6 +11,7 @@ import app.todos.models as _todo_models  # noqa: F401
 from app.ai.routes import router as ai_router
 from app.auth.routes import router as auth_router
 from app.config import settings
+from app.converge_verify.routes import router as converge_verify_router
 from app.database import engine
 from app.health.routes import router as health_router
 from app.powersync.routes import router as powersync_router
@@ -56,3 +57,5 @@ app.include_router(user_preference_router, tags=["user_preferences"])
 app.include_router(ai_router)
 app.include_router(powersync_router, prefix="/powersync", tags=["powersync"])
 app.include_router(sync_router, tags=["sync"])
+# Cutover tooling (#553 Phase 1) — removed by #556.
+app.include_router(converge_verify_router)
