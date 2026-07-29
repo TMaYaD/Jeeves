@@ -101,14 +101,14 @@ Future<void> _bindRegistration(
 ) async {
   if (certificate.memberId != header.authorMemberId) {
     throw const SyncRejection(
-      SyncRejectionReason.badRootSignature,
+      SyncRejectionReason.certMemberMismatch,
       'certificate names another member',
     );
   }
   await verifyEnvelope(envelope, certificate.signPk);
   if (_toHex(certificate.signKeyId) != _toHex(header.authorKeyId)) {
     throw const SyncRejection(
-      SyncRejectionReason.badRootSignature,
+      SyncRejectionReason.certKeyMismatch,
       'certificate key id is not the one the header names',
     );
   }

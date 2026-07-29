@@ -1295,7 +1295,7 @@ class SyncClient {
   ) async {
     if (certificate.memberId != header.authorMemberId) {
       throw SyncRejection(
-        SyncRejectionReason.badRootSignature,
+        SyncRejectionReason.certMemberMismatch,
         'certificate names ${certificate.memberId}, envelope author is '
         '${header.authorMemberId}',
       );
@@ -1303,7 +1303,7 @@ class SyncClient {
     await verifyEnvelope(pulled.envelope, certificate.signPk);
     if (!sameBytes(certificate.signKeyId, header.authorKeyId)) {
       throw const SyncRejection(
-        SyncRejectionReason.badRootSignature,
+        SyncRejectionReason.certKeyMismatch,
         'certificate key id is not the one the header names',
       );
     }

@@ -1,0 +1,11 @@
+# ADR-0032: Clients refuse certificate mismatches with the server's specific codes
+
+**Status:** Accepted
+**Date:** 2026-07-29
+**Context:** ADR-0028 (refusal codes are vocabulary shared between the two codecs and the frozen vectors). CodeRabbit finding #35 on PR #560, whose thread is deliberately left unresolved because this ADR decides against it.
+
+## Decision
+
+**When a Root-signed certificate disagrees with the envelope wearing it, both sides refuse under the specific code for the field that disagreed — `cert_member_mismatch` when the certificate is about another member, `cert_key_mismatch` when the header names a key the certificate does not carry.** The server already spoke this vocabulary; the Dart client collapsed both into `bad_root_signature`, and it is the client that changes. The reviewer's suggestion was the opposite: collapse the *server's* two codes into `bad_root_signature` so the halves agree cheaply. We rejected it because `bad_root_signature` is a claim about the signature, and in both of these refusals the signature is perfectly good — a genuine certificate is public the moment it is in the log, so the interesting question is what it binds to. The two answers are different attacks with different remediations: a certificate about somebody else is a copy being wrapped around a third party's envelopes to fork their chain, while a key-id disagreement is a header naming a key its author does not hold. A client that can only say "bad root signature" makes those indistinguishable in a quarantine row, which is the one place a user's device gets to explain itself with no server to ask.
+
+The cost is that the codes become protocol surface rather than an implementation detail: two frozen negative vectors in `spec/sync/envelope_v1_vectors.json` now pin them, along with the sub-order inside the binding step (member identity, then envelope verification under the certificate's key, then key id). Narrowing them again later means re-freezing vectors on both runners, which is why this is written down rather than left to the diff. The same collapse survives in one more place — the genesis root-pk cross-check refuses as `cert_root_pk_mismatch` on the server and `bad_root_signature` on the client — and is deliberately out of scope here; it is the same defect class and gets its own decision.

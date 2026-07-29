@@ -1133,6 +1133,17 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
         wall_ms=BASE_WALL_MS + 5000,
         corrupt_signature=True,
     )
+    # A registration that is genuinely Root-signed and genuinely about `device_b`:
+    # the two mismatch vectors below need certificates nothing is wrong *with*, so
+    # the only thing left to refuse is what the certificate binds to.
+    other_member_cert_bytes = _certificate("device_b", wall_ms=BASE_WALL_MS + 7000).encode()
+    other_member_signature = sign_registration_certificate(
+        other_member_cert_bytes, ROOT_SIGNING_KEY
+    )
+    #: The key id of a device that did not sign the envelope below — the header's
+    #: only lie.
+    foreign_author_key_id = derive_key_id(bytes(SIGNING_KEYS["device_b"].verify_key))
+
     bad_revoke_payload, _ = _revoke_payload(
         revoke_name="bad_revoker_signature",
         grant_id=_grant_id("service_suggester"),
@@ -1302,6 +1313,63 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
                 "A Root-signed Grant with no grantee. A valid signature over an "
                 "incomplete document authenticates the bytes and says nothing "
                 "about their meaning, so the field rules run anyway."
+            ),
+        ),
+        control_negative(
+            "control_certificate_member_mismatch",
+            reason="cert_member_mismatch",
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_MEMBER_REGISTER,
+                prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+                cert_bytes=other_member_cert_bytes,
+                signature=other_member_signature,
+            ),
+            note=(
+                "One device's genuinely Root-signed registration wrapped around "
+                "another device's envelope. A certificate is public the moment it "
+                "is in the log, so the binding step asks who it is *about*: the "
+                "member identity is compared before the envelope is verified "
+                "under the certificate's key, and this refuses as the member "
+                "mismatch rather than as the signature failure that would "
+                "follow. `cert_member_mismatch` names the certificate's subject "
+                "as the field that disagreed — the same code the server returns."
+            ),
+        ),
+        _negative(
+            "control_certificate_key_mismatch",
+            key="device_a",
+            reason="cert_key_mismatch",
+            envelope=build_envelope(
+                # Hand-rolled: `_header` derives `author_key_id` from the signing
+                # key, and the whole point of this vector is a header that names a
+                # key its own author does not hold.
+                replace(
+                    _header(
+                        op_id_name="control/certificate_key_mismatch",
+                        key="device_a",
+                        author_seq=1,
+                        op_class=OP_CLASS_CONTROL,
+                    ),
+                    author_key_id=foreign_author_key_id,
+                ),
+                frame_body(
+                    ControlPayload(
+                        control_type=CONTROL_TYPE_MEMBER_REGISTER,
+                        prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+                        cert_bytes=cert_bytes,
+                        signature=good_signature,
+                    ).encode()
+                ),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "The certificate is about this author and its key really did sign "
+                "this envelope — the header just names a different device's key "
+                "id. Envelope verification therefore *passes*, and the derived "
+                "key-id comparison after it is what fires. `cert_key_mismatch` "
+                "means the header names a key the certificate does not carry, "
+                "which is a different attack from a certificate about somebody "
+                "else and remediated differently."
             ),
         ),
     ]
