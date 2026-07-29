@@ -840,18 +840,27 @@ def _revoke_payload(
     revoke_name: str,
     grant_id: uuid.UUID,
     revoker: str,
+    revoker_member_id: uuid.UUID,
     prev_control_hash: bytes,
     wall_ms: int,
     signing_key: SigningKey = ROOT_SIGNING_KEY,
     corrupt_signature: bool = False,
 ) -> tuple[ControlPayload, str]:
+    """``revoker_member_id`` is the *device* authoring the revocation.
+
+    The HLC's tie-breaker node is a member id — that is what ``Hlc.for_member``
+    stores and what the control-fork tie-break compares — so stamping the freshly
+    minted ``revoke_id`` would order revocations by a certificate id rather than by
+    the device behind them.  Mirrors ``backend/tests/sync/builders.py`` and
+    ``app/test/sync/harness/sim_workspace.dart``.
+    """
     revoke_id = _revoke_id(revoke_name)
     certificate = RevokeCertificate(
         workspace_id=WORKSPACE_ID,
         revoke_id=revoke_id,
         grant_id=grant_id,
         revoker=revoker,
-        revoked_at_hlc=Hlc.for_member(revoke_id, wall_ms),
+        revoked_at_hlc=Hlc.for_member(revoker_member_id, wall_ms),
     )
     cert_bytes = certificate.encode()
     signature = bytearray(sign_revoke_certificate(cert_bytes, signing_key))
@@ -1016,6 +1025,7 @@ def _control_vectors() -> list[dict[str, Any]]:
         revoke_name="service_suggester",
         grant_id=_grant_id("service_suggester"),
         revoker=GRANTER_ROOT,
+        revoker_member_id=MEMBER_IDS["device_a"],
         prev_control_hash=bytes.fromhex(suggester_grant["payload_sha256_hex"]),
         wall_ms=BASE_WALL_MS + 3000,
     )
@@ -1127,6 +1137,7 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
         revoke_name="bad_revoker_signature",
         grant_id=_grant_id("service_suggester"),
         revoker=GRANTER_ROOT,
+        revoker_member_id=MEMBER_IDS["device_a"],
         prev_control_hash=hashlib.sha256(b"predecessor").digest(),
         wall_ms=BASE_WALL_MS + 6000,
         corrupt_signature=True,
