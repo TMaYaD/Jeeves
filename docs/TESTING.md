@@ -231,7 +231,7 @@ Five properties are worth knowing before changing anything here:
 - **ADR-0025 is applied here.** An Outcome holding several Areas keeps the one whose `(casefolded name, id)` sorts first — a pure function, so every re-run picks the same one — and each surplus membership becomes membership of the Label named after that Area: an existing legacy Label of that name (same-name Labels resolved by the same total order), else one the spine already holds from an earlier run, else a freshly minted Tag. Duplicate junction rows for one pair are one membership, not two Areas. The pick is **provisional**: the real resolution is the user's, in the next Weekly Review, and the report's conversion list is that pass's worklist. A Label an earlier run minted has no legacy row, so a later run endorses it by id rather than re-asserting it — the ids are in the report.
 - **Read-only on the legacy side, verified by effect.** Each run snapshots the legacy store's per-table digests *and* PowerSync's upload-queue count before and after, bracketing the authoring and the verification, and publishes the comparison. The new spine is written on purpose, so it is not in the proof. Production's `SyncStack` builds its clients **headless** (no projector) precisely so a reseed cannot tee entities back into PowerSync's upload queue and the old backend.
 
-**Verdict rules.** Worst-news-first, like converge-verify's: `readOnlyProofFailed` (the tool cannot vouch for itself) outranks `notEnrolled`, which outranks `uploadIncomplete` (ops still queued after the final flush, so the server does not hold what was authored), which outranks `diverged`, which outranks `partiallyReseeded`. A table is converged only when the planned and reduced entity-id sets match, every shared id's canonical digest matches, nothing was held back by the projector, and there are no anomalies on either side.
+**Verdict rules.** Worst-news-first, like converge-verify's: `readOnlyProofFailed` (the tool cannot vouch for itself) outranks `notEnrolled`, which outranks `uploadIncomplete` (ops still queued after the final flush, so the server does not hold what was authored), which outranks `diverged`, which outranks `partiallyReseeded`. `notEnrolled` covers the whole class of "there is no reading to report": a member credential missing on either Workspace, a Root unpinned on either Workspace (both get a scratch stack, so one pin is not enough), and a run that never reached the pull — the strongest verdict is gated on the premise rather than trusted from the caller, because a comparison over zero tables would otherwise pass vacuously. A table is converged only when the planned and reduced entity-id sets match, every shared id's canonical digest matches, nothing was held back by the projector, and there are no anomalies on either side.
 
 Automated coverage in `app/test/cutover/`:
 
@@ -242,7 +242,7 @@ Automated coverage in `app/test/cutover/`:
 - `reseed_report_test.dart` — the verdict ordering and the archival JSON.
 - `reseed_screen_test.dart` — the surface over scripted outcomes. It sets a tall viewport for the same reason the enrolment screen test does.
 
-### Manual runbook
+### Manual runbook (reseed)
 
 The Dart harness has no PowerSync engine, so the true device path only runs by hand. Preconditions: a green converge-verify report, an *enrolled* device (the reseed refuses otherwise), and sync settled. Against the compose stack (`podman compose -f infra/docker-compose.yml up -d`) with a signed-in emulator:
 
@@ -252,7 +252,7 @@ The Dart harness has no PowerSync engine, so the true device path only runs by h
 4. **Run it again.** Expect the same verdict with `0 authored`, everything *already present*, and the same store digest — that is idempotence on a real engine.
 5. **Interrupt it.** Airplane mode mid-run: expect a transport error, then re-run online and expect `0 authored` again with everything skipped (a run that got as far as authoring) or a normal pass (one that did not). The op count from step 3 must not have doubled.
 6. **Edit a row on the old stack between runs**, re-run, and expect exactly one entity re-asserted and the verdict still green.
-7. **Copy JSON** writes the whole report to the clipboard and to `adb logcat` (grep `reseed report`), which is the archival copy to paste into the issue.
+7. **Copy JSON** writes the whole report to the clipboard — that is the copy to paste into the issue. Only the verdict goes to `adb logcat` (grep `reseed report copied`), unlike converge-verify: this report carries legacy content (Outcome titles, Tag names) through the plan, and the log is readable by any bug report taken afterwards. A lost clipboard is a re-run away.
 
 **On the user's phone this is the Phase-2 human-in-the-loop step.** Unlike the enrolment ceremony there is no one-shot secret, so it is safe to re-run — but the report is the acceptance artifact for #553 Phase 2, and the ADR-0025 conversion list is the worklist to carry into the next Weekly Review. Any row under *Not carried* is a row the new spine will not have: fix it in the app (give the Outcome a title) and run again before the Phase-3 flip.
 

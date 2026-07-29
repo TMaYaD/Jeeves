@@ -17,6 +17,7 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:powersync/powersync.dart' as ps;
 
+import '../../database/gtd_database.dart';
 import '../../providers/powersync_provider.dart';
 import '../../providers/sync_stack_provider.dart';
 import '../../sync/collection_codecs.dart';
@@ -92,7 +93,12 @@ Future<ReseedOutcome> runReseed({
       (await buildLocalConvergeReport(readLegacyRows)).digest;
 
   final enrolled = gtdClient.isEnrolled && preferencesClient.isEnrolled;
-  final rootPinned = await gtdClient.pinnedRootPk() != null;
+  // Both Workspaces, because both get a scratch stack: an enrolment that crashed
+  // between the two pins leaves a device that can author into GTD and then cannot
+  // verify preferences at all. That has to read as the precondition it is, not as
+  // an uncaught error thrown after the authoring already happened.
+  final rootPinned = await gtdClient.pinnedRootPk() != null &&
+      await preferencesClient.pinnedRootPk() != null;
 
   var pulledBeforeAuthoring = false;
   if (enrolled && rootPinned) {
@@ -276,23 +282,39 @@ class RiverpodReseedRunner implements ReseedRunner {
             'verify a single control op — run the enrolment ceremony first',
           );
         }
-        return assembleReseedScratchStack(
-          workspaceId: workspaceId,
-          userId: stack.userId,
-          identity: stack.identity,
-          clock: stack.clock,
-          // The live stack's own wall clock and strategy registry, not a second
-          // copy: the scratch reducer's skew guard and preference lattices have
-          // to be the ones the device runs, or the verification would measure
-          // this tool instead of the data.
-          nowMs: stack.nowMs,
-          strategies: stack.strategies,
-          transport: live.transport,
-          pinnedRootPk: rootPk,
-          escrowVersion: await live.highestEscrowVersionSeen(),
-          syncDatabase: scratchStores.openSyncDatabase(),
-          domain: scratchStores.openDomainDatabase(),
-        );
+        final escrowVersion = await live.highestEscrowVersionSeen();
+        // Opened into locals so a failure between here and a built stack still has
+        // a handle to close. `runReseed`'s `finally` only covers a stack that
+        // exists; anything that throws during assembly would otherwise leave a
+        // native connection open with nothing left holding it.
+        final syncDatabase = scratchStores.openSyncDatabase();
+        GtdDatabase? domain;
+        try {
+          domain = scratchStores.openDomainDatabase();
+          return await assembleReseedScratchStack(
+            workspaceId: workspaceId,
+            userId: stack.userId,
+            identity: stack.identity,
+            clock: stack.clock,
+            // The live stack's own wall clock and strategy registry, not a second
+            // copy: the scratch reducer's skew guard and preference lattices have
+            // to be the ones the device runs, or the verification would measure
+            // this tool instead of the data.
+            nowMs: stack.nowMs,
+            strategies: stack.strategies,
+            transport: live.transport,
+            pinnedRootPk: rootPk,
+            escrowVersion: escrowVersion,
+            syncDatabase: syncDatabase,
+            domain: domain,
+          );
+        } catch (_) {
+          // Ownership never transferred, so closing here cannot double-close a
+          // stack the caller went on to use.
+          await domain?.close();
+          await syncDatabase.close();
+          rethrow;
+        }
       },
     );
   }

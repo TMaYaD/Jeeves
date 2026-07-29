@@ -70,10 +70,16 @@ class ReseedScratchStack {
   final SyncClient client;
   final CollectionRegistry registry;
 
-  /// Both stores, in the order that leaves nothing writing into a closed one.
+  /// Both stores, in the order that leaves nothing writing into a closed one —
+  /// and both of them regardless: this is the only cleanup path (the runner calls
+  /// it from `finally`), so a throw from the first close would otherwise leave the
+  /// op-log store open for the life of the process.
   Future<void> close() async {
-    await domain.close();
-    await syncDatabase.close();
+    try {
+      await domain.close();
+    } finally {
+      await syncDatabase.close();
+    }
   }
 }
 
@@ -189,8 +195,14 @@ class ReseedTableDiff {
       legacyAnomalies.isEmpty &&
       reducedAnomalies.isEmpty;
 
+  /// Held-back entities are counted too. They are one of the things that makes
+  /// [converged] false, so leaving them out let the screen read
+  /// "— 0 difference(s)" beside a red table.
   int get differenceCount =>
-      onlyInLegacyIds.length + onlyInReducedIds.length + mismatchedIds.length;
+      onlyInLegacyIds.length +
+      onlyInReducedIds.length +
+      mismatchedIds.length +
+      heldBackIds.length;
 
   Map<String, Object?> toJson() => {
         'converged': converged,

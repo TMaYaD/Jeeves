@@ -73,9 +73,13 @@ class _ReseedScreenState extends ConsumerState<ReseedScreen> {
   Future<void> _copyJson(ReseedOutcome outcome) async {
     final json = const JsonEncoder.withIndent('  ').convert(outcome.toJson());
     await Clipboard.setData(ClipboardData(text: json));
-    // Also to the log, so `adb logcat` keeps an archival copy that can be pasted
-    // into the issue even if the clipboard is lost.
-    debugPrint('reseed report: $json');
+    // The verdict only. Unlike converge-verify's report — ids and digests — this
+    // one carries legacy content (Outcome titles, Tag names) through
+    // `plan.toJson()`, and `debugPrint` writes in release builds too, so the full
+    // report would land in `adb logcat` and in any bug report taken afterwards.
+    // The clipboard is the archival copy; a lost one is a re-run away, because the
+    // reseed is idempotent.
+    debugPrint('reseed report copied: verdict=${outcome.verdict.name}');
   }
 
   @override

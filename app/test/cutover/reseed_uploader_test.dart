@@ -96,6 +96,8 @@ void main() {
     Future<ReseedUploadReport> upload(
       ReseedPlan plan, {
       int flushEveryOpCount = reseedFlushEveryOpCount,
+      int progressEveryEntityCount = reseedProgressEveryEntityCount,
+      void Function(ReseedUploadProgress)? onProgress,
     }) =>
         runReseedUpload(
           plan: plan,
@@ -104,6 +106,8 @@ void main() {
           readReducedCollection: (collection) =>
               device.registry.register(collection).readAll(),
           flushEveryOpCount: flushEveryOpCount,
+          progressEveryEntityCount: progressEveryEntityCount,
+          onProgress: onProgress,
         );
 
     PlannedEntity tag(String label, {String name = 'Home'}) => PlannedEntity(
@@ -150,13 +154,44 @@ void main() {
       final plan = planOf([
         for (var index = 0; index < 5; index++) tag('tag/batch-$index'),
       ]);
-      // A cadence of two means the queue drains three times mid-walk; the tail
-      // flush then finds nothing left. What the assertion actually pins is the
-      // property the cadence exists for: an interruption cannot leave more than
-      // the cadence un-posted.
-      final report = await upload(plan, flushEveryOpCount: 2);
+      // The property the cadence exists for is that an interruption cannot leave
+      // more than the cadence un-posted — so the observation has to be *during*
+      // the walk. After it, a tail-only flush is indistinguishable from a
+      // cadenced one, which is why the counts are sampled from `onProgress`
+      // (one emission per entity here) rather than at the end.
+      final storedOpCountsDuringWalk = <int>[];
+      final report = await upload(
+        plan,
+        flushEveryOpCount: 2,
+        progressEveryEntityCount: 1,
+        onProgress: (_) =>
+            storedOpCountsDuringWalk.add(workspace.server.storedOps.length),
+      );
       expect(report.authoredOpCount, 5);
+      // Ops reached the server before the walk ended, and not all of them: the
+      // tail flush is neither what put them there nor what posted every one.
+      expect(storedOpCountsDuringWalk.first,
+          lessThan(storedOpCountsDuringWalk.last));
+      expect(storedOpCountsDuringWalk.last,
+          lessThan(workspace.server.storedOps.length));
       expect((await device.client.health()).pendingOpCount, 0);
+    });
+
+    test('progress counters advance inside the walk, not once per collection',
+        () async {
+      final plan = planOf([
+        for (var index = 0; index < 4; index++) tag('tag/progress-$index'),
+      ]);
+      final completedCounts = <int>[];
+      await upload(
+        plan,
+        progressEveryEntityCount: 1,
+        onProgress: (progress) =>
+            completedCounts.add(progress.completedEntityCount),
+      );
+      // The head-of-collection emission and then one per entity. Without the
+      // in-walk emission this is `[0]` and the screen's line never moves.
+      expect(completedCounts, [0, 1, 2, 3, 4]);
     });
 
     test('a preference value with no key is refused at the call site',

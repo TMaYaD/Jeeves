@@ -68,7 +68,9 @@ enum ReseedVerdict {
   /// A table's id sets or digests differ.
   diverged,
 
-  /// The device cannot run this: not enrolled, no Root pinned.
+  /// The device cannot run this — not enrolled, no Root pinned on one of the two
+  /// Workspaces — or the run never got as far as pulling and comparing, so there
+  /// is no reading to report at all.
   notEnrolled,
 
   /// Ops are still queued after the final flush, so the server does not hold
@@ -178,6 +180,13 @@ ReseedVerdict reseedVerdictFor({
   }
   if (preconditions.pendingOpCountAfterFlush > 0) {
     return ReseedVerdict.uploadIncomplete;
+  }
+  // The premise, gated here rather than trusted from the caller: without the pull
+  // the diff skip measured emptiness, and `tables.any` is vacuously false over an
+  // empty list — so the strongest verdict in the acceptance artifact would
+  // otherwise be reachable from a run that compared nothing.
+  if (!preconditions.pulledBeforeAuthoring || tables.isEmpty) {
+    return ReseedVerdict.notEnrolled;
   }
   if (tables.any((table) => !table.converged)) return ReseedVerdict.diverged;
   if (plan.excludedRowCount > 0) return ReseedVerdict.partiallyReseeded;

@@ -137,6 +137,39 @@ void main() {
       );
     });
 
+    test('a run that never pulled cannot report a reading', () {
+      // The premise the whole comparison rests on. Without the pull the diff skip
+      // measured emptiness, and `tables.any` is vacuously false over an empty
+      // list — so this must not be the strongest verdict on the strength of the
+      // caller happening to set `enrolled` too.
+      expect(
+        reseedVerdictFor(
+          preconditions: const ReseedPreconditions(
+            enrolled: true,
+            rootPinned: true,
+            pulledBeforeAuthoring: false,
+            pendingOpCountAfterFlush: 0,
+          ),
+          readOnlyProof: _proofUnchanged,
+          plan: _plan(),
+          tables: const [],
+        ),
+        ReseedVerdict.notEnrolled,
+      );
+    });
+
+    test('no tables is no reading, whatever the preconditions say', () {
+      expect(
+        reseedVerdictFor(
+          preconditions: _clean,
+          readOnlyProof: _proofUnchanged,
+          plan: _plan(),
+          tables: const [],
+        ),
+        ReseedVerdict.notEnrolled,
+      );
+    });
+
     test('a failed read-only proof outranks everything', () {
       expect(
         reseedVerdictFor(

@@ -52,6 +52,13 @@ import 'reseed_plan.dart';
 /// out at a time.
 const int reseedFlushEveryOpCount = 1000;
 
+/// How many entities to walk between [ReseedUploadProgress] emissions.
+///
+/// Coarse on purpose: every emission is a `setState` on the screen, and a store
+/// with thousands of `todos` does not need one rebuild per row. Fine enough that
+/// the counters visibly advance, which is the whole reason they exist.
+const int reseedProgressEveryEntityCount = 100;
+
 /// Where the upload has got to, for the screen's progress line.
 class ReseedUploadProgress {
   const ReseedUploadProgress({
@@ -142,9 +149,9 @@ bool plannedFieldsAlreadyReduced(
 
 /// Author every entity in [plan] that the spine does not already hold.
 ///
-/// [readReducedCollection] is read once per collection and cached for the walk:
-/// the diff needs the whole collection's reduced state anyway, and one read beats
-/// one query per entity on a store with thousands of rows.
+/// [readReducedCollection] is read once per collection: the diff needs the whole
+/// collection's reduced state anyway, and one read beats one query per entity on a
+/// store with thousands of rows.
 ///
 /// A transport failure during a flush propagates. That is deliberate — the outbox
 /// is intact by contract, the entities already authored are in reduced state, and
@@ -157,6 +164,7 @@ Future<ReseedUploadReport> runReseedUpload({
   required ReducedCollectionReader readReducedCollection,
   void Function(ReseedUploadProgress)? onProgress,
   int flushEveryOpCount = reseedFlushEveryOpCount,
+  int progressEveryEntityCount = reseedProgressEveryEntityCount,
 }) async {
   var authored = 0;
   var skipped = 0;
@@ -165,7 +173,6 @@ Future<ReseedUploadReport> runReseedUpload({
   var completed = 0;
   final anomalies = <ReseedAnomaly>[];
 
-  final reducedByCollection = <String, Map<String, Map<String, Object?>>>{};
   var authoredSinceFlush = 0;
 
   Future<void> flush() async {
@@ -177,15 +184,20 @@ Future<ReseedUploadReport> runReseedUpload({
   for (final collection in reseedCollectionOrder) {
     final entities = plan.entitiesFor(collection).toList();
     if (entities.isEmpty) continue;
-    final reduced = reducedByCollection[collection] ??=
-        await readReducedCollection(collection);
-    onProgress?.call(ReseedUploadProgress(
-      collection: collection,
-      completedEntityCount: completed,
-      plannedEntityCount: plan.entities.length,
-      authoredOpCount: authored,
-      skippedEntityCount: skipped,
-    ));
+    final reduced = await readReducedCollection(collection);
+
+    // Emitted at the head of the collection and then *inside* the walk: the
+    // counters are what the screen's line is for, and a collection holding
+    // thousands of entities would otherwise show its starting values for the
+    // whole pass.
+    void reportProgress() => onProgress?.call(ReseedUploadProgress(
+          collection: collection,
+          completedEntityCount: completed,
+          plannedEntityCount: plan.entities.length,
+          authoredOpCount: authored,
+          skippedEntityCount: skipped,
+        ));
+    reportProgress();
 
     for (final entity in entities) {
       completed++;
@@ -216,6 +228,7 @@ Future<ReseedUploadReport> runReseedUpload({
         ));
       }
       if (authoredSinceFlush >= flushEveryOpCount) await flush();
+      if (completed % progressEveryEntityCount == 0) reportProgress();
     }
   }
 
