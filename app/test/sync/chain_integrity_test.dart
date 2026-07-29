@@ -277,6 +277,89 @@ void main() {
     expect(standing.single.authorSeq, firstPeerContentAuthorSeq + 2);
   });
 
+  test('a forged alternate quarantined first does not block the genuine successor',
+      () async {
+    // Two envelopes claim author_seq 5, and the forgery is quarantined *first*,
+    // so it holds the lower row id at that position. Arrival order is the one
+    // thing the server controls completely, so it must not decide which claimant
+    // the release scan re-admits — only the head's envelope hash can.
+    final first = await _op(workspace, peer, 'one');
+    await peerSession.postOps(workspace.workspaceId, [first]);
+    await a.sync();
+    expect(await _doc(a, workspace), {'step': 'one'});
+
+    // The genuine continuation of the chain, both halves held back.
+    final genuineSecond = await _op(workspace, peer, 'two');
+    final genuineThird = await _op(workspace, peer, 'three');
+
+    // A validly signed alternate at the same position as `genuineThird`, chained
+    // to a predecessor that will never exist.
+    peer.nextAuthorSeq = firstPeerContentAuthorSeq + 2;
+    peer.lastEnvelopeHash =
+        Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7f));
+    final forgedThird = await _op(workspace, peer, 'forged');
+
+    workspace.server.injectUnchecked(workspace.workspaceId, forgedThird);
+    await a.sync();
+    workspace.server.injectUnchecked(workspace.workspaceId, genuineThird);
+    await a.sync();
+    // Both claimants are gap rows at author_seq 5, the forgery with the lower id.
+    final claimants = await a.client.quarantined(includeReleased: false);
+    expect(claimants.length, 2);
+    expect(
+      claimants.map((row) => row.authorSeq),
+      everyElement(firstPeerContentAuthorSeq + 2),
+    );
+    expect(sameBytes(claimants.first.envelope, forgedThird), isTrue);
+
+    // The predecessor lands, the head moves to 4, and the scan has a choice.
+    workspace.server.injectUnchecked(workspace.workspaceId, genuineSecond);
+    await a.sync();
+
+    // Released to fixpoint: the genuine successor applied over its predecessor.
+    expect(await _doc(a, workspace), {'step': 'three'});
+
+    // The forgery is identified by its bytes, never by an alarm's row id: the
+    // fork alarm upserts by `(workspace, kind, author)` and keeps the first
+    // `quarantine_op_row_id` it was raised with, so it counts occurrences rather
+    // than enumerating claimants.
+    final rows = await a.client.quarantined();
+    final forgedRow = rows.singleWhere(
+      (row) => sameBytes(row.envelope, forgedThird),
+    );
+    final genuineRow = rows.singleWhere(
+      (row) => sameBytes(row.envelope, genuineThird),
+    );
+    expect(genuineRow.releasedAt, isNotNull);
+    expect(forgedRow.releasedAt, isNull);
+    expect(forgedRow.reason, SyncRejectionReason.authorChainGap.code);
+
+    final alarms = await a.alarmsByKind();
+    expect(
+      alarms[IntegrityAlarmKind.authorChainFork.code]!.resolvedAt,
+      isNull,
+      reason: 'the claimant that does not chain stands accused',
+    );
+    expect(
+      alarms[IntegrityAlarmKind.authorStreamReordered.code],
+      isNotNull,
+      reason: 'a successor did become chain-valid when its predecessor arrived',
+    );
+    expect(
+      alarms[IntegrityAlarmKind.authorChainGap.code]!.resolvedAt,
+      isNull,
+      reason: 'the forged claimant still stands refused as an unreleased gap row',
+    );
+    expect(
+      await a.client.quarantined(includeReleased: false),
+      [forgedRow],
+      reason: 'only the forgery is still refused',
+    );
+    final health = await a.client.health();
+    expect(health.clean, isFalse);
+    expect(health.quarantineCount, 1);
+  });
+
   test('a prev-hash mismatch at head + 1 is its own accusation', () async {
     // Right position, forged linkage, and a signature that verifies: the only
     // thing wrong is the chain field itself.

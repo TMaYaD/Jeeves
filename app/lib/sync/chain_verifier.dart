@@ -46,8 +46,9 @@ enum IntegrityAlarmKind {
   authorChainRewrite('author_chain_rewrite'),
 
   /// Gap successors became chain-valid as their predecessors arrived. Raised
-  /// only once no unreleased gap row is left for the author — while one stands,
-  /// the gap alarm stands with it.
+  /// whenever the release scan re-admitted anything at all; the *gap* alarm is
+  /// resolved only once no unreleased gap row is left for the author, so while
+  /// one stands the gap alarm stands beside this one.
   authorStreamReordered('author_stream_reordered'),
 
   /// The missing predecessor arrived and the successor does not chain to it:
