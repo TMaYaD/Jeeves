@@ -26,6 +26,8 @@ import 'package:jeeves/sync/root_authority.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 
 import 'harness/author_fixture.dart';
+import 'harness/reduced_state.dart';
+import 'harness/rejection_matcher.dart';
 import 'harness/sim_device.dart';
 import 'harness/sim_workspace.dart';
 import 'vectors.dart';
@@ -868,5 +870,152 @@ void main() {
           : await (await workspace.a.preferencesClient).authoredEnvelopes();
       expect(fromA, authored, reason: scope);
     }
+  });
+
+  // --- Author-side wire validation (#573) -------------------------------------
+
+  group('author-side wire validation', () {
+    /// Every outbox row the device holds, sent or not, by `author_seq`.
+    ///
+    /// Sent rows are retained as own-writes evidence, so "nothing was queued" is
+    /// asserted as "the set is unchanged" rather than "the table is empty".
+    Future<List<int>> outboxSeqs(SimDevice device) async => [
+          for (final row in await device.database.select(device.database.outbox).get())
+            row.authorSeq,
+        ];
+
+    test('a wire-invalid entity id is refused at capture, leaving no trace',
+        () async {
+      // The trap this closes: `'outcome-1'` is not a canonical UUID, so
+      // `OpPayload.decode` refuses it on every receiver — including this
+      // device's own echo. Before #573 it applied locally, was signed and
+      // uploaded, and surfaced as "did not converge" a long way from here.
+      await workspace.syncAll();
+      final a = workspace.a;
+      final outboxBefore = await outboxSeqs(a);
+      final authoredBefore = await a.client.authoredEnvelopes();
+      final stateBefore = await canonicalReducedState(a.database);
+
+      await expectLater(
+        a.client.capture(
+          collection: _harnessCollection,
+          entityId: 'outcome-1',
+          fields: {'title': 'first'},
+        ),
+        throwsRejection(SyncRejectionReason.malformedPayload),
+      );
+
+      expect(await outboxSeqs(a), outboxBefore, reason: 'nothing was queued');
+      expect(await a.client.authoredEnvelopes(), authoredBefore,
+          reason: 'the refusal spent no chain slot');
+      expect(await canonicalReducedState(a.database), stateBefore,
+          reason: 'nothing was reduced locally');
+
+      // And it is a refusal rather than a deferred quarantine: a valid capture
+      // still flows, and no device ends up holding a refused op.
+      workspace.clock.advance(1000);
+      await a.client.capture(
+        collection: _harnessCollection,
+        entityId: preferenceEntityId(workspace.workspaceId, 'harness-doc'),
+        fields: {'title': 'first'},
+      );
+      await workspace.syncAll();
+      expect(await canonicalReducedState(workspace.b.database),
+          await canonicalReducedState(a.database));
+      for (final device in workspace.devices) {
+        expect(await device.client.quarantined(), isEmpty,
+            reason: 'device ${device.label}');
+        expect((await _contentEnvelopes(device)).length, 1,
+            reason: 'device ${device.label}');
+      }
+    });
+
+    test('a refusal mid-stream costs no chain slot and wedges nothing',
+        () async {
+      // A regression pin, not a discriminator. `reduce(decoded)` and
+      // `reduce(payload)` agree for every payload the codec *accepts*, so no
+      // convergence assertion can observe "the author reduces the decoded
+      // payload" — that one is a structural guarantee (the author applies the
+      // exact object every peer constructs from the signed bytes), not a
+      // testable difference. What is pinned here is the surrounding stream: a
+      // refusal between two valid captures leaves the author chain contiguous
+      // and the authoring queue unwedged.
+      final a = workspace.a;
+      final docId = preferenceEntityId(workspace.workspaceId, 'harness-doc');
+      await a.client.capture(
+        collection: _harnessCollection,
+        entityId: docId,
+        fields: {'one': 'first'},
+      );
+      workspace.clock.advance(100);
+      await expectLater(
+        a.client.capture(
+          collection: _harnessCollection,
+          entityId: 'NOT-A-UUID',
+          fields: {'two': 'refused'},
+        ),
+        throwsRejection(SyncRejectionReason.malformedPayload),
+      );
+      workspace.clock.advance(100);
+      await a.client.capture(
+        collection: _harnessCollection,
+        entityId: docId,
+        fields: {'three': 'third'},
+      );
+
+      await workspace.syncAll();
+      expect(await canonicalReducedState(workspace.b.database),
+          await canonicalReducedState(a.database));
+      final headers = [
+        for (final envelope in await a.client.authoredEnvelopes())
+          OpHeader.parse(envelope),
+      ];
+      expect(
+        headers.map((header) => header.authorSeq),
+        List<int>.generate(headers.length, (index) => index + 1),
+        reason: 'the chain has no hole where the refusal was',
+      );
+      expect(headers.where((header) => header.opClass == opClassContent).length, 2);
+      expect((await a.client.health()).pendingOpCount, 0);
+    });
+
+    test('captureControl refuses what the receive codec would refuse', () async {
+      // The stateless prefix of `_verifyControlOp`, in its order. A quarantined
+      // control op is worse than a quarantined content op: everything chaining
+      // through it is wedged too.
+      final a = workspace.a;
+      final outboxBefore = await outboxSeqs(a);
+
+      await expectLater(
+        a.client.captureControl(Uint8List.fromList([0xff, 0xfe, 0xfd])),
+        throwsRejection(SyncRejectionReason.malformedControlPayload),
+      );
+      expect(await outboxSeqs(a), outboxBefore);
+
+      // Wire-valid JSON, structurally impossible: the all-zero link is
+      // genesis-only, so this is the truncated-history claim a device that
+      // skipped the pull would emit.
+      await expectLater(
+        a.client.captureControl(ControlPayload(
+          controlType: controlTypeMemberRegister,
+          prevControlHash: zeroPrevControlHash,
+          certBytes: Uint8List.fromList(utf8.encode('{}')),
+          signature: Uint8List(signatureLengthBytes),
+        ).encode()),
+        throwsRejection(SyncRejectionReason.controlChainBreak),
+      );
+      expect(await outboxSeqs(a), outboxBefore);
+
+      // And a type this build does not serve — #554's `rotate` — is refused
+      // before it can be signed into a chain no peer will follow.
+      await expectLater(
+        a.client.captureControl(ControlPayload(
+          controlType: 'rotate',
+          prevControlHash: workspace.controlChainHead(),
+        ).encode()),
+        throwsRejection(SyncRejectionReason.unsupportedControlType),
+      );
+      expect(await outboxSeqs(a), outboxBefore);
+    });
   });
 }
