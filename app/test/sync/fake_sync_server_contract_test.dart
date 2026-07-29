@@ -48,13 +48,16 @@
 /// place the server had a hole.
 library;
 
+import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart' show X25519;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/key_wraps.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/root_authority.dart';
 import 'package:jeeves/sync/signal_socket.dart';
@@ -69,6 +72,7 @@ import 'harness/sim_workspace.dart'
         grantEnvelope,
         memberRegisterEnvelope,
         revokeEnvelope,
+        rotateEnvelope,
         simulationStartWallMs,
         workspaceGenesisEnvelope;
 
@@ -1070,6 +1074,432 @@ void main() {
       // have no analogue here; what does have one is the end state — the object
       // a Device is left holding has no escrow method on it.
       expect(session, isNot(isA<UserTransport>()));
+    });
+  });
+
+  // ── The key plane ───────────────────────────────────────────────────────────
+  //
+  // The twin of `backend/tests/sync/test_keywrap_routes.py`. The byte-level
+  // construction of a wrap is pinned by `spec/sync/envelope_v1_vectors.json`'s
+  // `keywrap_vectors` on both sides, so these cases concentrate on what route tests
+  // can prove and vectors cannot: **who** may do each of these things, and **what the
+  // digest refuses**.
+  //
+  // Fixed key material rather than random, so a failure message names the same bytes
+  // twice — and the same values the Python file uses, so a divergence in the digest
+  // shows up as different bytes rather than as two suites disagreeing about inputs.
+
+  final epochKey = Uint8List.fromList(List<int>.generate(workspaceKeyBytes, (i) => i + 1));
+  final masterWrapKey =
+      Uint8List.fromList(List<int>.generate(workspaceKeyBytes, (i) => i + 100));
+  final ephemeralSeed = Uint8List.fromList(List<int>.generate(32, (i) => i + 200));
+  final wrapNonce = Uint8List.fromList(List<int>.generate(wrapNonceBytes, (i) => i + 50));
+  final escrowNonce = Uint8List.fromList(List<int>.generate(wrapNonceBytes, (i) => i + 80));
+
+  group('the key plane', () {
+    Uint8List kexKeyIdOf(AuthorFixture device) => deriveKeyId(device.kexPk);
+
+    Future<MemberKeyWrap> wrapFor(AuthorFixture device, {int epoch = 1}) async =>
+        MemberKeyWrap(
+          memberId: device.memberId,
+          kexKeyId: kexKeyIdOf(device),
+          wrap: await sealEpochKeyForMember(
+            workspaceKey: epochKey,
+            kexPk: device.kexPk,
+            workspaceId: workspaceId,
+            epoch: epoch,
+            memberId: device.memberId,
+            kexKeyId: kexKeyIdOf(device),
+            ephemeralSeed: ephemeralSeed,
+            nonce: wrapNonce,
+          ),
+        );
+
+    Future<Uint8List> escrowWrapFor({int epoch = 1}) => sealEpochKeyForEscrow(
+          workspaceKey: epochKey,
+          masterWrapKey: masterWrapKey,
+          workspaceId: workspaceId,
+          epoch: epoch,
+          nonce: escrowNonce,
+        );
+
+    Future<Uint8List> digestFor(List<AuthorFixture> devices, {int epoch = 1}) async =>
+        keyWrapDigest(
+          epoch: epoch,
+          memberWraps: [
+            for (final device in devices) await wrapFor(device, epoch: epoch),
+          ],
+          escrowWrap: await escrowWrapFor(epoch: epoch),
+        );
+
+    Future<List<KeyWrapRecord>> putWraps(
+      List<AuthorFixture> devices, {
+      int epoch = 1,
+      bool includeDigest = false,
+      FakeSyncServerMemberSession? as,
+      List<MemberKeyWrap>? wraps,
+      Uint8List? escrowWrap,
+    }) async =>
+        (as ?? session).putKeyWraps(
+          workspaceId,
+          epoch: epoch,
+          wraps: wraps ??
+              [for (final device in devices) await wrapFor(device, epoch: epoch)],
+          escrowWrap: escrowWrap ?? await escrowWrapFor(epoch: epoch),
+          keyWrapDigest: includeDigest ? await digestFor(devices, epoch: epoch) : null,
+        );
+
+    /// Author the `rotate` that commits to [devices]' wrap set, and post it.
+    Future<void> rotate(List<AuthorFixture> devices, {int fromEpoch = 0}) async {
+      await session.postOps(workspaceId, [
+        await rotateEnvelope(
+          device: author,
+          workspaceId: workspaceId,
+          prevControlHash: controlHeadOf(server, workspaceId),
+          keyWrapDigest: await digestFor(devices, epoch: fromEpoch + 1),
+          wallMs: simulationStartWallMs,
+          fromEpoch: fromEpoch,
+        ),
+      ]);
+    }
+
+    /// A second registered Member of the same User, with no Grant.
+    Future<AuthorFixture> registerSecond(int seed) async {
+      final second = await AuthorFixture.create(seed: _seedOf(seed));
+      await userSession.registerMember(
+        memberId: second.memberId,
+        signPk: second.signPk,
+        kexPk: second.kexPk,
+      );
+      return second;
+    }
+
+    test('a rotate materialises an epoch row with no wraps yet', () async {
+      // The ordering is the whole mechanism: the digest has to be in the log before
+      // the wraps arrive, or there is nothing to check them against. The window in
+      // between is the named orphaned-grant state a client re-fetches through.
+      await rotate([author]);
+      expect(server.keyedEpochs(workspaceId), [1]);
+      expect(server.keyWrapRecipients(workspaceId, 1), isEmpty);
+      expect(await session.fetchMyKeyWraps(workspaceId), isEmpty);
+      expect(await session.fetchEpochKeys(workspaceId), isEmpty,
+          reason: 'an epoch whose escrow wrap has not arrived is omitted, not served '
+              'empty — an empty blob would look like a wrap that fails to open');
+    });
+
+    test('a rotate needs a live owner grant', () async {
+      // No certificate means no Root shortcut: the role matrix is the whole gate.
+      // Every other control type can land on a Root signature alone, which is how an
+      // ungranted device's register-plus-grant batch gets in. A rotate cannot, and
+      // that is the intended consequence of it carrying no certificate.
+      final stranger = await registerSecond(70);
+      final strangerSession = await enrol(userSession, stranger);
+      await expectLater(
+        strangerSession.postOps(workspaceId, [
+          await rotateEnvelope(
+            device: stranger,
+            workspaceId: workspaceId,
+            prevControlHash: Uint8List.fromList(List<int>.filled(32, 0x11)),
+            keyWrapDigest: Uint8List.fromList(List<int>.filled(32, 0x22)),
+            wallMs: simulationStartWallMs,
+          ),
+        ]),
+        throwsStatus(403, 'no_live_grant'),
+      );
+    });
+
+    test('a rotate from the wrong epoch is refused', () async {
+      await rotate([author]);
+      await expectLater(
+        session.postOps(workspaceId, [
+          await rotateEnvelope(
+            device: author,
+            workspaceId: workspaceId,
+            prevControlHash: controlHeadOf(server, workspaceId),
+            keyWrapDigest: Uint8List.fromList(List<int>.filled(32, 0x33)),
+            wallMs: simulationStartWallMs,
+          ),
+        ]),
+        throwsStatus(409, 'rotate_epoch_conflict'),
+      );
+    });
+
+    test('a multi-step rotation is refused at decode', () async {
+      // `to_epoch` must be `from_epoch + 1`. A jump would leave an epoch no KeyWrap
+      // set is ever minted for, and the client's floor would then refuse content at
+      // an epoch the Workspace never keyed. Rewritten after encoding, because the
+      // statement class will *serialise* a two-step rotation and refuses to read one
+      // back — which is exactly the shape this has to put on the wire.
+      final payload = ControlPayload(
+        controlType: controlTypeRotate,
+        prevControlHash: controlHeadOf(server, workspaceId),
+        rotate: RotateStatement(
+          workspaceId: workspaceId,
+          fromEpoch: 0,
+          toEpoch: 1,
+          keyWrapDigest: Uint8List.fromList(List<int>.filled(32, 0x44)),
+          rotatedAtHlc: Hlc.forMember(author.memberId, simulationStartWallMs),
+        ),
+      ).encode();
+      final tampered = Uint8List.fromList(
+        utf8.encode(utf8.decode(payload).replaceFirst('"to_epoch":1', '"to_epoch":2')),
+      );
+      expect(tampered, isNot(payload));
+      await expectLater(
+        session.postOps(workspaceId, [
+          await author.nextEnvelope(
+            workspaceId,
+            opClass: opClassControl,
+            payload: tampered,
+          ),
+        ]),
+        throwsStatus(422, 'malformed_control_payload'),
+      );
+    });
+
+    test('wraps land when they hash to the rotates digest', () async {
+      // Both flavours are *unwrapped* rather than merely stored and compared: a route
+      // that accepted an unopenable wrap would pass a byte-equality test and lock the
+      // member out in the field.
+      await rotate([author]);
+      final written = await putWraps([author]);
+      expect(written.map((row) => row.epoch), [1]);
+
+      final stored = (await session.fetchMyKeyWraps(workspaceId)).single;
+      expect(
+        await unwrapEpochKeyForMember(
+          wrap: stored.wrap,
+          kexKeyPair: await X25519().newKeyPairFromSeed(author.kexSeed),
+          workspaceId: workspaceId,
+          epoch: 1,
+          memberId: author.memberId,
+          kexKeyId: kexKeyIdOf(author),
+        ),
+        epochKey,
+      );
+      final epochRow = (await session.fetchEpochKeys(workspaceId)).single;
+      expect(
+        await unwrapEpochKeyFromEscrow(
+          escrowWrap: epochRow.escrowWrap,
+          masterWrapKey: masterWrapKey,
+          workspaceId: workspaceId,
+          epoch: 1,
+        ),
+        epochKey,
+      );
+    });
+
+    test('an omitted wrap is refused by the digest', () async {
+      // The defence that matters: a curating operator's cheapest attack is to drop
+      // one member's wrap and let them look orphaned.
+      final second = await registerSecond(71);
+      await rotate([author, second]);
+      await expectLater(putWraps([author]), throwsStatus(422, 'keywrap_digest_mismatch'));
+    });
+
+    test('an added wrap is refused by the digest', () async {
+      final second = await registerSecond(72);
+      await rotate([author]);
+      await expectLater(
+        putWraps([author, second]),
+        throwsStatus(422, 'keywrap_digest_mismatch'),
+      );
+    });
+
+    test('a substituted escrow wrap is refused by the digest', () async {
+      // The one wrap with no second device to notice it went missing.
+      await rotate([author]);
+      await expectLater(
+        putWraps(
+          [author],
+          escrowWrap: await sealEpochKeyForEscrow(
+            workspaceKey: epochKey,
+            masterWrapKey: Uint8List(workspaceKeyBytes),
+            workspaceId: workspaceId,
+            epoch: 1,
+            nonce: escrowNonce,
+          ),
+        ),
+        throwsStatus(422, 'keywrap_digest_mismatch'),
+      );
+    });
+
+    test('wraps without a materialised rotate are refused', () async {
+      await expectLater(
+        putWraps([author], includeDigest: true),
+        throwsStatus(409, 'rotate_not_materialised'),
+      );
+    });
+
+    test('epoch zero carries its own digest', () async {
+      // Nothing rotated *to* epoch 0, so there is no signed op to have committed to
+      // it: the founding client's own digest is stored as the commitment.
+      await putWraps([author], epoch: 0, includeDigest: true);
+      expect(server.keyedEpochs(workspaceId), [0]);
+      expect(server.keyWrapRecipients(workspaceId, 0), {author.memberId});
+    });
+
+    test('an epoch zero digest that does not describe its own set is refused', () async {
+      await expectLater(
+        session.putKeyWraps(
+          workspaceId,
+          epoch: 0,
+          wraps: [await wrapFor(author, epoch: 0)],
+          escrowWrap: await escrowWrapFor(epoch: 0),
+          keyWrapDigest: Uint8List.fromList(List<int>.filled(keyWrapDigestBytes, 0x55)),
+        ),
+        throwsStatus(422, 'keywrap_digest_mismatch'),
+      );
+    });
+
+    test('a byte-identical replay is idempotent', () async {
+      // Both ceremonies retry, so a re-PUT of the same bytes is an acknowledgement.
+      await rotate([author]);
+      await putWraps([author]);
+      await putWraps([author]);
+      expect(server.keyWrapRecipients(workspaceId, 1), {author.memberId});
+    });
+
+    test('wraps require a live owner grant', () async {
+      // The same bar a rotate is held to: the two halves of one ceremony cannot have
+      // different authority, or the weaker one becomes the way in.
+      await rotate([author]);
+      final stranger = await registerSecond(73);
+      final strangerSession = await enrol(userSession, stranger);
+      await expectLater(
+        putWraps([author], as: strangerSession),
+        throwsStatus(403, 'keywrap_requires_owner'),
+      );
+    });
+
+    test('a wrap naming an unregistered kex key is refused', () async {
+      // The id must be the one the *server* derived from the registered key. A wrap
+      // sealed to some other key would be undeliverable, and the member would look
+      // orphaned for a reason nothing in the log explained.
+      await rotate([author]);
+      final genuine = await wrapFor(author);
+      await expectLater(
+        putWraps(
+          [author],
+          wraps: [
+            MemberKeyWrap(
+              memberId: genuine.memberId,
+              kexKeyId: Uint8List(authorKeyIdBytes),
+              wrap: genuine.wrap,
+            ),
+          ],
+        ),
+        throwsStatus(422, 'kex_key_id_not_registered'),
+      );
+    });
+
+    test('a malformed escrow wrap is refused before any crypto', () async {
+      await rotate([author]);
+      await expectLater(
+        putWraps([author], escrowWrap: Uint8List(3)),
+        throwsStatus(422, 'malformed_escrow_wrap'),
+      );
+    });
+
+    test('a wrap of the wrong width is refused before any crypto', () async {
+      await rotate([author]);
+      await expectLater(
+        putWraps(
+          [author],
+          wraps: [
+            MemberKeyWrap(
+              memberId: author.memberId,
+              kexKeyId: kexKeyIdOf(author),
+              wrap: Uint8List(keyWrapBytes - 1),
+            ),
+          ],
+        ),
+        throwsStatus(422, 'malformed_keywrap'),
+      );
+    });
+
+    test('a member fetches its own wraps across every epoch', () async {
+      // All epochs, not just the current one: soft-delete retention means content
+      // authored at any past epoch may still have to be read.
+      await putWraps([author], epoch: 0, includeDigest: true);
+      await rotate([author]);
+      await putWraps([author]);
+      expect(
+        (await session.fetchMyKeyWraps(workspaceId)).map((row) => row.epoch),
+        [0, 1],
+      );
+    });
+
+    test('the route has nowhere to ask for another members wraps', () async {
+      // Scoped to the calling Member and not parameterised. They would be unopenable
+      // anyway, which is what makes the scoping tidiness rather than the defence.
+      await rotate([author]);
+      await putWraps([author]);
+      final second = await registerSecond(74);
+      final secondSession = await enrol(userSession, second);
+      expect(await secondSession.fetchMyKeyWraps(workspaceId), isEmpty);
+    });
+
+    test('epoch keys serves the escrow wraps to a granted member', () async {
+      await rotate([author]);
+      await putWraps([author]);
+      final served = await session.fetchEpochKeys(workspaceId);
+      expect(served.map((row) => row.epoch), [1]);
+      expect(served.single.escrowWrap, await escrowWrapFor());
+      expect(served.single.keyWrapDigest, await digestFor([author]));
+    });
+
+    test('epoch keys omits an epoch whose wraps have not arrived', () async {
+      await rotate([author]);
+      expect(await session.fetchEpochKeys(workspaceId), isEmpty);
+    });
+
+    test('epoch keys refuses an ungranted member', () async {
+      final stranger = await registerSecond(75);
+      final strangerSession = await enrol(userSession, stranger);
+      await expectLater(
+        strangerSession.fetchEpochKeys(workspaceId),
+        throwsStatus(403, 'no_live_grant'),
+      );
+    });
+
+    test('content at the previous epoch still lands', () async {
+      // The `- 1` of `key_epoch >= current - 1`: a device offline across a rotation
+      // holds envelopes signed at the previous epoch, and those cannot be re-signed
+      // without forging its own chain.
+      await rotate([author]);
+      await session.postOps(workspaceId, [
+        await author.nextEnvelope(workspaceId, keyEpoch: 0),
+      ]);
+      expect(contentOps(server), hasLength(1));
+    });
+
+    test('content two epochs behind is refused', () async {
+      await rotate([author]);
+      await rotate([author], fromEpoch: 1);
+      await expectLater(
+        session.postOps(workspaceId, [
+          await author.nextEnvelope(workspaceId, keyEpoch: 0),
+        ]),
+        throwsStatus(409, 'key_epoch_stale'),
+      );
+    });
+
+    test('an unkeyed workspace refuses no epoch', () async {
+      // There is no epoch to be stale against, and content at epoch 0 is exactly what
+      // a pre-turn-on Workspace writes.
+      await session.postOps(workspaceId, [
+        await author.nextEnvelope(workspaceId, keyEpoch: 0),
+      ]);
+      expect(contentOps(server), hasLength(1));
+    });
+
+    test('the escrow wrap width is what the codec says', () async {
+      expect(epochKeyEscrowWrapBytes, wrapNonceBytes + workspaceKeyBytes + aeadTagBytes);
+      expect(
+        keyWrapBytes,
+        ephemeralPublicKeyBytes + wrapNonceBytes + workspaceKeyBytes + aeadTagBytes,
+      );
     });
   });
 

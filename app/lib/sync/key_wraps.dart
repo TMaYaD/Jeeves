@@ -3,7 +3,7 @@
 /// A deliberate mirror of `backend/app/sync/key_wraps.py`, pinned byte-for-byte by
 /// `spec/sync/envelope_v1_vectors.json`'s `keywrap_vectors`. Two wrap flavours,
 /// both carrying the same 32-byte plaintext — a Workspace content key
-/// `K_{w,epoch}` — and neither of them ever openable by the server (ADR-0034).
+/// `K_{w,epoch}` — and neither of them ever openable by the server (ADR-0037).
 ///
 /// **KeyWrap**, one per `(Member, epoch)`. A sealed-box-equivalent to the Member's
 /// registered X25519 `kex_pk`. This is the delivery of a Grant's entitlement: a

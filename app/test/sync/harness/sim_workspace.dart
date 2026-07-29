@@ -193,6 +193,36 @@ Future<Uint8List> revokeEnvelope({
   );
 }
 
+/// Mint a `rotate` envelope. **The one control type with no certificate**, so there
+/// is no signing key argument: a rotate's authority is the author's own live `owner`
+/// Grant, and the envelope signature is the only signature it carries.
+Future<Uint8List> rotateEnvelope({
+  required AuthorFixture device,
+  required String workspaceId,
+  required Uint8List prevControlHash,
+  required Uint8List keyWrapDigest,
+  required int wallMs,
+  int fromEpoch = 0,
+  int? toEpoch,
+  int? authorSeq,
+}) =>
+    device.nextEnvelope(
+      workspaceId,
+      opClass: opClassControl,
+      payload: ControlPayload(
+        controlType: controlTypeRotate,
+        prevControlHash: prevControlHash,
+        rotate: RotateStatement(
+          workspaceId: workspaceId,
+          fromEpoch: fromEpoch,
+          toEpoch: toEpoch ?? fromEpoch + 1,
+          keyWrapDigest: keyWrapDigest,
+          rotatedAtHlc: Hlc.forMember(device.memberId, wallMs),
+        ),
+      ).encode(),
+      authorSeq: authorSeq,
+    );
+
 /// The base wall time the fake clock starts at. Fixed so HLCs in failure
 /// messages are readable and reproducible.
 const int simulationStartWallMs = 1800000000000;

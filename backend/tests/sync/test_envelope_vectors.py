@@ -595,7 +595,7 @@ def test_a_wrap_of_the_wrong_width_is_refused_before_any_crypto_runs() -> None:
 def test_the_hand_rolled_hkdf_matches_rfc_5869_test_case_1() -> None:
     """RFC 5869 A.1, so the hand-rolled expansion is checked against the standard.
 
-    PyNaCl ships no HKDF (ADR-0034), and the golden vectors only prove that this
+    PyNaCl ships no HKDF (ADR-0037), and the golden vectors only prove that this
     implementation agrees with the Dart one — two wrong implementations would agree
     just as happily.  This anchors both of them to the RFC.
     """

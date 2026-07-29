@@ -2113,7 +2113,7 @@ def _envelope_vectors_document() -> dict[str, Any]:
                 "kdf": (
                     "HKDF-SHA256(ikm = X25519(esk, kex_pk), salt = empty, info) — the "
                     "salt being empty means RFC 5869's default of 32 zero bytes. PyNaCl "
-                    "ships no HKDF, so the Python side hand-rolls it (ADR-0034); the "
+                    "ships no HKDF, so the Python side hand-rolls it (ADR-0037); the "
                     "Dart side uses package:cryptography's Hkdf, whose `nonce` argument "
                     "is the RFC's salt. These vectors are what proves the two agree."
                 ),
@@ -2141,7 +2141,7 @@ def _envelope_vectors_document() -> dict[str, Any]:
                 "why_not_crypto_box_seal": (
                     "libsodium's sealed box has no Dart implementation that runs on web, "
                     "and the vector generator needs a deterministic construction. "
-                    "ADR-0034 records the trade-off."
+                    "ADR-0037 records the trade-off."
                 ),
             },
             "op_classes": {

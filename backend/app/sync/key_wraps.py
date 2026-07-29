@@ -1,7 +1,7 @@
 """The KeyWrap formats: how a Workspace epoch key reaches a Member, and the escrow.
 
 Two wrap flavours, both carrying the same 32-byte plaintext — a Workspace content
-key ``K_{w,epoch}`` — and neither of them ever openable by the server (ADR-0034):
+key ``K_{w,epoch}`` — and neither of them ever openable by the server (ADR-0037):
 
 **KeyWrap**, one per ``(Member, epoch)``.  A sealed-box-equivalent to the Member's
 registered X25519 ``kex_pk``.  This is the delivery of a Grant's entitlement: a
@@ -57,7 +57,7 @@ server could shuffle.
 
 **PyNaCl has no HKDF**, so :func:`hkdf_sha256` below is a hand-rolled RFC 5869
 HKDF-SHA256 — twelve lines, fully deterministic, and cross-checked against the
-Dart ``cryptography`` package's ``Hkdf`` by the golden vectors.  ADR-0034 records
+Dart ``cryptography`` package's ``Hkdf`` by the golden vectors.  ADR-0037 records
 that as a deliberate consequence of choosing a hand-rolled sealed box over
 libsodium's ``crypto_box_seal``, which has no Dart implementation that runs on
 web.

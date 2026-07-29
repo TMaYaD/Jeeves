@@ -94,13 +94,13 @@
       "master_wrap_key_bytes": 32,
       "keywrap_bytes": 104,
       "escrow_wrap_bytes": 72,
-      "kdf": "HKDF-SHA256(ikm = X25519(esk, kex_pk), salt = empty, info) \u2014 the salt being empty means RFC 5869's default of 32 zero bytes. PyNaCl ships no HKDF, so the Python side hand-rolls it (ADR-0034); the Dart side uses package:cryptography's Hkdf, whose `nonce` argument is the RFC's salt. These vectors are what proves the two agree.",
+      "kdf": "HKDF-SHA256(ikm = X25519(esk, kex_pk), salt = empty, info) \u2014 the salt being empty means RFC 5869's default of 32 zero bytes. PyNaCl ships no HKDF, so the Python side hand-rolls it (ADR-0037); the Dart side uses package:cryptography's Hkdf, whose `nonce` argument is the RFC's salt. These vectors are what proves the two agree.",
       "member_info": "b\"jeeves/keywrap/v1\" || epk 32B || workspace_id 16B || epoch u32 BE || member_id 16B || kex_key_id 8B",
       "member_wrap_layout": "epk 32B || nonce 24B || XChaCha20-Poly1305(hkdf key, nonce, aad = the info bytes, plaintext = K 32B)",
       "escrow_info": "b\"jeeves/epoch-key-escrow/v1\" || workspace_id 16B || epoch u32 BE",
       "escrow_wrap_layout": "nonce 24B || XChaCha20-Poly1305(master_wrap_key, nonce, aad = the info bytes, plaintext = K 32B)",
       "digest_preimage": "SHA-256(b\"jeeves/keywrap-digest/v1\" || epoch u32 BE || member_wrap_count u32 BE || for each (member_id, kex_key_id, wrap) sorted by (member_id, kex_key_id): member_id 16B || kex_key_id 8B || SHA-256(wrap) 32B || SHA-256(escrow_wrap) 32B)",
-      "why_not_crypto_box_seal": "libsodium's sealed box has no Dart implementation that runs on web, and the vector generator needs a deterministic construction. ADR-0034 records the trade-off."
+      "why_not_crypto_box_seal": "libsodium's sealed box has no Dart implementation that runs on web, and the vector generator needs a deterministic construction. ADR-0037 records the trade-off."
     },
     "op_classes": {
       "content": 1,
