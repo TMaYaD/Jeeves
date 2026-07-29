@@ -248,6 +248,12 @@ const FieldMergeStrategy setMerge = SetMergeStrategy();
 /// the collection — `key`, `user_id`, `updated_at` — stays plain LWW.
 const String preferenceValueField = 'value';
 
+/// The field naming which strategy arbitrates [preferenceValueField].
+///
+/// Protocol surface, not bookkeeping: an op carrying a value must carry this too
+/// or the reducer refuses it (`preference_value_without_key`, ADR-0033).
+const String preferenceKeyField = 'key';
+
 /// Maps ADR-0011's registry verdict onto the reducer's strategies.
 ///
 /// `app/lib/services/user_preferences_conflict.dart` stays the executable
@@ -263,9 +269,11 @@ FieldMergeStrategy strategyForPreferenceKey(String key) =>
 /// Which strategy governs `(collection, field)`.
 ///
 /// Eleven of the twelve collections are plain LWW. `user_preferences` selects
-/// per entity by its `key` field — from the op's own fields when it carries one
-/// (`set()` always sends `key`), else from the stored reduced `key`; an
-/// unresolvable key falls back to LWW.
+/// per op by the `key` the op itself carries — nothing stored is consulted, so
+/// which lattice arbitrates a write cannot depend on arrival order (ADR-0033).
+/// The reducer refuses a `value` write with no resolvable key upstream of here
+/// (`preference_value_without_key`), so [resolve]'s null-key result is a totality
+/// branch for the collection's plain-LWW fields, not a behaviour `value` can hit.
 class MergeStrategyRegistry {
   const MergeStrategyRegistry({
     this.preferenceKeyOverrides = const <String, FieldMergeStrategy>{},

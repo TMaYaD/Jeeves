@@ -8,7 +8,7 @@ are the thing both of them are measured against.
 | File | Pins |
 |---|---|
 | `envelope_v1_vectors.json` | The 158-byte header at every field offset, the body framing and its three padding rules, all four signing domains, exact signature and envelope bytes, the deterministic id derivations, and one negative vector per fail-closed refusal. Since #548 it also pins the control plane and the trust root: the `member_register` payload and its Root-signed certificate, the cross-author chain link (SHA-256 over the predecessor's *payload* bytes), the recovery-escrow signature preimage and blob layout, the Argon2id floor, and the proof-of-possession challenge preimage. |
-| `reducer_v1_vectors.json` | Field-grain HLC last-write-wins: ordering, idempotence, the member-id tie-break, tombstones in both directions, the F15 guard scoping, and what quarantines. |
+| `reducer_v1_vectors.json` | Field-grain HLC last-write-wins: ordering, idempotence, the member-id tie-break, tombstones in both directions, the F15 guard scoping, and what quarantines. Also the non-LWW merge strategies as join-semilattices (ADR-0030), permutation-flagged where associativity is the property; and strategy *selection* — a `user_preferences` op carries the `key` that picks its lattice, and a value write without one is refused rather than defaulted (ADR-0033). |
 
 The envelope file's sections, and what each is for:
 

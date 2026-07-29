@@ -285,7 +285,15 @@ class SyncClient {
   /// functions rather than a parallel check is what makes a future tightening of
   /// the codec bind authors automatically, with no second site to update.
   ///
-  /// The decode runs *before* `_authorAndQueue`, and therefore before the
+  /// The decoded payload then goes through `Reducer.guardPayload` — the receive
+  /// path's own stateless refusals, the same method on the same instance rather
+  /// than an author-side copy. The reducer runs it again inside `apply`; running
+  /// it here is what puts it *before* the op is durable, so a payload every peer
+  /// (and this device's own echo) would quarantine — a `user_preferences` value
+  /// write naming no key being the case with a golden vector — never reaches the
+  /// outbox. Both validations sit ahead of authoring for the same reason.
+  ///
+  /// Both run *before* `_authorAndQueue`, and therefore before the
   /// `keyEpochBelowFloor` guard: a stale-epoch capture that is also wire-invalid
   /// reports `malformed_payload`, which is intended — wire validity is the earlier
   /// question, and the answer is the same on every device regardless of its state.
@@ -312,6 +320,7 @@ class SyncClient {
     );
     final wireBytes = payload.encode();
     final decoded = OpPayload.decode(parseBody(frameBody(wireBytes)));
+    _reducer.guardPayload(decoded, authorMemberIdHex: identity.memberIdHex);
     final opId = await _authorAndQueue(
       opClass: opClassContent,
       payload: wireBytes,

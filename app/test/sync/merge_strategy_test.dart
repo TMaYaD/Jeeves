@@ -221,7 +221,12 @@ void main() {
       );
     });
 
-    test('an unresolvable key falls back to LWW', () {
+    test('a null key is a totality branch, not a behaviour', () {
+      // Since #563 the reducer refuses a received `value` write whose key is
+      // missing or non-string (`preference_value_without_key`) *before* it ever
+      // calls `resolve`, so this branch is unreachable for the arbitrated
+      // field. It stays because the resolver is total — `key`, `user_id` and
+      // `updated_at` reach it with no preference key and must still get LWW.
       expect(
         registry.resolve(collection: 'user_preferences', field: 'value'),
         same(lww),

@@ -18,6 +18,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart' show Ed25519;
 import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/collection_codecs.dart' show userPreferencesCollection;
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
@@ -1026,6 +1027,42 @@ void main() {
         throwsRejection(SyncRejectionReason.unsupportedControlType),
       );
       expect(await outboxSeqs(a), outboxBefore);
+    });
+
+    test('a preference value with no key is refused before it is authored',
+        () async {
+      // The reducer's stateless guard, run at capture on the same instance the
+      // receive path uses (#563). `PreferencesStore.set` cannot author this
+      // shape — its API takes the key — so what this pins is the seam: a future
+      // writer that forgot the key fails loudly here instead of signing an op
+      // every peer, and this device's own echo, would quarantine.
+      final prefs = await workspace.a.preferencesClient;
+      final outboxBefore = await outboxSeqs(workspace.a);
+      final stateBefore = await canonicalReducedState(workspace.a.database);
+
+      await expectLater(
+        prefs.capture(
+          collection: userPreferencesCollection,
+          entityId: workspace.a.preferences.entityIdFor('theme'),
+          fields: {'value': '"dark"'},
+        ),
+        throwsRejection(SyncRejectionReason.preferenceValueWithoutKey),
+      );
+      expect(await outboxSeqs(workspace.a), outboxBefore,
+          reason: 'nothing was queued');
+      expect(await canonicalReducedState(workspace.a.database), stateBefore,
+          reason: 'nothing was reduced locally');
+
+      // The same write with its key rides through and converges, so the guard
+      // refuses a shape rather than the collection.
+      workspace.clock.advance(100);
+      await workspace.a.preferences.set('theme', '"dark"');
+      await workspace.syncAll();
+      expect(await workspace.b.preferences.getAll(), {'theme': '"dark"'});
+      for (final device in workspace.devices) {
+        expect(await (await device.preferencesClient).quarantined(), isEmpty,
+            reason: 'device ${device.label}');
+      }
     });
   });
 }

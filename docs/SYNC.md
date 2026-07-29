@@ -64,6 +64,10 @@ An unregistered key resolves as `lww`, which is non-destructive: it never delete
 
 `preferenceConflictRegistry` is an exact-match `key → strategy` map consulted **before** the `snoozed_until` suffix rule and before the default, so an entry there always wins. Registering `lww` explicitly is redundant at runtime — the key would fall through to it anyway — but it records that the strategy was chosen and reviewed rather than inherited, which is the bar ADR-0011 sets for a key whose arbitration a reader would otherwise have to re-derive. Keys registered explicitly are marked in the matrix below.
 
+### On the op-log spine, selection is per op
+
+The registry above is consulted from two places: PowerSync's download reconciliation, which arbitrates two *rows*, and the op-log reducer (`app/lib/sync/reducer.dart`, via the `MergeStrategyRegistry` adapter in `merge_strategy.dart`), which arbitrates two *field writes*. On the spine the strategy is selected from the op alone: a `user_preferences` op that carries `value` carries the `key` too, and the reducer refuses one that does not under `preference_value_without_key` — a logged-but-refused quarantine, not a decode failure. Nothing stored is read to pick the strategy, so two devices cannot arbitrate the same pair of writes under different lattices depending on which of them had already learned the key ([ADR-0033](./adr/0033-user-preferences-ops-carry-their-key.md)). `SyncClient.capture` runs the same guard before authoring, so the shape cannot be signed into an outbox either. The refusal is pinned by `user_preferences_value_without_key_is_refused` in `spec/sync/reducer_v1_vectors.json`, and every strategy reachable this way owes ADR-0030's lattice obligations.
+
 ## Conflict matrix — every current `user_preferences` key
 
 The three cases are uniform per strategy:
