@@ -43,6 +43,23 @@ _KEYS_BY_LABEL = {entry["label"]: entry for entry in _IDENTITIES["keys"]}
 _ROOT_PUBLIC_KEY = bytes.fromhex(_IDENTITIES["root"]["root_pk_hex"])
 
 
+class _CertMemberMismatchError(ControlPayloadError):
+    """A Root-signed certificate that is *about* somebody other than the author.
+
+    Test-local: production Python runs this binding check in the ops route, whose
+    error codes are string literals on the 422 detail.  The runner needs a typed
+    error so the ``reason`` the negative vectors pin is the one it raises.
+    """
+
+    reason = "cert_member_mismatch"
+
+
+class _CertKeyMismatchError(ControlPayloadError):
+    """The header names a key the certificate does not carry."""
+
+    reason = "cert_key_mismatch"
+
+
 def _header_from_json(raw: dict[str, Any]) -> OpHeader:
     return OpHeader(
         suite=raw["suite"],
@@ -99,10 +116,10 @@ def _check_registration_binds_the_envelope(
     manufacture forks in the victim's chain.
     """
     if certificate.member_id != header.author_member_id:
-        raise ControlPayloadError("cert_member_mismatch")
+        raise _CertMemberMismatchError("certificate names another member")
     env.verify_envelope(envelope, certificate.sign_pk)
     if env.derive_key_id(certificate.sign_pk) != header.author_key_id:
-        raise ControlPayloadError("cert_key_mismatch")
+        raise _CertKeyMismatchError("certificate key id is not the one the header names")
 
 
 def _receive_control(envelope: bytes, root_pk: bytes) -> Any:

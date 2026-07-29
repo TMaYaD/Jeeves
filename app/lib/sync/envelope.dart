@@ -165,6 +165,19 @@ enum SyncRejectionReason {
   memberNotChainedToRoot('member_not_chained_to_root'),
   badRootSignature('bad_root_signature'),
 
+  /// A Root-signed certificate that is *about* a different member than the
+  /// envelope wearing it. Distinct from [badRootSignature] because nothing is
+  /// wrong with the signature: a genuine certificate is public the moment it is
+  /// in the log, and this is somebody wrapping a copy around their own envelopes.
+  /// The same code the server returns at 422.
+  certMemberMismatch('cert_member_mismatch'),
+
+  /// The certificate's key is not the one the header names — on the server, not
+  /// the member's registered key. Separate from [certMemberMismatch] because the
+  /// certificate names the right member and only the key disagrees, which is a
+  /// different attack with a different remediation (ADR-0032).
+  certKeyMismatch('cert_key_mismatch'),
+
   /// A Grant's granter did not sign it, under the Grant's own domain.
   badGrantSignature('bad_grant_signature'),
 

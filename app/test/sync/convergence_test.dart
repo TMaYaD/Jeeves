@@ -427,8 +427,11 @@ void main() {
     // `control_bad_root_signature` is not the only one that would fail. Each is
     // injected on its own and asserted for its own reason.
     //
-    // Two refusals a *stateful* receiver reaches before the codec's are accepted
-    // alongside the vector's own, and both are strictly stronger:
+    // Three refusals a *stateful* receiver reaches before the codec's are accepted
+    // alongside the vector's own, and all three are strictly stronger. Every entry
+    // here widens the accepted alternative for *every* vector in this loop, not
+    // just for the ones that motivated it — so each has to be a refusal that is
+    // stronger than any pinned reason, whichever vector produces it:
     //
     // * `member_not_chained_to_root` — a Grant or Revoke is authored by an
     //   already-registered member, so this device verifies the envelope against
@@ -439,9 +442,16 @@ void main() {
     //   applied control log does not hold. A codec has no chain state to check
     //   against; a receiver does, and a control op that does not fit its chain is
     //   refused whatever its certificate says.
+    // * `bad_root_signature` — every certificate here is signed by the *spec*
+    //   Root, which is not the Root this workspace pinned. A receiver that pinned
+    //   a different Root refuses a foreign-Root certificate before examining what
+    //   it binds to, which is why the two certificate-mismatch vectors never reach
+    //   their own reason here: refusing a certificate outright is stronger than
+    //   objecting to the member or key it names.
     const strongerRefusals = {
       SyncRejectionReason.memberNotChainedToRoot,
       SyncRejectionReason.controlChainBreak,
+      SyncRejectionReason.badRootSignature,
     };
     await workspace.syncAll();
     // Every device this loop enrols grants itself, so the set of legitimate
