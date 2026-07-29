@@ -19,6 +19,7 @@ import 'package:jeeves/sync/op_payload.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/root_authority.dart';
 
+import 'harness/rejection_matcher.dart';
 import 'vectors.dart';
 
 Uint8List _fromHex(String hex) {
@@ -888,11 +889,3 @@ void main() {
     });
   });
 }
-
-Matcher throwsRejection([SyncRejectionReason? reason]) => throwsA(
-      predicate<Object>(
-        (error) =>
-            error is SyncRejection && (reason == null || error.reason == reason),
-        'a SyncRejection${reason == null ? '' : ' (${reason.code})'}',
-      ),
-    );
