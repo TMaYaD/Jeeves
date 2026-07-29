@@ -144,8 +144,9 @@ All checks content-blind. **D** = Device (member JWT), **S** = Service (member J
 | `POST /w/{w}/ops` control | owner or Root-signed | as above; server materialises into its index; chain validity is the client's job |
 | `POST /w/{w}/ops` compaction/prune | role = compactor (or owner) | as above; prune sets `compacted_by`, never deletes (v1) |
 | `GET /w/{w}/ops?since=` | live Grant | no server-persisted cursor |
-| `PUT /w/{w}/keywraps` (rotation) | owner | matching `rotate` control op with equal `keywrap_digest` |
-| `GET /w/{w}/keywraps/me` | the member | `jwt.member == row.member` |
+| `PUT /w/{w}/keywraps` (rotation) | owner | whole-set upload; for `epoch > 0` a matching materialised `rotate` with equal `keywrap_digest`; epoch 0 carries its own digest (nothing rotated *to* it); byte-identical replay idempotent |
+| `GET /w/{w}/keywraps/me` | the member | `jwt.member == row.member` — the route takes no member parameter, so there is no id to get wrong; all epochs, since historical keys are kept for ever |
+| `GET /w/{w}/epoch-keys` | live Grant | returns the per-epoch escrow wraps, **useless without the passphrase**: they open only under `master_wrap_key`, which exists only inside the recovery escrow blob. This is the route that makes a fresh device's bootstrap work with no live second device. Deliberately *not* rate-limited or audited the way `GET /w/{w}/recovery` is — that route serves the material a passphrase guess is tested against, so each fetch is a guess handed out; these wraps are not guessable against anything. Epochs whose wraps have not yet arrived are omitted rather than served empty, so a missing wrap reads as a delivery gap and not as one that fails to open |
 | `POST /members` (enrol) | U | stores pubkeys only; **no authority** until a Root-signed MemberRegister lands |
 | `POST /members/{m}/challenge` | key possession | Ed25519 over server nonce, domain-separated |
 | `POST /services` / kex-key rotate | OP | identity key pinned app-side for first-party services (rotated by app update), by user-confirmed fingerprint or app-trusted signed directory for third-party/self-hosted; subkeys signed by identity key |

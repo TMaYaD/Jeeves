@@ -34,9 +34,9 @@ from nacl.signing import SigningKey  # noqa: E402
 from app.sync.control_payload import (  # noqa: E402
     COMPACTION_EXEMPT_OP_CLASSES,
     CONTROL_TYPE_GRANT,
-    CONTROL_TYPE_ROTATE,
     CONTROL_TYPE_MEMBER_REGISTER,
     CONTROL_TYPE_REVOKE,
+    CONTROL_TYPE_ROTATE,
     CONTROL_TYPE_WORKSPACE_GENESIS,
     GRANTER_ROOT,
     KEX_PUBLIC_KEY_BYTES,
