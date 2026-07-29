@@ -21,7 +21,7 @@ manifest refuses becomes an anomaly in the report (see ``canonical.py``).
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -32,10 +32,10 @@ from app.auth.dependencies import get_current_user
 from app.auth.models import User
 from app.config import settings
 from app.converge_verify.canonical import (
-    CANONICAL_ROW_MANIFEST,
     CONVERGE_VERIFY_TABLES,
     canonical_row,
     excluded_columns_report,
+    manifest_columns,
     parse_timestamp_utc_ms,
 )
 from app.database import get_db
@@ -118,7 +118,7 @@ async def _rows_for_table(
 ) -> list[dict[str, object]]:
     """SELECT the manifest's columns for this user's rows in [table]."""
     model = MODELS_BY_TABLE[table]
-    columns = [column for column, _ in CANONICAL_ROW_MANIFEST[table]]
+    columns = manifest_columns(table)
     statement = select(*[getattr(model, column) for column in columns]).where(
         model.user_id == user_id
     )
@@ -180,7 +180,12 @@ async def converge_verify_report(
 @router.get("/rows", response_model=RowDetailOut)
 async def converge_verify_rows(
     table: str = Query(...),
-    ids: str = Query(""),
+    # Repeated ``?ids=`` parameters rather than one comma-joined value: an id is
+    # opaque data out of the legacy store, and a comma inside one would split into
+    # two ids the server has no rows for — which the screen would then read as
+    # "only on this device".  Values are taken verbatim for the same reason: a
+    # stripped id is a different id.
+    ids: Annotated[list[str] | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> RowDetailOut:
@@ -189,7 +194,7 @@ async def converge_verify_rows(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"{table!r} is not a converge-verify table",
         )
-    requested = [piece for piece in (part.strip() for part in ids.split(",")) if piece]
+    requested = [piece for piece in (ids or []) if piece]
     if len(requested) > MAX_ROW_DETAIL_IDS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

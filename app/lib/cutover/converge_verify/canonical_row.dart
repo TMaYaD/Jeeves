@@ -337,11 +337,13 @@ String? _formatInstant(DateTime moment) {
 
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ`, or null when the rules refuse the value.
 ///
-/// Accepts a [DateTime] (naive is assumed UTC) or a string under the tolerant
-/// grammar frozen in the spec. The instant truncates, never rounds, to
-/// millisecond precision: milliseconds are the client-authorship grain, and a
-/// server-minted microsecond value reaches the device carrying the same
-/// microseconds, so both sides truncate identically.
+/// Accepts a [DateTime] — Dart has no zone-less value, so one carrying local
+/// time is converted with `toUtc()` rather than reinterpreted — or a string
+/// under the tolerant grammar frozen in the spec, where a zone-less string *is*
+/// read as UTC. The instant truncates, never rounds, to millisecond precision:
+/// milliseconds are the client-authorship grain, and a server-minted microsecond
+/// value reaches the device carrying the same microseconds, so both sides
+/// truncate identically.
 String? parseTimestampUtcMs(Object? value) {
   if (value is DateTime) return _formatInstant(value);
   if (value is! String) return null;

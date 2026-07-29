@@ -19,17 +19,24 @@ import '../../services/api_service.dart';
 import 'canonical_row.dart';
 import 'converge_differ.dart';
 
-/// One row's canonical string on each side. A null side means "no row here".
+/// One row's canonical string on each side. A null side means "no row here" —
+/// unless [serverDetailUnavailable], which means "not asked successfully", a
+/// different claim entirely and the reason the two are not one nullable field.
 class RowComparison {
   const RowComparison({
     required this.id,
     required this.localCanonical,
     required this.serverCanonical,
+    this.serverDetailUnavailable = false,
   });
 
   final String id;
   final String? localCanonical;
   final String? serverCanonical;
+
+  /// The detail request itself failed, so nothing may be concluded about the
+  /// server side of this row — neither that it agrees nor that it is absent.
+  final bool serverDetailUnavailable;
 
   List<ColumnDifference> differencesFor(String table) {
     final local = localCanonical;
@@ -55,6 +62,20 @@ abstract class ConvergeVerifyRunner {
 /// 404-means-skew check and the request agree.
 const String convergeVerifyReportPath = '/converge-verify/report';
 const String convergeVerifyRowsPath = '/converge-verify/rows';
+
+/// The detail-route request for [ids], built through [Uri] rather than
+/// interpolated.
+///
+/// An id is opaque data out of the legacy store this tool exists to inspect: an
+/// unencoded `&`, `#`, `%` or space in one would corrupt the request, and a
+/// comma-joined `ids` value would split an id containing a comma into two the
+/// server has no rows for. The server would then answer about other rows and the
+/// screen would read the gap as a divergence — a wrong conclusion about the data,
+/// dressed as a finding. Hence repeated, percent-encoded `ids` parameters.
+String convergeVerifyRowsRequest(String table, List<String> ids) => Uri(
+      path: convergeVerifyRowsPath,
+      queryParameters: {'table': table, 'ids': ids},
+    ).toString();
 
 class RiverpodConvergeVerifyRunner implements ConvergeVerifyRunner {
   RiverpodConvergeVerifyRunner(this._ref);
@@ -130,10 +151,9 @@ class RiverpodConvergeVerifyRunner implements ConvergeVerifyRunner {
     };
 
     var serverCanonical = <String, String>{};
+    var serverDetailUnavailable = false;
     try {
-      final body = await _api.get(
-        '$convergeVerifyRowsPath?table=$table&ids=${ids.join(',')}',
-      );
+      final body = await _api.get(convergeVerifyRowsRequest(table, ids));
       serverCanonical = {
         for (final entry
             in (body['rows'] as Map<String, dynamic>? ?? const {}).entries)
@@ -141,8 +161,10 @@ class RiverpodConvergeVerifyRunner implements ConvergeVerifyRunner {
       };
     } on DioException {
       // The detail route is a convenience over the report; losing it must not
-      // cost the ids the report already established.
+      // cost the ids the report already established. It must not read as "the
+      // server has no such row" either, so the failure travels with the rows.
       serverCanonical = const {};
+      serverDetailUnavailable = true;
     }
 
     return [
@@ -151,6 +173,7 @@ class RiverpodConvergeVerifyRunner implements ConvergeVerifyRunner {
           id: id,
           localCanonical: localCanonical[id],
           serverCanonical: serverCanonical[id],
+          serverDetailUnavailable: serverDetailUnavailable,
         ),
     ];
   }

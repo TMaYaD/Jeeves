@@ -41,11 +41,19 @@ class _ConvergeVerifyScreenState extends ConsumerState<ConvergeVerifyScreen> {
   /// Loaded on demand, per table: the column-level reading of its mismatches.
   final Map<String, List<RowComparison>> _comparisons = {};
 
+  /// Per table, why its column comparison could not be loaded. A tap that fails
+  /// must say so rather than look like a no-op.
+  final Map<String, Object> _comparisonErrors = {};
+
   Future<void> _run(String syncStateLabel) async {
     setState(() {
       _running = true;
       _error = null;
+      // The previous verdict, preconditions and proof describe the previous run.
+      // A run that fails must not leave them on screen next to the error.
+      _outcome = null;
       _comparisons.clear();
+      _comparisonErrors.clear();
     });
     try {
       final outcome = await ref
@@ -68,17 +76,36 @@ class _ConvergeVerifyScreenState extends ConsumerState<ConvergeVerifyScreen> {
   /// Read off the *watched* provider, never `ref.read` on an unwatched one: an
   /// unsubscribed StreamProvider is still `AsyncLoading` when a button callback
   /// reads it, which would quietly record every run's sync state as "unknown".
+  ///
+  /// `status.value`, not `asData?.value`, for the same reason one step further in:
+  /// `syncStatusProvider` watches `currentUserIdProvider`, so a rebuild of that
+  /// dependency leaves it `AsyncLoading` still carrying the last real status —
+  /// `asData` is null there and the run would be recorded as "unknown" anyway.
   String _syncStateLabel(AsyncValue<SyncStatus> status) {
     if (status.hasError) return 'error';
-    return status.asData?.value.name ?? 'unknown';
+    return status.value?.name ?? 'unknown';
   }
 
   Future<void> _loadComparisons(TableDiff table) async {
-    final comparisons = await ref
-        .read(convergeVerifyRunnerProvider)
-        .compareRows(table.table, table.mismatchedIds);
-    if (!mounted) return;
-    setState(() => _comparisons[table.table] = comparisons);
+    try {
+      final comparisons = await ref
+          .read(convergeVerifyRunnerProvider)
+          .compareRows(table.table, table.mismatchedIds);
+      if (!mounted) return;
+      setState(() {
+        _comparisonErrors.remove(table.table);
+        _comparisons[table.table] = comparisons;
+      });
+    } catch (error) {
+      // The local half of `compareRows` reads the store, so this can fail on its
+      // own. An unhandled async error from a button callback would leave the tap
+      // looking like a no-op.
+      if (!mounted) return;
+      setState(() {
+        _comparisons.remove(table.table);
+        _comparisonErrors[table.table] = error;
+      });
+    }
   }
 
   Future<void> _copyJson(ConvergeVerifyOutcome outcome) async {
@@ -232,6 +259,7 @@ class _ConvergeVerifyScreenState extends ConsumerState<ConvergeVerifyScreen> {
 
   Widget _tableTile(TableDiff table) {
     final comparisons = _comparisons[table.table];
+    final comparisonError = _comparisonErrors[table.table];
     return ExpansionTile(
       key: Key('converge_table_${table.table}'),
       title: Text(table.table),
@@ -273,6 +301,14 @@ class _ConvergeVerifyScreenState extends ConsumerState<ConvergeVerifyScreen> {
             onPressed: () => _loadComparisons(table),
             child: const Text('Compare columns'),
           ),
+        if (comparisonError != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Text(
+              'The column comparison could not run: $comparisonError',
+              key: Key('converge_comparison_error_${table.table}'),
+            ),
+          ),
         if (comparisons != null)
           for (final comparison in comparisons)
             _comparisonBlock(table.table, comparison),
@@ -296,8 +332,31 @@ class _ConvergeVerifyScreenState extends ConsumerState<ConvergeVerifyScreen> {
     );
   }
 
+  /// Why a row shows no column list. Only the last case is a claim about the
+  /// tool's own normaliser, and it needs both strings actually in hand: a detail
+  /// fetch that failed, or a row one side does not have, says nothing about
+  /// whether the two encodings agree.
+  String? _comparisonNote(RowComparison comparison, bool hasDifferences) {
+    if (comparison.serverDetailUnavailable) {
+      return 'Server row detail unavailable — the detail request failed, so '
+          'nothing is being claimed about this row. Run again.';
+    }
+    if (comparison.serverCanonical == null) {
+      return 'The server returned no row for this id.';
+    }
+    if (comparison.localCanonical == null) {
+      return 'This device has no row for this id.';
+    }
+    if (!hasDifferences) {
+      return 'No column difference visible — the two sides encode the same '
+          'values, so the mismatch is in this tool, not the data.';
+    }
+    return null;
+  }
+
   Widget _comparisonBlock(String table, RowComparison comparison) {
     final differences = comparison.differencesFor(table);
+    final note = _comparisonNote(comparison, differences.isNotEmpty);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Column(
@@ -306,10 +365,10 @@ class _ConvergeVerifyScreenState extends ConsumerState<ConvergeVerifyScreen> {
           Text(comparison.id,
               key: Key('converge_comparison_${table}_${comparison.id}'),
               style: const TextStyle(fontWeight: FontWeight.w600)),
-          if (differences.isEmpty)
-            const Text(
-              'No column difference visible — the two sides encode the same '
-              'values, so the mismatch is in this tool, not the data.',
+          if (note != null)
+            Text(
+              note,
+              key: Key('converge_comparison_note_${table}_${comparison.id}'),
             ),
           for (final difference in differences)
             Text(

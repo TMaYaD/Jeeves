@@ -7,6 +7,8 @@
 /// is asserted here; the diff logic itself is `converge_differ_test.dart`.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,10 +20,15 @@ import 'package:jeeves/cutover/converge_verify/converge_verify_screen.dart';
 import 'package:jeeves/providers/sync_status_provider.dart';
 
 class _StubRunner implements ConvergeVerifyRunner {
-  _StubRunner(this._outcome, {this.comparisons = const []});
+  _StubRunner(
+    this._outcome, {
+    this.comparisons = const [],
+    this.comparisonError,
+  });
 
   final ConvergeVerifyOutcome Function() _outcome;
   final List<RowComparison> comparisons;
+  final Object? comparisonError;
 
   int runs = 0;
   String? lastSyncStateLabel;
@@ -38,6 +45,7 @@ class _StubRunner implements ConvergeVerifyRunner {
   Future<List<RowComparison>> compareRows(
       String table, List<String> ids) async {
     comparedTables.add(table);
+    if (comparisonError case final error?) throw error;
     return comparisons;
   }
 }
@@ -127,9 +135,14 @@ Future<_StubRunner> _pumpAndRun(
   WidgetTester tester,
   ConvergeVerifyOutcome outcome, {
   List<RowComparison> comparisons = const [],
+  Object? comparisonError,
   SyncStatus syncStatus = SyncStatus.synced,
 }) async {
-  final runner = _StubRunner(() => outcome, comparisons: comparisons);
+  final runner = _StubRunner(
+    () => outcome,
+    comparisons: comparisons,
+    comparisonError: comparisonError,
+  );
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
@@ -398,6 +411,155 @@ void main() {
       contains('network down'),
     );
     expect(find.byKey(const Key('converge_verdict')), findsNothing);
+  });
+
+  testWidgets('a failed re-run does not leave the earlier verdict on screen',
+      (tester) async {
+    var runs = 0;
+    final runner = _StubRunner(() {
+      runs++;
+      if (runs > 1) throw StateError('store went away');
+      return _outcome(
+        verdict: ConvergeVerdict.converged,
+        server: _serverReport(),
+      );
+    });
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          convergeVerifyRunnerProvider.overrideWithValue(runner),
+          syncStatusProvider
+              .overrideWith((ref) => Stream.value(SyncStatus.synced)),
+        ],
+        child: const MaterialApp(home: ConvergeVerifyScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('converge_run_button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('converge_verdict')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('converge_run_button')));
+    await tester.pumpAndSettle();
+
+    // A stale "Converged" next to the error is the confusion this tool exists to
+    // avoid: nothing about the previous run survives a failed one.
+    expect(find.byKey(const Key('converge_verdict')), findsNothing);
+    expect(find.byKey(const Key('converge_read_only_proof')), findsNothing);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('converge_error'))).data,
+      contains('store went away'),
+    );
+  });
+
+  testWidgets('a re-subscribed sync status is recorded, not read as unknown',
+      (tester) async {
+    // `syncStatusProvider` watches `currentUserIdProvider`, so its stream is
+    // rebuilt whenever that changes. Riverpod then holds `AsyncLoading` carrying
+    // the last real status until the new stream emits — the state `asData` cannot
+    // see. Recording that as "unknown" would misreport the run's premise.
+    // A fresh identity per build, so invalidating it really does notify.
+    final dependency = Provider<Object>((ref) => Object());
+    final status = StreamController<SyncStatus>.broadcast();
+    addTearDown(status.close);
+    final runner = _StubRunner(
+      () => _outcome(verdict: ConvergeVerdict.converged),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          convergeVerifyRunnerProvider.overrideWithValue(runner),
+          syncStatusProvider.overrideWith((ref) {
+            ref.watch(dependency);
+            return status.stream;
+          }),
+        ],
+        child: const MaterialApp(home: ConvergeVerifyScreen()),
+      ),
+    );
+    status.add(SyncStatus.synced);
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byKey(const Key('converge_run_button'))),
+    );
+    container.invalidate(dependency);
+    await tester.pumpAndSettle();
+    expect(container.read(syncStatusProvider).asData, isNull,
+        reason: 'the rebuilt provider must be in the retained-value state');
+
+    await tester.tap(find.byKey(const Key('converge_run_button')));
+    await tester.pumpAndSettle();
+
+    expect(runner.lastSyncStateLabel, 'synced');
+  });
+
+  testWidgets('a failed column comparison is reported, not a silent no-op',
+      (tester) async {
+    await _pumpAndRun(
+      tester,
+      _outcome(
+        verdict: ConvergeVerdict.diverged,
+        server: _serverReport(),
+        tables: [
+          _diff('tags', localCount: 1, serverCount: 1, mismatched: ['tag-1']),
+        ],
+      ),
+      comparisonError: StateError('local store unreadable'),
+    );
+
+    await _tapScrolled(tester, const Key('converge_table_tags'));
+    await _tapScrolled(tester, const Key('converge_compare_tags'));
+
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('converge_comparison_error_tags')))
+          .data,
+      contains('local store unreadable'),
+    );
+  });
+
+  testWidgets('an unavailable server detail is not blamed on the normaliser',
+      (tester) async {
+    await _pumpAndRun(
+      tester,
+      _outcome(
+        verdict: ConvergeVerdict.diverged,
+        server: _serverReport(),
+        tables: [
+          _diff('tags', localCount: 1, serverCount: 1, mismatched: ['tag-1']),
+        ],
+      ),
+      comparisons: [
+        RowComparison(
+          id: 'tag-1',
+          localCanonical: canonicalRow('tags', const {
+            'color': null,
+            'id': 'tag-1',
+            'name': '@work',
+            'type': 'context',
+          }).canonical,
+          serverCanonical: null,
+          serverDetailUnavailable: true,
+        ),
+      ],
+    );
+
+    await _tapScrolled(tester, const Key('converge_table_tags'));
+    await _tapScrolled(tester, const Key('converge_compare_tags'));
+
+    // "The mismatch is in this tool" is a positive claim about the data, and a
+    // detail request that never answered cannot support it.
+    expect(
+      tester
+          .widget<Text>(
+              find.byKey(const Key('converge_comparison_note_tags_tag-1')))
+          .data,
+      allOf(
+        contains('Server row detail unavailable'),
+        isNot(contains('in this tool')),
+      ),
+    );
   });
 }
 

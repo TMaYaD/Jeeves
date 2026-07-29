@@ -350,7 +350,11 @@ def _encode_column(kind: str, value: object) -> tuple[str, str | None]:
             return encode_canonical_text(instant), None
         return _sentinel(UNPARSEABLE_TIMESTAMP, value), UNPARSEABLE_TIMESTAMP
 
-    raise AssertionError(f"unknown column kind {kind!r} in the converge-verify manifest")
+    # Unreachable while the manifest and the kind constants agree, and the vector
+    # suite asserts they do.  Degrade rather than raise, on principle and for
+    # parity with the Dart twin's `default` case: a raise here would 500 the whole
+    # report, which is the one failure mode this module is built to avoid.
+    return _sentinel(INVALID_TEXT, value), INVALID_TEXT
 
 
 _MISSING = object()

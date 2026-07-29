@@ -27,6 +27,7 @@ from app.converge_verify.canonical import (
     CANONICAL_ROW_MANIFEST,
     EXCLUDED_COLUMNS_BY_TABLE,
     EXCLUDED_COLUMNS_EVERY_TABLE,
+    _encode_column,
     canonical_row,
     encode_canonical_text,
     excluded_columns_report,
@@ -102,6 +103,18 @@ def test_every_manifest_kind_is_declared() -> None:
     for table, columns in CANONICAL_ROW_MANIFEST.items():
         for column, kind in columns:
             assert kind in declared, f"{table}.{column}"
+
+
+def test_an_undeclared_kind_degrades_instead_of_raising() -> None:
+    """Unreachable while the tests above pass, and still not allowed to raise.
+
+    The Dart twin's `default` case degrades to the same sentinel; a raise here
+    would 500 the whole report, which is the failure mode the module forbids.
+    """
+    assert _encode_column("no_such_kind", "x") == (
+        '{"invalid_text":"x"}',
+        "invalid_text",
+    )
 
 
 # --- timestamp parsing rules ------------------------------------------------

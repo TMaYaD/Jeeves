@@ -24,7 +24,10 @@ from app.todos.models import (
     Action,
     Capture,
     CaptureOutcome,
+    CaptureTag,
     FocusSession,
+    FocusSessionDisposition,
+    FocusSessionTask,
     Tag,
     TimeLog,
     Todo,
@@ -263,6 +266,26 @@ async def test_report_covers_a_row_in_every_table(client: AsyncClient, db: Async
             user_id=user_id,
         )
     )
+    db.add(CaptureTag(id="ct-1", capture_id="cap-1", tag_id="tag-1", user_id=user_id))
+    db.add(
+        FocusSessionTask(
+            id="fst-1",
+            focus_session_id="fs-1",
+            task_id="todo-0",
+            position=0,
+            disposition="rollover",
+            user_id=user_id,
+        )
+    )
+    db.add(
+        FocusSessionDisposition(
+            id="fsd-1",
+            focus_session_id="fs-1",
+            task_id="todo-0",
+            disposition="maybe",
+            user_id=user_id,
+        )
+    )
     await db.commit()
 
     body = (
@@ -276,9 +299,12 @@ async def test_report_covers_a_row_in_every_table(client: AsyncClient, db: Async
         "actions",
         "focus_sessions",
         "time_logs",
+        "focus_session_tasks",
+        "focus_session_dispositions",
         "user_preferences",
         "captures",
         "capture_outcomes",
+        "capture_tags",
     }
     for name in populated:
         table = body["tables"][name]
@@ -299,7 +325,7 @@ async def test_rows_returns_canonical_strings_for_named_ids(
 
     body = (
         await client.get(
-            "/converge-verify/rows?table=todos&ids=todo-0,nope",
+            "/converge-verify/rows?table=todos&ids=todo-0&ids=nope",
             headers={"Authorization": f"Bearer {token}"},
         )
     ).json()
@@ -341,20 +367,44 @@ async def test_rows_rejects_an_unknown_table(client: AsyncClient) -> None:
 async def test_rows_refuses_more_ids_than_the_cap(client: AsyncClient) -> None:
     """A refusal, not a silent truncation — a truncated answer reads as convergence."""
     token = await register(client, "cap@example.com")
-    ids = ",".join(f"id-{index}" for index in range(MAX_ROW_DETAIL_IDS + 1))
+    ids = "&".join(f"ids=id-{index}" for index in range(MAX_ROW_DETAIL_IDS + 1))
     response = await client.get(
-        f"/converge-verify/rows?table=todos&ids={ids}",
+        f"/converge-verify/rows?table=todos&{ids}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 400
 
-    at_cap = ",".join(f"id-{index}" for index in range(MAX_ROW_DETAIL_IDS))
+    at_cap = "&".join(f"ids=id-{index}" for index in range(MAX_ROW_DETAIL_IDS))
     assert (
         await client.get(
-            f"/converge-verify/rows?table=todos&ids={at_cap}",
+            f"/converge-verify/rows?table=todos&{at_cap}",
             headers={"Authorization": f"Bearer {token}"},
         )
     ).status_code == 200
+
+
+async def test_rows_takes_each_id_verbatim(client: AsyncClient, db: AsyncSession) -> None:
+    """An id is opaque data, so the detail route must not re-interpret it.
+
+    A comma, a space or an ``&`` inside an id used to split or truncate the
+    request, and a row the server does have then read as "only on this device" —
+    a wrong conclusion about the data, which is the one thing this tool must not
+    reach.
+    """
+    token = await register(client, "verbatim@example.com")
+    user_id = await _user_id(db, "verbatim@example.com")
+    odd_id = " a,b&c d "
+    await _seed_todo(db, user_id=user_id, todo_id=odd_id, title="Odd")
+
+    body = (
+        await client.get(
+            "/converge-verify/rows",
+            params={"table": "todos", "ids": [odd_id]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    ).json()
+    assert list(body["rows"]) == [odd_id]
+    assert body["missing_ids"] == []
 
 
 async def test_rows_with_no_ids_is_an_empty_answer(client: AsyncClient) -> None:
