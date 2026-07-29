@@ -1085,13 +1085,34 @@ class SyncClient {
     );
   }
 
-  /// Re-admit quarantined successors, one head + 1 lookup at a time, to fixpoint.
+  /// Re-admit quarantined successors, all claimants at head + 1 at a time, to
+  /// fixpoint.
   ///
   /// Reorder heals; drop and fork do not, and that is what makes the three end in
   /// distinct surfaced states. Arrival order 3, 2, 1 converges in a single sync
-  /// because every accepted op re-asks the same question — *is the op at head + 1
-  /// in quarantine?* — and a hostile 500-op reorder is 500 iterations of one flat
-  /// loop rather than 500 recursive frames.
+  /// because every accepted op re-asks the same question — *which quarantined
+  /// envelopes claim head + 1, and does one of them chain to the head?* — and a
+  /// hostile 500-op reorder is 500 iterations of one flat loop rather than 500
+  /// recursive frames.
+  ///
+  /// Several envelopes can claim one position, so the winner is chosen by
+  /// **verification and not by arrival order**: the quarantine row id records who
+  /// the server served first, and the server is the party under suspicion. A
+  /// forged alternate quarantined before the genuine op arrives must not outrank
+  /// it by winning a race it controls, and the head's envelope hash is the only
+  /// tiebreak the attacker cannot forge. Every claimant that refuses is accused
+  /// and stays refused; exactly one verifying claimant is released.
+  ///
+  /// Two byte-different claimants that both verify cannot happen without the
+  /// author signing two continuations of its own chain — a gap row exists only
+  /// after `verifyEnvelope` passed, so both bear the author's own signature. The
+  /// lowest row id wins deterministically and every further verifying claimant is
+  /// accused as `author_chain_fork` here, in the pass that saw it. Leaving it to
+  /// the head passing the contested position and the server re-serving the loser
+  /// as `author_chain_rewrite` would rest a real fork on a re-serve the server
+  /// chooses whether to make: the evidence is already local, so the accusation is
+  /// raised from it. Byte-identical claimants are one op quarantined under two
+  /// transport seqs and accuse nobody.
   ///
   /// A genuine drop leaves `author_chain_gap` standing forever, which is correct:
   /// withholding is detectable, not preventable.
@@ -1103,28 +1124,55 @@ class SyncClient {
     try {
       while (true) {
         final head = await _chainHead(authorMemberId);
-        final candidate = await _quarantinedGapAt(
+        final claimants = await _quarantinedGapClaimantsAt(
           authorMemberId,
           (head?.authorSeq ?? 0) + 1,
         );
-        if (candidate == null) break;
-        final seq = candidate.seq;
-        if (seq == null) break;
+        if (claimants.isEmpty) break;
 
-        final OpHeader header;
-        try {
-          header = OpHeader.parse(splitEnvelope(candidate.envelope).header);
-        } on SyncRejection {
-          // A gap refusal implies a header that parsed, so this is unreachable;
-          // stopping is still the only safe answer if it ever is not.
-          break;
-        }
-        final verdict = await _chainVerdictFor(header, candidate.envelope);
-        if (verdict.isRefusal) {
-          // The missing predecessor arrived and this successor provably does not
+        QuarantineRow? winner;
+        for (final claimant in claimants) {
+          // No transport seq to re-receive under, so there is nothing to release
+          // even if it would verify.
+          if (claimant.seq == null) continue;
+          final OpHeader header;
+          try {
+            header = OpHeader.parse(splitEnvelope(claimant.envelope).header);
+          } on SyncRejection {
+            // A gap refusal implies a header that parsed, so this is unreachable;
+            // skipping the claimant is still the only safe answer if it ever is not.
+            continue;
+          }
+          final verdict = await _chainVerdictFor(header, claimant.envelope);
+          if (!verdict.isRefusal) {
+            if (winner == null) {
+              // First verifying claimant in row-id order; the rest of the loop is
+              // still walked so every other claimant gets its accusation.
+              winner = claimant;
+            } else if (!sameBytes(winner.envelope, claimant.envelope)) {
+              // A second set of bytes chaining to the same head, under the same
+              // author signature the gap row already proved: the author forked its
+              // own chain. Only one of them can be released, so the other is
+              // accused now rather than silently dropped — the loop will never look
+              // at this position again once the head moves past it.
+              await _raiseAlarm(
+                IntegrityAlarmKind.authorChainFork,
+                authorMemberId: authorMemberId,
+                detail: 'author_seq ${header.authorSeq} has a second claimant '
+                    'that also chains to the head: the author signed two '
+                    'continuations of its own chain and only one was released',
+                quarantineOpRowId: claimant.id,
+              );
+            }
+            continue;
+          }
+          // The missing predecessor arrived and this claimant provably does not
           // chain to it: two incompatible continuations claim one position. It
           // stays quarantined — the predecessor is here, and it is not the one
-          // this op was chained to.
+          // this op was chained to. The alarm upserts by `(workspace, kind,
+          // author)` and keeps the first `quarantine_op_row_id` it saw, so N
+          // refusing claimants raise one row whose occurrence count grows; the
+          // row id names the first claimant accused, never the whole set.
           await _raiseAlarm(
             verdict.rejection!.reason == SyncRejectionReason.prevAuthorHashMismatch
                 ? IntegrityAlarmKind.authorChainFork
@@ -1132,17 +1180,23 @@ class SyncClient {
             authorMemberId: authorMemberId,
             detail: 'author_seq ${header.authorSeq} did not become chain-valid '
                 'when its predecessor arrived: ${verdict.rejection!.message}',
-            quarantineOpRowId: candidate.id,
+            quarantineOpRowId: claimant.id,
           );
-          break;
         }
+        // Nothing at head + 1 chains to the head: a lone refusing claimant ends
+        // the scan exactly as it always did.
+        if (winner == null) break;
         // Released *before* re-entry: the loop is driven by the unreleased rows,
         // and a re-entry that refuses for some later reason must not leave this
-        // candidate to be picked up forever.
-        await _markReleased(candidate.id);
+        // claimant to be picked up forever. Losers keep no `released_at` and are
+        // re-alarmed at most once per iteration — if the winner's re-receive
+        // refuses, the head does not advance and the next iteration sees them
+        // again — and the loop still terminates because the unreleased set at the
+        // contested position strictly shrinks on every pass.
+        await _markReleased(winner.id);
         releasedAny = true;
         affected.addAll(
-          await _receive(PulledOp(seq: seq, envelope: candidate.envelope)),
+          await _receive(PulledOp(seq: winner.seq!, envelope: winner.envelope)),
         );
       }
       if (releasedAny) {
@@ -1165,20 +1219,25 @@ class SyncClient {
     return affected;
   }
 
-  /// The one row that could now be chain-valid — a point lookup, not a walk.
-  Future<QuarantineRow?> _quarantinedGapAt(String authorMemberId, int authorSeq) async {
-    final rows = await (_db.select(_db.quarantinedOps)
-          ..where((row) =>
-              row.workspaceId.equals(workspaceId) &
-              row.authorMemberId.equals(authorMemberId) &
-              row.authorSeq.equals(authorSeq) &
-              row.releasedAt.isNull() &
-              row.reason.equals(SyncRejectionReason.authorChainGap.code))
-          ..orderBy([(row) => OrderingTerm(expression: row.id)])
-          ..limit(1))
-        .get();
-    return rows.isEmpty ? null : rows.first;
-  }
+  /// Every row that could now be chain-valid at one position — still a point
+  /// lookup by `(author, head + 1)`, never a table walk.
+  ///
+  /// It returns a list because several envelopes can claim one `author_seq`: a
+  /// forged alternate and the genuine op both quarantine as gap rows there, and
+  /// which of them arrived first is the server's choice rather than evidence.
+  Future<List<QuarantineRow>> _quarantinedGapClaimantsAt(
+    String authorMemberId,
+    int authorSeq,
+  ) =>
+      (_db.select(_db.quarantinedOps)
+            ..where((row) =>
+                row.workspaceId.equals(workspaceId) &
+                row.authorMemberId.equals(authorMemberId) &
+                row.authorSeq.equals(authorSeq) &
+                row.releasedAt.isNull() &
+                row.reason.equals(SyncRejectionReason.authorChainGap.code))
+            ..orderBy([(row) => OrderingTerm(expression: row.id)]))
+          .get();
 
   Future<bool> _hasUnreleasedGap(String authorMemberId) async {
     final rows = await (_db.select(_db.quarantinedOps)

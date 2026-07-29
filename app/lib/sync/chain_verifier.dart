@@ -46,12 +46,14 @@ enum IntegrityAlarmKind {
   authorChainRewrite('author_chain_rewrite'),
 
   /// Gap successors became chain-valid as their predecessors arrived. Raised
-  /// only once no unreleased gap row is left for the author — while one stands,
-  /// the gap alarm stands with it.
+  /// whenever the release scan re-admitted anything at all; the *gap* alarm is
+  /// resolved only once no unreleased gap row is left for the author, so while
+  /// one stands the gap alarm stands beside this one.
   authorStreamReordered('author_stream_reordered'),
 
-  /// The missing predecessor arrived and the successor does not chain to it:
-  /// two incompatible continuations claim the same position.
+  /// Two incompatible continuations claim the same position. Either the missing
+  /// predecessor arrived and a successor does not chain to it, or several
+  /// byte-different successors all chain to it and only one could be released.
   authorChainFork('author_chain_fork'),
 
   /// A pull returned an op at or below the cursor we asked past. `since` is a
