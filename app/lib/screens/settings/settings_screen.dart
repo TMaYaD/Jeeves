@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import '../../cutover/converge_verify/converge_verify_screen.dart';
 // Cutover tooling (#553 Phase 2) — removed by #556.
 import '../../cutover/enrolment_ceremony/enrolment_ceremony_screen.dart';
+// Cutover tooling (#553 Phase 2) — removed by #556.
+import '../../cutover/reseed/reseed_screen.dart';
 import '../../models/clarify_mode.dart';
 import '../../models/focus_session_planning_settings.dart';
 import '../../providers/auth_provider.dart';
@@ -155,6 +157,21 @@ class SettingsScreen extends ConsumerWidget {
               style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
             ),
             onTap: () => context.push(EnrolmentCeremonyScreen.routePath),
+          ),
+          ListTile(
+            key: const Key('reseed_tile'),
+            leading: const Icon(Icons.upload_file, color: Color(0xFF9CA3AF)),
+            title: const Text(
+              'Reseed',
+              style: TextStyle(
+                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: const Text(
+              'Author this store onto the op-log spine, then prove the spine '
+              'reduces back to it. Safe to run again.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => context.push(ReseedScreen.routePath),
           ),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
