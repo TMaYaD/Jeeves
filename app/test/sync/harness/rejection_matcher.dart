@@ -10,10 +10,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart';
 
 /// Matches a thrown [SyncRejection], optionally pinned to one [reason].
+///
+/// Uses `isA<SyncRejection>().having(...)` rather than a bare `predicate`, so a
+/// wrong-reason mismatch reports the actual [SyncRejectionReason] it saw
+/// instead of collapsing to an opaque "does not match" line.
 Matcher throwsRejection([SyncRejectionReason? reason]) => throwsA(
-      predicate<Object>(
-        (error) =>
-            error is SyncRejection && (reason == null || error.reason == reason),
-        'a SyncRejection${reason == null ? '' : ' (${reason.code})'}',
-      ),
+      reason == null
+          ? isA<SyncRejection>()
+          : isA<SyncRejection>().having(
+              (error) => error.reason,
+              'reason',
+              reason,
+            ),
     );
