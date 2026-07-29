@@ -56,6 +56,13 @@ class _EnrolmentCeremonyScreenState
   Object? _error;
   EnrolmentCeremonyFailure? _failure;
 
+  /// Whether an attempt in this session hit an escrow that already exists.
+  ///
+  /// Sticky, unlike [_failure]: the escrow conflict is what reveals the resume
+  /// route on a device the store still reads as un-enrolled, and the next failure
+  /// — a mistyped passphrase, most likely — must not take that route away again.
+  bool _escrowConflictSeen = false;
+
   final TextEditingController _resumeController = TextEditingController();
 
   @override
@@ -137,15 +144,22 @@ class _EnrolmentCeremonyScreenState
       _running = false;
       _error = failure;
       _failure = failure == null ? null : classifyEnrolmentCeremonyFailure(failure);
+      if (_failure == EnrolmentCeremonyFailure.escrowAlreadyExists) {
+        _escrowConflictSeen = true;
+      }
       if (failure == null) {
         // Shown exactly once: the phrase leaves the widget tree the moment the
         // ceremony it protected succeeded.
         _passphrase = null;
         _writtenDown = false;
+        _escrowConflictSeen = false;
         _resumeController.clear();
-      } else if (_passphrase != null) {
+      } else if (_passphrase != null && _resumeController.text.isEmpty) {
         // Pre-wire the resume field with the phrase this session generated, so a
-        // failure after the escrow landed is one tap from recovery.
+        // failure after the escrow landed is one tap from recovery. Only into an
+        // empty field: every failed attempt comes through here, and overwriting
+        // would throw away a correction — or another device's phrase — the user
+        // typed before the attempt that just failed.
         _resumeController.text = _passphrase!;
       }
     });
@@ -329,8 +343,7 @@ class _EnrolmentCeremonyScreenState
         // half-founded, and the phrase above is what finishes it. Offered here
         // rather than only after a reload, because the reload is exactly when the
         // phrase would be gone.
-        if (_failure == EnrolmentCeremonyFailure.escrowAlreadyExists)
-          ..._resumeControls(),
+        if (_escrowConflictSeen) ..._resumeControls(),
       ],
     ];
   }

@@ -94,13 +94,21 @@ void main() {
   });
 
   group('failure classification', () {
-    test('no response is the un-enrolled failure', () {
+    test('no response is its own category, not a conflict', () {
       expect(
         classifyEnrolmentCeremonyFailure(
           const SyncTransportException.unreachable('no route to host'),
         ),
         EnrolmentCeremonyFailure.serverUnreachable,
       );
+      // It is a statement about the request, not about what committed, so the
+      // copy must not tell the user the passphrase protected nothing.
+      final message = enrolmentCeremonyFailureMessage(
+        EnrolmentCeremonyFailure.serverUnreachable,
+        const SyncTransportException.unreachable('no route to host'),
+      );
+      expect(message, contains('Keep this passphrase'));
+      expect(message, isNot(contains('nothing was founded')));
     });
 
     test('both escrow-PUT refusals mean the account is already founded', () {
@@ -177,7 +185,21 @@ void main() {
         enrolmentCeremonyFailureMessage(EnrolmentCeremonyFailure.unknown, error),
         contains('the store went away'),
       );
-      // Every 409 is not an escrow conflict, and a generic 500 is not either.
+      // The structured code is the contract, not the status: a 409 carrying no
+      // `escrow_version_regression` is somebody else's conflict, and a
+      // classifier that fell back to the status code would call it an escrow one.
+      expect(
+        classifyEnrolmentCeremonyFailure(
+          const SyncTransportException(409, 'conflict'),
+        ),
+        EnrolmentCeremonyFailure.unknown,
+      );
+      expect(
+        classifyEnrolmentCeremonyFailure(
+          const SyncTransportException(403, 'forbidden'),
+        ),
+        EnrolmentCeremonyFailure.unknown,
+      );
       expect(
         classifyEnrolmentCeremonyFailure(
           const SyncTransportException(500, 'boom'),

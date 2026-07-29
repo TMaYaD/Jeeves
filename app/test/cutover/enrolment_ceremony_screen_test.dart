@@ -110,7 +110,10 @@ List<bool> _recordSecureScreenCalls(WidgetTester tester) {
   return calls;
 }
 
-Future<_StubRunner> _pump(WidgetTester tester, _StubRunner runner) async {
+Future<R> _pump<R extends EnrolmentCeremonyRunner>(
+  WidgetTester tester,
+  R runner,
+) async {
   // A viewport tall enough for the whole page. A `ListView` only inflates the
   // children near the visible window, so on the default 800px-high test surface
   // the confirmation checkbox and the founding button are *absent* from the tree
@@ -284,7 +287,8 @@ void main() {
     expect(find.byKey(const Key('enrolment_state_enrolled')), findsOneWidget);
   });
 
-  testWidgets('an unreachable server says nothing was founded', (tester) async {
+  testWidgets('an unreachable server never tells the user to drop the phrase',
+      (tester) async {
     await _pump(
       tester,
       _StubRunner(
@@ -297,12 +301,22 @@ void main() {
     await _tapScrolled(tester, const Key('enrolment_written_down_checkbox'));
     await _tapScrolled(tester, const Key('enrolment_found_button'));
 
-    expect(
-      tester.widget<Text>(find.byKey(const Key('enrolment_error'))).data,
-      allOf(contains('unreachable'), contains('nothing was founded')),
-    );
+    // "Unreachable" describes the request that failed, not the ceremony: the
+    // escrow PUT is step 2 of 7, and a lost response to it is indistinguishable
+    // here from one that never arrived. Telling the user nothing was written
+    // would invite them to discard the one phrase that can finish the account.
+    final error =
+        tester.widget<Text>(find.byKey(const Key('enrolment_error'))).data!;
+    expect(error, allOf(contains('unreachable'), contains('Keep this passphrase')));
+    expect(error, isNot(contains('nothing was founded')));
     expect(find.byKey(const Key('enrolment_state_not_enrolled')), findsOneWidget);
-    // Still un-enrolled, so founding stays on offer — with a fresh phrase.
+    // The phrase stays on screen for the retry rather than being regenerated,
+    // and the retry — not a resume field the store has no evidence for — is the
+    // route offered: it is the retry's own 403 that reveals a landed escrow.
+    expect(
+      tester.widget<SelectableText>(find.byKey(const Key('enrolment_passphrase'))).data,
+      _generated,
+    );
     expect(find.byKey(const Key('enrolment_resume_field')), findsNothing);
   });
 
@@ -338,6 +352,48 @@ void main() {
     );
     await _tapScrolled(tester, const Key('enrolment_resume_button'));
     expect(runner.resumedWith, [_generated]);
+  });
+
+  testWidgets('a correction typed into the resume field survives a failure',
+      (tester) async {
+    final runner = await _pump(
+      tester,
+      _StubRunner(
+        [_status(EnrolmentState.notEnrolled)],
+        foundFailure: const SyncTransportException(
+          403,
+          'escrow signature does not verify',
+          code: badEscrowSignatureCode,
+        ),
+        resumeFailure: const RecoveryEscrowException(
+          RecoveryEscrowFailure.wrongPassphrase,
+          'did not authenticate',
+        ),
+      ),
+    );
+
+    await _tapScrolled(tester, const Key('enrolment_generate_button'));
+    await _tapScrolled(tester, const Key('enrolment_written_down_checkbox'));
+    await _tapScrolled(tester, const Key('enrolment_found_button'));
+
+    // The phrase that actually claimed the escrow is the other device's, so the
+    // pre-wired one is wrong and the user retypes. Re-wiring on the *next*
+    // failure would silently hand back the phrase they just rejected, and they
+    // would have to transcribe it off paper again.
+    const String other = 'anvil ribbon staple battery horse correct';
+    await tester.enterText(find.byKey(const Key('enrolment_resume_field')), other);
+    await _tapScrolled(tester, const Key('enrolment_resume_button'));
+
+    // Still offered, and still holding what they typed: the escrow conflict is
+    // what revealed this route, and a mistyped phrase must not withdraw it.
+    expect(runner.resumedWith, [other]);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('enrolment_resume_field')))
+          .controller!
+          .text,
+      other,
+    );
   });
 
   testWidgets('a wrong passphrase on resume is a prompt, not an alarm',
@@ -392,16 +448,10 @@ void main() {
 
   testWidgets('a state that could not be read is reported, not blank',
       (tester) async {
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          enrolmentCeremonyRunnerProvider
-              .overrideWithValue(_ThrowingRunner('sign in first')),
-        ],
-        child: const MaterialApp(home: EnrolmentCeremonyScreen()),
-      ),
-    );
-    await tester.pumpAndSettle();
+    // Through `_pump` for its tall viewport: on the default surface the generate
+    // button would be un-inflated rather than absent, and the assertion below
+    // could not tell "no founding is offered" from "not built yet".
+    await _pump(tester, _ThrowingRunner('sign in first'));
 
     expect(
       tester.widget<Text>(find.byKey(const Key('enrolment_status_error'))).data,

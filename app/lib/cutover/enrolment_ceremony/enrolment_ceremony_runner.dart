@@ -139,7 +139,9 @@ class EnrolmentCeremonyRefusal implements Exception {
 
 /// Why an attempt failed, in the only categories the screen acts on.
 enum EnrolmentCeremonyFailure {
-  /// No response at all. Nothing was founded, and nothing was written.
+  /// No response to *this* request. Says nothing about what already committed:
+  /// the escrow PUT is one of seven steps, and a lost response to it is
+  /// indistinguishable from one that never arrived. The passphrase is kept.
   serverUnreachable,
 
   /// The slot already holds an escrow for this account.
@@ -195,9 +197,12 @@ String enrolmentCeremonyFailureMessage(
 ) =>
     switch (failure) {
       EnrolmentCeremonyFailure.serverUnreachable =>
-        'Server unreachable — nothing was founded. Run it again; the '
-            'passphrase above protected nothing and a fresh one will be '
-            'generated.',
+        'Server unreachable — this attempt did not finish, and whether the '
+            'escrow write reached the server is not knowable from here. Keep '
+            'this passphrase: it is the only thing that can finish a ceremony '
+            'that got that far. The state shown was re-read from this device — '
+            'run it again, and enrol with the passphrase if it turns out the '
+            'escrow already exists.',
       EnrolmentCeremonyFailure.escrowAlreadyExists =>
         'An escrow already exists for this account, so this device cannot found '
             'it. If you hold the passphrase, enrol against the existing escrow '
