@@ -184,7 +184,9 @@ async def converge_verify_rows(
     # opaque data out of the legacy store, and a comma inside one would split into
     # two ids the server has no rows for — which the screen would then read as
     # "only on this device".  Values are taken verbatim for the same reason: a
-    # stripped id is a different id.
+    # stripped or dropped id is a different id.  ``None`` (no parameter at all) is
+    # the only "no ids" case; ``?ids=`` names the empty-string id, which both
+    # sides carry as a real id — only NULL becomes ``null_id_row_count``.
     ids: Annotated[list[str] | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -194,7 +196,7 @@ async def converge_verify_rows(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"{table!r} is not a converge-verify table",
         )
-    requested = [piece for piece in (ids or []) if piece]
+    requested = ids or []
     if len(requested) > MAX_ROW_DETAIL_IDS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

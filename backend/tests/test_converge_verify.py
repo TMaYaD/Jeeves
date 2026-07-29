@@ -407,6 +407,34 @@ async def test_rows_takes_each_id_verbatim(client: AsyncClient, db: AsyncSession
     assert body["missing_ids"] == []
 
 
+async def test_rows_carries_the_empty_string_id(client: AsyncClient, db: AsyncSession) -> None:
+    """The empty string is an id, not an absence.
+
+    The report emits it as a key like any other — only a NULL id becomes
+    ``null_id_row_count``, on both sides — so a detail route that filtered it out
+    would report a row the server does have as missing, and the device would read
+    the two answers as a divergence.
+    """
+    token = await register(client, "emptyid@example.com")
+    user_id = await _user_id(db, "emptyid@example.com")
+    await _seed_todo(db, user_id=user_id, todo_id="", title="Blank id")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    report = (await client.get("/converge-verify/report", headers=headers)).json()
+    assert list(report["tables"]["todos"]["rows"]) == [""]
+    assert report["tables"]["todos"]["null_id_row_count"] == 0
+
+    body = (
+        await client.get(
+            "/converge-verify/rows",
+            params={"table": "todos", "ids": [""]},
+            headers=headers,
+        )
+    ).json()
+    assert list(body["rows"]) == [""]
+    assert body["missing_ids"] == []
+
+
 async def test_rows_with_no_ids_is_an_empty_answer(client: AsyncClient) -> None:
     token = await register(client, "empty@example.com")
     body = (
