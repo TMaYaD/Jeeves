@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+// Cutover tooling (#553 Phase 1) — removed by #556.
+import '../../cutover/converge_verify/converge_verify_screen.dart';
 import '../../models/clarify_mode.dart';
 import '../../models/focus_session_planning_settings.dart';
 import '../../providers/auth_provider.dart';
@@ -118,6 +120,25 @@ class SettingsScreen extends ConsumerWidget {
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('EVENING SHUTDOWN'),
           _EveningShutdownSettings(),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+          // Cutover tooling (#553 Phase 1) — removed by #556 along with the
+          // screen and its route.
+          _sectionHeader('CUTOVER TOOLING'),
+          ListTile(
+            key: const Key('converge_verify_tile'),
+            leading: const Icon(Icons.rule, color: Color(0xFF9CA3AF)),
+            title: const Text(
+              'Converge-verify',
+              style: TextStyle(
+                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: const Text(
+              'Compare this device\'s store with the server mirror, table by '
+              'table. Read-only.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => context.push(ConvergeVerifyScreen.routePath),
+          ),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
           Padding(

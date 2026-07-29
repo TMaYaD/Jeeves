@@ -4,6 +4,8 @@ import 'package:flutter/widgets.dart';
 import 'package:go_router/go_router.dart';
 
 import 'auth/auth_mode.dart';
+// Cutover tooling (#553 Phase 1) — removed by #556.
+import 'cutover/converge_verify/converge_verify_screen.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
@@ -85,6 +87,13 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/settings',
       builder: (context, state) => const SettingsScreen(),
+    ),
+    // Cutover tooling (#553 Phase 1) — removed by #556. Reachable in every
+    // flavour on purpose: the store that has to be verified lives on the
+    // production-flavour phone, and the screen only reads.
+    GoRoute(
+      path: ConvergeVerifyScreen.routePath,
+      builder: (context, state) => const ConvergeVerifyScreen(),
     ),
     ShellRoute(
       builder: (context, state, child) => AppShell(child: child),

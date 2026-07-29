@@ -1,0 +1,1018 @@
+{
+  "$comment": "Cutover tooling for #553 Phase 1 (issue #582) — the converge-verify check between the phone's legacy PowerSync-side local store and the legacy mirrored Postgres tables. Removed by #556 along with the two implementations it pins. See spec/converge_verify/README.md; these vectors are FROZEN and hand-authored — never regenerate one to make a test pass.",
+  "spec_version": 1,
+  "column_kinds": [
+    "verbatim_text",
+    "integer",
+    "boolean_as_int",
+    "timestamp_utc_ms"
+  ],
+  "excluded_columns": {
+    "*": [
+      "user_id"
+    ],
+    "todos": [
+      "time_spent_minutes"
+    ]
+  },
+  "canonical_encoding": {
+    "shape": "A JSON array of the manifest's columns, in manifest order, encoded with the explicit rules below rather than a stdlib JSON writer — the two languages' writers disagree on control-character escaping, and a digest may not depend on which side computed it.",
+    "rules": [
+      "No whitespace anywhere between tokens: elements are joined with ','.",
+      "SQL NULL emits the literal null.",
+      "An integer emits its shortest decimal form, '-' prefixed when negative.",
+      "A string emits a double-quoted JSON string.",
+      "Inside a string, escape exactly: '\"' as \\\", '\\' as \\\\, U+0008 as \\b, U+0009 as \\t, U+000A as \\n, U+000C as \\f, U+000D as \\r, and any other code point below U+0020 as \\u00 followed by two LOWERCASE hex digits. Every other code point is emitted literally as UTF-8 — no \\u escaping of non-ASCII, and U+007F is not escaped.",
+      "A value the manifest's kind refuses emits a single-key object sentinel and records a per-row anomaly: {\"unparseable_timestamp\":\"<raw as text>\"}, {\"invalid_boolean\":\"<raw as text>\"}, {\"invalid_integer\":\"<raw as text>\"}, {\"invalid_text\":\"<raw as text>\"}, or {\"missing_column\":true}. A refusal is never an exception: the report must survive whatever the store holds.",
+      "row_digest is the lowercase hex SHA-256 of the canonical string's UTF-8 bytes."
+    ]
+  },
+  "raw_as_text": [
+    "Every sentinel and every anomaly record renders the refused value through one shared rule, so the two implementations cannot disagree about how a bad value is spelled.",
+    "A string renders as itself.",
+    "A boolean renders as 'true' or 'false' — never Python's 'True'.",
+    "An integer, and a floating-point value with no fractional part, render as a decimal integer.",
+    "SQL NULL renders as 'null'.",
+    "Anything else renders as '<number>' for a remaining numeric value and '<unknown>' otherwise. The exact value is deliberately dropped rather than formatted: shortest-round-trip float formatting is not guaranteed identical across the two languages, and a digest may not depend on which side computed it. The anomaly still names the table, row id and column, which is what a reviewer needs to go and look."
+  ],
+  "column_kind_rules": {
+    "verbatim_text": [
+      "A string emits verbatim — including the empty string, which is distinct from NULL.",
+      "Anything else is refused as invalid_text."
+    ],
+    "integer": [
+      "An integer emits as a JSON number.",
+      "A floating-point value with no fractional part emits as the corresponding integer (SQLite may hold a REAL in an INTEGER column).",
+      "A boolean, a numeric string, or a fractional value is refused as invalid_integer."
+    ],
+    "boolean_as_int": [
+      "0 and false emit 0; 1 and true emit 1.",
+      "Any other value is refused as invalid_boolean — a truthiness rule would hide the divergence it is there to show."
+    ],
+    "timestamp_utc_ms": [
+      "A timestamp-aware value (a Postgres timestamptz row) converts to UTC.",
+      "A naive timestamp value is assumed to be UTC.",
+      "A string is parsed by the tolerant rules in timestamp_parsing below.",
+      "The instant truncates (never rounds) to millisecond precision and emits as YYYY-MM-DDTHH:MM:SS.mmmZ with a four-digit year.",
+      "Anything the rules refuse is refused as unparseable_timestamp."
+    ]
+  },
+  "timestamp_parsing": {
+    "grammar": "^[ \\t]*(\\d{4})-(\\d{2})-(\\d{2})[Tt ](\\d{2}):(\\d{2})(?::(\\d{2})(?:\\.(\\d+))?)?[ \\t]*(Z|z|[+-]\\d{2}(?::?\\d{2})?)?[ \\t]*$",
+    "rules": [
+      "Surrounding spaces and tabs are trimmed. The class is spelled out as [ \\t] rather than \\s on purpose: the two languages' regex engines disagree about which exotic code points \\s covers, and a grammar the two sides read differently is the one thing this file exists to prevent.",
+      "The date/time separator is 'T', 't', or a single space.",
+      "Seconds are optional; a fractional part is any number of digits and is truncated to its first three (never rounded).",
+      "The offset is optional and may be preceded by whitespace — Drift's store_date_time_values_as_text output writes a space before it (docs/SYNC.md). 'Z'/'z' means UTC; otherwise ±HH:MM, ±HHMM or ±HH.",
+      "No offset means UTC. This is an assumption, not an observation: the app writes UTC (time_logs, focus_sessions) and Drift writes an offset, so a zone-less string is a legacy or foreign shape.",
+      "Component ranges are validated explicitly: month 1-12, day valid for that month and year, hour 0-23, minute 0-59, second 0-59 (no leap second), offset hour 0-23, offset minute 0-59.",
+      "The resulting UTC year must be 1-9999 — the intersection of what the two languages' date types can both represent and format.",
+      "These are RULES, not one observed serialisation. The compose stack and the deployed stack run different powersync-service versions, so freezing on a captured wire format would pin the wrong thing."
+    ],
+    "vectors": [
+      {
+        "name": "utc_z_with_millis",
+        "raw": "2026-04-30T00:00:00.000Z",
+        "expected": "2026-04-30T00:00:00.000Z"
+      },
+      {
+        "name": "utc_z_no_fraction",
+        "raw": "2026-04-30T00:00:00Z",
+        "expected": "2026-04-30T00:00:00.000Z"
+      },
+      {
+        "name": "utc_z_no_seconds",
+        "raw": "2026-04-30T00:00Z",
+        "expected": "2026-04-30T00:00:00.000Z"
+      },
+      {
+        "name": "lowercase_t_and_z",
+        "raw": "2026-04-30t00:00:00.000z",
+        "expected": "2026-04-30T00:00:00.000Z"
+      },
+      {
+        "name": "drift_space_before_offset",
+        "raw": "2026-04-30T00:00:00.000 +05:30",
+        "expected": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "name": "offset_no_space",
+        "raw": "2026-04-30T00:00:00.000+05:30",
+        "expected": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "name": "space_separator",
+        "raw": "2026-04-30 00:00:00.000+05:30",
+        "expected": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "name": "basic_offset_no_colon",
+        "raw": "2026-04-30T00:00:00+0530",
+        "expected": "2026-04-29T18:30:00.000Z"
+      },
+      {
+        "name": "hour_only_offset",
+        "raw": "2026-04-30T00:00:00+05",
+        "expected": "2026-04-29T19:00:00.000Z"
+      },
+      {
+        "name": "negative_offset",
+        "raw": "2026-04-30T00:00:00-05:00",
+        "expected": "2026-04-30T05:00:00.000Z"
+      },
+      {
+        "name": "microseconds_truncated_not_rounded",
+        "raw": "2026-04-30T05:30:00.123999+00:00",
+        "expected": "2026-04-30T05:30:00.123Z"
+      },
+      {
+        "name": "microseconds_exact",
+        "raw": "2026-04-30T05:30:00.123456+00:00",
+        "expected": "2026-04-30T05:30:00.123Z"
+      },
+      {
+        "name": "one_fraction_digit",
+        "raw": "2026-04-30T05:30:00.1+00:00",
+        "expected": "2026-04-30T05:30:00.100Z"
+      },
+      {
+        "name": "two_fraction_digits",
+        "raw": "2026-04-30T05:30:00.12+00:00",
+        "expected": "2026-04-30T05:30:00.120Z"
+      },
+      {
+        "name": "ten_fraction_digits",
+        "raw": "2026-04-30T05:30:00.1234567890+00:00",
+        "expected": "2026-04-30T05:30:00.123Z"
+      },
+      {
+        "name": "zoneless_assumed_utc",
+        "raw": "2026-04-30T05:30:00",
+        "expected": "2026-04-30T05:30:00.000Z"
+      },
+      {
+        "name": "zoneless_space_separator",
+        "raw": "2026-04-30 05:30:00",
+        "expected": "2026-04-30T05:30:00.000Z"
+      },
+      {
+        "name": "surrounding_whitespace",
+        "raw": "  2026-04-30T00:00:00Z  ",
+        "expected": "2026-04-30T00:00:00.000Z"
+      },
+      {
+        "name": "day_rolls_backward",
+        "raw": "2026-01-01T00:00:00.000+05:30",
+        "expected": "2025-12-31T18:30:00.000Z"
+      },
+      {
+        "name": "day_rolls_forward",
+        "raw": "2026-12-31T23:59:59.999-05:00",
+        "expected": "2027-01-01T04:59:59.999Z"
+      },
+      {
+        "name": "leap_day",
+        "raw": "2024-02-29T12:00:00Z",
+        "expected": "2024-02-29T12:00:00.000Z"
+      },
+      {
+        "name": "year_one_padded",
+        "raw": "0001-01-01T00:00:00Z",
+        "expected": "0001-01-01T00:00:00.000Z"
+      },
+      {
+        "name": "refuses_invalid_day",
+        "raw": "2026-02-30T00:00:00Z",
+        "expected": null
+      },
+      {
+        "name": "refuses_month_thirteen",
+        "raw": "2026-13-01T00:00:00Z",
+        "expected": null
+      },
+      {
+        "name": "refuses_hour_24",
+        "raw": "2026-04-30T24:00:00Z",
+        "expected": null
+      },
+      {
+        "name": "refuses_minute_60",
+        "raw": "2026-04-30T00:60:00Z",
+        "expected": null
+      },
+      {
+        "name": "refuses_leap_second",
+        "raw": "2026-04-30T00:00:60Z",
+        "expected": null
+      },
+      {
+        "name": "refuses_offset_hour_24",
+        "raw": "2026-04-30T00:00:00+24:00",
+        "expected": null
+      },
+      {
+        "name": "refuses_offset_minute_60",
+        "raw": "2026-04-30T00:00:00+05:60",
+        "expected": null
+      },
+      {
+        "name": "refuses_date_only",
+        "raw": "2026-04-30",
+        "expected": null
+      },
+      {
+        "name": "refuses_epoch_millis_text",
+        "raw": "1714435200000",
+        "expected": null
+      },
+      {
+        "name": "refuses_free_text",
+        "raw": "not a timestamp",
+        "expected": null
+      },
+      {
+        "name": "refuses_empty_string",
+        "raw": "",
+        "expected": null
+      },
+      {
+        "name": "refuses_year_underflow",
+        "raw": "0001-01-01T00:00:00+05:30",
+        "expected": null
+      },
+      {
+        "name": "refuses_year_overflow",
+        "raw": "9999-12-31T23:59:59.999-05:00",
+        "expected": null
+      }
+    ]
+  },
+  "manifest": {
+    "todos": [
+      [
+        "capture_source",
+        "verbatim_text"
+      ],
+      [
+        "clarified",
+        "boolean_as_int"
+      ],
+      [
+        "created_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "done_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "due_date",
+        "timestamp_utc_ms"
+      ],
+      [
+        "energy_level",
+        "verbatim_text"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "intent",
+        "verbatim_text"
+      ],
+      [
+        "last_clarified_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "last_next_action_completion_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "location_id",
+        "verbatim_text"
+      ],
+      [
+        "notes",
+        "verbatim_text"
+      ],
+      [
+        "priority",
+        "integer"
+      ],
+      [
+        "time_estimate",
+        "integer"
+      ],
+      [
+        "title",
+        "verbatim_text"
+      ],
+      [
+        "updated_at",
+        "timestamp_utc_ms"
+      ]
+    ],
+    "tags": [
+      [
+        "color",
+        "verbatim_text"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "name",
+        "verbatim_text"
+      ],
+      [
+        "type",
+        "verbatim_text"
+      ]
+    ],
+    "todo_tags": [
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "tag_id",
+        "verbatim_text"
+      ],
+      [
+        "todo_id",
+        "verbatim_text"
+      ]
+    ],
+    "actions": [
+      [
+        "created_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "done_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "energy_level",
+        "verbatim_text"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "outcome_id",
+        "verbatim_text"
+      ],
+      [
+        "position",
+        "integer"
+      ],
+      [
+        "role",
+        "verbatim_text"
+      ],
+      [
+        "text",
+        "verbatim_text"
+      ],
+      [
+        "time_estimate",
+        "integer"
+      ],
+      [
+        "updated_at",
+        "timestamp_utc_ms"
+      ]
+    ],
+    "focus_sessions": [
+      [
+        "current_task_id",
+        "verbatim_text"
+      ],
+      [
+        "ended_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "started_at",
+        "timestamp_utc_ms"
+      ]
+    ],
+    "time_logs": [
+      [
+        "action_id",
+        "verbatim_text"
+      ],
+      [
+        "ended_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "focus_session_id",
+        "verbatim_text"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "started_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "task_id",
+        "verbatim_text"
+      ]
+    ],
+    "focus_session_tasks": [
+      [
+        "disposition",
+        "verbatim_text"
+      ],
+      [
+        "focus_session_id",
+        "verbatim_text"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "position",
+        "integer"
+      ],
+      [
+        "task_id",
+        "verbatim_text"
+      ]
+    ],
+    "focus_session_dispositions": [
+      [
+        "disposition",
+        "verbatim_text"
+      ],
+      [
+        "focus_session_id",
+        "verbatim_text"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "task_id",
+        "verbatim_text"
+      ]
+    ],
+    "user_preferences": [
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "key",
+        "verbatim_text"
+      ],
+      [
+        "updated_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "value",
+        "verbatim_text"
+      ]
+    ],
+    "captures": [
+      [
+        "capture_source",
+        "verbatim_text"
+      ],
+      [
+        "clarified_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "created_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "notes",
+        "verbatim_text"
+      ],
+      [
+        "title",
+        "verbatim_text"
+      ],
+      [
+        "updated_at",
+        "timestamp_utc_ms"
+      ]
+    ],
+    "capture_outcomes": [
+      [
+        "capture_id",
+        "verbatim_text"
+      ],
+      [
+        "created_at",
+        "timestamp_utc_ms"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "outcome_id",
+        "verbatim_text"
+      ]
+    ],
+    "capture_tags": [
+      [
+        "capture_id",
+        "verbatim_text"
+      ],
+      [
+        "id",
+        "verbatim_text"
+      ],
+      [
+        "tag_id",
+        "verbatim_text"
+      ]
+    ]
+  },
+  "row_vectors": [
+    {
+      "name": "todos_local_store_shape",
+      "table": "todos",
+      "raw": {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "title": "Ship the cutover check",
+        "notes": null,
+        "priority": null,
+        "due_date": "2026-04-30T00:00:00.000 +05:30",
+        "created_at": "2026-04-29T09:15:00.000 +05:30",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": 1,
+        "intent": "next",
+        "time_estimate": 25,
+        "energy_level": "medium",
+        "capture_source": "manual",
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": "2026-04-29T09:15:00.000 +05:30",
+        "time_spent_minutes": 0,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[\"manual\",1,\"2026-04-29T03:45:00.000Z\",null,\"2026-04-29T18:30:00.000Z\",\"medium\",\"11111111-1111-4111-8111-111111111111\",\"next\",\"2026-04-29T03:45:00.000Z\",null,null,null,null,25,\"Ship the cutover check\",null]",
+      "digest": "511d6932e1044254790063c8aebf43988d56be420db11b3ac7d61019db5f52f3",
+      "anomalies": [],
+      "logical_row_group": "todos_row_1"
+    },
+    {
+      "name": "todos_postgres_mirror_shape",
+      "table": "todos",
+      "raw": {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "title": "Ship the cutover check",
+        "notes": null,
+        "priority": null,
+        "due_date": "2026-04-29T18:30:00+00:00",
+        "created_at": "2026-04-29T03:45:00.000000+00:00",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": true,
+        "intent": "next",
+        "time_estimate": 25,
+        "energy_level": "medium",
+        "capture_source": "manual",
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": "2026-04-29T03:45:00.000000+00:00",
+        "time_spent_minutes": 999,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[\"manual\",1,\"2026-04-29T03:45:00.000Z\",null,\"2026-04-29T18:30:00.000Z\",\"medium\",\"11111111-1111-4111-8111-111111111111\",\"next\",\"2026-04-29T03:45:00.000Z\",null,null,null,null,25,\"Ship the cutover check\",null]",
+      "digest": "511d6932e1044254790063c8aebf43988d56be420db11b3ac7d61019db5f52f3",
+      "anomalies": [],
+      "logical_row_group": "todos_row_1"
+    },
+    {
+      "name": "todos_null_is_not_empty_string",
+      "table": "todos",
+      "raw": {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "title": "",
+        "notes": "",
+        "priority": 0,
+        "due_date": null,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": 0,
+        "intent": "maybe",
+        "time_estimate": 0,
+        "energy_level": null,
+        "capture_source": null,
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": null,
+        "time_spent_minutes": 0,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[null,0,\"2026-01-01T00:00:00.000Z\",null,null,null,\"22222222-2222-4222-8222-222222222222\",\"maybe\",null,null,null,\"\",0,0,\"\",null]",
+      "digest": "856f20f3a493b14cdbc51043bc436792fda8ce35c2dffe4fd2607b0096c6d770",
+      "anomalies": []
+    },
+    {
+      "name": "todos_text_escaping",
+      "table": "todos",
+      "raw": {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "title": "He said \"hi\"\nline2\tcol\\path \u000b café 🚀",
+        "notes": null,
+        "priority": -1,
+        "due_date": null,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": 1,
+        "intent": "next",
+        "time_estimate": null,
+        "energy_level": null,
+        "capture_source": null,
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": null,
+        "time_spent_minutes": 0,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[null,1,\"2026-01-01T00:00:00.000Z\",null,null,null,\"33333333-3333-4333-8333-333333333333\",\"next\",null,null,null,null,-1,null,\"He said \\\"hi\\\"\\nline2\\tcol\\\\path \\u000b café 🚀\",null]",
+      "digest": "e6d8a492891554d0e301b8f1d2de2d7a267d3e0da1af65b907d687169db2c7a5",
+      "anomalies": []
+    },
+    {
+      "name": "todos_unparseable_timestamp_degrades_to_anomaly",
+      "table": "todos",
+      "raw": {
+        "id": "44444444-4444-4444-8444-444444444444",
+        "title": "Legacy row",
+        "notes": null,
+        "priority": null,
+        "due_date": null,
+        "created_at": "30/04/2026 00:00",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": 1,
+        "intent": "next",
+        "time_estimate": null,
+        "energy_level": null,
+        "capture_source": null,
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": null,
+        "time_spent_minutes": 0,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[null,1,{\"unparseable_timestamp\":\"30/04/2026 00:00\"},null,null,null,\"44444444-4444-4444-8444-444444444444\",\"next\",null,null,null,null,null,null,\"Legacy row\",null]",
+      "digest": "598e0fdb21ea97e073e439f8df23cad326b22a9fff655551d15c03020ce4f47f",
+      "anomalies": [
+        {
+          "column": "created_at",
+          "kind": "unparseable_timestamp",
+          "raw": "30/04/2026 00:00"
+        }
+      ]
+    },
+    {
+      "name": "todos_invalid_boolean_degrades_to_anomaly",
+      "table": "todos",
+      "raw": {
+        "id": "44444444-4444-4444-8444-444444444444",
+        "title": "Legacy row",
+        "notes": null,
+        "priority": null,
+        "due_date": null,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": 2,
+        "intent": "next",
+        "time_estimate": null,
+        "energy_level": null,
+        "capture_source": null,
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": null,
+        "time_spent_minutes": 0,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[null,{\"invalid_boolean\":\"2\"},\"2026-01-01T00:00:00.000Z\",null,null,null,\"44444444-4444-4444-8444-444444444444\",\"next\",null,null,null,null,null,null,\"Legacy row\",null]",
+      "digest": "526afd9552a6c4bc1b317abc8b1787d32817c4721f6d819cb2978583ffaec4f5",
+      "anomalies": [
+        {
+          "column": "clarified",
+          "kind": "invalid_boolean",
+          "raw": "2"
+        }
+      ]
+    },
+    {
+      "name": "todos_invalid_integer_degrades_to_anomaly",
+      "table": "todos",
+      "raw": {
+        "id": "44444444-4444-4444-8444-444444444444",
+        "title": "Legacy row",
+        "notes": null,
+        "priority": "high",
+        "due_date": null,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": 1,
+        "intent": "next",
+        "time_estimate": null,
+        "energy_level": null,
+        "capture_source": null,
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": null,
+        "time_spent_minutes": 0,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[null,1,\"2026-01-01T00:00:00.000Z\",null,null,null,\"44444444-4444-4444-8444-444444444444\",\"next\",null,null,null,null,{\"invalid_integer\":\"high\"},null,\"Legacy row\",null]",
+      "digest": "83df376c82c90b84cdebdba8949e6f46dac688e339de5a1b8302afc39aa43bac",
+      "anomalies": [
+        {
+          "column": "priority",
+          "kind": "invalid_integer",
+          "raw": "high"
+        }
+      ]
+    },
+    {
+      "name": "todos_invalid_text_degrades_to_anomaly",
+      "table": "todos",
+      "raw": {
+        "id": "44444444-4444-4444-8444-444444444444",
+        "title": 7,
+        "notes": null,
+        "priority": null,
+        "due_date": null,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": 1,
+        "intent": "next",
+        "time_estimate": null,
+        "energy_level": null,
+        "capture_source": null,
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": null,
+        "time_spent_minutes": 0,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[null,1,\"2026-01-01T00:00:00.000Z\",null,null,null,\"44444444-4444-4444-8444-444444444444\",\"next\",null,null,null,null,null,null,{\"invalid_text\":\"7\"},null]",
+      "digest": "46f426a2dce7a75b136abefb14f033e5e4e7bb72f9cc676238440a45427b63d2",
+      "anomalies": [
+        {
+          "column": "title",
+          "kind": "invalid_text",
+          "raw": "7"
+        }
+      ]
+    },
+    {
+      "name": "todos_missing_column_degrades_to_anomaly",
+      "table": "todos",
+      "raw": {
+        "id": "44444444-4444-4444-8444-444444444444",
+        "title": "Legacy row",
+        "notes": null,
+        "priority": null,
+        "due_date": null,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": null,
+        "done_at": null,
+        "clarified": 1,
+        "time_estimate": null,
+        "energy_level": null,
+        "capture_source": null,
+        "location_id": null,
+        "user_id": "user-a",
+        "last_clarified_at": null,
+        "time_spent_minutes": 0,
+        "last_next_action_completion_at": null
+      },
+      "canonical": "[null,1,\"2026-01-01T00:00:00.000Z\",null,null,null,\"44444444-4444-4444-8444-444444444444\",{\"missing_column\":true},null,null,null,null,null,null,\"Legacy row\",null]",
+      "digest": "218cea86e9b0341c4aedaa1eca0eda2590b261091aecba4a2147c810068517a8",
+      "anomalies": [
+        {
+          "column": "intent",
+          "kind": "missing_column",
+          "raw": null
+        }
+      ]
+    },
+    {
+      "name": "tags_row",
+      "table": "tags",
+      "raw": {
+        "id": "55555555-5555-4555-8555-555555555555",
+        "name": "@work",
+        "color": "#ff0000",
+        "type": "context",
+        "user_id": "user-a"
+      },
+      "canonical": "[\"#ff0000\",\"55555555-5555-4555-8555-555555555555\",\"@work\",\"context\"]",
+      "digest": "53f2624797e7e1f510f4d233545d5afa6fef6a154ba5572180918ef99b0c84c8",
+      "anomalies": []
+    },
+    {
+      "name": "todo_tags_row",
+      "table": "todo_tags",
+      "raw": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "todo_id": "11111111-1111-4111-8111-111111111111",
+        "tag_id": "55555555-5555-4555-8555-555555555555",
+        "user_id": "user-a"
+      },
+      "canonical": "[\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"55555555-5555-4555-8555-555555555555\",\"11111111-1111-4111-8111-111111111111\"]",
+      "digest": "d0c7df545da5589f89765366002ae6bb20f571a32c029d8bc21f06766e1e8fb1",
+      "anomalies": []
+    },
+    {
+      "name": "actions_row_local_store_shape",
+      "table": "actions",
+      "raw": {
+        "id": "66666666-6666-4666-8666-666666666666",
+        "outcome_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "user-a",
+        "text": "Draft the outline",
+        "role": "current",
+        "position": null,
+        "energy_level": "low",
+        "time_estimate": 15,
+        "created_at": "2026-04-29T09:15:00.000 +05:30",
+        "updated_at": "2026-04-29T09:30:00.000 +05:30",
+        "done_at": null
+      },
+      "canonical": "[\"2026-04-29T03:45:00.000Z\",null,\"low\",\"66666666-6666-4666-8666-666666666666\",\"11111111-1111-4111-8111-111111111111\",null,\"current\",\"Draft the outline\",15,\"2026-04-29T04:00:00.000Z\"]",
+      "digest": "ab1526d2a8697982dd523bb72587b6f435c23d11f517370b26fb6f50b322e907",
+      "anomalies": [],
+      "logical_row_group": "actions_row_1"
+    },
+    {
+      "name": "actions_row_postgres_mirror_shape",
+      "table": "actions",
+      "raw": {
+        "id": "66666666-6666-4666-8666-666666666666",
+        "outcome_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "user-a",
+        "text": "Draft the outline",
+        "role": "current",
+        "position": null,
+        "energy_level": "low",
+        "time_estimate": 15,
+        "created_at": "2026-04-29T03:45:00.000000+00:00",
+        "updated_at": "2026-04-29T04:00:00.000000+00:00",
+        "done_at": null
+      },
+      "canonical": "[\"2026-04-29T03:45:00.000Z\",null,\"low\",\"66666666-6666-4666-8666-666666666666\",\"11111111-1111-4111-8111-111111111111\",null,\"current\",\"Draft the outline\",15,\"2026-04-29T04:00:00.000Z\"]",
+      "digest": "ab1526d2a8697982dd523bb72587b6f435c23d11f517370b26fb6f50b322e907",
+      "anomalies": [],
+      "logical_row_group": "actions_row_1"
+    },
+    {
+      "name": "focus_sessions_row",
+      "table": "focus_sessions",
+      "raw": {
+        "id": "77777777-7777-4777-8777-777777777777",
+        "user_id": "user-a",
+        "started_at": "2026-04-29T03:45:00.000Z",
+        "ended_at": null,
+        "current_task_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "canonical": "[\"11111111-1111-4111-8111-111111111111\",null,\"77777777-7777-4777-8777-777777777777\",\"2026-04-29T03:45:00.000Z\"]",
+      "digest": "95f367aca0b7208c4b4d7b9aef921da146b0fedf85bee118cdb5ac1e37c8f48f",
+      "anomalies": []
+    },
+    {
+      "name": "time_logs_row",
+      "table": "time_logs",
+      "raw": {
+        "id": "88888888-8888-4888-8888-888888888888",
+        "user_id": "user-a",
+        "task_id": "11111111-1111-4111-8111-111111111111",
+        "action_id": "66666666-6666-4666-8666-666666666666",
+        "started_at": "2026-04-29T03:45:00.000Z",
+        "ended_at": "2026-04-29T04:15:00.000Z",
+        "focus_session_id": "77777777-7777-4777-8777-777777777777"
+      },
+      "canonical": "[\"66666666-6666-4666-8666-666666666666\",\"2026-04-29T04:15:00.000Z\",\"77777777-7777-4777-8777-777777777777\",\"88888888-8888-4888-8888-888888888888\",\"2026-04-29T03:45:00.000Z\",\"11111111-1111-4111-8111-111111111111\"]",
+      "digest": "507a1f8e4c3b72b21a22b22ef9e07192ca93209669dbc13bad8882fe8a75e5c2",
+      "anomalies": []
+    },
+    {
+      "name": "focus_session_tasks_row",
+      "table": "focus_session_tasks",
+      "raw": {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "focus_session_id": "77777777-7777-4777-8777-777777777777",
+        "task_id": "11111111-1111-4111-8111-111111111111",
+        "position": 0,
+        "disposition": "rollover",
+        "user_id": "user-a"
+      },
+      "canonical": "[\"rollover\",\"77777777-7777-4777-8777-777777777777\",\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",0,\"11111111-1111-4111-8111-111111111111\"]",
+      "digest": "dee53ec74070bbe26d4ef598c47518803f44a8e85e4492d2525eaacfed424625",
+      "anomalies": []
+    },
+    {
+      "name": "focus_session_dispositions_row",
+      "table": "focus_session_dispositions",
+      "raw": {
+        "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "focus_session_id": "77777777-7777-4777-8777-777777777777",
+        "task_id": "22222222-2222-4222-8222-222222222222",
+        "disposition": "maybe",
+        "user_id": "user-a"
+      },
+      "canonical": "[\"maybe\",\"77777777-7777-4777-8777-777777777777\",\"cccccccc-cccc-4ccc-8ccc-cccccccccccc\",\"22222222-2222-4222-8222-222222222222\"]",
+      "digest": "a5b8b9a48ea5ec0e2ece8967f6d184f0ba00e33a0b9cbe726e9b75ad316b2266",
+      "anomalies": []
+    },
+    {
+      "name": "user_preferences_row_value_is_verbatim_json_text",
+      "table": "user_preferences",
+      "raw": {
+        "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "user_id": "user-a",
+        "key": "daily_planning_time",
+        "value": "{\"hour\":8,\"minute\":0}",
+        "updated_at": "2026-04-29T03:45:00.000Z"
+      },
+      "canonical": "[\"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee\",\"daily_planning_time\",\"2026-04-29T03:45:00.000Z\",\"{\\\"hour\\\":8,\\\"minute\\\":0}\"]",
+      "digest": "26bf3d58336537dedf185095fbe148b4dd9074e1fd50c820666694930f3b0684",
+      "anomalies": []
+    },
+    {
+      "name": "captures_row",
+      "table": "captures",
+      "raw": {
+        "id": "99999999-9999-4999-8999-999999999999",
+        "title": "Call the plumber",
+        "notes": null,
+        "capture_source": "share_sheet",
+        "created_at": "2026-04-29T09:15:00.000 +05:30",
+        "clarified_at": null,
+        "updated_at": null,
+        "user_id": "user-a"
+      },
+      "canonical": "[\"share_sheet\",null,\"2026-04-29T03:45:00.000Z\",\"99999999-9999-4999-8999-999999999999\",null,\"Call the plumber\",null]",
+      "digest": "02d5d5374125d860fe8e842853c955b105fcf4bffa8a1792743f47e6b9989e39",
+      "anomalies": []
+    },
+    {
+      "name": "capture_outcomes_row",
+      "table": "capture_outcomes",
+      "raw": {
+        "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "capture_id": "99999999-9999-4999-8999-999999999999",
+        "outcome_id": "11111111-1111-4111-8111-111111111111",
+        "created_at": "2026-04-29T09:15:00.000 +05:30",
+        "user_id": "user-a"
+      },
+      "canonical": "[\"99999999-9999-4999-8999-999999999999\",\"2026-04-29T03:45:00.000Z\",\"dddddddd-dddd-4ddd-8ddd-dddddddddddd\",\"11111111-1111-4111-8111-111111111111\"]",
+      "digest": "1804aacffc5ff275476ecd28def00a0263490dda37872ef85f7884a30f336578",
+      "anomalies": []
+    },
+    {
+      "name": "capture_tags_row",
+      "table": "capture_tags",
+      "raw": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "capture_id": "99999999-9999-4999-8999-999999999999",
+        "tag_id": "55555555-5555-4555-8555-555555555555",
+        "user_id": "user-a"
+      },
+      "canonical": "[\"99999999-9999-4999-8999-999999999999\",\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"55555555-5555-4555-8555-555555555555\"]",
+      "digest": "1facc8365921ab5619838aca98c3e977de05c28570c386fbedfee6c6be5c1eb6",
+      "anomalies": []
+    }
+  ]
+}
