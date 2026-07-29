@@ -551,6 +551,28 @@ def test_the_canonical_chain_revokes_by_grant_id() -> None:
 
 
 @pytest.mark.parametrize(
+    "vector",
+    [v for v in _DOCUMENT["control_vectors"] if v["control_type"] == control.CONTROL_TYPE_REVOKE],
+    ids=lambda v: str(v["name"]),
+)
+def test_a_revokes_clock_is_stamped_with_its_authoring_devices_member_id(
+    vector: dict[str, Any],
+) -> None:
+    """The HLC's tie-breaker node is a *member* id, never a certificate id.
+
+    The control-fork tie-break compares the revoke certificate's HLC first and the
+    author's member id second, so a node carrying the freshly minted ``revoke_id``
+    would order revocations by certificate rather than by the device behind them.
+    Mirrors ``backend/tests/sync/builders.py``'s ``revoke_certificate``.
+    """
+    revoke = control.RevokeCertificate.decode(bytes.fromhex(vector["cert_hex"]))
+    author_member_id = uuid.UUID(_KEYS_BY_LABEL[vector["key"]]["member_id"])
+    assert vector["header"]["author_member_id"] == str(author_member_id)
+    assert revoke.revoked_at_hlc.member_id_hex == author_member_id.hex
+    assert revoke.revoked_at_hlc.member_id_hex != revoke.revoke_id.hex
+
+
+@pytest.mark.parametrize(
     "vector", _DOCUMENT["negative_control_vectors"], ids=lambda v: str(v["name"])
 )
 def test_negative_control_vector_fails_closed_with_the_pinned_reason(

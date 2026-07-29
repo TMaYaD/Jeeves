@@ -597,6 +597,33 @@ void main() {
         expect(payload.authority, vector['authority']);
       });
 
+      if (vector['control_type'] == controlTypeRevoke) {
+        test('${vector['name']} stamps its clock with its authoring devices member id',
+            () {
+          // The HLC's tie-breaker node is a *member* id, never a certificate id.
+          // The control-fork tie-break compares the revoke certificate's HLC
+          // first and the author's member id second, so a node carrying the
+          // freshly minted `revoke_id` would order revocations by certificate
+          // rather than by the device behind them. Mirrors
+          // `app/test/sync/harness/sim_workspace.dart`'s `revokeEnvelope`.
+          final revoke =
+              RevokeCertificate.decode(_fromHex(vector['cert_hex'] as String));
+          final key = keysByLabel[vector['key'] as String]!;
+          expect(
+            (vector['header'] as Map<String, dynamic>)['author_member_id'],
+            key['member_id'],
+          );
+          expect(
+            revoke.revokedAtHlc.memberIdHex,
+            memberIdToHex(key['member_id'] as String),
+          );
+          expect(
+            revoke.revokedAtHlc.memberIdHex,
+            isNot(memberIdToHex(revoke.revokeId)),
+          );
+        });
+      }
+
       if (registeringControlTypes.contains(vector['control_type'])) {
         test('${vector['name']} carries its authors own keys', () async {
           // An author's first op must be the control op that registers it. #548's
