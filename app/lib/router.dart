@@ -8,6 +8,8 @@ import 'auth/auth_mode.dart';
 import 'cutover/converge_verify/converge_verify_screen.dart';
 // Cutover tooling (#553 Phase 2) — removed by #556.
 import 'cutover/enrolment_ceremony/enrolment_ceremony_screen.dart';
+// Cutover tooling (#553 Phase 2) — removed by #556.
+import 'cutover/reseed/reseed_screen.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
@@ -103,6 +105,13 @@ final appRouter = GoRouter(
     GoRoute(
       path: EnrolmentCeremonyScreen.routePath,
       builder: (context, state) => const EnrolmentCeremonyScreen(),
+    ),
+    // Cutover tooling (#553 Phase 2) — removed by #556. Reachable in every
+    // flavour for the same reason as its two siblings above: the store that has
+    // to be reseeded lives on the production-flavour phone.
+    GoRoute(
+      path: ReseedScreen.routePath,
+      builder: (context, state) => const ReseedScreen(),
     ),
     ShellRoute(
       builder: (context, state, child) => AppShell(child: child),

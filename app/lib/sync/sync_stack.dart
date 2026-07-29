@@ -39,6 +39,8 @@ class SyncStack {
     required this.keyStore,
     required this.identity,
     required this.clock,
+    required this.nowMs,
+    required this.strategies,
     required this.defaultClient,
     required this.workspaceClientFactory,
     required this.enrolment,
@@ -132,6 +134,8 @@ class SyncStack {
       keyStore: keyStore,
       identity: identity,
       clock: clock,
+      nowMs: nowMs,
+      strategies: strategies,
       defaultClient: defaultClient,
       workspaceClientFactory: workspaceClientFactory,
       enrolment: EnrolmentService(
@@ -158,6 +162,18 @@ class SyncStack {
   final DeviceKeyStore keyStore;
   final MemberIdentity identity;
   final HlcClock clock;
+
+  /// The wall clock every [Reducer] on this device reads, and the strategy
+  /// registry every one of them arbitrates under.
+  ///
+  /// Both are held rather than merely used at assembly because a later slice may
+  /// have to build a *second* reducer over the same device — #553's reseed
+  /// verification builds a throwaway one to reduce the server log from zero — and
+  /// a second reducer reading a different clock or a different registry would
+  /// measure the tooling instead of the data: the skew guard's verdict and which
+  /// lattice arbitrates a preference are both inputs to what reduction produces.
+  final int Function() nowMs;
+  final MergeStrategyRegistry strategies;
 
   /// The client for the default (GTD) Workspace.
   final SyncClient defaultClient;
