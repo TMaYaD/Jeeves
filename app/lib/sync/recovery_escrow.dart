@@ -44,6 +44,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart' show compute;
 
 import 'envelope.dart';
 
@@ -91,6 +92,17 @@ const int firstEscrowVersion = 1;
 /// idempotent without spending one of the escrow read path's audited,
 /// rate-limited fetches to ask first.
 const String escrowVersionRegressionCode = 'escrow_version_regression';
+
+/// The structured `detail.code` a `PUT /w/{w}/recovery` signature refusal carries.
+///
+/// **This, not [escrowVersionRegressionCode], is what "someone already founded
+/// this account" looks like to a fresh device.** The server verifies the record's
+/// Root signature against the `root_pk` already in the slot *before* it compares
+/// versions, so a device that minted its own Root is refused for signing with the
+/// wrong one. `escrow_version_regression` is reachable only when the signature
+/// verifies — i.e. the same Root writing the same slot again, which is the
+/// crash-window replay the ceremony tolerates internally.
+const String badEscrowSignatureCode = 'bad_escrow_signature';
 
 /// Why an escrow operation was refused.
 ///
@@ -381,20 +393,58 @@ Future<SecretKey> _deriveKeyOrRefuse(
   }
 }
 
+/// The KDF's inputs as one sendable value, so the work can leave this isolate.
+class _Argon2idRequest {
+  const _Argon2idRequest(this.passphrase, this.salt, this.parameters);
+
+  final String passphrase;
+  final Uint8List salt;
+  final Argon2idParameters parameters;
+}
+
+/// Argon2id **off the UI isolate** (#553 Phase 2, mechanics only).
+///
+/// The production floor is 64 MiB at t=3 through a pure-Dart implementation,
+/// which is seconds of solid CPU. On the UI isolate that is a frozen frame
+/// pipeline for the duration — a spinner that does not spin, and long enough to
+/// earn an ANR on the one phone the enrolment ceremony has to run on.
+///
+/// `compute` rather than `Isolate.run` directly: `dart:isolate` is not part of
+/// the web SDK, and importing it here would break the web build that
+/// `cd-app.yml` produces. `compute` *is* `Isolate.run` wherever isolates exist,
+/// and degrades to an inline call on web, which is the honest behaviour for a
+/// platform the op-log stack does not carry anyway.
+///
+/// Nothing about the ceremony changes: same parameters, same salt, same bytes.
+/// A failure inside the isolate comes back to [_deriveKeyOrRefuse] and is
+/// classified there exactly as a local throw was.
 Future<SecretKey> _deriveKey(
   String passphrase,
   Uint8List salt,
   Argon2idParameters parameters,
-) =>
-    Argon2id(
-      memory: parameters.memoryKib,
-      iterations: parameters.timeCost,
-      parallelism: parameters.parallelism,
-      hashLength: 32,
-    ).deriveKey(
-      secretKey: SecretKey(utf8.encode(passphrase)),
-      nonce: salt,
+) async =>
+    SecretKey(
+      await compute(
+        _argon2idKeyBytes,
+        _Argon2idRequest(passphrase, salt, parameters),
+        debugLabel: 'argon2id-escrow-key',
+      ),
     );
+
+Future<List<int>> _argon2idKeyBytes(_Argon2idRequest request) async {
+  final derived = await Argon2id(
+    memory: request.parameters.memoryKib,
+    iterations: request.parameters.timeCost,
+    parallelism: request.parameters.parallelism,
+    hashLength: 32,
+  ).deriveKey(
+    secretKey: SecretKey(utf8.encode(request.passphrase)),
+    nonce: request.salt,
+  );
+  // Bytes, not the `SecretKey`: only the raw material crosses the port, and it
+  // is re-wrapped on the far side.
+  return derived.extractBytes();
+}
 
 Uint8List _blobHeader(Argon2idParameters parameters, Uint8List salt, Uint8List nonce) {
   final header = Uint8List(escrowBlobHeaderBytes);

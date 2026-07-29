@@ -27,6 +27,22 @@ class ApiService {
 
   String get baseUrl => _baseUrl;
 
+  /// The session-authenticated Dio, for the op-log stack's `UserTransport`.
+  ///
+  /// Production sync wiring (#553 Phase 2). The sync routes that take the
+  /// **User** credential — `POST /members`, `PUT`/`GET /w/{w}/recovery`, the
+  /// proof-of-possession exchange — are the same session's requests as every
+  /// other backend call, so they ride this Dio rather than a second one: one
+  /// bearer token, one 401 refresh-and-retry interceptor, no way for a refreshed
+  /// session to be picked up by one and missed by the other. The backend mounts
+  /// the sync router at the root, so the base URL needs no adjustment.
+  ///
+  /// The **member** credential never lands here.
+  /// `HttpUserTransport.completeMemberChallenge` builds a separate Dio carrying
+  /// the member token, which is what keeps a stolen user session from speaking
+  /// as a Device (review F10).
+  Dio get sessionDio => _dio;
+
   String? _authToken;
 
   // Called by AuthService after construction to wire up the 401 refresh path.
