@@ -360,6 +360,82 @@ void main() {
     expect(health.quarantineCount, 1);
   });
 
+  test('a second claimant that also chains to the head is a fork, not a silent drop',
+      () async {
+    // The symmetric case of the test above: both claimants at author_seq 5 chain
+    // to the same predecessor, so both verify. A gap row exists only after
+    // `verifyEnvelope` passed, so both carry the peer's own signature — the peer
+    // forked its own chain (a device restored from an older backup re-authoring a
+    // position it already spent does exactly this). Only one can be released, and
+    // the other must not leave quarantine silently: the release scan never looks
+    // at this position again once the head moves past it.
+    final first = await _op(workspace, peer, 'one');
+    await peerSession.postOps(workspace.workspaceId, [first]);
+    await a.sync();
+
+    // Held back, so both claimants at seq 5 quarantine as gap rows first.
+    final genuineSecond = await _op(workspace, peer, 'two');
+    // `advance: false` leaves the fixture at seq 5 with `hash('two')` as its
+    // prev-hash, so both of these chain to the same predecessor at the same
+    // position and differ only in their bytes.
+    final thirdClaimant = await _op(workspace, peer, 'three', advance: false);
+    final rivalThirdClaimant =
+        await _op(workspace, peer, 'three as well', advance: false);
+
+    workspace.server.injectUnchecked(workspace.workspaceId, thirdClaimant);
+    await a.sync();
+    workspace.server.injectUnchecked(workspace.workspaceId, rivalThirdClaimant);
+    await a.sync();
+    final claimants = await a.client.quarantined(includeReleased: false);
+    expect(claimants.length, 2);
+    expect(
+      claimants.map((row) => row.authorSeq),
+      everyElement(firstPeerContentAuthorSeq + 2),
+    );
+
+    // The predecessor lands, the head moves to 4, and both claimants verify.
+    workspace.server.injectUnchecked(workspace.workspaceId, genuineSecond);
+    await a.sync();
+
+    // The lowest row id wins deterministically; its rival stays refused.
+    expect(await _doc(a, workspace), {'step': 'three'});
+    final rows = await a.client.quarantined();
+    final releasedRow =
+        rows.singleWhere((row) => sameBytes(row.envelope, thirdClaimant));
+    final refusedRow =
+        rows.singleWhere((row) => sameBytes(row.envelope, rivalThirdClaimant));
+    expect(releasedRow.releasedAt, isNotNull);
+    expect(refusedRow.releasedAt, isNull);
+    expect(refusedRow.reason, SyncRejectionReason.authorChainGap.code);
+
+    final alarms = await a.alarmsByKind();
+    final fork = alarms[IntegrityAlarmKind.authorChainFork.code];
+    expect(
+      fork,
+      isNotNull,
+      reason: 'the claimant that was not released stands accused',
+    );
+    expect(fork!.resolvedAt, isNull, reason: 'the accusation still stands');
+    expect(
+      fork.quarantineOpRowId,
+      refusedRow.id,
+      reason: 'the accusation names the claimant it could not release',
+    );
+    expect(
+      alarms[IntegrityAlarmKind.authorStreamReordered.code],
+      isNotNull,
+      reason: 'a successor did become chain-valid when its predecessor arrived',
+    );
+    expect(
+      alarms[IntegrityAlarmKind.authorChainGap.code]!.resolvedAt,
+      isNull,
+      reason: 'the rival claimant still stands refused as an unreleased gap row',
+    );
+    final health = await a.client.health();
+    expect(health.clean, isFalse);
+    expect(health.quarantineCount, 1);
+  });
+
   test('a prev-hash mismatch at head + 1 is its own accusation', () async {
     // Right position, forged linkage, and a signature that verifies: the only
     // thing wrong is the chain field itself.

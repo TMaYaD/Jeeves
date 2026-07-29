@@ -1054,13 +1054,18 @@ class SyncClient {
   /// forged alternate quarantined before the genuine op arrives must not outrank
   /// it by winning a race it controls, and the head's envelope hash is the only
   /// tiebreak the attacker cannot forge. Every claimant that refuses is accused
-  /// and stays refused; only the verifying one is released.
+  /// and stays refused; exactly one verifying claimant is released.
   ///
   /// Two byte-different claimants that both verify cannot happen without the
-  /// author signing two continuations of its own chain — its own accusation, not
-  /// something this loop launders. The lowest row id wins deterministically, and
-  /// once the head passes the contested position, re-serving the other refuses as
-  /// `author_chain_rewrite`.
+  /// author signing two continuations of its own chain — a gap row exists only
+  /// after `verifyEnvelope` passed, so both bear the author's own signature. The
+  /// lowest row id wins deterministically and every further verifying claimant is
+  /// accused as `author_chain_fork` here, in the pass that saw it. Leaving it to
+  /// the head passing the contested position and the server re-serving the loser
+  /// as `author_chain_rewrite` would rest a real fork on a re-serve the server
+  /// chooses whether to make: the evidence is already local, so the accusation is
+  /// raised from it. Byte-identical claimants are one op quarantined under two
+  /// transport seqs and accuse nobody.
   ///
   /// A genuine drop leaves `author_chain_gap` standing forever, which is correct:
   /// withholding is detectable, not preventable.
@@ -1093,9 +1098,25 @@ class SyncClient {
           }
           final verdict = await _chainVerdictFor(header, claimant.envelope);
           if (!verdict.isRefusal) {
-            // First verifying claimant in row-id order; the rest of the loop is
-            // still walked so every refusing claimant gets its accusation.
-            winner ??= claimant;
+            if (winner == null) {
+              // First verifying claimant in row-id order; the rest of the loop is
+              // still walked so every other claimant gets its accusation.
+              winner = claimant;
+            } else if (!sameBytes(winner.envelope, claimant.envelope)) {
+              // A second set of bytes chaining to the same head, under the same
+              // author signature the gap row already proved: the author forked its
+              // own chain. Only one of them can be released, so the other is
+              // accused now rather than silently dropped — the loop will never look
+              // at this position again once the head moves past it.
+              await _raiseAlarm(
+                IntegrityAlarmKind.authorChainFork,
+                authorMemberId: authorMemberId,
+                detail: 'author_seq ${header.authorSeq} has a second claimant '
+                    'that also chains to the head: the author signed two '
+                    'continuations of its own chain and only one was released',
+                quarantineOpRowId: claimant.id,
+              );
+            }
             continue;
           }
           // The missing predecessor arrived and this claimant provably does not
