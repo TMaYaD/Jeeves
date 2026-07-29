@@ -260,6 +260,22 @@ enum SyncRejectionReason {
   /// before any crypto runs — see `key_wraps.dart`.
   malformedKeyWrap('malformed_keywrap'),
 
+  /// A rotation would leave a live Grant with no wrap, so the ceremony refused
+  /// **before authoring anything** (review F14a).
+  ///
+  /// Authoring-side only, and deliberately not stageable: a rotation whose wrap set
+  /// omits a survivor would lock an honest Member out of the Workspace for ever, and
+  /// the digest means the omission would be committed to in a signed op before
+  /// anyone noticed. A blocked ceremony that says who it cannot wrap to is the
+  /// recoverable outcome; a staged one is not.
+  ///
+  /// The reachable case today is a live-granted **Service**: Services hold no
+  /// per-User KEX subkey yet (that rides #557), so a Workspace with one cannot
+  /// rotate until it does. A Device is always wrappable — a Grant to a Member this
+  /// device has not chained is already refused as `unknown_grantee`, so every
+  /// surviving Device in the grants view is in the directory with its KEX key.
+  unwrappableGrant('unwrappable_grant'),
+
   /// A content op built against a `key_epoch` the server has already rotated past
   /// by more than one. The authoring-side twin of the server's `key_epoch_stale`
   /// refusal, so a device does not post what it will only be handed back.

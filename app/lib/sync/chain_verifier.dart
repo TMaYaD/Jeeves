@@ -72,9 +72,29 @@ enum IntegrityAlarmKind {
   duplicateOpIdDivergence('duplicate_op_id_divergence'),
 
   /// A signature that does not verify. Per the spec this is an alarm surfaced to
-  /// the user and never merely a skipped row — the rule AEAD failure inherits
-  /// when #554 lands.
+  /// the user and never merely a skipped row — the rule [aeadFailure] inherits.
   signatureInvalid('signature_invalid'),
+
+  /// An `aead_v1` body that did not authenticate under an epoch key this device
+  /// **holds**. The normative rule from the proposal, and #554's AC-5: AEAD failure
+  /// is an alarm, never a skipped row.
+  ///
+  /// Distinct from a missing key, which raises no accusation: not holding the key
+  /// for an epoch is a delivery gap that heals when the wrap arrives, while bytes
+  /// that fail under a key we do hold mean the ciphertext, the header or the key is
+  /// not what the author signed. The codec cannot say which — the header is the AAD
+  /// — so the accusation is the failure itself rather than a guess at its cause.
+  aeadFailure('aead_failure'),
+
+  /// A *content* op at suite `plaintext_v1` whose `key_epoch` this device holds a
+  /// key for. The one-way upgrade, enforced at the read boundary.
+  ///
+  /// An accusation and not merely a refusal: once an epoch is keyed, every content
+  /// op at it is encrypted, so a plaintext one is either a coerced author or a
+  /// server replaying pre-turn-on bytes at a keyed epoch. Pre-turn-on history at
+  /// *earlier*, unkeyed epochs stays readable, which is what keeps turn-on
+  /// non-destructive.
+  plaintextAtEncryptedEpoch('plaintext_at_encrypted_epoch'),
 
   /// Two control ops named the same predecessor. The tie-break picked one branch
   /// and quarantined the other; content was re-reduced under the corrected grants
@@ -259,8 +279,15 @@ ChainVerdict chainVerdict({
 /// unknown suite, a bad padding byte — is a refused envelope and nothing more;
 /// a signature that does not verify is an alarm, because the spec says signature
 /// failure is surfaced to the user and never merely a skipped row.
+///
+/// The two encryption refusals that escalate do so for the same reason, and the one
+/// that does not is [SyncRejectionReason.missingEpochKey]: a wrap that has not
+/// arrived yet accuses nobody.
 IntegrityAlarmKind? alarmForRejection(SyncRejectionReason reason) => switch (reason) {
       SyncRejectionReason.badSignature => IntegrityAlarmKind.signatureInvalid,
+      SyncRejectionReason.aeadFailure => IntegrityAlarmKind.aeadFailure,
+      SyncRejectionReason.plaintextAtEncryptedEpoch =>
+        IntegrityAlarmKind.plaintextAtEncryptedEpoch,
       SyncRejectionReason.authorChainGap => IntegrityAlarmKind.authorChainGap,
       SyncRejectionReason.prevAuthorHashMismatch =>
         IntegrityAlarmKind.prevAuthorHashMismatch,

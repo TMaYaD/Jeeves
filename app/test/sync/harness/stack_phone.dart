@@ -32,6 +32,7 @@ import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_lifecycle.dart';
 import 'package:jeeves/sync/sync_stack.dart';
 import 'package:jeeves/sync/sync_transport.dart';
+import 'package:jeeves/sync/workspace_key_store.dart';
 
 import 'fake_sync_server.dart';
 import 'sim_device.dart';
@@ -122,6 +123,10 @@ class StackPhone {
         userTransport: userTransport,
         domain: domain,
         nowMs: () => clock.nowMs,
+        // The platform keychain is unreachable in a unit test; the in-memory store
+        // is the same swap `sim_device` makes, so a plaintext_v1 capture's
+        // key lookup returns "no key" instead of throwing on the missing channel.
+        workspaceKeys: InMemoryWorkspaceKeyStore(),
         kdfParameters: harnessKdfParameters,
         kdfFloor: harnessKdfParameters,
       );

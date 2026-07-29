@@ -28,6 +28,7 @@ import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/envelope.dart' show opClassContent;
 import 'package:jeeves/sync/initial_upload.dart' show InitialUploadReport;
 import 'package:jeeves/sync/initial_upload_plan.dart' show uploadRefused;
+import 'package:jeeves/sync/key_wraps.dart' show MemberKeyWrap;
 import 'package:jeeves/sync/sync_lifecycle.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 
@@ -138,6 +139,30 @@ class _UnsubscribableSignalTransport implements SyncTransport {
     required int limit,
   }) =>
       _inner.pullOps(workspaceId, since: since, limit: limit);
+
+  @override
+  Future<List<KeyWrapRecord>> putKeyWraps(
+    String workspaceId, {
+    required int epoch,
+    required List<MemberKeyWrap> wraps,
+    required Uint8List escrowWrap,
+    Uint8List? keyWrapDigest,
+  }) =>
+      _inner.putKeyWraps(
+        workspaceId,
+        epoch: epoch,
+        wraps: wraps,
+        escrowWrap: escrowWrap,
+        keyWrapDigest: keyWrapDigest,
+      );
+
+  @override
+  Future<List<KeyWrapRecord>> fetchMyKeyWraps(String workspaceId) =>
+      _inner.fetchMyKeyWraps(workspaceId);
+
+  @override
+  Future<List<EpochKeyRecord>> fetchEpochKeys(String workspaceId) =>
+      _inner.fetchEpochKeys(workspaceId);
 }
 
 int _contentOpCount(FakeSyncServer server) => server.storedOps

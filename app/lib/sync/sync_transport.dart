@@ -18,6 +18,7 @@ library;
 
 import 'dart:typed_data';
 
+import 'key_wraps.dart';
 import 'recovery_escrow.dart';
 
 export 'recovery_escrow.dart' show RecoveryEscrowRecord;
@@ -116,6 +117,59 @@ const String authorChainConflictCode = 'author_chain_conflict';
 /// batch for ever, refused with 413 `batch_too_large`, and never drain the queue
 /// it exists for. `SyncClient.flushOutbox` is the caller that honours it.
 const int maxOpsPerBatch = 1000;
+
+/// One stored KeyWrap, as `GET /w/{w}/keywraps/me` serves it.
+///
+/// The wrap is opaque to the server and to every Member but the one it names: the
+/// `info` binding covers the Workspace, the epoch, the member and the key id, so a
+/// row delivered into the wrong slot fails to authenticate rather than opening.
+class KeyWrapRecord {
+  const KeyWrapRecord({
+    required this.epoch,
+    required this.memberId,
+    required this.kexKeyId,
+    required this.wrap,
+  });
+
+  final int epoch;
+  final String memberId;
+
+  /// The server-derived 8-byte id of the KEX key this was sealed to. Carried so a
+  /// device that has rotated its KEX key can tell which of its keys opens the wrap.
+  final Uint8List kexKeyId;
+  final Uint8List wrap;
+}
+
+/// One epoch's escrow wrap, as `GET /w/{w}/epoch-keys` serves it.
+///
+/// Useless without `master_wrap_key`, which exists only inside the recovery escrow
+/// blob behind Argon2id and the passphrase. That is what makes a fresh device's
+/// bootstrap work with no second device online.
+class EpochKeyRecord {
+  const EpochKeyRecord({
+    required this.epoch,
+    required this.escrowWrap,
+    required this.keyWrapDigest,
+  });
+
+  final int epoch;
+  final Uint8List escrowWrap;
+
+  /// The commitment the epoch was published under — the `rotate` op's own digest
+  /// for every epoch above 0, and the founding client's for epoch 0.
+  final Uint8List keyWrapDigest;
+}
+
+/// The structured `detail.code` a wraps PUT gets when nothing has committed to a
+/// digest for the epoch yet.
+///
+/// The ordering the ceremony has to get right: author the `rotate`, let it land,
+/// then PUT. A caller that sees this has raced its own rotate.
+const String rotateNotMaterialisedCode = 'rotate_not_materialised';
+
+/// The structured `detail.code` a wraps PUT gets when the set does not hash to the
+/// digest the log committed to.
+const String keyWrapDigestMismatchCode = 'keywrap_digest_mismatch';
 
 /// A `workspace_genesis` posted into a Workspace that already has one.
 ///
@@ -220,6 +274,37 @@ abstract class SyncTransport {
     required int since,
     required int limit,
   });
+
+  /// Upload the **whole** wrap set for one epoch. Owner only, digest-gated.
+  ///
+  /// Whole-set and never incremental, because the digest commits to the set: a
+  /// partial upload could not be checked against it, and accepting one would restore
+  /// the very curation power the digest exists to remove.
+  ///
+  /// [keyWrapDigest] is required for epoch 0 — the one epoch with no `rotate`
+  /// behind it, so its commitment arrives in the body — and ignored above it, where
+  /// the signed `rotate` op is the authority on what the digest is.
+  ///
+  /// Returns this Member's own wraps after the write, which is what the enrolment
+  /// path needs next anyway.
+  Future<List<KeyWrapRecord>> putKeyWraps(
+    String workspaceId, {
+    required int epoch,
+    required List<MemberKeyWrap> wraps,
+    required Uint8List escrowWrap,
+    Uint8List? keyWrapDigest,
+  });
+
+  /// This Member's wraps across **every** epoch it has been given one for.
+  ///
+  /// Not parameterised by member, so there is no id to get wrong: the route is
+  /// scoped to the calling credential. All epochs, because content authored at any
+  /// past epoch may still have to be read.
+  Future<List<KeyWrapRecord>> fetchMyKeyWraps(String workspaceId);
+
+  /// Every epoch's escrow wrap. Epochs whose wraps have not arrived are omitted —
+  /// that window is an epoch nobody can read yet, not a wrap that fails to open.
+  Future<List<EpochKeyRecord>> fetchEpochKeys(String workspaceId);
 
   /// One subscription per call: the returned stream is single-subscription and
   /// spent once cancelled, so reconnecting means calling this again rather than

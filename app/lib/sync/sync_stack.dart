@@ -38,6 +38,7 @@ import 'reducer.dart';
 import 'sync_client.dart';
 import 'sync_database.dart';
 import 'sync_transport.dart';
+import 'workspace_key_store.dart';
 
 class SyncStack {
   SyncStack._({
@@ -74,6 +75,7 @@ class SyncStack {
     required UserTransport userTransport,
     required int Function() nowMs,
     GtdDatabase? domain,
+    WorkspaceKeyStore? workspaceKeys,
     MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
     PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
     Argon2idParameters kdfParameters = Argon2idParameters.floor,
@@ -101,6 +103,12 @@ class SyncStack {
             domain: domain,
           );
 
+    // One store per device, keyed by Workspace inside — the platform keychain in
+    // production, injected by a harness that needs N independent stores in one
+    // process. It is *not* the sync database: an epoch key in the store that holds
+    // the ciphertext would make the encryption decorative (review F22).
+    final epochKeys = workspaceKeys ?? SecureStorageWorkspaceKeyStore();
+
     final defaultClient = SyncClient(
       workspaceId: defaultWorkspaceId(userId),
       userId: userId,
@@ -108,6 +116,7 @@ class SyncStack {
       database: database,
       clock: clock,
       reducer: Reducer(database, nowMs: nowMs, strategies: strategies),
+      workspaceKeys: epochKeys,
       now: now,
     )..projector = projector;
 
@@ -127,8 +136,10 @@ class SyncStack {
           clock: clock,
           reducer: Reducer(database, nowMs: nowMs, strategies: strategies),
           // The one directory, so a Member chained in one Workspace is not a
-          // stranger in the other.
+          // stranger in the other; and the one key store, which is keyed by
+          // Workspace and therefore already the right scope for both.
           directory: defaultClient.directory,
+          workspaceKeys: epochKeys,
           now: now,
         )..projector = projector,
       );

@@ -26,6 +26,7 @@ import 'package:jeeves/sync/domain_projector.dart';
 import 'package:jeeves/sync/enrolment.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/key_wraps.dart';
 import 'package:jeeves/sync/member_identity.dart';
 import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/passphrase_policy.dart';
@@ -38,6 +39,7 @@ import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_health.dart';
 import 'package:jeeves/sync/sync_transport.dart';
+import 'package:jeeves/sync/workspace_key_store.dart';
 
 import 'fake_sync_server.dart';
 import 'signal_probe.dart';
@@ -313,6 +315,36 @@ class DeviceLink implements SyncTransport, UserTransport {
   }
 
   @override
+  Future<List<KeyWrapRecord>> putKeyWraps(
+    String workspaceId, {
+    required int epoch,
+    required List<MemberKeyWrap> wraps,
+    required Uint8List escrowWrap,
+    Uint8List? keyWrapDigest,
+  }) async {
+    _requireOnline();
+    return _member.putKeyWraps(
+      workspaceId,
+      epoch: epoch,
+      wraps: wraps,
+      escrowWrap: escrowWrap,
+      keyWrapDigest: keyWrapDigest,
+    );
+  }
+
+  @override
+  Future<List<KeyWrapRecord>> fetchMyKeyWraps(String workspaceId) async {
+    _requireOnline();
+    return _member.fetchMyKeyWraps(workspaceId);
+  }
+
+  @override
+  Future<List<EpochKeyRecord>> fetchEpochKeys(String workspaceId) async {
+    _requireOnline();
+    return _member.fetchEpochKeys(workspaceId);
+  }
+
+  @override
   Stream<void> newSeqSignals(String workspaceId) => decodeSignalFrames(
         () async {
           _requireOnline();
@@ -362,6 +394,7 @@ class SimDevice {
     required this.link,
     required this.projector,
     required this.keyStore,
+    required this.workspaceKeys,
     required this.enrolment,
     required this.kdfParameters,
     required this.passphrasePolicy,
@@ -398,6 +431,7 @@ class SimDevice {
     MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
     String? passphrase,
     String? chosenPassphrase,
+    bool encryptFromGenesis = false,
     Random? random,
     Argon2idParameters kdf = harnessKdfParameters,
     PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
@@ -451,6 +485,9 @@ class SimDevice {
       timers: simTimers,
       keepaliveInterval: keepaliveInterval,
     );
+    // One store per device — N devices means N stores that cannot see each other,
+    // which is what makes "this device could not read that epoch" a real claim.
+    final workspaceKeys = InMemoryWorkspaceKeyStore();
     final client = SyncClient(
       workspaceId: defaultWorkspaceId(userId),
       userId: userId,
@@ -462,6 +499,7 @@ class SimDevice {
         nowMs: () => clock.nowMs,
         strategies: strategies,
       ),
+      workspaceKeys: workspaceKeys,
       pullPageLimit: pullPageLimit,
       now: () => clock.asDateTime,
     );
@@ -499,8 +537,10 @@ class SimDevice {
             reducer: Reducer(database, nowMs: () => clock.nowMs, strategies: strategies),
             transport: link,
             // The one directory, so a Member chained in one Workspace is not a
-            // stranger in the other. Real devices share it for the same reason.
+            // stranger in the other. Real devices share it for the same reason, and
+            // the one key store for the same reason again — it is keyed by Workspace.
             directory: client.directory,
+            workspaceKeys: workspaceKeys,
             pullPageLimit: pullPageLimit,
             now: () => clock.asDateTime,
           )..projector = projector,
@@ -525,8 +565,14 @@ class SimDevice {
       random: random ?? Random(label.codeUnitAt(0)),
     );
     final outcome = passphrase == null
-        ? await enrolment.enrolFirstDevice(passphrase: chosenPassphrase)
-        : await enrolment.enrolWithPassphrase(passphrase);
+        ? await enrolment.enrolFirstDevice(
+            passphrase: chosenPassphrase,
+            encryptFromGenesis: encryptFromGenesis,
+          )
+        : await enrolment.enrolWithPassphrase(
+            passphrase,
+            encryptFromGenesis: encryptFromGenesis,
+          );
 
     return SimDevice._(
       label: label,
@@ -541,6 +587,7 @@ class SimDevice {
       link: link,
       projector: projector,
       keyStore: keyStore,
+      workspaceKeys: workspaceKeys,
       enrolment: enrolment,
       kdfParameters: kdf,
       passphrasePolicy: passphrasePolicy,
@@ -570,6 +617,11 @@ class SimDevice {
   final DeviceLink link;
   final DomainProjector projector;
   final DeviceKeyStore keyStore;
+
+  /// This device's `epoch -> K_{w,epoch}` map, per Workspace. A test asserts on it to
+  /// say what this device can and cannot read.
+  final WorkspaceKeyStore workspaceKeys;
+
   final EnrolmentService enrolment;
 
   /// The costs this device's ceremony ran at, injected as both the parameters

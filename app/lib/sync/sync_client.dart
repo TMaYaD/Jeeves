@@ -48,7 +48,7 @@
 /// client cannot have.
 library;
 
-import 'dart:math' show min;
+import 'dart:math' show Random, min;
 
 import 'package:drift/drift.dart';
 // The append to `op_log` is a plain insert whose uniqueness constraints are the
@@ -66,6 +66,7 @@ import 'envelope.dart';
 import 'grants_view.dart';
 import 'hlc.dart';
 import 'ids.dart';
+import 'key_wraps.dart';
 import 'member_identity.dart';
 import 'op_payload.dart';
 import 'reducer.dart';
@@ -73,6 +74,7 @@ import 'recovery_escrow.dart';
 import 'sync_database.dart';
 import 'sync_health.dart';
 import 'sync_transport.dart';
+import 'workspace_key_store.dart';
 
 /// not tunable per call: one page is a batch of ops, sized to keep a bootstrap
 /// pull to a handful of round-trips without an unbounded response body.
@@ -141,6 +143,7 @@ class SyncClient {
     required Reducer reducer,
     SyncTransport? transport,
     MemberDirectory? directory,
+    WorkspaceKeyStore? workspaceKeys,
     this.pullPageLimit = defaultPullPageLimit,
     DateTime Function()? now,
   })  : _db = database,
@@ -148,6 +151,7 @@ class SyncClient {
         _reducer = reducer,
         _transport = transport,
         directory = directory ?? MemberDirectory(),
+        workspaceKeys = workspaceKeys ?? InMemoryWorkspaceKeyStore(),
         _now = now ?? DateTime.now {
     this.directory.rememberSelf(identity);
   }
@@ -165,6 +169,24 @@ class SyncClient {
   bool get isPreferencesWorkspace => workspaceId == userPreferencesWorkspaceId(userId);
   final MemberIdentity identity;
   final MemberDirectory directory;
+
+  /// The `epoch -> K_{w,epoch}` map this device holds, per Workspace.
+  ///
+  /// Empty means `plaintext_v1`, which is what every pre-turn-on Workspace is:
+  /// nothing in this class decides to encrypt, it encrypts iff a key exists for the
+  /// epoch it is authoring at. Shared with the other Workspace's client on the same
+  /// device the way [directory] is — the store is keyed by Workspace, so one store
+  /// per device is one scope per Workspace.
+  final WorkspaceKeyStore workspaceKeys;
+
+  /// The nonce source, and deliberately not a seam.
+  ///
+  /// A 24-byte XChaCha20 nonce repeated under one key is a catastrophic failure of
+  /// the stream cipher, so there is no injectable entropy here for a test to seed —
+  /// the golden vectors pin nonces by calling `sealBody` with a header they built,
+  /// which is the only way to get a chosen nonce into an envelope.
+  final Random _nonceEntropy = Random.secure();
+
   final int pullPageLimit;
 
   final SyncDatabase _db;
@@ -423,18 +445,44 @@ class SyncClient {
         );
       }
     }
+    // **Encryption is a fact about the epoch, not a mode this client is in.** A
+    // content op is sealed iff this device holds `K_{w,keyEpoch}`, so turning
+    // encryption on is the arrival of a key and nothing else — no switch, no
+    // per-call flag, and no way for two ops at one epoch to disagree about the
+    // suite. Control ops are `plaintext_v1` for ever (the server materialises their
+    // payloads and holds no key), which is why the lookup is skipped for them
+    // rather than merely expected to miss.
+    final workspaceKey = opClass == opClassControl
+        ? null
+        : await workspaceKeys.keyFor(workspaceId, keyEpoch);
     final chain = await _authorChain();
     final header = OpHeader(
       workspaceId: workspaceId,
       opClass: opClass,
+      suite: workspaceKey == null ? suitePlaintextV1 : suiteAeadV1,
       keyEpoch: keyEpoch,
       opId: _newOpId(),
       authorMemberId: identity.memberId,
       authorKeyId: identity.keyId,
       authorSeq: chain.nextAuthorSeq,
       prevAuthorHash: chain.lastEnvelopeHash,
+      // Minted here and written into the header *before* it is serialized, so the
+      // AAD and the signature both cover it. Zero under 0x00, as the codec requires.
+      nonce: workspaceKey == null ? null : randomBytes(_nonceEntropy, nonceBytes),
     );
-    final envelope = await identity.signer.buildEnvelope(header, frameBody(payload));
+    final framedBody = frameBody(payload);
+    // The same 158 bytes are the AAD here and the AAD on receive: `serialize()` is
+    // a pure function of the header, and `buildEnvelope` calls it again to lay the
+    // envelope out, so there is one definition of those bytes rather than a copy to
+    // keep in step.
+    final body = workspaceKey == null
+        ? framedBody
+        : await sealBody(
+            headerBytes: header.serialize(),
+            framedBody: framedBody,
+            workspaceKey: workspaceKey,
+          );
+    final envelope = await identity.signer.buildEnvelope(header, body);
 
     await _db.transaction(() async {
       await _db.into(_db.outbox).insert(
@@ -694,6 +742,19 @@ class SyncClient {
       }
       hasMore = page.hasMore && page.ops.isNotEmpty && advanced;
     }
+    // A rotation landed, or something is still waiting on a wrap. Either way the
+    // fetch is bounded — one round-trip per pull, never one per op — and the
+    // freshness race F14b names (the wraps PUT landing moments after the rotate op)
+    // resolves on the next pull rather than as a mystery decryption failure.
+    if (_epochKeyRefreshRequired || await _hasOpsAwaitingEpochKeys()) {
+      _epochKeyRefreshRequired = false;
+      await refreshEpochKeys();
+      // Unconditional on what the fetch learned: a key can also have arrived through
+      // the escrow path (an enrolling device adopting the history), and gating the
+      // release on *this* fetch having learned something would leave those ops
+      // quarantined for ever.
+      affected.addAll(await _releaseOpsAwaitingEpochKeys());
+    }
     if (_rebuildRequired) {
       // A control fork resolved during this pull, so the authorization verdicts
       // the content ops applied under are no longer the right ones.
@@ -760,7 +821,10 @@ class SyncClient {
         final parts = splitEnvelope(row.envelope);
         header = OpHeader.parse(parts.header);
         if (header.opClass == opClassControl) continue;
-        payload = OpPayload.decode(parseBody(parts.body));
+        // The **same** dispatch the receive path uses, and not a second decode: a
+        // rebuild that ran `parseBody` on an `aead_v1` body would find every
+        // encrypted row unparseable and quietly un-reduce the entire Workspace.
+        payload = await _decodeContentPayload(header, parts.header, parts.body);
       } on SyncRejection {
         // Bytes that no longer parse cannot be re-applied, and the row stays as
         // the evidence it is. Refusing to replay it is the fail-closed answer.
@@ -919,7 +983,11 @@ class SyncClient {
 
       final signPk = directory.publicKeyFor(header.authorMemberId, header.authorKeyId);
       await verifyEnvelope(pulled.envelope, signPk);
-      final payload = OpPayload.decode(parseBody(parts.body));
+      // Verify, **then** decrypt. Ed25519 authenticates the author over
+      // `header || body`; the AEAD then authenticates the header binding and yields
+      // the plaintext. The other order would have this device decrypting bytes no
+      // registered key vouched for.
+      final payload = await _decodeContentPayload(header, parts.header, parts.body);
 
       final verdict = await _chainVerdictFor(header, pulled.envelope);
       if (verdict.isRefusal) throw verdict.rejection!;
@@ -1330,6 +1398,9 @@ class SyncClient {
       case controlTypeRevoke:
         await _receiveRevoke(pulled, payload, header, rootPk);
 
+      case controlTypeRotate:
+        await _receiveRotate(pulled, payload, header);
+
       default:
         // Unreachable: `requireServedType` already refused it.
         throw SyncRejection(
@@ -1380,6 +1451,22 @@ class SyncClient {
       // Genesis fixes the epoch floor at 0. Recorded rather than assumed, so a
       // Workspace's floor exists from the moment the Workspace does.
       await raiseEpochFloor(0);
+    }
+    if (payload.controlType == controlTypeRotate) {
+      // **The floor's only production raiser**, and the whole point of applying a
+      // rotate. From here this device refuses to *author* below the new epoch, so a
+      // rotation cannot be undone by the next offline write — and a suppressed
+      // rotation is detectable as the author-chain gap in the rotating owner's
+      // stream plus a floor that stopped moving.
+      //
+      // The statement's `from_epoch` is deliberately **not** checked against the
+      // local floor. `raiseEpochFloor` clamps, so an older rotate re-served is the
+      // no-op it should be, and a *skipped* rotation is impossible for a receiver to
+      // reach: `to_epoch == from_epoch + 1` is a decode invariant and the control
+      // chain fixes the order the steps apply in. A second check here would be a
+      // second place for the two to disagree.
+      await raiseEpochFloor(payload.rotateStatement().toEpoch);
+      _epochKeyRefreshRequired = true;
     }
     await _appendAppliedControlOp(pulled, payload, header, verified.payloadBytes);
   }
@@ -1465,6 +1552,45 @@ class SyncClient {
         SyncRejectionReason.serviceGrantForbidden,
         'the user_preferences Workspace grants no Service; ${grant.memberId} is '
         'a ${directory.kindOf(grant.memberId)}',
+      );
+    }
+  }
+
+  /// Verify one `rotate`: the envelope's own signature, and a live owner Grant.
+  ///
+  /// **The one served type with no second signature to check**, and that is a
+  /// consequence rather than a gap. Every other type's authority is somebody other
+  /// than the author — Root, or a granting Member — so its certificate travels
+  /// separately signed. A rotate's authority is the author's *own* live `owner`
+  /// Grant, which is the `(role, op_class)` rule already applied everywhere, and the
+  /// fields it asserts **are** the body the envelope signature covers. A rotate
+  /// therefore cannot land on a Root signature alone, unlike every sibling.
+  Future<void> _receiveRotate(
+    PulledOp pulled,
+    ControlPayload payload,
+    OpHeader header,
+  ) async {
+    await verifyEnvelope(
+      pulled.envelope,
+      directory.publicKeyFor(header.authorMemberId, header.authorKeyId),
+    );
+    // Decoded after the signature check, as the grant path decodes after its own:
+    // parsing first would be reading an unauthenticated document.
+    final rotate = payload.rotateStatement();
+    if (rotate.workspaceId != workspaceId) {
+      throw SyncRejection(
+        SyncRejectionReason.workspaceMismatch,
+        'rotate names workspace ${rotate.workspaceId}, pulled from $workspaceId',
+      );
+    }
+    if (!(await grantsView()).wasOwnerAt(header.authorMemberId, pulled.seq)) {
+      // Positional, at the op's own seq, like every other authorization verdict: a
+      // rotate authored while its author still held owner stays valid when a later
+      // revocation arrives.
+      throw SyncRejection(
+        SyncRejectionReason.noLiveGrant,
+        'member ${header.authorMemberId} held no live owner Grant at seq '
+        '${pulled.seq}, so it cannot rotate this Workspace\'s key',
       );
     }
   }
@@ -1620,11 +1746,34 @@ class SyncClient {
 
   /// Live Grants with no current-epoch KeyWrap.
   ///
-  /// A named, surfaced state *now*, dormant until #554: with no KeyWraps the
-  /// predicate is defined against epoch 0 and never fires. The vocabulary and the
-  /// seam land here so #554 wires delivery rather than concepts.
-  Future<List<DerivedGrant>> orphanedGrants() async =>
-      (await grantsView()).orphanedGrants().toList();
+  /// **Decidable for this device's own Grants and no others.** A KeyWrap is sealed to
+  /// one Member and `GET /w/{w}/keywraps/me` is the only wrap route there is, so a
+  /// device cannot observe whether a *peer* was wrapped to — and reporting every peer
+  /// as orphaned for want of evidence would make the surface useless. Peers are
+  /// therefore passed as wrapped: not an optimistic assumption but the only honest
+  /// one, and the wrap set they belong to is already committed to by the `rotate`
+  /// op's digest, which the server cannot curate.
+  ///
+  /// An orphaned own Grant is what drives the bounded KeyWrap re-fetch (F14b): it
+  /// says "this device holds a live Grant and cannot read the current epoch", which
+  /// is the freshness window after a rotation, and it clears itself when the wrap
+  /// arrives.
+  Future<List<DerivedGrant>> orphanedGrants() async {
+    final currentEpoch = await epochFloor();
+    final view = await grantsView();
+    final holdsCurrentKey =
+        await workspaceKeys.keyFor(workspaceId, currentEpoch) != null;
+    return view
+        .orphanedGrants(
+          currentEpoch: currentEpoch,
+          keyWrappedGrantIds: {
+            for (final grant in view.grants.values)
+              if (holdsCurrentKey || grant.memberId != identity.memberId)
+                grant.grantId,
+          },
+        )
+        .toList();
+  }
 
   Future<void> _appendAppliedControlOp(
     PulledOp pulled,
@@ -1666,6 +1815,9 @@ class SyncClient {
         controlTypeMemberRegister => payload.certificate().registeredAtHlc,
         controlTypeGrant => payload.grantCertificate().grantedAtHlc,
         controlTypeRevoke => payload.revokeCertificate().revokedAtHlc,
+        // A rotate carries no certificate, so its own `rotated_at_hlc` is the clock
+        // the tie-break reads — the same field, one document up.
+        controlTypeRotate => payload.rotateStatement().rotatedAtHlc,
         _ => throw SyncRejection(
             SyncRejectionReason.unsupportedControlType,
             'control type "${payload.controlType}" carries no certificate clock',
@@ -1790,6 +1942,153 @@ class SyncClient {
     _rebuildRequired = true;
   }
 
+  // --- Suite dispatch and epoch keys -------------------------------------------
+
+  /// Decode one content op's body under whichever suite its header names.
+  ///
+  /// The **whole** of the encryption read path, and it is a two-branch dispatch on
+  /// one question — does this device hold `K_{w,key_epoch}`:
+  ///
+  /// * `aead_v1` with the key: open under the *literal received header bytes* as
+  ///   AAD, then run [parseBody] on the plaintext. The padding rules therefore run
+  ///   inside the AEAD rather than beside it, through the same function a
+  ///   `plaintext_v1` body goes through.
+  /// * `aead_v1` without the key: [SyncRejectionReason.missingEpochKey] — a
+  ///   healable delivery gap, quarantined and re-tried once the wrap arrives.
+  /// * `plaintext_v1` at an epoch we hold a key for:
+  ///   [SyncRejectionReason.plaintextAtEncryptedEpoch] — the upgrade is one-way, and
+  ///   this is the boundary that keeps it so.
+  /// * `plaintext_v1` at an unkeyed epoch: the pre-turn-on path, unchanged for ever.
+  Future<OpPayload> _decodeContentPayload(
+    OpHeader header,
+    Uint8List headerBytes,
+    Uint8List body,
+  ) async {
+    final workspaceKey = await workspaceKeys.keyFor(workspaceId, header.keyEpoch);
+    if (header.suite == suiteAeadV1) {
+      if (workspaceKey == null) {
+        throw SyncRejection(
+          SyncRejectionReason.missingEpochKey,
+          'no key for epoch ${header.keyEpoch} of this Workspace on this device',
+        );
+      }
+      return OpPayload.decode(parseBody(await openBody(
+        headerBytes: headerBytes,
+        body: body,
+        workspaceKey: workspaceKey,
+      )));
+    }
+    if (workspaceKey != null) {
+      throw SyncRejection(
+        SyncRejectionReason.plaintextAtEncryptedEpoch,
+        'a content op at suite plaintext_v1 arrived at epoch ${header.keyEpoch}, '
+        'which this Workspace has a key for',
+      );
+    }
+    return OpPayload.decode(parseBody(body));
+  }
+
+  /// Set when this pull learned that an epoch key it does not hold now exists.
+  ///
+  /// Acted on at the end of the pull rather than mid-page, for [_rebuildRequired]'s
+  /// reason: a rotate and the first op at the new epoch usually arrive in one page,
+  /// and re-fetching per op would spend a round-trip per op.
+  bool _epochKeyRefreshRequired = false;
+
+  /// Fetch this Member's KeyWraps and learn every epoch key they carry.
+  ///
+  /// The ordinary delivery path, and it needs **no passphrase**: a wrap is sealed to
+  /// this Device's own registered X25519 key, so the device that holds the seed can
+  /// open it. The passphrase is only needed for the escrow route, which is the
+  /// bootstrap case with no wrap yet (see `key_ceremony.dart`).
+  ///
+  /// Returns how many new epochs were learned. A wrap that does not open under our
+  /// own key is an accusation rather than a crash: it is raised as an
+  /// `aead_failure` alarm and the loop continues, because one substituted wrap must
+  /// not stop the others from arriving.
+  Future<int> refreshEpochKeys() async {
+    final ownKexKeyId = deriveKeyId(identity.kexPk);
+    var learned = 0;
+    for (final record in await transport.fetchMyKeyWraps(workspaceId)) {
+      // Neither of these is reachable through the real route — it serves
+      // `jwt.member == row.member` only — so they are the fail-closed answer to a
+      // server that serves something else, not a filter the protocol needs.
+      if (record.memberId != identity.memberId) continue;
+      if (!sameBytes(record.kexKeyId, ownKexKeyId)) continue;
+      if (await workspaceKeys.keyFor(workspaceId, record.epoch) != null) continue;
+      try {
+        await workspaceKeys.remember(
+          workspaceId,
+          record.epoch,
+          await unwrapEpochKeyForMember(
+            wrap: record.wrap,
+            kexKeyPair: identity.kexKeyPair,
+            workspaceId: workspaceId,
+            epoch: record.epoch,
+            memberId: identity.memberId,
+            kexKeyId: ownKexKeyId,
+          ),
+        );
+        learned++;
+      } on SyncRejection catch (rejection) {
+        await _raiseAlarm(
+          IntegrityAlarmKind.aeadFailure,
+          detail: 'the KeyWrap served for epoch ${record.epoch} did not open under '
+              'this Device\'s own KEX key: ${rejection.message}',
+        );
+      }
+    }
+    return learned;
+  }
+
+  /// Re-receive the ops quarantined for a key that has since arrived.
+  ///
+  /// The healing half of [SyncRejectionReason.missingEpochKey]. Released *before*
+  /// re-entry, exactly as the chain-successor scan does it: a re-receive that
+  /// refuses for some later reason must leave the row released rather than
+  /// re-examined for ever.
+  Future<Set<AffectedEntity>> _releaseOpsAwaitingEpochKeys() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.reason.equals(SyncRejectionReason.missingEpochKey.code))
+          ..orderBy([(row) => OrderingTerm(expression: row.id)]))
+        .get();
+    final affected = <AffectedEntity>{};
+    for (final row in rows) {
+      final seq = row.seq;
+      if (seq == null) continue;
+      final OpHeader header;
+      try {
+        header = OpHeader.parse(splitEnvelope(row.envelope).header);
+      } on SyncRejection {
+        continue;
+      }
+      if (await workspaceKeys.keyFor(workspaceId, header.keyEpoch) == null) continue;
+      await _markReleased(row.id);
+      affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
+    }
+    return affected;
+  }
+
+  /// Whether anything is still waiting on a key — the state-based half of the
+  /// refresh trigger.
+  ///
+  /// Read from the quarantine rather than from a flag, so a device that was offline
+  /// when the wrap was published retries on its next pull instead of only on the
+  /// pull that first saw the gap.
+  Future<bool> _hasOpsAwaitingEpochKeys() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.reason.equals(SyncRejectionReason.missingEpochKey.code))
+          ..limit(1))
+        .get();
+    return rows.isNotEmpty;
+  }
+
   // --- epoch_floor ------------------------------------------------------------
 
   /// The monotone `key_epoch` floor for this Workspace. Absent reads as 0.
@@ -1798,6 +2097,31 @@ class SyncClient {
           ..where((r) => r.workspaceId.equals(workspaceId)))
         .getSingleOrNull();
     return row?.keyEpochFloor ?? 0;
+  }
+
+  /// When the current epoch was established, as the **log** records it.
+  ///
+  /// The `rotated_at_hlc` of the latest applied `rotate`, or the genesis's
+  /// `created_at_hlc` for a Workspace that has never rotated. Read from the signed
+  /// control ops rather than from `epoch_floors.raised_at`, because that column
+  /// stamps *this device's* local clock at the moment it applied the op — two
+  /// devices would then disagree about the epoch's age, and a device that enrolled
+  /// yesterday would think a two-year-old epoch was a day old.
+  ///
+  /// Null before any control op has applied.
+  Future<DateTime?> currentEpochEstablishedAt() async {
+    final rows = await _appliedControlLog();
+    for (final row in rows.reversed) {
+      if (row.controlType == controlTypeRotate) {
+        return DateTime.fromMillisecondsSinceEpoch(row.certWallMs, isUtc: true);
+      }
+    }
+    for (final row in rows) {
+      if (row.controlType == controlTypeWorkspaceGenesis) {
+        return DateTime.fromMillisecondsSinceEpoch(row.certWallMs, isUtc: true);
+      }
+    }
+    return null;
   }
 
   /// Raise the floor, clamping to the maximum ever seen.

@@ -391,6 +391,69 @@ class SimWorkspace {
     }
   }
 
+  /// Bring [service] in as a chained, granted **Service** rather than a Device.
+  ///
+  /// The `member_kind` is a *signed* fact, so this differs from [enrolFixture] in
+  /// exactly one field — the registration certificate's kind — and everything else is
+  /// the same two-op ceremony. It exists because a live-granted Service is the one
+  /// reachable state in which a Workspace has a Member no epoch key can be wrapped
+  /// to: Service KeyWraps need a verified per-User KEX subkey, and Service enrolment
+  /// does not exist yet.
+  ///
+  /// The default Workspace only. The preferences Workspace refuses a Service Grant on
+  /// both sides, which is a different rule and has its own test.
+  Future<FakeSyncServerMemberSession> enrolServiceFixture(
+    AuthorFixture service, {
+    String role = roleSuggester,
+  }) async {
+    final user = server.connectAsUser(userId);
+    await user.registerMember(
+      memberId: service.memberId,
+      signPk: service.signPk,
+      kexPk: service.kexPk,
+    );
+    final nonce = await user.requestMemberChallenge(service.memberId);
+    final session = await user.completeMemberChallenge(
+      memberId: service.memberId,
+      nonce: nonce,
+      signature: await service.signChallenge(nonce),
+    ) as FakeSyncServerMemberSession;
+
+    final root = await recoverRoot();
+    try {
+      final register = await memberRegisterEnvelope(
+        device: service,
+        workspaceId: workspaceId,
+        root: root,
+        prevControlHash: controlChainHead(),
+        wallMs: clock.nowMs,
+        certificate: RegistrationCertificate(
+          workspaceId: workspaceId,
+          memberId: service.memberId,
+          signPk: service.signPk,
+          kexPk: service.kexPk,
+          registeredAtHlc: Hlc.forMember(service.memberId, clock.nowMs),
+          memberKind: memberKindService,
+        ),
+      );
+      await session.postOps(workspaceId, [
+        register,
+        await grantEnvelope(
+          device: service,
+          workspaceId: workspaceId,
+          root: root,
+          prevControlHash: controlPayloadHash(parseBody(splitEnvelope(register).body)),
+          memberId: service.memberId,
+          role: role,
+          wallMs: clock.nowMs,
+        ),
+      ]);
+      return session;
+    } finally {
+      root.drop();
+    }
+  }
+
   /// Push everyone, then pull everyone, twice — one pass would leave the first
   /// device having pulled before the last device pushed.
   Future<void> syncAll() async {

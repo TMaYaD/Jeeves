@@ -30,6 +30,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'key_wraps.dart';
 import 'signal_socket.dart';
 import 'sync_transport.dart';
 
@@ -96,6 +97,69 @@ class HttpSyncTransport implements SyncTransport {
       hasMore: response['has_more'] as bool,
     );
   }
+
+  @override
+  Future<List<KeyWrapRecord>> putKeyWraps(
+    String workspaceId, {
+    required int epoch,
+    required List<MemberKeyWrap> wraps,
+    required Uint8List escrowWrap,
+    Uint8List? keyWrapDigest,
+  }) async {
+    final response = await _send(
+      () => _dio.put<Map<String, dynamic>>(
+        '/w/$workspaceId/keywraps',
+        data: {
+          'epoch': epoch,
+          'wraps': [
+            for (final wrap in wraps)
+              {
+                'member_id': wrap.memberId,
+                'kex_key_id': base64Encode(wrap.kexKeyId),
+                'wrap_b64': base64Encode(wrap.wrap),
+              },
+          ],
+          'escrow_wrap_b64': base64Encode(escrowWrap),
+          if (keyWrapDigest != null)
+            'keywrap_digest_b64': base64Encode(keyWrapDigest),
+        },
+      ),
+    );
+    return _keyWrapsFromJson(response!);
+  }
+
+  @override
+  Future<List<KeyWrapRecord>> fetchMyKeyWraps(String workspaceId) async {
+    final response = await _send(
+      () => _dio.get<Map<String, dynamic>>('/w/$workspaceId/keywraps/me'),
+    );
+    return _keyWrapsFromJson(response!);
+  }
+
+  @override
+  Future<List<EpochKeyRecord>> fetchEpochKeys(String workspaceId) async {
+    final response = await _send(
+      () => _dio.get<Map<String, dynamic>>('/w/$workspaceId/epoch-keys'),
+    );
+    return [
+      for (final epoch in response!['epochs'] as List<dynamic>)
+        EpochKeyRecord(
+          epoch: (epoch as Map<String, dynamic>)['epoch'] as int,
+          escrowWrap: base64Decode(epoch['escrow_wrap_b64'] as String),
+          keyWrapDigest: base64Decode(epoch['keywrap_digest_b64'] as String),
+        ),
+    ];
+  }
+
+  static List<KeyWrapRecord> _keyWrapsFromJson(Map<String, dynamic> json) => [
+        for (final wrap in json['wraps'] as List<dynamic>)
+          KeyWrapRecord(
+            epoch: (wrap as Map<String, dynamic>)['epoch'] as int,
+            memberId: wrap['member_id'] as String,
+            kexKeyId: base64Decode(wrap['kex_key_id'] as String),
+            wrap: base64Decode(wrap['wrap_b64'] as String),
+          ),
+      ];
 
   @override
   Stream<void> newSeqSignals(String workspaceId) => decodeSignalFrames(
