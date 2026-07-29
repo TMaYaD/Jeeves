@@ -9,7 +9,7 @@
 /// ```
 /// header (canonical, fixed order; fixed-width fields, big-endian integers)
 ///                           offset  size
-///   suite            u8        0      1   0x00 = plaintext_v1
+///   suite            u8        0      1   0x00 = plaintext_v1, 0x01 = aead_v1
 ///   op_class         u8        1      1   1=content 2=control 3=suggestion
 ///                                         4=compaction 5=prune
 ///   workspace_id     16B       2     16
@@ -23,10 +23,30 @@
 ///   nonce            24B     134     24   zero under suite 0x00
 ///                         total = 158 bytes
 ///
-/// body      = u32 payload_len || payload || zero padding
-/// signature = Ed25519(sk_author, "jeeves/op/v1" || header || body)
-/// envelope  = header || body || signature
+/// plaintext body = u32 payload_len || payload || zero padding
+/// aead_v1 body   = XChaCha20-Poly1305(K_{w,epoch}, header.nonce,
+///                      aad = the 158 serialized header bytes exactly,
+///                      plaintext = the *same* framed body)
+/// signature      = Ed25519(sk_author, "jeeves/op/v1" || header || body)
+/// envelope       = header || body || signature
 /// ```
+///
+/// **`aead_v1` is a body wrapper and nothing else.** No offset moves, no field is
+/// added, and the framed plaintext under 0x01 is byte for byte what 0x00 would
+/// have carried in the clear — so [parseBody]'s three padding rules run on the
+/// decrypted plaintext through the same code path, which is how the
+/// covert-channel and tamper duty moves *inside* the AEAD rather than being
+/// duplicated beside it. The AAD is the literal header, so the suite, the
+/// `key_epoch` and the nonce are all bound with no second binding to keep in step.
+///
+/// One rule is suite-conditional, and only one: a 0x01 body is 16 bytes longer
+/// than the size class it pads to (the Poly1305 tag), so wire-legality is
+/// [isLegalBodyLengthForSuite] rather than [isLegalBodyLength].
+///
+/// **Control ops are `plaintext_v1` for ever** (review F2): the server must parse
+/// them to materialise memberships, Grants and rotations, and it holds no key.
+/// A control op wearing suite 0x01 is refused as
+/// [SyncRejectionReason.encryptedControlOp] by both codecs.
 library;
 
 import 'dart:convert';
@@ -37,14 +57,14 @@ import 'package:cryptography/cryptography.dart';
 
 // --- Suites ------------------------------------------------------------------
 
-/// plaintext_v1 — no AEAD, Ed25519 signature only. The suite this slice speaks.
+/// plaintext_v1 — no AEAD, Ed25519 signature only.
 const int suitePlaintextV1 = 0x00;
 
-/// aead_v1 — XChaCha20-Poly1305 + Ed25519. Reserved for #554, never emitted here.
+/// aead_v1 — XChaCha20-Poly1305 over the framed body, plus the Ed25519 signature.
 const int suiteAeadV1 = 0x01;
 
 /// Suites this build implements. Anything else is fail-closed (review F21).
-const Set<int> servedSuites = {suitePlaintextV1};
+const Set<int> servedSuites = {suitePlaintextV1, suiteAeadV1};
 
 // --- Op classes ---------------------------------------------------------------
 
@@ -84,6 +104,16 @@ const int prevAuthorHashBytes = 32;
 const int observedHeadBytes = 32;
 const int nonceBytes = 24;
 const int signPublicKeyBytes = 32;
+
+/// The Poly1305 tag every AEAD ciphertext here carries, appended.
+///
+/// One constant for the envelope body, the KeyWrap and the escrow blob: they all
+/// use XChaCha20-Poly1305, and three copies of 16 is how one of them ends up
+/// disagreeing.
+const int aeadTagBytes = 16;
+
+/// A Workspace content key `K_{w,epoch}` — random 256 bits, never derived.
+const int workspaceKeyBytes = 32;
 
 const int _offsetSuite = 0;
 const int _offsetOpClass = 1;
@@ -125,6 +155,16 @@ const String signingDomainEscrowV1 = 'jeeves/escrow/v1';
 const int payloadLengthPrefixBytes = 4;
 
 /// Padded body sizes below the oversize threshold.
+///
+/// **Measured and left alone under #554.** A full-day convergence corpus authors
+/// 61 content ops: 32 pad to 256 and 29 to 1024, and 25 of those 29 have a framed
+/// length in 257–512 — so 256→1024 *is* the common jump, exactly as the proposal
+/// suspected. A 512 class was still refused. Padding classes are a confidentiality
+/// mechanism, not a bandwidth one: splitting the bucket would hand an observer one
+/// more bit per op about how large its payload is, and buy back ~13 KiB a day. On
+/// an issue whose subject is confidentiality that is the wrong side of the trade,
+/// and the coarse bucket is the padding doing its job — collapsing 41% of a day's
+/// ops into a class indistinguishable from the largest ones.
 const List<int> bodySizeClassesBytes = [256, 1024, 4096, 16384];
 
 /// Above the largest size class a body rounds up to the next multiple of this,
@@ -139,6 +179,16 @@ const int bodyOversizeMultipleBytes = 16384;
 /// written out so the number cannot drift from the padding rule it follows from.
 final int minimumEnvelopeBytes =
     headerLengthBytes + bodySizeClassesBytes.first + signatureLengthBytes;
+
+/// [minimumEnvelopeBytes], made suite-aware by the one thing that differs.
+///
+/// The server's content-blind floor: under 0x01 the smallest legal body is the
+/// smallest size class *plus the tag*, so a floor that stayed at the plaintext
+/// number would let a 16-byte-short encrypted envelope into the log for every
+/// puller to quarantine. It reads the suite out of the header, which it already
+/// parses, and still never looks at a body byte.
+int minimumEnvelopeBytesForSuite(int suite) =>
+    minimumEnvelopeBytes + (suite == suiteAeadV1 ? aeadTagBytes : 0);
 
 // --- Failure surface -------------------------------------------------------------
 
@@ -155,6 +205,65 @@ enum SyncRejectionReason {
   nonZeroPadding('non_zero_padding'),
   badSignature('bad_signature'),
   workspaceMismatch('workspace_mismatch'),
+
+  /// An `op_class = control` op wearing suite `aead_v1`.
+  ///
+  /// A **codec-level document invariant**, refused wherever the bytes are held.
+  /// Control ops are unencrypted by design (review F2): the server materialises
+  /// memberships, Grants and rotations out of their payloads and holds no key, so
+  /// an encrypted one is not a stricter op — it is an op nobody can act on, and
+  /// a client that tolerated it would be trusting a server that could no longer
+  /// check anything. Carries a golden negative vector: both codecs must classify
+  /// it identically.
+  encryptedControlOp('encrypted_control_op'),
+
+  /// The AEAD did not authenticate under a key this device **holds**.
+  ///
+  /// Never a skipped row: the op quarantines *and* raises an
+  /// `aead_failure` integrity alarm, because a key we hold plus bytes that do not
+  /// authenticate under it is either a tampered body or a tampered header — the
+  /// AAD is the header — and both are accusations rather than delivery gaps.
+  /// Distinct from [missingEpochKey], which is the healable case.
+  aeadFailure('aead_failure'),
+
+  /// An op at a `key_epoch` this device holds no `K_{w,epoch}` for.
+  ///
+  /// Quarantined fail-closed, and *not* an alarm: a KeyWrap that has not arrived
+  /// yet is a delivery gap, not misconduct. The standing state is surfaced through
+  /// the orphaned-grant predicate, which triggers a bounded KeyWrap re-fetch before
+  /// it escalates — the `GET /w/{w}/keywraps/me` freshness race after a rotation is
+  /// exactly this, named rather than left as a mystery decryption failure.
+  ///
+  /// Client-only and stateful: the same envelope is readable for a device holding
+  /// the wrap and a gap for one that does not, so it carries no golden vector.
+  missingEpochKey('missing_epoch_key'),
+
+  /// A *content* op at suite 0x00 whose `key_epoch` this device holds a key for.
+  ///
+  /// The read-boundary half of "the upgrade is one-way": once an epoch is keyed,
+  /// a coerced or buggy author cannot quietly hand the Workspace back a plaintext
+  /// op at that epoch. History written at *earlier*, unkeyed epochs stays readable
+  /// for ever — turn-on mints `K_{w,N+1}`, never `K_{w,N}` — which is what makes
+  /// this the only dual-read branch the design needs.
+  ///
+  /// **Scoped to content ops today.** Compaction and prune (#555) are the other
+  /// classes that may carry a body, and a plaintext class-4 op at a keyed epoch is
+  /// the same downgrade leak; whichever of #554/#555 lands second extends this
+  /// rule to them. Control ops are exempt by construction — they are 0x00 for
+  /// ever, which is [encryptedControlOp]'s whole point.
+  ///
+  /// An alarm as well as a quarantine: unlike [missingEpochKey] nothing about this
+  /// heals by waiting.
+  plaintextAtEncryptedEpoch('plaintext_at_encrypted_epoch'),
+
+  /// A KeyWrap or escrow wrap of the wrong length. A pure width check, refused
+  /// before any crypto runs — see `key_wraps.dart`.
+  malformedKeyWrap('malformed_keywrap'),
+
+  /// A content op built against a `key_epoch` the server has already rotated past
+  /// by more than one. The authoring-side twin of the server's `key_epoch_stale`
+  /// refusal, so a device does not post what it will only be handed back.
+  keyEpochStale('key_epoch_stale'),
 
   /// No *verified* MemberRegister has taught this device the author's key.
   ///
@@ -414,7 +523,8 @@ class OpHeader {
     );
   }
 
-  /// Fail closed on any suite or op class this build does not serve.
+  /// Fail closed on any suite or op class this build does not serve, and on the
+  /// one `(suite, op_class)` pair the protocol forbids outright.
   void checkServed() {
     if (!servedSuites.contains(suite)) {
       throw SyncRejection(
@@ -428,6 +538,103 @@ class OpHeader {
         'op_class $opClass is not served',
       );
     }
+    if (suite == suiteAeadV1 && opClass == opClassControl) {
+      // Not a served/unserved question, and so not expressible as a set: both
+      // halves are served, and the *pair* is forbidden for ever. See
+      // [SyncRejectionReason.encryptedControlOp].
+      throw const SyncRejection(
+        SyncRejectionReason.encryptedControlOp,
+        'control ops are plaintext_v1 for ever: the server materialises their '
+        'payloads and holds no key',
+      );
+    }
+  }
+}
+
+// --- aead_v1: sealing and opening a body -------------------------------------
+
+/// The AEAD the whole protocol uses: XChaCha20-Poly1305, as the escrow blob does.
+final Cipher _bodyCipher = Xchacha20.poly1305Aead();
+
+/// The 24 nonce bytes carried at [_offsetNonce] of a serialized header.
+///
+/// Read out of the literal header rather than passed alongside it: the nonce *is*
+/// a header field, so a caller that could supply a different one would be sealing
+/// under bytes the AAD does not cover.
+Uint8List nonceOfHeader(Uint8List headerBytes) =>
+    _sliceOf(headerBytes, _offsetNonce, nonceBytes);
+
+/// Seal a framed body under `aead_v1`: `ciphertext || tag`.
+///
+/// [headerBytes] is both the AAD and the source of the nonce, so there is exactly
+/// one place either can come from. The plaintext is the *already framed* body —
+/// pad-then-encrypt — which is what puts [parseBody]'s padding rules inside the
+/// AEAD instead of beside it.
+///
+/// Nothing here mints a nonce. Production draws 24 bytes from `Random.secure()`
+/// at authoring and writes them into the header before it is serialized; the
+/// golden vectors pin explicit nonce bytes. A seeded-nonce scheme would be
+/// catastrophic under a stream cipher, so the seam is "the caller already chose,
+/// and it is in the header" rather than an injectable entropy source.
+Future<Uint8List> sealBody({
+  required Uint8List headerBytes,
+  required Uint8List framedBody,
+  required Uint8List workspaceKey,
+}) async {
+  _requireLength(headerBytes, headerLengthBytes, 'header');
+  _requireLength(workspaceKey, workspaceKeyBytes, 'workspace key');
+  final box = await _bodyCipher.encrypt(
+    framedBody,
+    secretKey: SecretKey(workspaceKey),
+    nonce: nonceOfHeader(headerBytes),
+    aad: headerBytes,
+  );
+  return (BytesBuilder(copy: false)
+        ..add(box.cipherText)
+        ..add(box.mac.bytes))
+      .toBytes();
+}
+
+/// Open an `aead_v1` body back to its framed plaintext.
+///
+/// Throws [SyncRejectionReason.invalidBodyLength] for a body that is not a size
+/// class plus a tag, and [SyncRejectionReason.aeadFailure] for anything the AEAD
+/// refuses — a tampered ciphertext and a tampered header are the same verdict
+/// here, because the header is the AAD and the codec cannot tell which of them
+/// moved. Classifying them apart would be a guess.
+Future<Uint8List> openBody({
+  required Uint8List headerBytes,
+  required Uint8List body,
+  required Uint8List workspaceKey,
+}) async {
+  _requireLength(headerBytes, headerLengthBytes, 'header');
+  _requireLength(workspaceKey, workspaceKeyBytes, 'workspace key');
+  if (!isLegalBodyLengthForSuite(suiteAeadV1, body.length)) {
+    throw SyncRejection(
+      SyncRejectionReason.invalidBodyLength,
+      'an aead_v1 body of ${body.length} bytes is not a size class plus a '
+      '$aeadTagBytes-byte tag',
+    );
+  }
+  final split = body.length - aeadTagBytes;
+  try {
+    return Uint8List.fromList(
+      await _bodyCipher.decrypt(
+        SecretBox(
+          Uint8List.sublistView(body, 0, split),
+          nonce: nonceOfHeader(headerBytes),
+          mac: Mac(Uint8List.sublistView(body, split)),
+        ),
+        secretKey: SecretKey(workspaceKey),
+        aad: headerBytes,
+      ),
+    );
+  } on SecretBoxAuthenticationError catch (error) {
+    throw SyncRejection(
+      SyncRejectionReason.aeadFailure,
+      'the aead_v1 body did not authenticate under the epoch key this device '
+      'holds: $error',
+    );
   }
 }
 
@@ -562,6 +769,17 @@ bool isLegalBodyLength(int bodyLengthBytes) {
   if (bodySizeClassesBytes.contains(bodyLengthBytes)) return true;
   return bodyLengthBytes > bodySizeClassesBytes.last &&
       bodyLengthBytes % bodyOversizeMultipleBytes == 0;
+}
+
+/// [isLegalBodyLength], made suite-aware — **the one suite-conditional rule**.
+///
+/// A 0x01 body is the padded plaintext plus the Poly1305 tag, so its legal lengths
+/// are the plaintext ones shifted by 16. Expressed as a shift rather than as a
+/// second table so a change to the size classes moves both suites at once.
+bool isLegalBodyLengthForSuite(int suite, int bodyLengthBytes) {
+  if (suite != suiteAeadV1) return isLegalBodyLength(bodyLengthBytes);
+  return bodyLengthBytes > aeadTagBytes &&
+      isLegalBodyLength(bodyLengthBytes - aeadTagBytes);
 }
 
 /// `u32 payload_len || payload || 0x00 padding` to the next legal length.

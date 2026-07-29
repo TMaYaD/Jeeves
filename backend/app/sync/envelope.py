@@ -9,7 +9,7 @@ here that is not mirrored there is a protocol fork.
 
     header (canonical, fixed order; fixed-width fields, big-endian integers)
                               offset  size
-      suite            u8        0      1   0x00 = plaintext_v1
+      suite            u8        0      1   0x00 = plaintext_v1, 0x01 = aead_v1
       op_class         u8        1      1   1=content 2=control 3=suggestion
                                             4=compaction 5=prune
       workspace_id     16B       2     16
@@ -23,17 +23,35 @@ here that is not mirrored there is a protocol fork.
       nonce            24B     134     24   zero under suite 0x00
                             total = 158 bytes
 
-    body      = u32 payload_len || payload || zero padding (see `frame_body`)
-    signature = Ed25519(sk_author, b"jeeves/op/v1" || header || body)
-    envelope  = header || body || signature
+    plaintext body = u32 payload_len || payload || zero padding (`frame_body`)
+    aead_v1 body   = XChaCha20-Poly1305(K_{w,epoch}, header.nonce,
+                         aad = the 158 serialized header bytes exactly,
+                         plaintext = the *same* framed body)
+    signature      = Ed25519(sk_author, b"jeeves/op/v1" || header || body)
+    envelope       = header || body || signature
 
 The header is constant width, so no per-field length prefixes are needed: the
 envelope framing supplies the only variable length, ``body_len = len(envelope)
 - ENVELOPE_OVERHEAD_BYTES``.
 
-Under suite 0x01 (``aead_v1``, reserved for #554) the body becomes ciphertext
-with AAD = the serialized header bytes, exactly.  Nothing else about the layout
-changes, which is why the AAD is defined as the literal header today.
+**``aead_v1`` is a body wrapper and nothing else** — no offset moves, no field is
+added, and the framed plaintext under 0x01 is byte for byte what 0x00 would have
+carried in the clear.  The AAD is the literal header, so the suite, the
+``key_epoch`` and the nonce are bound with no second binding to keep in step.
+Exactly one rule is suite-conditional: a 0x01 body is 16 bytes longer than the
+size class it pads to (the Poly1305 tag), so wire-legality is
+:func:`is_legal_body_length_for_suite`.
+
+**The server never decrypts and never parses a 0x01 body.**  Its
+content-blindness is cryptographic from here on: what it holds for an encrypted
+op is the header index and opaque bytes.  ``seal_body``/``open_body`` exist in
+this module so the golden-vector generator and the two codecs pin one
+construction — no request path calls them.
+
+**Control ops are ``plaintext_v1`` for ever** (review F2): the server materialises
+memberships, Grants and rotations out of their payloads and holds no key, so an
+encrypted control op is not a stricter op but one nobody can act on.  Both codecs
+refuse it as ``encrypted_control_op``.
 """
 
 from __future__ import annotations
@@ -44,17 +62,18 @@ import uuid
 from dataclasses import dataclass
 from typing import Final
 
-from nacl.exceptions import BadSignatureError
+from nacl import bindings
+from nacl.exceptions import BadSignatureError, CryptoError
 from nacl.signing import SigningKey, VerifyKey
 
 # --- Suites -----------------------------------------------------------------
 
-#: plaintext_v1 — no AEAD, Ed25519 signature only.  The suite this slice serves.
+#: plaintext_v1 — no AEAD, Ed25519 signature only.
 SUITE_PLAINTEXT_V1: Final = 0x00
-#: aead_v1 — XChaCha20-Poly1305 + Ed25519.  Reserved for #554, never served here.
+#: aead_v1 — XChaCha20-Poly1305 over the framed body, plus the Ed25519 signature.
 SUITE_AEAD_V1: Final = 0x01
 #: Suites this build implements.  Anything else is fail-closed (review F21).
-SERVED_SUITES: Final[frozenset[int]] = frozenset({SUITE_PLAINTEXT_V1})
+SERVED_SUITES: Final[frozenset[int]] = frozenset({SUITE_PLAINTEXT_V1, SUITE_AEAD_V1})
 
 # --- Op classes -------------------------------------------------------------
 
@@ -95,6 +114,13 @@ OBSERVED_HEAD_BYTES: Final = 32
 NONCE_BYTES: Final = 24
 SIGN_PUBLIC_KEY_BYTES: Final = 32
 
+#: The Poly1305 tag every AEAD ciphertext in this protocol carries, appended.
+#: One constant for the envelope body, the KeyWrap and the escrow blob — three
+#: copies of 16 is how one of them ends up disagreeing.
+AEAD_TAG_BYTES: Final = 16
+#: A Workspace content key ``K_{w,epoch}`` — random 256 bits, never derived.
+WORKSPACE_KEY_BYTES: Final = 32
+
 #: Byte offset and width of every header field, in canonical order.  Exported so
 #: the golden-vector generator and both test suites pin the same numbers.
 HEADER_FIELD_LAYOUT: Final[tuple[tuple[str, int, int], ...]] = (
@@ -125,6 +151,14 @@ ZERO_PREV_AUTHOR_HASH: Final = bytes(PREV_AUTHOR_HASH_BYTES)
 
 PAYLOAD_LENGTH_PREFIX_BYTES: Final = 4
 #: Padded body sizes below the oversize threshold.
+#:
+#: **Measured and left alone under #554.**  A full-day convergence corpus authors
+#: 61 content ops: 32 pad to 256 and 29 to 1024, and 25 of those 29 have a framed
+#: length in 257–512 — so 256→1024 *is* the common jump.  A 512 class was still
+#: refused: padding classes are a confidentiality mechanism, not a bandwidth one,
+#: and splitting the bucket would hand an observer one more bit per op about how
+#: large its payload is to buy back ~13 KiB a day.  The coarse bucket is the
+#: padding doing its job.
 BODY_SIZE_CLASSES_BYTES: Final[tuple[int, ...]] = (256, 1024, 4096, 16384)
 #: Above the largest size class a body rounds up to the next multiple of this,
 #: with no hard cap — #550's notes fields can be large.
@@ -138,6 +172,18 @@ BODY_OVERSIZE_MULTIPLE_BYTES: Final = 16384
 MINIMUM_ENVELOPE_BYTES: Final = (
     HEADER_LENGTH_BYTES + BODY_SIZE_CLASSES_BYTES[0] + SIGNATURE_LENGTH_BYTES
 )
+
+
+def minimum_envelope_bytes_for_suite(suite: int) -> int:
+    """:data:`MINIMUM_ENVELOPE_BYTES`, made suite-aware by the one thing that differs.
+
+    The server's content-blind floor.  Under 0x01 the smallest legal body is the
+    smallest size class *plus the tag*, so a floor left at the plaintext number
+    would admit a 16-byte-short encrypted envelope into the log for every puller to
+    quarantine.  It reads the suite out of the header it already parses and still
+    never looks at a body byte.
+    """
+    return MINIMUM_ENVELOPE_BYTES + (AEAD_TAG_BYTES if suite == SUITE_AEAD_V1 else 0)
 
 
 # --- Failure surface --------------------------------------------------------
@@ -196,6 +242,32 @@ class BadSignatureEnvelopeError(EnvelopeError):
 
 class WorkspaceMismatchError(EnvelopeError):
     reason = "workspace_mismatch"
+
+
+class EncryptedControlOpError(EnvelopeError):
+    """An ``op_class = control`` op wearing suite ``aead_v1``.
+
+    A codec-level document invariant, refused wherever the bytes are held.  Not a
+    served/unserved question and so not expressible as a set: both halves are
+    served and the *pair* is forbidden for ever, because the server materialises
+    control payloads and holds no key.  A client that tolerated one would be
+    trusting a server that could no longer check anything.
+    """
+
+    reason = "encrypted_control_op"
+
+
+class AeadFailureError(EnvelopeError):
+    """The AEAD did not authenticate under the key supplied.
+
+    A tampered ciphertext and a tampered header are the same verdict — the header
+    is the AAD, and the codec cannot tell which of them moved.  Classifying them
+    apart would be a guess.  On a client this is an integrity *alarm* as well as a
+    quarantine (never a skipped row); the server never reaches it, because it never
+    decrypts.
+    """
+
+    reason = "aead_failure"
 
 
 # --- Header -----------------------------------------------------------------
@@ -308,6 +380,20 @@ def is_legal_body_length(body_length_bytes: int) -> bool:
     )
 
 
+def is_legal_body_length_for_suite(suite: int, body_length_bytes: int) -> bool:
+    """:func:`is_legal_body_length`, made suite-aware — **the one such rule**.
+
+    A 0x01 body is the padded plaintext plus the Poly1305 tag, so its legal lengths
+    are the plaintext ones shifted by 16.  Expressed as a shift rather than as a
+    second table, so a change to the size classes moves both suites at once.
+    """
+    if suite != SUITE_AEAD_V1:
+        return is_legal_body_length(body_length_bytes)
+    return body_length_bytes > AEAD_TAG_BYTES and is_legal_body_length(
+        body_length_bytes - AEAD_TAG_BYTES
+    )
+
+
 def frame_body(payload: bytes) -> bytes:
     """``u32 payload_len || payload || 0x00 padding`` to the next legal length."""
     framed_length = PAYLOAD_LENGTH_PREFIX_BYTES + len(payload)
@@ -381,8 +467,75 @@ def envelope_hash(envelope: bytes) -> bytes:
 
 
 def check_served(header: OpHeader) -> None:
-    """Fail closed on any suite or op class this build does not serve."""
+    """Fail closed on any unserved suite or op class, and on the one forbidden pair."""
     if header.suite not in SERVED_SUITES:
         raise UnsupportedSuiteError(f"suite 0x{header.suite:02x} is not served")
     if header.op_class not in SERVED_OP_CLASSES:
         raise UnsupportedOpClassError(f"op_class {header.op_class} is not served")
+    if header.suite == SUITE_AEAD_V1 and header.op_class == OP_CLASS_CONTROL:
+        raise EncryptedControlOpError(
+            "control ops are plaintext_v1 for ever: the server materialises their "
+            "payloads and holds no key"
+        )
+
+
+# --- aead_v1: sealing and opening a body ------------------------------------
+
+
+def nonce_of_header(header_bytes: bytes) -> bytes:
+    """The 24 nonce bytes carried at offset 134 of a serialized header.
+
+    Read out of the literal header rather than passed alongside it: the nonce *is* a
+    header field, so a caller able to supply a different one would be sealing under
+    bytes the AAD does not cover.
+    """
+    offset = dict((name, offset) for name, offset, _ in HEADER_FIELD_LAYOUT)["nonce"]
+    return header_bytes[offset : offset + NONCE_BYTES]
+
+
+def seal_body(header_bytes: bytes, framed_body: bytes, workspace_key: bytes) -> bytes:
+    """Seal a framed body under ``aead_v1``: ``ciphertext || tag``.
+
+    ``header_bytes`` is both the AAD and the source of the nonce, so there is
+    exactly one place either can come from.  The plaintext is the *already framed*
+    body — pad-then-encrypt — which is what puts :func:`parse_body`'s padding rules
+    inside the AEAD instead of beside it.
+
+    Nothing here mints a nonce.  Production draws 24 bytes from a CSPRNG at
+    authoring and writes them into the header before it is serialized; the golden
+    vectors pin explicit nonce bytes.  A seeded-nonce scheme would be catastrophic
+    under a stream cipher, so the seam is "the caller already chose, and it is in
+    the header" rather than an injectable entropy source.
+    """
+    if len(header_bytes) != HEADER_LENGTH_BYTES:
+        raise ValueError(f"header must be {HEADER_LENGTH_BYTES} bytes")
+    if len(workspace_key) != WORKSPACE_KEY_BYTES:
+        raise ValueError(f"workspace key must be {WORKSPACE_KEY_BYTES} bytes")
+    return bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
+        framed_body, header_bytes, nonce_of_header(header_bytes), workspace_key
+    )
+
+
+def open_body(header_bytes: bytes, body: bytes, workspace_key: bytes) -> bytes:
+    """Open an ``aead_v1`` body back to its framed plaintext.
+
+    Raises :class:`InvalidBodyLengthError` for a body that is not a size class plus
+    a tag, and :class:`AeadFailureError` for anything the AEAD refuses.
+    """
+    if len(header_bytes) != HEADER_LENGTH_BYTES:
+        raise ValueError(f"header must be {HEADER_LENGTH_BYTES} bytes")
+    if len(workspace_key) != WORKSPACE_KEY_BYTES:
+        raise ValueError(f"workspace key must be {WORKSPACE_KEY_BYTES} bytes")
+    if not is_legal_body_length_for_suite(SUITE_AEAD_V1, len(body)):
+        raise InvalidBodyLengthError(
+            f"an aead_v1 body of {len(body)} bytes is not a size class plus a "
+            f"{AEAD_TAG_BYTES}-byte tag"
+        )
+    try:
+        return bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
+            body, header_bytes, nonce_of_header(header_bytes), workspace_key
+        )
+    except CryptoError as exc:
+        raise AeadFailureError(
+            "the aead_v1 body did not authenticate under the epoch key supplied"
+        ) from exc
