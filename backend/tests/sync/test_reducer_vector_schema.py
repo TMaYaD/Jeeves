@@ -114,7 +114,7 @@ def test_the_lattice_cases_are_present() -> None:
         "set_merge_unions_concurrent_additions",
         "set_merge_three_op_associativity",
         "set_merge_unsorted_first_write_is_canonical_and_replay_safe",
-        "strategy_selection_falls_back_to_lww_without_a_key",
-        "strategy_selection_reads_the_stored_key",
+        "strategy_selection_uses_the_carried_key",
+        "user_preferences_value_without_key_is_refused",
     }
     assert required <= names, f"missing lattice vectors: {sorted(required - names)}"

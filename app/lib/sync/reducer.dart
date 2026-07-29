@@ -19,6 +19,11 @@
 ///   non-LWW [FieldMergeStrategy] — ADR-0011's Conflict Strategy registry rides
 ///   here — and every such strategy must be a join-semilattice so reduction
 ///   stays order-independent (ADR-0030).
+/// - **Which** strategy arbitrates is read from the op and nothing else. A
+///   `user_preferences` write names the `key` that selects its lattice or it is
+///   refused (`preference_value_without_key`, ADR-0033), so reduction consults no
+///   stored state to pick a strategy and selection is order-independent
+///   structurally rather than by policy.
 library;
 
 import 'dart:convert';
@@ -65,12 +70,12 @@ class Reducer {
     OpPayload payload, {
     required String authorMemberIdHex,
   }) async {
-    _guard(payload, authorMemberIdHex);
+    guardPayload(payload, authorMemberIdHex: authorMemberIdHex);
     await _db.transaction(() async {
       if (payload.tombstone) {
         await _applyTombstone(payload);
       }
-      final preferenceKey = await _preferenceKeyFor(payload);
+      final preferenceKey = _preferenceKeyFor(payload);
       for (final entry in payload.fields.entries) {
         await _applyField(payload, entry.key, entry.value, preferenceKey);
       }
@@ -78,26 +83,34 @@ class Reducer {
     return {(collection: payload.collection, entityId: payload.entityId)};
   }
 
-  /// The `user_preferences` key this entity holds — from the op's own fields
-  /// when it carries one, else from the stored reduced `key`. Null (and so a
-  /// plain-LWW fallback) for every other collection and for an entity whose key
-  /// this device has never seen.
-  Future<String?> _preferenceKeyFor(OpPayload payload) async {
+  /// The `user_preferences` key this op carries, or null for every other
+  /// collection and for a preference op that carries no key (a tombstone, or a
+  /// write touching only plain-LWW fields — neither has a value to arbitrate).
+  ///
+  /// A pure read of the op: nothing stored is consulted, so which strategy
+  /// arbitrates a field cannot depend on what this device has already applied.
+  /// The one shape this could not resolve — a `value` with no string key — is
+  /// refused by [guardPayload] before reduction starts.
+  String? _preferenceKeyFor(OpPayload payload) {
     if (payload.collection != userPreferencesCollection) return null;
-    final carried = payload.fields['key']?.value;
-    if (carried is String) return carried;
-    final stored = await (_db.select(_db.reducedFields)
-          ..where((row) =>
-              row.collection.equals(payload.collection) &
-              row.entityId.equals(payload.entityId) &
-              row.field.equals('key')))
-        .getSingleOrNull();
-    if (stored == null) return null;
-    final decoded = jsonDecode(stored.valueJson);
-    return decoded is String ? decoded : null;
+    final carried = payload.fields[preferenceKeyField]?.value;
+    return carried is String ? carried : null;
   }
 
-  void _guard(OpPayload payload, String authorMemberIdHex) {
+  /// The refusals that read no reduced state — the op, its header author and
+  /// local wall time are the whole input, so the verdict does not depend on what
+  /// this device has already applied.
+  ///
+  /// Public because `SyncClient.capture` runs it *before* authoring, on the same
+  /// [Reducer] instance the receive path uses: one function rather than a second
+  /// author-side copy free to disagree with it, and a payload every peer would
+  /// refuse is never signed into the outbox (the divergence class #573 closes).
+  /// Stateful verdicts — chain position, grants, the epoch floor — stay where
+  /// they are and are deliberately not here.
+  void guardPayload(
+    OpPayload payload, {
+    required String authorMemberIdHex,
+  }) {
     if (payload.hlc.wallMs > _nowMs() + futureSkewBoundMs) {
       throw SyncRejection(
         SyncRejectionReason.hlcInTheFuture,
@@ -110,6 +123,15 @@ class Reducer {
         SyncRejectionReason.hlcMemberIsNotAuthor,
         'op hlc member ${payload.hlc.memberIdHex} is not the header author '
         '$authorMemberIdHex',
+      );
+    }
+    if (payload.collection == userPreferencesCollection &&
+        payload.fields.containsKey(preferenceValueField) &&
+        payload.fields[preferenceKeyField]?.value is! String) {
+      throw SyncRejection(
+        SyncRejectionReason.preferenceValueWithoutKey,
+        'user_preferences op ${payload.entityId} carries a value with no '
+        'string key to select its merge strategy',
       );
     }
   }

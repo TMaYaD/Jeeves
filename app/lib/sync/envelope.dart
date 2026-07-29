@@ -233,6 +233,23 @@ enum SyncRejectionReason {
   hlcInTheFuture('hlc_in_the_future'),
   hlcMemberIsNotAuthor('hlc_member_is_not_author'),
 
+  /// A `user_preferences` op carrying `value` whose `key` is missing or not a
+  /// string.
+  ///
+  /// Strategy selection for `user_preferences.value` is per-op by design
+  /// (ADR-0033): the key names which lattice arbitrates the field, and the
+  /// writer always has it — the entity id is derived from it. An op that carries
+  /// a value without a resolvable key is therefore ambiguous about *which*
+  /// merge strategy decides it, and it is refused rather than defaulted, because
+  /// the default (LWW) was precisely the order-dependence: which strategy
+  /// arbitrated depended on whether this device had already learned the key.
+  ///
+  /// Like the two HLC guards above — and unlike the client-only chain rules
+  /// below — this is a payload-semantics verdict identical on every device, so
+  /// it carries a golden vector (`user_preferences_value_without_key_is_refused`
+  /// in `spec/sync/reducer_v1_vectors.json`).
+  preferenceValueWithoutKey('preference_value_without_key'),
+
   // --- Per-author chain rules (client-only) ---------------------------------
   //
   // These six are *stateful receiver policy*, not per-envelope codec rules: the

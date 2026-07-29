@@ -474,6 +474,25 @@ void main() {
           await db.customSelect('SELECT id FROM user_preferences').get();
       expect(rows.single.read<String>('id'), op.entityId);
     });
+
+    test('a captured value write always names its key', () async {
+      // Protocol obligation, not a convenience: the key selects which merge
+      // strategy arbitrates `value` (ADR-0033), and the receive path refuses a
+      // value write that does not carry it. Both DAO branches are exercised —
+      // the INSERT and the UPDATE — because either could drop the field.
+      await db.userPreferencesDao.set(_userId, 'theme', '"dark"');
+      await db.userPreferencesDao.set(_userId, 'theme', '"light"');
+      final valueWrites = capture.recorded
+          .where((op) =>
+              op.collection == 'user_preferences' &&
+              op.fields.containsKey('value'))
+          .toList();
+      expect(valueWrites, hasLength(2));
+      for (final op in valueWrites) {
+        expect(op.fields['key'], isA<String>(),
+            reason: 'value write on ${op.entityId} carries no string key');
+      }
+    });
   });
 
   group('the seam itself', () {

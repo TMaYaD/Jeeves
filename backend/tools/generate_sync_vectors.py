@@ -2391,39 +2391,20 @@ def _collection_and_strategy_cases(t: int) -> list[dict[str, Any]]:
             "expected_quarantine_reasons": [],
         },
         {
-            "name": "strategy_selection_falls_back_to_lww_without_a_key",
+            "name": "strategy_selection_uses_the_carried_key",
             "note": (
-                "A `user_preferences` op whose entity has no resolvable `key` — "
-                "none carried, none stored — falls back to LWW. The newer clock "
-                "wins even though its value is the earlier floor, which is the "
-                "opposite of what max_timestamp_value would decide."
-            ),
-            "permute": True,
-            "ops": [
-                _pref_op(author=_MEMBER_A, wall_ms=t + 1000, key=None, value=_FLOOR_EARLY),
-                _pref_op(author=_MEMBER_B, wall_ms=t, key=None, value=_FLOOR_LATE),
-            ],
-            "expected_entities": {
-                USER_PREFERENCES_COLLECTION: {_SNOOZE_ENTITY_ID: {"value": _FLOOR_EARLY}}
-            },
-            "expected_clocks": {
-                USER_PREFERENCES_COLLECTION: {
-                    _SNOOZE_ENTITY_ID: {"value": [t + 1000, 0, _MEMBER_A]}
-                }
-            },
-            "expected_quarantine_reasons": [],
-        },
-        {
-            "name": "strategy_selection_reads_the_stored_key",
-            "note": (
-                "The strategy is selected per entity by its `key` field: an op "
-                "that carries only `value` resolves the key from reduced state, "
-                "and the floor still wins. Converges in either arrival order."
+                "Strategy selection reads nothing but the op. Both writes carry "
+                "`key`, so `max_timestamp_value` is picked from the op alone and "
+                "no stored state is consulted — which is what makes selection "
+                "order-independent structurally rather than by policy (#563). "
+                "The selection-layer twin of "
+                "max_timestamp_value_stale_later_value_wins: same reduction, "
+                "asserted for where the strategy came from."
             ),
             "permute": True,
             "ops": [
                 _pref_op(author=_MEMBER_A, wall_ms=t, value=_FLOOR_LATE),
-                _pref_op(author=_MEMBER_B, wall_ms=t + 1000, key=None, value=_FLOOR_EARLY),
+                _pref_op(author=_MEMBER_B, wall_ms=t + 1000, value=_FLOOR_EARLY),
             ],
             "expected_entities": {
                 USER_PREFERENCES_COLLECTION: {
@@ -2433,12 +2414,55 @@ def _collection_and_strategy_cases(t: int) -> list[dict[str, Any]]:
             "expected_clocks": {
                 USER_PREFERENCES_COLLECTION: {
                     _SNOOZE_ENTITY_ID: {
-                        "key": [t, 0, _MEMBER_A],
+                        "key": [t + 1000, 0, _MEMBER_B],
                         "value": [t + 1000, 0, _MEMBER_B],
                     }
                 }
             },
             "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "user_preferences_value_without_key_is_refused",
+            "note": (
+                "A `user_preferences` write carrying `value` must name the key "
+                "that selects its strategy. The first op omits `key` and the "
+                "second carries a non-string one: both are unresolvable for "
+                "selection, both are refused under the same code rather than "
+                "defaulted to LWW, since that default was the order-dependence "
+                "(#563). The third op is well-formed and applies, so a refusal "
+                "wedges neither the entity nor the stream. Not permuted — "
+                "quarantine is a per-arrival fact the permutation harness cannot "
+                "assert; the refused ops carry the *later* floor, so a guard "
+                "that failed to fire would show up as a changed reduced value."
+            ),
+            "ops": [
+                _pref_op(author=_MEMBER_A, wall_ms=t, key=None, value=_FLOOR_LATE),
+                _reduce_op(
+                    author=_MEMBER_B,
+                    collection=USER_PREFERENCES_COLLECTION,
+                    entity_id=_SNOOZE_ENTITY_ID,
+                    hlc=[t + 1000, 0, _MEMBER_B],
+                    fields={"key": {"v": 7}, "value": {"v": _FLOOR_LATE}},
+                ),
+                _pref_op(author=_MEMBER_A, wall_ms=t + 2000, value=_FLOOR_EARLY),
+            ],
+            "expected_entities": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {"key": _SNOOZE_KEY, "value": _FLOOR_EARLY}
+                }
+            },
+            "expected_clocks": {
+                USER_PREFERENCES_COLLECTION: {
+                    _SNOOZE_ENTITY_ID: {
+                        "key": [t + 2000, 0, _MEMBER_A],
+                        "value": [t + 2000, 0, _MEMBER_A],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [
+                "preference_value_without_key",
+                "preference_value_without_key",
+            ],
         },
     ]
 

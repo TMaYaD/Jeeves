@@ -18,6 +18,7 @@ library;
 
 import 'collection_codecs.dart' show userPreferencesCollection;
 import 'ids.dart';
+import 'merge_strategy.dart' show preferenceKeyField, preferenceValueField;
 import 'reducer.dart';
 import 'sync_client.dart';
 
@@ -30,12 +31,18 @@ class PreferencesStore {
   final CollectionView _view;
 
   /// The field holding the key itself. It never changes for a given entity —
-  /// the id is derived from it — but it must be in the op for a device to be
-  /// able to enumerate preferences it has only ever seen over the wire.
-  static const String keyField = 'key';
+  /// the id is derived from it — and it is on every write for two reasons: a
+  /// device can only enumerate preferences it has seen over the wire if the key
+  /// travelled with them, and it is protocol-mandatory on a `value` write
+  /// because the key selects that field's merge strategy. The receive path
+  /// refuses a value write without it (`preference_value_without_key`,
+  /// ADR-0033), so omitting it here would author an op every peer quarantines.
+  /// Aliased to the reducer's own constant rather than respelled, so the writer
+  /// and the guard that refuses it can never name different fields.
+  static const String keyField = preferenceKeyField;
 
-  /// The one field that actually changes.
-  static const String valueField = 'value';
+  /// The one field that actually changes — and the one the registry arbitrates.
+  static const String valueField = preferenceValueField;
 
   String entityIdFor(String key) =>
       preferenceEntityId(_client.workspaceId, key);
