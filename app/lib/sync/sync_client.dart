@@ -272,6 +272,28 @@ class SyncClient {
   /// is the opposite of what a floor is for. An explicit value is for a caller that
   /// genuinely knows the epoch it is writing under; below the floor it is refused,
   /// which is the guard doing its job rather than the client refusing its own work.
+  ///
+  /// **The payload is round-tripped through the receive path's own codec before
+  /// anything is signed.** `frameBody → parseBody → OpPayload.decode` is byte for
+  /// byte the pipeline a pull runs, so a payload no receiver could apply — a
+  /// non-canonical entity id being the one that bites in practice — is a thrown
+  /// `SyncRejection` at this call site with the store, the outbox and the author
+  /// chain all untouched. Without it such a payload applied locally, was signed
+  /// and uploaded, and was then quarantined by every peer *and* by this device's
+  /// own echo: silent permanent divergence, surfacing as "did not converge" a
+  /// long way from the cause (#573, Phase 0 of #553). Reusing the literal receive
+  /// functions rather than a parallel check is what makes a future tightening of
+  /// the codec bind authors automatically, with no second site to update.
+  ///
+  /// The decode runs *before* `_authorAndQueue`, and therefore before the
+  /// `keyEpochBelowFloor` guard: a stale-epoch capture that is also wire-invalid
+  /// reports `malformed_payload`, which is intended — wire validity is the earlier
+  /// question, and the answer is the same on every device regardless of its state.
+  ///
+  /// The **decoded** payload is what gets reduced. That is a structural guarantee
+  /// rather than a behavioural change: the author applies the exact object every
+  /// peer will construct from the signed bytes, so no codec asymmetry that decode
+  /// *accepts* can split this device's state from its peers'.
   Future<String> capture({
     required String collection,
     required String entityId,
@@ -288,13 +310,15 @@ class SyncClient {
       },
       tombstone: tombstone,
     );
+    final wireBytes = payload.encode();
+    final decoded = OpPayload.decode(parseBody(frameBody(wireBytes)));
     final opId = await _authorAndQueue(
       opClass: opClassContent,
-      payload: payload.encode(),
+      payload: wireBytes,
       keyEpoch: keyEpoch ?? await epochFloor(),
     );
     final affected =
-        await _reducer.apply(payload, authorMemberIdHex: identity.memberIdHex);
+        await _reducer.apply(decoded, authorMemberIdHex: identity.memberIdHex);
     // The authoring device projects its own op too: that is what applies the
     // widened cascade and the `focus_session_tasks.id` realignment locally,
     // rather than leaving the author as the one device whose rows differ.
@@ -306,8 +330,31 @@ class SyncClient {
   ///
   /// The caller is `EnrolmentService`, which is the only thing in this slice
   /// that has a Root to sign a payload with.
-  Future<String> captureControl(Uint8List payload) =>
-      _authorAndQueue(opClass: opClassControl, payload: payload, keyEpoch: 0);
+  ///
+  /// The bytes go through the **stateless prefix** of [_verifyControlOp], in its
+  /// order — `parseBody` → `ControlPayload.decode` → `requireServedType` →
+  /// `requireChainLinkShape` — for the same reason [capture] round-trips its
+  /// payload, and with more at stake: a quarantined control op wedges every op
+  /// chaining through it. The state-dependent stages (Root signature,
+  /// certificate-binds-this-envelope, workspace match, chain position) stay
+  /// receive-side deliberately. Their inputs are the *receiving* device's state —
+  /// its pinned Root, its directory, its applied control log, the pulled envelope
+  /// — so re-implementing them here would create a second verification path free
+  /// to disagree with the first, which is the failure this validation exists to
+  /// remove. The certificates themselves are minted and Root-signed moments
+  /// earlier by the same code that verifies them.
+  ///
+  /// `async` and not an arrow: a refusal has to reach the caller as a *failed
+  /// future*, the way [capture]'s does, rather than as a synchronous throw out of
+  /// the call expression that no `.catchError` on the result could see. The body
+  /// still runs to `_authorAndQueue` without an intervening `await`, so the
+  /// authoring queue slot is claimed in call order exactly as before.
+  Future<String> captureControl(Uint8List payload) async {
+    final decoded = ControlPayload.decode(parseBody(frameBody(payload)));
+    decoded.requireServedType();
+    decoded.requireChainLinkShape();
+    return _authorAndQueue(opClass: opClassControl, payload: payload, keyEpoch: 0);
+  }
 
   /// Tail of the authoring queue: every `_authorAndQueue` waits on it.
   ///

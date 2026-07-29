@@ -26,9 +26,10 @@ import 'harness/sim_workspace.dart';
 const _userId = 'sim-user';
 
 /// Entity ids are canonical lowercase UUIDs on the wire — the payload codec
-/// rejects anything else rather than normalising it, so a fixture id like
-/// 'outcome-1' would apply locally and quarantine on every peer. Deriving them
-/// keeps the harness reproducible without hand-writing UUID literals.
+/// rejects anything else rather than normalising it, and authoring runs that
+/// same codec, so a fixture id like 'outcome-1' is refused by `capture()` itself
+/// with `malformed_payload`. Deriving them keeps the harness reproducible
+/// without hand-writing UUID literals.
 String _id(String label) => const Uuid().v5(jeevesWorkspaceNamespace, 'sim/$label');
 
 /// `todos.time_spent_minutes` never travels on the wire — a dead cache
