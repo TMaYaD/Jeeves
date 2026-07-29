@@ -19,10 +19,8 @@ from types import ModuleType
 
 import pytest
 import sqlalchemy as sa
-from alembic.script import ScriptDirectory
 from sqlalchemy.pool import StaticPool
 
-from app import migrate
 from tests.sync.helpers import load_migration, run_migration
 
 _MIGRATION_FILENAME = "0034_drop_mirrored_domain_schema.py"
@@ -79,12 +77,13 @@ def _table_names(engine: sa.engine.Engine) -> set[str]:
         return set(sa.inspect(conn).get_table_names())
 
 
-def test_0034_chains_from_0033_and_is_the_current_head() -> None:
+def test_0034_chains_from_0033() -> None:
+    # Its link, not its position at the head.  "Which revision is the head" is
+    # asserted once, by the newest migration's own test — 0035 (keywraps) now
+    # owns that claim in tests/sync/test_keywraps_migration.py.
     module = _load()
     assert module.revision == "0034"
     assert module.down_revision == "0033"
-    script = ScriptDirectory.from_config(migrate._alembic_config())
-    assert script.get_heads() == ["0034"]
 
 
 def test_0034_drops_exactly_the_mirrored_tables() -> None:

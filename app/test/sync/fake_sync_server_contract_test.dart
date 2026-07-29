@@ -716,13 +716,14 @@ void main() {
     });
 
     test('an unserved control type is rejected', () async {
-      // #554's landing slot: every control type this build does not serve is
-      // closed. `grant` is served now, so `rotate` carries the case.
+      // Every control type this build does not serve is closed. `rotate` is served
+      // now (#554), so rotating a *Member's* own signing or KEX key — a different
+      // thing from rotating the Workspace content key — carries the case.
       final envelope = await author.nextEnvelope(
         workspaceId,
         opClass: opClassControl,
         payload: ControlPayload(
-          controlType: 'rotate',
+          controlType: 'member_key_rotate',
           prevControlHash: controlHead(),
         ).encode(),
       );

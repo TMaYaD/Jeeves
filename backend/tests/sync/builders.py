@@ -23,6 +23,7 @@ from app.sync.control_payload import (
     CONTROL_TYPE_GRANT,
     CONTROL_TYPE_MEMBER_REGISTER,
     CONTROL_TYPE_REVOKE,
+    CONTROL_TYPE_ROTATE,
     CONTROL_TYPE_WORKSPACE_GENESIS,
     GRANTER_ROOT,
     MEMBER_KIND_DEVICE,
@@ -34,6 +35,7 @@ from app.sync.control_payload import (
     MemberKeys,
     RegistrationCertificate,
     RevokeCertificate,
+    RotateStatement,
     control_payload_hash,
     sign_genesis_certificate,
     sign_grant_certificate,
@@ -99,6 +101,16 @@ class SpecDevice:
     def key_id(self) -> bytes:
         return derive_key_id(self.sign_pk)
 
+    @property
+    def kex_key_id_for_wraps(self) -> bytes:
+        """The KEX key's id, by the *same* derivation the signing key id uses.
+
+        Literally the same function over a different 32-byte public key, which is
+        what stops the two ids drifting apart. Named for its use rather than
+        ``kex_key_id`` so it never reads as an alias of :attr:`key_id`.
+        """
+        return derive_key_id(self.kex_pk)
+
     def registration_body(self) -> dict[str, str]:
         return {
             "member_id": str(self.member_id),
@@ -139,6 +151,40 @@ class SpecDevice:
             self.next_author_seq += 1
             self.last_envelope_hash = envelope_hash(envelope)
         return envelope
+
+    def rotate_envelope(
+        self,
+        workspace_id: uuid.UUID,
+        *,
+        prev_control_hash: bytes,
+        keywrap_digest: bytes,
+        from_epoch: int = 0,
+        wall_ms: int = 1_800_000_000_000,
+        author_seq: int | None = None,
+    ) -> bytes:
+        """A ``rotate`` control op, signed by this device and nothing else.
+
+        On :class:`SpecDevice` rather than :class:`SpecRoot` because a rotate carries
+        no certificate: its authority is the author's own live ``owner`` Grant, so
+        the envelope signature is the only signature there is.  Every other control
+        builder hangs off Root for the opposite reason.
+        """
+        return self.next_envelope(
+            workspace_id,
+            op_class=OP_CLASS_CONTROL,
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_ROTATE,
+                prev_control_hash=prev_control_hash,
+                rotate=RotateStatement(
+                    workspace_id=workspace_id,
+                    from_epoch=from_epoch,
+                    to_epoch=from_epoch + 1,
+                    keywrap_digest=keywrap_digest,
+                    rotated_at_hlc=Hlc.for_member(self.member_id, wall_ms),
+                ),
+            ).encode(),
+            author_seq=author_seq,
+        )
 
 
 @dataclass

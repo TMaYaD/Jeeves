@@ -166,6 +166,16 @@ Future<Object> _receiveControl(
       await _bindRegistration(certificate, envelope, header);
       return certificate;
 
+    case controlTypeRotate:
+      // No certificate and no separate signature: a rotate's authority is the
+      // author's own live owner Grant, which is receiver state a vector cannot
+      // carry, so what is checkable here is the envelope signature and the
+      // statement's own shape. The authority check is pinned by the route and
+      // harness suites.
+      await verifyEnvelope(envelope, _specSignPk(identities, header.authorMemberId));
+      expect(payload.isRootSigned, isFalse);
+      return payload.rotateStatement();
+
     default:
       // Grant and Revoke: the authority is Root or an owning Member, and *which*
       // key verifies the certificate is decided by the payload's own `authority`
@@ -820,6 +830,7 @@ void main() {
       expect(control['workspace_genesis_type'], controlTypeWorkspaceGenesis);
       expect(control['grant_type'], controlTypeGrant);
       expect(control['revoke_type'], controlTypeRevoke);
+      expect(control['rotate_type'], controlTypeRotate);
       expect(control['served_control_types'], servedControlTypes.toList()..sort());
       expect(control['member_kind_device'], memberKindDevice);
       expect(control['member_kind_service'], memberKindService);
@@ -901,18 +912,45 @@ void main() {
       test('${vector['name']} round-trips through the receive pipeline',
           () async {
         final envelope = _fromHex(vector['envelope_hex'] as String);
-        final certificate = await _receiveControl(envelope, rootPk, identities);
-
-        // The signed artifact is the certificate's literal bytes; a lossy decode
-        // would break every verifier.
-        final certBytes = _certBytesOf(certificate);
-        expect(utf8.decode(certBytes), vector['cert_json']);
-        expect(_toHex(certBytes), vector['cert_hex']);
+        final decoded = await _receiveControl(envelope, rootPk, identities);
 
         final payload =
             ControlPayload.decode(parseBody(splitEnvelope(envelope).body));
         expect(payload.controlType, vector['control_type']);
         expect(_toHex(payload.prevControlHash), vector['prev_control_hash_hex']);
+
+        if (vector['control_type'] == controlTypeRotate) {
+          // No certificate and no separate signature — the fields *are* the
+          // payload, so a round-trip through the payload codec is the whole of
+          // what there is to check.
+          expect(vector['cert_json'], '');
+          expect(payload.signature, isEmpty);
+          expect(payload.authority, '');
+          expect(
+            jsonEncode(payload.toJson()),
+            jsonEncode(jsonDecode(vector['payload_json'] as String)),
+          );
+          // Two independent decodes of the same bytes — the pipeline's and this
+          // test's — must agree field for field. Comparing instances would only
+          // assert that one object was passed around.
+          final received = decoded as RotateStatement;
+          final reference = payload.rotateStatement();
+          expect(received.workspaceId, reference.workspaceId);
+          expect(received.fromEpoch, reference.fromEpoch);
+          expect(received.toEpoch, reference.toEpoch);
+          expect(_toHex(received.keyWrapDigest), _toHex(reference.keyWrapDigest));
+          expect(received.rotatedAtHlc.toJson(), reference.rotatedAtHlc.toJson());
+          // Single-step by construction, and epoch 0 left unkeyed — which is what
+          // keeps a pre-turn-on Workspace's plaintext history readable for ever.
+          expect(received.toEpoch, received.fromEpoch + 1);
+          return;
+        }
+
+        // The signed artifact is the certificate's literal bytes; a lossy decode
+        // would break every verifier.
+        final certBytes = _certBytesOf(decoded);
+        expect(utf8.decode(certBytes), vector['cert_json']);
+        expect(_toHex(certBytes), vector['cert_hex']);
         expect(_toHex(payload.signature), vector['signature_hex']);
         expect(payload.authority, vector['authority']);
       });
@@ -984,6 +1022,11 @@ void main() {
           controlTypeGrant,
           controlTypeGrant,
           controlTypeRevoke,
+          // The revoke-then-rotate pair `revokeAndRotate` authors back to back,
+          // which is also what turning encryption on looks like: a rotate chains
+          // off the control head like any other type, and its link is the same
+          // hash-of-payload-bytes even though it carries no certificate.
+          controlTypeRotate,
         ],
       );
       expect(chain.first['prev_control_hash_hex'], _toHex(zeroPrevControlHash));

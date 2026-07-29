@@ -5,7 +5,7 @@ deliberate (ADR-0028, security review F2): content is opaque to the server for
 ever, but membership and authority have to be checkable by whoever is holding
 the bytes, so control payloads are unencrypted and self-describing.
 
-Four served types, all sharing the same two mandatory fields::
+Five served types, all sharing the same two mandatory fields::
 
     {"type": "member_register",  "prev_control_hash": "<hex64>",
      "cert": "<base64>", "root_sig": "<base64>"}
@@ -18,6 +18,14 @@ Four served types, all sharing the same two mandatory fields::
 
     {"type": "revoke", "prev_control_hash": "<hex64>",
      "cert": "<base64>", "revoker_sig": "<base64>", "revoker": "root"|"<uuid>"}
+
+    {"type": "rotate", "prev_control_hash": "<hex64>", "workspace_id": "<uuid>",
+     "from_epoch": N, "to_epoch": N+1, "keywrap_digest": "<base64>",
+     "rotated_at_hlc": [...]}
+
+``rotate`` is the one type with **no certificate and no separate signature** — see
+:class:`RotateStatement` for why that follows from where its authority comes from
+rather than being an inconsistency.
 
 The chain link is a hash of the predecessor's **payload bytes** — the unframed
 payload as ``envelope.parse_body`` returns it — not of the envelope and not of
@@ -76,6 +84,7 @@ from app.sync.envelope import (
     derive_key_id,
 )
 from app.sync.escrow import ROOT_PUBLIC_KEY_BYTES, ROOT_SIGNATURE_BYTES
+from app.sync.key_wraps import KEYWRAP_DIGEST_BYTES, MAX_KEY_EPOCH
 from app.sync.op_payload import CANONICAL_UUID_PATTERN, Hlc
 
 #: Every signing use of the Root key is domain-separated (review F7).
@@ -88,15 +97,19 @@ CONTROL_TYPE_MEMBER_REGISTER: Final = "member_register"
 CONTROL_TYPE_WORKSPACE_GENESIS: Final = "workspace_genesis"
 CONTROL_TYPE_GRANT: Final = "grant"
 CONTROL_TYPE_REVOKE: Final = "revoke"
+#: The Workspace moved to a new content key.  #554's raiser of the epoch floor.
+CONTROL_TYPE_ROTATE: Final = "rotate"
 
-#: The control types this build serves.  ``rotate``/``member_key_rotate`` are
-#: #554's and stay fail-closed.
+#: The control types this build serves.  ``member_key_rotate`` — rotating a
+#: *Member's* own signing or KEX key, as opposed to the Workspace content key — is
+#: still fail-closed, as is everything else outside this set.
 SERVED_CONTROL_TYPES: Final[frozenset[str]] = frozenset(
     {
         CONTROL_TYPE_MEMBER_REGISTER,
         CONTROL_TYPE_WORKSPACE_GENESIS,
         CONTROL_TYPE_GRANT,
         CONTROL_TYPE_REVOKE,
+        CONTROL_TYPE_ROTATE,
     }
 )
 
@@ -540,6 +553,82 @@ class RevokeCertificate:
         )
 
 
+# --- Rotate -----------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RotateStatement:
+    """The Workspace moved from one content key to the next.
+
+    **The one served control type with no certificate**, and deliberately so.
+    Every other type carries a separately signed frozen document because its
+    authority is somebody *other* than the envelope's author — Root, or a granting
+    Member — so the certificate has to travel independently of who is posting it.
+    A rotate's authority is the author's own live ``owner`` Grant, which is exactly
+    the ``(grant.role, op_class = 2)`` rule the server and every client already
+    apply.  A second signature would add a second thing to keep in step and prove
+    nothing the envelope signature does not already prove: the envelope covers
+    ``header || body``, and these fields *are* the body.
+
+    ``keywrap_digest`` is the load-bearing field.  It commits to the whole wrap set
+    **before any wrap is uploaded**, so ``PUT /w/{w}/keywraps`` can refuse a set
+    that does not hash to it: the server can neither add a wrap for a member the
+    owner never wrapped to, nor omit one and lock an honest member out.  Without the
+    commitment living in the signed log, curating the wrap set would be entirely
+    within a hostile server's gift.
+
+    ``from_epoch`` is carried as well as ``to_epoch`` so the statement is a claim
+    about a *transition* rather than about a destination: a receiver can tell a
+    rotation it has the predecessor for from one that skips an epoch, without
+    consulting anything but the op.
+    """
+
+    workspace_id: uuid.UUID
+    from_epoch: int
+    to_epoch: int
+    keywrap_digest: bytes
+    rotated_at_hlc: Hlc
+
+    def to_json_dict(self) -> dict[str, Any]:
+        return {
+            "workspace_id": str(self.workspace_id),
+            "from_epoch": self.from_epoch,
+            "to_epoch": self.to_epoch,
+            "keywrap_digest": base64.b64encode(self.keywrap_digest).decode("ascii"),
+            "rotated_at_hlc": self.rotated_at_hlc.to_json(),
+        }
+
+    @classmethod
+    def from_json_dict(cls, raw: dict[str, Any]) -> RotateStatement:
+        from_epoch = raw.get("from_epoch")
+        to_epoch = raw.get("to_epoch")
+        if not isinstance(from_epoch, int) or isinstance(from_epoch, bool):
+            raise MalformedControlPayloadError("from_epoch must be an integer")
+        if not isinstance(to_epoch, int) or isinstance(to_epoch, bool):
+            raise MalformedControlPayloadError("to_epoch must be an integer")
+        if not 0 <= from_epoch <= MAX_KEY_EPOCH or not 0 <= to_epoch <= MAX_KEY_EPOCH:
+            raise MalformedControlPayloadError("an epoch must fit the header's u32")
+        if to_epoch != from_epoch + 1:
+            # Single-step by construction.  A rotation that jumped epochs would
+            # leave a gap no KeyWrap set is ever minted for, and the epoch floor
+            # would then refuse content at an epoch the Workspace never keyed.
+            raise MalformedControlPayloadError(
+                f"a rotation is one step: to_epoch {to_epoch} must be from_epoch {from_epoch} + 1"
+            )
+        digest = _require_base64(raw.get("keywrap_digest"), "keywrap_digest")
+        if len(digest) != KEYWRAP_DIGEST_BYTES:
+            raise MalformedControlPayloadError(
+                f"keywrap_digest must be {KEYWRAP_DIGEST_BYTES} bytes"
+            )
+        return cls(
+            workspace_id=_require_canonical_uuid(raw.get("workspace_id"), "workspace_id"),
+            from_epoch=from_epoch,
+            to_epoch=to_epoch,
+            keywrap_digest=digest,
+            rotated_at_hlc=_decode_hlc(raw.get("rotated_at_hlc"), "rotated_at_hlc"),
+        )
+
+
 # --- The payload envelope ---------------------------------------------------
 
 
@@ -547,12 +636,17 @@ class RevokeCertificate:
 class ControlPayload:
     """A parsed control op body.
 
-    One class for four types, because the two mandatory fields — ``type`` and
+    One class for every type, because the two mandatory fields — ``type`` and
     ``prev_control_hash`` — are the whole of what a receiver may read before it
     knows which type it is holding.  ``signature`` carries whichever of
     ``root_sig``/``granter_sig``/``revoker_sig`` the type names, and ``authority``
     carries ``granter``/``revoker`` (``""`` for the two Root-only types, whose
     authority is Root by definition).
+
+    ``rotate`` is the one served type carrying no certificate and no separate
+    signature: its authority is the author's own live ``owner`` Grant, so the
+    envelope signature is the only signature there is.  Its fields live in
+    ``rotate`` — see :class:`RotateStatement` for why that is not an inconsistency.
     """
 
     control_type: str
@@ -560,6 +654,8 @@ class ControlPayload:
     cert_bytes: bytes = b""
     signature: bytes = b""
     authority: str = ""
+    #: Populated for ``rotate`` and for nothing else.
+    rotate: RotateStatement | None = None
 
     @property
     def root_sig(self) -> bytes:
@@ -577,6 +673,14 @@ class ControlPayload:
         return self.control_type in _ROOT_ONLY_CONTROL_TYPES or self.authority == GRANTER_ROOT
 
     def to_json_dict(self) -> dict[str, Any]:
+        if self.control_type == CONTROL_TYPE_ROTATE:
+            if self.rotate is None:
+                raise MalformedControlPayloadError("a rotate payload carries a rotate statement")
+            return {
+                "type": self.control_type,
+                "prev_control_hash": self.prev_control_hash.hex(),
+                **self.rotate.to_json_dict(),
+            }
         base: dict[str, Any] = {
             "type": self.control_type,
             "prev_control_hash": self.prev_control_hash.hex(),
@@ -620,6 +724,18 @@ class ControlPayload:
                 prev_control_hash=bytes.fromhex(prev_control_hash),
             )
 
+        if control_type == CONTROL_TYPE_ROTATE:
+            # No cert, no separate signature, no `authority` string: the author's own
+            # live owner Grant is the authority, and the envelope signature is the
+            # signature.  `is_root_signed` is therefore False, which is exactly
+            # right — a rotate goes through the role matrix like any member-signed
+            # control op.
+            return cls(
+                control_type=control_type,
+                prev_control_hash=bytes.fromhex(prev_control_hash),
+                rotate=RotateStatement.from_json_dict(raw),
+            )
+
         signature_field, authority_field = _SIGNATURE_FIELDS[control_type]
         signature = _require_base64(raw.get(signature_field), signature_field)
         if len(signature) != ROOT_SIGNATURE_BYTES:
@@ -659,6 +775,17 @@ class ControlPayload:
 
     def revoke_certificate(self) -> RevokeCertificate:
         return RevokeCertificate.decode(self.cert_bytes)
+
+    def rotate_statement(self) -> RotateStatement:
+        """The rotate fields, or a refusal.
+
+        A method rather than direct attribute access at the call sites, so the "this
+        is not a rotate" case is one fail-closed refusal instead of a ``None`` each
+        caller has to remember to check.
+        """
+        if self.rotate is None:
+            raise MalformedControlPayloadError(f"{self.control_type!r} carries no rotate statement")
+        return self.rotate
 
     def require_served_type(self) -> None:
         if self.control_type not in SERVED_CONTROL_TYPES:

@@ -53,8 +53,13 @@ def _apply_0033(engine: sa.engine.Engine) -> None:
 
 
 def test_0033_chains_from_0032() -> None:
-    # Head moved to 0034 (#556); that assertion lives with the revision that
-    # owns it, in tests/test_mirror_drop_migration.py.
+    """Its link, not its position at the head.
+
+    "Which revision is the head" is asserted once, by the *newest* migration's own
+    test — ``tests/sync/test_keywraps_migration.py`` today.  Repeating the claim here
+    would mean every new migration had to edit an older migration's test to say it is
+    no longer last, which is a chore that teaches nothing.
+    """
     module = load_migration("migration_0033", "0033_add_workspaces_and_grants.py")
     assert module.revision == "0033"
     assert module.down_revision == "0032"

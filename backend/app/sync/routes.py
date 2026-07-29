@@ -94,6 +94,7 @@ from app.sync.control_payload import (
     CONTROL_TYPE_GRANT,
     CONTROL_TYPE_MEMBER_REGISTER,
     CONTROL_TYPE_REVOKE,
+    CONTROL_TYPE_ROTATE,
     CONTROL_TYPE_WORKSPACE_GENESIS,
     GRANTER_ROOT,
     KEX_PUBLIC_KEY_BYTES,
@@ -107,6 +108,7 @@ from app.sync.control_payload import (
     GrantCertificate,
     RegistrationCertificate,
     RevokeCertificate,
+    RotateStatement,
     UnsupportedControlTypeError,
     verify_genesis_certificate,
     verify_grant_certificate,
@@ -114,7 +116,6 @@ from app.sync.control_payload import (
     verify_revoke_certificate,
 )
 from app.sync.envelope import (
-    MINIMUM_ENVELOPE_BYTES,
     OP_CLASS_CONTROL,
     SIGN_PUBLIC_KEY_BYTES,
     EnvelopeError,
@@ -122,6 +123,7 @@ from app.sync.envelope import (
     OpHeader,
     check_served,
     derive_key_id,
+    minimum_envelope_bytes_for_suite,
     parse_body,
     split_envelope,
 )
@@ -138,6 +140,13 @@ from app.sync.escrow import (
     verify_escrow_signature,
 )
 from app.sync.ids import derivable_workspace_ids, user_preferences_workspace_id
+from app.sync.key_wraps import (
+    EPOCH_KEY_ESCROW_WRAP_BYTES,
+    KEYWRAP_BYTES,
+    KEYWRAP_DIGEST_BYTES,
+    MAX_KEY_EPOCH,
+    keywrap_digest,
+)
 from app.sync.member_auth import (
     MEMBER_CHALLENGE_NONCE_BYTES,
     TOKEN_USE_MEMBER,
@@ -148,8 +157,21 @@ from app.sync.member_auth import (
     member_challenge_retry_after_seconds,
     verify_member_challenge,
 )
-from app.sync.models import Grant, Member, Op, RecoveryEscrow, RecoveryEscrowFetch, Workspace
+from app.sync.models import (
+    Grant,
+    KeyWrap,
+    Member,
+    Op,
+    RecoveryEscrow,
+    RecoveryEscrowFetch,
+    Workspace,
+    WorkspaceEpoch,
+)
 from app.sync.schemas import (
+    EpochKeyListResponse,
+    EpochKeyOut,
+    KeyWrapListResponse,
+    KeyWrapOut,
     MemberChallengeResponse,
     MemberListResponse,
     MemberOut,
@@ -160,6 +182,7 @@ from app.sync.schemas import (
     PostOpsResponse,
     PulledOp,
     PullOpsResponse,
+    PutKeyWrapsRequest,
     RecoveryEscrowRequest,
     RecoveryEscrowResponse,
 )
@@ -776,15 +799,25 @@ async def post_ops(
         envelope = _decode_base64(encoded, "malformed_base64", index=index)
         try:
             header = OpHeader.parse(envelope)
-            if len(envelope) < MINIMUM_ENVELOPE_BYTES:
-                # The one body-shaped rule a content-blind server can apply: it
-                # follows from the padding size classes alone, so refusing here
-                # costs no look at the body and keeps unstorable bytes out of
-                # the log rather than leaving every puller to quarantine them.
+            # The one body-shaped rule a content-blind server can apply: it follows
+            # from the padding size classes alone, so refusing here costs no look at
+            # the body and keeps unstorable bytes out of the log rather than leaving
+            # every puller to quarantine them.  Suite-aware since #554 — an
+            # ``aead_v1`` body is a size class *plus the Poly1305 tag*, and a floor
+            # left at the plaintext number would admit a 16-byte-short encrypted
+            # envelope.  The suite comes from the header the server already parses,
+            # so this still reads no body byte.
+            floor = minimum_envelope_bytes_for_suite(header.suite)
+            if len(envelope) < floor:
                 raise EnvelopeTooShortError(
-                    f"envelope is {len(envelope)} bytes, the shortest legal one "
-                    f"is {MINIMUM_ENVELOPE_BYTES}"
+                    f"envelope is {len(envelope)} bytes, the shortest legal one at "
+                    f"suite 0x{header.suite:02x} is {floor}"
                 )
+            # Refuses an unserved suite or op class, and the one forbidden pair:
+            # ``op_class = 2`` under ``aead_v1``.  Control ops are plaintext for ever
+            # because *this module* materialises their payloads and holds no key, so
+            # letting an encrypted one into the log would be storing an op the server
+            # can never act on and every client must refuse.
             check_served(header)
         except EnvelopeError as exc:
             raise _unprocessable(exc.reason, index=index) from exc
@@ -918,6 +951,7 @@ class _ControlAdmission:
     registration: RegistrationCertificate | None = None
     grant: GrantCertificate | None = None
     revoke: RevokeCertificate | None = None
+    rotate: RotateStatement | None = None
 
 
 async def _verify_and_authorize(
@@ -940,6 +974,10 @@ async def _verify_and_authorize(
     """
     grants = await _grant_index(db, workspace_id)
     workspace_exists = await db.get(Workspace, workspace_id) is not None
+    # The Workspace's current key epoch, or None while it has never been keyed.
+    # Walked forward through the batch exactly as ``grants`` is, so a ``rotate`` at
+    # index 1 counts for a content op at index 2 of the same POST.
+    current_epoch = await _current_key_epoch(db, workspace_id)
     # Which of this batch's ops the log already holds.  A replay must not read as
     # a *reuse* of the grant id it carries: the id belongs to the op that first
     # asserted it, and re-posting that same op asserts nothing new.
@@ -975,6 +1013,7 @@ async def _verify_and_authorize(
             if not workspace_exists:
                 raise _conflict("workspace_not_created", index=index)
             _require_role(grants, current_member.member_id, header.op_class, index)
+            _require_fresh_key_epoch(header, current_epoch, index)
             continue
 
         payload = _decode_control_payload(envelope, index)
@@ -1065,10 +1104,109 @@ async def _verify_and_authorize(
             admissions.append(
                 _ControlAdmission(index=index, control_type=payload.control_type, revoke=revoke)
             )
+        elif payload.control_type == CONTROL_TYPE_ROTATE:
+            rotate = _verify_rotate(
+                payload,
+                header,
+                index=index,
+                workspace_id=workspace_id,
+                current_epoch=current_epoch,
+            )
+            # Walked forward like ``grants``: a content op later in this same batch is
+            # judged against the epoch this rotate establishes, not the one before it.
+            current_epoch = rotate.to_epoch
+            admissions.append(
+                _ControlAdmission(index=index, control_type=payload.control_type, rotate=rotate)
+            )
         else:  # pragma: no cover — ``require_served_type`` already refused it
             raise _unprocessable("unsupported_control_type", index=index)
 
     return admissions
+
+
+async def _current_key_epoch(db: AsyncSession, workspace_id: uuid.UUID) -> int | None:
+    """``MAX(workspace_epochs.epoch)``, or None while the Workspace is unkeyed.
+
+    Derived rather than stored: a "current epoch" column would be a cache of this
+    maximum, free to disagree with the rows that produced it.
+
+    None is a real and permanent state, not merely a pre-rotation one.  A Workspace
+    that existed before encryption was turned on has no epoch rows at all, and a
+    Workspace that never turns encryption on never gets any — which is exactly what
+    keeps ``plaintext_v1`` clients working after this migration.
+    """
+    return (
+        await db.execute(
+            select(func.max(WorkspaceEpoch.epoch)).where(
+                WorkspaceEpoch.workspace_id == workspace_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def _require_fresh_key_epoch(header: OpHeader, current_epoch: int | None, index: int) -> None:
+    """Refuse a content op built against an epoch the Workspace has left behind.
+
+    ``key_epoch >= current - 1``, and the ``- 1`` is deliberate: a device that was
+    offline across a rotation has ops in its outbox signed at the previous epoch, and
+    those envelopes cannot be re-signed without forging its chain.  One epoch of
+    slack is what lets an honest offline device drain its queue; two would make the
+    floor meaningless.  Survivor ops at the old epoch applying is an accepted risk
+    recorded in the proposal — the *revoked* member's ops are refused wholesale by
+    ``_refuse_if_revoked`` and the positional grant check, at every epoch, which is
+    the case that actually matters.
+
+    An unkeyed Workspace refuses nothing here.  There is no epoch to be stale
+    against, and content at epoch 0 is exactly what a pre-turn-on Workspace writes.
+    """
+    if current_epoch is None:
+        return
+    if header.key_epoch < current_epoch - 1:
+        raise _conflict(
+            "key_epoch_stale",
+            index=index,
+            key_epoch=header.key_epoch,
+            current_epoch=current_epoch,
+        )
+
+
+def _verify_rotate(
+    payload: ControlPayload,
+    header: OpHeader,
+    *,
+    index: int,
+    workspace_id: uuid.UUID,
+    current_epoch: int | None,
+) -> RotateStatement:
+    """Verify one ``rotate``: it names this Workspace, and it is the next step.
+
+    Everything about *authority* was already settled before this is reached — a
+    rotate is not root-signed, so ``_require_role`` demanded a live ``owner`` Grant,
+    and the envelope signature proved the author. There is no certificate to check:
+    see :class:`RotateStatement` for why the envelope signature is the only one.
+
+    What is left is the transition itself.  ``from_epoch`` must be where the
+    Workspace actually is, so two owners racing a rotation cannot both land and leave
+    the log claiming two different keys for one epoch — the loser is refused with the
+    epoch it should have rotated from, and its move is to re-pull and rotate again.
+    An unkeyed Workspace may only be rotated *from* epoch 0, which is what makes
+    turn-on mint ``K_{w,1}`` and leave epoch 0 unkeyed and readable for ever.
+    """
+    try:
+        rotate = payload.rotate_statement()
+    except ControlPayloadError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    if rotate.workspace_id != workspace_id:
+        raise _unprocessable("cert_workspace_mismatch", index=index)
+    expected_from = 0 if current_epoch is None else current_epoch
+    if rotate.from_epoch != expected_from:
+        raise _conflict(
+            "rotate_epoch_conflict",
+            index=index,
+            from_epoch=rotate.from_epoch,
+            expected_from_epoch=expected_from,
+        )
+    return rotate
 
 
 def _require_role(grants: _GrantIndex, member_id: uuid.UUID, op_class: int, index: int) -> None:
@@ -1374,6 +1512,29 @@ async def _materialise_control(
             )
             db.add(granted)
             staged_grants[granted.grant_id] = granted
+        elif admission.rotate is not None:
+            # The epoch row exists from the moment the rotate does, carrying the
+            # digest the signed op committed to — and no wraps yet.  That ordering is
+            # the whole mechanism: ``PUT /w/{w}/keywraps`` has something to check the
+            # set *against*, so the server can neither add a wrap for a member the
+            # owner never wrapped to nor omit one and lock an honest member out.
+            #
+            # ``escrow_wrap`` is empty until the wraps PUT fills it.  It cannot be
+            # non-empty here: the rotate op is signed content and the escrow wrap is
+            # a separate blob that never travels in the log.  Between the two the
+            # Workspace has a keyed epoch nobody can read yet, which is precisely the
+            # named orphaned-grant window the client re-fetches through rather than a
+            # state to be avoided.
+            db.add(
+                WorkspaceEpoch(
+                    workspace_id=workspace_id,
+                    epoch=admission.rotate.to_epoch,
+                    keywrap_digest=admission.rotate.keywrap_digest,
+                    escrow_wrap=b"",
+                    rotate_seq=result.seq,
+                    created_at=now,
+                )
+            )
         elif admission.revoke is not None:
             target = staged_grants.get(admission.revoke.grant_id) or await db.get(
                 Grant, (workspace_id, admission.revoke.grant_id)
@@ -1547,6 +1708,277 @@ async def pull_ops(
             for row in rows[:limit]
         ],
         has_more=has_more,
+    )
+
+
+# ── The key plane ─────────────────────────────────────────────────────────────
+#
+# Three routes, and the server's role in all three is *storage and arithmetic*.  It
+# holds wraps it cannot open and checks a hash it was told to check; every
+# cryptographic decision was made by an owner Device before the bytes arrived.
+#
+# The one thing the server genuinely enforces is the digest, and that is enforcement
+# of a commitment the *log* made, not of a policy of its own: a ``rotate`` op is
+# signed by an owner and names ``keywrap_digest`` before any wrap exists, so
+# refusing a set that does not hash to it is the server holding itself to somebody
+# else's word.  Without it, deciding which members can read a new epoch would be
+# entirely within a hostile operator's gift.
+
+
+@router.put("/w/{workspace_id}/keywraps", response_model=KeyWrapListResponse)
+async def put_keywraps(
+    workspace_id: uuid.UUID,
+    body: PutKeyWrapsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_member: Member = Depends(get_current_member),
+) -> KeyWrapListResponse:
+    """Upload the whole wrap set for one epoch.  Owner only, digest-gated.
+
+    **Whole-set, never incremental.**  The digest commits to the set, so a partial
+    upload could not be checked against it — and accepting one would restore exactly
+    the curation power the digest exists to remove.
+
+    For ``epoch > 0`` the matching ``rotate`` must already be materialised and this
+    set must hash to *its* digest.  Ordering matters and is the client's to get
+    right: author the rotate, let it land, then PUT.  A wraps upload arriving first
+    is refused with ``rotate_not_materialised`` rather than trusted, because a digest
+    the log has not committed to is just a number the uploader chose.
+
+    Epoch 0 is the one case with no rotate behind it — nothing rotated *to* it — so
+    its digest arrives in the body and is stored as the commitment.  That is a fresh
+    Workspace keyed at genesis; a Workspace that predates encryption never mints an
+    epoch 0 row, and turn-on gives it ``K_{w,1}`` instead.
+
+    **Replay is idempotent, and only byte-identical replay.**  The enrolment and
+    rotation ceremonies both retry, and a re-PUT of the same bytes must be an
+    acknowledgement rather than a conflict.  A *different* set for an epoch already
+    written is refused: the wraps an epoch was published with are not a later
+    caller's to replace, and allowing it would let a stolen owner credential swap the
+    key set out from under devices that already read it.
+    """
+    _require_derivable_workspace(workspace_id, current_member.user_id)
+    await _refuse_if_revoked(db, workspace_id, current_member)
+    if not 0 <= body.epoch <= MAX_KEY_EPOCH:
+        raise _unprocessable("malformed_key_epoch", epoch=body.epoch)
+
+    grants = await _grant_index(db, workspace_id)
+    # Minting wraps is an owner act: it is the delivery half of a Grant, and only an
+    # owner holds the authority to say who reads a Workspace.  The matrix row for
+    # op_class 2 is the same bar a rotate itself is held to, which is the point —
+    # the two halves of one ceremony cannot have different authority.
+    if ROLE_OWNER not in grants.live_roles(current_member.member_id):
+        raise _forbidden(
+            "keywrap_requires_owner",
+            revoked=grants.is_revoked(current_member.member_id),
+        )
+
+    escrow_wrap = _decode_base64(body.escrow_wrap_b64, "malformed_escrow_wrap")
+    if len(escrow_wrap) != EPOCH_KEY_ESCROW_WRAP_BYTES:
+        raise _unprocessable("malformed_escrow_wrap", expected_bytes=EPOCH_KEY_ESCROW_WRAP_BYTES)
+
+    entries: list[tuple[uuid.UUID, bytes, bytes]] = []
+    seen: set[uuid.UUID] = set()
+    for position, entry in enumerate(body.wraps):
+        wrap = _decode_base64(entry.wrap_b64, "malformed_keywrap", index=position)
+        if len(wrap) != KEYWRAP_BYTES:
+            raise _unprocessable("malformed_keywrap", index=position, expected_bytes=KEYWRAP_BYTES)
+        kex_key_id = _decode_base64(entry.kex_key_id, "malformed_kex_key_id", index=position)
+        member = await db.get(Member, entry.member_id)
+        if member is None or member.user_id != current_member.user_id:
+            raise _unprocessable("unknown_keywrap_member", index=position)
+        if member.kex_pk is None or derive_key_id(member.kex_pk) != kex_key_id:
+            # The key id must be the one the server derived from the *registered*
+            # KEX key, never a claim: a wrap sealed to some other key would be
+            # undeliverable, and the member would look orphaned for a reason nothing
+            # in the log explained.
+            raise _unprocessable("kex_key_id_not_registered", index=position)
+        if entry.member_id in seen:
+            # Two wraps for one member in one set: the digest sorts by
+            # ``(member_id, kex_key_id)``, so a duplicate would make the commitment
+            # depend on which copy the server kept.
+            raise _unprocessable("duplicate_keywrap_member", index=position)
+        seen.add(entry.member_id)
+        entries.append((entry.member_id, kex_key_id, wrap))
+
+    computed = keywrap_digest(epoch=body.epoch, member_wraps=entries, escrow_wrap=escrow_wrap)
+
+    stored_epoch = await db.get(WorkspaceEpoch, (workspace_id, body.epoch))
+    if body.epoch == 0:
+        if stored_epoch is None:
+            if body.keywrap_digest_b64 is None:
+                raise _unprocessable("missing_keywrap_digest", epoch=body.epoch)
+            claimed = _decode_base64(body.keywrap_digest_b64, "malformed_keywrap_digest")
+            if len(claimed) != KEYWRAP_DIGEST_BYTES:
+                raise _unprocessable(
+                    "malformed_keywrap_digest", expected_bytes=KEYWRAP_DIGEST_BYTES
+                )
+            if claimed != computed:
+                # Self-inconsistent: the caller's own digest does not describe the
+                # set it just uploaded.  Refused rather than silently corrected,
+                # because a client that miscomputes the digest here would also
+                # miscompute it in the ``rotate`` op it signs next.
+                raise _unprocessable("keywrap_digest_mismatch", epoch=body.epoch)
+            db.add(
+                WorkspaceEpoch(
+                    workspace_id=workspace_id,
+                    epoch=body.epoch,
+                    keywrap_digest=computed,
+                    escrow_wrap=escrow_wrap,
+                    rotate_seq=None,
+                    created_at=datetime.now(UTC),
+                )
+            )
+    elif stored_epoch is None:
+        # No materialised rotate for this epoch, so nothing has committed to a
+        # digest.  Trusting the body's would make the whole commitment ceremonial.
+        raise _conflict("rotate_not_materialised", epoch=body.epoch)
+
+    if stored_epoch is not None:
+        if stored_epoch.keywrap_digest != computed:
+            raise _unprocessable(
+                "keywrap_digest_mismatch",
+                epoch=body.epoch,
+                expected_digest=base64.b64encode(stored_epoch.keywrap_digest).decode("ascii"),
+            )
+        if stored_epoch.escrow_wrap and stored_epoch.escrow_wrap != escrow_wrap:
+            # The digest covers the escrow wrap, so reaching here means two different
+            # escrow wraps hash into one digest — impossible without a SHA-256
+            # collision.  Refused anyway: a defence that only holds while the hash
+            # does is worth one line to make unconditional.
+            raise _unprocessable("keywrap_digest_mismatch", epoch=body.epoch)
+        stored_epoch.escrow_wrap = escrow_wrap
+
+    for member_id, kex_key_id, wrap in entries:
+        existing = await db.get(KeyWrap, (workspace_id, member_id, body.epoch))
+        if existing is None:
+            db.add(
+                KeyWrap(
+                    workspace_id=workspace_id,
+                    member_id=member_id,
+                    epoch=body.epoch,
+                    kex_key_id=kex_key_id,
+                    wrap=wrap,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        elif existing.wrap != wrap or existing.kex_key_id != kex_key_id:
+            # Unreachable while the digest check above holds — the digest covers
+            # every wrap — so this is the same belt-and-braces as the escrow-wrap
+            # comparison, and it keeps the "an epoch's wraps are written once" rule
+            # true independently of the hash.
+            raise _conflict("keywrap_already_written", epoch=body.epoch)
+
+    await db.commit()
+    return await _keywraps_for_member(db, workspace_id, current_member.member_id)
+
+
+@router.get("/w/{workspace_id}/keywraps/me", response_model=KeyWrapListResponse)
+async def get_my_keywraps(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_member: Member = Depends(get_current_member),
+) -> KeyWrapListResponse:
+    """This Member's wraps, across every epoch — ``jwt.member == row.member``, only.
+
+    Scoped to the calling Member and not parameterised, so there is no id to get
+    wrong: a member cannot ask for another's wraps because the route has nowhere to
+    put the request.  They would be unopenable anyway, which is what makes the
+    scoping a tidiness rather than the defence.
+
+    All epochs, not just the current one.  Soft-delete retention means content
+    authored at any past epoch may still have to be read, so historical wraps are
+    kept and served for ever.
+    """
+    _require_derivable_workspace(workspace_id, current_member.user_id)
+    await _refuse_if_revoked(db, workspace_id, current_member)
+    return await _keywraps_for_member(db, workspace_id, current_member.member_id)
+
+
+async def _keywraps_for_member(
+    db: AsyncSession, workspace_id: uuid.UUID, member_id: uuid.UUID
+) -> KeyWrapListResponse:
+    rows = (
+        (
+            await db.execute(
+                select(KeyWrap)
+                .where(KeyWrap.workspace_id == workspace_id, KeyWrap.member_id == member_id)
+                .order_by(KeyWrap.epoch)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return KeyWrapListResponse(
+        wraps=[
+            KeyWrapOut(
+                epoch=row.epoch,
+                member_id=row.member_id,
+                kex_key_id=base64.b64encode(row.kex_key_id).decode("ascii"),
+                wrap_b64=base64.b64encode(row.wrap).decode("ascii"),
+            )
+            for row in rows
+        ]
+    )
+
+
+@router.get("/w/{workspace_id}/epoch-keys", response_model=EpochKeyListResponse)
+async def get_epoch_keys(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_member: Member = Depends(get_current_member),
+) -> EpochKeyListResponse:
+    """Every epoch's escrow wrap — **useless without the passphrase**.
+
+    Held to the member-GET bar plus a live Grant, which is a deliberately low bar
+    because the bytes disclose nothing: an escrow wrap opens only under
+    ``master_wrap_key``, and that exists only inside the recovery escrow blob, behind
+    Argon2id and the passphrase.  Anyone who can already open these can already open
+    Root.
+
+    This is the route that makes AC-2 work with **no live second device**: a device
+    enrolling on the passphrase alone recovers ``master_wrap_key`` from the escrow,
+    reads every epoch's wrap here, and can then decrypt the entire history — then
+    mints and uploads its *own* KeyWraps, because it is an owner.  No ceremony
+    round-trip with another device, which is the same "no second device online, ever"
+    invariant enrolment already runs on.
+
+    Not rate-limited or audited the way ``GET /w/{w}/recovery`` is, and the asymmetry
+    is intentional: the escrow route serves the material a passphrase guess is tested
+    against, so each fetch is a guess handed out.  These wraps are not guessable
+    against anything — there is no low-entropy secret behind them.
+
+    Rows with an empty ``escrow_wrap`` are omitted.  That is the window between a
+    ``rotate`` landing and its wraps PUT arriving: the epoch exists and nothing can
+    read it yet, and a client seeing the epoch without a wrap would learn only what
+    it already knows from the log.  Serving an empty blob would make it look like a
+    wrap that fails to open — an alarm — instead of one that has not arrived.
+    """
+    _require_derivable_workspace(workspace_id, current_member.user_id)
+    await _refuse_if_revoked(db, workspace_id, current_member)
+    grants = await _grant_index(db, workspace_id)
+    if not grants.live_roles(current_member.member_id):
+        raise _forbidden("no_live_grant", revoked=grants.is_revoked(current_member.member_id))
+    rows = (
+        (
+            await db.execute(
+                select(WorkspaceEpoch)
+                .where(WorkspaceEpoch.workspace_id == workspace_id)
+                .order_by(WorkspaceEpoch.epoch)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return EpochKeyListResponse(
+        epochs=[
+            EpochKeyOut(
+                epoch=row.epoch,
+                escrow_wrap_b64=base64.b64encode(row.escrow_wrap).decode("ascii"),
+                keywrap_digest_b64=base64.b64encode(row.keywrap_digest).decode("ascii"),
+            )
+            for row in rows
+            if row.escrow_wrap
+        ]
     )
 
 

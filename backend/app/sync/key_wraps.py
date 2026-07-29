@@ -80,8 +80,10 @@ KEYWRAP_INFO_DOMAIN: Final = b"jeeves/keywrap/v1"
 EPOCH_KEY_ESCROW_INFO_DOMAIN: Final = b"jeeves/epoch-key-escrow/v1"
 KEYWRAP_DIGEST_DOMAIN: Final = b"jeeves/keywrap-digest/v1"
 
-KEX_PUBLIC_KEY_BYTES: Final = 32
 #: The ephemeral X25519 share a KeyWrap carries, so it needs no prior state.
+#: A Member's registered ``kex_pk`` is checked against this too — both are X25519
+#: public keys, and giving them separate constants would invite the two to drift
+#: apart when nothing about the algorithm allows it.
 EPHEMERAL_PUBLIC_KEY_BYTES: Final = 32
 WRAP_NONCE_BYTES: Final = 24
 MASTER_WRAP_KEY_BYTES: Final = 32
@@ -185,8 +187,8 @@ def wrap_epoch_key_for_member(
     """
     if len(workspace_key) != WORKSPACE_KEY_BYTES:
         raise ValueError(f"workspace key must be {WORKSPACE_KEY_BYTES} bytes")
-    if len(kex_pk) != KEX_PUBLIC_KEY_BYTES:
-        raise ValueError(f"kex_pk must be {KEX_PUBLIC_KEY_BYTES} bytes")
+    if len(kex_pk) != EPHEMERAL_PUBLIC_KEY_BYTES:
+        raise ValueError(f"kex_pk must be {EPHEMERAL_PUBLIC_KEY_BYTES} bytes")
     if len(nonce) != WRAP_NONCE_BYTES:
         raise ValueError(f"nonce must be {WRAP_NONCE_BYTES} bytes")
     epk = bindings.crypto_scalarmult_base(ephemeral_secret_key)

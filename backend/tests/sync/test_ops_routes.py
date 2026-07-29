@@ -637,7 +637,9 @@ async def test_a_control_op_signed_by_a_foreign_root_is_rejected(
 
 async def test_an_unserved_control_type_is_rejected(client: AsyncClient, session: Session) -> None:
     """#554's landing slot: every control type this build does not serve is closed."""
-    payload = ControlPayload(control_type="rotate", prev_control_hash=session.control_head).encode()
+    payload = ControlPayload(
+        control_type="member_key_rotate", prev_control_hash=session.control_head
+    ).encode()
     envelope = session.device.next_envelope(
         session.workspace_id, op_class=OP_CLASS_CONTROL, payload=payload
     )
@@ -650,7 +652,7 @@ async def test_an_unserved_control_type_is_rejected(client: AsyncClient, session
     assert detail_of(response) == {
         "code": "unsupported_control_type",
         "index": 0,
-        "type": "rotate",
+        "type": "member_key_rotate",
     }
 
 

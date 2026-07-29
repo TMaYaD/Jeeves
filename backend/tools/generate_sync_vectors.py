@@ -34,6 +34,7 @@ from nacl.signing import SigningKey  # noqa: E402
 from app.sync.control_payload import (  # noqa: E402
     COMPACTION_EXEMPT_OP_CLASSES,
     CONTROL_TYPE_GRANT,
+    CONTROL_TYPE_ROTATE,
     CONTROL_TYPE_MEMBER_REGISTER,
     CONTROL_TYPE_REVOKE,
     CONTROL_TYPE_WORKSPACE_GENESIS,
@@ -59,6 +60,7 @@ from app.sync.control_payload import (  # noqa: E402
     MemberKeys,
     RegistrationCertificate,
     RevokeCertificate,
+    RotateStatement,
     control_payload_hash,
     sign_genesis_certificate,
     sign_grant_certificate,
@@ -1115,6 +1117,64 @@ def _control_vectors() -> list[dict[str, Any]]:
         ),
     )
 
+    # The rotation that turns encryption on for this Workspace.  It chains off the
+    # revoke above, which is also the shape `revokeAndRotate` produces: revoke, then
+    # rotate, back to back in one authoring queue.
+    rotate_digest = keywrap_digest(
+        epoch=1,
+        member_wraps=[
+            (
+                MEMBER_IDS[label],
+                derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS[label]),
+                wrap_epoch_key_for_member(
+                    workspace_key=SPEC_EPOCH_KEYS[1],
+                    kex_pk=KEYWRAP_KEX_PUBLIC_KEYS[label],
+                    workspace_id=WORKSPACE_ID,
+                    epoch=1,
+                    member_id=MEMBER_IDS[label],
+                    kex_key_id=derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS[label]),
+                    ephemeral_secret_key=_spec_ephemeral_seed(label),
+                    nonce=_spec_nonce(f"keywrap/{label}"),
+                ),
+            )
+            for label in KEY_LABELS
+        ],
+        escrow_wrap=wrap_epoch_key_for_escrow(
+            workspace_key=SPEC_EPOCH_KEYS[1],
+            master_wrap_key=SPEC_MASTER_WRAP_KEY,
+            workspace_id=WORKSPACE_ID,
+            epoch=1,
+            nonce=_spec_nonce("epoch-key-escrow/1"),
+        ),
+    )
+    append(
+        "rotate_to_epoch_1",
+        key="device_a",
+        payload=ControlPayload(
+            control_type=CONTROL_TYPE_ROTATE,
+            prev_control_hash=bytes.fromhex(vectors[-1]["payload_sha256_hex"]),
+            rotate=RotateStatement(
+                workspace_id=WORKSPACE_ID,
+                from_epoch=0,
+                to_epoch=1,
+                keywrap_digest=rotate_digest,
+                rotated_at_hlc=Hlc.for_member(MEMBER_IDS["device_a"], BASE_WALL_MS + 4000),
+            ),
+        ),
+        cert_json="",
+        note=(
+            "Turning encryption on *is* a rotation — no separate switch, no second "
+            "machine. from_epoch 0 to_epoch 1, so epoch 0 is never keyed and this "
+            "Workspace's pre-turn-on plaintext history stays readable for ever. The "
+            "one control type with no certificate and no separate signature: its "
+            "authority is the author's own live owner Grant, so the envelope "
+            "signature is the only signature there is. keywrap_digest commits to the "
+            "whole wrap set *before* any wrap is uploaded, which is what stops the "
+            "server curating who can read the new epoch — it matches "
+            "keywrap_digest_two_members_epoch_1 exactly."
+        ),
+    )
+
     return vectors
 
 
@@ -1247,13 +1307,15 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
             "control_unsupported_type",
             reason="unsupported_control_type",
             payload=ControlPayload(
-                control_type="rotate",
+                control_type="member_key_rotate",
                 prev_control_hash=hashlib.sha256(b"predecessor").digest(),
             ),
             note=(
-                "A control type this build does not serve. #554 turns `rotate` "
-                "into a positive vector; until then every type outside the four "
-                "served ones is fail-closed."
+                "A control type this build does not serve. Rotating a *Member's* own "
+                "signing or KEX key is a different thing from rotating the Workspace "
+                "content key, which `rotate` now does: every type outside the five "
+                "served ones stays fail-closed, and the payload beyond the two "
+                "self-identifying fields is not even parsed."
             ),
         ),
         control_negative(
@@ -2111,7 +2173,23 @@ def _envelope_vectors_document() -> dict[str, Any]:
                 "workspace_genesis_type": CONTROL_TYPE_WORKSPACE_GENESIS,
                 "grant_type": CONTROL_TYPE_GRANT,
                 "revoke_type": CONTROL_TYPE_REVOKE,
+                "rotate_type": CONTROL_TYPE_ROTATE,
                 "served_control_types": sorted(SERVED_CONTROL_TYPES),
+                "rotate_carries_no_certificate": (
+                    "rotate is the one served type with no cert and no separate "
+                    "signature. Every other type's authority is somebody other than "
+                    "the envelope's author — Root, or a granting Member — so its "
+                    "certificate has to travel independently of who is posting it. A "
+                    "rotate's authority is the author's own live owner Grant, which "
+                    "is the same (role, op_class = 2) rule already applied, so the "
+                    "envelope signature is the only signature there is."
+                ),
+                "rotate_is_single_step": (
+                    "to_epoch must be from_epoch + 1. A rotation that jumped epochs "
+                    "would leave a gap no KeyWrap set is ever minted for, and the "
+                    "epoch floor would then refuse content at an epoch the Workspace "
+                    "never keyed."
+                ),
                 "member_kind_device": MEMBER_KIND_DEVICE,
                 "member_kind_service": MEMBER_KIND_SERVICE,
                 "prev_control_hash_bytes": PREV_CONTROL_HASH_BYTES,

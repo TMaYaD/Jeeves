@@ -8,6 +8,7 @@ honest about the wire format the real server speaks.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -169,6 +170,15 @@ def _receive_control(envelope: bytes, root_pk: bytes) -> Any:
     # key verifies the certificate is decided by the payload's own `authority`
     # field and nothing else.  The envelope itself is verified against the
     # author's directory key, as any non-registering op is.
+    if payload.control_type == control.CONTROL_TYPE_ROTATE:
+        # No certificate and no separate signature: a rotate's authority is the
+        # author's own live owner Grant, which is receiver state a vector cannot
+        # carry, so what is checkable here is the envelope signature and the
+        # statement's own shape.  The authority check is pinned by the route tests.
+        env.verify_envelope(envelope, _member_sign_pk(str(header.author_member_id)))
+        assert not payload.is_root_signed
+        return payload.rotate_statement()
+
     authority_pk = (
         root_pk if payload.authority == control.GRANTER_ROOT else _member_sign_pk(payload.authority)
     )
@@ -669,6 +679,7 @@ def test_control_constants_match_the_frozen_file() -> None:
     assert frozen["workspace_genesis_type"] == control.CONTROL_TYPE_WORKSPACE_GENESIS
     assert frozen["grant_type"] == control.CONTROL_TYPE_GRANT
     assert frozen["revoke_type"] == control.CONTROL_TYPE_REVOKE
+    assert frozen["rotate_type"] == control.CONTROL_TYPE_ROTATE
     assert frozen["served_control_types"] == sorted(control.SERVED_CONTROL_TYPES)
     assert frozen["member_kind_device"] == control.MEMBER_KIND_DEVICE
     assert frozen["member_kind_service"] == control.MEMBER_KIND_SERVICE
@@ -749,16 +760,28 @@ def test_control_vector_round_trips_through_the_receive_pipeline(
     vector: dict[str, Any],
 ) -> None:
     envelope = bytes.fromhex(vector["envelope_hex"])
-    certificate = _receive_control(envelope, _ROOT_PUBLIC_KEY)
-
-    # The signed artifact is the certificate's literal bytes; re-encoding is not
-    # part of verification, but a lossy decode would break every verifier.
-    assert certificate.encode().decode("utf-8") == vector["cert_json"]
-    assert certificate.encode().hex() == vector["cert_hex"]
+    decoded = _receive_control(envelope, _ROOT_PUBLIC_KEY)
 
     payload = ControlPayload.decode(env.parse_body(env.split_envelope(envelope)[1]))
     assert payload.control_type == vector["control_type"]
     assert payload.prev_control_hash.hex() == vector["prev_control_hash_hex"]
+
+    if vector["control_type"] == control.CONTROL_TYPE_ROTATE:
+        # No certificate and no separate signature — the fields *are* the payload, so
+        # a round-trip through the payload codec is the whole of what there is to
+        # check.  See RotateStatement for why that follows from where its authority
+        # comes from.
+        assert vector["cert_json"] == ""
+        assert payload.signature == b""
+        assert payload.authority == ""
+        assert payload.to_json_dict() == json.loads(vector["payload_json"])
+        assert decoded == payload.rotate_statement()
+        return
+
+    # The signed artifact is the certificate's literal bytes; re-encoding is not
+    # part of verification, but a lossy decode would break every verifier.
+    assert decoded.encode().decode("utf-8") == vector["cert_json"]
+    assert decoded.encode().hex() == vector["cert_hex"]
     assert payload.signature.hex() == vector["signature_hex"]
     assert payload.authority == vector["authority"]
 
@@ -805,6 +828,11 @@ def test_the_canonical_control_chain_links_payload_hash_to_payload_hash() -> Non
         control.CONTROL_TYPE_GRANT,
         control.CONTROL_TYPE_GRANT,
         control.CONTROL_TYPE_REVOKE,
+        # The revoke-then-rotate pair `revokeAndRotate` authors back to back, which
+        # is also what turning encryption on looks like: a rotate chains off the
+        # control head like any other type, and its link is the same
+        # hash-of-payload-bytes even though it carries no certificate.
+        control.CONTROL_TYPE_ROTATE,
     ]
     assert chain[0]["prev_control_hash_hex"] == control.ZERO_PREV_CONTROL_HASH.hex()
     for predecessor, successor in zip(chain, chain[1:], strict=False):
