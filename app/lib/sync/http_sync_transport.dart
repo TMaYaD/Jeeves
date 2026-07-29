@@ -1,8 +1,15 @@
 /// The two transports over HTTP against `backend/app/sync/routes.py`.
 ///
-/// The production seam. Nothing in the app wires it up yet — the sync spine is
-/// exercised entirely through the in-process double in `test/sync/harness/`,
-/// and the live app stays on PowerSync until #553.
+/// The production seam, and it is wired up: `providers/sync_stack_provider.dart`
+/// builds [HttpUserTransport] over `ApiService`'s session Dio, and the enrolment
+/// ceremony reaches it from the phone (#553 Phase 2). [HttpSyncTransport] arrives
+/// the only way it can — out of the proof-of-possession exchange below.
+///
+/// What the live app still does *not* do is push domain writes through here: DAO
+/// capture stays `NoopDomainOpCapture` and PowerSync remains the sync path until
+/// the flip. The convergence properties are still asserted against the
+/// in-process double in `test/sync/harness/`, which is contract-tested
+/// case-for-case against these routes.
 ///
 /// [HttpUserTransport] carries the User's session; [HttpSyncTransport] carries
 /// a member token and is *only* reachable by completing the proof-of-possession

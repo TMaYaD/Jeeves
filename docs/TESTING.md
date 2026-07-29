@@ -179,6 +179,40 @@ The Dart harness has no PowerSync engine (see the manual checklist above), so th
 
 On the user's actual phone the same steps apply minus the seeded divergences, and the backend deploy must have landed first: the endpoint is only present after a pipeline deploy, so a `Server not yet deployed` verdict means merged-but-not-deployed, not divergence.
 
+## Enrolment ceremony (cutover tooling, #553 Phase 2)
+
+The screen that runs `EnrolmentService` on the device: passphrase → Root → both escrow slots → member registration → per-Workspace genesis and this Device's owner Grant. **#556 removes the surface** (`app/lib/cutover/enrolment_ceremony/`, the `/settings/enrolment-ceremony` route and the Settings entry, all marked) but *not* the machinery underneath it — `app/lib/sync/sync_stack.dart`, `sync_store*.dart`, `providers/sync_stack_provider.dart`, `ApiService.sessionDio` and `services/secure_screen.dart` are permanent and carry no removal marker.
+
+**Three states, read from the store with no network.** A relaunched device holds no member credential — it is minted by the proof-of-possession exchange and never persisted — so the status has to be answerable offline:
+
+- *not enrolled* — no stored keys **and** no pinned Root. The only state that offers founding.
+- *half-founded* — either keys with a Workspace whose control log is still empty, or **a pinned Root with no keys at all**. The second is the one that is easy to get wrong: `enrolFirstDevice` writes the escrow and pins Root *before* it stores the keypairs, so a crash in that window leaves the account's escrow claimed by a device that cannot prove it, and founding again can only ever return `escrow_version_regression`. Both are recovered by re-entering the passphrase ("Enrol with the passphrase").
+- *enrolled* — keys stored and every derivable Workspace founded. No founding control is rendered, and the runner refuses a second founding below the UI as well.
+
+**What the surface does differently from converge-verify, on purpose.** No copy-to-clipboard for the passphrase (a clipboard manager or cloud clipboard sync would carry the encryption ceiling off the device — it is monospaced and selectable, to be written on paper); an explicit "I have written this down" checkbox gating the founding button, asked *before* the run so an interrupted ceremony still leaves the phrase in hand; and `FLAG_SECURE` on the window while the screen is mounted, because the recents thumbnail is a real capture that the system takes unprompted. The passphrase is rendered once and leaves the widget tree on success — the outcome's echo of it is never shown.
+
+**Escrow conflicts arrive as `bad_escrow_signature` (403), not `escrow_version_regression` (409).** The server verifies the record's Root signature against the `root_pk` already in the slot before it compares versions, so a fresh device founding an already-founded account is refused for signing with its own Root. The version conflict is only reachable for the same Root re-writing its own slot, which the ceremony tolerates internally. Both classify as "an escrow already exists for this account", and both reveal the passphrase route on a device the store still reads as *not enrolled* — pre-filled with the phrase this session generated, into an empty field only. The reveal is sticky for the session and the field keeps what the user typed, because the phrase that claimed the escrow may be another device's and a mistyped correction must not withdraw the route or hand back the rejected phrase.
+
+Automated coverage:
+
+- `app/test/sync/enrolment_ceremony_runner_test.dart` — the real runner over the real `SyncStack`, against `FakeSyncServer`: founding, the refusal of a second founding (asserting the server saw no write), an offline run leaving the device un-enrolled, both crash windows and their passphrase resumes, the escrow conflict, and a second phone enrolling on the passphrase alone. **Deliberately not a `SimDevice` test:** a `SimDevice` hands every client the same omnipresent `DeviceLink` at construction, so it cannot notice a stack that fails to propagate the member transport to the preferences Workspace's client — the one place production diverges from the harness. Attaching that transport at construction instead of on every factory call makes the first case fail with `this device has no member credential yet`, which is exactly the bug the test exists for.
+- `app/test/cutover/enrolment_ceremony_screen_test.dart` — the screen over a scripted runner, including the `FLAG_SECURE` set/clear pair. It sets a tall viewport: a `ListView` only inflates children near the visible window, so on the default 800px surface the checkbox and the founding button would be *absent* from the tree, and a finder that missed them would read as "the screen offers no founding" — a claim other cases in the file make on purpose.
+- `app/test/cutover/enrolment_ceremony_status_test.dart` — the state table and the failure classification as pure functions.
+
+### Manual runbook
+
+The ceremony's real path needs a real key store and a real server, so it only runs by hand. Against the compose stack (`podman compose -f infra/docker-compose.yml up -d`) with a signed-in emulator:
+
+1. **Sign in first.** The Workspace ids, the escrow slot and the Grants all derive from the account, so the screen refuses the `local` placeholder user with "sign in before enrolling this device".
+2. Settings → *CUTOVER TOOLING* → **Enrolment ceremony**. Expect *Not enrolled*, and nothing else on offer but **Generate passphrase**. The section sits between EVENING SHUTDOWN and ABOUT, well below the fold — scroll rather than trusting a tap coordinate.
+3. **Generate**, then confirm the checkbox, then **Found the Workspace**. Expect a few seconds of spinner (the Argon2id floor, on a background isolate) and then the enrolled panel: member id, escrow version 1, Root fingerprint, and both Workspaces marked *founded*.
+4. **Verify server-side**: `podman compose -f infra/docker-compose.yml exec postgres psql -U jeeves -d jeeves -c "SELECT workspace_id, version FROM recovery_escrows"` shows two slots, and `SELECT workspace_id, author_member_id, author_seq, op_class FROM ops ORDER BY seq` shows two control ops per Workspace (genesis, then the root-signed owner Grant).
+5. **Re-open the screen.** Expect the enrolled panel again, with no founding control of any kind.
+6. **Airplane mode, fresh account.** Expect "Server unreachable", *Not enrolled* still on screen afterwards, and the generated passphrase still shown for the retry. The copy deliberately does **not** claim nothing was written: "unreachable" describes the request that failed, and a lost response to the escrow PUT is indistinguishable from one that never arrived — so it tells the user to keep the passphrase and, if a retry then reports an existing escrow, to enrol with it.
+7. **Screen capture.** `adb shell screencap` on the ceremony screen returns a black frame while `FLAG_SECURE` is set, and a normal one on any other screen — which is also the check that the flag is being cleared on the way out.
+
+**On the user's phone this is the Phase-2 human-in-the-loop step, and there is exactly one shot at it.** The passphrase is generated on the device, shown once, and is unrecoverable; write it on paper before tapping **Found the Workspace**, and do not leave the screen until it says enrolled. The enrolled panel (member id, escrow version, Root fingerprint, both Workspace ids) is the artifact to paste back into #553.
+
 ## Manual testing on the Android emulator (for agents)
 
 For flows that are impractical to cover with `flutter_test` / integration tests — in particular the Sign-In With Solana round-trip, which requires a real MWA-compatible wallet — drive the running emulator via `adb`. This section captures the stable coordinates and navigation paths so successive sessions don't have to re-discover them.

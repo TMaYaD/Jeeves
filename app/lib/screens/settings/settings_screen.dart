@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 // Cutover tooling (#553 Phase 1) — removed by #556.
 import '../../cutover/converge_verify/converge_verify_screen.dart';
+// Cutover tooling (#553 Phase 2) — removed by #556.
+import '../../cutover/enrolment_ceremony/enrolment_ceremony_screen.dart';
 import '../../models/clarify_mode.dart';
 import '../../models/focus_session_planning_settings.dart';
 import '../../providers/auth_provider.dart';
@@ -138,6 +140,21 @@ class SettingsScreen extends ConsumerWidget {
               style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
             ),
             onTap: () => context.push(ConvergeVerifyScreen.routePath),
+          ),
+          ListTile(
+            key: const Key('enrolment_ceremony_tile'),
+            leading: const Icon(Icons.vpn_key, color: Color(0xFF9CA3AF)),
+            title: const Text(
+              'Enrolment ceremony',
+              style: TextStyle(
+                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: const Text(
+              'Found the Workspace from this phone: passphrase → Root → escrow '
+              '→ genesis.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => context.push(EnrolmentCeremonyScreen.routePath),
           ),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
