@@ -18,6 +18,7 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
@@ -306,8 +307,9 @@ void main() {
     expect(await a.pendingRotations.read(defaultWs()), isEmpty);
   });
 
-  test('a resume racing a set already written is a byte-identical 200, not an '
-      'error (AC-4)', () async {
+  test('a committed-but-unacked set is re-learned by the relaunch pull, and the '
+      'resume discards the stale record without a second PUT (AC-4, discard '
+      'ordering)', () async {
     final (a, faults) = await phone(label: 'A', fileBacked: true);
     final outcome = await a.enrolAsFirstDevice();
 
@@ -321,18 +323,51 @@ void main() {
     expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNull);
     expect(await a.pendingRotations.read(defaultWs()), contains(1));
 
-    // The resume re-PUTs the same bytes. A different set would be refused
-    // `keywrap_already_written`; a byte-identical one returns 200 and completes.
+    // On relaunch the ordinary pull runs first (step 4), before the resume (step 5),
+    // and re-learns the committed wrap via `refreshEpochKeys` — so the resume finds
+    // the key already held and discards the stale record. No second PUT.
     await a.relaunch();
     expect(await a.activate(), SyncActivation.active);
     expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNotNull);
     expect(await a.pendingRotations.read(defaultWs()), isEmpty);
     expect(faults.putKeyWrapsCallCount, 1,
         reason: 'the set was PUT exactly once — the ceremony commit that lost its '
-            'ack. On relaunch the ordinary pull re-learns that committed wrap '
-            '(refreshEpochKeys, no passphrase), so the resume finds the key already '
-            'held and discards the stale record rather than issuing a redundant '
-            'second PUT');
+            'ack. The relaunch pull re-learns that committed wrap before the resume '
+            'runs, so the resume discards rather than issuing a redundant second PUT');
+  });
+
+  test('a ceremony-triggered resume that runs before any pull re-PUTs the '
+      'committed set byte-identical and gets a 200 (AC-4, re-PUT ordering)',
+      () async {
+    final (a, faults) = await phone(label: 'A', fileBacked: true);
+    final outcome = await a.enrolAsFirstDevice();
+
+    // Same stranded state — wraps committed server-side, key not held, record
+    // standing — but reached inside a live process. `_rotateOne`'s only pull is the
+    // one *before* the rotate, so nothing has re-learned epoch 1's wrap yet.
+    faults.commitThenThrow[defaultWs()] = 1;
+    await expectLater(
+      a.stack.enrolment.turnOnEncryption(passphrase: outcome.passphrase),
+      throwsA(isA<SyncTransportException>()),
+    );
+    expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNull);
+    expect(await a.pendingRotations.read(defaultWs()), contains(1));
+    expect(faults.putKeyWrapsCallCount, 1);
+
+    // Resume directly, with no intervening pull — the ceremony-path ordering that
+    // `rotateWorkspaceKeys` takes (it calls `resumePendingRotations` at the top,
+    // before `_rotateOne` pulls). With no `refreshEpochKeys` ahead of it, the resume
+    // cannot discard: it must re-PUT the committed set. The server accepts the
+    // byte-identical bytes as a 200 (`#590` idempotency) and the key is remembered.
+    await a.stack.enrolment.resumePendingRotations(workspaceId: defaultWs());
+
+    expect(faults.putKeyWrapsCallCount, 2,
+        reason: 'the resume issued the second, byte-identical PUT — the idempotent '
+            're-PUT path, exercised because no pull re-learned the key first');
+    expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNotNull,
+        reason: 'the byte-identical re-PUT returned 200 and the key was remembered');
+    expect(await a.pendingRotations.read(defaultWs()), isEmpty,
+        reason: 'the completed record was removed');
   });
 
   test('a rotation interrupted partway through the two Workspaces leaves only the '
@@ -391,39 +426,7 @@ void main() {
   test('a corrupt pending record is discarded per entry, never wedging the '
       'good records beside it', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
-
-    // A map-backed FlutterSecureStorage: the real store over the real JSON codec,
-    // only the keychain replaced. Corruption is injected by writing raw bytes the
-    // codec cannot parse — exactly a truncated keychain value on disk.
-    final backing = <String, String>{};
-    const channel =
-        MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      final args = (call.arguments as Map).cast<String, Object?>();
-      final key = args['key'] as String?;
-      switch (call.method) {
-        case 'read':
-          return backing[key];
-        case 'write':
-          backing[key!] = args['value']! as String;
-          return null;
-        case 'delete':
-          backing.remove(key);
-          return null;
-        case 'containsKey':
-          return backing.containsKey(key);
-        case 'readAll':
-          return Map<String, String>.from(backing);
-        case 'deleteAll':
-          backing.clear();
-          return null;
-        default:
-          return null;
-      }
-    });
-    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final storage = _FakeSecureStorage()..install();
 
     const ws = 'rotation-resume-corrupt-ws';
     const storeKey = 'jeeves/sync/pending_rotations/$ws';
@@ -431,7 +434,7 @@ void main() {
 
     // One decodable epoch and one that cannot decode (a truncated value), side by
     // side in the same Workspace record.
-    backing[storeKey] = jsonEncode({
+    storage.backing[storeKey] = jsonEncode({
       '3': encodePendingEpochKeySet(_placeholderSet(3)),
       '5': {'epoch': 5, 'workspace_key': 'not valid base64 %%%'},
     });
@@ -443,10 +446,44 @@ void main() {
 
     // A wholly undecodable record self-discards rather than throwing on every read
     // — otherwise it would wedge `resumePendingRotations` and every later ceremony.
-    backing[storeKey] = 'not json at all';
+    storage.backing[storeKey] = 'not json at all';
     expect(await store.read(ws), isEmpty);
-    expect(backing.containsKey(storeKey), isFalse,
+    expect(storage.backing.containsKey(storeKey), isFalse,
         reason: 'an unparseable record is cleared, not re-read for ever');
+  });
+
+  test('a direct read self-heal cannot clobber a concurrent put — read is on the '
+      'same mutation chain as put', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    final storage = _FakeSecureStorage()..install();
+
+    const ws = 'rotation-resume-race-ws';
+    const storeKey = 'jeeves/sync/pending_rotations/$ws';
+    final store = SecureStoragePendingRotationStore();
+
+    // A wholly corrupt record: a direct `read` — the shape `resumePendingRotations`
+    // issues — will self-heal it by deleting the key (`clearRaw`).
+    storage.backing[storeKey] = 'not json at all';
+
+    // Hold that self-heal delete mid-flight, then start a `put` while it is parked.
+    // If `read` were off the mutation chain the put's write would land inside the
+    // window and the resumed delete would wipe it; because `read` shares the chain,
+    // the put simply queues behind the whole read (self-heal included).
+    final gate = Completer<void>();
+    storage.deleteGate = gate; // the handler disarms the field, so hold our own ref
+    final readFuture = store.read(ws);
+    await Future<void>.delayed(Duration.zero); // let read reach its gated delete
+    final putFuture = store.put(ws, _placeholderSet(9));
+    await Future<void>.delayed(Duration.zero); // give the put a chance to interleave
+    gate.complete();
+
+    await Future.wait([readFuture, putFuture]);
+
+    final after = await store.read(ws);
+    expect(after.keys, contains(9),
+        reason: 'the put survived: a chained read cannot let its self-heal delete '
+            'land after the put and clobber the set it just persisted');
+    expect(after[9]!.epoch, 9);
   });
 
   test('the EpochKeySet codec round-trips byte-for-byte through JSON', () async {
@@ -498,3 +535,51 @@ EpochKeySet _placeholderSet(int epoch) => EpochKeySet(
       escrowWrap: _filled(epochKeyEscrowWrapBytes, 0),
       digest: _filled(keyWrapDigestBytes, 0),
     );
+
+/// A map-backed [FlutterSecureStorage] over the store's real JSON codec — only the
+/// keychain replaced, so the store under test is production but for its I/O. The
+/// pending-rotation store key is `jeeves/sync/pending_rotations/<workspaceId>`.
+class _FakeSecureStorage {
+  final Map<String, String> backing = {};
+
+  /// Armed by a test: the *next* `delete` (a `clearRaw` self-heal) parks on this
+  /// until it completes, then disarms. The hook a race test uses to hold a self-heal
+  /// mid-flight while a concurrent `put` tries to interleave.
+  Completer<void>? deleteGate;
+
+  void install() {
+    const channel =
+        MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      final args = (call.arguments as Map).cast<String, Object?>();
+      final key = args['key'] as String?;
+      switch (call.method) {
+        case 'read':
+          return backing[key];
+        case 'write':
+          backing[key!] = args['value']! as String;
+          return null;
+        case 'delete':
+          final gate = deleteGate;
+          if (gate != null) {
+            deleteGate = null;
+            await gate.future;
+          }
+          backing.remove(key);
+          return null;
+        case 'containsKey':
+          return backing.containsKey(key);
+        case 'readAll':
+          return Map<String, String>.from(backing);
+        case 'deleteAll':
+          backing.clear();
+          return null;
+        default:
+          return null;
+      }
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+  }
+}

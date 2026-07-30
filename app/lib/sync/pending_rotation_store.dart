@@ -43,9 +43,23 @@ import 'key_wraps.dart';
 typedef PendingRotationsByEpoch = Map<int, EpochKeySet>;
 
 abstract class PendingRotationStore {
-  /// Every pending rotation this device holds for [workspaceId]. Empty when none
-  /// is in flight, which is the ordinary steady state.
-  Future<PendingRotationsByEpoch> read(String workspaceId);
+  /// Every pending rotation this device holds for [workspaceId], read on the same
+  /// per-Workspace mutation chain [put] and [remove] run on. Empty when none is in
+  /// flight, which is the ordinary steady state.
+  ///
+  /// Chained because a corrupt record makes [readRaw] *write* (its `clearRaw`
+  /// self-heal): an external `read` — `resumePendingRotations` calls this one
+  /// directly — must not let that deferred delete land after a concurrent `put`'s
+  /// write and clobber the set it just persisted. [put]/[remove] call [readRaw]
+  /// instead, because they already run inside [_serialised] and would deadlock on
+  /// this one.
+  Future<PendingRotationsByEpoch> read(String workspaceId) =>
+      _serialised(workspaceId, () => readRaw(workspaceId));
+
+  /// [read] off the mutation chain — the storage read itself, including the
+  /// per-record corruption self-heal. Only ever called from inside a [_serialised]
+  /// body ([read], [put], [remove]); never reach for it from outside one.
+  Future<PendingRotationsByEpoch> readRaw(String workspaceId);
 
   /// Replace the whole map. Callers that add one epoch go through [put]; callers
   /// that drop one go through [remove].
@@ -53,7 +67,7 @@ abstract class PendingRotationStore {
 
   /// Forget every pending rotation for this Workspace, straight to storage and
   /// off the mutation chain. Callers go through [clear], which runs this on the
-  /// same per-Workspace chain [put] and [remove] use; [read] calls it directly on
+  /// same per-Workspace chain [put] and [remove] use; [readRaw] calls it directly on
   /// the corruption path, where it is already inside a chained body.
   Future<void> clearRaw(String workspaceId);
 
@@ -77,14 +91,14 @@ abstract class PendingRotationStore {
   /// the newer one is the only one that could be published anyway.
   Future<void> put(String workspaceId, EpochKeySet set) =>
       _serialised(workspaceId, () async {
-        final held = await read(workspaceId);
+        final held = await readRaw(workspaceId);
         await write(workspaceId, {...held, set.epoch: set});
       });
 
   /// Drop one epoch's pending set — what `publish` succeeding calls.
   Future<void> remove(String workspaceId, int epoch) =>
       _serialised(workspaceId, () async {
-        final held = await read(workspaceId);
+        final held = await readRaw(workspaceId);
         if (!held.containsKey(epoch)) return;
         await write(workspaceId, {...held}..remove(epoch));
       });
@@ -104,7 +118,7 @@ class InMemoryPendingRotationStore extends PendingRotationStore {
   final Map<String, PendingRotationsByEpoch> _sets = {};
 
   @override
-  Future<PendingRotationsByEpoch> read(String workspaceId) async =>
+  Future<PendingRotationsByEpoch> readRaw(String workspaceId) async =>
       {...?_sets[workspaceId]};
 
   @override
@@ -150,15 +164,16 @@ class SecureStoragePendingRotationStore extends PendingRotationStore {
       'jeeves/sync/pending_rotations/$workspaceId';
 
   @override
-  Future<PendingRotationsByEpoch> read(String workspaceId) async {
+  Future<PendingRotationsByEpoch> readRaw(String workspaceId) async {
     final raw = await _storage.read(key: _key(workspaceId));
     if (raw == null) return {};
     // A corrupt record is unpublishable, and if it threw on every read it would
     // also be unremovable — wedging `resumePendingRotations` and every later
     // ceremony that resumes first, for good. So corruption self-discards here per
     // record: a set that never round-trips materialised nothing, and nothing is
-    // stranded by dropping it. `clearRaw` (not `clear`) because `read` runs inside
-    // `put`/`remove`'s chained bodies, where the serialised `clear` would deadlock.
+    // stranded by dropping it. `clearRaw` (not `clear`) because this always runs
+    // inside a `_serialised` body (`read`/`put`/`remove`), where the serialised
+    // `clear` would deadlock — and being on that chain is what makes the delete safe.
     final Map<String, Object?> decoded;
     try {
       decoded = jsonDecode(raw) as Map<String, Object?>;

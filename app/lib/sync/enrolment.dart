@@ -721,7 +721,7 @@ class EnrolmentService {
           // `publish` remembers the key and this device finally holds K_{w,epoch}.
           await WorkspaceKeyCeremony(client: scoped).publish(set);
           await pendingRotations.remove(workspace, epoch);
-        } on SyncTransportException catch (error) {
+        } on SyncTransportException catch (error, stackTrace) {
           if (error.code == rotateNotMaterialisedCode) {
             // The rotate was never authored (a premature record per `_rotateOne`'s
             // persist-before-author ordering — safe because the `WorkspaceEpoch` row
@@ -735,8 +735,10 @@ class EnrolmentService {
           // such failure is rethrown after the pass so the caller still learns.
           // A server refusal that should not happen for a byte-identical replay
           // lands here too, and surfaces the same way (the pull seam swallows it).
+          // Carry the caught `stackTrace` — where `flushOutbox`/`publish` actually
+          // failed — not the throw site below, so the rethrow points at the cause.
           firstFailure ??= error;
-          firstStackTrace ??= StackTrace.current;
+          firstStackTrace ??= stackTrace;
         }
       }
     }
