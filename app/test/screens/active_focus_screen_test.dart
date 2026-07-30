@@ -345,7 +345,6 @@ void main() {
           clarified: true,
           intent: 'next',
           userId: _userId,
-          timeSpentMinutes: 0,
         );
 
     test('a remaining task always yields the "Next up" advance message', () {

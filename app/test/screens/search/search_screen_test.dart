@@ -55,7 +55,6 @@ Todo _fakeTodo() => Todo(
       captureSource: 'manual',
       locationId: null,
       userId: 'local',
-      timeSpentMinutes: 0,
     );
 
 // ---------------------------------------------------------------------------

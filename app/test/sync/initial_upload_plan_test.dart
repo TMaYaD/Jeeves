@@ -169,19 +169,19 @@ void main() {
       expect(encoded.anomalies.single.column, 'created_at');
     });
 
-    test('never emits todos.time_spent_minutes', () {
+    test('drops a column the codec does not carry', () {
       final encoded = encodeLegacyRow(
         collection: todosCollection,
         row: {
           'title': 'x',
           'created_at': '2026-07-04T08:30:00.000Z',
           'user_id': _userId,
+          // A stray column an old store might hold — e.g. the dropped
+          // `time_spent_minutes` cache (#604). Only codec columns reach the wire.
           'time_spent_minutes': 17,
         },
         userId: _userId,
       );
-      // The dead cache: never on the wire (ADR-0030); the projector supplies the
-      // column's declared default when it creates a row.
       expect(encoded.fields.containsKey('time_spent_minutes'), isFalse);
     });
   });

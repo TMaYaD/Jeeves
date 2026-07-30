@@ -18,6 +18,9 @@ import '../../../providers/evening_shutdown_provider.dart';
 /// Back navigation returns to the previous task and clears its in-memory
 /// disposition so the user can re-choose. All disposition writes are deferred
 /// to [EveningShutdownNotifier.closeDay].
+///
+/// The "logged" chip is derived from `time_logs` via
+/// [loggedMinutesByOutcomeProvider] — no Outcome row carries a total.
 class UnfinishedTasksStep extends ConsumerStatefulWidget {
   const UnfinishedTasksStep({super.key});
 
@@ -69,6 +72,10 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
     final notifier = ref.read(eveningShutdownProvider.notifier);
     final dispositions =
         ref.watch(eveningShutdownProvider.select((s) => s.dispositions));
+    // Derived from time_logs; absent (→ 0) while the first emission is in
+    // flight and for an Outcome with no stints.
+    final loggedMinutes =
+        ref.watch(loggedMinutesByOutcomeProvider).value?[current.id] ?? 0;
 
     return SingleChildScrollView(
       physics: const ClampingScrollPhysics(),
@@ -76,6 +83,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
       child: _TaskResolutionCard(
         key: ValueKey(current.id),
         todo: current,
+        loggedMinutes: loggedMinutes,
         lastDisposition: dispositions[current.id],
         onRollOver: () => notifier.rolloverTask(current.id),
         onReturn: () => notifier.returnToNext(current.id),
@@ -93,6 +101,7 @@ class _TaskResolutionCard extends StatelessWidget {
   const _TaskResolutionCard({
     super.key,
     required this.todo,
+    required this.loggedMinutes,
     required this.onRollOver,
     required this.onReturn,
     required this.onDefer,
@@ -100,6 +109,10 @@ class _TaskResolutionCard extends StatelessWidget {
   });
 
   final Todo todo;
+
+  /// Minutes summed from this Outcome's `time_logs` rows; 0 when it has none.
+  final int loggedMinutes;
+
   final VoidCallback onRollOver;
   final VoidCallback onReturn;
   final VoidCallback onDefer;
@@ -134,7 +147,7 @@ class _TaskResolutionCard extends StatelessWidget {
                   color: Color(0xFF1A1A2E),
                 ),
               ),
-              if (todo.timeEstimate != null || todo.timeSpentMinutes > 0) ...[
+              if (todo.timeEstimate != null || loggedMinutes > 0) ...[
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 12,
@@ -145,10 +158,10 @@ class _TaskResolutionCard extends StatelessWidget {
                         label: 'Est ${_fmt(todo.timeEstimate!)}',
                         color: const Color(0xFF2563EB),
                       ),
-                    if (todo.timeSpentMinutes > 0)
+                    if (loggedMinutes > 0)
                       _Chip(
                         icon: Icons.access_time,
-                        label: '${_fmt(todo.timeSpentMinutes)} logged',
+                        label: '${_fmt(loggedMinutes)} logged',
                         color: const Color(0xFF7C3AED),
                       ),
                   ],

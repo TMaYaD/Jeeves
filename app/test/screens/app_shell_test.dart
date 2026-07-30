@@ -169,7 +169,6 @@ Todo _todo(String id, String title) => Todo(
       clarified: true,
       intent: 'next',
       userId: 'test-user',
-      timeSpentMinutes: 0,
     );
 
 const _replanKey = Key('focus_replan');

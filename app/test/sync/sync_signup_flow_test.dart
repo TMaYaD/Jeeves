@@ -49,10 +49,10 @@ String _id(String label) =>
     const Uuid().v5(jeevesWorkspaceNamespace, 'signup/$label');
 
 /// Every collection group's table, and the columns excluded from the row-level
-/// comparison. Only the dead `todos.time_spent_minutes` cache is ever excluded
-/// (ADR-0030).
+/// comparison — none: every domain column is synced or derived at read time
+/// (`todos.time_spent_minutes` was dropped in #604).
 const Map<String, Set<String>> _tables = {
-  'todos': {'time_spent_minutes'},
+  'todos': {},
   'actions': {},
   'tags': {},
   'todo_tags': {},
@@ -239,8 +239,8 @@ void main() {
     await b.lifecycle!.flushOutboxNow();
     await a.stack.defaultClient.sync();
     expect(
-      await domainRows(a.domain, 'todos', exclude: {'time_spent_minutes'}),
-      await domainRows(b.domain, 'todos', exclude: {'time_spent_minutes'}),
+      await domainRows(a.domain, 'todos'),
+      await domainRows(b.domain, 'todos'),
     );
   });
 

@@ -32,10 +32,11 @@ const _userId = 'sim-user';
 /// without hand-writing UUID literals.
 String _id(String label) => const Uuid().v5(jeevesWorkspaceNamespace, 'sim/$label');
 
-/// `todos.time_spent_minutes` never travels on the wire — a dead cache
-/// (ADR-0030) the projector only ever fills with its declared default at create
-/// time — so it is excluded from every cross-device comparison.
-const _deadCache = {'time_spent_minutes'};
+/// No column is excluded from the cross-device comparison: every column on the
+/// domain tables is either synced or derived at read time, so two converged
+/// devices hold byte-identical rows. (The former exception,
+/// `todos.time_spent_minutes`, was dropped in #604.)
+const Set<String> _noExclusions = {};
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -53,9 +54,9 @@ void main() {
 
   Future<void> expectTableConverges(String table, {String orderBy = 'id'}) async {
     final rowsA = await domainRows(a.domain, table,
-        exclude: _deadCache, orderBy: orderBy);
+        exclude: _noExclusions, orderBy: orderBy);
     final rowsB = await domainRows(b.domain, table,
-        exclude: _deadCache, orderBy: orderBy);
+        exclude: _noExclusions, orderBy: orderBy);
     expect(rowsB, rowsA, reason: '$table did not converge');
     expect(rowsA, isNotEmpty, reason: '$table was never populated');
   }

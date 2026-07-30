@@ -133,24 +133,33 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         .watchSingleOrNull();
   }
 
+  /// One stint's minutes, ceiling-rounded, for a `time_logs` row under SQL alias
+  /// [logAlias].
+  ///
+  /// The single spelling of the arithmetic every time-spent derivation below
+  /// shares: an open row (`ended_at IS NULL`) is valued at the current UTC time,
+  /// and the ceiling uses the `+ 0.9999` trick because SQLite has no `CEIL()`.
+  /// Ceiling is applied **per stint**, not to the sum, so three 30-second stints
+  /// read as three minutes — which is what makes two derivations at different
+  /// grains comparable only when they share this expression verbatim.
+  static String _stintMinutesCeilSql(String logAlias) => 'CAST('
+      '  ((julianday(COALESCE($logAlias.ended_at, datetime(\'now\')))'
+      '    - julianday($logAlias.started_at))'
+      '   * 86400 / 60 + 0.9999)'
+      'AS INTEGER)';
+
   /// Correlated SQL subquery: ceiling-rounded total minutes across all
   /// `time_logs` rows whose `task_id` equals [taskIdRef] (a SQL expression,
-  /// e.g. `'t.id'` or a bound `'?'`).
-  ///
-  /// Open rows (ended_at IS NULL) are included using the current UTC time.
-  /// Per-interval ceiling arithmetic uses the `+ 0.9999` trick since SQLite
-  /// has no CEIL() function. The inner alias `dtl` is chosen to avoid
+  /// e.g. `'t.id'` or a bound `'?'`). The inner alias `dtl` is chosen to avoid
   /// colliding with outer-query table aliases.
   ///
-  /// This is the single derivation of time-spent from TimeLogs (the source of
-  /// truth); queries that surface time-spent embed it rather than reading the
-  /// dead `todos.time_spent_minutes` column (issue #480).
-  static String totalMinutesSubquery(String taskIdRef) => '(SELECT COALESCE(SUM('
-      '  CAST('
-      '    ((julianday(COALESCE(dtl.ended_at, datetime(\'now\'))) - julianday(dtl.started_at))'
-      '     * 86400 / 60 + 0.9999)'
-      '  AS INTEGER)'
-      '), 0) FROM time_logs dtl WHERE dtl.task_id = $taskIdRef)';
+  /// This is the single derivation of time-spent at the Outcome grain, and
+  /// `time_logs` is its only source of truth — nothing stores a total (issue
+  /// #604, ADR-0030). A surface that renders one embeds this, calls
+  /// [totalMinutesForTask], or watches [watchTotalMinutesByTask].
+  static String totalMinutesSubquery(String taskIdRef) =>
+      '(SELECT COALESCE(SUM(${_stintMinutesCeilSql('dtl')}), 0) '
+      'FROM time_logs dtl WHERE dtl.task_id = $taskIdRef)';
 
   /// Correlated SQL subquery: ceiling-rounded total minutes across all
   /// `time_logs` rows whose `action_id` equals [actionIdRef] (a SQL expression,
@@ -169,12 +178,8 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
   /// colliding with [totalMinutesSubquery]'s `dtl` when both appear in one
   /// query.
   static String totalMinutesSubqueryForAction(String actionIdRef) =>
-      '(SELECT COALESCE(SUM('
-      '  CAST('
-      '    ((julianday(COALESCE(dtla.ended_at, datetime(\'now\'))) - julianday(dtla.started_at))'
-      '     * 86400 / 60 + 0.9999)'
-      '  AS INTEGER)'
-      '), 0) FROM time_logs dtla WHERE dtla.action_id = $actionIdRef)';
+      '(SELECT COALESCE(SUM(${_stintMinutesCeilSql('dtla')}), 0) '
+      'FROM time_logs dtla WHERE dtla.action_id = $actionIdRef)';
 
   /// Ceiling-rounded sum of minutes spent on [taskId] across all log rows.
   ///
@@ -186,5 +191,30 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
       readsFrom: {timeLogs},
     ).getSingle();
     return result.read<int>('total_minutes');
+  }
+
+  /// Minutes logged per Outcome, keyed by `time_logs.task_id`, re-emitted
+  /// whenever a stint is opened, closed or synced in.
+  ///
+  /// The batched sibling of [totalMinutesForTask], with the same arithmetic (both
+  /// go through [_stintMinutesCeilSql]) and the same cumulative scope: every
+  /// stint ever logged against the Outcome, not just the open session's. It
+  /// exists for the surfaces that render a *list* of totals — the Evening
+  /// Shutdown Review steps, which also fold them into a session total — where one
+  /// read per row would be a query per card and a sum that settles a frame late.
+  ///
+  /// **Outcomes with no stints are absent, not zero**: an aggregate over
+  /// `time_logs` cannot enumerate them, and inventing a key per Outcome would
+  /// need a join the callers do not want. Read it as `map[id] ?? 0`.
+  Stream<Map<String, int>> watchTotalMinutesByTask() {
+    return customSelect(
+      'SELECT task_id, COALESCE(SUM(${_stintMinutesCeilSql('dtl')}), 0) '
+      '  AS total_minutes '
+      'FROM time_logs dtl GROUP BY task_id',
+      readsFrom: {timeLogs},
+    ).watch().map((rows) => {
+          for (final row in rows)
+            row.read<String>('task_id'): row.read<int>('total_minutes'),
+        });
   }
 }

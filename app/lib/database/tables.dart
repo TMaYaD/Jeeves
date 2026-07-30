@@ -14,6 +14,13 @@ import '../utils/uuid.dart';
 // todos
 // ---------------------------------------------------------------------------
 
+/// One row per Outcome.
+///
+/// **There is no stored time-spent total here.** Time spent on an Outcome is
+/// derived from `SUM(time_logs)` at read time — see
+/// `TimeLogDao.totalMinutesSubquery`, which values an open stint at `now()`. The
+/// surfaces that display it read that derivation directly; nothing caches it,
+/// because a cached total is a value that can only ever be stale (ADR-0030).
 class Todos extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get title => text().withLength(max: 500)();
@@ -66,10 +73,6 @@ class Todos extends Table {
   /// Drives the re-clarification ("Stale") predicate; see todo_dao.dart's
   /// _needsReviewWhere.
   DateTimeColumn get lastClarifiedAt => dateTime().nullable()();
-
-  /// Cumulative time spent in minutes across all focus stints.
-  IntColumn get timeSpentMinutes =>
-      integer().withDefault(const Constant(0)).clientDefault(() => 0)();
 
   /// When a focus session last closed with this task non-done.
   /// Stamped by reviewAndCloseSession. Used to detect staleness vs lastClarifiedAt.

@@ -28,13 +28,6 @@
 /// to the author's own value (down to the millisecond floor the `dateTime`
 /// encoding pins).
 ///
-/// **Creating a row is not the same as merging one.** A created row has to
-/// satisfy every NOT NULL the table declares, including on columns the log
-/// carries nothing about — see [CollectionCodec.unsyncedInsertDefaults], whose
-/// one member is the dead `todos.time_spent_minutes` cache. Those defaults are
-/// applied on INSERT only; the update path never touches them, so a row's local
-/// value is never overwritten by a projection.
-///
 /// **Dangling references are not enforced.** Out-of-causal-order arrival is
 /// routine and a tombstoned parent is permanent, so the projector never checks
 /// referential existence — a TimeLog outlives its hard-deleted Outcome and
@@ -138,12 +131,6 @@ class DomainProjector {
     ).getSingleOrNull();
 
     if (existing == null) {
-      // A created row has to satisfy every NOT NULL the table declares, even on
-      // columns the log says nothing about. Insert-time only: on the update path
-      // below these columns are left exactly as the local row holds them.
-      for (final entry in codec.unsyncedInsertDefaults.entries) {
-        values.putIfAbsent(entry.key, () => _bindLiteral(entry.value));
-      }
       final columns = values.keys.map((c) => '"$c"').join(', ');
       final placeholders = List.filled(values.length, '?').join(', ');
       await domain.customInsert(
@@ -218,16 +205,6 @@ class DomainProjector {
     if (clauses.isEmpty) return null;
     return (sql: clauses.join(' AND '), variables: variables);
   }
-
-  /// Binds a codec-declared literal (see
-  /// [CollectionCodec.unsyncedInsertDefaults]) — no field kind to consult,
-  /// because the value comes from the codec rather than off the wire.
-  static Variable<Object> _bindLiteral(Object? value) => switch (value) {
-        final int number => Variable<int>(number),
-        final bool flag => Variable<int>(flag ? 1 : 0),
-        final String text => Variable<String>(text),
-        _ => Variable<String>(null),
-      };
 
   static Variable<Object> _bind(FieldKind kind, Object? value) =>
       switch (kind) {

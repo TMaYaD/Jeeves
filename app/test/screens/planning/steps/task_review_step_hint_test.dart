@@ -16,7 +16,6 @@ Todo _todo({
     createdAt: now,
     updatedAt: now,
     userId: 'u',
-    timeSpentMinutes: 0,
     lastNextActionCompletionAt: lastNextActionCompletionAt,
     lastClarifiedAt: lastClarifiedAt,
   );
