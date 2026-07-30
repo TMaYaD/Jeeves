@@ -75,6 +75,9 @@ with `FATAL: logical replication slot "powersync" exists, but "wal_level" <
 ```bash
 podman compose run --rm --no-deps -d --name pg-slotfix postgres \
   postgres -c wal_level=logical -c max_replication_slots=10
+timeout 30 bash -c \
+  'until podman exec pg-slotfix pg_isready -U jeeves -d jeeves >/dev/null 2>&1; do sleep 1; done' \
+  || { echo "pg-slotfix did not become ready within 30s" >&2; podman rm -f pg-slotfix; exit 1; }
 podman exec pg-slotfix psql -U jeeves -d jeeves \
   -c "SELECT pg_drop_replication_slot('powersync')"
 podman rm -f pg-slotfix
