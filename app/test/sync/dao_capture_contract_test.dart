@@ -206,6 +206,12 @@ void main() {
       final tag = await db.tagDao.findOrCreateTag('errand', 'context', _userId);
       await db.tagDao.assignTag(id, tag, _userId);
       await db.customStatement('DELETE FROM todos WHERE id = ?', [id]);
+      final danglingBefore = await (db.select(db.todoTags)
+            ..where((row) => row.todoId.equals(id)))
+          .get();
+      expect(danglingBefore, hasLength(1),
+          reason: 'the raw parent delete must leave the junction dangling — '
+              'otherwise this is the already-gone case, not the regression');
       capture.clear();
 
       final removed = await db.todoDao.deleteOutcome(id);
@@ -213,6 +219,11 @@ void main() {
       expect(removed, 0);
       expect(capture.recorded, isEmpty,
           reason: 'the junction is not this absent Outcome\'s to tombstone');
+      final danglingAfter = await (db.select(db.todoTags)
+            ..where((row) => row.todoId.equals(id)))
+          .get();
+      expect(danglingAfter, hasLength(1),
+          reason: 'the surviving junction is left untouched');
     });
   });
 
@@ -515,6 +526,7 @@ void main() {
       // (user_id, key) and rewriting `id` — is what still catches a row some
       // *other* build minted at random; it is not what this store relies on.
       await db.userPreferencesDao.set(_userId, 'theme', '"dark"');
+      capture.clear();
       await db.userPreferencesDao.set(_userId, 'theme', '"light"');
 
       final derived =
@@ -524,10 +536,11 @@ void main() {
       expect(rows, hasLength(1), reason: 'UNIQUE(user_id, key) upsert');
       expect(rows.single.read<String>('id'), derived);
       expect(rows.single.read<String>('value'), '"light"');
-      for (final op in capture.forCollection(userPreferencesCollection)) {
-        expect(op.entityId, derived,
-            reason: 'the op names the entity the row is');
-      }
+      final ops = capture.forCollection(userPreferencesCollection);
+      expect(ops, hasLength(1),
+          reason: 'the update authors exactly one op, not none');
+      expect(ops.single.entityId, derived,
+          reason: 'the op names the entity the row is');
     });
 
     test('a captured value write always names its key', () async {

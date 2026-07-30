@@ -556,6 +556,22 @@ void main() {
         )),
       );
     });
+
+    test('breaks an equal-started_at tie on the smallest id', () async {
+      // The different-timestamp fixtures never exercise the `id ASC` tie-break,
+      // so a regression that dropped it would still pass. Two sessions that
+      // start in the same instant (a cross-device race can land exactly that)
+      // must resolve deterministically to the smallest id. Inserted in reverse
+      // id order so rowid order would answer 'z-session'.
+      final startedAt = DateTime.utc(2026, 7, 29, 9);
+      await project('z-session', startedAt);
+      await project('a-session', startedAt);
+
+      final session = await db.focusSessionDao.getActiveSession();
+
+      expect(session?.id, 'a-session',
+          reason: 'equal started_at, tie-break smallest id');
+    });
   });
 
   // ---------------------------------------------------------------------------
