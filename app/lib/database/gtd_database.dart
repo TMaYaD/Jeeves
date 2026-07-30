@@ -102,8 +102,27 @@ class GtdDatabase extends _$GtdDatabase {
         zoneValues: {_capturingZoneKey: true},
       );
 
-  /// Marks a zone opened by [capturing] / [uncapturedTransaction]. Present ⇒ a
-  /// [transaction] call is inside a sanctioned scope; absent ⇒ refuse.
+  /// Runs a schema-migration [body] with the [transaction] guard held open,
+  /// but — unlike [_capturedTransaction] — WITHOUT opening a transaction of its
+  /// own. Drift's `Migrator` recreate steps (e.g. `alterTable`) open their own
+  /// `transaction` on this db object, which hits the [transaction] override,
+  /// *and* toggle `PRAGMA foreign_keys` immediately outside that transaction —
+  /// a sequence sqlite only honours when nothing has already wrapped the
+  /// migration in an outer transaction (the pragma is silently a no-op inside
+  /// one). So this marks the zone and nothing more: the migrator keeps
+  /// ownership of the transaction boundary, and the marker keeps the guard
+  /// satisfied while it does. Migrations are the same op-free category as
+  /// [uncapturedTransaction] — they run during `onCreate`/`onUpgrade`, before
+  /// any DAO write path is live, so nothing describes an effect and nothing is
+  /// ever signed or queued.
+  Future<T> _duringMigration<T>(Future<T> Function() body) => runZoned(
+        body,
+        zoneValues: {_capturingZoneKey: true},
+      );
+
+  /// Marks a zone opened by [capturing] / [uncapturedTransaction] / a schema
+  /// migration ([_duringMigration]). Present ⇒ a [transaction] call is inside a
+  /// sanctioned scope; absent ⇒ refuse.
   static final Object _capturingZoneKey = Object();
 
   /// Refuses a bare domain-store [transaction] opened outside a capturing zone.
@@ -149,8 +168,13 @@ class GtdDatabase extends _$GtdDatabase {
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) => m.createAll(),
-        onUpgrade: (m, from, to) async {
+        // Every migration entry point runs inside [_duringMigration]: drift's
+        // recreate steps open a `transaction` on this db object, which the
+        // [transaction] guard would otherwise refuse (a migration is outside
+        // any [capturing] scope). Migrations author no ops, so the marker lets
+        // them through without weakening the guard's runtime teeth.
+        onCreate: (m) => _duringMigration(m.createAll),
+        onUpgrade: (m, from, to) => _duringMigration(() async {
           // v2 (issue #604): drop `todos.time_spent_minutes`, a denormalised
           // time-spent cache with no write path — time spent is derived from
           // `SUM(time_logs)` at read time. The column carried nothing on a v1
@@ -166,7 +190,7 @@ class GtdDatabase extends _$GtdDatabase {
           if (from < 2) {
             await m.alterTable(TableMigration(todos));
           }
-        },
+        }),
       );
 
   /// Invalidates Drift stream queries reading `todos` (and, when
