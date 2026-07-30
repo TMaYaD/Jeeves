@@ -16,29 +16,25 @@ if git diff --cached --name-only | grep -q "^backend/"; then
     . .venv/bin/activate
     
     echo ">> Running ruff check..."
-    ruff check .
-    if [ $? -ne 0 ]; then
+    if ! ruff check .; then
         echo "❌ ruff check failed! Please fix linting errors."
         exit 1
     fi
 
     echo ">> Running ruff format --check..."
-    ruff format --check .
-    if [ $? -ne 0 ]; then
+    if ! ruff format --check .; then
         echo "❌ ruff format failed! Run 'ruff format .' to fix formatting."
         exit 1
     fi
 
     echo ">> Running mypy..."
-    mypy app
-    if [ $? -ne 0 ]; then
+    if ! mypy app; then
         echo "❌ mypy failed! Please fix type errors."
         exit 1
     fi
 
     echo ">> Running pytest..."
-    pytest
-    if [ $? -ne 0 ]; then
+    if ! pytest; then
         echo "❌ pytest failed! Please fix failing tests."
         exit 1
     fi
@@ -54,16 +50,41 @@ if git diff --cached --name-only | grep -q "^app/"; then
 
     # Resolve Flutter. FVM symlink wins so the hook always uses the version
     # pinned in app/.fvmrc; system locations are fallbacks for devs not on FVM.
+    #
+    # app/.fvm/flutter_sdk is gitignored and only materialized by `fvm use`,
+    # so linked worktrees don't carry their own copy. Fall back to the main
+    # checkout's, resolved via git-common-dir (which always points at the
+    # main worktree's .git, in this checkout or any linked one) — see #594.
+    main_common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+    main_app_fvm_bin=""
+    if [ -n "$main_common_dir" ]; then
+        main_checkout_dir=$(cd "$(dirname "$main_common_dir")" && pwd -P 2>/dev/null)
+        if [ -n "$main_checkout_dir" ]; then
+            main_app_fvm_bin="$main_checkout_dir/app/.fvm/flutter_sdk/bin"
+        fi
+    fi
+
+    flutter_bin_dir=""
     for flutter_candidate in \
         ".fvm/flutter_sdk/bin" \
+        "$main_app_fvm_bin" \
         "$HOME/development/flutter/bin" \
         "$HOME/flutter/bin" \
         "/opt/flutter/bin"; do
-        if [ -x "$flutter_candidate/flutter" ]; then
-            export PATH="$flutter_candidate:$PATH"
+        if [ -n "$flutter_candidate" ] && [ -x "$flutter_candidate/flutter" ]; then
+            flutter_bin_dir="$flutter_candidate"
             break
         fi
     done
+
+    if [ -z "$flutter_bin_dir" ]; then
+        echo "❌ No Flutter SDK found. Checked local app/.fvm/flutter_sdk, the main"
+        echo "   checkout's app/.fvm/flutter_sdk, and system locations."
+        echo "   Run 'fvm use' (in the main checkout, or in this worktree) and retry."
+        exit 1
+    fi
+
+    export PATH="$flutter_bin_dir:$PATH"
 
     # Self-heal the Flutter version file before invoking dart. pub locates the
     # SDK via bin/cache/flutter.version.json, but the SDK wrapper deletes that
@@ -71,25 +92,31 @@ if git diff --cached --name-only | grep -q "^app/"; then
     # it — a bare `dart run` does not. On machines where several workers share
     # one SDK, a sibling's run can knock the file out mid-commit. Touch it here
     # so build_runner always finds the SDK.
-    flutter --version >/dev/null 2>&1
+    #
+    # Run it from *inside* the SDK's own directory, never from app/: flutter
+    # derives the identity it stamps into bin/cache/flutter.version.json from
+    # the git repo of its cwd. From app/ that repo is Jeeves itself, and
+    # flutter will happily write Jeeves's revision into the shared SDK's
+    # cache — corrupting it for every other worker on the machine (#594).
+    flutter_sdk_root=$(cd "$flutter_bin_dir/.." && pwd -P 2>/dev/null)
+    if [ -n "$flutter_sdk_root" ]; then
+        (cd "$flutter_sdk_root" && flutter --version >/dev/null 2>&1)
+    fi
 
     echo ">> Running build_runner..."
-    dart run build_runner build --delete-conflicting-outputs
-    if [ $? -ne 0 ]; then
+    if ! dart run build_runner build --delete-conflicting-outputs; then
         echo "❌ build_runner failed! Please fix code generation errors."
         exit 1
     fi
 
     echo ">> Running flutter analyze..."
-    flutter analyze
-    if [ $? -ne 0 ]; then
+    if ! flutter analyze; then
         echo "❌ flutter analyze failed! Please fix dart warnings/errors."
         exit 1
     fi
 
     echo ">> Running flutter test..."
-    flutter test
-    if [ $? -ne 0 ]; then
+    if ! flutter test; then
         echo "❌ flutter test failed! Please fix failing tests."
         exit 1
     fi
