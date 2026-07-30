@@ -20,7 +20,7 @@ const Uuid _uuid = Uuid();
 int _seedlessFixtureCount = 0;
 
 class AuthorFixture {
-  AuthorFixture._(this.memberId, this.signer, this.kexPk);
+  AuthorFixture._(this.memberId, this.signer, this.kexPk, this.kexSeed);
 
   /// An omitted [seed] is derived from a per-instance counter, not from a
   /// constant. Two seedless fixtures would otherwise share `signPk`, `keyId` and
@@ -49,12 +49,18 @@ class AuthorFixture {
       memberId ?? _uuid.v4(),
       signer,
       Uint8List.fromList(kexPublicKey.bytes),
+      Uint8List.fromList([for (final byte in signSeed) (byte + 0x5A) % 256]),
     );
   }
 
   final String memberId;
   final EnvelopeSigner signer;
   final Uint8List kexPk;
+
+  /// The X25519 seed behind [kexPk], so a test can open a KeyWrap sealed to this
+  /// fixture. The *fixture* holds it because a real Member does — `DeviceKeyStore`
+  /// persists exactly this — and unwrapping is half of what a wrap round-trip proves.
+  final Uint8List kexSeed;
 
   int nextAuthorSeq = 1;
   Uint8List lastEnvelopeHash = Uint8List(prevAuthorHashBytes);

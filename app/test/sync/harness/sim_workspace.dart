@@ -193,6 +193,36 @@ Future<Uint8List> revokeEnvelope({
   );
 }
 
+/// Mint a `rotate` envelope. **The one control type with no certificate**, so there
+/// is no signing key argument: a rotate's authority is the author's own live `owner`
+/// Grant, and the envelope signature is the only signature it carries.
+Future<Uint8List> rotateEnvelope({
+  required AuthorFixture device,
+  required String workspaceId,
+  required Uint8List prevControlHash,
+  required Uint8List keyWrapDigest,
+  required int wallMs,
+  int fromEpoch = 0,
+  int? toEpoch,
+  int? authorSeq,
+}) =>
+    device.nextEnvelope(
+      workspaceId,
+      opClass: opClassControl,
+      payload: ControlPayload(
+        controlType: controlTypeRotate,
+        prevControlHash: prevControlHash,
+        rotate: RotateStatement(
+          workspaceId: workspaceId,
+          fromEpoch: fromEpoch,
+          toEpoch: toEpoch ?? fromEpoch + 1,
+          keyWrapDigest: keyWrapDigest,
+          rotatedAtHlc: Hlc.forMember(device.memberId, wallMs),
+        ),
+      ).encode(),
+      authorSeq: authorSeq,
+    );
+
 /// The base wall time the fake clock starts at. Fixed so HLCs in failure
 /// messages are readable and reproducible.
 const int simulationStartWallMs = 1800000000000;
@@ -387,6 +417,69 @@ class SimWorkspace {
       // Every other Root-holding path in the harness drops in a `finally`, and a
       // refused post is exactly what the negative tests stage: without this a
       // failing ceremony would leave Root live for the rest of the test.
+      root.drop();
+    }
+  }
+
+  /// Bring [service] in as a chained, granted **Service** rather than a Device.
+  ///
+  /// The `member_kind` is a *signed* fact, so this differs from [enrolFixture] in
+  /// exactly one field — the registration certificate's kind — and everything else is
+  /// the same two-op ceremony. It exists because a live-granted Service is the one
+  /// reachable state in which a Workspace has a Member no epoch key can be wrapped
+  /// to: Service KeyWraps need a verified per-User KEX subkey, and Service enrolment
+  /// does not exist yet.
+  ///
+  /// The default Workspace only. The preferences Workspace refuses a Service Grant on
+  /// both sides, which is a different rule and has its own test.
+  Future<FakeSyncServerMemberSession> enrolServiceFixture(
+    AuthorFixture service, {
+    String role = roleSuggester,
+  }) async {
+    final user = server.connectAsUser(userId);
+    await user.registerMember(
+      memberId: service.memberId,
+      signPk: service.signPk,
+      kexPk: service.kexPk,
+    );
+    final nonce = await user.requestMemberChallenge(service.memberId);
+    final session = await user.completeMemberChallenge(
+      memberId: service.memberId,
+      nonce: nonce,
+      signature: await service.signChallenge(nonce),
+    ) as FakeSyncServerMemberSession;
+
+    final root = await recoverRoot();
+    try {
+      final register = await memberRegisterEnvelope(
+        device: service,
+        workspaceId: workspaceId,
+        root: root,
+        prevControlHash: controlChainHead(),
+        wallMs: clock.nowMs,
+        certificate: RegistrationCertificate(
+          workspaceId: workspaceId,
+          memberId: service.memberId,
+          signPk: service.signPk,
+          kexPk: service.kexPk,
+          registeredAtHlc: Hlc.forMember(service.memberId, clock.nowMs),
+          memberKind: memberKindService,
+        ),
+      );
+      await session.postOps(workspaceId, [
+        register,
+        await grantEnvelope(
+          device: service,
+          workspaceId: workspaceId,
+          root: root,
+          prevControlHash: controlPayloadHash(parseBody(splitEnvelope(register).body)),
+          memberId: service.memberId,
+          role: role,
+          wallMs: clock.nowMs,
+        ),
+      ]);
+      return session;
+    } finally {
       root.drop();
     }
   }

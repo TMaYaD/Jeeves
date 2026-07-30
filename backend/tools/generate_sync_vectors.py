@@ -28,6 +28,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from nacl import bindings  # noqa: E402
 from nacl.signing import SigningKey  # noqa: E402
 
 from app.sync.control_payload import (  # noqa: E402
@@ -35,6 +36,7 @@ from app.sync.control_payload import (  # noqa: E402
     CONTROL_TYPE_GRANT,
     CONTROL_TYPE_MEMBER_REGISTER,
     CONTROL_TYPE_REVOKE,
+    CONTROL_TYPE_ROTATE,
     CONTROL_TYPE_WORKSPACE_GENESIS,
     GRANTER_ROOT,
     KEX_PUBLIC_KEY_BYTES,
@@ -58,6 +60,7 @@ from app.sync.control_payload import (  # noqa: E402
     MemberKeys,
     RegistrationCertificate,
     RevokeCertificate,
+    RotateStatement,
     control_payload_hash,
     sign_genesis_certificate,
     sign_grant_certificate,
@@ -65,12 +68,14 @@ from app.sync.control_payload import (  # noqa: E402
     sign_revoke_certificate,
 )
 from app.sync.envelope import (  # noqa: E402
+    AEAD_TAG_BYTES,
     BODY_OVERSIZE_MULTIPLE_BYTES,
     BODY_SIZE_CLASSES_BYTES,
     ENVELOPE_OVERHEAD_BYTES,
     HEADER_FIELD_LAYOUT,
     HEADER_LENGTH_BYTES,
     KNOWN_OP_CLASSES,
+    MINIMUM_ENVELOPE_BYTES,
     OP_CLASS_COMPACTION,
     OP_CLASS_CONTENT,
     OP_CLASS_CONTROL,
@@ -81,11 +86,14 @@ from app.sync.envelope import (  # noqa: E402
     SIGNING_DOMAIN_OP_V1,
     SUITE_AEAD_V1,
     SUITE_PLAINTEXT_V1,
+    WORKSPACE_KEY_BYTES,
     OpHeader,
     build_envelope,
     derive_key_id,
     envelope_hash,
     frame_body,
+    minimum_envelope_bytes_for_suite,
+    seal_body,
 )
 from app.sync.escrow import (  # noqa: E402
     ARGON2ID_FLOOR_MEMORY_KIB,
@@ -110,6 +118,21 @@ from app.sync.ids import (  # noqa: E402
     default_workspace_id,
     preference_entity_id,
     user_preferences_workspace_id,
+)
+from app.sync.key_wraps import (  # noqa: E402
+    EPHEMERAL_PUBLIC_KEY_BYTES,
+    EPOCH_KEY_ESCROW_INFO_DOMAIN,
+    EPOCH_KEY_ESCROW_WRAP_BYTES,
+    KEYWRAP_BYTES,
+    KEYWRAP_DIGEST_DOMAIN,
+    KEYWRAP_INFO_DOMAIN,
+    MASTER_WRAP_KEY_BYTES,
+    WRAP_NONCE_BYTES,
+    epoch_key_escrow_info,
+    keywrap_digest,
+    keywrap_info,
+    wrap_epoch_key_for_escrow,
+    wrap_epoch_key_for_member,
 )
 from app.sync.member_auth import (  # noqa: E402
     MEMBER_CHALLENGE_NONCE_BYTES,
@@ -199,18 +222,23 @@ def _header(
     op_class: int = OP_CLASS_CONTENT,
     workspace_id: uuid.UUID = WORKSPACE_ID,
     prev_author_hash: bytes | None = None,
+    key_epoch: int = 0,
+    nonce: bytes | None = None,
 ) -> OpHeader:
     sign_pk = bytes(SIGNING_KEYS[key].verify_key)
     return OpHeader(
         suite=suite,
         op_class=op_class,
         workspace_id=workspace_id,
-        key_epoch=0,
+        key_epoch=key_epoch,
         op_id=_op_id(op_id_name),
         author_member_id=MEMBER_IDS[key],
         author_key_id=derive_key_id(sign_pk),
         author_seq=author_seq,
         prev_author_hash=prev_author_hash or bytes(32),
+        # Zero under 0x00; an explicit pinned value under 0x01, where it is the
+        # XChaCha20 nonce and part of the AAD.  Production draws it from a CSPRNG.
+        nonce=nonce if nonce is not None else bytes(24),
     )
 
 
@@ -487,6 +515,53 @@ def _negative_vectors() -> list[dict[str, Any]]:
                 SIGNING_KEYS["device_a"],
             ),
             note="Suite 0x7F is not a value the protocol names. Fail closed (F21).",
+        )
+    )
+    # A *genuinely sealed* control op, not a plaintext body wearing suite 0x01: the
+    # refusal has to be the (suite, op_class) pair itself and not a body-shaped
+    # complaint that happens to fire first, so the artifact is what an attacker
+    # would actually produce.
+    encrypted_control_header = _header(
+        op_id_name="encrypted_control_op",
+        key="device_a",
+        author_seq=1,
+        suite=SUITE_AEAD_V1,
+        op_class=OP_CLASS_CONTROL,
+        key_epoch=1,
+        nonce=_spec_nonce("aead/encrypted-control"),
+    )
+    encrypted_control_header_bytes = encrypted_control_header.serialize()
+    vectors.append(
+        _negative(
+            "encrypted_control_op",
+            key="device_a",
+            reason="encrypted_control_op",
+            envelope=build_envelope(
+                encrypted_control_header,
+                seal_body(
+                    encrypted_control_header_bytes,
+                    frame_body(
+                        ControlPayload(
+                            control_type=CONTROL_TYPE_MEMBER_REGISTER,
+                            prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+                            cert_bytes=_certificate("device_a", wall_ms=BASE_WALL_MS).encode(),
+                            signature=sign_registration_certificate(
+                                _certificate("device_a", wall_ms=BASE_WALL_MS).encode(),
+                                ROOT_SIGNING_KEY,
+                            ),
+                        ).encode()
+                    ),
+                    SPEC_EPOCH_KEYS[1],
+                ),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "A validly signed, validly sealed member_register under suite 0x01. "
+                "Refused by both codecs: control ops are plaintext_v1 for ever, "
+                "because the server materialises their payloads and holds no key. "
+                "Both halves of the pair are served and the pair is forbidden, which "
+                "is why this is not expressible as a served-set membership test."
+            ),
         )
     )
     vectors.append(
@@ -1042,6 +1117,41 @@ def _control_vectors() -> list[dict[str, Any]]:
         ),
     )
 
+    # The rotation that turns encryption on for this Workspace.  It chains off the
+    # revoke above, which is also the shape `revokeAndRotate` produces: revoke, then
+    # rotate, back to back in one authoring queue.
+    rotate_member_wraps, rotate_escrow_wrap = _epoch_1_wrap_set()
+    rotate_digest = keywrap_digest(
+        epoch=1, member_wraps=rotate_member_wraps, escrow_wrap=rotate_escrow_wrap
+    )
+    append(
+        "rotate_to_epoch_1",
+        key="device_a",
+        payload=ControlPayload(
+            control_type=CONTROL_TYPE_ROTATE,
+            prev_control_hash=bytes.fromhex(vectors[-1]["payload_sha256_hex"]),
+            rotate=RotateStatement(
+                workspace_id=WORKSPACE_ID,
+                from_epoch=0,
+                to_epoch=1,
+                keywrap_digest=rotate_digest,
+                rotated_at_hlc=Hlc.for_member(MEMBER_IDS["device_a"], BASE_WALL_MS + 4000),
+            ),
+        ),
+        cert_json="",
+        note=(
+            "Turning encryption on *is* a rotation — no separate switch, no second "
+            "machine. from_epoch 0 to_epoch 1, so epoch 0 is never keyed and this "
+            "Workspace's pre-turn-on plaintext history stays readable for ever. The "
+            "one control type with no certificate and no separate signature: its "
+            "authority is the author's own live owner Grant, so the envelope "
+            "signature is the only signature there is. keywrap_digest commits to the "
+            "whole wrap set *before* any wrap is uploaded, which is what stops the "
+            "server curating who can read the new epoch — it matches "
+            "keywrap_digest_two_members_epoch_1 exactly."
+        ),
+    )
+
     return vectors
 
 
@@ -1174,13 +1284,15 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
             "control_unsupported_type",
             reason="unsupported_control_type",
             payload=ControlPayload(
-                control_type="rotate",
+                control_type="member_key_rotate",
                 prev_control_hash=hashlib.sha256(b"predecessor").digest(),
             ),
             note=(
-                "A control type this build does not serve. #554 turns `rotate` "
-                "into a positive vector; until then every type outside the four "
-                "served ones is fail-closed."
+                "A control type this build does not serve. Rotating a *Member's* own "
+                "signing or KEX key is a different thing from rotating the Workspace "
+                "content key, which `rotate` now does: every type outside the five "
+                "served ones stays fail-closed, and the payload beyond the two "
+                "self-identifying fields is not even parsed."
             ),
         ),
         control_negative(
@@ -1375,6 +1487,502 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
     ]
 
 
+# --- aead_v1 and KeyWrap vectors (#554) -------------------------------------
+#
+# Determinism is not a problem here, and the reason is worth stating: **the nonce
+# is a header field supplied by the caller**, so a vector simply pins explicit
+# nonce bytes and everything downstream — XChaCha20-Poly1305 and Ed25519 alike —
+# is a pure function.  Nothing in production reads a seeded nonce; the codec takes
+# the nonce out of the header it was given, and the authoring path fills that field
+# from `Random.secure()`.
+
+#: The spec Workspace's content key at epoch 1.  Random in production and never
+#: derived (proposal § Identity and keys); labelled here so both codecs reproduce
+#: every ciphertext below rather than trusting one of them.
+SPEC_EPOCH_KEYS = {
+    epoch: hashlib.sha256(f"jeeves/spec/sync/epoch-key/{epoch}".encode()).digest()[
+        :WORKSPACE_KEY_BYTES
+    ]
+    for epoch in (1, 2)
+}
+
+#: The master wrap key the recovery escrow carries.  In production it comes out of
+#: the escrow blob; here it is labelled for the same reason Root's seed is.
+SPEC_MASTER_WRAP_KEY = hashlib.sha256(b"jeeves/spec/sync/master-wrap-key").digest()[
+    :MASTER_WRAP_KEY_BYTES
+]
+
+
+def _spec_nonce(label: str) -> bytes:
+    return hashlib.sha256(f"jeeves/spec/sync/nonce/{label}".encode()).digest()[:WRAP_NONCE_BYTES]
+
+
+def _spec_ephemeral_seed(label: str) -> bytes:
+    return hashlib.sha256(f"jeeves/spec/sync/keywrap-esk/{label}".encode()).digest()
+
+
+#: Real X25519 keypairs for the KeyWrap vectors, seeds published.
+#:
+#: ``KEX_PUBLIC_KEYS`` above — the keys the *registration certificates* carry — are
+#: labelled hashes with no known scalar behind them, which was fine while no codec
+#: did key agreement: both sides only ever carried those bytes.  A wrap sealed to
+#: one of them is computable but **nobody can open it**, so it could pin the forward
+#: direction and never the reverse.
+#:
+#: Rather than re-key the certificates (which would move every control vector's
+#: bytes for no cryptographic gain — X25519 does not care *which* 32-byte public key
+#: it agrees with), the KeyWrap vectors get their own seeded pair.  The vectors'
+#: job is to pin the construction byte-for-byte in both directions, and that is
+#: exactly what these allow.  The end-to-end path — a certificate publishes
+#: ``kex_pk``, an owner wraps to it, the member unwraps with its own seed — runs on
+#: genuine ``MemberIdentity`` keypairs in the harness suites, which is the same
+#: division of labour the position and chain rules already follow.
+KEYWRAP_KEX_SEEDS = {
+    label: hashlib.sha256(f"jeeves/spec/sync/keywrap-kex/{label}".encode()).digest()
+    for label in KEY_LABELS
+}
+KEYWRAP_KEX_PUBLIC_KEYS = {
+    label: bindings.crypto_scalarmult_base(seed) for label, seed in KEYWRAP_KEX_SEEDS.items()
+}
+
+
+def _epoch_1_member_wrap(label: str) -> bytes:
+    """One member's epoch-1 KeyWrap, from the labelled seeds and nonces — defined once.
+
+    Both the frozen ``rotate_to_epoch_1`` control op and ``_keywrap_vectors`` build
+    from this same function, so the rotate's committed digest and
+    ``keywrap_digest_two_members_epoch_1`` agree *structurally* rather than by two
+    call sites hand-copying the same inputs.
+    """
+    return wrap_epoch_key_for_member(
+        workspace_key=SPEC_EPOCH_KEYS[1],
+        kex_pk=KEYWRAP_KEX_PUBLIC_KEYS[label],
+        workspace_id=WORKSPACE_ID,
+        epoch=1,
+        member_id=MEMBER_IDS[label],
+        kex_key_id=derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS[label]),
+        ephemeral_secret_key=_spec_ephemeral_seed(label),
+        nonce=_spec_nonce(f"keywrap/{label}"),
+    )
+
+
+def _epoch_1_escrow_wrap() -> bytes:
+    """The epoch-1 escrow wrap, shared the same way as :func:`_epoch_1_member_wrap`."""
+    return wrap_epoch_key_for_escrow(
+        workspace_key=SPEC_EPOCH_KEYS[1],
+        master_wrap_key=SPEC_MASTER_WRAP_KEY,
+        workspace_id=WORKSPACE_ID,
+        epoch=1,
+        nonce=_spec_nonce("epoch-key-escrow/1"),
+    )
+
+
+def _epoch_1_wrap_set() -> tuple[list[tuple[uuid.UUID, bytes, bytes]], bytes]:
+    """``(member_wraps, escrow_wrap)`` in :func:`keywrap_digest`'s vocabulary."""
+    return (
+        [
+            (
+                MEMBER_IDS[label],
+                derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS[label]),
+                _epoch_1_member_wrap(label),
+            )
+            for label in KEY_LABELS
+        ],
+        _epoch_1_escrow_wrap(),
+    )
+
+
+def _aead_positive(
+    name: str,
+    *,
+    key: str,
+    header: OpHeader,
+    payload: bytes,
+    epoch: int,
+    note: str,
+) -> dict[str, Any]:
+    """One whole ``aead_v1`` envelope, plus the plaintext it must open back to.
+
+    Both directions are pinned: a codec has to produce these exact bytes from the
+    plaintext *and* recover the plaintext from these exact bytes.  Pinning only the
+    forward direction would leave a codec free to seal correctly and open wrongly.
+    """
+    header_bytes = header.serialize()
+    framed = frame_body(payload)
+    body = seal_body(header_bytes, framed, SPEC_EPOCH_KEYS[epoch])
+    envelope = build_envelope(header, body, SIGNING_KEYS[key])
+    return {
+        "name": name,
+        "note": note,
+        "key": key,
+        "epoch": epoch,
+        "workspace_key_hex": SPEC_EPOCH_KEYS[epoch].hex(),
+        "header": _header_json(header),
+        "header_hex": header_bytes.hex(),
+        "payload_json": payload.decode("utf-8"),
+        "payload_length_bytes": len(payload),
+        # The framed plaintext, which is byte for byte what plaintext_v1 would have
+        # carried in the clear.  That equality *is* the "aead_v1 is a body wrapper"
+        # claim, so it is pinned rather than described.
+        "framed_body_length_bytes": len(framed),
+        "framed_body_hex": framed.hex(),
+        "body_length_bytes": len(body),
+        "body_hex": body.hex(),
+        "signature_hex": envelope[-SIGNATURE_LENGTH_BYTES:].hex(),
+        "envelope_hex": envelope.hex(),
+        "envelope_sha256_hex": envelope_hash(envelope).hex(),
+    }
+
+
+def _aead_vectors() -> list[dict[str, Any]]:
+    vectors = [
+        _aead_positive(
+            "aead_content_set_preference",
+            key="device_a",
+            header=_header(
+                op_id_name="aead_set_theme_dark",
+                key="device_a",
+                author_seq=1,
+                suite=SUITE_AEAD_V1,
+                key_epoch=1,
+                nonce=_spec_nonce("aead/set-theme-dark"),
+            ),
+            payload=_theme_payload(key="device_a", value="dark", wall_ms=BASE_WALL_MS).encode(),
+            epoch=1,
+            note=(
+                "The plaintext_v1 vector content_set_preference, sealed. Same framed "
+                "body, same 256-byte size class inside; the wire body is that plus a "
+                f"{AEAD_TAG_BYTES}-byte tag. AAD is the {HEADER_LENGTH_BYTES} header "
+                "bytes exactly."
+            ),
+        )
+    ]
+    vectors.append(
+        _aead_positive(
+            "aead_content_at_epoch_2",
+            key="device_b",
+            header=_header(
+                op_id_name="aead_epoch_2",
+                key="device_b",
+                author_seq=1,
+                suite=SUITE_AEAD_V1,
+                key_epoch=2,
+                nonce=_spec_nonce("aead/epoch-2"),
+            ),
+            payload=_theme_payload(
+                key="device_b", value="light", wall_ms=BASE_WALL_MS + 1000
+            ).encode(),
+            epoch=2,
+            note=(
+                "A second epoch under a different key. key_epoch is inside the AAD, "
+                "so a body sealed at one epoch cannot be replayed as another's even "
+                "if the keys were somehow the same."
+            ),
+        )
+    )
+    vectors.append(
+        _aead_positive(
+            "aead_content_body_size_class_1024",
+            key="device_a",
+            header=_header(
+                op_id_name="aead_size_class_1024",
+                key="device_a",
+                author_seq=2,
+                suite=SUITE_AEAD_V1,
+                key_epoch=1,
+                nonce=_spec_nonce("aead/size-class-1024"),
+                prev_author_hash=bytes.fromhex(vectors[0]["envelope_sha256_hex"]),
+            ),
+            payload=_sized_payload(
+                _theme_payload(key="device_a", value="dark", wall_ms=BASE_WALL_MS),
+                1024 - PAYLOAD_LENGTH_PREFIX_BYTES - PADDING_BYTES_IN_SIZE_CLASS_VECTORS,
+            ).encode(),
+            epoch=1,
+            note=(
+                "Pad-then-encrypt at a larger class, chained at author_seq 2: the "
+                "padding rules run on the decrypted plaintext through the same code "
+                "path plaintext_v1 uses."
+            ),
+        )
+    )
+    return vectors
+
+
+def _negative_aead_vectors() -> list[dict[str, Any]]:
+    """The refusals an AEAD suite adds, one vector each.
+
+    ``aead_failure`` covers a tampered ciphertext and a tampered header as one
+    verdict on purpose: the header is the AAD, so a codec cannot tell which of them
+    moved, and splitting the code would be a guess dressed as a diagnosis.  Both
+    cases are pinned so neither codec quietly classifies one of them as something
+    else.
+    """
+    base = _aead_vectors()[0]
+    envelope = bytes.fromhex(base["envelope_hex"])
+    body_start = HEADER_LENGTH_BYTES
+    body_end = len(envelope) - SIGNATURE_LENGTH_BYTES
+
+    def _with_byte_flipped(offset: int) -> bytes:
+        mutated = bytearray(envelope)
+        mutated[offset] ^= 0x01
+        return bytes(mutated)
+
+    vectors: list[dict[str, Any]] = []
+    # Re-signed after the tamper, so the *AEAD* is the thing that refuses it rather
+    # than the signature getting there first. An unsigned tamper is already covered
+    # by `bad_signature`, and would tell us nothing about the AEAD.
+    tampered_body = bytearray(envelope[body_start:body_end])
+    tampered_body[0] ^= 0x01
+    resigned_tampered_body = build_envelope(
+        OpHeader.parse(envelope[:HEADER_LENGTH_BYTES]),
+        bytes(tampered_body),
+        SIGNING_KEYS[base["key"]],
+    )
+    vectors.append(
+        {
+            "name": "aead_tampered_ciphertext",
+            "note": (
+                "One ciphertext byte flipped and the envelope re-signed, so the "
+                "signature verifies and the AEAD is what refuses it. Verify-then-"
+                "decrypt is the receive order; this is the second gate firing."
+            ),
+            "key": base["key"],
+            "reason": "aead_failure",
+            "epoch": base["epoch"],
+            "workspace_key_hex": base["workspace_key_hex"],
+            "envelope_hex": resigned_tampered_body.hex(),
+        }
+    )
+
+    # A header bit flip, re-signed. The header is the AAD, so this is an AEAD
+    # failure and not a signature failure — which is the whole point of binding the
+    # AAD to the literal header rather than to a subset of its fields.
+    tampered_header_bytes = _with_byte_flipped(
+        dict((name, offset) for name, offset, _ in HEADER_FIELD_LAYOUT)["key_epoch"] + 3
+    )[:HEADER_LENGTH_BYTES]
+    resigned_tampered_header = build_envelope(
+        OpHeader.parse(tampered_header_bytes),
+        envelope[body_start:body_end],
+        SIGNING_KEYS[base["key"]],
+    )
+    vectors.append(
+        {
+            "name": "aead_tampered_header_key_epoch",
+            "note": (
+                "key_epoch changed and the envelope re-signed. The AAD is the literal "
+                "header, so the body no longer authenticates: aead_failure, not "
+                "bad_signature. A server cannot re-label an op's epoch."
+            ),
+            "key": base["key"],
+            "reason": "aead_failure",
+            "epoch": base["epoch"],
+            "workspace_key_hex": base["workspace_key_hex"],
+            "envelope_hex": resigned_tampered_header.hex(),
+        }
+    )
+
+    # Wrong key, everything else honest: what a receiver holding the *previous*
+    # epoch's key sees if it ignores key_epoch. Still aead_failure.
+    vectors.append(
+        {
+            "name": "aead_wrong_epoch_key",
+            "note": (
+                "The genuine epoch-1 envelope, offered with the epoch-2 key. Refused "
+                "as aead_failure — a key we hold that does not open the bytes is an "
+                "accusation, distinct from missing_epoch_key which is a delivery gap."
+            ),
+            "key": base["key"],
+            "reason": "aead_failure",
+            "epoch": 2,
+            "workspace_key_hex": SPEC_EPOCH_KEYS[2].hex(),
+            "envelope_hex": base["envelope_hex"],
+        }
+    )
+
+    # An illegal 0x01 body length: a size class with no room for the tag.
+    short_body = frame_body(
+        _theme_payload(key="device_a", value="dark", wall_ms=BASE_WALL_MS).encode()
+    )
+    short_header = _header(
+        op_id_name="aead_short_body",
+        key="device_a",
+        author_seq=1,
+        suite=SUITE_AEAD_V1,
+        key_epoch=1,
+        nonce=_spec_nonce("aead/short-body"),
+    )
+    vectors.append(
+        {
+            "name": "aead_body_is_a_bare_size_class",
+            "note": (
+                "A 0x01 body of exactly 256 bytes. Legal for plaintext_v1 and illegal "
+                f"here: an aead_v1 body is a size class plus the {AEAD_TAG_BYTES}-byte "
+                "tag. The one suite-conditional rule in the codec."
+            ),
+            "key": "device_a",
+            "reason": "invalid_body_length",
+            "epoch": 1,
+            "workspace_key_hex": SPEC_EPOCH_KEYS[1].hex(),
+            "envelope_hex": build_envelope(
+                short_header, short_body, SIGNING_KEYS["device_a"]
+            ).hex(),
+        }
+    )
+    return vectors
+
+
+def _keywrap_vectors() -> list[dict[str, Any]]:
+    """The two wrap flavours, the digest over a two-member set, and one refusal.
+
+    Every wrap is pinned *and* asserted to unwrap back to the epoch key, in both
+    codecs: the sealing and the opening key schedule must be the same function, and
+    an asymmetry between them surfaces only as "the wrap never opens" long after the
+    bytes are frozen.
+    """
+    epoch = 1
+    workspace_key = SPEC_EPOCH_KEYS[epoch]
+    member_wraps: list[tuple[uuid.UUID, bytes, bytes]] = []
+    vectors: list[dict[str, Any]] = []
+
+    for label in KEY_LABELS:
+        member_id = MEMBER_IDS[label]
+        kex_pk = KEYWRAP_KEX_PUBLIC_KEYS[label]
+        kex_key_id = derive_key_id(kex_pk)
+        ephemeral_seed = _spec_ephemeral_seed(label)
+        nonce = _spec_nonce(f"keywrap/{label}")
+        wrap = _epoch_1_member_wrap(label)
+        member_wraps.append((member_id, kex_key_id, wrap))
+        vectors.append(
+            {
+                "name": f"keywrap_{label}_epoch_{epoch}",
+                "note": (
+                    "epk || nonce || XChaCha20-Poly1305 over the 32-byte epoch key. "
+                    "The HKDF info and the AEAD AAD are the same bytes, and epk is "
+                    "inside them (HPKE discipline), so nothing about the wrap can be "
+                    "re-pointed at another member, epoch, Workspace or key."
+                ),
+                "flavour": "member",
+                "key": label,
+                "member_id": str(member_id),
+                "workspace_id": str(WORKSPACE_ID),
+                "epoch": epoch,
+                # A *seeded* KEX pair, unlike the certificates' placeholder keys, so
+                # the reverse direction is pinnable too.  See KEYWRAP_KEX_SEEDS.
+                "kex_seed_hex": KEYWRAP_KEX_SEEDS[label].hex(),
+                "kex_pk_hex": kex_pk.hex(),
+                "kex_key_id_hex": kex_key_id.hex(),
+                # The X25519 scalar. Ephemeral and per-wrap in production; pinned here
+                # so both codecs reproduce these exact 104 bytes.
+                "ephemeral_seed_hex": ephemeral_seed.hex(),
+                "nonce_hex": nonce.hex(),
+                "info_hex": keywrap_info(
+                    ephemeral_public_key=wrap[:EPHEMERAL_PUBLIC_KEY_BYTES],
+                    workspace_id=WORKSPACE_ID,
+                    epoch=epoch,
+                    member_id=member_id,
+                    kex_key_id=kex_key_id,
+                ).hex(),
+                "workspace_key_hex": workspace_key.hex(),
+                "wrap_hex": wrap.hex(),
+            }
+        )
+
+    escrow_nonce = _spec_nonce(f"epoch-key-escrow/{epoch}")
+    escrow_wrap = _epoch_1_escrow_wrap()
+    vectors.append(
+        {
+            "name": f"epoch_key_escrow_wrap_epoch_{epoch}",
+            "note": (
+                "The same epoch key under the escrowed master_wrap_key. This is what "
+                "makes a fresh device's bootstrap work with no live second device: "
+                "passphrase -> master_wrap_key -> every historical epoch key."
+            ),
+            "flavour": "escrow",
+            "workspace_id": str(WORKSPACE_ID),
+            "epoch": epoch,
+            "master_wrap_key_hex": SPEC_MASTER_WRAP_KEY.hex(),
+            "nonce_hex": escrow_nonce.hex(),
+            "info_hex": epoch_key_escrow_info(workspace_id=WORKSPACE_ID, epoch=epoch).hex(),
+            "workspace_key_hex": workspace_key.hex(),
+            "wrap_hex": escrow_wrap.hex(),
+        }
+    )
+
+    vectors.append(
+        {
+            "name": f"keywrap_digest_two_members_epoch_{epoch}",
+            "note": (
+                "The commitment a rotate op carries. Entries are sorted by "
+                "(member_id, kex_key_id) so the digest is a property of the set and "
+                "not of an upload order the server could shuffle, and the escrow wrap "
+                "is inside it so the server can neither add nor omit any wrap."
+            ),
+            "flavour": "digest",
+            "workspace_id": str(WORKSPACE_ID),
+            "epoch": epoch,
+            "member_wraps": [
+                {
+                    "member_id": str(member_id),
+                    "kex_key_id_hex": kex_key_id.hex(),
+                    "wrap_hex": wrap.hex(),
+                }
+                for member_id, kex_key_id, wrap in member_wraps
+            ],
+            "escrow_wrap_hex": escrow_wrap.hex(),
+            "digest_hex": keywrap_digest(
+                epoch=epoch, member_wraps=member_wraps, escrow_wrap=escrow_wrap
+            ).hex(),
+        }
+    )
+
+    # The binding, demonstrated rather than asserted: device_a's wrap offered in
+    # device_b's slot. Everything else is honest and it still refuses, because
+    # member_id is inside the info and therefore inside the derived key.
+    _, _, a_wrap = member_wraps[0]
+    vectors.append(
+        {
+            "name": "keywrap_replayed_into_another_member_slot",
+            "note": (
+                "device_a's genuine wrap, unwrapped as if it were device_b's. member_id "
+                "and kex_key_id are inside the info, so the derived key differs and the "
+                "AEAD refuses: aead_failure. An honest-but-confused server cannot "
+                "misroute a wrap."
+            ),
+            "flavour": "negative_member",
+            "reason": "aead_failure",
+            "key": "device_b",
+            "member_id": str(MEMBER_IDS["device_b"]),
+            "workspace_id": str(WORKSPACE_ID),
+            "epoch": epoch,
+            "kex_seed_hex": KEYWRAP_KEX_SEEDS["device_b"].hex(),
+            "kex_key_id_hex": derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS["device_b"]).hex(),
+            "wrap_hex": a_wrap.hex(),
+        }
+    )
+    # The epoch binding, the same way: the genuine epoch-1 wrap read as epoch 2.
+    _, b_kex_key_id, b_wrap = member_wraps[1]
+    vectors.append(
+        {
+            "name": "keywrap_replayed_into_another_epoch",
+            "note": (
+                "device_b's genuine epoch-1 wrap, unwrapped as if it were epoch 2. The "
+                "epoch is inside the info, so a server cannot hand yesterday's key over "
+                "as today's."
+            ),
+            "flavour": "negative_epoch",
+            "reason": "aead_failure",
+            "key": "device_b",
+            "member_id": str(MEMBER_IDS["device_b"]),
+            "workspace_id": str(WORKSPACE_ID),
+            "epoch": 2,
+            "kex_seed_hex": KEYWRAP_KEX_SEEDS["device_b"].hex(),
+            "kex_key_id_hex": b_kex_key_id.hex(),
+            "wrap_hex": b_wrap.hex(),
+        }
+    )
+    return vectors
+
+
 # --- Escrow and challenge preimages -----------------------------------------
 
 #: A deterministic stand-in for a real wrapped blob.  The server never parses a
@@ -1461,9 +2069,90 @@ def _envelope_vectors_document() -> dict[str, Any]:
             ],
             "suites": {
                 "plaintext_v1": SUITE_PLAINTEXT_V1,
-                "aead_v1_reserved": SUITE_AEAD_V1,
+                "aead_v1": SUITE_AEAD_V1,
             },
             "served_suites": sorted(SERVED_SUITES),
+            "aead": {
+                "cipher": "XChaCha20-Poly1305",
+                "tag_bytes": AEAD_TAG_BYTES,
+                "workspace_key_bytes": WORKSPACE_KEY_BYTES,
+                "aad": (
+                    f"the {HEADER_LENGTH_BYTES} serialized header bytes, exactly — so "
+                    "the suite, the key_epoch and the nonce are all bound with no "
+                    "second binding to keep in step"
+                ),
+                "nonce_source": (
+                    "the header's own nonce field at offset "
+                    f"{dict((name, offset) for name, offset, _ in HEADER_FIELD_LAYOUT)['nonce']}"
+                    ", 24 random bytes minted "
+                    "at authoring. Production draws them from a CSPRNG; these vectors "
+                    "pin explicit values, and no seeded-nonce scheme exists in "
+                    "production code."
+                ),
+                "body_rule": (
+                    "aead_v1 body = XChaCha20-Poly1305 over the *same* framed body "
+                    "plaintext_v1 would carry, so its length is a size class plus the "
+                    "tag. This is the only suite-conditional rule in the codec."
+                ),
+                "order": (
+                    "verify-then-decrypt on receive: Ed25519 authenticates the author, "
+                    "then the AEAD authenticates the header binding and the "
+                    "confidentiality."
+                ),
+                "control_ops_are_plaintext_for_ever": (
+                    "An op_class = 2 op under suite 0x01 is refused as "
+                    "encrypted_control_op by both codecs. The server materialises "
+                    "control payloads and holds no key, so an encrypted control op is "
+                    "not a stricter op but one nobody can act on."
+                ),
+                "minimum_envelope_bytes": {
+                    str(SUITE_PLAINTEXT_V1): MINIMUM_ENVELOPE_BYTES,
+                    str(SUITE_AEAD_V1): minimum_envelope_bytes_for_suite(SUITE_AEAD_V1),
+                },
+            },
+            "keywrap": {
+                "member_info_domain": KEYWRAP_INFO_DOMAIN.decode("ascii"),
+                "escrow_info_domain": EPOCH_KEY_ESCROW_INFO_DOMAIN.decode("ascii"),
+                "digest_domain": KEYWRAP_DIGEST_DOMAIN.decode("ascii"),
+                "ephemeral_public_key_bytes": EPHEMERAL_PUBLIC_KEY_BYTES,
+                "nonce_bytes": WRAP_NONCE_BYTES,
+                "master_wrap_key_bytes": MASTER_WRAP_KEY_BYTES,
+                "keywrap_bytes": KEYWRAP_BYTES,
+                "escrow_wrap_bytes": EPOCH_KEY_ESCROW_WRAP_BYTES,
+                "kdf": (
+                    "HKDF-SHA256(ikm = X25519(esk, kex_pk), salt = empty, info) — the "
+                    "salt being empty means RFC 5869's default of 32 zero bytes. PyNaCl "
+                    "ships no HKDF, so the Python side hand-rolls it (ADR-0037); the "
+                    "Dart side uses package:cryptography's Hkdf, whose `nonce` argument "
+                    "is the RFC's salt. These vectors are what proves the two agree."
+                ),
+                "member_info": (
+                    'b"jeeves/keywrap/v1" || epk 32B || workspace_id 16B || '
+                    "epoch u32 BE || member_id 16B || kex_key_id 8B"
+                ),
+                "member_wrap_layout": (
+                    "epk 32B || nonce 24B || XChaCha20-Poly1305(hkdf key, nonce, "
+                    "aad = the info bytes, plaintext = K 32B)"
+                ),
+                "escrow_info": (
+                    'b"jeeves/epoch-key-escrow/v1" || workspace_id 16B || epoch u32 BE'
+                ),
+                "escrow_wrap_layout": (
+                    "nonce 24B || XChaCha20-Poly1305(master_wrap_key, nonce, "
+                    "aad = the info bytes, plaintext = K 32B)"
+                ),
+                "digest_preimage": (
+                    'SHA-256(b"jeeves/keywrap-digest/v1" || epoch u32 BE || '
+                    "member_wrap_count u32 BE || for each (member_id, kex_key_id, wrap) "
+                    "sorted by (member_id, kex_key_id): member_id 16B || kex_key_id 8B "
+                    "|| SHA-256(wrap) 32B || SHA-256(escrow_wrap) 32B)"
+                ),
+                "why_not_crypto_box_seal": (
+                    "libsodium's sealed box has no Dart implementation that runs on web, "
+                    "and the vector generator needs a deterministic construction. "
+                    "ADR-0037 records the trade-off."
+                ),
+            },
             "op_classes": {
                 "content": 1,
                 "control": 2,
@@ -1493,7 +2182,23 @@ def _envelope_vectors_document() -> dict[str, Any]:
                 "workspace_genesis_type": CONTROL_TYPE_WORKSPACE_GENESIS,
                 "grant_type": CONTROL_TYPE_GRANT,
                 "revoke_type": CONTROL_TYPE_REVOKE,
+                "rotate_type": CONTROL_TYPE_ROTATE,
                 "served_control_types": sorted(SERVED_CONTROL_TYPES),
+                "rotate_carries_no_certificate": (
+                    "rotate is the one served type with no cert and no separate "
+                    "signature. Every other type's authority is somebody other than "
+                    "the envelope's author — Root, or a granting Member — so its "
+                    "certificate has to travel independently of who is posting it. A "
+                    "rotate's authority is the author's own live owner Grant, which "
+                    "is the same (role, op_class = 2) rule already applied, so the "
+                    "envelope signature is the only signature there is."
+                ),
+                "rotate_is_single_step": (
+                    "to_epoch must be from_epoch + 1. A rotation that jumped epochs "
+                    "would leave a gap no KeyWrap set is ever minted for, and the "
+                    "epoch floor would then refuse content at an epoch the Workspace "
+                    "never keyed."
+                ),
                 "member_kind_device": MEMBER_KIND_DEVICE,
                 "member_kind_service": MEMBER_KIND_SERVICE,
                 "prev_control_hash_bytes": PREV_CONTROL_HASH_BYTES,
@@ -1608,6 +2313,9 @@ def _envelope_vectors_document() -> dict[str, Any]:
         "negative_vectors": _negative_vectors(),
         "control_vectors": _control_vectors(),
         "negative_control_vectors": _negative_control_vectors(),
+        "aead_vectors": _aead_vectors(),
+        "negative_aead_vectors": _negative_aead_vectors(),
+        "keywrap_vectors": _keywrap_vectors(),
         "escrow_vectors": _escrow_vectors(),
         "member_challenge_vectors": _member_challenge_vectors(),
     }

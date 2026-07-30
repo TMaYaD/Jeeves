@@ -222,6 +222,89 @@ class RecoveryEscrow(Base):
     )
 
 
+class KeyWrap(Base):
+    """One Workspace epoch key, wrapped to one Member's registered KEX key.
+
+    **The server can never unwrap any of this.**  ``wrap`` is opaque bytes sealed to
+    the Member's X25519 ``kex_pk``; holding the whole table gains an operator
+    nothing, which is the property that makes storing it acceptable at all.
+
+    Keyed ``(workspace_id, member_id, epoch)``, so delivery is per Member per epoch
+    and a rotation adds rows rather than replacing them.  **Historical wraps are
+    kept for ever**: soft-delete retention means a device may need to read content
+    authored at any past epoch, and the escrow provides recovery for free.
+
+    ``kex_key_id`` is stored alongside because a Member may rotate its KEX key: a
+    wrap names *which* key it was sealed to, so a stale wrap is identifiable rather
+    than merely unopenable.
+
+    Authoritative for nobody, like every other index here — but for a different
+    reason from ``grants``.  A Grant is a *claim about authority* the log settles; a
+    KeyWrap is a *delivery of bytes* whose correctness the client checks
+    cryptographically when it opens it.  The commitment that the set is the right
+    set lives in the signed ``rotate`` op's ``keywrap_digest``, not in this table.
+    """
+
+    __tablename__ = "keywraps"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    member_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    #: First 8 bytes of SHA-256 over the raw 32-byte X25519 public key.
+    kex_key_id: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    #: ``epk 32B || nonce 24B || XChaCha20-Poly1305(...)`` — see ``app.sync.key_wraps``.
+    wrap: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class WorkspaceEpoch(Base):
+    """One ``(Workspace, epoch)``: the digest it committed to, and the escrow wrap.
+
+    The materialised index of ``rotate`` control ops, and — like ``grants`` —
+    authoritative for nobody: the signed rotate in the log is the fact.  It exists
+    so ``PUT /w/{w}/keywraps`` can check a wrap set against the digest, and so a
+    content POST can be refused for naming an epoch the Workspace has already
+    rotated well past, both without walking the log per request.
+
+    **The current epoch is ``MAX(epoch)``.**  Not a column on ``workspaces``: a
+    stored "current" would be a cache of this table's maximum, free to disagree with
+    it, and the naming rule would then require it to say so.
+
+    The **epoch 0 row carries no ``rotate_seq``**, because no rotate op creates it.
+    A Workspace keyed from genesis has its epoch 0 row minted by the first wraps
+    PUT; a Workspace that existed before encryption was turned on never gets one at
+    all, because turn-on mints ``K_{w,1}`` and leaves epoch 0 unkeyed — which is
+    exactly what keeps its pre-turn-on plaintext history readable for ever.
+
+    ``escrow_wrap`` is the same epoch key wrapped under the User's
+    ``master_wrap_key``, which lives only inside the recovery escrow blob.  It is
+    what lets a fresh device read all history from the passphrase alone, with no
+    second device online — and it is equally unopenable by the server.
+    """
+
+    __tablename__ = "workspace_epochs"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    #: SHA-256 over the whole wrap set — see ``app.sync.key_wraps.keywrap_digest``.
+    #: The commitment the signed ``rotate`` op made *before* any wrap was uploaded,
+    #: copied here so the wraps PUT can be checked against it.
+    keywrap_digest: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    #: ``nonce 24B || XChaCha20-Poly1305(master_wrap_key, ...)``.
+    escrow_wrap: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    #: The transport seq of the ``rotate`` op that produced this epoch, so the row
+    #: can always be traced back to the evidence.  Null for epoch 0, which no
+    #: rotate creates.
+    rotate_seq: Mapped[int | None] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
 class RecoveryEscrowFetch(Base):
     """Append-only audit of every escrow read.
 

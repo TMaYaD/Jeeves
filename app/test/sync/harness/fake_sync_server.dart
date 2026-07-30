@@ -32,6 +32,7 @@ import 'dart:typed_data';
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/key_wraps.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/signal_socket.dart';
 import 'package:jeeves/sync/sync_transport.dart';
@@ -174,6 +175,7 @@ class _ControlAdmission {
     this.registration,
     this.grant,
     this.revoke,
+    this.rotate,
   });
 
   final int index;
@@ -183,12 +185,57 @@ class _ControlAdmission {
   final RegistrationCertificate? registration;
   final GrantCertificate? grant;
   final RevokeCertificate? revoke;
+  final RotateStatement? rotate;
 }
 
 class _EscrowSlot {
   _EscrowSlot(this.record);
 
   RecoveryEscrowRecord record;
+}
+
+/// One row of `workspace_epochs`: the materialised index of a `rotate` op, and the
+/// home of that epoch's escrow wrap.
+///
+/// Authoritative for nobody, like `grants`. The *current* epoch is
+/// `MAX(epoch)` over these rows and is never stored — a column holding it would be a
+/// cache of that maximum, free to disagree with the rows that produced it.
+class _WorkspaceEpoch {
+  _WorkspaceEpoch({
+    required this.epoch,
+    required this.keyWrapDigest,
+    required this.escrowWrap,
+    required this.rotateSeq,
+  });
+
+  final int epoch;
+
+  /// The commitment the epoch was published under — from the signed `rotate` for
+  /// every epoch above 0, and from the founding client's body for epoch 0.
+  final Uint8List keyWrapDigest;
+
+  /// Empty between a `rotate` landing and its wraps PUT arriving. That window is an
+  /// epoch nobody can read yet, which is why `GET /w/{w}/epoch-keys` omits the row
+  /// rather than serving an empty blob that would look like a wrap failing to open.
+  Uint8List escrowWrap;
+
+  /// Null for epoch 0, which nothing rotated *to*.
+  final int? rotateSeq;
+}
+
+/// One row of `keywraps`, opaque to the server for ever.
+class _StoredKeyWrap {
+  _StoredKeyWrap({
+    required this.epoch,
+    required this.memberId,
+    required this.kexKeyId,
+    required this.wrap,
+  });
+
+  final int epoch;
+  final String memberId;
+  final Uint8List kexKeyId;
+  final Uint8List wrap;
 }
 
 /// Guards the single-transaction batch. The cap is [maxOpsPerBatch] — the one
@@ -221,6 +268,12 @@ class FakeSyncServer {
 
   /// `workspace_id -> grant_id -> grant`. The server's own authz index.
   final Map<String, Map<String, _StoredGrant>> _grants = {};
+
+  /// `workspace_id -> epoch -> row`. Materialised from `rotate` control ops.
+  final Map<String, Map<int, _WorkspaceEpoch>> _workspaceEpochs = {};
+
+  /// `workspace_id -> 'member_id/epoch' -> wrap`. Written once per epoch, whole-set.
+  final Map<String, Map<String, _StoredKeyWrap>> _keyWraps = {};
 
   /// Member ids whose transport credential a revocation killed, in order — the
   /// fake's stand-in for `revoke_member_transport`.
@@ -349,6 +402,12 @@ class FakeSyncServer {
     _log.removeWhere((op) => op.workspaceId == workspaceId);
     _workspaces.remove(workspaceId);
     _grants.remove(workspaceId);
+    // The key plane goes with the Workspace, as the real server's rows do: a
+    // re-founded Workspace starting life with a stale current epoch would refuse
+    // its own genesis-era content as `key_epoch_stale` — a failure mode the real
+    // server cannot produce.
+    _workspaceEpochs.remove(workspaceId);
+    _keyWraps.remove(workspaceId);
   }
 
   /// Truncate the log above [seq] and hand the freed seqs back out.
@@ -889,6 +948,9 @@ class FakeSyncServer {
     final isPreferences = workspaceId == userPreferencesWorkspaceId(member.userId);
     final stagedKinds = <String, String>{};
     final admissions = <_ControlAdmission>[];
+    // Walked forward through the batch exactly as `grants` is, so a `rotate` at index
+    // 0 is what the content op at index 1 is judged against.
+    var currentEpoch = _currentKeyEpoch(workspaceId);
 
     for (var index = 0; index < parsed.length; index++) {
       final header = parsed[index];
@@ -897,6 +959,7 @@ class FakeSyncServer {
           throw SyncTransportException(409, 'ops[$index]', code: 'workspace_not_created');
         }
         _requireRole(grants, member.record.memberId, header.opClass, index);
+        _requireFreshKeyEpoch(header, currentEpoch, index);
         continue;
       }
 
@@ -993,9 +1056,83 @@ class FakeSyncServer {
             controlType: payload.controlType,
             revoke: revoke,
           ));
+        case controlTypeRotate:
+          final rotate = _verifyRotate(
+            payload,
+            index: index,
+            workspaceId: workspaceId,
+            currentEpoch: currentEpoch,
+          );
+          // The epoch this rotate establishes is what the rest of the batch is
+          // judged against: a content op posted behind its own rotation is at the
+          // new epoch, not the old one.
+          currentEpoch = rotate.toEpoch;
+          admissions.add(_ControlAdmission(
+            index: index,
+            controlType: payload.controlType,
+            rotate: rotate,
+          ));
       }
     }
     return admissions;
+  }
+
+  /// `MAX(workspace_epochs.epoch)`, or null while the Workspace is unkeyed.
+  ///
+  /// Null is a real and permanent state rather than merely a pre-rotation one: a
+  /// Workspace that never turns encryption on never gets an epoch row, which is what
+  /// keeps `plaintext_v1` clients working for ever.
+  int? _currentKeyEpoch(String workspaceId) {
+    final rows = _workspaceEpochs[workspaceId];
+    if (rows == null || rows.isEmpty) return null;
+    return rows.keys.reduce((a, b) => a > b ? a : b);
+  }
+
+  /// `key_epoch >= current - 1` on content ops, and the `- 1` is load-bearing.
+  ///
+  /// A device offline across a rotation holds outbox envelopes signed at the previous
+  /// epoch, and those cannot be re-signed without forging its own chain. One epoch of
+  /// slack drains that queue; two would make the floor meaningless.
+  void _requireFreshKeyEpoch(OpHeader header, int? currentEpoch, int index) {
+    if (currentEpoch == null) return;
+    if (header.keyEpoch < currentEpoch - 1) {
+      throw SyncTransportException(409, 'ops[$index]', code: 'key_epoch_stale');
+    }
+    if (header.keyEpoch > currentEpoch) {
+      // The ceiling, mirroring the real route: an epoch the Workspace has not
+      // rotated to has no wrap set, so admitting the op would park a permanently
+      // unreadable row in the log.
+      throw SyncTransportException(409, 'ops[$index]', code: 'key_epoch_unknown');
+    }
+  }
+
+  /// Verify one `rotate`: it names this Workspace, and it is the next step.
+  ///
+  /// Authority was settled before this is reached — a rotate is not root-signed, so
+  /// `_requireRole` already demanded a live `owner` Grant, and the envelope signature
+  /// proved the author. There is no certificate, so there is nothing else to check
+  /// but the transition: `from_epoch` must be where the Workspace actually is, or two
+  /// owners racing a rotation could both land and leave the log claiming two
+  /// different keys for one epoch.
+  RotateStatement _verifyRotate(
+    ControlPayload payload, {
+    required int index,
+    required String workspaceId,
+    required int? currentEpoch,
+  }) {
+    final RotateStatement rotate;
+    try {
+      rotate = payload.rotateStatement();
+    } on SyncRejection catch (rejection) {
+      throw SyncTransportException(422, 'ops[$index]', code: rejection.reason.code);
+    }
+    if (rotate.workspaceId != workspaceId) {
+      throw SyncTransportException(422, 'ops[$index]', code: 'cert_workspace_mismatch');
+    }
+    if (rotate.fromEpoch != (currentEpoch ?? 0)) {
+      throw SyncTransportException(409, 'ops[$index]', code: 'rotate_epoch_conflict');
+    }
+    return rotate;
   }
 
   /// The `(grant.role, header.op_class)` matrix, content-blind as ever.
@@ -1265,6 +1402,17 @@ class FakeSyncServer {
       }
       if (admission.controlType == controlTypeWorkspaceGenesis) {
         _workspaces[workspaceId] = result.seq;
+      } else if (admission.rotate != null) {
+        // The epoch row exists from the moment the rotate does, carrying the digest
+        // and no wrap yet. That ordering is the whole mechanism: the wraps PUT has
+        // something to check itself against, and it cannot invent one.
+        _workspaceEpochs.putIfAbsent(workspaceId, () => {})[admission.rotate!.toEpoch] =
+            _WorkspaceEpoch(
+          epoch: admission.rotate!.toEpoch,
+          keyWrapDigest: admission.rotate!.keyWrapDigest,
+          escrowWrap: Uint8List(0),
+          rotateSeq: result.seq,
+        );
       } else if (admission.grant != null) {
         index[admission.grant!.grantId] = _StoredGrant(
           grantId: admission.grant!.grantId,
@@ -1289,6 +1437,213 @@ class FakeSyncServer {
     ];
   }
 
+
+  // --- The key plane ---------------------------------------------------------
+  //
+  // Storage and arithmetic, and nothing else. The server holds wraps it cannot open
+  // and checks a hash it was told to check; every cryptographic decision was made by
+  // an owner Device before the bytes arrived. The one thing it genuinely enforces is
+  // the digest, and that is enforcement of a commitment the *log* made — without it,
+  // deciding which Members can read a new epoch would be entirely within a hostile
+  // operator's gift.
+
+  Future<List<KeyWrapRecord>> _putKeyWraps(
+    String callerMemberId,
+    String workspaceId, {
+    required int epoch,
+    required List<MemberKeyWrap> wraps,
+    required Uint8List escrowWrap,
+    Uint8List? claimedDigest,
+  }) async {
+    final member = _members[callerMemberId];
+    if (member == null) {
+      throw const SyncTransportException(401, 'unknown member', code: 'unknown_member');
+    }
+    _authorizeWorkspace(member.userId, workspaceId);
+    _refuseIfRevoked(workspaceId, callerMemberId);
+    if (epoch < 0 || epoch > maxKeyEpoch) {
+      throw SyncTransportException(422, 'epoch $epoch', code: 'malformed_key_epoch');
+    }
+    // Minting wraps is an owner act: it is the delivery half of a Grant, and the two
+    // halves of one ceremony cannot have different authority.
+    final grants = _GrantIndex.detachedCopyOf(_grants[workspaceId]);
+    if (!grants.liveRoles(callerMemberId).contains(roleOwner)) {
+      throw const SyncTransportException(403, 'owner only', code: 'keywrap_requires_owner');
+    }
+    if (escrowWrap.length != epochKeyEscrowWrapBytes) {
+      throw const SyncTransportException(422, 'escrow_wrap', code: 'malformed_escrow_wrap');
+    }
+
+    final seen = <String>{};
+    for (var position = 0; position < wraps.length; position++) {
+      final entry = wraps[position];
+      if (entry.wrap.length != keyWrapBytes) {
+        throw SyncTransportException(422, 'wraps[$position]', code: 'malformed_keywrap');
+      }
+      final wrapped = _members[entry.memberId];
+      if (wrapped == null || wrapped.userId != member.userId) {
+        throw SyncTransportException(422, 'wraps[$position]', code: 'unknown_keywrap_member');
+      }
+      final kexPk = wrapped.record.kexPk;
+      if (kexPk == null || !_sameBytes(deriveKeyId(kexPk), entry.kexKeyId)) {
+        // The key id must be the one the server derived from the *registered* KEX
+        // key, never a claim: a wrap sealed to some other key would be undeliverable
+        // and the Member would look orphaned for a reason nothing in the log explains.
+        throw SyncTransportException(422, 'wraps[$position]', code: 'kex_key_id_not_registered');
+      }
+      if (!seen.add(entry.memberId)) {
+        throw SyncTransportException(422, 'wraps[$position]', code: 'duplicate_keywrap_member');
+      }
+    }
+
+    final computed = keyWrapDigest(
+      epoch: epoch,
+      memberWraps: wraps,
+      escrowWrap: escrowWrap,
+    );
+    final rows = _workspaceEpochs.putIfAbsent(workspaceId, () => {});
+    var stored = rows[epoch];
+    if (epoch == 0) {
+      if (stored == null) {
+        // The one epoch with no rotate behind it: its digest arrives in the body and
+        // is stored as the commitment. Refused rather than silently corrected when it
+        // does not describe its own set — a client that miscomputes it here would
+        // miscompute it in the rotate op it signs next.
+        if (claimedDigest == null) {
+          throw SyncTransportException(422, 'epoch 0', code: 'missing_keywrap_digest');
+        }
+        if (claimedDigest.length != keyWrapDigestBytes) {
+          throw const SyncTransportException(422, 'digest', code: 'malformed_keywrap_digest');
+        }
+        if (!_sameBytes(claimedDigest, computed)) {
+          throw SyncTransportException(422, 'epoch 0', code: 'keywrap_digest_mismatch');
+        }
+        stored = _WorkspaceEpoch(
+          epoch: 0,
+          keyWrapDigest: computed,
+          escrowWrap: Uint8List(0),
+          rotateSeq: null,
+        );
+        rows[0] = stored;
+      }
+    } else if (stored == null) {
+      // Nothing has committed to a digest for this epoch, so trusting the body's
+      // would make the whole commitment ceremonial.
+      throw SyncTransportException(409, 'epoch $epoch', code: rotateNotMaterialisedCode);
+    }
+
+    if (!_sameBytes(stored.keyWrapDigest, computed)) {
+      throw SyncTransportException(
+        422,
+        'epoch $epoch',
+        code: keyWrapDigestMismatchCode,
+      );
+    }
+    if (stored.escrowWrap.isNotEmpty && !_sameBytes(stored.escrowWrap, escrowWrap)) {
+      // Unreachable while the digest covers the escrow wrap, and kept unconditional
+      // anyway: a defence that only holds while SHA-256 does is worth one line.
+      throw SyncTransportException(422, 'epoch $epoch', code: keyWrapDigestMismatchCode);
+    }
+    stored.escrowWrap = escrowWrap;
+
+    final wrapRows = _keyWraps.putIfAbsent(workspaceId, () => {});
+    for (final entry in wraps) {
+      final key = '${entry.memberId}/$epoch';
+      final existing = wrapRows[key];
+      if (existing == null) {
+        wrapRows[key] = _StoredKeyWrap(
+          epoch: epoch,
+          memberId: entry.memberId,
+          kexKeyId: entry.kexKeyId,
+          wrap: entry.wrap,
+        );
+      } else if (!_sameBytes(existing.wrap, entry.wrap) ||
+          !_sameBytes(existing.kexKeyId, entry.kexKeyId)) {
+        // Byte-identical replay is an acknowledgement — both ceremonies retry — but a
+        // *different* set for an epoch already written is not a later caller's to
+        // publish: allowing it would let a stolen owner credential swap the key set
+        // out from under devices that already read it.
+        throw SyncTransportException(409, 'epoch $epoch', code: 'keywrap_already_written');
+      }
+    }
+    return _keyWrapsForMember(workspaceId, callerMemberId);
+  }
+
+  Future<List<KeyWrapRecord>> _myKeyWraps(String memberId, String workspaceId) async {
+    final member = _members[memberId];
+    if (member == null) {
+      throw const SyncTransportException(401, 'unknown member', code: 'unknown_member');
+    }
+    _authorizeWorkspace(member.userId, workspaceId);
+    _refuseIfRevoked(workspaceId, memberId);
+    return _keyWrapsForMember(workspaceId, memberId);
+  }
+
+  /// Scoped to the calling Member and not parameterised, so there is no id to get
+  /// wrong. Every epoch, because content authored at any past one may still be read.
+  List<KeyWrapRecord> _keyWrapsForMember(String workspaceId, String memberId) {
+    final rows = [
+      for (final row in (_keyWraps[workspaceId] ?? const {}).values)
+        if (row.memberId == memberId) row,
+    ]..sort((a, b) => a.epoch.compareTo(b.epoch));
+    return [
+      for (final row in rows)
+        KeyWrapRecord(
+          epoch: row.epoch,
+          memberId: row.memberId,
+          kexKeyId: row.kexKeyId,
+          wrap: row.wrap,
+        ),
+    ];
+  }
+
+  Future<List<EpochKeyRecord>> _epochKeys(String memberId, String workspaceId) async {
+    final member = _members[memberId];
+    if (member == null) {
+      throw const SyncTransportException(401, 'unknown member', code: 'unknown_member');
+    }
+    _authorizeWorkspace(member.userId, workspaceId);
+    _refuseIfRevoked(workspaceId, memberId);
+    // A live Grant, and a deliberately low bar: the bytes disclose nothing without
+    // `master_wrap_key`, which lives behind Argon2id and the passphrase. Anyone who
+    // can already open these can already open Root.
+    final grants = _GrantIndex.detachedCopyOf(_grants[workspaceId]);
+    if (grants.liveRoles(memberId).isEmpty) {
+      throw SyncTransportException(
+        403,
+        'no live Grant${grants.hasAnyGrant(memberId) ? ' (revoked)' : ''}',
+        code: 'no_live_grant',
+      );
+    }
+    final rows = (_workspaceEpochs[workspaceId] ?? const <int, _WorkspaceEpoch>{})
+        .values
+        .where((row) => row.escrowWrap.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.epoch.compareTo(b.epoch));
+    return [
+      for (final row in rows)
+        EpochKeyRecord(
+          epoch: row.epoch,
+          escrowWrap: row.escrowWrap,
+          keyWrapDigest: row.keyWrapDigest,
+        ),
+    ];
+  }
+
+  /// Which Members hold a wrap for one epoch — what a test asserts a rotation on.
+  ///
+  /// Reading the *stored rows* rather than the client's word for them is the point: a
+  /// revoked Device being absent from the new epoch's set is a fact about the server's
+  /// table, not about what the ceremony believed it uploaded.
+  Set<String> keyWrapRecipients(String workspaceId, int epoch) => {
+        for (final row in (_keyWraps[workspaceId] ?? const {}).values)
+          if (row.epoch == epoch) row.memberId,
+      };
+
+  /// The epochs this Workspace has rows for, in order.
+  List<int> keyedEpochs(String workspaceId) =>
+      (_workspaceEpochs[workspaceId] ?? const <int, _WorkspaceEpoch>{}).keys.toList()
+        ..sort();
 
   PullPage _pullOps(
     String memberId,
@@ -1534,6 +1889,31 @@ class FakeSyncServerMemberSession implements SyncTransport {
     required int limit,
   }) async =>
       server._pullOps(memberId, workspaceId, since: since, limit: limit);
+
+  @override
+  Future<List<KeyWrapRecord>> putKeyWraps(
+    String workspaceId, {
+    required int epoch,
+    required List<MemberKeyWrap> wraps,
+    required Uint8List escrowWrap,
+    Uint8List? keyWrapDigest,
+  }) =>
+      server._putKeyWraps(
+        memberId,
+        workspaceId,
+        epoch: epoch,
+        wraps: wraps,
+        escrowWrap: escrowWrap,
+        claimedDigest: keyWrapDigest,
+      );
+
+  @override
+  Future<List<KeyWrapRecord>> fetchMyKeyWraps(String workspaceId) =>
+      server._myKeyWraps(memberId, workspaceId);
+
+  @override
+  Future<List<EpochKeyRecord>> fetchEpochKeys(String workspaceId) =>
+      server._epochKeys(memberId, workspaceId);
 
   @override
   Stream<void> newSeqSignals(String workspaceId) => decodeSignalFrames(

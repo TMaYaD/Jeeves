@@ -57,7 +57,7 @@ _LAST_MIRRORED_REVISION = "0033"
 
 # Head after 0034.  Spelled out so adding a revision without deciding what it
 # means for the drop assertions fails this test rather than silently moving.
-_HEAD_REVISION = "0034"
+_HEAD_REVISION = "0035"
 
 # Dropped by 0034, children first (the migration's own order).
 _MIRRORED_TABLES = (

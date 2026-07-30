@@ -58,6 +58,7 @@ import 'device_key_store.dart';
 import 'envelope.dart';
 import 'hlc.dart';
 import 'ids.dart';
+import 'key_ceremony.dart';
 import 'passphrase_policy.dart';
 import 'recovery_escrow.dart';
 import 'root_authority.dart';
@@ -167,22 +168,35 @@ class EnrolmentService {
   /// [passphrase] defaults to a generated diceware phrase. A user-chosen one is
   /// accepted — the returned [EnrolmentOutcome.strength] carries the estimate
   /// and the warning a screen must show if it is weak.
-  Future<EnrolmentOutcome> enrolFirstDevice({String? passphrase}) async {
+  /// [encryptFromGenesis] keys every Workspace this ceremony founds at epoch 0, so
+  /// it is encrypted from its first content op.
+  ///
+  /// **Off by default, and deliberately.** Landing #554 must change nothing about
+  /// what an existing deployment emits — encryption turns on per Workspace via the
+  /// explicit owner-run [turnOnEncryption] ceremony, never by a deploy — and the
+  /// plaintext cutover in #553 depends on a freshly enrolled Workspace being
+  /// byte-inspectable while it is verified. Flipping the default is the cutover's
+  /// decision to make once that verification is done, and it is one word here.
+  Future<EnrolmentOutcome> enrolFirstDevice({
+    String? passphrase,
+    bool encryptFromGenesis = false,
+  }) async {
     final chosen = passphrase ?? passphrasePolicy.generate(random: _random);
     final strength = passphrase == null
         ? passphrasePolicy.strengthOfGenerated()
         : passphrasePolicy.estimate(passphrase);
 
     final root = await RootAuthority.generate(random: _random);
+    final masterWrapKey = _randomBytes(masterWrapKeyBytes);
     try {
       final blob = await wrapEscrowBlob(
         passphrase: chosen,
         secrets: EscrowedSecrets(
           rootSecretKey: root.secretKey,
-          // Escrowed now, read by nothing until #554. Minting it here is what
-          // keeps the blob shape constant, so a passphrase change stays a pure
-          // re-wrap for ever.
-          masterWrapKey: _randomBytes(masterWrapKeyBytes),
+          // Minting it here is what keeps the blob shape constant, so a passphrase
+          // change stays a pure re-wrap for ever. Its first reader is the epoch-key
+          // escrow wrap below.
+          masterWrapKey: masterWrapKey,
         ),
         parameters: kdfParameters,
         floor: kdfFloor,
@@ -204,7 +218,11 @@ class EnrolmentService {
       );
       _knownEscrowRecords[client.workspaceId] = record;
       await client.pinRoot(root.rootPk, record.version);
-      await _registerThisDevice(root);
+      await _registerThisDevice(
+        root,
+        masterWrapKey: masterWrapKey,
+        encryptFromGenesis: encryptFromGenesis,
+      );
       return EnrolmentOutcome(
         passphrase: chosen,
         strength: strength,
@@ -218,11 +236,23 @@ class EnrolmentService {
   }
 
   /// Enrol a further Device with nothing but the passphrase.
-  Future<EnrolmentOutcome> enrolWithPassphrase(String passphrase) async {
-    final (record, root, _) = await _recoverRoot(passphrase);
+  ///
+  /// [encryptFromGenesis] only bites on a Workspace this ceremony *founds* — the
+  /// log-state branch means a later device can be the one that founds the
+  /// preferences Workspace. A Workspace that already has a genesis is joined, and
+  /// whether it is encrypted is a fact about it rather than a choice made here.
+  Future<EnrolmentOutcome> enrolWithPassphrase(
+    String passphrase, {
+    bool encryptFromGenesis = false,
+  }) async {
+    final (record, root, secrets) = await _recoverRoot(passphrase);
     try {
       await client.pinRoot(root.rootPk, record.version);
-      await _registerThisDevice(root);
+      await _registerThisDevice(
+        root,
+        masterWrapKey: secrets.masterWrapKey,
+        encryptFromGenesis: encryptFromGenesis,
+      );
       return EnrolmentOutcome(
         passphrase: passphrase,
         strength: passphrasePolicy.estimate(passphrase),
@@ -334,7 +364,11 @@ class EnrolmentService {
   }
 
   /// Steps 2 through 7 — everything after Root is in hand.
-  Future<void> _registerThisDevice(RootAuthority root) async {
+  Future<void> _registerThisDevice(
+    RootAuthority root, {
+    required Uint8List masterWrapKey,
+    required bool encryptFromGenesis,
+  }) async {
     final identity = client.identity;
 
     // 2. Both escrow slots, in a pinned order. The default slot first, because
@@ -381,12 +415,258 @@ class EnrolmentService {
     // 6. Per Workspace, default first: pull, look, then claim.
     for (final workspace in _workspaces) {
       await _claimPlaceIn(workspace, root);
+      // 6b. The key plane, once this device is a granted Member of the Workspace.
+      //     Two mutually exclusive cases, decided by what the Workspace already is:
+      //
+      //     - it holds epoch keys already -> adopt them from the escrow wraps.
+      //       This is the passphrase-alone path, and it needs no second device
+      //       online and no round-trip with one.
+      //     - it holds none, and this ceremony founded it, and the caller asked for
+      //       encryption -> mint `K_{w,0}` and publish the set.
+      //
+      //     Adoption runs first and unconditionally, because "the Workspace is
+      //     already encrypted" is a fact to discover rather than a state to assume:
+      //     a device that skipped it and then keyed epoch 0 itself would be refused
+      //     by the digest, and rightly.
+      await _adoptOrMintEpochKeys(
+        workspace,
+        masterWrapKey: masterWrapKey,
+        encryptFromGenesis: encryptFromGenesis,
+      );
     }
     // 7. Root is dropped by the caller's `finally`, whatever happened here.
   }
 
+  /// The key plane for one Workspace at the end of its enrolment.
+  Future<void> _adoptOrMintEpochKeys(
+    String workspaceId, {
+    required Uint8List masterWrapKey,
+    required bool encryptFromGenesis,
+  }) async {
+    final scoped = await _scoped(workspaceId);
+    final ceremony = WorkspaceKeyCeremony(client: scoped, random: _random);
+    if (await ceremony.adoptFromEscrow(masterWrapKey: masterWrapKey) > 0) {
+      // The Workspace was already encrypted, so the history this device just pulled
+      // is quarantined behind the keys it did not have while pulling. One re-pull
+      // releases it: the ops are in the quarantine, and the release scan re-receives
+      // every row whose epoch is now readable.
+      await scoped.pull();
+      return;
+    }
+    if (!encryptFromGenesis) return;
+    if (await scoped.workspaceKeys.highestEpochHeld(workspaceId) != null) {
+      // Adoption learning nothing does not mean the Workspace is unkeyed: a re-run
+      // on a device that already holds every epoch's key learns zero too. Minting
+      // is only for a Workspace with no keyed epoch at all — publishing a second
+      // `K_{w,0}` over a keyed one would be refused by the stored digest anyway,
+      // so this turns a guaranteed refusal into the idempotent re-run it is.
+      return;
+    }
+    await ceremony.publish(await ceremony.prepare(
+      epoch: 0,
+      masterWrapKey: masterWrapKey,
+    ));
+  }
+
   /// The two Workspaces every enrolment covers, in the order it covers them.
   List<String> get _workspaces => derivableWorkspaceIds(client.userId);
+
+  /// This device's client for one of its Workspaces.
+  Future<SyncClient> _scoped(String workspaceId) async =>
+      workspaceId == client.workspaceId ? client : await workspaceClientFactory(workspaceId);
+
+  // --- Key rotation ------------------------------------------------------------
+
+  /// Turn encryption **on** for every Workspace of this User.
+  ///
+  /// Turn-on *is* a rotation, and that is the point rather than a shortcut: the owner
+  /// mints `K_{w,N+1}`, authors `rotate(N -> N+1)`, publishes the wrap set, and
+  /// authors content under the new key from then on. There is no separate switch and
+  /// no second machine to get wrong — and because the new epoch is `N+1`, every
+  /// content op already in the log stays at an *unkeyed* epoch and stays readable
+  /// for ever. Minting `K_{w,N}` instead would have keyed the past retroactively and
+  /// turned the whole existing history into a refusal on every device.
+  ///
+  /// Idempotent in the only sense that matters: running it on an already-encrypted
+  /// Workspace rotates it, which is a legal thing to do at any time.
+  Future<Map<String, int>> turnOnEncryption({required String passphrase}) =>
+      rotateWorkspaceKeys(passphrase: passphrase);
+
+  /// Revoke a Device and rotate every Workspace's key in one ceremony.
+  ///
+  /// **The two halves are inseparable**, which is why there is no `revokeDevice`
+  /// beside this. A revocation alone stops the Device *authoring*; it does nothing
+  /// about the key already on it, so a revoked Device that kept receiving would keep
+  /// reading. The rotation is what makes the revocation mean something, and the
+  /// wrap set for the new epoch simply has no entry for the revoked Member.
+  ///
+  /// **Nothing is authored until every survivor's wrap exists** (review F14a). The
+  /// wrap set is built first, and a survivor that cannot be wrapped to raises
+  /// [SyncRejectionReason.unwrappableGrant] with the log untouched — no revoke, no
+  /// rotate, no PUT. A half-run ceremony here would either leave a Device revoked
+  /// with the key still valid, or publish a signed digest that locks an honest
+  /// Member out permanently.
+  ///
+  /// Takes the passphrase because only Root may revoke an owner Grant (ADR-0031) and
+  /// every Device holds one — the deliberate corollary of "Devices are owners".
+  Future<Map<String, int>> revokeAndRotate({
+    required String passphrase,
+    required String memberId,
+  }) {
+    if (memberId == client.identity.memberId) {
+      // A device revoking itself would author the revoke, rotate away from its own
+      // key, and then be unable to read the Workspace it is still holding open. The
+      // ceremony for retiring *this* device is running this one from another device.
+      throw ArgumentError('a Device cannot revoke and rotate against itself');
+    }
+    return rotateWorkspaceKeys(passphrase: passphrase, revokeMemberId: memberId);
+  }
+
+  /// Rotate every Workspace of this User to its next epoch, optionally cutting one
+  /// Member off on the way.
+  ///
+  /// Returns the epoch each Workspace now stands at. Both Workspaces, because a
+  /// revoked Device must lose the preferences log as well as the GTD one, and
+  /// because a User's preferences are exactly as private as their tasks.
+  Future<Map<String, int>> rotateWorkspaceKeys({
+    required String passphrase,
+    String? revokeMemberId,
+  }) async {
+    final (_, root, secrets) = await _recoverRoot(passphrase);
+    try {
+      final epochs = <String, int>{};
+      for (final workspace in _workspaces) {
+        epochs[workspace] = await _rotateOne(
+          workspace,
+          root: root,
+          masterWrapKey: secrets.masterWrapKey,
+          revokeMemberId: revokeMemberId,
+        );
+      }
+      return epochs;
+    } finally {
+      root.drop();
+    }
+  }
+
+  /// One Workspace's rotation, in the one order that is safe.
+  ///
+  /// ```
+  /// 1. build the wrap set for N+1 over the survivors   (refuses here, or never)
+  /// 2. author revoke(s), then rotate committing to the digest
+  /// 3. flush — the rotate must be materialised before the wraps are accepted
+  /// 4. PUT the wraps, and only then remember the key locally
+  /// 5. pull, which applies the rotate and raises this device's epoch floor
+  /// ```
+  ///
+  /// Step 3 before step 4 is the server's rule, not a preference: a wraps upload
+  /// arriving before its `rotate` is refused as `rotate_not_materialised`, because a
+  /// digest the log has not committed to is just a number the uploader chose.
+  ///
+  /// Step 5 is what turns the key into an authoring key. `capture` authors at the
+  /// floor, and the floor rises only when the verified rotate applies — so between
+  /// step 4 and step 5 this device holds `K_{w,N+1}` and still authors at `N`, which
+  /// is a legal state rather than a window to close.
+  Future<int> _rotateOne(
+    String workspaceId, {
+    required RootAuthority root,
+    required Uint8List masterWrapKey,
+    String? revokeMemberId,
+  }) async {
+    final scoped = await _scoped(workspaceId);
+    // Pull first: the survivor set and the chain link both come from the applied
+    // control log, and rotating against a stale view of who holds a Grant is how a
+    // Member added a moment ago gets locked out.
+    await scoped.pull();
+
+    final fromEpoch = await scoped.epochFloor();
+    final toEpoch = fromEpoch + 1;
+    final ceremony = WorkspaceKeyCeremony(client: scoped, random: _random);
+    final keySet = await ceremony.prepare(
+      epoch: toEpoch,
+      masterWrapKey: masterWrapKey,
+      excludeMemberId: revokeMemberId,
+    );
+
+    var head = await scoped.appliedControlHead();
+    if (revokeMemberId != null) {
+      final view = await scoped.grantsView();
+      final doomed = view.grants.values
+          .where((grant) => grant.memberId == revokeMemberId && grant.isLive)
+          .toList()
+        ..sort((a, b) => a.grantedSeq.compareTo(b.grantedSeq));
+      if (doomed.isEmpty) {
+        throw SyncRejection(
+          SyncRejectionReason.unknownGrant,
+          'no live Grant for $revokeMemberId in $workspaceId to revoke',
+        );
+      }
+      for (final grant in doomed) {
+        // Grant-granular, so a Member holding several loses each one explicitly
+        // (review F19). Root signs every one of them: a Device's Grant is an owner
+        // Grant, and only Root may unmake one.
+        final certificate = RevokeCertificate(
+          workspaceId: workspaceId,
+          revokeId: const Uuid().v4(),
+          grantId: grant.grantId,
+          revoker: granterRoot,
+          revokedAtHlc: Hlc.forMember(scoped.identity.memberId, _nowMs()),
+        );
+        final certBytes = certificate.encode();
+        final payload = ControlPayload(
+          controlType: controlTypeRevoke,
+          prevControlHash: head,
+          certBytes: certBytes,
+          signature: await root.signRevokeCertificateBytes(certBytes),
+          authority: granterRoot,
+        ).encode();
+        await scoped.captureControl(payload);
+        head = controlPayloadHash(payload);
+      }
+    }
+
+    final rotatePayload = ControlPayload(
+      controlType: controlTypeRotate,
+      prevControlHash: head,
+      rotate: RotateStatement(
+        workspaceId: workspaceId,
+        fromEpoch: fromEpoch,
+        toEpoch: toEpoch,
+        keyWrapDigest: keySet.digest,
+        rotatedAtHlc: Hlc.forMember(scoped.identity.memberId, _nowMs()),
+      ),
+    ).encode();
+    await scoped.captureControl(rotatePayload);
+    await scoped.flushOutbox();
+    await ceremony.publish(keySet);
+    await scoped.pull();
+    return scoped.epochFloor();
+  }
+
+  /// Whether any of this User's Workspaces has stood at its epoch too long.
+  ///
+  /// The scheduled-rotation trigger. It reports and does not act: minting an epoch
+  /// writes an escrow wrap under `master_wrap_key`, which lives behind the
+  /// passphrase, so a quarterly rotation is a prompt the surface raises rather than
+  /// a background job — and caching the master wrap key on the device to make it
+  /// unattended would move escrow material out from behind the passphrase for a
+  /// convenience.
+  ///
+  /// Unencrypted Workspaces are never "due": turning encryption on is an owner's
+  /// decision, not a timer's.
+  Future<List<String>> workspacesDueForRotation({
+    Duration maxEpochAge = quarterlyRotationInterval,
+  }) async {
+    final due = <String>[];
+    final now = DateTime.fromMillisecondsSinceEpoch(_nowMs(), isUtc: true);
+    for (final workspace in _workspaces) {
+      final scoped = await _scoped(workspace);
+      final isDue = await WorkspaceKeyCeremony(client: scoped, random: _random)
+          .isRotationDue(now: now, maxEpochAge: maxEpochAge);
+      if (isDue) due.add(workspace);
+    }
+    return due;
+  }
 
   /// Write the slot if it is empty, and **pin Root for it either way**.
   ///
@@ -395,8 +675,7 @@ class EnrolmentService {
   /// not verify a control op in the other. Skipping the pin is what leaves the
   /// second Workspace's log unverifiable and its genesis re-authored for ever.
   Future<void> _writeEscrowSlot(RootAuthority root, String workspaceId) async {
-    final scoped =
-        workspaceId == client.workspaceId ? client : await workspaceClientFactory(workspaceId);
+    final scoped = await _scoped(workspaceId);
     final known = _knownEscrowRecords[workspaceId];
     var version = known?.version ?? firstEscrowVersion;
     if (known == null) {
@@ -458,9 +737,7 @@ class EnrolmentService {
 
   /// One pass of the claim. Returns what its flush concluded.
   Future<FlushOutcome> _claimOnce(String workspaceId, RootAuthority root) async {
-    final scoped = client.workspaceId == workspaceId
-        ? client
-        : await workspaceClientFactory(workspaceId);
+    final scoped = await _scoped(workspaceId);
 
     // The pull is load-bearing, and it runs while this device holds a member
     // credential and no Grant: authoring first would emit a fork-lie chain link.

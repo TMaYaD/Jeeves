@@ -7,7 +7,7 @@
 /// registered by Root, and that a role was granted by somebody entitled to grant
 /// it, before honouring anything (ADR-0028, F2).
 ///
-/// Four served types, all sharing the same two mandatory fields:
+/// Five served types, all sharing the same two mandatory fields:
 ///
 /// ```
 /// {"type": "member_register",   "prev_control_hash": "<hex64>",
@@ -18,7 +18,14 @@
 ///  "cert": "<base64>", "granter_sig": "<base64>", "granter": "root"|"<uuid>"}
 /// {"type": "revoke", "prev_control_hash": "<hex64>",
 ///  "cert": "<base64>", "revoker_sig": "<base64>", "revoker": "root"|"<uuid>"}
+/// {"type": "rotate", "prev_control_hash": "<hex64>", "workspace_id": "<uuid>",
+///  "from_epoch": N, "to_epoch": N+1, "keywrap_digest": "<base64>",
+///  "rotated_at_hlc": [...]}
 /// ```
+///
+/// `rotate` is the one type with **no certificate and no separate signature** —
+/// see [RotateStatement] for why that is a consequence of where its authority comes
+/// from rather than an inconsistency.
 ///
 /// The chain link is over the predecessor's **payload bytes** — the unframed
 /// payload `parseBody` returns — not the envelope and not a re-serialization.
@@ -55,19 +62,25 @@ import 'package:crypto/crypto.dart' as crypto;
 
 import 'envelope.dart';
 import 'hlc.dart';
+import 'key_wraps.dart';
 
 const String controlTypeMemberRegister = 'member_register';
 const String controlTypeWorkspaceGenesis = 'workspace_genesis';
 const String controlTypeGrant = 'grant';
 const String controlTypeRevoke = 'revoke';
 
-/// The control types this build serves. `rotate`/`member_key_rotate` are #554's
-/// and stay fail-closed.
+/// The Workspace moved to a new content key. #554's raiser of the epoch floor.
+const String controlTypeRotate = 'rotate';
+
+/// The control types this build serves. `member_key_rotate` — rotating a
+/// *Member's* own signing or KEX key, as opposed to the Workspace content key — is
+/// still fail-closed, as is everything else outside this set.
 const Set<String> servedControlTypes = {
   controlTypeMemberRegister,
   controlTypeWorkspaceGenesis,
   controlTypeGrant,
   controlTypeRevoke,
+  controlTypeRotate,
 };
 
 /// The two types that carry their author's own registration, and are therefore
@@ -511,6 +524,88 @@ class RevokeCertificate {
   }
 }
 
+/// The Workspace moved from one content key to the next.
+///
+/// **The one served control type with no certificate**, and deliberately so. Every
+/// other type carries a separately signed frozen document because its authority is
+/// somebody *other* than the envelope's author — Root, or a granting Member — so the
+/// certificate has to travel independently of who is posting it. A rotate's
+/// authority is the author's own live `owner` Grant, which is exactly the
+/// `(grant.role, opClassControl)` rule the server and every client already apply. A
+/// second signature would add a second thing to keep in step and prove nothing the
+/// envelope signature does not already prove: the envelope covers `header || body`,
+/// and these fields *are* the body.
+///
+/// [keyWrapDigest] is the load-bearing field. It commits to the whole wrap set
+/// **before any wrap is uploaded**, so `PUT /w/{w}/keywraps` can refuse a set that
+/// does not hash to it: the server can neither add a wrap for a member the owner
+/// never wrapped to, nor omit one and lock an honest member out. Without the
+/// commitment living in the signed log, curating the wrap set would be entirely
+/// within a hostile server's gift.
+///
+/// [fromEpoch] is carried as well as [toEpoch] so the statement is a claim about a
+/// *transition* rather than about a destination: a receiver can tell a rotation it
+/// holds the predecessor for from one that skips an epoch, without consulting
+/// anything but the op.
+class RotateStatement {
+  RotateStatement({
+    required this.workspaceId,
+    required this.fromEpoch,
+    required this.toEpoch,
+    required this.keyWrapDigest,
+    required this.rotatedAtHlc,
+  });
+
+  final String workspaceId;
+  final int fromEpoch;
+  final int toEpoch;
+  final Uint8List keyWrapDigest;
+  final Hlc rotatedAtHlc;
+
+  Map<String, Object?> toJson() => {
+        'workspace_id': workspaceId,
+        'from_epoch': fromEpoch,
+        'to_epoch': toEpoch,
+        'keywrap_digest': base64Encode(keyWrapDigest),
+        'rotated_at_hlc': rotatedAtHlc.toJson(),
+      };
+
+  static RotateStatement fromJson(Map<String, dynamic> raw) {
+    final fromEpoch = raw['from_epoch'];
+    final toEpoch = raw['to_epoch'];
+    if (fromEpoch is! int || toEpoch is! int) {
+      throw const SyncRejection(
+        SyncRejectionReason.malformedControlPayload,
+        'from_epoch and to_epoch must be integers',
+      );
+    }
+    if (fromEpoch < 0 || fromEpoch > maxKeyEpoch || toEpoch < 0 || toEpoch > maxKeyEpoch) {
+      throw const SyncRejection(
+        SyncRejectionReason.malformedControlPayload,
+        'an epoch must fit the header\'s u32',
+      );
+    }
+    if (toEpoch != fromEpoch + 1) {
+      // Single-step by construction. A rotation that jumped epochs would leave a
+      // gap no KeyWrap set is ever minted for, and the epoch floor would then
+      // refuse content at an epoch the Workspace never keyed.
+      throw SyncRejection(
+        SyncRejectionReason.malformedControlPayload,
+        'a rotation is one step: to_epoch $toEpoch must be from_epoch '
+        '$fromEpoch + 1',
+      );
+    }
+    return RotateStatement(
+      workspaceId: _requireCanonicalUuid(raw['workspace_id'], 'workspace_id'),
+      fromEpoch: fromEpoch,
+      toEpoch: toEpoch,
+      keyWrapDigest:
+          _requireKey(raw['keywrap_digest'], 'keywrap_digest', keyWrapDigestBytes),
+      rotatedAtHlc: _decodeHlc(raw['rotated_at_hlc'], 'rotated_at_hlc'),
+    );
+  }
+}
+
 /// `controlType -> (signature field, authority field or null)`.
 const Map<String, (String, String?)> _signatureFields = {
   controlTypeMemberRegister: ('root_sig', null),
@@ -540,6 +635,7 @@ class ControlPayload {
     Uint8List? certBytes,
     Uint8List? signature,
     String? authority,
+    this.rotate,
   })  : certBytes = certBytes ?? Uint8List(0),
         signature = signature ?? Uint8List(0),
         authority = authority ??
@@ -550,6 +646,25 @@ class ControlPayload {
   final Uint8List certBytes;
   final Uint8List signature;
   final String authority;
+
+  /// Populated for `rotate` and for nothing else.
+  final RotateStatement? rotate;
+
+  /// The rotate fields, or a refusal.
+  ///
+  /// A method rather than direct field access at the call sites, so "this is not a
+  /// rotate" is one fail-closed refusal instead of a null each caller has to
+  /// remember to check.
+  RotateStatement rotateStatement() {
+    final statement = rotate;
+    if (statement == null) {
+      throw SyncRejection(
+        SyncRejectionReason.malformedControlPayload,
+        '"$controlType" carries no rotate statement',
+      );
+    }
+    return statement;
+  }
 
   /// The Root signature, for the two types whose signer is always Root.
   Uint8List get rootSig => signature;
@@ -563,6 +678,13 @@ class ControlPayload {
       _rootOnlyControlTypes.contains(controlType) || authority == granterRoot;
 
   Map<String, Object?> toJson() {
+    if (controlType == controlTypeRotate) {
+      return {
+        'type': controlType,
+        'prev_control_hash': _hex(prevControlHash),
+        ...rotateStatement().toJson(),
+      };
+    }
     final fields = _signatureFields[controlType] ?? ('root_sig', null);
     return {
       'type': controlType,
@@ -607,6 +729,18 @@ class ControlPayload {
       );
     }
     final prevControlHash = _fromHex(prevHashHex);
+
+    if (controlType == controlTypeRotate) {
+      // No cert, no separate signature, no `authority` string: the author's own live
+      // owner Grant is the authority, and the envelope signature is the signature.
+      // `isRootSigned` is therefore false, which is exactly right — a rotate goes
+      // through the role matrix like any member-signed control op.
+      return ControlPayload(
+        controlType: controlType,
+        prevControlHash: prevControlHash,
+        rotate: RotateStatement.fromJson(raw),
+      );
+    }
 
     final fields = _signatureFields[controlType];
     if (fields == null) {

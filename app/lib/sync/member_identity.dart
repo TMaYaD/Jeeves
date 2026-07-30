@@ -131,6 +131,16 @@ class MemberDirectory {
   final Map<String, Uint8List> _keys = {};
   final Set<String> _chainedMembers = {};
 
+  /// Each chained Member's X25519 key and the id derived from it.
+  ///
+  /// Learned exactly where the signing keys are — from a verified registration — and
+  /// keyed by Member rather than by `(member, key id)`, because a KeyWrap is minted
+  /// *to* a member's current key rather than verified *against* a key an op names.
+  /// The key id travels with it so a wrap can say which key it was sealed to, which
+  /// is what makes a future KEX-key rotation a new wrap instead of an ambiguous
+  /// overwrite.
+  final Map<String, ({Uint8List kexPk, Uint8List kexKeyId})> _keyExchangeKeys = {};
+
   /// The `member_kind` each chained Member's certificate asserted.
   ///
   /// A *signed* fact, so it is learned the same way keys are — never from the
@@ -147,6 +157,10 @@ class MemberDirectory {
   /// one entry that does not come from the log.
   void rememberSelf(MemberIdentity identity) {
     _keys[_slot(identity.memberId, identity.keyId)] = identity.signPk;
+    _keyExchangeKeys[identity.memberId] = (
+      kexPk: identity.kexPk,
+      kexKeyId: deriveKeyId(identity.kexPk),
+    );
     _chainedMembers.add(identity.memberId);
     // This device is a Device. The one kind that does not come from the log,
     // for the same reason its keys do not.
@@ -159,11 +173,25 @@ class MemberDirectory {
   /// there is no way to call this with something the server merely asserted.
   void rememberChained(RegistrationCertificate certificate) {
     _keys[_slot(certificate.memberId, certificate.signKeyId)] = certificate.signPk;
+    _keyExchangeKeys[certificate.memberId] = (
+      kexPk: certificate.kexPk,
+      kexKeyId: certificate.kexKeyId,
+    );
     _chainedMembers.add(certificate.memberId);
     _kinds[certificate.memberId] = certificate.memberKind;
   }
 
   bool isChained(String memberId) => _chainedMembers.contains(memberId);
+
+  /// The X25519 key a KeyWrap for [memberId] is sealed to, or null for a Member
+  /// this device has never chained.
+  ///
+  /// Null is the fail-closed answer, and the rotation ceremony treats it as one: a
+  /// survivor whose key cannot be resolved is a wrap that cannot be minted, and the
+  /// ceremony refuses before authoring anything rather than publishing a set that
+  /// locks that Member out.
+  ({Uint8List kexPk, Uint8List kexKeyId})? keyExchangeFor(String memberId) =>
+      _keyExchangeKeys[memberId];
 
   /// The kind a verified certificate asserted for [memberId], or null for a
   /// member this device has never chained. Null is the fail-closed answer: a

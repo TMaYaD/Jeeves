@@ -9,10 +9,12 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart' show SimpleKeyPair;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/key_wraps.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/member_identity.dart';
 import 'package:jeeves/sync/op_payload.dart';
@@ -164,6 +166,16 @@ Future<Object> _receiveControl(
       await _bindRegistration(certificate, envelope, header);
       return certificate;
 
+    case controlTypeRotate:
+      // No certificate and no separate signature: a rotate's authority is the
+      // author's own live owner Grant, which is receiver state a vector cannot
+      // carry, so what is checkable here is the envelope signature and the
+      // statement's own shape. The authority check is pinned by the route and
+      // harness suites.
+      await verifyEnvelope(envelope, _specSignPk(identities, header.authorMemberId));
+      expect(payload.isRootSigned, isFalse);
+      return payload.rotateStatement();
+
     default:
       // Grant and Revoke: the authority is Root or an owning Member, and *which*
       // key verifies the certificate is decided by the payload's own `authority`
@@ -233,8 +245,28 @@ void main() {
       expect(protocol['envelope_overhead_bytes'], envelopeOverheadBytes);
       expect(protocol['signing_domain'], signingDomainOpV1);
       expect((protocol['suites'] as Map)['plaintext_v1'], suitePlaintextV1);
-      expect((protocol['suites'] as Map)['aead_v1_reserved'], suiteAeadV1);
+      expect((protocol['suites'] as Map)['aead_v1'], suiteAeadV1);
       expect(protocol['served_suites'], servedSuites.toList()..sort());
+      final aead = protocol['aead'] as Map<String, dynamic>;
+      expect(aead['tag_bytes'], aeadTagBytes);
+      expect(aead['workspace_key_bytes'], workspaceKeyBytes);
+      expect(
+        (aead['minimum_envelope_bytes'] as Map)['$suitePlaintextV1'],
+        minimumEnvelopeBytesForSuite(suitePlaintextV1),
+      );
+      expect(
+        (aead['minimum_envelope_bytes'] as Map)['$suiteAeadV1'],
+        minimumEnvelopeBytesForSuite(suiteAeadV1),
+      );
+      final keywrap = protocol['keywrap'] as Map<String, dynamic>;
+      expect(keywrap['member_info_domain'], keyWrapInfoDomain);
+      expect(keywrap['escrow_info_domain'], epochKeyEscrowInfoDomain);
+      expect(keywrap['digest_domain'], keyWrapDigestDomain);
+      expect(keywrap['ephemeral_public_key_bytes'], ephemeralPublicKeyBytes);
+      expect(keywrap['nonce_bytes'], wrapNonceBytes);
+      expect(keywrap['master_wrap_key_bytes'], masterWrapKeyBytes);
+      expect(keywrap['keywrap_bytes'], keyWrapBytes);
+      expect(keywrap['escrow_wrap_bytes'], epochKeyEscrowWrapBytes);
       expect(protocol['served_op_classes'], servedOpClasses.toList()..sort());
       expect(protocol['known_op_classes'], knownOpClasses.toList()..sort());
       expect(protocol['body_size_classes_bytes'], bodySizeClassesBytes);
@@ -380,6 +412,343 @@ void main() {
     });
   });
 
+  group('aead_v1 vectors', () {
+    for (final vector in vectorList(document, 'aead_vectors')) {
+      final epochKey = _fromHex(vector['workspace_key_hex'] as String);
+
+      test('${vector['name']} seals to the pinned bytes', () async {
+        final header = _headerFromJson(vector['header'] as Map<String, dynamic>);
+        final headerBytes = header.serialize();
+        expect(_toHex(headerBytes), vector['header_hex']);
+        expect(header.suite, suiteAeadV1);
+
+        final payload =
+            Uint8List.fromList(utf8.encode(vector['payload_json'] as String));
+        final framed = frameBody(payload);
+        // The framed plaintext is byte for byte what plaintext_v1 would have
+        // carried. That equality *is* the "aead_v1 is a body wrapper" claim, so it
+        // is asserted rather than assumed.
+        expect(_toHex(framed), vector['framed_body_hex']);
+        expect(framed.length, vector['framed_body_length_bytes']);
+        expect(isLegalBodyLength(framed.length), isTrue);
+
+        final body = await sealBody(
+          headerBytes: headerBytes,
+          framedBody: framed,
+          workspaceKey: epochKey,
+        );
+        expect(_toHex(body), vector['body_hex']);
+        expect(body.length, vector['body_length_bytes']);
+        expect(body.length, framed.length + aeadTagBytes);
+        expect(isLegalBodyLengthForSuite(suiteAeadV1, body.length), isTrue);
+        // ...and illegal for the other suite, which is the whole of the
+        // suite-conditional rule.
+        expect(isLegalBodyLength(body.length), isFalse);
+
+        final signer = await signerFor(vector['key'] as String);
+        final envelope = await signer.buildEnvelope(header, body);
+        expect(_toHex(envelope), vector['envelope_hex']);
+        expect(_toHex(envelopeHash(envelope)), vector['envelope_sha256_hex']);
+      });
+
+      test('${vector['name']} opens back through the receive order', () async {
+        final envelope = _fromHex(vector['envelope_hex'] as String);
+        final parts = splitEnvelope(envelope);
+        final header = OpHeader.parse(parts.header);
+        header.checkServed();
+
+        // Verify **then** decrypt: Ed25519 authenticates the author, and only then
+        // does the AEAD authenticate the header binding and the confidentiality.
+        final key = keysByLabel[vector['key'] as String]!;
+        await verifyEnvelope(envelope, _fromHex(key['sign_pk_hex'] as String));
+
+        final framed = await openBody(
+          headerBytes: parts.header,
+          body: parts.body,
+          workspaceKey: epochKey,
+        );
+        expect(_toHex(framed), vector['framed_body_hex']);
+        // The padding rules run on the decrypted plaintext, through the same
+        // function the plaintext suite uses.
+        expect(utf8.decode(parseBody(framed)), vector['payload_json']);
+        expect(
+          utf8.decode(OpPayload.decode(parseBody(framed)).encode()),
+          vector['payload_json'],
+        );
+      });
+    }
+
+    for (final vector in vectorList(document, 'negative_aead_vectors')) {
+      test('${vector['name']} fails closed as ${vector['reason']}', () async {
+        final envelope = _fromHex(vector['envelope_hex'] as String);
+        final parts = splitEnvelope(envelope);
+        SyncRejection? rejection;
+        try {
+          await openBody(
+            headerBytes: parts.header,
+            body: parts.body,
+            workspaceKey: _fromHex(vector['workspace_key_hex'] as String),
+          );
+        } on SyncRejection catch (thrown) {
+          rejection = thrown;
+        }
+        expect(rejection, isNotNull, reason: 'vector was accepted');
+        expect(rejection!.reason.code, vector['reason']);
+      });
+    }
+
+    test('the tampered vectors still carry a valid author signature', () async {
+      // Otherwise they would prove nothing about the AEAD: `bad_signature` would
+      // fire first and the AAD binding would go untested.
+      for (final name in ['aead_tampered_ciphertext', 'aead_tampered_header_key_epoch']) {
+        final vector = vectorList(document, 'negative_aead_vectors')
+            .firstWhere((entry) => entry['name'] == name);
+        final envelope = _fromHex(vector['envelope_hex'] as String);
+        final key = keysByLabel[vector['key'] as String]!;
+        await verifyEnvelope(envelope, _fromHex(key['sign_pk_hex'] as String));
+      }
+    });
+
+    test('a control op under suite 0x01 is refused by checkServed', () {
+      final vector = vectorList(document, 'negative_vectors')
+          .firstWhere((entry) => entry['name'] == 'encrypted_control_op');
+      final header =
+          OpHeader.parse(splitEnvelope(_fromHex(vector['envelope_hex'] as String)).header);
+      expect(header.suite, suiteAeadV1);
+      expect(header.opClass, opClassControl);
+      // Both halves are individually served, and the pair is forbidden — which is
+      // why this cannot be expressed as a served-set membership test.
+      expect(servedSuites, contains(header.suite));
+      expect(servedOpClasses, contains(header.opClass));
+      expect(
+        header.checkServed,
+        throwsRejection(SyncRejectionReason.encryptedControlOp),
+      );
+    });
+  });
+
+  group('keywrap vectors', () {
+    Map<String, dynamic> wrapVector(String name) => vectorList(document, 'keywrap_vectors')
+        .firstWhere((entry) => entry['name'] == name);
+
+    /// The private half of a KeyWrap vector's KEX pair, from its published seed.
+    ///
+    /// The *certificates'* `kex_pk` values are labelled hashes with no known scalar,
+    /// which was fine while no codec did key agreement. The KeyWrap vectors carry
+    /// their own seeded pair so the reverse direction is pinnable too — see
+    /// `KEYWRAP_KEX_SEEDS` in the generator.
+    Future<SimpleKeyPair> kexKeyPairOf(Map<String, dynamic> vector) async =>
+        (await MemberIdentity.generate(kexSeed: _fromHex(vector['kex_seed_hex'] as String)))
+            .kexKeyPair;
+
+    for (final label in ['device_a', 'device_b']) {
+      test('keywrap_${label}_epoch_1 seals to the pinned bytes', () async {
+        final vector = wrapVector('keywrap_${label}_epoch_1');
+        final wrap = await sealEpochKeyForMember(
+          workspaceKey: _fromHex(vector['workspace_key_hex'] as String),
+          kexPk: _fromHex(vector['kex_pk_hex'] as String),
+          workspaceId: vector['workspace_id'] as String,
+          epoch: vector['epoch'] as int,
+          memberId: vector['member_id'] as String,
+          kexKeyId: _fromHex(vector['kex_key_id_hex'] as String),
+          ephemeralSeed: _fromHex(vector['ephemeral_seed_hex'] as String),
+          nonce: _fromHex(vector['nonce_hex'] as String),
+        );
+        expect(_toHex(wrap), vector['wrap_hex']);
+        expect(wrap.length, keyWrapBytes);
+        // The info is the HKDF info *and* the AEAD AAD, so it is pinned once and
+        // asserted here rather than being an internal detail.
+        expect(
+          _toHex(keyWrapInfo(
+            ephemeralPublicKey: Uint8List.sublistView(wrap, 0, ephemeralPublicKeyBytes),
+            workspaceId: vector['workspace_id'] as String,
+            epoch: vector['epoch'] as int,
+            memberId: vector['member_id'] as String,
+            kexKeyId: _fromHex(vector['kex_key_id_hex'] as String),
+          )),
+          vector['info_hex'],
+        );
+        // The kex key id is the same derivation the signing key id uses.
+        expect(
+          _toHex(deriveKeyId(_fromHex(vector['kex_pk_hex'] as String))),
+          vector['kex_key_id_hex'],
+        );
+      });
+
+      test('keywrap_${label}_epoch_1 unwraps back to the epoch key', () async {
+        final vector = wrapVector('keywrap_${label}_epoch_1');
+        expect(
+          _toHex(await unwrapEpochKeyForMember(
+            wrap: _fromHex(vector['wrap_hex'] as String),
+            kexKeyPair: await kexKeyPairOf(vector),
+            workspaceId: vector['workspace_id'] as String,
+            epoch: vector['epoch'] as int,
+            memberId: vector['member_id'] as String,
+            kexKeyId: _fromHex(vector['kex_key_id_hex'] as String),
+          )),
+          vector['workspace_key_hex'],
+        );
+      });
+    }
+
+    test('the escrow wrap seals and opens under the master wrap key', () async {
+      final vector = wrapVector('epoch_key_escrow_wrap_epoch_1');
+      final masterWrapKey = _fromHex(vector['master_wrap_key_hex'] as String);
+      final wrap = await sealEpochKeyForEscrow(
+        workspaceKey: _fromHex(vector['workspace_key_hex'] as String),
+        masterWrapKey: masterWrapKey,
+        workspaceId: vector['workspace_id'] as String,
+        epoch: vector['epoch'] as int,
+        nonce: _fromHex(vector['nonce_hex'] as String),
+      );
+      expect(_toHex(wrap), vector['wrap_hex']);
+      expect(wrap.length, epochKeyEscrowWrapBytes);
+      expect(
+        _toHex(epochKeyEscrowInfo(
+          workspaceId: vector['workspace_id'] as String,
+          epoch: vector['epoch'] as int,
+        )),
+        vector['info_hex'],
+      );
+      expect(
+        _toHex(await unwrapEpochKeyFromEscrow(
+          escrowWrap: wrap,
+          masterWrapKey: masterWrapKey,
+          workspaceId: vector['workspace_id'] as String,
+          epoch: vector['epoch'] as int,
+        )),
+        vector['workspace_key_hex'],
+      );
+    });
+
+    test('the digest commits to the whole wrap set, order-independently', () {
+      final vector = wrapVector('keywrap_digest_two_members_epoch_1');
+      final wraps = [
+        for (final entry in vector['member_wraps'] as List<dynamic>)
+          MemberKeyWrap(
+            memberId: (entry as Map<String, dynamic>)['member_id'] as String,
+            kexKeyId: _fromHex(entry['kex_key_id_hex'] as String),
+            wrap: _fromHex(entry['wrap_hex'] as String),
+          ),
+      ];
+      final escrowWrap = _fromHex(vector['escrow_wrap_hex'] as String);
+      expect(
+        _toHex(keyWrapDigest(
+          epoch: vector['epoch'] as int,
+          memberWraps: wraps,
+          escrowWrap: escrowWrap,
+        )),
+        vector['digest_hex'],
+      );
+      // Sorted inside the digest, so an upload order the server chose cannot move
+      // the commitment.
+      expect(
+        _toHex(keyWrapDigest(
+          epoch: vector['epoch'] as int,
+          memberWraps: wraps.reversed.toList(),
+          escrowWrap: escrowWrap,
+        )),
+        vector['digest_hex'],
+      );
+      // Omitting a wrap, adding one, or swapping the escrow wrap all move it —
+      // which is what makes the digest a defence against a curating server.
+      expect(
+        _toHex(keyWrapDigest(
+          epoch: vector['epoch'] as int,
+          memberWraps: [wraps.first],
+          escrowWrap: escrowWrap,
+        )),
+        isNot(vector['digest_hex']),
+      );
+      expect(
+        _toHex(keyWrapDigest(
+          epoch: (vector['epoch'] as int) + 1,
+          memberWraps: wraps,
+          escrowWrap: escrowWrap,
+        )),
+        isNot(vector['digest_hex']),
+      );
+      expect(
+        _toHex(keyWrapDigest(
+          epoch: vector['epoch'] as int,
+          memberWraps: [...wraps, wraps.first],
+          escrowWrap: escrowWrap,
+        )),
+        isNot(vector['digest_hex']),
+      );
+      expect(
+        _toHex(keyWrapDigest(
+          epoch: vector['epoch'] as int,
+          memberWraps: wraps,
+          escrowWrap: Uint8List(escrowWrap.length),
+        )),
+        isNot(vector['digest_hex']),
+      );
+    });
+
+    for (final name in [
+      'keywrap_replayed_into_another_member_slot',
+      'keywrap_replayed_into_another_epoch',
+    ]) {
+      test('$name refuses', () async {
+        final vector = wrapVector(name);
+        SyncRejection? rejection;
+        try {
+          await unwrapEpochKeyForMember(
+            wrap: _fromHex(vector['wrap_hex'] as String),
+            kexKeyPair: await kexKeyPairOf(vector),
+            workspaceId: vector['workspace_id'] as String,
+            epoch: vector['epoch'] as int,
+            memberId: vector['member_id'] as String,
+            kexKeyId: _fromHex(vector['kex_key_id_hex'] as String),
+          );
+        } on SyncRejection catch (thrown) {
+          rejection = thrown;
+        }
+        expect(rejection, isNotNull, reason: 'a misrouted wrap was accepted');
+        expect(rejection!.reason.code, vector['reason']);
+      });
+    }
+
+    test('a wrap of the wrong width is refused before any crypto runs', () async {
+      await expectLater(
+        unwrapEpochKeyForMember(
+          wrap: Uint8List(keyWrapBytes - 1),
+          kexKeyPair: await kexKeyPairOf(wrapVector('keywrap_device_a_epoch_1')),
+          workspaceId: identities['workspace_id'] as String,
+          epoch: 1,
+          memberId: (keysByLabel['device_a']!)['member_id'] as String,
+          kexKeyId: Uint8List(authorKeyIdBytes),
+        ),
+        throwsRejection(SyncRejectionReason.malformedKeyWrap),
+      );
+    });
+
+    test('a low-order epk is refused before any key is derived', () async {
+      // Contributory behaviour: an all-zero epk yields an all-zero shared secret,
+      // a constant the wrap's author also knows — so a hostile server could mint a
+      // wrap that authenticates while installing a key it chose. The refusal must
+      // be malformed_keywrap, not an AEAD failure after deriving from a constant.
+      final vector = wrapVector('keywrap_device_a_epoch_1');
+      final genuine = _fromHex(vector['wrap_hex'] as String);
+      final zeroEpkWrap = Uint8List.fromList([
+        ...Uint8List(ephemeralPublicKeyBytes),
+        ...genuine.sublist(ephemeralPublicKeyBytes),
+      ]);
+      await expectLater(
+        unwrapEpochKeyForMember(
+          wrap: zeroEpkWrap,
+          kexKeyPair: await kexKeyPairOf(vector),
+          workspaceId: vector['workspace_id'] as String,
+          epoch: vector['epoch'] as int,
+          memberId: vector['member_id'] as String,
+          kexKeyId: _fromHex(vector['kex_key_id_hex'] as String),
+        ),
+        throwsRejection(SyncRejectionReason.malformedKeyWrap),
+      );
+    });
+  });
+
   group('body framing', () {
     test('size classes and the oversize multiple', () {
       expect(paddedBodyLength(1), 256);
@@ -501,6 +870,7 @@ void main() {
       expect(control['workspace_genesis_type'], controlTypeWorkspaceGenesis);
       expect(control['grant_type'], controlTypeGrant);
       expect(control['revoke_type'], controlTypeRevoke);
+      expect(control['rotate_type'], controlTypeRotate);
       expect(control['served_control_types'], servedControlTypes.toList()..sort());
       expect(control['member_kind_device'], memberKindDevice);
       expect(control['member_kind_service'], memberKindService);
@@ -582,18 +952,45 @@ void main() {
       test('${vector['name']} round-trips through the receive pipeline',
           () async {
         final envelope = _fromHex(vector['envelope_hex'] as String);
-        final certificate = await _receiveControl(envelope, rootPk, identities);
-
-        // The signed artifact is the certificate's literal bytes; a lossy decode
-        // would break every verifier.
-        final certBytes = _certBytesOf(certificate);
-        expect(utf8.decode(certBytes), vector['cert_json']);
-        expect(_toHex(certBytes), vector['cert_hex']);
+        final decoded = await _receiveControl(envelope, rootPk, identities);
 
         final payload =
             ControlPayload.decode(parseBody(splitEnvelope(envelope).body));
         expect(payload.controlType, vector['control_type']);
         expect(_toHex(payload.prevControlHash), vector['prev_control_hash_hex']);
+
+        if (vector['control_type'] == controlTypeRotate) {
+          // No certificate and no separate signature — the fields *are* the
+          // payload, so a round-trip through the payload codec is the whole of
+          // what there is to check.
+          expect(vector['cert_json'], '');
+          expect(payload.signature, isEmpty);
+          expect(payload.authority, '');
+          expect(
+            jsonEncode(payload.toJson()),
+            jsonEncode(jsonDecode(vector['payload_json'] as String)),
+          );
+          // Two independent decodes of the same bytes — the pipeline's and this
+          // test's — must agree field for field. Comparing instances would only
+          // assert that one object was passed around.
+          final received = decoded as RotateStatement;
+          final reference = payload.rotateStatement();
+          expect(received.workspaceId, reference.workspaceId);
+          expect(received.fromEpoch, reference.fromEpoch);
+          expect(received.toEpoch, reference.toEpoch);
+          expect(_toHex(received.keyWrapDigest), _toHex(reference.keyWrapDigest));
+          expect(received.rotatedAtHlc.toJson(), reference.rotatedAtHlc.toJson());
+          // Single-step by construction, and epoch 0 left unkeyed — which is what
+          // keeps a pre-turn-on Workspace's plaintext history readable for ever.
+          expect(received.toEpoch, received.fromEpoch + 1);
+          return;
+        }
+
+        // The signed artifact is the certificate's literal bytes; a lossy decode
+        // would break every verifier.
+        final certBytes = _certBytesOf(decoded);
+        expect(utf8.decode(certBytes), vector['cert_json']);
+        expect(_toHex(certBytes), vector['cert_hex']);
         expect(_toHex(payload.signature), vector['signature_hex']);
         expect(payload.authority, vector['authority']);
       });
@@ -665,6 +1062,11 @@ void main() {
           controlTypeGrant,
           controlTypeGrant,
           controlTypeRevoke,
+          // The revoke-then-rotate pair `revokeAndRotate` authors back to back,
+          // which is also what turning encryption on looks like: a rotate chains
+          // off the control head like any other type, and its link is the same
+          // hash-of-payload-bytes even though it carries no certificate.
+          controlTypeRotate,
         ],
       );
       expect(chain.first['prev_control_hash_hex'], _toHex(zeroPrevControlHash));

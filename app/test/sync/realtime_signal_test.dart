@@ -16,6 +16,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/key_wraps.dart';
 import 'package:jeeves/sync/signal_listener.dart';
 import 'package:jeeves/sync/signal_socket.dart';
 import 'package:jeeves/sync/sync_transport.dart';
@@ -397,4 +398,30 @@ abstract class _DelegatingTransport implements SyncTransport {
   @override
   Future<PullPage> pullOps(String workspaceId, {required int since, required int limit}) =>
       inner.pullOps(workspaceId, since: since, limit: limit);
+
+  // The key plane passes straight through: these tests interfere with the socket,
+  // and a subscription reveals nothing about which epoch anything is at.
+  @override
+  Future<List<KeyWrapRecord>> putKeyWraps(
+    String workspaceId, {
+    required int epoch,
+    required List<MemberKeyWrap> wraps,
+    required Uint8List escrowWrap,
+    Uint8List? keyWrapDigest,
+  }) =>
+      inner.putKeyWraps(
+        workspaceId,
+        epoch: epoch,
+        wraps: wraps,
+        escrowWrap: escrowWrap,
+        keyWrapDigest: keyWrapDigest,
+      );
+
+  @override
+  Future<List<KeyWrapRecord>> fetchMyKeyWraps(String workspaceId) =>
+      inner.fetchMyKeyWraps(workspaceId);
+
+  @override
+  Future<List<EpochKeyRecord>> fetchEpochKeys(String workspaceId) =>
+      inner.fetchEpochKeys(workspaceId);
 }

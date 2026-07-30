@@ -8,6 +8,7 @@ honest about the wire format the real server speaks.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -17,6 +18,7 @@ from nacl.signing import SigningKey
 from app.sync import control_payload as control
 from app.sync import envelope as env
 from app.sync import escrow as esc
+from app.sync import key_wraps as kw
 from app.sync import member_auth
 from app.sync.control_payload import ControlPayload, ControlPayloadError, RegistrationCertificate
 from app.sync.envelope import EnvelopeError, OpHeader
@@ -168,6 +170,15 @@ def _receive_control(envelope: bytes, root_pk: bytes) -> Any:
     # key verifies the certificate is decided by the payload's own `authority`
     # field and nothing else.  The envelope itself is verified against the
     # author's directory key, as any non-registering op is.
+    if payload.control_type == control.CONTROL_TYPE_ROTATE:
+        # No certificate and no separate signature: a rotate's authority is the
+        # author's own live owner Grant, which is receiver state a vector cannot
+        # carry, so what is checkable here is the envelope signature and the
+        # statement's own shape.  The authority check is pinned by the route tests.
+        env.verify_envelope(envelope, _member_sign_pk(str(header.author_member_id)))
+        assert not payload.is_root_signed
+        return payload.rotate_statement()
+
     authority_pk = (
         root_pk if payload.authority == control.GRANTER_ROOT else _member_sign_pk(payload.authority)
     )
@@ -194,8 +205,24 @@ def test_protocol_constants_match_the_frozen_file() -> None:
     assert _PROTOCOL["envelope_overhead_bytes"] == env.ENVELOPE_OVERHEAD_BYTES
     assert _PROTOCOL["signing_domain"] == env.SIGNING_DOMAIN_OP_V1.decode("ascii")
     assert _PROTOCOL["suites"]["plaintext_v1"] == env.SUITE_PLAINTEXT_V1
-    assert _PROTOCOL["suites"]["aead_v1_reserved"] == env.SUITE_AEAD_V1
+    assert _PROTOCOL["suites"]["aead_v1"] == env.SUITE_AEAD_V1
     assert _PROTOCOL["served_suites"] == sorted(env.SERVED_SUITES)
+    aead = _PROTOCOL["aead"]
+    assert aead["tag_bytes"] == env.AEAD_TAG_BYTES
+    assert aead["workspace_key_bytes"] == env.WORKSPACE_KEY_BYTES
+    assert aead["minimum_envelope_bytes"] == {
+        str(suite): env.minimum_envelope_bytes_for_suite(suite)
+        for suite in sorted(env.SERVED_SUITES)
+    }
+    wrap = _PROTOCOL["keywrap"]
+    assert wrap["member_info_domain"] == kw.KEYWRAP_INFO_DOMAIN.decode("ascii")
+    assert wrap["escrow_info_domain"] == kw.EPOCH_KEY_ESCROW_INFO_DOMAIN.decode("ascii")
+    assert wrap["digest_domain"] == kw.KEYWRAP_DIGEST_DOMAIN.decode("ascii")
+    assert wrap["ephemeral_public_key_bytes"] == kw.EPHEMERAL_PUBLIC_KEY_BYTES
+    assert wrap["nonce_bytes"] == kw.WRAP_NONCE_BYTES
+    assert wrap["master_wrap_key_bytes"] == kw.MASTER_WRAP_KEY_BYTES
+    assert wrap["keywrap_bytes"] == kw.KEYWRAP_BYTES
+    assert wrap["escrow_wrap_bytes"] == kw.EPOCH_KEY_ESCROW_WRAP_BYTES
     assert _PROTOCOL["served_op_classes"] == sorted(env.SERVED_OP_CLASSES)
     assert _PROTOCOL["known_op_classes"] == sorted(env.KNOWN_OP_CLASSES)
     assert _PROTOCOL["body_size_classes_bytes"] == list(env.BODY_SIZE_CLASSES_BYTES)
@@ -317,6 +344,307 @@ def test_non_zero_padding_vector_puts_the_byte_at_the_first_padding_position() -
     assert not any(body[first_padding_offset + 1 :])
 
 
+@pytest.mark.parametrize("vector", _DOCUMENT["aead_vectors"], ids=lambda v: str(v["name"]))
+def test_aead_vector_seals_to_the_pinned_bytes(vector: dict[str, Any]) -> None:
+    key_entry = _KEYS_BY_LABEL[vector["key"]]
+    signing_key = SigningKey(bytes.fromhex(key_entry["seed_hex"]))
+    header = _header_from_json(vector["header"])
+    header_bytes = header.serialize()
+    epoch_key = bytes.fromhex(vector["workspace_key_hex"])
+
+    assert header.suite == env.SUITE_AEAD_V1
+    assert header_bytes.hex() == vector["header_hex"]
+
+    framed = env.frame_body(vector["payload_json"].encode("utf-8"))
+    # The framed plaintext is byte for byte what plaintext_v1 would have carried.
+    # That equality *is* the "aead_v1 is a body wrapper" claim, so it is asserted.
+    assert framed.hex() == vector["framed_body_hex"]
+    assert env.is_legal_body_length(len(framed))
+
+    body = env.seal_body(header_bytes, framed, epoch_key)
+    assert body.hex() == vector["body_hex"]
+    assert len(body) == len(framed) + env.AEAD_TAG_BYTES
+    assert env.is_legal_body_length_for_suite(env.SUITE_AEAD_V1, len(body))
+    # ...and illegal for the other suite, which is the whole suite-conditional rule.
+    assert not env.is_legal_body_length(len(body))
+
+    envelope = env.build_envelope(header, body, signing_key)
+    assert envelope.hex() == vector["envelope_hex"]
+    assert env.envelope_hash(envelope).hex() == vector["envelope_sha256_hex"]
+
+
+@pytest.mark.parametrize("vector", _DOCUMENT["aead_vectors"], ids=lambda v: str(v["name"]))
+def test_aead_vector_opens_back_through_the_receive_order(vector: dict[str, Any]) -> None:
+    key_entry = _KEYS_BY_LABEL[vector["key"]]
+    envelope = bytes.fromhex(vector["envelope_hex"])
+    header_bytes, body, _ = env.split_envelope(envelope)
+    env.check_served(OpHeader.parse(header_bytes))
+
+    # Verify **then** decrypt: Ed25519 authenticates the author, and only then does
+    # the AEAD authenticate the header binding and the confidentiality.
+    env.verify_envelope(envelope, bytes.fromhex(key_entry["sign_pk_hex"]))
+
+    framed = env.open_body(header_bytes, body, bytes.fromhex(vector["workspace_key_hex"]))
+    assert framed.hex() == vector["framed_body_hex"]
+    # The padding rules run on the decrypted plaintext, through the same function
+    # the plaintext suite uses.
+    assert env.parse_body(framed).decode("utf-8") == vector["payload_json"]
+
+
+@pytest.mark.parametrize("vector", _DOCUMENT["negative_aead_vectors"], ids=lambda v: str(v["name"]))
+def test_negative_aead_vector_fails_closed_with_the_pinned_reason(
+    vector: dict[str, Any],
+) -> None:
+    header_bytes, body, _ = env.split_envelope(bytes.fromhex(vector["envelope_hex"]))
+    try:
+        env.open_body(header_bytes, body, bytes.fromhex(vector["workspace_key_hex"]))
+    except EnvelopeError as rejection:
+        assert rejection.reason == vector["reason"]
+    else:
+        pytest.fail(f"{vector['name']} was accepted; expected {vector['reason']}")
+
+
+@pytest.mark.parametrize("name", ["aead_tampered_ciphertext", "aead_tampered_header_key_epoch"])
+def test_the_tampered_aead_vectors_still_carry_a_valid_author_signature(name: str) -> None:
+    """Otherwise they would prove nothing about the AEAD.
+
+    ``bad_signature`` would fire first and the AAD binding would go untested — which
+    is precisely the property the header-tamper vector exists to demonstrate.
+    """
+    vector = next(v for v in _DOCUMENT["negative_aead_vectors"] if v["name"] == name)
+    envelope = bytes.fromhex(vector["envelope_hex"])
+    env.verify_envelope(envelope, bytes.fromhex(_KEYS_BY_LABEL[vector["key"]]["sign_pk_hex"]))
+
+
+def test_a_control_op_under_suite_aead_v1_is_refused_by_check_served() -> None:
+    vector = next(v for v in _DOCUMENT["negative_vectors"] if v["name"] == "encrypted_control_op")
+    header_bytes, _, _ = env.split_envelope(bytes.fromhex(vector["envelope_hex"]))
+    header = OpHeader.parse(header_bytes)
+    assert header.suite == env.SUITE_AEAD_V1
+    assert header.op_class == env.OP_CLASS_CONTROL
+    # Both halves are individually served, and the pair is forbidden — which is why
+    # this cannot be expressed as a served-set membership test.
+    assert header.suite in env.SERVED_SUITES
+    assert header.op_class in env.SERVED_OP_CLASSES
+    with pytest.raises(env.EncryptedControlOpError):
+        env.check_served(header)
+
+
+def _wrap_vector(name: str) -> dict[str, Any]:
+    return next(v for v in _DOCUMENT["keywrap_vectors"] if v["name"] == name)
+
+
+@pytest.mark.parametrize("label", ["device_a", "device_b"])
+def test_keywrap_seals_to_the_pinned_bytes_and_unwraps_back(label: str) -> None:
+    vector = _wrap_vector(f"keywrap_{label}_epoch_1")
+    workspace_id = uuid.UUID(vector["workspace_id"])
+    member_id = uuid.UUID(vector["member_id"])
+    kex_key_id = bytes.fromhex(vector["kex_key_id_hex"])
+    kex_seed = bytes.fromhex(vector["kex_seed_hex"])
+
+    # The kex key id is the same derivation the signing key id uses — literally the
+    # same function, so the two cannot drift apart.
+    assert (
+        env.derive_key_id(bytes.fromhex(vector["kex_pk_hex"])).hex() == (vector["kex_key_id_hex"])
+    )
+
+    wrap = kw.wrap_epoch_key_for_member(
+        workspace_key=bytes.fromhex(vector["workspace_key_hex"]),
+        kex_pk=bytes.fromhex(vector["kex_pk_hex"]),
+        workspace_id=workspace_id,
+        epoch=vector["epoch"],
+        member_id=member_id,
+        kex_key_id=kex_key_id,
+        ephemeral_secret_key=bytes.fromhex(vector["ephemeral_seed_hex"]),
+        nonce=bytes.fromhex(vector["nonce_hex"]),
+    )
+    assert wrap.hex() == vector["wrap_hex"]
+    assert len(wrap) == kw.KEYWRAP_BYTES
+    # The info is the HKDF info *and* the AEAD AAD, so it is pinned once here rather
+    # than left an internal detail.
+    assert (
+        kw.keywrap_info(
+            ephemeral_public_key=wrap[: kw.EPHEMERAL_PUBLIC_KEY_BYTES],
+            workspace_id=workspace_id,
+            epoch=vector["epoch"],
+            member_id=member_id,
+            kex_key_id=kex_key_id,
+        ).hex()
+        == vector["info_hex"]
+    )
+
+    assert (
+        kw.unwrap_epoch_key_for_member(
+            wrap=wrap,
+            kex_secret_key=kex_seed,
+            workspace_id=workspace_id,
+            epoch=vector["epoch"],
+            member_id=member_id,
+            kex_key_id=kex_key_id,
+        ).hex()
+        == vector["workspace_key_hex"]
+    )
+
+
+def test_the_escrow_wrap_seals_and_opens_under_the_master_wrap_key() -> None:
+    vector = _wrap_vector("epoch_key_escrow_wrap_epoch_1")
+    workspace_id = uuid.UUID(vector["workspace_id"])
+    master_wrap_key = bytes.fromhex(vector["master_wrap_key_hex"])
+    wrap = kw.wrap_epoch_key_for_escrow(
+        workspace_key=bytes.fromhex(vector["workspace_key_hex"]),
+        master_wrap_key=master_wrap_key,
+        workspace_id=workspace_id,
+        epoch=vector["epoch"],
+        nonce=bytes.fromhex(vector["nonce_hex"]),
+    )
+    assert wrap.hex() == vector["wrap_hex"]
+    assert len(wrap) == kw.EPOCH_KEY_ESCROW_WRAP_BYTES
+    assert (
+        kw.epoch_key_escrow_info(workspace_id=workspace_id, epoch=vector["epoch"]).hex()
+        == vector["info_hex"]
+    )
+    assert (
+        kw.unwrap_epoch_key_from_escrow(
+            escrow_wrap=wrap,
+            master_wrap_key=master_wrap_key,
+            workspace_id=workspace_id,
+            epoch=vector["epoch"],
+        ).hex()
+        == vector["workspace_key_hex"]
+    )
+
+
+def test_the_keywrap_digest_commits_to_the_whole_set_order_independently() -> None:
+    vector = _wrap_vector("keywrap_digest_two_members_epoch_1")
+    entries = [
+        (
+            uuid.UUID(entry["member_id"]),
+            bytes.fromhex(entry["kex_key_id_hex"]),
+            bytes.fromhex(entry["wrap_hex"]),
+        )
+        for entry in vector["member_wraps"]
+    ]
+    escrow_wrap = bytes.fromhex(vector["escrow_wrap_hex"])
+    digest = kw.keywrap_digest(epoch=vector["epoch"], member_wraps=entries, escrow_wrap=escrow_wrap)
+    assert digest.hex() == vector["digest_hex"]
+    assert len(digest) == kw.KEYWRAP_DIGEST_BYTES
+    # Sorted inside the digest, so an upload order the server chose cannot move the
+    # commitment.
+    assert (
+        kw.keywrap_digest(
+            epoch=vector["epoch"],
+            member_wraps=list(reversed(entries)),
+            escrow_wrap=escrow_wrap,
+        ).hex()
+        == vector["digest_hex"]
+    )
+    # Omitting a wrap, changing the epoch, or swapping the escrow wrap all move it —
+    # which is what makes the digest a defence against a curating server.
+    assert (
+        kw.keywrap_digest(
+            epoch=vector["epoch"], member_wraps=entries[:1], escrow_wrap=escrow_wrap
+        ).hex()
+        != vector["digest_hex"]
+    )
+    assert (
+        kw.keywrap_digest(
+            epoch=vector["epoch"] + 1, member_wraps=entries, escrow_wrap=escrow_wrap
+        ).hex()
+        != vector["digest_hex"]
+    )
+    assert (
+        kw.keywrap_digest(
+            epoch=vector["epoch"],
+            member_wraps=entries,
+            escrow_wrap=bytes(kw.EPOCH_KEY_ESCROW_WRAP_BYTES),
+        ).hex()
+        != vector["digest_hex"]
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["keywrap_replayed_into_another_member_slot", "keywrap_replayed_into_another_epoch"],
+)
+def test_a_misrouted_keywrap_refuses(name: str) -> None:
+    vector = _wrap_vector(name)
+    with pytest.raises(EnvelopeError) as refusal:
+        kw.unwrap_epoch_key_for_member(
+            wrap=bytes.fromhex(vector["wrap_hex"]),
+            kex_secret_key=bytes.fromhex(vector["kex_seed_hex"]),
+            workspace_id=uuid.UUID(vector["workspace_id"]),
+            epoch=vector["epoch"],
+            member_id=uuid.UUID(vector["member_id"]),
+            kex_key_id=bytes.fromhex(vector["kex_key_id_hex"]),
+        )
+    assert refusal.value.reason == vector["reason"]
+
+
+def test_a_wrap_of_the_wrong_width_is_refused_before_any_crypto_runs() -> None:
+    with pytest.raises(kw.MalformedKeyWrapError):
+        kw.unwrap_epoch_key_for_member(
+            wrap=bytes(kw.KEYWRAP_BYTES - 1),
+            kex_secret_key=bytes(32),
+            workspace_id=uuid.UUID(_IDENTITIES["workspace_id"]),
+            epoch=1,
+            member_id=uuid.UUID(_KEYS_BY_LABEL["device_a"]["member_id"]),
+            kex_key_id=bytes(8),
+        )
+
+
+def test_a_low_order_epk_is_refused_before_any_key_is_derived() -> None:
+    """Contributory behaviour: an all-zero ``epk`` yields a constant shared secret.
+
+    A hostile server minting a wrap around a low-order point would know the whole
+    key schedule, so the wrap could authenticate while installing a key the server
+    chose — the exact property ADR-0037 claims the wrap format denies it.  The
+    refusal must be ``malformed_keywrap``, not a bare ``RuntimeError`` escaping
+    from libsodium.
+    """
+    genuine = bytes.fromhex(_wrap_vector("keywrap_device_a_epoch_1")["wrap_hex"])
+    zero_epk_wrap = bytes(kw.EPHEMERAL_PUBLIC_KEY_BYTES) + genuine[kw.EPHEMERAL_PUBLIC_KEY_BYTES :]
+    with pytest.raises(kw.MalformedKeyWrapError):
+        kw.unwrap_epoch_key_for_member(
+            wrap=zero_epk_wrap,
+            kex_secret_key=bytes.fromhex(_wrap_vector("keywrap_device_a_epoch_1")["kex_seed_hex"]),
+            workspace_id=uuid.UUID(_IDENTITIES["workspace_id"]),
+            epoch=1,
+            member_id=uuid.UUID(_KEYS_BY_LABEL["device_a"]["member_id"]),
+            kex_key_id=bytes.fromhex(_wrap_vector("keywrap_device_a_epoch_1")["kex_key_id_hex"]),
+        )
+
+
+def test_the_hand_rolled_hkdf_matches_rfc_5869_test_case_1() -> None:
+    """RFC 5869 A.1, so the hand-rolled expansion is checked against the standard.
+
+    PyNaCl ships no HKDF (ADR-0037), and the golden vectors only prove that this
+    implementation agrees with the Dart one — two wrong implementations would agree
+    just as happily.  This anchors both of them to the RFC.
+    """
+    okm = kw.hkdf_sha256(
+        ikm=bytes.fromhex("0b" * 22),
+        salt=bytes.fromhex("000102030405060708090a0b0c"),
+        info=bytes.fromhex("f0f1f2f3f4f5f6f7f8f9"),
+        length=42,
+    )
+    assert okm.hex() == (
+        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+    )
+
+
+def test_an_empty_hkdf_salt_is_the_rfcs_default_of_hashlen_zero_bytes() -> None:
+    """The one reading the two languages could plausibly disagree about.
+
+    ``package:cryptography``'s ``Hkdf`` calls the salt ``nonce`` and defaults it to
+    empty; RFC 5869 says an absent salt is ``HashLen`` zeros.  If the Dart side ever
+    meant "no salt at all" instead, every wrap would be unopenable across languages,
+    so the equivalence is asserted rather than assumed.
+    """
+    assert kw.hkdf_sha256(b"ikm", b"", b"info", 32) == kw.hkdf_sha256(
+        b"ikm", bytes(32), b"info", 32
+    )
+
+
 def test_body_size_class_arithmetic() -> None:
     assert env.padded_body_length(1) == 256
     assert env.padded_body_length(256) == 256
@@ -373,6 +701,7 @@ def test_control_constants_match_the_frozen_file() -> None:
     assert frozen["workspace_genesis_type"] == control.CONTROL_TYPE_WORKSPACE_GENESIS
     assert frozen["grant_type"] == control.CONTROL_TYPE_GRANT
     assert frozen["revoke_type"] == control.CONTROL_TYPE_REVOKE
+    assert frozen["rotate_type"] == control.CONTROL_TYPE_ROTATE
     assert frozen["served_control_types"] == sorted(control.SERVED_CONTROL_TYPES)
     assert frozen["member_kind_device"] == control.MEMBER_KIND_DEVICE
     assert frozen["member_kind_service"] == control.MEMBER_KIND_SERVICE
@@ -453,16 +782,28 @@ def test_control_vector_round_trips_through_the_receive_pipeline(
     vector: dict[str, Any],
 ) -> None:
     envelope = bytes.fromhex(vector["envelope_hex"])
-    certificate = _receive_control(envelope, _ROOT_PUBLIC_KEY)
-
-    # The signed artifact is the certificate's literal bytes; re-encoding is not
-    # part of verification, but a lossy decode would break every verifier.
-    assert certificate.encode().decode("utf-8") == vector["cert_json"]
-    assert certificate.encode().hex() == vector["cert_hex"]
+    decoded = _receive_control(envelope, _ROOT_PUBLIC_KEY)
 
     payload = ControlPayload.decode(env.parse_body(env.split_envelope(envelope)[1]))
     assert payload.control_type == vector["control_type"]
     assert payload.prev_control_hash.hex() == vector["prev_control_hash_hex"]
+
+    if vector["control_type"] == control.CONTROL_TYPE_ROTATE:
+        # No certificate and no separate signature — the fields *are* the payload, so
+        # a round-trip through the payload codec is the whole of what there is to
+        # check.  See RotateStatement for why that follows from where its authority
+        # comes from.
+        assert vector["cert_json"] == ""
+        assert payload.signature == b""
+        assert payload.authority == ""
+        assert payload.to_json_dict() == json.loads(vector["payload_json"])
+        assert decoded == payload.rotate_statement()
+        return
+
+    # The signed artifact is the certificate's literal bytes; re-encoding is not
+    # part of verification, but a lossy decode would break every verifier.
+    assert decoded.encode().decode("utf-8") == vector["cert_json"]
+    assert decoded.encode().hex() == vector["cert_hex"]
     assert payload.signature.hex() == vector["signature_hex"]
     assert payload.authority == vector["authority"]
 
@@ -509,6 +850,11 @@ def test_the_canonical_control_chain_links_payload_hash_to_payload_hash() -> Non
         control.CONTROL_TYPE_GRANT,
         control.CONTROL_TYPE_GRANT,
         control.CONTROL_TYPE_REVOKE,
+        # The revoke-then-rotate pair `revokeAndRotate` authors back to back, which
+        # is also what turning encryption on looks like: a rotate chains off the
+        # control head like any other type, and its link is the same
+        # hash-of-payload-bytes even though it carries no certificate.
+        control.CONTROL_TYPE_ROTATE,
     ]
     assert chain[0]["prev_control_hash_hex"] == control.ZERO_PREV_CONTROL_HASH.hex()
     for predecessor, successor in zip(chain, chain[1:], strict=False):

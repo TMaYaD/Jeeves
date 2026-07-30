@@ -1017,11 +1017,12 @@ void main() {
       );
       expect(await outboxSeqs(a), outboxBefore);
 
-      // And a type this build does not serve — #554's `rotate` — is refused
-      // before it can be signed into a chain no peer will follow.
+      // And a type this build does not serve — rotating a *Member's* own keys, as
+      // opposed to the Workspace content key `rotate` now moves — is refused before
+      // it can be signed into a chain no peer will follow.
       await expectLater(
         a.client.captureControl(ControlPayload(
-          controlType: 'rotate',
+          controlType: 'member_key_rotate',
           prevControlHash: workspace.controlChainHead(),
         ).encode()),
         throwsRejection(SyncRejectionReason.unsupportedControlType),
