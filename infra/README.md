@@ -44,6 +44,46 @@ docker compose down
 docker compose down -v
 ```
 
+## One-time PowerSync replication-slot cleanup
+
+Alembic 0034 drops the `powersync` publication, but a publication and a
+replication slot are separate objects: `DROP PUBLICATION` leaves the slot
+behind, and destroying the PowerSync Dokku app does not drop it either. An
+orphaned logical slot has no consumer and reserves WAL for ever, so it must be
+dropped by hand — once per database that ever ran PowerSync.
+
+**Production**, immediately after the deploy that carries 0034 (the Dokku
+Postgres service still runs `wal_level=logical`, so the drop needs no restart):
+
+```bash
+dokku postgres:connect jeeves-db
+```
+
+```sql
+SELECT slot_name, wal_status, pg_size_pretty(
+  pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS wal_retained
+FROM pg_replication_slots;
+SELECT pg_drop_replication_slot('powersync');
+```
+
+**Local dev** with a persisted `postgres_data` volume needs the extra step,
+because this stack's compose no longer passes `wal_level=logical`: Postgres
+refuses to start while a logical slot exists under a lower `wal_level`, exiting
+with `FATAL: logical replication slot "powersync" exists, but "wal_level" <
+"logical"`. Bring it up once on the old setting, drop the slot, then go back:
+
+```bash
+podman compose run --rm --no-deps -d --name pg-slotfix postgres \
+  postgres -c wal_level=logical -c max_replication_slots=10
+podman exec pg-slotfix psql -U jeeves -d jeeves \
+  -c "SELECT pg_drop_replication_slot('powersync')"
+podman rm -f pg-slotfix
+podman compose up -d postgres
+```
+
+Volumes created after #556 never had a slot; `podman compose down -v` followed by
+a fresh `up` is the other way out in dev, and destroys all data.
+
 ## Recovering from schema/version drift
 
 **Symptom:** the backend container crash-loops and `podman compose logs backend`

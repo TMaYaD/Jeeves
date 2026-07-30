@@ -48,10 +48,22 @@ alembic revision --autogenerate -m "describe change"
 
 # Apply migrations
 alembic upgrade head
-
-# Rollback one step
-alembic downgrade -1
 ```
+
+`alembic downgrade` is not the way back from the current head. **Revision 0034
+(`drop_mirrored_domain_schema`) is irreversible** and raises rather than
+downgrading: the fifteen tables it dropped were a cache of client state
+(ADR-0026), so recreating them empty would restore their shape and none of their
+contents. Recovery is restore-the-backup then re-record the revision:
+
+```bash
+# Restore the export taken immediately before the deploy, then:
+cd backend && alembic stamp <revision>
+```
+
+Take that backup (`dokku postgres:export`, or `pg_dump` locally) before deploying
+across 0034. The one-time replication-slot cleanup that goes with it is in
+[the infra README](../infra/README.md#one-time-powersync-replication-slot-cleanup).
 
 Containerized startup (`infra/docker-compose.yml`) and the dokku release phase
 (`Procfile`) run migrations via `python -m app.migrate` — a wrapper around
@@ -64,7 +76,7 @@ recovery guidance instead of an opaque `DuplicateColumnError` traceback. See
 Grouped by bounded context, not by layer — each package owns its own models,
 schemas and routes.
 
-```
+```text
 backend/
 ├── app/
 │   ├── main.py         # FastAPI app, lifespan, middleware, router includes

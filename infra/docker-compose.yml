@@ -20,6 +20,11 @@ services:
       - postgres_data:/var/lib/postgresql
     # Connection logging only.  Nothing streams the WAL any more, so the
     # logical-replication settings this override also used to carry are gone.
+    # A `postgres_data` volume that predates #556 still holds the orphaned
+    # `powersync` slot, and Postgres refuses to start on the default `wal_level`
+    # while a logical slot exists (FATAL: logical replication slot 'powersync'
+    # exists, but 'wal_level' < 'logical').  Drop it once — see
+    # README.md#one-time-powersync-replication-slot-cleanup.
     command: >
       postgres
         -c log_connections=on

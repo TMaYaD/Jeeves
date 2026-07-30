@@ -9,7 +9,7 @@ This document describes the architectural design of Jeeves, a productivity-focus
 The system follows an offline-first architecture, allowing clients to work securely and seamlessly without an internet connection, while continuously syncing with the central database when online.
 
 - **Frontend Clients:** Flutter-based applications supporting mobile (iOS/Android), web, and desktop.
-- **Backend Service:** A Python-based FastAPI service responsible for business logic, integrations, and AI endpoints.
+- **Backend Service:** A Python-based FastAPI service — the Minimal Sync Server (ADR-0026). It authenticates Devices and serves the op log; it owns no domain schema, no domain routes and no AI endpoints.
 - **Sync Engine:** the minimal sync server's content-blind op log — signed ops over per-Workspace logs, replicated device to device (ADR-0026). It is the only sync path on the device.
 - **Primary Database:** PostgreSQL.
 
