@@ -274,10 +274,11 @@ lands you in the app.
 ## The store cutover (verify on a debug install)
 
 The first open of a build carrying #595 creates `jeeves_domain.sqlite` and **deletes**
-`jeeves.sqlite` and its `-wal`/`-shm` sidecars (ADR-0035). The io-level behaviour —
-fresh-vs-existing detection, the deletion, its idempotence — is asserted over a temp
-directory in `app/test/database/domain_store_io_test.dart`, and the op-log replay into a
-fresh store in `app/test/sync/domain_rebuild_test.dart`.
+`jeeves.sqlite` and its `-wal`/`-shm` sidecars (ADR-0035). The io-level behaviour — the
+replay gate (the `jeeves_domain.rebuilt` marker, including the retry after a replay that
+never completed), the deletion, its idempotence — is asserted over a temp directory in
+`app/test/database/domain_store_io_test.dart`, and the op-log replay itself in
+`app/test/sync/domain_rebuild_test.dart`.
 
 On a device, the check needs the store, so it needs `run-as` and therefore a **debug or
 emulator install**:
@@ -319,7 +320,7 @@ For flows that are impractical to cover with `flutter_test` / integration tests 
   sleep 1.5
   adb shell input tap 250 2280   # Settings
   sleep 1.2
-  adb shell input tap 540 552    # Sign out tile
+  adb shell input tap 540 440    # Sign out tile
   sleep 1
   adb shell input tap 844 1378   # confirm
   sleep 2
@@ -380,6 +381,6 @@ Coordinates are `(x, y)` in device pixels. The drawer lives under a hamburger ic
 
 **Sign-out from Settings** (should stay on Settings in its signed-out state):
 1. From `/inbox`: `tap 106 170` → `tap 250 2280` → `/settings`
-2. `tap 540 552` (Sign out tile) → dialog
+2. `tap 540 440` (Sign out tile) → dialog
 3. `tap 844 1378` (red confirm)
 4. Verify: still on `/settings`, SYNC section now shows the "Sign in to sync across devices" tile in place of "Sign out". The section has exactly these two states and never reports sync *state* — that is the drawer indicator's job.

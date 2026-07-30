@@ -235,7 +235,7 @@ void main() {
       'closes the open log (ADR-0010, issue #476)', () async {
     await db.actionDao.setCurrentAction('o1', 'call the plumber');
     final current = await db.actionDao.getCurrentAction('o1');
-    // Open a stint against the current Action (through the view's trigger).
+    // Open a stint against the current Action.
     await db.into(db.timeLogs).insert(TimeLogsCompanion(
           id: const Value('log-1'),
           userId: const Value('u1'),
@@ -258,8 +258,10 @@ void main() {
 
     await _waitUntil(() => openCounts.isNotEmpty && openCounts.last == 1);
 
-    // Completing the Action closes the log; the time_logs view write reports
-    // changes()==0, so only notifyTimeLogsViewWrite refreshes this watcher.
+    // Completing the Action closes the log from inside an `actions`-grain
+    // transaction, and `notifyTimeLogsViewWrite` is fired by the caller after
+    // that transaction commits — which is what this watcher refreshes on, rather
+    // than on the async bridge's own invalidation (#342, ADR-0010).
     await db.actionDao.completeCurrentAction('o1');
 
     await _waitUntil(() => openCounts.last == 0);

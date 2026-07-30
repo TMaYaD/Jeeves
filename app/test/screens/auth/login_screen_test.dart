@@ -212,10 +212,14 @@ void main() {
   });
 
   group('LoginScreen — success flow', () {
-    // The production redirect over the production gate, with stub routes.
+    // The production redirect over the production gate, with stub routes. The
+    // gate is passed rather than left to the redirect's fallback, so what the
+    // onboarding enforcement reads is visible here — it is the same global the
+    // fake AuthNotifiers above write and `tearDown` resets.
     GoRouter gatedRouter({String initialLocation = '/login'}) => GoRouter(
           initialLocation: initialLocation,
-          redirect: buildAppRouterRedirect(swsMode: false),
+          redirect:
+              buildAppRouterRedirect(swsMode: false, gate: sessionGateNotifier),
           refreshListenable: sessionGateNotifier,
           routes: [
             GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),

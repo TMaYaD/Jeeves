@@ -4,8 +4,10 @@
 /// `jeeves_domain.sqlite` and deletes the PowerSync-era file rather than
 /// converting it. For an **enrolled** device that is not a data loss: its op log
 /// is the record, `jeeves_sync.sqlite` is a file of its own, and reduced state is
-/// exactly what the domain read model is a projection of. So the first open of the
-/// new store replays that projection.
+/// exactly what the domain read model is a projection of. So the new store is
+/// replayed into, once — gated on the marker a completed replay writes rather than
+/// on the store's own creation, so a replay that failed is retried on the next
+/// launch (`database/domain_store_io.dart`).
 ///
 /// Nothing new is computed here. The reduce already happened — this walks the
 /// entities the substrate holds and drives them through the same

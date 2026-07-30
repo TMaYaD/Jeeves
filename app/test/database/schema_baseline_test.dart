@@ -162,16 +162,19 @@ void main() {
       addTearDown(db.close);
 
       final now = DateTime.parse('2026-07-30T09:00:00.000Z');
-      Future<void> insert() => db.customStatement(
+      // Explicit, distinct ids: derive them from a clock and two calls landing
+      // in the same microsecond would fail on the `id` primary key instead of
+      // the constraint this test exists to pin.
+      Future<void> insert(String id) => db.customStatement(
             'INSERT INTO user_preferences (id, user_id, "key", value, updated_at) '
             "VALUES (?, 'u1', 'planning_time', '08:00', ?)",
-            [DateTime.now().microsecondsSinceEpoch.toString(), now.toIso8601String()],
+            [id, now.toIso8601String()],
           );
 
-      await insert();
+      await insert('p1');
       // One row per preference per user is what makes the LWW reconciliation in
       // `services/user_preferences_conflict.dart` well defined.
-      await expectLater(insert(), throwsA(isA<Exception>()));
+      await expectLater(insert('p2'), throwsA(isA<Exception>()));
     });
 
     test('todos defaults land without being supplied', () async {

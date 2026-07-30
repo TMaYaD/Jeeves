@@ -193,9 +193,13 @@ void main() {
   group('RegisterScreen — success flow', () {
     // The production redirect over the production gate, with stub routes: what
     // is under test is that signing up needs no navigation decision of its own.
+    // The gate is passed rather than left to the redirect's fallback, so what
+    // the onboarding enforcement reads is visible here — it is the same global
+    // the fake AuthNotifiers above write and `tearDown` resets.
     GoRouter gatedRouter({String initialLocation = '/register'}) => GoRouter(
           initialLocation: initialLocation,
-          redirect: buildAppRouterRedirect(swsMode: false),
+          redirect:
+              buildAppRouterRedirect(swsMode: false, gate: sessionGateNotifier),
           refreshListenable: sessionGateNotifier,
           routes: [
             GoRoute(path: '/register', builder: (_, _) => const RegisterScreen()),

@@ -38,7 +38,7 @@ jeeves/
 Located in `app/`.
 
 - **State Management:** `flutter_riverpod` and `riverpod_annotation`.
-- **Local Storage:** Offline-first, two Drift-owned SQLite files per device — `jeeves_domain.sqlite` (the domain read model) and `jeeves_sync.sqlite` (the op log), opened over `sqlite_async` / `drift_sqlite_async` with `sqlite3_flutter_libs` underneath. See [§ Two stores](#two-stores-and-the-path-between-them) and [ADR-0035](./adr/0035-domain-store-cut-over-by-fresh-file.md).
+- **Local Storage:** Offline-first, two Drift-owned SQLite files per device, each opened through its own adapter (`sqlite3_flutter_libs` underneath both) — `jeeves_domain.sqlite`, the domain read model, over `sqlite_async` / `drift_sqlite_async`; and `jeeves_sync.sqlite`, the op log, over Drift's native executor on a background isolate (`NativeDatabase.createInBackground`), so reducing a page of ops never competes with the UI isolate for frames. See [§ Two stores](#two-stores-and-the-path-between-them), [§ Current adapters](#current-adapters) and [ADR-0035](./adr/0035-domain-store-cut-over-by-fresh-file.md).
 - **API Communication:** `dio` and `retrofit`.
 - **Data Models:** `freezed` and `json_serializable` for robust immutable models.
 - **Sync:** the minimal sync server's op log — signed ops over per-Workspace logs, authored from enrolment onward and replicated device to device ([§ Minimal Sync Server](#minimal-sync-server), ADR-0026, ADR-0034).
@@ -69,9 +69,15 @@ and idempotently on every launch after ([ADR-0035](./adr/0035-domain-store-cut-o
 
 | Piece | File | Role |
 |---|---|---|
-| Open path | `app/lib/database/domain_store_io.dart` (+ `_stub`) | Resolves the documents directory, opens the file over `sqlite_async`, reports whether it had to create it, and disposes of the legacy store. |
-| Providers | `app/lib/providers/database_provider.dart` | `domainStoreProvider` (the opened file), `databaseProvider` (the Drift `GtdDatabase` over it, wrapped in `DatabaseConnection.delayed` so queries issued before the open resolves are queued), `domainStoreRebuildProvider` (the first-open replay). |
-| First-open replay | `app/lib/sync/domain_rebuild.dart` | Projects everything the local op log has reduced into a store that was just created, through the same `DomainProjector` a pull batch uses. Idempotent, tombstones included. |
+| Open path | `app/lib/database/domain_store_io.dart` (+ `_stub`) | Resolves the documents directory, opens the file over `sqlite_async`, reports whether the op log still owes it a replay, and disposes of the legacy store. |
+| Providers | `app/lib/providers/database_provider.dart` | `domainStoreProvider` (the opened file), `databaseProvider` (the Drift `GtdDatabase` over it, wrapped in `DatabaseConnection.delayed` so queries issued before the open resolves are queued), `domainStoreRebuildProvider` (the replay, plus the marker write and the failure log). |
+| Replay | `app/lib/sync/domain_rebuild.dart` | Projects everything the local op log has reduced into a store that has not been projected into yet, through the same `DomainProjector` a pull batch uses. Idempotent, tombstones included. |
+
+The replay is gated on a marker file, `jeeves_domain.rebuilt`, that only a *completed* replay
+writes — not on the store's own creation. A replay that throws would otherwise be skipped for
+ever on every later launch, leaving the log's reduced state stranded in a file nothing reads;
+with the marker the next launch retries it, and a failure is logged. Creating the store clears
+a stale marker, so a store deleted out from under the app is replayed into again.
 
 An enrolled device therefore loses nothing across the cutover: its op log is the record and
 the domain store is a projection of it. A device that never enrolled has no log and starts

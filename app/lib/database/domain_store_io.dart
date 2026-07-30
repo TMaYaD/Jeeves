@@ -28,12 +28,31 @@ const String domainStoreFileName = 'jeeves_domain.sqlite';
 /// The local op log, which lives in its own file, is the recovery path.
 const String legacyPowerSyncStoreFileName = 'jeeves.sqlite';
 
-/// A freshly opened domain store, and whether this open created it.
+/// The marker that records a *completed* op-log replay into the domain store.
 ///
-/// [createdFresh] is what decides whether the op log gets projected in: only a
-/// store that did not exist a moment ago is empty enough for a rebuild to be a
-/// rebuild rather than a duplicate write.
-typedef DomainStoreOpening = ({SqliteDatabase database, bool createdFresh});
+/// Its own file rather than a row, because it has to be readable before the
+/// store is open and survive a replay that threw halfway through one.
+const String domainRebuildMarkerFileName = 'jeeves_domain.rebuilt';
+
+/// A freshly opened domain store, whether the op log still owes it a replay, and
+/// the way to record that the replay finished.
+///
+/// [needsRebuild] is what decides whether the op log gets projected in. It is
+/// **not** "the file did not exist a moment ago": a replay that threw leaves the
+/// store created but unpopulated, and keying off creation alone would skip the
+/// retry for ever, leaving reduced state stranded in a log nothing reads. The
+/// answer is the absence of [domainRebuildMarkerFileName], which only a completed
+/// replay writes — so a failed one is retried on the next launch, and a store
+/// deleted out from under the app is replayed into again (a fresh create clears a
+/// stale marker).
+///
+/// [markRebuilt] is the write of that marker, called by the replay's one caller
+/// (`providers/database_provider.dart`) on success and nowhere else.
+typedef DomainStoreOpening = ({
+  SqliteDatabase database,
+  bool needsRebuild,
+  void Function() markRebuilt,
+});
 
 class DomainStoreImpl {
   /// Open (creating on first run) the domain store in the app documents
@@ -45,20 +64,40 @@ class DomainStoreImpl {
 /// The whole of the open path, over an explicit [directoryPath].
 ///
 /// Split out from [DomainStoreImpl.openDatabase] so the behaviour that matters —
-/// fresh-vs-existing detection and the legacy file's disposal — is testable
-/// against a temp directory instead of only on a device.
+/// the replay gate and the legacy file's disposal — is testable against a temp
+/// directory instead of only on a device.
 Future<DomainStoreOpening> openDomainStoreIn(String directoryPath) async {
   final file = File(p.join(directoryPath, domainStoreFileName));
   // Before the open, which creates it. `-wal`/`-shm` are irrelevant here: a
   // sidecar without its main file is not a store.
   final createdFresh = !file.existsSync();
+  final marker = File(p.join(directoryPath, domainRebuildMarkerFileName));
+  // A store that was just created has never been replayed into, whatever a
+  // leftover marker claims — so the marker follows the file rather than
+  // outliving it.
+  if (createdFresh && marker.existsSync()) {
+    try {
+      marker.deleteSync();
+    } on FileSystemException {
+      // Best-effort: a marker that cannot be cleared costs one skipped replay
+      // into a store that is empty anyway, not a broken app.
+    }
+  }
+  final needsRebuild = !marker.existsSync();
 
   final database = SqliteDatabase(path: file.path);
   await database.initialize();
 
   deleteLegacyPowerSyncStore(directoryPath);
 
-  return (database: database, createdFresh: createdFresh);
+  return (
+    database: database,
+    needsRebuild: needsRebuild,
+    markRebuilt: () => marker.writeAsStringSync(
+      'The op log has been projected into $domainStoreFileName.\n',
+      flush: true,
+    ),
+  );
 }
 
 /// Delete the PowerSync-era store and its SQLite sidecars.

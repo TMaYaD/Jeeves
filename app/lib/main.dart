@@ -142,10 +142,12 @@ class JeevesApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Eagerly materialise [domainStoreRebuildProvider] so a device whose domain
-    // store was just created replays its local op log into it. Read first, and
-    // before anything that reads the store, so the replay starts as early as the
-    // app can start it; it is not awaited (see the provider's own note on why
-    // the ADR-0010 notifies make that safe).
+    // store has not yet been replayed into replays its local op log now — first
+    // launch after the cutover, or any launch after one that failed part-way.
+    // Read first, and before anything that reads the store, so the replay starts
+    // as early as the app can start it; it is not awaited (see the provider's own
+    // note on why the ADR-0010 notifies make that safe), and a failure is logged
+    // there rather than surfaced here, since there is no UI that could act on it.
     ref.watch(domainStoreRebuildProvider);
 
     // Eagerly materialise [authTokenProvider] so its async build() runs at

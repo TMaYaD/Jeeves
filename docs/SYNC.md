@@ -49,7 +49,7 @@ Every strategy owes ADR-0030's obligations: merge must be commutative, associati
 
 ### The default is safe for any future key
 
-An unregistered key resolves as `lww`, which is non-destructive: it never deletes a value, it only prefers the newer of two present values. A key needs explicit registration only when blanket LWW would be *wrong* (snooze floors, sets), not merely to be safe.
+An unregistered key resolves as `lww`, which never *loses* a write: it selects the newer of the two by HLC and nothing else. That includes a tombstone, which the reducer treats as an ordinary value (see the matrix below) — so a later clear does win, and the key reads as absent afterwards. What LWW does not do is remove the row or discard the fresher of two writes, which is why it is the safe default: a key needs explicit registration only when *choosing the newer write* would be wrong (snooze floors, sets), not merely to be safe.
 
 ### Explicit registration
 

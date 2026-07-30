@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:drift_sqlite_async/drift_sqlite_async.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sqlite_async/sqlite_async.dart' show SqliteDatabase;
 
@@ -27,8 +28,8 @@ final Provider<WorkspaceRoutingOpCapture> domainOpCaptureProvider =
 /// Two stores per device by design (see `sync/domain_projector.dart`): this one is
 /// the domain read model, `syncDatabaseProvider`'s is the convergence substrate.
 /// Opening this one also disposes of the PowerSync-era `jeeves.sqlite`
-/// (ADR-0035), and reports whether the file had to be created — which is what
-/// [domainStoreRebuildProvider] keys the op-log replay on.
+/// (ADR-0035), and reports whether the op log still owes it a replay — which is
+/// what [domainStoreRebuildProvider] keys on.
 final FutureProvider<DomainStoreOpening> domainStoreProvider =
     FutureProvider<DomainStoreOpening>((ref) async {
   ref.keepAlive();
@@ -75,15 +76,30 @@ final Provider<GtdDatabase> databaseProvider = Provider<GtdDatabase>((ref) {
 /// still refreshes when it does. Blocking startup on a walk of the whole store to
 /// gain a guarantee the notifies already provide would be the worse trade.
 ///
-/// **Only for a store that was just created.** An existing store already holds
-/// the projection; replaying into it would be a no-op at best and is not worth the
-/// walk.
+/// **Only until it has completed once.** A store that already holds the
+/// projection does not want the walk again — but the gate is the marker a
+/// *finished* replay writes, not the store's existence, so a replay that threw is
+/// retried on the next launch rather than skipped for ever with the log's reduced
+/// state stranded (`database/domain_store_io.dart`).
+///
+/// **A failure is logged, not swallowed.** It propagates into this provider's
+/// error state as well, but nothing reads that state — the console line is what a
+/// missing-data report is diagnosed from, the same convention
+/// `sync_lifecycle_provider.dart` follows for a failed activation.
 final FutureProvider<int> domainStoreRebuildProvider =
     FutureProvider<int>((ref) async {
   ref.keepAlive();
-  if (!(await ref.read(domainStoreProvider.future)).createdFresh) return 0;
-  return rebuildDomainFromOpLog(
-    sync: await ref.read(syncDatabaseProvider.future),
-    domain: ref.read(databaseProvider),
-  );
+  final opening = await ref.read(domainStoreProvider.future);
+  if (!opening.needsRebuild) return 0;
+  try {
+    final projected = await rebuildDomainFromOpLog(
+      sync: await ref.read(syncDatabaseProvider.future),
+      domain: ref.read(databaseProvider),
+    );
+    opening.markRebuilt();
+    return projected;
+  } on Object catch (error) {
+    debugPrint('domain store rebuild: failed, will retry next launch — $error');
+    rethrow;
+  }
 });
