@@ -975,6 +975,11 @@ class FakeSyncServer {
     // Class-4 op ids this batch carries but has not yet stored, so a prune later in
     // the same POST can name one.
     final stagedCompactionOpIds = <String>{};
+    // Prune targets claimed by an earlier admission in this POST, so a second prune
+    // naming a shared seq is refused here rather than tripping the materialisation
+    // check with a race that did not happen — mirrors `claimed_seqs` in the real
+    // route's `_verify_and_authorize`.
+    final claimedSeqs = <int>{};
     final admissions = <_ControlAdmission>[];
     // Walked forward through the batch exactly as `grants` is, so a `rotate` at index
     // 0 is what the content op at index 1 is judged against.
@@ -1000,6 +1005,7 @@ class FakeSyncServer {
             index: index,
             workspaceId: workspaceId,
             stagedCompactionOpIds: stagedCompactionOpIds,
+            claimedSeqs: claimedSeqs,
             isReplay: replayedOpIds.contains(header.opId),
           ));
         }
@@ -1190,6 +1196,7 @@ class FakeSyncServer {
     required int index,
     required String workspaceId,
     required Set<String> stagedCompactionOpIds,
+    required Set<int> claimedSeqs,
     required bool isReplay,
   }) {
     final PrunePayload payload;
@@ -1255,6 +1262,19 @@ class FakeSyncServer {
           code: 'prune_target_already_compacted',
         );
       }
+      if (claimedSeqs.contains(target.seq) && !isReplay) {
+        // An *earlier* prune in this same POST already named this seq. Caught here
+        // rather than at materialisation so `_materialisePrunes`' rowcount guard
+        // keeps its one documented cause — a concurrent prune — instead of an
+        // in-batch collision leaving refused ops in `_log` (the fake has no
+        // `db.rollback()`, so a refusal that fires only after `_log.addAll` would
+        // strand them). Mirrors the real route's `_verify_prune`.
+        throw SyncTransportException(
+          422,
+          'ops[$index]',
+          code: 'prune_target_already_compacted',
+        );
+      }
       if (targetHeader.opId == payload.compactionOpId) {
         throw SyncTransportException(
           422,
@@ -1263,6 +1283,10 @@ class FakeSyncServer {
         );
       }
     }
+    // Stage this prune's seqs so a later admission in the same POST that names one of
+    // them is refused above. A replay's targets are already stamped, so they never
+    // reach the collision check anyway.
+    claimedSeqs.addAll(payload.targets.map((target) => target.seq));
     return _PruneAdmission(
       index: index,
       targets: payload.targets,
@@ -1275,10 +1299,12 @@ class FakeSyncServer {
   /// Mirrors `_materialise_prunes` in `backend/app/sync/routes.py`: the row lookup is
   /// workspace-scoped as `_verifyPrune` is, and an already-stamped target is the
   /// guarded UPDATE finding fewer rows than it attested — refused as
-  /// `prune_target_already_compacted` rather than silently skipped, so a client test
-  /// that stages two prunes sharing a target fails here the way it would 422 against
-  /// the real route. Each admission is checked before any of its rows are stamped, so
-  /// a mid-admission refusal never leaves a partial stamp behind.
+  /// `prune_target_already_compacted` rather than silently skipped. With in-batch
+  /// shared targets now refused during verification (`claimedSeqs` in `_verifyPrune`),
+  /// this stamp-time check keeps its one documented cause: a concurrent prune that
+  /// stamped a target between verification and here. Each admission is checked before
+  /// any of its rows are stamped, so a mid-admission refusal never leaves a partial
+  /// stamp behind.
   void _materialisePrunes(
     String workspaceId,
     List<_PruneAdmission> prunes,

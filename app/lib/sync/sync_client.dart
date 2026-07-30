@@ -430,23 +430,33 @@ class SyncClient {
   /// `assert`: an assertion is stripped from release builds and, worse, ran after
   /// the outbox row and `author_state` were already durable, so a dishonest snapshot
   /// shipped silently. Applying first is safe precisely because an honest snapshot
-  /// is a no-op — nothing is undone when nothing changed.
+  /// is a no-op — nothing is undone when nothing changed — and the apply plus its
+  /// before/after fingerprint check run inside one [SyncDatabase.transaction] so a
+  /// *dishonest* snapshot's mutation rolls back with the throw rather than staying
+  /// written until the next rebuild. The reducer's own transaction nests as a
+  /// savepoint inside it; [_authorAndQueue] and projection run only once that
+  /// transaction has committed the no-op.
   Future<String> captureCompaction(OpPayload snapshot) async {
     final wireBytes = snapshot.encode();
     final decoded = OpPayload.decode(parseBody(frameBody(wireBytes)));
     guardOpClassShape(decoded, opClass: opClassCompaction);
     _reducer.guardPayload(decoded, authorMemberIdHex: identity.memberIdHex);
 
-    final before = await _entityFingerprint(decoded.collection, decoded.entityId);
-    final affected =
-        await _reducer.apply(decoded, authorMemberIdHex: identity.memberIdHex);
-    final after = await _entityFingerprint(decoded.collection, decoded.entityId);
-    if (before != after) {
-      throw StateError(
-        'a compaction snapshot changed its own author\'s reduced state, so its '
-        'per-field clocks are not the joined ones: $before -> $after',
-      );
-    }
+    final affected = await _db.transaction(() async {
+      final before =
+          await _entityFingerprint(decoded.collection, decoded.entityId);
+      final touched =
+          await _reducer.apply(decoded, authorMemberIdHex: identity.memberIdHex);
+      final after =
+          await _entityFingerprint(decoded.collection, decoded.entityId);
+      if (before != after) {
+        throw StateError(
+          'a compaction snapshot changed its own author\'s reduced state, so its '
+          'per-field clocks are not the joined ones: $before -> $after',
+        );
+      }
+      return touched;
+    });
 
     final opId = await _authorAndQueue(
       opClass: opClassCompaction,
