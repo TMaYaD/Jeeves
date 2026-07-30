@@ -2,9 +2,11 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately and are replicated to PostgreSQL by PowerSync when connectivity is available. This document describes how conflicts between a local row and the server's copy are resolved — with the focus on the `user_preferences` synced key-value store — and the [`todos`](#the-todos-upload-contract) and [focus-session](#the-focus-session-upload-contract) upload contracts: which columns must round-trip verbatim through the REST schemas.
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). This document describes how conflicts are resolved — with the focus on the `user_preferences` synced key-value store — and the [`todos`](#the-todos-upload-contract) and [focus-session](#the-focus-session-upload-contract) upload contracts.
 
-For the transport architecture (buckets, sync shapes, the BackendConnector, credentials), see [ARCHITECTURE.md § Sync Engine](./ARCHITECTURE.md#sync-engine). For the vocabulary (Sync Shape, Bucket, LWW, Tombstone), see [CONTEXT.md § Sync](../CONTEXT.md#sync).
+**The legacy PowerSync path is disconnected (#591).** Everything below about the CRUD queue, `uploadData()`, dead letters, the write-checkpoint windows and the REST upload contracts describes machinery that is still *present* — on the device as a store engine, and on the server as the mirrored tables and routes — and is no longer *live*: the app never connects the engine, so nothing uploads through the connector and no new dead letter can be recorded. It is documented rather than deleted for two reasons. The mirrored tables and their REST schemas still exist server-side until #556 removes them, and the shapes they imposed are the shapes the rows on a device that ran on that path still have — which is what the initial upload reads. The wholesale rewrite of this document belongs with that removal.
+
+For the transport architecture, see [ARCHITECTURE.md § Minimal Sync Server](./ARCHITECTURE.md#minimal-sync-server) — and § Sync Engine for the disconnected engine. For the vocabulary, see [CONTEXT.md § Sync](../CONTEXT.md#sync).
 
 ## The two directions of a preference conflict
 
@@ -21,7 +23,9 @@ Deletion in `user_preferences` is modelled as a **tombstone** — a present row 
 
 Therefore the rule **server-absent → keep local** can never swallow a legitimate delete. A delete is a value, not a gap.
 
-## PowerSync reconciliation behaviour (write-checkpoint)
+## PowerSync reconciliation behaviour (write-checkpoint) — the disconnected path
+
+The engine no longer connects, so none of these windows can occur on a shipped device; they are what shaped the rows a pre-#591 device holds. On the op log the equivalent question has a different answer entirely: a device's own writes are durable in the outbox from the moment they are signed, and reduced state is a join-semilattice, so nothing is ever "held" against a checkpoint or wiped by an absence — deletion is a tombstone op.
 
 PowerSync keeps CRUD-queue mutations applied on top of synced data and holds them until a downloaded checkpoint reaches the *write checkpoint* issued after `uploadData()` succeeds. The wipe windows and whether the engine self-heals:
 
@@ -97,7 +101,7 @@ Every current key, grouped by family:
 
 ## Sign-in migration
 
-A separate LWW pass runs once at sign-in, when local-only rows (`user_id = 'local'`) are reassigned to the authenticated user (`LocalDataMigrationService.migrate`, `migration_service.dart`). It applies the `lww` strategy in SQL — reassigning non-conflicting keys and, for conflicting keys, keeping the row with the newer `updated_at`. This is the account-merge path, distinct from the ongoing PowerSync download reconciliation above.
+A separate LWW pass runs once at sign-in, when local-only rows (`user_id = 'local'`) are reassigned to the authenticated user (`LocalDataMigrationService.migrate`, `migration_service.dart`). It applies the `lww` strategy in SQL — reassigning non-conflicting keys and, for conflicting keys, keeping the row with the newer `updated_at`. It is a raw-SQL pass over the mirror and authors no op, which is correct: the initial upload reads its tables **unfiltered** and stamps the enrolled `user_id` at authoring, so a row this pass missed still reaches the log under the account that is syncing (#582's rule).
 
 ## The create-dedupe contract
 

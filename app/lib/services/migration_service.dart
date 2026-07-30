@@ -355,6 +355,29 @@ Future<int> carveOutLocalInbox({
 /// right after [migrateLocalInboxToCaptures], before any watcher exists, so it
 /// needs no view-notify.
 ///
+/// ## It writes raw SQL and authors no op, on purpose (#591)
+///
+/// Post-flip this is the one write path that does not travel the capture seam, so
+/// its retirements are local-only: reduced state still holds `role = 'current'`
+/// for a retired loser, and a later projection of that entity will put the column
+/// back — after which the next launch retires it again. Idempotent churn on a
+/// column no read trusts, and not data loss.
+///
+/// Capture-wrapping it would not fix that, it would only look like it did. This
+/// runs inside [powerSyncInstanceProvider]'s own build, at process start —
+/// **before sign-in and long before the lifecycle binds capture** — so a wrapped
+/// version would describe its effect into an unbound seam and author nothing
+/// anyway. It also holds a `ps.PowerSyncDatabase` rather than the `GtdDatabase`
+/// whose `capturing` scope the seam lives on.
+///
+/// The exposure is small on both axes. It needs a genuine cross-device
+/// multi-`current` race to have anything to do at all, and every device runs the
+/// *same* deterministic winner rule — greatest `COALESCE(updated_at, created_at)`,
+/// tie-break smallest `id` — so they converge on the same winner independently
+/// whether or not the repair replicates. Every read applies that same rule, so
+/// what the user sees is stable either way. Making the repair an authored op
+/// belongs with the fixups' own home, which moves when #556 swaps the store.
+///
 /// Returns the number of Action rows retired. A steady-state store returns 0.
 Future<int> reconcileActionsAtStartup(ps.PowerSyncDatabase db) async {
   var repaired = 0;

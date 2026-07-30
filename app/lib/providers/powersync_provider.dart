@@ -1,40 +1,45 @@
-// PowerSync database provider — the single process-wide owner of the
-// on-device sync engine.
+// The on-device SQLite store the domain read model lives in.
 //
-// Replaces the older `SyncService` singleton.  The provider pattern
-// follows the powersync-ja Drift demo: a keepAlive FutureProvider opens
-// and initializes `PowerSyncDatabase` once, then watches
-// [currentUserIdProvider] to drive `connect()` / `disconnect()`
-// reactively — login starts sync, logout stops it.  The Drift
-// [databaseProvider] reads this future via `DatabaseConnection.delayed`
-// so Drift queries issued before the DB is ready are queued and flushed
-// on completion.
+// **PowerSync is the storage engine here and nothing else. It does not
+// connect.** #591 flipped the op-log spine on as the production sync path, so
+// this provider opens the database, runs the two startup fixups that have to
+// happen before anything reads it, and stops. There is no `connect()`, no
+// connector, and no `currentUserIdProvider` listener — a signed-in device does
+// not replicate to the legacy mirrored Postgres tables.
 //
-// Platform-specific storage (file path on native, OPFS on web) is
-// handled entirely by [PowerSyncStorageImpl] via a conditional import —
-// this file has no dart:io or kIsWeb references.
-
-import 'dart:async';
+// That disconnection is required rather than tidy. The user's own cutover is
+// sign-out → sign-up as a *new* account, so on the first launch afterwards the
+// session token is the new account's and `_handleMigration` has reassigned every
+// local row — which enqueues all of them in `ps_crud`. A connector would upload
+// the entire migrated store into the new account's legacy tables: a second, live
+// sync path beside the op log, into tables #556 deletes. Teeing writes into both
+// is exactly the dual-write branching the Implementation stance forbids.
+//
+// `ps_crud` therefore grows with nothing draining it, bounded by one user's
+// writes over the confidence window. Local writes enqueue because the tables are
+// PowerSync-managed, which cannot be turned off without the fresh-store swap
+// that #556 owns; the queue costs disk and nothing else, and the file goes with
+// the engine. `services/backend_connector.dart` survives until #556 removes it
+// there, with the rest of the engine.
+//
+// The Drift [databaseProvider] reads this future via `DatabaseConnection.delayed`
+// so Drift queries issued before the DB is ready are queued and flushed on
+// completion. Platform-specific storage (file path on native, OPFS on web) is
+// handled entirely by [PowerSyncStorageImpl] via a conditional import — this file
+// has no dart:io or kIsWeb references.
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:powersync/powersync.dart' as ps;
 
 import '../database/powersync_schema.g.dart';
 import '../database/powersync_storage.dart';
-import '../services/api_service.dart';
-import '../services/backend_connector.dart';
 import '../services/migration_service.dart'
     show migrateLocalInboxToCaptures, reconcileActionsAtStartup;
-import 'auth_provider.dart';
-import 'database_provider.dart';
 
 /// Process-wide [PowerSyncDatabase] handle.
 ///
 /// Created once on first read and kept alive for the app's lifetime via
-/// [ProviderRef.keepAlive].  Login/logout transitions are observed
-/// through [currentUserIdProvider] and translated into
-/// `PowerSyncDatabase.connect()` / `.disconnect()` calls on the same
-/// instance — the database is never re-opened.
+/// [ProviderRef.keepAlive]. Never re-opened, and never connected.
 // Explicit variable type: this provider and [databaseProvider] reference each
 // other from their initializers, and without the annotation the analyzer
 // reports a top-level type-inference cycle.
@@ -45,89 +50,26 @@ final FutureProvider<ps.PowerSyncDatabase> powerSyncInstanceProvider =
   final db = await PowerSyncStorageImpl().openDatabase(powersyncSchema);
 
   // Carve a local-only user's Inbox out of `todos` into `captures` before
-  // anything reads it (issue #184 Phase 2). A signed-in user gets the
-  // equivalent move server-side from Alembic 0026 and it arrives via sync; a
-  // user who has never signed in has no server to do it, so without this their
-  // Inbox would vanish the moment the UI started reading `captures`. Idempotent
-  // and insert-before-delete, so it is safe on every launch.
+  // anything reads it (issue #184 Phase 2). A signed-in user got the equivalent
+  // move server-side from Alembic 0026 while the legacy path was live; a user who
+  // has never signed in has no server to do it, so without this their Inbox would
+  // vanish the moment the UI started reading `captures`. Idempotent and
+  // insert-before-delete, so it is safe on every launch.
   await migrateLocalInboxToCaptures(db);
 
   // Repair the Action grain before anything reads it (ADR-0001 story 9, issue
   // #479; ADR-0022). One pass: converge an accidental multi-`current` set onto
   // the writers' deterministic winner, retiring the losers. It reads `actions`
-  // and nothing else — the legacy `todos.next_action_text` cursor has no
-  // readers left, and no longer exists to acquire one (ADR-0024). It never
-  // overwrites an Action's text and never stamps `last_clarified_at`
-  // (ADR-0012). Like the migration above it runs before any watcher exists, so
-  // no view-notify.
+  // and nothing else — the legacy `todos.next_action_text` cursor has no readers
+  // left, and no longer exists to acquire one (ADR-0024). It never overwrites an
+  // Action's text and never stamps `last_clarified_at` (ADR-0012). Like the
+  // migration above it runs before any watcher exists, so no view-notify.
+  //
+  // It writes raw SQL and therefore authors **no op** — see its own docstring for
+  // why that is the right trade rather than an oversight.
   await reconcileActionsAtStartup(db);
 
-  // Bridge the current auth state to PowerSync's connection lifecycle.
-  // [currentUserIdProvider] holds `'local'` when no-one is logged in and
-  // the real user id otherwise.  Transitions drive connect/disconnect.
-  //
-  // All transitions are serialized through [pending] so a rapid
-  // login → logout (or vice-versa) can never interleave connect() and
-  // disconnect() calls on the same PowerSync DB.
-  Future<void> pending = Future.value();
-  var disposed = false;
-
-  Future<void> applyUser(String userId) {
-    final next = pending.then((_) async {
-      // Skip if disposal began while this transition was queued, so we
-      // never call connect()/disconnect() on a closing database.
-      if (disposed) return;
-      if (userId == 'local') {
-        await db.disconnect();
-      } else {
-        // databaseProvider is a synchronous Provider over a delayed Drift
-        // connection, so reading it here cannot deadlock — queries the
-        // connector issues before the connection resolves are queued.
-        final connector = JeevesBackendConnector(
-          ref.read(apiServiceProvider),
-          ref.read(databaseProvider),
-        );
-        await db.connect(connector: connector);
-      }
-    }).catchError((Object e, StackTrace st) {
-      // Swallow so one failed transition doesn't poison the chain — errors
-      // are observable via PowerSync's status stream.
-    });
-    pending = next;
-    return next;
-  }
-
-  // Subscribe BEFORE the initial apply.  On cold start, auth restoration
-  // runs concurrently with this provider's build() and can flip
-  // [currentUserIdProvider] from `'local'` to the real user id during the
-  // `await` below.  If we subscribed after that await, such transitions
-  // would land in the gap — [ref.listen] does not fire for existing
-  // state — and PowerSync would stay disconnected until the next manual
-  // login/logout.  The [pending] chain serialises the initial apply with
-  // any listener-triggered apply, so the correct end state is reached
-  // regardless of ordering.
-  final sub = ref.listen<String>(
-    currentUserIdProvider,
-    (previous, next) {
-      if (previous == next) return;
-      if (disposed) return;
-      // Enqueue the transition; the serial chain above ensures it runs
-      // strictly after any in-flight connect/disconnect completes.
-      unawaited(applyUser(next));
-    },
-  );
-  await applyUser(ref.read(currentUserIdProvider));
-
-  // Single async disposal: mark disposed, cancel the listener, drain any
-  // in-flight transition, then close the DB.  Registering close() hooks
-  // separately could otherwise race with a queued applyUser() that's
-  // about to touch a closing database.
-  ref.onDispose(() async {
-    disposed = true;
-    sub.close();
-    await pending;
-    await db.close();
-  });
+  ref.onDispose(db.close);
 
   return db;
 });

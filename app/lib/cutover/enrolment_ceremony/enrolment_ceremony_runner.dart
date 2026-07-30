@@ -14,6 +14,7 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/sync_lifecycle_provider.dart';
 import '../../providers/sync_stack_provider.dart';
 import '../../sync/enrolment.dart';
 import '../../sync/enrolment_state.dart';
@@ -148,9 +149,19 @@ abstract class EnrolmentCeremonyRunner {
 /// including `SyncStack`'s member-transport propagation, which is the one part of
 /// the wiring the harness's own fakes cannot stand in for.
 class StackEnrolmentCeremonyRunner implements EnrolmentCeremonyRunner {
-  StackEnrolmentCeremonyRunner(this._stack);
+  StackEnrolmentCeremonyRunner(this._stack, {Future<void> Function()? onEnrolled})
+      : _onEnrolled = onEnrolled;
 
   final Future<SyncStack> Function() _stack;
+
+  /// Start syncing, once a ceremony has produced an enrolled device.
+  ///
+  /// **This call site is throwaway; what it calls is not.** The screen above it
+  /// goes with #556, and the onboarding flow that replaces it drives the same
+  /// `SyncLifecycle.activate` over the same `SyncStack` — which is also what the
+  /// app calls at every launch, so a missed call here costs one relaunch rather
+  /// than a device that never syncs.
+  final Future<void> Function()? _onEnrolled;
 
   @override
   Future<EnrolmentCeremonyStatus> status() async =>
@@ -172,7 +183,10 @@ class StackEnrolmentCeremonyRunner implements EnrolmentCeremonyRunner {
                 'against it with the passphrase instead of founding again',
       );
     }
-    return (await _stack()).enrolment.enrolFirstDevice(passphrase: passphrase);
+    final outcome =
+        await (await _stack()).enrolment.enrolFirstDevice(passphrase: passphrase);
+    await _onEnrolled?.call();
+    return outcome;
   }
 
   @override
@@ -182,12 +196,20 @@ class StackEnrolmentCeremonyRunner implements EnrolmentCeremonyRunner {
         'this device is already enrolled — there is nothing to resume',
       );
     }
-    return (await _stack()).enrolment.enrolWithPassphrase(passphrase);
+    final outcome =
+        await (await _stack()).enrolment.enrolWithPassphrase(passphrase);
+    await _onEnrolled?.call();
+    return outcome;
   }
 }
 
 final enrolmentCeremonyRunnerProvider = Provider<EnrolmentCeremonyRunner>(
   (ref) => StackEnrolmentCeremonyRunner(
     () => ref.read(syncStackProvider.future),
+    onEnrolled: () async {
+      final lifecycle = await ref.read(syncLifecycleProvider.future);
+      if (lifecycle == null) return;
+      await activateAndLog(lifecycle);
+    },
   ),
 );

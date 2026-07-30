@@ -1,33 +1,38 @@
-// One-shot post-sync fixups that have to wait until PowerSync's initial
-// replication has finished.  Kept out of [powerSyncInstanceProvider] so
-// that provider stays a thin owner of the PowerSync connection — it does
-// not need to know which tables require domain-level fixup.  Adding a new
-// hook (different table, different rule) means extending the listener
-// here, not bloating the sync provider with raw-SQL clones of DAO logic.
+// One-shot post-sync fixups that have to wait until the first sync has brought
+// other devices' rows in.
 //
-// Reads [databaseProvider] so each hook drives its DAO directly: a single
-// source of truth, exercised by the same tests prod runs through.  No
-// import cycle — the dependency chain is one-way:
-//   postSyncHooksProvider → databaseProvider → powerSyncInstanceProvider
+// **Repointed at the spine (#591).** It used to wait on PowerSync's
+// `hasSynced`, which never flips now that the engine does not connect: the hook
+// would never fire and the provider would hold a dangling status-stream listener
+// for the process's lifetime. The equivalent signal is
+// `SyncLifecycle.firstSyncSettled`, which completes once both Workspace clients
+// have pulled.
 //
-// Eager materialisation: this provider must be `ref.watch`-ed once from
-// the widget tree (see main.dart) so its build runs at startup and the
-// hook actually wires up.  Otherwise it stays lazy and dedupe never
-// fires.
+// Kept rather than pruned with the #556 inventory because the job survives the
+// flip. `dedupeTags` merges Tags two devices minted independently, and Tag ids
+// are random UUIDv4s by rule (`sync/ids.dart` — only junctions and preferences
+// derive theirs), so two devices creating "Home" offline still converge on two
+// entities. Nothing about the op log makes that impossible; the projector
+// realigns derived ids, not names.
+//
+// Reads [databaseProvider] so the hook drives its DAO directly: a single source
+// of truth, exercised by the same tests prod runs through.
+//
+// Eager materialisation: this provider must be `ref.watch`-ed once from the
+// widget tree (see main.dart) so its build runs at startup and the hook actually
+// wires up. Otherwise it stays lazy and dedupe never fires.
 
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:powersync/powersync.dart' as ps;
 
 import 'database_provider.dart';
-import 'powersync_provider.dart';
+import 'sync_lifecycle_provider.dart';
 
 final postSyncHooksProvider = Provider<void>((ref) {
   ref.keepAlive();
 
   final db = ref.read(databaseProvider);
-  StreamSubscription<ps.SyncStatus>? sub;
   var disposed = false;
   var ran = false;
 
@@ -45,31 +50,20 @@ final postSyncHooksProvider = Provider<void>((ref) {
     }
   }
 
-  // `Provider`'s builder cannot be async, so kick off the wiring in the
-  // background.  PowerSync's `connect()` resolves once the websocket is
-  // established, not once the initial download finishes — rows keep
-  // streaming in afterwards — so we wait for `hasSynced == true`, which
-  // PowerSync flips after the first replication cycle completes.
+  // `Provider`'s builder cannot be async, so kick off the waiting in the
+  // background. A device with nobody signed in has no lifecycle and never
+  // arms — the same non-effect an unconnected engine's `hasSynced` had, and the
+  // right one: a device that has never synced has no foreign duplicates to
+  // merge.
   Future<void> setup() async {
-    final psDb = await ref.read(powerSyncInstanceProvider.future);
+    final lifecycle = await ref.read(syncLifecycleProvider.future);
+    if (disposed || lifecycle == null) return;
+    await lifecycle.firstSyncSettled;
     if (disposed) return;
-    if (psDb.currentStatus.hasSynced == true) {
-      await runOnce();
-      return;
-    }
-    sub = psDb.statusStream.listen((status) {
-      if (status.hasSynced != true) return;
-      sub?.cancel();
-      sub = null;
-      unawaited(runOnce());
-    });
+    await runOnce();
   }
 
   unawaited(setup());
 
-  ref.onDispose(() async {
-    disposed = true;
-    await sub?.cancel();
-    sub = null;
-  });
+  ref.onDispose(() => disposed = true);
 });
