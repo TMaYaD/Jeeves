@@ -654,6 +654,45 @@ void main() {
     });
   });
 
+  group('a rotated Workspace still compacts (#555 regression)', () {
+    test('a prune authors and materialises at key_epoch >= 1', () async {
+      // The prune op is `plaintext_v1` for ever — the server materialises its
+      // payload and holds no key — so [capturePrune] forces its workspace key null.
+      // The author-time missing-key guard used to exempt only control ops, so on any
+      // rotated Workspace (epoch >= 1) the prune tripped `missing_epoch_key` and
+      // compaction pruning died on exactly the Workspaces that had rotated keys.
+      final workspace = await SimWorkspace.create(deviceCount: 1);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+
+      await a.enrolment.turnOnEncryption(passphrase: workspace.passphrase);
+      expect(await a.client.epochFloor(), 1,
+          reason: 'turn-on rotated the Workspace to epoch 1');
+
+      final entityId = _entityId('rotated');
+      await _fill(workspace, a, entityId: entityId);
+
+      final result = await _compactor(a).compactEntity(
+        collection: _collection,
+        entityId: entityId,
+      );
+      expect(result.prunedOpCount, greaterThanOrEqualTo(compactionThresholdLiveOps));
+
+      await a.client.sync();
+      final pruneOp = workspace.server.storedOps.firstWhere(
+        (op) =>
+            op.workspaceId == workspace.workspaceId &&
+            op.header?.opClass == opClassPrune,
+      );
+      expect(pruneOp.header!.suite, suitePlaintextV1,
+          reason: 'the prune reached the server as plaintext_v1 despite epoch 1');
+      expect(pruneOp.header!.keyEpoch, 1);
+
+      final health = await a.client.health();
+      expect(health.unresolvedAlarmCount, 0, reason: '${health.alarmKinds}');
+    });
+  });
+
   group('the prune payload codec', () {
     test('refuses an empty target list', () {
       expect(

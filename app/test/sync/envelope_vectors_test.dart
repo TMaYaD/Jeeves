@@ -585,8 +585,10 @@ void main() {
           OpHeader.parse(splitEnvelope(_fromHex(vector['envelope_hex'] as String)).header);
       expect(header.suite, suiteAeadV1);
       expect(header.opClass, opClassPrune);
-      // The same shape as the control pair, under its own code: a client that saw
-      // this has learned something different about its server.
+      // The same shape as the control pair, under its own code: both halves are
+      // individually served and it is the *pair* that is forbidden, so a client that
+      // saw this has learned something different about its server.
+      expect(servedSuites, contains(header.suite));
       expect(servedOpClasses, contains(header.opClass));
       expect(
         header.checkServed,

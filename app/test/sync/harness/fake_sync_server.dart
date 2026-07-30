@@ -928,7 +928,7 @@ class FakeSyncServer {
     // is anchored to a transport seq, and a seq does not exist until the op is
     // stored. The authorization verdict is positional against those numbers, so
     // they have to be the real ones.
-    _materialisePrunes(prunes, results);
+    _materialisePrunes(workspaceId, prunes, results);
     for (final memberId in _materialiseControl(workspaceId, admissions, results)) {
       // Two halves of one revocation: the credential dies so nothing can
       // authenticate a *new* socket or POST, and the live sockets close so an
@@ -1271,13 +1271,37 @@ class FakeSyncServer {
   }
 
   /// Stamp `compactedBy`. **Never a removal**, exactly as on the real server.
-  void _materialisePrunes(List<_PruneAdmission> prunes, List<OpAppendResult> results) {
+  ///
+  /// Mirrors `_materialise_prunes` in `backend/app/sync/routes.py`: the row lookup is
+  /// workspace-scoped as `_verifyPrune` is, and an already-stamped target is the
+  /// guarded UPDATE finding fewer rows than it attested — refused as
+  /// `prune_target_already_compacted` rather than silently skipped, so a client test
+  /// that stages two prunes sharing a target fails here the way it would 422 against
+  /// the real route. Each admission is checked before any of its rows are stamped, so
+  /// a mid-admission refusal never leaves a partial stamp behind.
+  void _materialisePrunes(
+    String workspaceId,
+    List<_PruneAdmission> prunes,
+    List<OpAppendResult> results,
+  ) {
     for (final admission in prunes) {
       if (results[admission.index].duplicate) continue;
       final pruneSeq = results[admission.index].seq;
-      for (final target in admission.targets) {
-        final row = _log.firstWhere((op) => op.seq == target.seq);
-        row.compactedBy ??= pruneSeq;
+      final rows = [
+        for (final target in admission.targets)
+          _log.firstWhere(
+            (op) => op.workspaceId == workspaceId && op.seq == target.seq,
+          ),
+      ];
+      if (rows.any((row) => row.compactedBy != null)) {
+        throw SyncTransportException(
+          422,
+          'ops[${admission.index}]',
+          code: 'prune_target_already_compacted',
+        );
+      }
+      for (final row in rows) {
+        row.compactedBy = pruneSeq;
       }
     }
   }

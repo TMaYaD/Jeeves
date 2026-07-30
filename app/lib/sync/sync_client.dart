@@ -421,12 +421,16 @@ class SyncClient {
   /// not carry their original clocks is a thrown [SyncRejection] here rather than an
   /// op every peer quarantines.
   ///
-  /// **The self-apply is a provable no-op**, and the assertion says so. Every field
-  /// of an honest snapshot carries the clock already stored for it, so reduction
-  /// skips each one as an equal-HLC idempotent write. A snapshot that *changes* the
-  /// compactor's own reduced state is a bug in whatever built it — it means the
-  /// clocks are not the joined ones — and the cheapest place to catch that is at the
-  /// source, before the bytes are anybody else's problem.
+  /// **The self-apply is a provable no-op**, and this refuses if it ever is not.
+  /// Every field of an honest snapshot carries the clock already stored for it, so
+  /// reduction skips each one as an equal-HLC idempotent write. A snapshot that
+  /// *changes* the compactor's own reduced state is a bug in whatever built it — it
+  /// means the clocks are not the joined ones — and it must never be signed. The
+  /// check runs *before* [_authorAndQueue], as a thrown [StateError] rather than an
+  /// `assert`: an assertion is stripped from release builds and, worse, ran after
+  /// the outbox row and `author_state` were already durable, so a dishonest snapshot
+  /// shipped silently. Applying first is safe precisely because an honest snapshot
+  /// is a no-op — nothing is undone when nothing changed.
   Future<String> captureCompaction(OpPayload snapshot) async {
     final wireBytes = snapshot.encode();
     final decoded = OpPayload.decode(parseBody(frameBody(wireBytes)));
@@ -434,18 +438,20 @@ class SyncClient {
     _reducer.guardPayload(decoded, authorMemberIdHex: identity.memberIdHex);
 
     final before = await _entityFingerprint(decoded.collection, decoded.entityId);
+    final affected =
+        await _reducer.apply(decoded, authorMemberIdHex: identity.memberIdHex);
+    final after = await _entityFingerprint(decoded.collection, decoded.entityId);
+    if (before != after) {
+      throw StateError(
+        'a compaction snapshot changed its own author\'s reduced state, so its '
+        'per-field clocks are not the joined ones: $before -> $after',
+      );
+    }
+
     final opId = await _authorAndQueue(
       opClass: opClassCompaction,
       payload: wireBytes,
       keyEpoch: await epochFloor(),
-    );
-    final affected =
-        await _reducer.apply(decoded, authorMemberIdHex: identity.memberIdHex);
-    final after = await _entityFingerprint(decoded.collection, decoded.entityId);
-    assert(
-      before == after,
-      'a compaction snapshot changed its own author\'s reduced state, so its '
-      'per-field clocks are not the joined ones: $before -> $after',
     );
     await projector?.project(affected);
     return opId;
@@ -588,6 +594,45 @@ class SyncClient {
     return matches;
   }
 
+  /// Every logged entity op, bucketed by `(collection, entity_id)` in one scan.
+  ///
+  /// The compaction sweep's shape: [Compactor.compactionCandidates] weighs every
+  /// entity at once, and asking [loggedOpsForEntity] per entity would re-decode the
+  /// whole `op_log` once per entity — O(entities × log) full decodes on a mature
+  /// store. This decodes each row once and buckets it by the decoded
+  /// `(collection, entity_id)`, so the sweep costs a single scan. Same structural
+  /// exclusions and the same fail-closed skip on unreadable bytes as the per-entity
+  /// scan, because it is the same scan.
+  Future<Map<(String, String), List<LoggedEntityOp>>> loggedOpsByEntity() async {
+    final rows = await (_db.select(_db.opLog)
+          ..where((row) => row.workspaceId.equals(workspaceId))
+          ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
+        .get();
+    final buckets = <(String, String), List<LoggedEntityOp>>{};
+    for (final row in rows) {
+      try {
+        final parts = splitEnvelope(row.envelope);
+        final header = OpHeader.parse(parts.header);
+        if (header.opClass != opClassContent &&
+            header.opClass != opClassCompaction) {
+          continue;
+        }
+        final payload =
+            await _decodeContentPayload(header, parts.header, parts.body);
+        (buckets[(payload.collection, payload.entityId)] ??= []).add((
+          seq: row.seq,
+          authorMemberId: header.authorMemberId,
+          authorSeq: header.authorSeq,
+          opClass: header.opClass,
+          envelope: row.envelope,
+        ));
+      } on SyncRejection {
+        continue;
+      }
+    }
+    return buckets;
+  }
+
   /// Every chain position a verified prune has attested, by author.
   ///
   /// Read by the compaction pass so it never proposes a target twice, and by the
@@ -674,11 +719,17 @@ class SyncClient {
     final workspaceKey = mustStayPlaintextOpClasses.contains(opClass)
         ? null
         : await workspaceKeys.keyFor(workspaceId, keyEpoch);
-    if (workspaceKey == null && opClass != opClassControl && keyEpoch > 0) {
-      // **A missing key is never permission to emit plaintext.** Above epoch 0 the
-      // epoch exists only because a `rotate` created it, and a rotate commits to a
-      // wrap set before it is authored — so "no key at epoch >= 1" is always a
-      // delivery gap on this device, never a legitimately unkeyed epoch. Sealing is
+    if (workspaceKey == null &&
+        !mustStayPlaintextOpClasses.contains(opClass) &&
+        keyEpoch > 0) {
+      // **A missing key is never permission to emit plaintext.** The exemption is
+      // [mustStayPlaintextOpClasses], not a bare control test: a prune is 0x00 for
+      // ever for the same reason a control op is, so a missing key at epoch >= 1 is
+      // never its problem — forcing it through this guard would kill compaction
+      // pruning on every rotated Workspace. Above epoch 0 the epoch exists only
+      // because a `rotate` created it, and a rotate commits to a wrap set before it
+      // is authored — so "no key at epoch >= 1" is always a delivery gap on this
+      // device for a *sealed* class, never a legitimately unkeyed epoch. Sealing is
       // still a fact about the epoch rather than a mode; this is the one case where
       // the fact cannot be read off the key alone. Authoring `plaintext_v1` here
       // would put the user's content on the server in the clear at an epoch that is

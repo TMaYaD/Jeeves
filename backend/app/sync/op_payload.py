@@ -151,7 +151,7 @@ class OpPayload:
     @property
     def effective_tombstone_hlc(self) -> Hlc:
         """The clock the tombstone applies at: its own if it carries one, else the op's."""
-        return self.tombstone_hlc or self.hlc
+        return self.hlc if self.tombstone_hlc is None else self.tombstone_hlc
 
     def to_json_dict(self) -> dict[str, Any]:
         fields_json: dict[str, Any] = {}

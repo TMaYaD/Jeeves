@@ -51,11 +51,12 @@ from typing import Any, Final
 from app.sync.envelope import PREV_AUTHOR_HASH_BYTES
 from app.sync.op_payload import CANONICAL_UUID_PATTERN
 
-#: An envelope hash is exactly 64 lowercase hex characters — SHA-256 of the whole
-#: envelope, spelled the way :mod:`app.sync.op_payload` spells a member id: one
-#: casing, no normalisation, because a codec that accepted another spelling would
-#: accept attestations its peer refuses.
-ENVELOPE_HASH_HEX_PATTERN: Final = re.compile(r"^[0-9a-f]{64}$")
+#: An envelope hash is exactly ``PREV_AUTHOR_HASH_BYTES * 2`` lowercase hex
+#: characters — SHA-256 of the whole envelope, spelled the way
+#: :mod:`app.sync.op_payload` spells a member id: one casing, no normalisation,
+#: because a codec that accepted another spelling would accept attestations its
+#: peer refuses.
+ENVELOPE_HASH_HEX_PATTERN: Final = re.compile(rf"^[0-9a-f]{{{PREV_AUTHOR_HASH_BYTES * 2}}}$")
 
 #: not configurable: how many ops one prune may attest.  It bounds the single
 #: ``UPDATE`` the server runs and the walk every client runs, and it is the same

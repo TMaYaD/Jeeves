@@ -386,11 +386,11 @@ class InitialUploadState extends Table {
 ///
 /// [pruneSeq] is kept so a row can always be traced back to the op that produced
 /// it, the way `grants.granted_seq` is.
-@TableIndex(
-  name: 'pruned_attestations_position',
-  columns: {#workspaceId, #authorMemberId, #authorSeq},
-  unique: true,
-)
+///
+/// No `@TableIndex` over the position: the composite primary key
+/// `{workspaceId, authorMemberId, authorSeq}` already enforces that uniqueness, so a
+/// second index over the same columns in the same order would only add a B-tree and
+/// a write per insert without adding a rule.
 @DataClassName('PrunedAttestationRow')
 class PrunedAttestations extends Table {
   TextColumn get workspaceId => text()();
@@ -517,12 +517,12 @@ class SyncDatabase extends _$SyncDatabase {
             await migrator.createTable(initialUploadState);
           }
           if (from < 8) {
-            // One new table and its index, nothing backfilled and nothing moved: a
-            // device upgrading here has received no prune op, so it genuinely has
-            // no attestations rather than an empty set by decree. Every byte of its
-            // log, quarantine and reduced state survives untouched.
+            // One new table, no index and no backfill: its composite primary key is
+            // the uniqueness constraint, and a device upgrading here has received no
+            // prune op, so it genuinely has no attestations rather than an empty set
+            // by decree. Every byte of its log, quarantine and reduced state
+            // survives untouched.
             await migrator.createTable(prunedAttestations);
-            await migrator.create(prunedAttestationsPosition);
           }
         },
       );

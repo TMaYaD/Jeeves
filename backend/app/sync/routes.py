@@ -1061,6 +1061,10 @@ async def _verify_and_authorize(
     # Class-4 op ids this batch carries but has not yet stored, so a prune later in
     # the same POST can name one.  Header fields only: a class-4 body is ciphertext.
     staged_compaction_op_ids: set[uuid.UUID] = set()
+    # Prune targets claimed by an earlier admission in this POST, so a second prune
+    # naming a shared seq is refused at verification rather than tripping the
+    # materialisation rowcount check with a race that did not happen.
+    claimed_seqs: set[int] = set()
 
     admissions = _BatchAdmissions()
     for index, (envelope, header) in enumerate(parsed):
@@ -1085,8 +1089,8 @@ async def _verify_and_authorize(
                         header,
                         index=index,
                         workspace_id=workspace_id,
-                        current_member=current_member,
                         staged_compaction_op_ids=staged_compaction_op_ids,
+                        claimed_seqs=claimed_seqs,
                         is_replay=header.op_id in replayed_op_ids,
                     )
                 )
@@ -1207,8 +1211,8 @@ async def _verify_prune(
     *,
     index: int,
     workspace_id: uuid.UUID,
-    current_member: Member,
     staged_compaction_op_ids: set[uuid.UUID],
+    claimed_seqs: set[int],
     is_replay: bool,
 ) -> _PruneAdmission:
     """The second body-reading path, and everything it refuses.
@@ -1291,12 +1295,22 @@ async def _verify_prune(
             # ``revoked_by_seq``'s immutability — with the same verbatim-replay
             # exemption, because a replay stamped these rows itself.
             raise _unprocessable("prune_target_already_compacted", index=index, seq=target.seq)
+        if target.seq in claimed_seqs and not is_replay:
+            # An *earlier* prune in this same POST already named this seq.  Caught
+            # here rather than at materialisation so that the guarded UPDATE's
+            # rowcount mismatch keeps its one documented cause — a concurrent prune
+            # — instead of misreporting an in-batch collision as a race that never
+            # happened and rolling back an otherwise-valid batch.
+            raise _unprocessable("prune_target_already_compacted", index=index, seq=target.seq)
         if row.op_id == payload.compaction_op_id:
             # A compaction cannot supersede itself.  Only reachable against a
             # *stored* target: a same-batch compaction has no transport seq yet, so
             # it structurally cannot appear in ``targets``.
             raise _unprocessable("prune_target_is_its_own_compaction", index=index, seq=target.seq)
-    del current_member
+    # Stage this prune's seqs so a later admission in the same POST that names one of
+    # them is refused above rather than at the UPDATE.  A replay's targets are
+    # already stamped, so they never reach the collision check anyway.
+    claimed_seqs.update(target.seq for target in payload.targets)
     return _PruneAdmission(index=index, targets=payload.targets, is_replay=is_replay)
 
 
@@ -1313,11 +1327,13 @@ async def _materialise_prunes(
     ``include_compacted`` serves it back.
 
     The ``UPDATE`` is guarded on ``compacted_by IS NULL`` and its rowcount checked
-    against the target count.  With duplicates refused at decode that mismatch has
-    exactly one cause left: a **concurrent prune** stamped a shared target between
-    this batch's validation and its append.  The loser rolls back and learns the
-    same ``prune_target_already_compacted`` the sequential case gives it, which is
-    the whole point of naming the two conditions apart.
+    against the target count.  With duplicates refused at decode *and* same-batch
+    shared targets refused during verification (``claimed_seqs`` in
+    ``_verify_prune``), that mismatch has exactly one cause left: a **concurrent
+    prune** stamped a shared target between this batch's validation and its append.
+    The loser rolls back and learns the same ``prune_target_already_compacted`` the
+    sequential case gives it, which is the whole point of naming the two conditions
+    apart.
     """
     for admission in prunes:
         if results[admission.index].duplicate:

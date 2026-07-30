@@ -607,7 +607,10 @@ def _negative_vectors() -> list[dict[str, Any]]:
                 "keeps 'unknown' and 'not yet' indistinguishable to a receiver. "
                 "Replaces #554's compaction vector, now that #555 serves class 4 — "
                 "the fail-closed negative has to survive the class it named being "
-                "turned on, so it moved to the class #557 will turn on next."
+                "turned on, so it moved to the class #557 will turn on next. Its "
+                "op_id_name stays 'unimplemented_op_class' so the frozen envelope "
+                "bytes do not churn on the move (see spec/sync/README.md); only the "
+                "vector label tracks the class it now names."
             ),
         )
     )

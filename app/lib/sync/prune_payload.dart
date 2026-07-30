@@ -45,11 +45,12 @@ import 'dart:typed_data';
 
 import 'envelope.dart';
 
-/// An envelope hash is exactly 64 lowercase hex characters — SHA-256 over the
+/// An envelope hash is exactly [prevAuthorHashBytes] * 2 lowercase hex characters — SHA-256 over the
 /// whole envelope, spelled the way an HLC member id is spelled: one casing, no
 /// normalisation, because a codec that accepted another spelling would accept
 /// attestations its peer refuses.
-final RegExp _envelopeHashHexPattern = RegExp(r'^[0-9a-f]{64}$');
+final RegExp _envelopeHashHexPattern =
+    RegExp('^[0-9a-f]{${prevAuthorHashBytes * 2}}\$');
 
 /// not tunable per call: how many ops one prune may attest. It bounds the single
 /// `UPDATE` the server runs and the walk every client runs, and it is the same

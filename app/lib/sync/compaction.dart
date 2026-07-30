@@ -143,6 +143,19 @@ class Compactor {
         'threshold of $thresholdLiveOps',
       );
     }
+    // Checked *before* anything is signed: [PrunePayload.encode] refuses above the
+    // cap, and discovering that only after [SyncClient.captureCompaction] had
+    // authored and queued the class-4 snapshot would leave an unpaired compaction op
+    // in the outbox — uploaded, superseding nothing, with the pass unable to succeed
+    // until the entity was split by hand. Fail closed on the same error the codec
+    // raises, so an over-cap entity is a named refusal rather than a wedged outbox.
+    if (targets.length > maxPruneTargets) {
+      throw SyncRejection(
+        SyncRejectionReason.pruneTargetsTooMany,
+        '$collection/$entityId has ${targets.length} compactable op(s), above the '
+        'per-prune cap of $maxPruneTargets; split the entity before compacting',
+      );
+    }
 
     // Awaited in order, so the snapshot takes the earlier `author_seq` and the
     // flusher presents the pair compaction-before-prune. Two un-awaited authors
@@ -173,13 +186,19 @@ class Compactor {
       for (final row in rows) (collection: row.collection, entityId: row.entityId),
     };
     final attested = await _attestedPositions();
+    // One decode-scan of the whole log, bucketed by `(collection, entityId)`, rather
+    // than [_compactableOps] per entity — which would re-decode the whole log once
+    // per entity. The per-entity unattested filter and the checks below are
+    // unchanged; only the source of the ops moved from N scans to one.
+    final byEntity = await _client.loggedOpsByEntity();
     final candidates = <AffectedEntity>[];
     for (final entity in entities) {
-      final ops = await _compactableOps(
-        collection: entity.collection,
-        entityId: entity.entityId,
-        attested: attested,
-      );
+      final logged = byEntity[(entity.collection, entity.entityId)];
+      if (logged == null) continue;
+      final ops = [
+        for (final op in logged)
+          if (!attested.contains('${op.authorMemberId}/${op.authorSeq}')) op,
+      ];
       if (ops.length < thresholdLiveOps) continue;
       final newest = await _newestReceivedAt([for (final op in ops) op.seq]);
       if (newest == null || newest.isAfter(cutoff)) continue;
