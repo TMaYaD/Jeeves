@@ -16,10 +16,10 @@ import 'dart:convert';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jeeves/cutover/reseed/reseed_plan.dart';
+import 'package:jeeves/sync/initial_upload_plan.dart';
 import 'package:jeeves/cutover/reseed/reseed_report.dart';
 import 'package:jeeves/cutover/reseed/reseed_runner.dart';
-import 'package:jeeves/cutover/reseed/reseed_uploader.dart';
+import 'package:jeeves/sync/initial_upload.dart';
 import 'package:jeeves/cutover/reseed/reseed_verifier.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
@@ -96,7 +96,7 @@ void main() {
     /// One run through the production orchestration.
     Future<ReseedOutcome> reseed({
       String Function()? mintTagId,
-      int flushEveryOpCount = reseedFlushEveryOpCount,
+      int flushEveryOpCount = initialUploadFlushEveryOpCount,
     }) =>
         runReseed(
           readLegacyRows: legacy.readRows,
@@ -131,7 +131,7 @@ void main() {
       // Both Workspaces reported on: eleven GTD collections plus preferences.
       expect(
         outcome.tables.map((table) => table.table),
-        containsAll(reseedCollectionOrder),
+        containsAll(initialUploadCollectionOrder),
       );
 
       // Every planned entity authored, nothing skipped on a first run.
@@ -232,14 +232,14 @@ void main() {
       // nothing acknowledged by the server. Offline makes `capture()` succeed
       // (it is purely local) and the flush fail.
       device.goOffline();
-      final plan = await buildReseedPlan(
+      final plan = await buildInitialUploadPlan(
         readLegacyRows: legacy.readRows,
         userId: device.userId,
         preferencesWorkspaceId: preferencesClient.workspaceId,
         mintTagId: _mintedTagIds(),
       );
       await expectLater(
-        runReseedUpload(
+        runInitialUpload(
           plan: plan,
           gtdClient: device.client,
           preferencesClient: preferencesClient,
@@ -365,7 +365,7 @@ void main() {
           outcome.plan.entitiesFor(userPreferencesCollection).toList();
       expect(preferences, isNotEmpty);
       for (final entity in preferences) {
-        expect(entity.workspace, ReseedWorkspace.preferences);
+        expect(entity.workspace, InitialUploadWorkspace.preferences);
         // ADR-0033: a value write names the key that selects its merge strategy,
         // or every peer quarantines it. Plus `user_id` and `updated_at`, which
         // `PreferencesStore.set` does not write — the reseed has to satisfy the
@@ -411,7 +411,7 @@ int _serverContentOpCount(SimWorkspace workspace) => workspace.server.storedOps
     .where((op) => op.header?.opClass == opClassContent)
     .length;
 
-Map<String, int> _plannedByCollection(ReseedPlan plan) {
+Map<String, int> _plannedByCollection(InitialUploadPlan plan) {
   final counts = <String, int>{};
   for (final entity in plan.entities) {
     counts[entity.collection] = (counts[entity.collection] ?? 0) + 1;

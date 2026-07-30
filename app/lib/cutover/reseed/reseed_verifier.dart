@@ -52,7 +52,7 @@ import '../../sync/sync_client.dart';
 import '../../sync/sync_database.dart';
 import '../../sync/sync_transport.dart';
 import '../converge_verify/canonical_row.dart';
-import 'reseed_plan.dart';
+import '../../sync/initial_upload_plan.dart';
 
 /// One throwaway verification stack, for one Workspace.
 class ReseedScratchStack {
@@ -180,8 +180,8 @@ class ReseedTableDiff {
   /// Reduced but not projected — required columns unsatisfied.
   final List<String> heldBackIds;
 
-  final List<ReseedAnomaly> legacyAnomalies;
-  final List<ReseedAnomaly> reducedAnomalies;
+  final List<InitialUploadAnomaly> legacyAnomalies;
+  final List<InitialUploadAnomaly> reducedAnomalies;
 
   /// #582's rule, kept verbatim: an anomaly means this row's digest does not
   /// carry that column's content, so "equal digests" would be a weaker claim than
@@ -238,7 +238,7 @@ Map<String, Object?> reseedCanonicalInput(
 /// [collections] is the subset of the twelve this stack's Workspace carries, so
 /// the preferences stack is not asked about `todos` and vice versa.
 Future<List<ReseedTableDiff>> compareReducedStateWithPlan({
-  required ReseedPlan plan,
+  required InitialUploadPlan plan,
   required ReseedScratchStack stack,
   required List<String> collections,
 }) async {
@@ -251,8 +251,8 @@ Future<List<ReseedTableDiff>> compareReducedStateWithPlan({
     final reduced = await stack.registry.view(collection).readAll();
     final projectedIds = await _projectedRowIds(stack.domain, collection);
 
-    final legacyAnomalies = <ReseedAnomaly>[];
-    final reducedAnomalies = <ReseedAnomaly>[];
+    final legacyAnomalies = <InitialUploadAnomaly>[];
+    final reducedAnomalies = <InitialUploadAnomaly>[];
     final legacyDigests = <String, String>{};
     final reducedDigests = <String, String>{};
 
@@ -263,7 +263,7 @@ Future<List<ReseedTableDiff>> compareReducedStateWithPlan({
       );
       legacyDigests[entry.key] = row.digest;
       for (final anomaly in row.anomalies) {
-        legacyAnomalies.add(ReseedAnomaly(
+        legacyAnomalies.add(InitialUploadAnomaly(
           table: collection,
           kind: anomaly.kind,
           rowId: entry.key,
@@ -279,7 +279,7 @@ Future<List<ReseedTableDiff>> compareReducedStateWithPlan({
       );
       reducedDigests[entry.key] = row.digest;
       for (final anomaly in row.anomalies) {
-        reducedAnomalies.add(ReseedAnomaly(
+        reducedAnomalies.add(InitialUploadAnomaly(
           table: collection,
           kind: anomaly.kind,
           rowId: entry.key,
@@ -301,7 +301,7 @@ Future<List<ReseedTableDiff>> compareReducedStateWithPlan({
     }
     // Entities the plan vouches for without re-asserting — a Label an earlier
     // reseed minted for a converted Area — are not "state the source does not
-    // have"; see `ReseedPlan.endorsedEntityIdsByCollection`.
+    // have"; see `InitialUploadPlan.endorsedEntityIdsByCollection`.
     final endorsed =
         plan.endorsedEntityIdsByCollection[collection] ?? const <String>{};
     final onlyInReduced = [
@@ -313,7 +313,7 @@ Future<List<ReseedTableDiff>> compareReducedStateWithPlan({
         if (!projectedIds.contains(id)) id,
     ];
     for (final id in heldBack) {
-      reducedAnomalies.add(ReseedAnomaly(
+      reducedAnomalies.add(InitialUploadAnomaly(
         table: collection,
         kind: projectionHeldBack,
         rowId: id,
@@ -354,9 +354,9 @@ Future<Set<String>> _projectedRowIds(
 }
 
 /// The collections each Workspace carries.
-List<String> reseedCollectionsFor(ReseedWorkspace workspace) => [
-      for (final collection in reseedCollectionOrder)
+List<String> reseedCollectionsFor(InitialUploadWorkspace workspace) => [
+      for (final collection in initialUploadCollectionOrder)
         if ((collection == userPreferencesCollection) ==
-            (workspace == ReseedWorkspace.preferences))
+            (workspace == InitialUploadWorkspace.preferences))
           collection,
     ];

@@ -21,6 +21,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/cutover/converge_verify/canonical_row.dart';
 import 'package:jeeves/cutover/converge_verify/converge_differ.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/sync/collection_codecs.dart' show parseTimestampUtcMs;
 
 import '../test_helpers.dart';
 

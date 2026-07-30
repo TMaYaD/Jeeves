@@ -1,58 +1,70 @@
-/// The reseed transform: legacy rows in, planned ops out. Pure.
+/// The initial-upload transform: local domain rows in, planned ops out. Pure.
 ///
-/// **Cutover tooling — removed by #556**, together with the rest of
-/// `app/lib/cutover/`, `app/test/cutover/`, the `/settings/reseed` route and the
-/// Settings entry.
+/// **Permanent sync-layer machinery.** Enrolment triggers it (`sync_lifecycle`),
+/// and the cutover-scoped verification surface (`app/lib/cutover/reseed/`) reads
+/// the same plan — which is what makes that comparison a statement about the data
+/// rather than about two normalisers.
 ///
-/// One implementation, two consumers. `reseed_uploader.dart` authors what this
-/// plans; `reseed_verifier.dart` compares the *same* plan against what the new
-/// spine reduces back from the server. A second copy of the transform on the
-/// verification side could only ever agree with the uploader by luck, so there
-/// is exactly one — which is also what makes the comparison a statement about
-/// the data rather than about two normalisers.
+/// One implementation, two consumers. `initial_upload.dart` authors what this
+/// plans; `cutover/reseed/reseed_verifier.dart` compares the *same* plan against
+/// what the spine reduces back from the server. A second copy of the transform on
+/// the verification side could only ever agree with the uploader by luck, so
+/// there is exactly one.
+///
+/// **Which store the walk reads.** The domain read model — today the same
+/// physical file PowerSync manages, `jeeves_domain.sqlite` once #556 swaps it,
+/// with no seam change either time. Reads are `SELECT * FROM <table>`,
+/// deliberately unfiltered (#582's rule): a row stranded at `user_id = 'local'`,
+/// or under a previous account's id, must reach the plan rather than vanish
+/// behind a predicate. The transform stamps the enrolled `user_id` at authoring,
+/// so such rows land under the account that is actually syncing.
+///
+/// **A note on the word "legacy" in this file.** It names the *row-store* side of
+/// the transform — the domain tables — as against the reduced-state side the diff
+/// skip reads. It is not a claim that those tables are on their way out: they are
+/// the domain read model. The naming (and the report keys derived from it) is
+/// revisited when #556 swaps the file the read model lives in.
 ///
 /// Three rules the shape encodes deliberately:
 ///
 /// * **Entity ids are not minted here.** Junctions and `user_preferences` carry
 ///   their derivation (`todoTagIdFor` and siblings, `preferenceEntityId`);
-///   everything else keeps the legacy row's own `id`, per `sync/ids.dart`'s
+///   everything else keeps the local row's own `id`, per `sync/ids.dart`'s
 ///   explicit rule that only those two families are deterministic. That is what
 ///   makes a re-run address the same entities rather than duplicating them.
 /// * **Nulls are authored, absences are not.** A NULL optional column travels as
-///   an explicit null field, so the reseed preserves it rather than leaving a
+///   an explicit null field, so the upload preserves it rather than leaving a
 ///   stale value standing on a re-run. A NULL *required* column is different: an
 ///   op omitting it can never project, so the row is left out of the plan
-///   entirely and named in [ReseedPlan.anomalies] — loudly excluded rather than
-///   quietly uploaded into a shape no device can materialise.
+///   entirely and named in [InitialUploadPlan.anomalies] — loudly excluded rather
+///   than quietly uploaded into a shape no device can materialise.
 /// * **ADR-0025 is applied here, not at the storage layer.** An Outcome holding
 ///   several Areas keeps one and converts the surplus to Labels, by a pure
 ///   function of the data so every re-run picks the same Area. The pick is
-///   provisional: the user's own resolution happens in the post-cutover Weekly
-///   Review, and [ReseedPlan.resolutions] is that pass's worklist.
+///   provisional: the user's own resolution happens in the next Weekly Review,
+///   and [InitialUploadPlan.resolutions] is that pass's worklist.
 library;
 
 import 'package:uuid/uuid.dart';
 
-import '../../database/daos/capture_dao.dart'
+import '../database/daos/capture_dao.dart'
     show captureOutcomeIdFor, captureTagIdFor;
-import '../../database/daos/focus_session_dao.dart'
+import '../database/daos/focus_session_dao.dart'
     show focusSessionDispositionIdFor;
-import '../../database/daos/tag_dao.dart' show todoTagIdFor;
-import '../../sync/collection_codecs.dart';
-import '../../sync/ids.dart';
-import '../converge_verify/canonical_row.dart'
-    show convergeVerifyTables, parseTimestampUtcMs, rawAsText;
+import '../database/daos/tag_dao.dart' show todoTagIdFor;
+import 'collection_codecs.dart';
+import 'ids.dart';
 
 /// The production Tag-id minter: a random UUIDv4, per `sync/ids.dart`'s rule
 /// that only junctions and `user_preferences` get deterministic ids. Injected
 /// rather than called inline so a test can assert the transform is otherwise a
 /// pure function of its inputs.
-String reseedRandomTagId() => const Uuid().v4();
+String initialUploadRandomTagId() => const Uuid().v4();
 
-/// Reads every row of one legacy table. `SELECT * FROM <table>`, deliberately
+/// Reads every row of one domain table. `SELECT * FROM <table>`, deliberately
 /// unfiltered — #582's rule: a row stranded at `user_id = 'local'` must reach
 /// the plan and be visible in the report, not vanish behind a predicate.
-typedef ReseedRowSource = Future<List<Map<String, Object?>>> Function(
+typedef InitialUploadRowSource = Future<List<Map<String, Object?>>> Function(
     String table);
 
 /// Reduced state for one collection, as `{entity id: {field: value}}`.
@@ -60,7 +72,7 @@ typedef ReducedCollectionReader
     = Future<Map<String, Map<String, Object?>>> Function(String collection);
 
 /// Which of the User's two Workspaces an entity is authored into.
-enum ReseedWorkspace {
+enum InitialUploadWorkspace {
   /// The default (GTD) Workspace: eleven of the twelve collections.
   gtd,
 
@@ -78,7 +90,7 @@ const String labelTagType = 'label';
 /// whose Outcome has not arrived still reduces, and projects when it does — so
 /// this is for a human reading the log and a progress bar that advances
 /// sensibly, not for correctness.
-const List<String> reseedCollectionOrder = [
+const List<String> initialUploadCollectionOrder = [
   tagsCollection,
   todosCollection,
   capturesCollection,
@@ -93,9 +105,6 @@ const List<String> reseedCollectionOrder = [
   userPreferencesCollection,
 ];
 
-/// The legacy tables the reseed walks — #582's twelve, so the two tools cannot
-/// disagree about what "the store" is.
-const List<String> reseedTables = convergeVerifyTables;
 
 // --- anomaly kinds ---------------------------------------------------------
 
@@ -126,11 +135,11 @@ const String uploadRefused = 'upload_refused';
 /// because its required columns are not satisfied.
 const String projectionHeldBack = 'projection_held_back';
 
-/// One thing the reseed could not do faithfully, named where a reviewer can go
+/// One thing the upload could not do faithfully, named where a reviewer can go
 /// look. Never thrown — #582's discipline: a throw would brick the report on the
-/// one device the tool exists to run on.
-class ReseedAnomaly {
-  const ReseedAnomaly({
+/// one device the data lives on.
+class InitialUploadAnomaly {
+  const InitialUploadAnomaly({
     required this.table,
     required this.kind,
     this.rowId,
@@ -160,11 +169,11 @@ class ReseedAnomaly {
 
   @override
   String toString() =>
-      'ReseedAnomaly($table, $kind, $rowId, $column, $raw)';
+      'InitialUploadAnomaly($table, $kind, $rowId, $column, $raw)';
 
   @override
   bool operator ==(Object other) =>
-      other is ReseedAnomaly &&
+      other is InitialUploadAnomaly &&
       other.table == table &&
       other.kind == kind &&
       other.rowId == rowId &&
@@ -177,7 +186,7 @@ class ReseedAnomaly {
 
 // --- planned entities ------------------------------------------------------
 
-/// One entity the reseed will assert, with the exact wire fields it will carry.
+/// One entity the upload will assert, with the exact wire fields it will carry.
 class PlannedEntity {
   const PlannedEntity({
     required this.workspace,
@@ -187,7 +196,7 @@ class PlannedEntity {
     required this.legacyRowIds,
   });
 
-  final ReseedWorkspace workspace;
+  final InitialUploadWorkspace workspace;
   final String collection;
   final String entityId;
 
@@ -203,8 +212,8 @@ class PlannedEntity {
 // --- ADR-0025 conversions -------------------------------------------------
 
 /// A Tag as the report names it: enough to find it, no more.
-class ReseedTagRef {
-  const ReseedTagRef({required this.id, required this.name});
+class InitialUploadTagRef {
+  const InitialUploadTagRef({required this.id, required this.name});
 
   final String id;
   final String name;
@@ -213,13 +222,13 @@ class ReseedTagRef {
 
   @override
   bool operator ==(Object other) =>
-      other is ReseedTagRef && other.id == id && other.name == name;
+      other is InitialUploadTagRef && other.id == id && other.name == name;
 
   @override
   int get hashCode => Object.hash(id, name);
 
   @override
-  String toString() => 'ReseedTagRef($id, $name)';
+  String toString() => 'InitialUploadTagRef($id, $name)';
 }
 
 /// Where the Label an Area converted to came from.
@@ -240,8 +249,8 @@ class AreaMembershipConversion {
     required this.collapsedOntoExistingMembership,
   });
 
-  final ReseedTagRef area;
-  final ReseedTagRef label;
+  final InitialUploadTagRef area;
+  final InitialUploadTagRef label;
   final String labelOrigin;
 
   /// The Outcome already carried this Label, so the junction derivation
@@ -273,7 +282,7 @@ class AreaExclusivityResolution {
   /// row carries none.
   final String? outcomeTitle;
 
-  final ReseedTagRef keptArea;
+  final InitialUploadTagRef keptArea;
   final List<AreaMembershipConversion> converted;
 
   Map<String, Object?> toJson() => {
@@ -286,8 +295,8 @@ class AreaExclusivityResolution {
 
 // --- the plan --------------------------------------------------------------
 
-class ReseedPlan {
-  const ReseedPlan({
+class InitialUploadPlan {
+  const InitialUploadPlan({
     required this.entities,
     required this.resolutions,
     required this.anomalies,
@@ -296,13 +305,13 @@ class ReseedPlan {
     required this.endorsedEntityIdsByCollection,
   });
 
-  /// Every entity to author, in [reseedCollectionOrder].
+  /// Every entity to author, in [initialUploadCollectionOrder].
   final List<PlannedEntity> entities;
 
   /// Every multi-Area Outcome ADR-0025 resolved.
   final List<AreaExclusivityResolution> resolutions;
 
-  final List<ReseedAnomaly> anomalies;
+  final List<InitialUploadAnomaly> anomalies;
 
   /// How many rows each legacy table held, before the transform.
   final Map<String, int> legacyRowCountByTable;
@@ -314,10 +323,10 @@ class ReseedPlan {
   /// Entities the spine holds that the plan deliberately does **not** re-assert,
   /// and vouches for anyway.
   ///
-  /// Exactly one thing lands here: a Label an earlier reseed *minted* for a
+  /// Exactly one thing lands here: a Label an earlier pass *minted* for a
   /// converted Area. It has no legacy row, so a later run resolves the conversion
   /// onto it by name rather than planning it again — and without this the
-  /// verification would read the reseed's own previous output as state the source
+  /// verification would read the upload's own previous output as state the source
   /// store does not have. Endorsing it is narrower than excluding the collection
   /// and louder than ignoring the difference: the ids are in the report.
   final Map<String, Set<String>> endorsedEntityIdsByCollection;
@@ -336,7 +345,7 @@ class ReseedPlan {
   int get labelsMinted => _distinctLabelIds(labelOriginMinted).length;
 
   /// Labels that already existed, whichever side they were found on — a legacy
-  /// Tag row, or one an earlier reseed minted and the spine still holds.
+  /// Tag row, or one an earlier pass minted and the spine still holds.
   int get labelsMerged =>
       _distinctLabelIds(labelOriginLegacyTag).length +
       _distinctLabelIds(labelOriginSpineTag).length;
@@ -349,8 +358,8 @@ class ReseedPlan {
             if (conversion.labelOrigin == origin) conversion.label.id,
       };
 
-  /// Rows no op could carry. Non-zero means the reseed is not a faithful copy of
-  /// the legacy store, and the verdict says so rather than reading green.
+  /// Rows no op could carry. Non-zero means the upload is not a faithful copy of
+  /// the local store, and any verdict over it says so rather than reading green.
   int get excludedRowCount => excludedRowIdsByTable.values
       .fold(0, (total, ids) => total + ids.length);
 
@@ -400,7 +409,7 @@ class _LegacyTag {
     return byName != 0 ? byName : a.id.compareTo(b.id);
   }
 
-  ReseedTagRef get ref => ReseedTagRef(id: id, name: name);
+  InitialUploadTagRef get ref => InitialUploadTagRef(id: id, name: name);
 }
 
 /// Build the plan for one legacy store.
@@ -413,19 +422,19 @@ class _LegacyTag {
 /// [mintTagId] is injected so a test can assert the plan is a pure function of
 /// its inputs; production hands in a random UUID minter, per `ids.dart`'s rule
 /// that only junctions and preferences get deterministic ids.
-Future<ReseedPlan> buildReseedPlan({
-  required ReseedRowSource readLegacyRows,
+Future<InitialUploadPlan> buildInitialUploadPlan({
+  required InitialUploadRowSource readLegacyRows,
   required String userId,
   required String preferencesWorkspaceId,
   required String Function() mintTagId,
-  Map<String, ReseedTagRef> spineLabelTagsByName = const {},
+  Map<String, InitialUploadTagRef> spineLabelTagsByName = const {},
 }) async {
   final rowsByTable = <String, List<Map<String, Object?>>>{};
-  for (final table in reseedTables) {
+  for (final table in initialUploadCollectionOrder) {
     rowsByTable[table] = await readLegacyRows(table);
   }
 
-  final anomalies = <ReseedAnomaly>[];
+  final anomalies = <InitialUploadAnomaly>[];
   final excluded = <String, List<String>>{};
   void exclude(String table, String? rowId) {
     (excluded[table] ??= <String>[]).add(rowId ?? '(no id)');
@@ -455,11 +464,11 @@ Future<ReseedPlan> buildReseedPlan({
   );
 
   final entities = <PlannedEntity>[];
-  for (final collection in reseedCollectionOrder) {
+  for (final collection in initialUploadCollectionOrder) {
     final codec = collectionCodecs[collection]!;
     final workspace = collection == userPreferencesCollection
-        ? ReseedWorkspace.preferences
-        : ReseedWorkspace.gtd;
+        ? InitialUploadWorkspace.preferences
+        : InitialUploadWorkspace.gtd;
     final rows = collection == todoTagsCollection
         ? resolution.todoTagRows
         : rowsByTable[collection]!;
@@ -470,13 +479,13 @@ Future<ReseedPlan> buildReseedPlan({
     final byEntityId = <String, PlannedEntity>{};
     for (final row in rows) {
       final legacyRowId = row['id'] is String ? row['id'] as String : null;
-      final entityId = reseedEntityIdFor(
+      final entityId = initialUploadEntityIdFor(
         collection: collection,
         row: row,
         preferencesWorkspaceId: preferencesWorkspaceId,
       );
       if (entityId == null) {
-        anomalies.add(ReseedAnomaly(
+        anomalies.add(InitialUploadAnomaly(
           table: collection,
           kind: missingIdentityColumns,
           rowId: legacyRowId,
@@ -492,7 +501,7 @@ Future<ReseedPlan> buildReseedPlan({
       );
       anomalies.addAll([
         for (final anomaly in encoded.anomalies)
-          ReseedAnomaly(
+          InitialUploadAnomaly(
             table: collection,
             kind: anomaly.kind,
             rowId: legacyRowId ?? entityId,
@@ -515,7 +524,7 @@ Future<ReseedPlan> buildReseedPlan({
         );
         continue;
       }
-      anomalies.add(ReseedAnomaly(
+      anomalies.add(InitialUploadAnomaly(
         table: collection,
         kind: collapsedDuplicateRow,
         rowId: legacyRowId ?? entityId,
@@ -540,12 +549,13 @@ Future<ReseedPlan> buildReseedPlan({
     }
   }
 
-  return ReseedPlan(
+  return InitialUploadPlan(
     entities: entities,
     resolutions: resolution.resolutions,
     anomalies: anomalies,
     legacyRowCountByTable: {
-      for (final table in reseedTables) table: rowsByTable[table]!.length,
+      for (final table in initialUploadCollectionOrder)
+        table: rowsByTable[table]!.length,
     },
     excludedRowIdsByTable: {
       for (final entry in excluded.entries) entry.key: entry.value..sort(),
@@ -562,8 +572,8 @@ Future<ReseedPlan> buildReseedPlan({
 ///
 /// The two deterministic families of `sync/ids.dart` and nothing else: every
 /// other collection keeps the legacy row's own `id`, which is what makes the
-/// reseed address existing entities instead of minting new ones.
-String? reseedEntityIdFor({
+/// upload address existing entities instead of minting new ones.
+String? initialUploadEntityIdFor({
   required String collection,
   required Map<String, Object?> row,
   required String preferencesWorkspaceId,
@@ -619,7 +629,7 @@ class EncodedLegacyRow {
   });
 
   final Map<String, Object?> fields;
-  final List<ReseedAnomaly> anomalies;
+  final List<InitialUploadAnomaly> anomalies;
 
   /// A required column could not be carried, so no op for this row could ever
   /// satisfy the projector. The caller excludes the row rather than authoring an
@@ -631,8 +641,9 @@ class EncodedLegacyRow {
 ///
 /// `user_id` is **stamped** with the enrolled account rather than copied: the
 /// legacy value may be the `'local'` placeholder a never-synced row was stranded
-/// under, and the whole point of the reseed is that the new spine holds the
-/// User's own rows. The stamping is a declared exclusion in the report.
+/// under — or a previous account's, since `logout()`'s reassignment is
+/// best-effort — and the whole point of the upload is that the spine holds the
+/// enrolled User's own rows. The stamping is a declared exclusion in the report.
 EncodedLegacyRow encodeLegacyRow({
   required String collection,
   required Map<String, Object?> row,
@@ -640,7 +651,7 @@ EncodedLegacyRow encodeLegacyRow({
 }) {
   final codec = collectionCodecs[collection]!;
   final fields = <String, Object?>{};
-  final anomalies = <ReseedAnomaly>[];
+  final anomalies = <InitialUploadAnomaly>[];
   var unprojectable = false;
 
   for (final entry in codec.columns.entries) {
@@ -653,7 +664,7 @@ EncodedLegacyRow encodeLegacyRow({
     final required = codec.requiredColumns.contains(column);
     if (raw == null) {
       if (required) {
-        anomalies.add(ReseedAnomaly(
+        anomalies.add(InitialUploadAnomaly(
           table: collection,
           kind: nullRequiredColumn,
           column: column,
@@ -661,14 +672,14 @@ EncodedLegacyRow encodeLegacyRow({
         unprojectable = true;
         continue;
       }
-      // An explicit null, not an absence: the reseed asserts what the legacy
+      // An explicit null, not an absence: the upload asserts what the local
       // store holds, including the emptiness of a column.
       fields[column] = null;
       continue;
     }
     final encoded = _encodeValue(entry.value, raw);
     if (encoded.refused) {
-      anomalies.add(ReseedAnomaly(
+      anomalies.add(InitialUploadAnomaly(
         table: collection,
         kind: unencodableValue,
         column: column,
@@ -736,7 +747,7 @@ class _AreaResolutionResult {
   final List<AreaExclusivityResolution> resolutions;
 
   /// Labels an earlier run minted, found on the spine and merged onto rather than
-  /// minted again. See [ReseedPlan.endorsedEntityIdsByCollection].
+  /// minted again. See [InitialUploadPlan.endorsedEntityIdsByCollection].
   final Set<String> endorsedSpineLabelIds;
 }
 
@@ -744,7 +755,7 @@ _AreaResolutionResult _resolveAreaExclusivity({
   required List<Map<String, Object?>> todoTagRows,
   required List<Map<String, Object?>> todoRows,
   required Map<String, _LegacyTag> tagsById,
-  required Map<String, ReseedTagRef> spineLabelTagsByName,
+  required Map<String, InitialUploadTagRef> spineLabelTagsByName,
   required String Function() mintTagId,
   required String userId,
 }) {
@@ -781,7 +792,7 @@ _AreaResolutionResult _resolveAreaExclusivity({
   final resolutions = <AreaExclusivityResolution>[];
   // Keyed by casefolded name so one run mints at most one Label per Area name,
   // however many Outcomes convert it.
-  final resolvedLabels = <String, ({ReseedTagRef ref, String origin})>{};
+  final resolvedLabels = <String, ({InitialUploadTagRef ref, String origin})>{};
   final endorsedSpineLabelIds = <String>{};
 
   for (final todoId in rowsByTodoId.keys) {
@@ -834,10 +845,10 @@ _AreaResolutionResult _resolveAreaExclusivity({
           // vouches for it instead of asserting it.
           endorsedSpineLabelIds.add(spine.id);
         } else {
-          final ref = ReseedTagRef(id: mintTagId(), name: area.name);
+          final ref = InitialUploadTagRef(id: mintTagId(), name: area.name);
           resolved = (ref: ref, origin: labelOriginMinted);
           mintedTags.add(PlannedEntity(
-            workspace: ReseedWorkspace.gtd,
+            workspace: InitialUploadWorkspace.gtd,
             collection: tagsCollection,
             entityId: ref.id,
             // Stamped with the enrolled account, like every other planned

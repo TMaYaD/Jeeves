@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/secure_screen.dart';
+import '../../sync/enrolment_state.dart';
 import 'enrolment_ceremony_runner.dart';
 
 class EnrolmentCeremonyScreen extends ConsumerStatefulWidget {

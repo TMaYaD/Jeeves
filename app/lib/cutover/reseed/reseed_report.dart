@@ -11,8 +11,8 @@ library;
 
 import '../converge_verify/canonical_row.dart' show excludedColumnsReport;
 import '../converge_verify/converge_differ.dart' show ReadOnlyProof;
-import 'reseed_plan.dart';
-import 'reseed_uploader.dart';
+import '../../sync/initial_upload.dart';
+import '../../sync/initial_upload_plan.dart';
 import 'reseed_verifier.dart';
 
 /// What has to be true before "reduced state equals the source" means anything.
@@ -95,12 +95,12 @@ class ReseedOutcome {
   });
 
   final ReseedVerdict verdict;
-  final ReseedPlan plan;
+  final InitialUploadPlan plan;
 
   /// Null when the run never got as far as authoring.
-  final ReseedUploadReport? upload;
+  final InitialUploadReport? upload;
 
-  /// Both Workspaces' tables, in [reseedCollectionOrder].
+  /// Both Workspaces' tables, in [initialUploadCollectionOrder].
   final List<ReseedTableDiff> tables;
 
   /// Read-only *on the legacy side*: the store the reseed reads and must not
@@ -117,7 +117,7 @@ class ReseedOutcome {
   /// Every anomaly the run produced, plan and upload and verification alike, in
   /// one list — the screen renders this and nothing has to remember to look in
   /// three places.
-  List<ReseedAnomaly> get anomalies => [
+  List<InitialUploadAnomaly> get anomalies => [
         ...plan.anomalies,
         ...?upload?.anomalies,
         for (final table in tables) ...table.legacyAnomalies,
@@ -171,7 +171,7 @@ const Map<String, String> reseedDeclaredExclusions = {
 ReseedVerdict reseedVerdictFor({
   required ReseedPreconditions preconditions,
   required ReadOnlyProof readOnlyProof,
-  required ReseedPlan plan,
+  required InitialUploadPlan plan,
   required List<ReseedTableDiff> tables,
 }) {
   if (!readOnlyProof.unchanged) return ReseedVerdict.readOnlyProofFailed;

@@ -21,6 +21,12 @@ import 'package:powersync/powersync.dart' as ps;
 
 import 'package:jeeves/cutover/converge_verify/canonical_row.dart';
 import 'package:jeeves/database/powersync_schema.g.dart';
+// The timestamp grammar now lives in the sync layer; the frozen spec still pins
+// it, so the assertions stay here.
+import 'package:jeeves/sync/collection_codecs.dart'
+    show parseTimestampUtcMs, timestampPattern;
+import 'package:jeeves/sync/initial_upload_plan.dart'
+    show initialUploadCollectionOrder;
 
 /// `flutter test` runs with `app/` as the working directory (docs/TESTING.md).
 const String _specFile =
@@ -217,6 +223,22 @@ void main() {
         expect(vector['digest'], expected);
       });
     }
+
+    test('the two tools walk the same twelve tables', () {
+      // #582's rule: the converge-verify check and the initial upload cannot
+      // disagree about what "the store" is. The orders differ on purpose —
+      // this one reads well in a report, the upload's is authoring order with
+      // parents before junctions — so the agreement is over the sets.
+      expect(
+        initialUploadCollectionOrder.toSet(),
+        convergeVerifyTables.toSet(),
+      );
+      expect(
+        initialUploadCollectionOrder.length,
+        convergeVerifyTables.length,
+        reason: 'a repeated table would make the set comparison vacuous',
+      );
+    });
 
     test('every table has at least one row vector', () {
       expect(

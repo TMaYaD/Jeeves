@@ -15,11 +15,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/cutover/converge_verify/converge_differ.dart'
     show ReadOnlyProof;
-import 'package:jeeves/cutover/reseed/reseed_plan.dart';
+import 'package:jeeves/sync/initial_upload_plan.dart';
 import 'package:jeeves/cutover/reseed/reseed_report.dart';
 import 'package:jeeves/cutover/reseed/reseed_runner.dart';
 import 'package:jeeves/cutover/reseed/reseed_screen.dart';
-import 'package:jeeves/cutover/reseed/reseed_uploader.dart';
+import 'package:jeeves/sync/initial_upload.dart';
 import 'package:jeeves/cutover/reseed/reseed_verifier.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 
@@ -70,11 +70,11 @@ const _preconditionsClean = ReseedPreconditions(
   pendingOpCountAfterFlush: 0,
 );
 
-ReseedPlan _plan({
+InitialUploadPlan _plan({
   List<AreaExclusivityResolution> resolutions = const [],
   Map<String, List<String>> excluded = const {},
 }) =>
-    ReseedPlan(
+    InitialUploadPlan(
       entities: const [],
       resolutions: resolutions,
       anomalies: const [],
@@ -83,7 +83,7 @@ ReseedPlan _plan({
       endorsedEntityIdsByCollection: const {},
     );
 
-const _upload = ReseedUploadReport(
+const _upload = InitialUploadReport(
   plannedEntityCount: 12,
   authoredOpCount: 10,
   skippedEntityCount: 2,
@@ -112,8 +112,8 @@ ReseedTableDiff _table({
 
 ReseedOutcome _outcome({
   ReseedVerdict verdict = ReseedVerdict.reseededAndConverged,
-  ReseedPlan? plan,
-  ReseedUploadReport? upload = _upload,
+  InitialUploadPlan? plan,
+  InitialUploadReport? upload = _upload,
   List<ReseedTableDiff> tables = const [],
   ReadOnlyProof proof = _proofUnchanged,
   ReseedPreconditions preconditions = _preconditionsClean,
@@ -249,11 +249,11 @@ void main() {
               AreaExclusivityResolution(
                 outcomeId: 'outcome-1',
                 outcomeTitle: 'Three Areas at once',
-                keptArea: const ReseedTagRef(id: 'area-1', name: 'admin'),
+                keptArea: const InitialUploadTagRef(id: 'area-1', name: 'admin'),
                 converted: const [
                   AreaMembershipConversion(
-                    area: ReseedTagRef(id: 'area-2', name: 'Home'),
-                    label: ReseedTagRef(id: 'label-1', name: 'Home'),
+                    area: InitialUploadTagRef(id: 'area-2', name: 'Home'),
+                    label: InitialUploadTagRef(id: 'label-1', name: 'Home'),
                     labelOrigin: labelOriginLegacyTag,
                     collapsedOntoExistingMembership: false,
                   ),

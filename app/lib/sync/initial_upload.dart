@@ -1,11 +1,14 @@
-/// Authors the reseed plan through the production capture path.
+/// Authors the initial-upload plan through the production capture path.
 ///
-/// **Cutover tooling — removed by #556.**
+/// **Permanent sync-layer machinery.** The trigger is enrolment
+/// (`sync_lifecycle.dart`), not a button: a device that becomes enrolled with
+/// local data already in it authors that data into the log, and a device that was
+/// interrupted resumes on its next sync.
 ///
 /// Nothing here is a second write path: every entity goes through
 /// `SyncClient.capture`, so the codecs, the receive-codec round trip, the
 /// author-side guards (#573, ADR-0033), the HLC, the signature, the outbox and
-/// the local reduce are all exactly the ones the running app will use. The
+/// the local reduce are all exactly the ones every other write uses. The
 /// uploader's only job is deciding *what* to capture and *when to stop*.
 ///
 /// ## Idempotence is decided by reading the target, not by remembering the run
@@ -17,11 +20,14 @@
 /// already-spent `(workspace, author, op_id)` slot and every peer would read the
 /// differing envelope as a rewrite.
 ///
-/// Instead the skip is a diff against the new spine's reduced state, which is
+/// Instead the skip is a diff against the spine's reduced state, which is
 /// airtight because `capture()` reduces locally *before* it returns: there is no
-/// window in which an authored entity is invisible to the check. A run therefore
+/// window in which an authored entity is invisible to the check. A pass therefore
 /// requires a pull first, so a device whose sync store was rebuilt diffs against
-/// reality rather than emptiness.
+/// reality rather than emptiness. On a second device that pull has already
+/// projected the first device's data into the domain store, so the walk over a
+/// projector-fed store is self-cancelling — every entity's planned fields are
+/// already the reduced values and the whole pass skips.
 ///
 /// **Only the planned fields are compared** (see [plannedFieldsAlreadyReduced]).
 /// Comparing the whole reduced field set would re-author every entity that
@@ -31,17 +37,17 @@
 /// A restart does not fork the author chain: `_authorAndQueue` reads the head
 /// from the persisted `author_state` row and every capture goes through the one
 /// serialised authoring tail. (The only path that re-derives a head from the log
-/// is the superseded-genesis rewind, which a reseed never reaches.)
+/// is the superseded-genesis rewind, which an upload never reaches.)
 ///
-/// No tombstones are authored. The reseed asserts what exists; absence from the
-/// legacy store is "never authored", not "deleted".
+/// No tombstones are authored. The upload asserts what exists; absence from the
+/// domain store is "never authored", not "deleted".
 library;
 
 import 'dart:convert';
 
-import '../../sync/envelope.dart' show SyncRejection;
-import '../../sync/sync_client.dart';
-import 'reseed_plan.dart';
+import 'envelope.dart' show SyncRejection;
+import 'initial_upload_plan.dart';
+import 'sync_client.dart';
 
 /// How many captures to author between `flushOutbox()` calls.
 ///
@@ -50,18 +56,19 @@ import 'reseed_plan.dart';
 /// interrupted run leaves un-posted, and the diff skip makes the retry free
 /// either way. One value, chosen to match the flush chunk so a full batch goes
 /// out at a time.
-const int reseedFlushEveryOpCount = 1000;
+const int initialUploadFlushEveryOpCount = 1000;
 
-/// How many entities to walk between [ReseedUploadProgress] emissions.
+/// How many entities to walk between [InitialUploadProgress] emissions.
 ///
-/// Coarse on purpose: every emission is a `setState` on the screen, and a store
-/// with thousands of `todos` does not need one rebuild per row. Fine enough that
-/// the counters visibly advance, which is the whole reason they exist.
-const int reseedProgressEveryEntityCount = 100;
+/// Coarse on purpose: an emission is a `setState` on whatever observes the walk,
+/// and a store with thousands of `todos` does not need one rebuild per row. Fine
+/// enough that the counters visibly advance, which is the whole reason they
+/// exist.
+const int initialUploadProgressEveryEntityCount = 100;
 
-/// Where the upload has got to, for the screen's progress line.
-class ReseedUploadProgress {
-  const ReseedUploadProgress({
+/// Where the upload has got to, for a progress line.
+class InitialUploadProgress {
+  const InitialUploadProgress({
     required this.collection,
     required this.completedEntityCount,
     required this.plannedEntityCount,
@@ -81,8 +88,8 @@ class ReseedUploadProgress {
 }
 
 /// What one upload pass did.
-class ReseedUploadReport {
-  const ReseedUploadReport({
+class InitialUploadReport {
+  const InitialUploadReport({
     required this.plannedEntityCount,
     required this.authoredOpCount,
     required this.skippedEntityCount,
@@ -110,7 +117,7 @@ class ReseedUploadReport {
   /// verification then shows it as `only_in_legacy`, which is the honest state.
   final int refusedEntityCount;
 
-  final List<ReseedAnomaly> anomalies;
+  final List<InitialUploadAnomaly> anomalies;
 
   Map<String, Object?> toJson() => {
         'planned_entity_count': plannedEntityCount,
@@ -157,21 +164,21 @@ bool plannedFieldsAlreadyReduced(
 /// is intact by contract, the entities already authored are in reduced state, and
 /// the next run skips them. Hiding the failure would leave the user believing the
 /// server holds ops it has never seen.
-Future<ReseedUploadReport> runReseedUpload({
-  required ReseedPlan plan,
+Future<InitialUploadReport> runInitialUpload({
+  required InitialUploadPlan plan,
   required SyncClient gtdClient,
   required SyncClient preferencesClient,
   required ReducedCollectionReader readReducedCollection,
-  void Function(ReseedUploadProgress)? onProgress,
-  int flushEveryOpCount = reseedFlushEveryOpCount,
-  int progressEveryEntityCount = reseedProgressEveryEntityCount,
+  void Function(InitialUploadProgress)? onProgress,
+  int flushEveryOpCount = initialUploadFlushEveryOpCount,
+  int progressEveryEntityCount = initialUploadProgressEveryEntityCount,
 }) async {
   var authored = 0;
   var skipped = 0;
   var reasserted = 0;
   var refused = 0;
   var completed = 0;
-  final anomalies = <ReseedAnomaly>[];
+  final anomalies = <InitialUploadAnomaly>[];
 
   var authoredSinceFlush = 0;
 
@@ -181,16 +188,16 @@ Future<ReseedUploadReport> runReseedUpload({
     await preferencesClient.flushOutbox();
   }
 
-  for (final collection in reseedCollectionOrder) {
+  for (final collection in initialUploadCollectionOrder) {
     final entities = plan.entitiesFor(collection).toList();
     if (entities.isEmpty) continue;
     final reduced = await readReducedCollection(collection);
 
     // Emitted at the head of the collection and then *inside* the walk: the
-    // counters are what the screen's line is for, and a collection holding
+    // counters are what a progress line is for, and a collection holding
     // thousands of entities would otherwise show its starting values for the
     // whole pass.
-    void reportProgress() => onProgress?.call(ReseedUploadProgress(
+    void reportProgress() => onProgress?.call(InitialUploadProgress(
           collection: collection,
           completedEntityCount: completed,
           plannedEntityCount: plan.entities.length,
@@ -206,7 +213,7 @@ Future<ReseedUploadReport> runReseedUpload({
         skipped++;
         continue;
       }
-      final client = entity.workspace == ReseedWorkspace.preferences
+      final client = entity.workspace == InitialUploadWorkspace.preferences
           ? preferencesClient
           : gtdClient;
       try {
@@ -220,7 +227,7 @@ Future<ReseedUploadReport> runReseedUpload({
         if (existing != null) reasserted++;
       } on SyncRejection catch (rejection) {
         refused++;
-        anomalies.add(ReseedAnomaly(
+        anomalies.add(InitialUploadAnomaly(
           table: entity.collection,
           kind: uploadRefused,
           rowId: entity.entityId,
@@ -235,7 +242,7 @@ Future<ReseedUploadReport> runReseedUpload({
   // The tail, and the only flush a small store ever reaches.
   await flush();
 
-  return ReseedUploadReport(
+  return InitialUploadReport(
     plannedEntityCount: plan.entities.length,
     authoredOpCount: authored,
     skippedEntityCount: skipped,

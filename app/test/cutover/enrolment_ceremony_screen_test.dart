@@ -19,6 +19,7 @@ import 'package:jeeves/cutover/enrolment_ceremony/enrolment_ceremony_runner.dart
 import 'package:jeeves/cutover/enrolment_ceremony/enrolment_ceremony_screen.dart';
 import 'package:jeeves/services/secure_screen.dart';
 import 'package:jeeves/sync/enrolment.dart';
+import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/passphrase_policy.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/sync_transport.dart';
