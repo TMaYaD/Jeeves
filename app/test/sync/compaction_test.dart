@@ -28,6 +28,7 @@ import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/compaction.dart';
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
+import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/op_payload.dart';
 import 'package:jeeves/sync/prune_payload.dart';
@@ -472,16 +473,23 @@ void main() {
       final entityId = _entityId('settled');
       await _fill(workspace, workspace.a, entityId: entityId, count: 22);
 
+      // Withhold A's first few content ops for the duration of the fresh device's
+      // bootstrap, so the ops after them quarantine as gap claimants — and *then*
+      // compact them away. The attestation is what settles them: each claimant and
+      // the compactor agree byte for byte, so there is nothing left to accuse
+      // anybody of. The withholding has to be in place before the device enrols,
+      // because the enrolment ceremony is what pulls.
+      final aOps = _contentOpsOf(workspace, workspace.a);
+      workspace.server.omitSeqs.addAll([for (final op in aOps.take(5)) op.seq]);
       final fresh = await _freshDevice(workspace, 'J');
       addTearDown(fresh.close);
-      // Serve one of A's later ops first, so it quarantines as a gap claimant,
-      // *then* compact it away. The attestation is what settles it: the claimant
-      // and the compactor agree byte for byte, so there is nothing to accuse.
-      final aOps = _contentOpsOf(workspace, workspace.a);
-      workspace.server.serveOrder = [aOps[5].seq];
       await fresh.sync();
-      workspace.server.serveOrder = null;
-      expect(await fresh.client.quarantined(includeReleased: false), isNotEmpty);
+      workspace.server.omitSeqs.clear();
+      expect(
+        await fresh.client.quarantined(includeReleased: false),
+        isNotEmpty,
+        reason: 'the withheld predecessors should have gapped their successors',
+      );
 
       await _compactor(workspace.a).compactEntity(
         collection: _collection,

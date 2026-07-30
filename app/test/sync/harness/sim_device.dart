@@ -302,6 +302,7 @@ class DeviceLink implements SyncTransport, UserTransport {
     String workspaceId, {
     required int since,
     required int limit,
+    bool includeCompacted = false,
   }) async {
     _requireOnline();
     final gate = pullGate;
@@ -311,7 +312,12 @@ class DeviceLink implements SyncTransport, UserTransport {
       pullFailure = null;
       throw failure;
     }
-    return _member.pullOps(workspaceId, since: since, limit: limit);
+    return _member.pullOps(
+      workspaceId,
+      since: since,
+      limit: limit,
+      includeCompacted: includeCompacted,
+    );
   }
 
   @override

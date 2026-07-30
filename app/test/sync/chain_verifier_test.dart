@@ -252,7 +252,31 @@ void main() {
         );
       });
 
-      test('loses to a derived head — the log outranks an attestation about it',
+      test('wins above a derived head, so a mid-chain hole is bridgeable',
+          () async {
+        // The one deliberate change #555 makes to shipped verification logic.
+        // Entity-level pruning punches holes *inside* an author's chain, so a
+        // device may hold positions 1-2 and have to verify position 41 across
+        // attested ones; a rule that always preferred the derived head could never
+        // get there. Sound because the caller walks the floor contiguously forward
+        // from the real head — there is no gap in it to hide anything in.
+        final held = await _mint(author);
+        final floorHash = _someHash(0x55);
+        author.nextAuthorSeq = 41;
+        author.lastEnvelopeHash = floorHash;
+        final survivor = await _mint(author);
+        expect(
+          chainVerdict(
+            header: survivor.header,
+            envelope: survivor.envelope,
+            head: (authorSeq: 1, envelopeHash: envelopeHash(held.envelope)),
+            verifiedFloor: (seq: 40, envelopeHash: floorHash),
+          ).outcome,
+          ChainOutcome.accept,
+        );
+      });
+
+      test('loses at or below the derived head, where the log is better evidence',
           () async {
         final first = await _mint(author);
         final second = await _mint(author);
@@ -261,9 +285,99 @@ void main() {
             header: second.header,
             envelope: second.envelope,
             head: (authorSeq: 1, envelopeHash: envelopeHash(first.envelope)),
-            verifiedFloor: (seq: 40, envelopeHash: _someHash(0x55)),
+            // A floor *behind* the log says nothing the log does not already say.
+            verifiedFloor: (seq: 1, envelopeHash: _someHash(0x55)),
           ).outcome,
           ChainOutcome.accept,
+        );
+      });
+
+      test('a position beyond the bridge is still a gap', () async {
+        // Partial bridge: the floor reaches 40 and the op claims 45, so five
+        // positions are accounted for by nobody. Attestations widen what is
+        // verified, never what is assumed.
+        author.nextAuthorSeq = 45;
+        author.lastEnvelopeHash = _someHash(0x66);
+        final op = await _mint(author);
+        expect(
+          chainVerdict(
+            header: op.header,
+            envelope: op.envelope,
+            verifiedFloor: (seq: 40, envelopeHash: _someHash(0x55)),
+          ).rejection!.reason,
+          SyncRejectionReason.authorChainGap,
+        );
+      });
+
+      test('an op naming the wrong hash at the bridged position is refused',
+          () async {
+        author.nextAuthorSeq = 41;
+        author.lastEnvelopeHash = _someHash(0x66);
+        final op = await _mint(author);
+        expect(
+          chainVerdict(
+            header: op.header,
+            envelope: op.envelope,
+            verifiedFloor: (seq: 40, envelopeHash: _someHash(0x55)),
+          ).rejection!.reason,
+          SyncRejectionReason.prevAuthorHashMismatch,
+        );
+      });
+    });
+
+    group('the #555 attestation at an arriving position', () {
+      test('a pruned original re-served is superseded, and accuses nobody',
+          () async {
+        final op = await _mint(author);
+        expect(
+          chainVerdict(
+            header: op.header,
+            envelope: op.envelope,
+            head: (authorSeq: 5, envelopeHash: _someHash(0x77)),
+            storedAttestation: (
+              authorSeq: op.header.authorSeq,
+              envelopeHash: envelopeHash(op.envelope),
+            ),
+          ).outcome,
+          ChainOutcome.supersededByPrune,
+        );
+      });
+
+      test('different bytes at an attested position stand accused', () async {
+        // The forged-claimant shape: a server offering something *other* than what
+        // the compactor attested at a position it claimed to have removed. Both
+        // signatures are real, so this is an accusation rather than a bare refusal.
+        final op = await _mint(author);
+        final verdict = chainVerdict(
+          header: op.header,
+          envelope: op.envelope,
+          head: (authorSeq: 5, envelopeHash: _someHash(0x77)),
+          storedAttestation: (
+            authorSeq: op.header.authorSeq,
+            envelopeHash: _someHash(0x88),
+          ),
+        );
+        expect(verdict.rejection!.reason, SyncRejectionReason.pruneAttestationDivergence);
+        expect(verdict.alarm, IntegrityAlarmKind.pruneAttestationDivergence);
+      });
+
+      test('a stored op at the position outranks any attestation about it',
+          () async {
+        // Evidence beats an attestation *about* evidence: the honest re-serve is
+        // still an idempotent skip, and a substitution is still a rewrite.
+        final op = await _mint(author);
+        expect(
+          chainVerdict(
+            header: op.header,
+            envelope: op.envelope,
+            head: (authorSeq: 5, envelopeHash: _someHash(0x77)),
+            storedAtAuthorSeq: (authorSeq: op.header.authorSeq, envelope: op.envelope),
+            storedAttestation: (
+              authorSeq: op.header.authorSeq,
+              envelopeHash: _someHash(0x88),
+            ),
+          ).outcome,
+          ChainOutcome.idempotentSkip,
         );
       });
     });

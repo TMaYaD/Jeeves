@@ -79,11 +79,18 @@ class HttpSyncTransport implements SyncTransport {
     String workspaceId, {
     required int since,
     required int limit,
+    bool includeCompacted = false,
   }) async {
     final response = await _send(
       () => _dio.get<Map<String, dynamic>>(
         '/w/$workspaceId/ops',
-        queryParameters: {'since': since, 'limit': limit},
+        queryParameters: {
+          'since': since,
+          'limit': limit,
+          // Omitted rather than sent as false, so an ordinary sync's request line
+          // is byte-for-byte what it was before the history view existed.
+          if (includeCompacted) 'include_compacted': true,
+        },
       ),
     );
     return PullPage(

@@ -373,6 +373,41 @@ class InitialUploadState extends Table {
   Set<Column<Object>> get primaryKey => {userId};
 }
 
+/// One position a verified prune op attested, and the hash it attested there.
+///
+/// The evidence that lets a device chain *past* history it never received. Plain
+/// inserts, never edited — the same rule `op_log` follows, and for the same reason:
+/// an attestation is something a signed op said, and what it said does not change.
+///
+/// Unique on `(workspace, author, author_seq)` because a chain position holds one
+/// op: two prunes attesting one position with different hashes is exactly the
+/// divergence `prune_attestation_divergence` accuses, and the constraint makes the
+/// upsert key a real rule rather than a convention.
+///
+/// [pruneSeq] is kept so a row can always be traced back to the op that produced
+/// it, the way `grants.granted_seq` is.
+@TableIndex(
+  name: 'pruned_attestations_position',
+  columns: {#workspaceId, #authorMemberId, #authorSeq},
+  unique: true,
+)
+@DataClassName('PrunedAttestationRow')
+class PrunedAttestations extends Table {
+  TextColumn get workspaceId => text()();
+  TextColumn get authorMemberId => text()();
+  IntColumn get authorSeq => integer()();
+
+  /// SHA-256 over the whole envelope that used to sit at this position — what a
+  /// survivor's `prev_author_hash` is checked against once the op itself is gone.
+  BlobColumn get envelopeHash => blob()();
+
+  /// The transport seq of the prune op that attested this position.
+  IntColumn get pruneSeq => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {workspaceId, authorMemberId, authorSeq};
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -389,6 +424,7 @@ class InitialUploadState extends Table {
     AppliedControlLog,
     EpochFloors,
     InitialUploadState,
+    PrunedAttestations,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -400,9 +436,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// three indexes it reads through (#551); v5 adds the applied-control log the
   /// grants view is derived from and the per-Workspace `epoch_floor` (#549);
   /// v6 turns the documented integrity-alarm upsert key into a constraint; v7
-  /// adds the per-account initial-upload marker (#591).
+  /// adds the per-account initial-upload marker (#591); v8 adds the prune
+  /// attestations the verified chain floor is built from (#555).
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -478,6 +515,14 @@ class SyncDatabase extends _$SyncDatabase {
             // authored its store into the log, so it walks — and the walk is
             // idempotent, so a device that somehow had would skip everything.
             await migrator.createTable(initialUploadState);
+          }
+          if (from < 8) {
+            // One new table and its index, nothing backfilled and nothing moved: a
+            // device upgrading here has received no prune op, so it genuinely has
+            // no attestations rather than an empty set by decree. Every byte of its
+            // log, quarantine and reduced state survives untouched.
+            await migrator.createTable(prunedAttestations);
+            await migrator.create(prunedAttestationsPosition);
           }
         },
       );
