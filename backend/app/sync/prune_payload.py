@@ -17,7 +17,7 @@ Mirrored field for field by ``app/lib/sync/prune_payload.dart`` and pinned by
       ]
     }
 
-**Why a target is more than a seq** (ADR-0035).  The proposal says a prune
+**Why a target is more than a seq** (ADR-0038).  The proposal says a prune
 "enumerates the seqs its compaction supersedes", and a transport seq is not
 enough, because of a structural fact about entity-level compaction: an author's
 chain interleaves many entities' ops, so pruning one entity's ops removes

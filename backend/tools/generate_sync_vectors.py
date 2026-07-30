@@ -960,7 +960,7 @@ def _prune_vectors() -> list[dict[str, Any]]:
                 "A class-5 prune naming its compaction by op_id and attesting two of "
                 "device_b's chain positions. Each target carries the envelope hash a "
                 "fresh device needs to check the *survivor*'s prev_author_hash "
-                "against, which is why a bare seq would not do (ADR-0035). Suite 0x00, "
+                "against, which is why a bare seq would not do (ADR-0038). Suite 0x00, "
                 "for ever: the server acts on this payload."
             ),
         ),
@@ -1155,7 +1155,7 @@ def _negative_prune_vectors() -> list[dict[str, Any]]:
             ),
             note=(
                 "A target with no envelope hash is a bare seq, which is precisely the "
-                "shape ADR-0035 rejected: it cannot bridge a mid-chain hole, so a "
+                "shape ADR-0038 rejected: it cannot bridge a mid-chain hole, so a "
                 "receiver accepting it would have nothing to check a survivor's "
                 "prev_author_hash against."
             ),
@@ -2690,7 +2690,7 @@ def _envelope_vectors_document() -> dict[str, Any]:
                     "author's chain interleaves many entities' ops. A fresh device "
                     "verifying a survivor at author_seq N needs to know head+1..N-1 "
                     "were legitimately removed and the envelope hash at N-1 to check "
-                    "prev_author_hash against. ADR-0035."
+                    "prev_author_hash against. ADR-0038."
                 ),
                 "shape_rules": (
                     "Refused at decode wherever the bytes are held: an empty "

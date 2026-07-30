@@ -11,7 +11,7 @@
 ///   merging it is absorption rather than a fresh write by the compactor;
 /// * a class-5 prune carries **per-op chain attestations**, because entity-level
 ///   pruning punches holes *inside* every contributing author's chain rather than
-///   truncating a prefix (ADR-0035);
+///   truncating a prefix (ADR-0038);
 /// * those attestations bridge the verified chain floor over the holes, and the
 ///   quarantine-then-release fixpoint is what makes an honest bootstrap converge
 ///   inside one sync instead of raising an alarm storm;

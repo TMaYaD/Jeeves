@@ -540,7 +540,7 @@ def test_prune_vector_is_byte_identical_and_receives(vector: dict[str, Any]) -> 
     )
     assert isinstance(received, PrunePayload)
     assert received.targets
-    # A target is more than a seq, which is the whole of ADR-0035: the envelope hash
+    # A target is more than a seq, which is the whole of ADR-0038: the envelope hash
     # is what a fresh device checks a *survivor*'s prev_author_hash against.
     for target in received.targets:
         assert len(target.envelope_hash) == env.PREV_AUTHOR_HASH_BYTES

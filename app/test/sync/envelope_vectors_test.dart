@@ -674,7 +674,7 @@ void main() {
           _fromHex(key['sign_pk_hex'] as String),
         ) as PrunePayload;
         expect(received.targets, isNotEmpty);
-        // A target is more than a seq, which is the whole of ADR-0035: the envelope
+        // A target is more than a seq, which is the whole of ADR-0038: the envelope
         // hash is what a fresh device checks a *survivor*'s prev_author_hash against.
         for (final target in received.targets) {
           expect(target.envelopeHash.length, prevAuthorHashBytes);

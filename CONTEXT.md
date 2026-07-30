@@ -453,6 +453,18 @@ Two things are deliberately not automatic. **Encryption turning on is a per-Work
 
 One rotation is refused rather than performed: a Workspace with a live-granted **Service** cannot rotate, because a Service holds no per-User key-exchange subkey to wrap to yet. The ceremony refuses before authoring anything rather than publishing a wrap set that cuts the Service off with the owner's own signature on the omission.
 
+**A log that grows for ever is compacted one entity at a time, and nothing is ever deleted (#555).** The vocabulary:
+
+- **Compaction op** — one entity's whole joined state, re-asserted as a single signed op. Every field carries the clock that *won* it, which is what makes the snapshot equivalent to the ops it supersedes rather than a fresh write by whoever authored it: an HLC names its author, so a field's own clock is its authorship provenance. A pending edit at an older clock loses exactly as it would have lost against the original; one at a newer clock wins exactly as it would have won.
+- **Prune op** — the enumeration of what a Compaction op supersedes, and the second op class the server *reads*. Zero content: transport positions, author positions, and envelope hashes.
+- **Prune attestation** — one entry of that enumeration. It is evidence a device keeps, and it is what lets a fresh device verify a chain across history it never received: knowing that a position was legitimately removed, and the hash to check the next op's link against. It is also what *settles* a quarantined op the prune supersedes — released rather than left standing, because the claimant and the compactor agree byte for byte.
+- **Soft-delete prune** — the v1 stance. A prune marks the superseded ops and removes nothing. Soft-to-hard is an easy later shift; the reverse is impossible.
+- **History view** — the whole log on request, superseded ops included. A prune hides history from the *sync* path so a fresh device need not replay it; the User is still owed it, behind no extra gate.
+
+The **compactor** role exists for this and the owner role covers it, so in the single-user fleet the owner device compacts its own Workspace with no service enrolled and no Grant minted. Two op classes are never superseded: a control op, because that would delete the evidence a Grant existed, and a Prune op, because a Prune *is* the attestation that history was removed and losing it would leave garbage collection indistinguishable from a server that truncated the log.
+
+Compaction is deliberately conservative about *when*. A device that is not caught up would snapshot a partial join, and one with a standing Integrity Alarm would snapshot state it has itself accused; both refuse rather than approximate. A recently-written entity is left alone entirely, which protects the devices still holding its history — and means a freshly reseeded log is not a candidate for anything until it has aged.
+
 ## Implementation
 
 **User** *(an authenticating identity)*:
@@ -474,7 +486,7 @@ An entity that can hold Workspace keys, author Ops, and authenticate to the sync
 _Avoid_: Peer, Keyholder, Client (transport term), Participant (a Grant role), Account
 
 **Grant** *(the membership fact: Member × Workspace, with a role)*:
-The signed authorization fact "this Member participates in this Workspace with this role" — recorded as a control op chained to the Workspace's **Root**, never as bare server state. The Grant *is* membership. Its **role** fixes which op classes the Member may emit: **owner** (content + control: grants, revocations, promotions), **participant** (content), **compactor** (compaction + prune — the *most*-trusted role: full read plus history re-assertion), **suggester** (suggestions only — the *least*-trusted role, and the AI Service's default). Distinct from **KeyWrap**, which delivers the key a Grant entitles the Member to; a Grant with no current-epoch KeyWrap is an *orphaned grant* — a nameable, detectable, healable state, not a mystery decryption failure.
+The signed authorization fact "this Member participates in this Workspace with this role" — recorded as a control op chained to the Workspace's **Root**, never as bare server state. The Grant *is* membership. Its **role** fixes which op classes the Member may emit: **owner** (content + control: grants, revocations, promotions), **participant** (content), **compactor** (compaction + prune — the *most*-trusted role: full read plus history re-assertion, so a fresh device that holds none of the superseded ops necessarily takes its attestations on the compactor's signature; a device that *does* hold them cross-checks and accuses), **suggester** (suggestions only — the *least*-trusted role, and the AI Service's default). Distinct from **KeyWrap**, which delivers the key a Grant entitles the Member to; a Grant with no current-epoch KeyWrap is an *orphaned grant* — a nameable, detectable, healable state, not a mystery decryption failure.
 _Avoid_: Membership (heavier synonym), Share, Permission (the role is the permission; the Grant is the fact)
 
 **KeyWrap** *(delivery of one Workspace key to one Member)*:

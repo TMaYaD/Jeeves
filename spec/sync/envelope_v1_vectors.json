@@ -211,7 +211,7 @@
     "prune": {
       "max_targets": 1000,
       "target_fields": "seq (transport), author_member_id, author_seq, envelope_hash (64 lowercase hex, SHA-256 over the whole envelope)",
-      "why_more_than_a_seq": "Entity-level pruning punches holes *inside* every contributing author's chain rather than truncating a prefix, because an author's chain interleaves many entities' ops. A fresh device verifying a survivor at author_seq N needs to know head+1..N-1 were legitimately removed and the envelope hash at N-1 to check prev_author_hash against. ADR-0035.",
+      "why_more_than_a_seq": "Entity-level pruning punches holes *inside* every contributing author's chain rather than truncating a prefix, because an author's chain interleaves many entities' ops. A fresh device verifying a survivor at author_seq N needs to know head+1..N-1 were legitimately removed and the envelope hash at N-1 to check prev_author_hash against. ADR-0038.",
       "shape_rules": "Refused at decode wherever the bytes are held: an empty enumeration (prune_targets_empty), a duplicate on either the seq or the (author, author_seq) key (prune_duplicate_target), and more than max_targets entries (prune_targets_too_many). Refusing duplicates at decode leaves the server's materialisation rowcount check exactly one possible cause: a concurrent prune.",
       "server_readable": "The second deliberate exception to content-blindness after control ops. The server acts on this payload to stamp ops.compacted_by, and can afford to read it because the enumeration carries seqs, positions and hashes and nothing about what any op said.",
       "soft_delete_only": "A prune stamps ops.compacted_by and never deletes. Default pulls exclude the row, include_compacted=true serves it back, and the envelope bytes are untouched for ever. Soft-to-hard is an easy later shift; the reverse is impossible."
@@ -716,7 +716,7 @@
     },
     {
       "name": "prune_target_missing_envelope_hash",
-      "note": "A target with no envelope hash is a bare seq, which is precisely the shape ADR-0035 rejected: it cannot bridge a mid-chain hole, so a receiver accepting it would have nothing to check a survivor's prev_author_hash against.",
+      "note": "A target with no envelope hash is a bare seq, which is precisely the shape ADR-0038 rejected: it cannot bridge a mid-chain hole, so a receiver accepting it would have nothing to check a survivor's prev_author_hash against.",
       "key": "device_a",
       "reason": "malformed_prune_payload",
       "expected_workspace_id": "7af3026d-8599-55e0-9861-18d0f42ecbf3",
@@ -1120,7 +1120,7 @@
   "prune_vectors": [
     {
       "name": "prune_two_attestations",
-      "note": "A class-5 prune naming its compaction by op_id and attesting two of device_b's chain positions. Each target carries the envelope hash a fresh device needs to check the *survivor*'s prev_author_hash against, which is why a bare seq would not do (ADR-0035). Suite 0x00, for ever: the server acts on this payload.",
+      "note": "A class-5 prune naming its compaction by op_id and attesting two of device_b's chain positions. Each target carries the envelope hash a fresh device needs to check the *survivor*'s prev_author_hash against, which is why a bare seq would not do (ADR-0038). Suite 0x00, for ever: the server acts on this payload.",
       "key": "device_a",
       "header": {
         "suite": 0,
