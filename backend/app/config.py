@@ -21,7 +21,8 @@ _VERSION_SHAPED = re.compile(r"^\d+\.\d+\.\d+(\.\d+)?(-[0-9A-Za-z.-]+)?$")
 
 class Settings(BaseSettings):
     # Env vars are read unprefixed (DATABASE_URL, REDIS_URL, SECRET_KEY, ...)
-    # to align with platform conventions (dokku service-link, Anthropic SDK, etc.).
+    # to align with platform conventions (dokku service-link injects DATABASE_URL
+    # and REDIS_URL unprefixed, and a prefix would mean rewriting them at deploy).
     model_config = SettingsConfigDict(env_file=".env")
 
     # Environment. Use APP_ENV rather than the too-generic ENV.

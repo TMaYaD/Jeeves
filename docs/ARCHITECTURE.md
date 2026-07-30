@@ -52,17 +52,18 @@ Located in `backend/`.
 - **Framework:** `fastapi` with Python 3.12+ running on `uvicorn`.
 - **Database ORM:** `sqlalchemy` (with `asyncpg` for async I/O) and `alembic` for migrations.
 - **Validation:** `pydantic`.
-- **Background Tasks:** `celery` with `redis`.
-- **AI Integrations:** `anthropic` client library.
+- **Redis:** `redis` — auth nonce and rate-limit counters, recovery-escrow and member-auth state. Not a task-queue broker; there are no background workers.
+- **Scope:** the Minimal Sync Server and nothing else (ADR-0026). `app/auth`, `app/sync`, `app/health` — no domain schema, no domain routes, no AI endpoints. #556 dropped the mirrored tables and the REST surface over them; the client is the source of truth and the server never interprets an envelope's contents.
 - **Architecture:** Follows the [12-Factor App methodology](./BACKEND_GUIDELINES.md) (stateless processes, environment-based configuration, etc.).
 
 ### Sync Engine (PowerSync) — the local store engine, disconnected
 
 **PowerSync is not the sync path. It does not connect.** #591 flipped the op-log
 spine on and `powerSyncInstanceProvider` stopped calling `connect()`: there is no
-connector, no credentials fetch and no `currentUserIdProvider` listener. What
-survives is the on-device SQLite store the domain read model lives in, plus the
-server-side mirrored tables and REST routes that #556 removes with the engine.
+connector, no credentials fetch and no `currentUserIdProvider` listener. The
+server half is already gone — #556 dropped the mirrored tables, the REST routes
+over them and the whole PowerSync deployment. What survives is the on-device
+SQLite store the domain read model lives in, and it goes with the engine.
 
 The disconnection is required rather than tidy — see
 [ADR-0034](./adr/0034-sync-starts-at-enrolment.md). The user's cutover is a fresh
@@ -80,10 +81,9 @@ upload reads:
 
 - The Flutter app connects to a self-hosted `journeyapps/powersync-service` instance.
 - Twelve sync shapes are replicated per user: `todos`, `tags`, `todo_tags`, `time_logs`, `focus_sessions`, `focus_session_tasks`, `focus_session_dispositions` (issue #418, ADR-0016), `user_preferences`, the Capture split (issue #184, ADR-0006) `captures`, `capture_outcomes`, `capture_tags`, and `actions` (issue #471, ADR-0001 story 1) — every bucket filters on `user_id` directly, since PowerSync rejects JOINs in bucket data queries as a fatal sync-rules error. The junction tables (`todo_tags`, `focus_session_tasks`, `focus_session_dispositions`, `capture_outcomes`, `capture_tags`) carry a denormalized `user_id` for this purpose (Alembic 0008, 0025, 0027, 0026); `actions` is an owned entity (client-declared `id`, like `captures`) that denormalizes `user_id` from its Outcome for the same reason (Alembic 0028). `focus_session_dispositions` is the durable home for Review Dispositions on off-Plan engaged Outcomes — Plan-member Dispositions stay on `focus_session_tasks.disposition`, keeping the Plan fixed (ADR-0002); see `docs/SYNC.md § The focus-session upload contract`. `captures` splits Capture from Outcome at the storage layer (Inbox = `captures.clarified_at IS NULL`); Alembic 0026 non-destructively moves the old `todos.clarified = false` rows across, and `carveOutLocalInbox` does the same move on-device for users who have never signed in. The Inbox and every clarify surface now read and write these tables — see `docs/SYNC.md § The Capture-split upload contract`. `actions` replicates and, from issue #472 (ADR-0001 story 2), is written on every next-action write path via `ActionDao`; from issue #473 (story 3) it is also what the app *reads* for current-Action existence and text. Story 9 (issue #479, ADR-0022) completed the move by making `actions` the only grain, and #525 (ADR-0024) dropped the `todos.next_action_text` cursor outright — it is no longer declared, projected or replicated on the client. See the `actions` data-model note below and `docs/SYNC.md § The actions upload contract`.
-- The backend still serves short-lived JWTs from `GET /powersync/credentials`, validated against the shared `SECRET_KEY`. No client fetches them.
+- The server half is **gone** (#556): `GET /powersync/credentials`, the mirrored tables and every REST route over them were removed, and Alembic 0034 dropped the `powersync` publication. Nothing on the server would answer this engine if it did connect.
 - Local writes queue in `ps_crud` because the tables are PowerSync-managed. Nothing drains the queue: `JeevesBackendConnector.uploadData()` has no caller, and turning the enqueueing off needs the fresh-store swap #556 owns.
-- PowerSync uses Postgres for internal bucket storage — no additional database is required.
-- Sync rules deploy with the backend. `infra/powersync/sync-config.yaml` is the only place bucket definitions exist; Backend CD pushes to Dokku (whose release phase runs Alembic) and then runs `infra/dokku/publish-sync-config.sh`, which publishes that file to the PowerSync app as `POWERSYNC_CONFIG_B64` and no-ops when it is unchanged. A migration and the buckets that read its tables therefore ship in one pipeline run rather than one shipping and the other waiting on a human. The ordering is sequential, not atomic — see ADR-0017 and `infra/dokku/README.md` for the residual window and the manual two-phase procedure destructive migrations still need.
+- There is no deployment to describe. #556 removed the `journeyapps/powersync-service` app, `infra/powersync/sync-config.yaml`, both dokku scripts, Backend CI's bucket-validation job and Backend CD's sync-rules publish step. Bucket definitions no longer exist anywhere, so the migration/publish ordering ADR-0017 documented — and the manual two-phase procedure destructive migrations needed under it — no longer apply; ADR-0017 stands as a record of the decision it made.
 - Conflict resolution: last-write-wins by default, with a per-key strategy registry for `user_preferences` (snooze floors use a non-regressing `maxTimestampValue` rule; list/set keys are provisioned for merge). See [SYNC.md](./SYNC.md) for the full conflict matrix, the tombstone invariant, and the PowerSync write-checkpoint behaviour.
 
 #### The `actions` table (issue #471 story 1, issue #472 story 2, issue #473 story 3, issue #474 story 4, issue #478 story 8, ADR-0001)

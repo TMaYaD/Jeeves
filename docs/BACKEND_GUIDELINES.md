@@ -22,7 +22,7 @@ The Jeeves FastAPI service is built following the [12-Factor App methodology](ht
 
 ### 4. Backing Services
 - **Principle:** Treat backing services as attached resources.
-- **Application:** PostgreSQL, Redis, and Anthropic API are treated as external resources. The backend can swap them out by simply changing environment variables without requiring code changes.
+- **Application:** PostgreSQL and Redis are treated as external resources. The backend can swap them out by simply changing environment variables without requiring code changes.
 
 ### 5. Build, Release, Run
 - **Principle:** Strictly separate build and run stages.
@@ -30,7 +30,7 @@ The Jeeves FastAPI service is built following the [12-Factor App methodology](ht
 
 ### 6. Processes
 - **Principle:** Execute the app as one or more stateless processes.
-- **Application:** The FastAPI and Celery processes are entirely stateless, with one deliberate exception: `app/sync/signal_hub.py` holds live signal-socket subscriptions in process memory. Nothing there is persistent — it is a set of connected sockets, which cannot be offloaded anywhere — but it does mean a poke reaches only subscribers attached to the process that handled the write. See §8 for the constraint that follows.
+- **Application:** The FastAPI process — the only process type there is — is entirely stateless, with one deliberate exception: `app/sync/signal_hub.py` holds live signal-socket subscriptions in process memory. Nothing there is persistent — it is a set of connected sockets, which cannot be offloaded anywhere — but it does mean a poke reaches only subscribers attached to the process that handled the write. See §8 for the constraint that follows.
 
 ### 7. Port Binding
 - **Principle:** Export services via port binding.
@@ -38,7 +38,7 @@ The Jeeves FastAPI service is built following the [12-Factor App methodology](ht
 
 ### 8. Concurrency
 - **Principle:** Scale out via the process model.
-- **Application:** We scale HTTP traffic by adding more Uvicorn workers or horizontally scaling the FastAPI containers. We scale background jobs by adding Celery workers. **Precondition for the HTTP half:** the op-log signal socket's in-process fan-out (§6) is correct only while uvicorn runs single-process, as it does in every deployment today (Dockerfile, Procfile, compose — no `--workers`). Replacing `SignalHub` with a Redis pub/sub implementation — the seam is that class, and redis is already a dependency — comes before the first extra worker, or realtime sync silently stops working for everyone not sharing a process with the writer.
+- **Application:** We scale HTTP traffic by adding more Uvicorn workers or horizontally scaling the FastAPI containers. There is no background-job process type to scale — the server appends and serves op envelopes and does nothing asynchronously. **Precondition:** the op-log signal socket's in-process fan-out (§6) is correct only while uvicorn runs single-process, as it does in every deployment today (Dockerfile, Procfile, compose — no `--workers`). Replacing `SignalHub` with a Redis pub/sub implementation — the seam is that class, and redis is already a dependency — comes before the first extra worker, or realtime sync silently stops working for everyone not sharing a process with the writer.
 
 ### 9. Disposability
 - **Principle:** Maximize robustness with fast startup and graceful shutdown.
