@@ -211,19 +211,18 @@ class WorkspaceKeyCeremony {
   /// peers were never given, and at epoch 0 (where the floor is already 0) it would
   /// immediately start authoring content nobody else could read. A failed PUT must
   /// leave the Workspace exactly as encrypted as it was.
-  Future<void> publish(EpochKeySet set) async {
-    await client.transport.putKeyWraps(
-      client.workspaceId,
-      epoch: set.epoch,
-      wraps: set.memberWraps,
-      escrowWrap: set.escrowWrap,
-      // Epoch 0 has no `rotate` behind it, so its commitment travels in the body.
-      // Above it the signed op is the authority and a body digest would be a second
-      // claim the server could be asked to prefer.
-      keyWrapDigest: set.epoch == 0 ? set.digest : null,
-    );
-    await client.workspaceKeys.remember(client.workspaceId, set.epoch, set.workspaceKey);
-  }
+  ///
+  /// A rotation makes the set durable before it authors, so a publish interrupted by
+  /// a crash resumes from [SyncClient.resumePendingWrapSets] rather than stranding
+  /// the epoch — hence the "upload then remember" order lives on the client, as the
+  /// one definition both a live and a resumed publish run through.
+  Future<void> publish(EpochKeySet set) => client.publishWrapSet(
+        epoch: set.epoch,
+        wraps: set.memberWraps,
+        escrowWrap: set.escrowWrap,
+        digest: set.digest,
+        workspaceKey: set.workspaceKey,
+      );
 
   /// Learn every epoch key the escrow wraps carry. Returns how many were new.
   ///

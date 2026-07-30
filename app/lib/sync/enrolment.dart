@@ -60,6 +60,7 @@ import 'hlc.dart';
 import 'ids.dart';
 import 'key_ceremony.dart';
 import 'passphrase_policy.dart';
+import 'pending_wrap_set_store.dart';
 import 'recovery_escrow.dart';
 import 'root_authority.dart';
 import 'sync_client.dart';
@@ -554,18 +555,27 @@ class EnrolmentService {
   /// ```
   /// 1. build the wrap set for N+1 over the survivors   (refuses here, or never)
   /// 2. author revoke(s), then rotate committing to the digest
-  /// 3. flush — the rotate must be materialised before the wraps are accepted
-  /// 4. PUT the wraps, and only then remember the key locally
-  /// 5. pull, which applies the rotate and raises this device's epoch floor
+  /// 3. persist the prepared set, durable before the flush (#617)
+  /// 4. flush — the rotate must be materialised before the wraps are accepted
+  /// 5. PUT the wraps, and only then remember the key locally; drop the record
+  /// 6. pull, which applies the rotate and raises this device's epoch floor
   /// ```
   ///
-  /// Step 3 before step 4 is the server's rule, not a preference: a wraps upload
+  /// Step 4 before step 5 is the server's rule, not a preference: a wraps upload
   /// arriving before its `rotate` is refused as `rotate_not_materialised`, because a
   /// digest the log has not committed to is just a number the uploader chose.
   ///
-  /// Step 5 is what turns the key into an authoring key. `capture` authors at the
+  /// Step 3 is what makes step 5 survivable. The prepared set — member wraps, escrow
+  /// wrap, digest and `K_{w,N+1}` — is the only place the entropy the digest commits
+  /// to lives; once the flush lands, a second `prepare` could never reproduce it, so
+  /// a publish lost to a crash would strand the epoch permanently. Written to the
+  /// same secure-storage tier as the epoch keys and removed once the PUT is
+  /// confirmed, it lets the publish resume — from the next ceremony, the pull tail,
+  /// or launch (see `SyncClient.resumePendingWrapSets`).
+  ///
+  /// Step 6 is what turns the key into an authoring key. `capture` authors at the
   /// floor, and the floor rises only when the verified rotate applies — so between
-  /// step 4 and step 5 this device holds `K_{w,N+1}` and still authors at `N`, which
+  /// step 5 and step 6 this device holds `K_{w,N+1}` and still authors at `N`, which
   /// is a legal state rather than a window to close.
   Future<int> _rotateOne(
     String workspaceId, {
@@ -576,7 +586,9 @@ class EnrolmentService {
     final scoped = await _scoped(workspaceId);
     // Pull first: the survivor set and the chain link both come from the applied
     // control log, and rotating against a stale view of who holds a Grant is how a
-    // Member added a moment ago gets locked out.
+    // Member added a moment ago gets locked out. The pull's tail also resumes any
+    // wrap set a *previous* rotation of this Workspace left unpublished, so a fresh
+    // rotation completes the last one before building on the epoch it stranded.
     await scoped.pull();
 
     final fromEpoch = await scoped.epochFloor();
@@ -637,8 +649,28 @@ class EnrolmentService {
       ),
     ).encode();
     await scoped.captureControl(rotatePayload);
+    // Durable before the point of no return. Once the flush lands the server
+    // materialises the rotate and every device's epoch floor rises to `toEpoch`; if
+    // `publish` then fails, this record is the only place `K_{w,toEpoch}` and the
+    // digest-committed set survive, and the resume path is the only way the epoch is
+    // ever readable. Keychain tier, never the sync database — it carries the key in
+    // the clear.
+    await scoped.pendingWrapSets?.put(
+      workspaceId,
+      PendingWrapSet(
+        epoch: keySet.epoch,
+        workspaceKey: keySet.workspaceKey,
+        memberWraps: keySet.memberWraps,
+        escrowWrap: keySet.escrowWrap,
+        digest: keySet.digest,
+      ),
+    );
     await scoped.flushOutbox();
     await ceremony.publish(keySet);
+    // Published and remembered: the record has done its job. A crash before this
+    // delete leaves a byte-identical re-PUT for the resume path, which the server
+    // acknowledges with a 200 rather than refusing.
+    await scoped.pendingWrapSets?.delete(workspaceId, keySet.epoch);
     await scoped.pull();
     return scoped.epochFloor();
   }

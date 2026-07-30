@@ -33,6 +33,7 @@ import 'ids.dart';
 import 'member_identity.dart';
 import 'merge_strategy.dart';
 import 'passphrase_policy.dart';
+import 'pending_wrap_set_store.dart';
 import 'recovery_escrow.dart';
 import 'reducer.dart';
 import 'sync_client.dart';
@@ -76,6 +77,7 @@ class SyncStack {
     required int Function() nowMs,
     GtdDatabase? domain,
     WorkspaceKeyStore? workspaceKeys,
+    PendingWrapSetStore? pendingWrapSets,
     MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
     PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
     Argon2idParameters kdfParameters = Argon2idParameters.floor,
@@ -109,6 +111,13 @@ class SyncStack {
     // the ciphertext would make the encryption decorative (review F22).
     final epochKeys = workspaceKeys ?? SecureStorageWorkspaceKeyStore();
 
+    // Sibling to the epoch-key store and on the same keychain tier: it holds a
+    // rotation's prepared wrap set — `workspaceKey` in the clear — between the
+    // `rotate` landing and its PUT, so a crash in that window is resumable rather
+    // than a stranded epoch (#617). One instance, shared by every client below the
+    // way the epoch keys are.
+    final pendingSets = pendingWrapSets ?? SecureStoragePendingWrapSetStore();
+
     final defaultClient = SyncClient(
       workspaceId: defaultWorkspaceId(userId),
       userId: userId,
@@ -117,6 +126,7 @@ class SyncStack {
       clock: clock,
       reducer: Reducer(database, nowMs: nowMs, strategies: strategies),
       workspaceKeys: epochKeys,
+      pendingWrapSets: pendingSets,
       now: now,
     )..projector = projector;
 
@@ -137,9 +147,11 @@ class SyncStack {
           reducer: Reducer(database, nowMs: nowMs, strategies: strategies),
           // The one directory, so a Member chained in one Workspace is not a
           // stranger in the other; and the one key store, which is keyed by
-          // Workspace and therefore already the right scope for both.
+          // Workspace and therefore already the right scope for both — as is the
+          // pending-wrap-set store beside it.
           directory: defaultClient.directory,
           workspaceKeys: epochKeys,
+          pendingWrapSets: pendingSets,
           now: now,
         )..projector = projector,
       );

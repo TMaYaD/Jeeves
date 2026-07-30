@@ -27,6 +27,7 @@ import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/enrolment.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/pending_wrap_set_store.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_lifecycle.dart';
@@ -47,6 +48,7 @@ class StackPhone {
     required this.userTransport,
     required this.keyStore,
     required this.workspaceKeys,
+    required this.pendingWrapSets,
     required this.syncStore,
     required this.storeDirectory,
     required this.clock,
@@ -81,6 +83,11 @@ class StackPhone {
     // the fresh stack the same instance or every relaunch test would read its
     // `aead_v1` history as a delivery gap instead of decrypting it.
     final workspaceKeys = InMemoryWorkspaceKeyStore();
+    // Held by the phone for the same reason [workspaceKeys] is: the production store
+    // is the platform keychain, which survives a process death, so [relaunch] hands
+    // the fresh stack the same instance — which is exactly what lets an interrupted
+    // rotation's prepared wrap set outlive the crash it is meant to survive (#617).
+    final pendingWrapSets = InMemoryPendingWrapSetStore();
     final link = DeviceLink(server.connectAsUser(userId));
     // The capture seam exists before the store it writes through, and is bound to
     // nothing: this is the pre-enrolment state a real process starts in.
@@ -96,6 +103,7 @@ class StackPhone {
         syncStore: syncStore,
         keyStore: keyStore,
         workspaceKeys: workspaceKeys,
+        pendingWrapSets: pendingWrapSets,
         userTransport: decorated,
         domain: domain,
         clock: clock,
@@ -106,6 +114,7 @@ class StackPhone {
       userTransport: decorated,
       keyStore: keyStore,
       workspaceKeys: workspaceKeys,
+      pendingWrapSets: pendingWrapSets,
       syncStore: syncStore,
       storeDirectory: storeDirectory,
       clock: clock,
@@ -118,6 +127,7 @@ class StackPhone {
     required SyncDatabase syncStore,
     required DeviceKeyStore keyStore,
     required WorkspaceKeyStore workspaceKeys,
+    required PendingWrapSetStore pendingWrapSets,
     required UserTransport userTransport,
     required GtdDatabase domain,
     required FakeClock clock,
@@ -137,6 +147,7 @@ class StackPhone {
         // capture's key lookup returns "no key" instead of throwing on the
         // missing channel — and a relaunch reuses it, as a keychain would.
         workspaceKeys: workspaceKeys,
+        pendingWrapSets: pendingWrapSets,
         kdfParameters: harnessKdfParameters,
         kdfFloor: harnessKdfParameters,
       );
@@ -155,6 +166,12 @@ class StackPhone {
 
   /// The epoch-key store, playing the platform keychain: it outlives [relaunch].
   final InMemoryWorkspaceKeyStore workspaceKeys;
+
+  /// Where an interrupted rotation's prepared wrap set waits between the `rotate`
+  /// landing and its PUT. Keychain-tier like [workspaceKeys], and reused across
+  /// [relaunch] the same way, so a test can prove the resume completes after a
+  /// process death rather than only within one run.
+  final InMemoryPendingWrapSetStore pendingWrapSets;
   final Directory? storeDirectory;
   final FakeClock clock;
 
@@ -212,6 +229,7 @@ class StackPhone {
       syncStore: syncStore,
       keyStore: keyStore,
       workspaceKeys: workspaceKeys,
+      pendingWrapSets: pendingWrapSets,
       userTransport: userTransport,
       domain: domain,
       clock: clock,

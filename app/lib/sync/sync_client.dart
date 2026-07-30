@@ -69,6 +69,7 @@ import 'ids.dart';
 import 'key_wraps.dart';
 import 'member_identity.dart';
 import 'op_payload.dart';
+import 'pending_wrap_set_store.dart';
 import 'prune_payload.dart';
 import 'reducer.dart';
 import 'recovery_escrow.dart';
@@ -158,6 +159,7 @@ class SyncClient {
     SyncTransport? transport,
     MemberDirectory? directory,
     WorkspaceKeyStore? workspaceKeys,
+    this.pendingWrapSets,
     this.pullPageLimit = defaultPullPageLimit,
     DateTime Function()? now,
   })  : _db = database,
@@ -192,6 +194,13 @@ class SyncClient {
   /// device the way [directory] is — the store is keyed by Workspace, so one store
   /// per device is one scope per Workspace.
   final WorkspaceKeyStore workspaceKeys;
+
+  /// Where a rotation's prepared wrap set waits between the `rotate` landing and its
+  /// PUT — the durability behind [resumePendingWrapSets]. Null leaves a rotation's
+  /// publish exactly as it was: unrecoverable if it fails, which is what the tests
+  /// that predate this seam still exercise. Shared across a device's Workspaces the
+  /// way [workspaceKeys] is, keyed by Workspace inside.
+  final PendingWrapSetStore? pendingWrapSets;
 
   /// The nonce source, and deliberately not a seam.
   ///
@@ -1040,6 +1049,12 @@ class SyncClient {
       }
       hasMore = page.hasMore && page.ops.isNotEmpty && advanced;
     }
+    // A rotation this device began but did not finish publishing — a crash between
+    // its `rotate` landing and its wraps PUT — completes here, idempotently, from
+    // the ordinary pull every device runs. Before the refresh below, so a wrap set
+    // this publishes makes the key available to release ops quarantined on it in the
+    // same pull.
+    await resumePendingWrapSets();
     // A rotation landed, or something is still waiting on a wrap. Either way the
     // fetch is bounded — one round-trip per pull, never one per op — and the
     // freshness race F14b names (the wraps PUT landing moments after the rotate op)
@@ -2662,6 +2677,106 @@ class SyncClient {
       }
     }
     return learned;
+  }
+
+  /// Upload one epoch's wrap set, then — and only then — remember its key locally.
+  ///
+  /// The single definition of that order, shared by a live rotation
+  /// ([WorkspaceKeyCeremony.publish]) and a resumed one ([resumePendingWrapSets]).
+  /// Remembering first would leave this device holding a key its peers were never
+  /// handed, and at epoch 0 (where the floor is already 0) it would immediately
+  /// author content nobody else could read. A failed PUT must leave the Workspace
+  /// exactly as encrypted as it was.
+  Future<void> publishWrapSet({
+    required int epoch,
+    required List<MemberKeyWrap> wraps,
+    required Uint8List escrowWrap,
+    required Uint8List digest,
+    required Uint8List workspaceKey,
+  }) async {
+    await transport.putKeyWraps(
+      workspaceId,
+      epoch: epoch,
+      wraps: wraps,
+      escrowWrap: escrowWrap,
+      // Epoch 0 has no `rotate` behind it, so its commitment travels in the body.
+      // Above it the signed op is the authority and a body digest would be a second
+      // claim the server could be asked to prefer.
+      keyWrapDigest: epoch == 0 ? digest : null,
+    );
+    await workspaceKeys.remember(workspaceId, epoch, workspaceKey);
+  }
+
+  /// Finish any wrap set a rotation prepared but did not publish (#617).
+  ///
+  /// A rotation makes the prepared set durable *before* it flushes the `rotate`
+  /// (see `pending_wrap_set_store.dart`), so a crash between the flush and the PUT
+  /// leaves a record here rather than an epoch nobody holds the key for. This
+  /// re-PUTs the exact bytes the `rotate` committed to — the server treats a
+  /// byte-identical replay as a 200 acknowledgement — and remembers the key, which
+  /// is all a live publish does.
+  ///
+  /// Reached from the pull tail, so every ordinary sync (and therefore launch) runs
+  /// it, and so the pull that opens a fresh rotation completes the last one first.
+  /// Idempotent and best-effort: the record's *presence* is the retry condition, so
+  /// an unmaterialised rotate or an unreachable server just leaves it for the next
+  /// trigger rather than failing the pull that called this.
+  Future<void> resumePendingWrapSets() async {
+    final store = pendingWrapSets;
+    if (store == null || !isEnrolled) return;
+    // Best-effort throughout: this rides the pull tail, so nothing here may break
+    // the ordinary sync that called it. A keychain read that hiccups, a store write
+    // that fails, a server that is down — each leaves the record in place for the
+    // next trigger, which is the whole retry condition. Only a programming error
+    // (an `Error`, not an `Exception`) is allowed to surface.
+    final List<PendingWrapSet> pending;
+    try {
+      pending = await store.read(workspaceId);
+    } on Exception {
+      return;
+    }
+    // Lowest epoch first: a higher one cannot materialise before its predecessor,
+    // so completing them in order is what lets the loop stop at the first that is
+    // not ready yet.
+    pending.sort((a, b) => a.epoch.compareTo(b.epoch));
+    for (final set in pending) {
+      try {
+        if (await workspaceKeys.keyFor(workspaceId, set.epoch) != null) {
+          // Already published: holding the key means the publish landed and only
+          // the record's removal was lost. Discard it rather than re-PUT for ever
+          // (AC-7).
+          await store.delete(workspaceId, set.epoch);
+          continue;
+        }
+        await publishWrapSet(
+          epoch: set.epoch,
+          wraps: set.memberWraps,
+          escrowWrap: set.escrowWrap,
+          digest: set.digest,
+          workspaceKey: set.workspaceKey,
+        );
+        await store.delete(workspaceId, set.epoch);
+      } on SyncTransportException catch (error) {
+        if (error.code == keyWrapDigestMismatchCode) {
+          // Permanent: these exact bytes will never hash to the digest the log
+          // committed to, so retrying is pointless — and, unlike a not-yet-
+          // materialised rotate, a later epoch's publish does not wait on this one
+          // clearing. Skip it and try the rest, rather than wedge every higher
+          // epoch behind a record only a recovery this issue leaves out of scope
+          // could ever clear.
+          continue;
+        }
+        // Transient: the `rotate` has not reached the server yet (its POST still
+        // queued) or the server is unreachable — both heal on a later trigger, and
+        // no higher epoch can materialise before this one. Stop, keep the record.
+        return;
+      } on Exception {
+        // A local store or keychain failure on this epoch — not the server
+        // refusing the set. Leave the record and move to the next rather than
+        // break the pull; the next trigger retries this one.
+        continue;
+      }
+    }
   }
 
   /// Re-receive the ops quarantined for a key that has since arrived.

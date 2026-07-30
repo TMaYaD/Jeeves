@@ -21,6 +21,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/screens/enrolment/enrolment_ceremony_runner.dart';
 import 'package:jeeves/sync/device_key_store.dart';
+import 'package:jeeves/sync/pending_wrap_set_store.dart';
 import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
@@ -146,6 +147,10 @@ void main() {
       keyStore: keyStore,
       userTransport: faults,
       nowMs: () => clock.nowMs,
+      // The platform keychain is unreachable in a unit test, and the pull tail
+      // reads this store on every pull to complete an interrupted rotation, so the
+      // in-memory swap is injected the same way the key store is.
+      pendingWrapSets: InMemoryPendingWrapSetStore(),
       // Both, so the floor check runs on the production path at a cost a test
       // suite can afford.
       kdfParameters: harnessKdfParameters,
