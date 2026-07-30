@@ -17,20 +17,34 @@
 /// ## The order is load-bearing
 ///
 /// 1. **Derive enrolment state from the store, no network.** `notEnrolled` or
-///    `foundingIncomplete` and nothing happens at all: an un-enrolled device
-///    keeps working fully offline and authors nothing, and a half-founded one
-///    must not walk or attach either — its log is not the log its next ceremony
-///    will continue.
-/// 2. **Re-attach the member transport if absent** (the relaunch case), by
+///    `foundingIncomplete` and nothing happens beyond *settling capture silent*:
+///    an un-enrolled device keeps working fully offline and authors nothing, and
+///    a half-founded one must not walk or attach either — its log is not the log
+///    its next ceremony will continue. The settle is a decision, not an absence
+///    of one: the seam buffers from construction, so "author nothing" has to be
+///    *said*, or its buffer grows for the session.
+/// 2. **Bind capture, from the local reads alone.** From here new domain writes
+///    author ops. Moved ahead of every network step on purpose: the seam buffers
+///    each write made since construction, and binding drains that buffer, so the
+///    decision must not wait on the proof-of-possession round trip below. The
+///    preferences client `bind` takes is built locally — the member transport
+///    propagates per factory call, so one built before the attach tolerates none
+///    existing yet.
+/// 3. **Re-attach the member transport if absent** (the relaunch case), by
 ///    proof-of-possession over the *stored* keys. Nothing is persisted: a
 ///    per-launch PoP is self-refreshing and leaves no credential at rest. This is
-///    also the recovery from `SignalListenerState.authParked`.
-/// 3. **Bind capture.** From here new domain writes author ops.
-/// 4. **Sync both Workspace clients.** Pull-before-authoring is what makes the
-///    diff skip meaningful: a device that authored before pulling would
-///    re-author a store the log already holds. A failure here stops the
-///    activation — the next one retries — and specifically leaves the marker
-///    alone.
+///    also the recovery from `SignalListenerState.authParked`. It sits inside the
+///    same `try` as step 4, so an offline relaunch's failure to mint a credential
+///    returns `syncFailed` — capture already bound, writes queuing — rather than
+///    escaping unclassified and leaving the whole session silent.
+/// 4. **Sync both Workspace clients.** Pull-before-authoring narrows to the
+///    initial upload's diff skip: a device that *walked* before pulling would
+///    re-author a store the log already holds. DAO ops authored between bind and
+///    this pull are already reality, and correct — they queue and post. A failure
+///    here stops the activation — the next one retries — and specifically leaves
+///    the marker alone. The preferences client is re-fetched from the factory
+///    *after* the attach, so it carries the member transport the pre-attach one
+///    could not.
 /// 5. **Initial upload, if the marker is unset.** On a completed pass the marker
 ///    is set with the report. A transport failure mid-walk propagates, the marker
 ///    stays unset, and the next activation resumes through the diff skip.
@@ -116,8 +130,11 @@ enum SyncActivation {
   /// Step 1 said the ceremony is unfinished. Same non-effect, different cause.
   foundingIncomplete,
 
-  /// Step 4 failed — offline launch, most likely. Capture is bound (an offline
-  /// device queues correctly), the marker is untouched, nothing is listening.
+  /// The member transport could not be attached (step 3) or the first sync
+  /// failed (step 4) — offline launch, most likely. Capture is *already* bound,
+  /// so an offline device queues its writes correctly; the marker is untouched,
+  /// and nothing is listening. This is what turns an offline enrolled relaunch
+  /// into correct queue-and-retry instead of a full-session silent drop.
   syncFailed,
 
   /// Step 5 did not finish, so the marker is **unset** and the next activation
@@ -219,26 +236,49 @@ class SyncLifecycle {
     final status = await _stack.readEnrolmentStatus();
     switch (status.state) {
       case EnrolmentState.notEnrolled:
+        _capture.unbind();
         return SyncActivation.notEnrolled;
       case EnrolmentState.foundingIncomplete:
+        _capture.unbind();
         return SyncActivation.foundingIncomplete;
       case EnrolmentState.enrolled:
         break;
     }
     if (deactivated()) return SyncActivation.deactivated;
 
-    await _attachMemberTransportIfAbsent();
-    if (deactivated()) return SyncActivation.deactivated;
-
+    // Bind capture before any network, from the local reads alone: the enrolment
+    // decision is what disposes of the buffered ops, and it must not wait on the
+    // proof-of-possession round trip below. `workspaceClientFactory` builds the
+    // preferences client locally — the member transport propagates per-call, so
+    // one built before the attach tolerates none existing yet. `onOpAuthored` is
+    // armed *through* bind, before it drains, so a buffered op schedules the
+    // debounced flush rather than sitting in the outbox until the next write.
     final gtdClient = _stack.defaultClient;
-    final preferencesClient = await _stack
-        .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId));
+    await _capture.bind(
+      gtdClient: gtdClient,
+      preferencesClient: await _stack
+          .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId)),
+      onOpAuthored: _scheduleOutboxFlush,
+    );
     if (deactivated()) return SyncActivation.deactivated;
-    _capture
-      ..bind(gtdClient: gtdClient, preferencesClient: preferencesClient)
-      ..onOpAuthored = _scheduleOutboxFlush;
 
+    // The PoP is now inside the try: an offline enrolled relaunch throws here,
+    // and that must classify as `syncFailed` (capture is already bound; writes
+    // queue) rather than escape unclassified and leave the session silent.
+    late final SyncClient preferencesClient;
     try {
+      await _attachMemberTransportIfAbsent();
+      // A sign-out that landed while the PoP was parked stops here rather than
+      // syncing the old account's log. A bare `return` inside the try is not a
+      // throw, so it bypasses the `syncFailed` catch. Capture is already settled
+      // silent by `deactivate`'s `unbind`, so no re-bind is needed.
+      if (deactivated()) return SyncActivation.deactivated;
+      // Re-fetch after the attach: the client built for bind was constructed
+      // before the member transport existed, so its own `sync()` would have no
+      // transport. The factory memoises and propagates the credential per-call,
+      // so this returns the same client now carrying it.
+      preferencesClient = await _stack
+          .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId));
       await gtdClient.sync();
       await preferencesClient.sync();
     } on Object {

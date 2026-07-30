@@ -6,7 +6,7 @@
 ///
 /// **The hazard is smaller than it was, and that is worth stating.** ADR-0010's
 /// failure mode was that the `SqliteAsyncDriftConnection` bridge named PowerSync's
-/// *backing* table (`ps_data__todos`), never the `todos` view a watcher read, so
+/// own *backing* table, never the `todos` view a watcher read, so
 /// a projector write invalidated nothing at all. Over real tables the bridge names
 /// `todos` — the table that actually changed and the one the watcher declares — so
 /// it is now a working second refresh path. The negative assertion this file used

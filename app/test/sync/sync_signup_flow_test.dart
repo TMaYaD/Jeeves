@@ -252,11 +252,18 @@ void main() {
       clock: clock,
     );
     addTearDown(a.close);
+    // Legacy rows — data that predates authoring (PowerSync-era, ADR-0035).
+    // Settle the seam silent so the seed lands in the domain store without being
+    // buffered: the **initial upload** is what authors these, which is the path
+    // this test is about. (A captured pre-enrolment write would instead be
+    // drained at bind and flushed at the first sync — a different path.)
+    a.capture.unbind();
     await _seedOfflineWork(a.domain, clock);
     await a.enrolAsFirstDevice();
 
-    // The POST lands and the response is lost — indistinguishable, from here,
-    // from one that never arrived. Every capture succeeded; the flush did not.
+    // The upload's POST lands and the response is lost — indistinguishable, from
+    // here, from one that never arrived. The walk authored every op; the post
+    // did not confirm.
     a.link.dropPostResponse = true;
     expect(await a.activate(), SyncActivation.uploadIncomplete);
     expect(
