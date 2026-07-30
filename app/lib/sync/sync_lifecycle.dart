@@ -289,6 +289,18 @@ class SyncLifecycle {
     if (deactivated()) return SyncActivation.deactivated;
     if (!_firstSyncSettled.isCompleted) _firstSyncSettled.complete();
 
+    // The launch resume of a key rotation stranded by a crash between its flush and
+    // its publish (#617). The credential is minted (step 3) and the rotate is
+    // materialised — the step-4 pull applied it and raised the floor — so this
+    // re-publishes the persisted wrap set and remembers the key. Guarded: a resume
+    // that cannot finish now leaves its record for the next pull or the next
+    // ceremony, and must not turn a healthy activation into a failure.
+    try {
+      await _stack.enrolment.resumePendingRotations();
+    } on Object {
+      // Left durable; the pull-tail trigger retries it.
+    }
+
     var uploaded = true;
     try {
       await _uploadIfMarkerUnset(
@@ -421,6 +433,12 @@ class SyncLifecycle {
           client: client,
           transport: _signalTransport ?? client.transport,
           delay: _listenerDelay,
+          // The pull-tail resume of a stranded rotation (#617), scoped to this
+          // listener's own Workspace so a poke on one log does not drive a publish
+          // on the other. Guarded inside the listener, so a transient resume failure
+          // never registers as a pull failure.
+          onSyncComplete: () => _stack.enrolment
+              .resumePendingRotations(workspaceId: client.workspaceId),
         );
         await listener.start();
         started.add(listener);

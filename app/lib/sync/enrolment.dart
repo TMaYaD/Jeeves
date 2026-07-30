@@ -60,6 +60,7 @@ import 'hlc.dart';
 import 'ids.dart';
 import 'key_ceremony.dart';
 import 'passphrase_policy.dart';
+import 'pending_rotation_store.dart';
 import 'recovery_escrow.dart';
 import 'root_authority.dart';
 import 'sync_client.dart';
@@ -95,6 +96,7 @@ class EnrolmentService {
     required this.client,
     required this.userTransport,
     required this.keyStore,
+    required this.pendingRotations,
     required this.workspaceClientFactory,
     required int Function() nowMs,
     this.passphrasePolicy = const PassphrasePolicy(),
@@ -111,6 +113,11 @@ class EnrolmentService {
   final SyncClient client;
   final UserTransport userTransport;
   final DeviceKeyStore keyStore;
+
+  /// Where a prepared wrap set is made durable before its `rotate` is authored, so
+  /// a crash between the flush and the `publish` is resumable rather than a
+  /// permanently unpublishable epoch. Same secure-storage tier as the epoch keys.
+  final PendingRotationStore pendingRotations;
 
   /// Builds (or returns) the client for another of this User's Workspaces.
   ///
@@ -532,6 +539,12 @@ class EnrolmentService {
     required String passphrase,
     String? revokeMemberId,
   }) async {
+    // Finish any rotation this User left stranded before starting a new one. This
+    // also delivers AC-5: `_rotateOne` writes its own record before its own flush,
+    // so a throw on the second Workspace leaves the first with no record (deleted on
+    // its success) and the second with a live one — the next ceremony resumes only
+    // the second and does not re-rotate the first.
+    await resumePendingRotations();
     final (_, root, secrets) = await _recoverRoot(passphrase);
     try {
       final epochs = <String, int>{};
@@ -588,6 +601,17 @@ class EnrolmentService {
       excludeMemberId: revokeMemberId,
     );
 
+    // Persist the prepared set *before authoring anything*, not merely before the
+    // flush. `prepare` has already fixed `keySet.digest`, so this commits nothing
+    // prematurely — but on a single-isolate event loop any `await` between authoring
+    // the rotate and writing the record could yield to a background lifecycle flush
+    // that materialises the just-authored rotate before the record exists, which is
+    // the exact stranded state this store exists to prevent. The only state this
+    // ordering introduces is record-exists-but-rotate-never-authored (a crash before
+    // the `captureControl` below), which is safe: nothing materialised, no floor
+    // moved, and `resumePendingRotations` discards it on `rotate_not_materialised`.
+    await pendingRotations.put(workspaceId, keySet);
+
     var head = await scoped.appliedControlHead();
     if (revokeMemberId != null) {
       final view = await scoped.grantsView();
@@ -639,8 +663,73 @@ class EnrolmentService {
     await scoped.captureControl(rotatePayload);
     await scoped.flushOutbox();
     await ceremony.publish(keySet);
+    // `publish` remembered the key, so the record has done its job. Removing it here
+    // keeps the steady state empty; a crash between `publish` and this line leaves a
+    // stale record whose epoch the device already holds a key for, which
+    // `resumePendingRotations` discards rather than re-publishing (AC-7).
+    await pendingRotations.remove(workspaceId, keySet.epoch);
     await scoped.pull();
     return scoped.epochFloor();
+  }
+
+  /// Re-publish any prepared wrap set whose rotate materialised but whose key was
+  /// never remembered — the passphrase-free resume of a crashed [_rotateOne].
+  ///
+  /// Because the persisted record already carries `workspaceKey`, the member wraps,
+  /// the escrow wrap and the digest, this needs **no passphrase and no
+  /// `master_wrap_key`**: `publish` is member-scoped, and that is exactly what lets
+  /// this run from the pull tail and from launch, not only from the next
+  /// passphrase-gated ceremony. Scoped to [workspaceId] when given (one per pull
+  /// listener), otherwise every derivable Workspace.
+  ///
+  /// Best-effort by contract: a transient/offline failure leaves the record for the
+  /// next trigger, and the only records it *deletes* are the ones it has provably
+  /// finished (key now held) or that never materialised a rotate to finish.
+  Future<void> resumePendingRotations({String? workspaceId}) async {
+    final targets = workspaceId == null ? _workspaces : [workspaceId];
+    for (final workspace in targets) {
+      final pending = await pendingRotations.read(workspace);
+      if (pending.isEmpty) continue;
+      final scoped = await _scoped(workspace);
+      // No member credential (a pre-enrolment or mid-attach caller): leave every
+      // record and let a trigger that holds one finish it.
+      if (!scoped.isEnrolled) continue;
+      // Lowest epoch first. Independent of each other, but deterministic order keeps
+      // a failure reproducible.
+      for (final epoch in pending.keys.toList()..sort()) {
+        final set = pending[epoch]!;
+        // Already complete: the original ceremony's `publish` remembered the key
+        // before it could delete the record (a crash in that one-line gap). Stale,
+        // not a retry — discard it (AC-7).
+        if (await scoped.workspaceKeys.keyFor(workspace, epoch) != null) {
+          await pendingRotations.remove(workspace, epoch);
+          continue;
+        }
+        try {
+          // Drain a rotate that was authored but never flushed (a crash between the
+          // `captureControl` and the flush). Op-id-namespaced, so a no-op when the
+          // outbox is empty.
+          await scoped.flushOutbox();
+          // Byte-identical re-PUT returns 200 (server-side idempotency, #590), then
+          // `publish` remembers the key and this device finally holds K_{w,epoch}.
+          await WorkspaceKeyCeremony(client: scoped).publish(set);
+          await pendingRotations.remove(workspace, epoch);
+        } on SyncTransportException catch (error) {
+          if (error.code == rotateNotMaterialisedCode) {
+            // The rotate was never authored (a premature record per `_rotateOne`'s
+            // persist-before-author ordering — safe because the `WorkspaceEpoch` row
+            // is created atomically with the rotate). Discard it: the owner can
+            // re-run the whole ceremony fresh with new entropy, nothing stranded.
+            await pendingRotations.remove(workspace, epoch);
+            continue;
+          }
+          // Offline or transient: leave the record for the next trigger. Anything
+          // else (a server refusal that should not happen for a byte-identical
+          // replay) surfaces to the caller, which the pull seam swallows.
+          rethrow;
+        }
+      }
+    }
   }
 
   /// Whether any of this User's Workspaces has stood at its epoch too long.

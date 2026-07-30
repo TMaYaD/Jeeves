@@ -31,6 +31,7 @@ import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_lifecycle.dart';
 import 'package:jeeves/sync/sync_stack.dart';
+import 'package:jeeves/sync/pending_rotation_store.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 import 'package:jeeves/sync/workspace_key_store.dart';
 
@@ -47,6 +48,7 @@ class StackPhone {
     required this.userTransport,
     required this.keyStore,
     required this.workspaceKeys,
+    required this.pendingRotations,
     required this.syncStore,
     required this.storeDirectory,
     required this.clock,
@@ -81,6 +83,11 @@ class StackPhone {
     // the fresh stack the same instance or every relaunch test would read its
     // `aead_v1` history as a delivery gap instead of decrypting it.
     final workspaceKeys = InMemoryWorkspaceKeyStore();
+    // Held by the phone for the same reason `workspaceKeys` is: the production store
+    // is the platform keychain, which survives a process death, so [relaunch] must
+    // hand the fresh stack the same instance — otherwise the record that the resume
+    // must survive the crash to publish would vanish on the very crash under test.
+    final pendingRotations = InMemoryPendingRotationStore();
     final link = DeviceLink(server.connectAsUser(userId));
     // The capture seam exists before the store it writes through, and is bound to
     // nothing: this is the pre-enrolment state a real process starts in.
@@ -96,6 +103,7 @@ class StackPhone {
         syncStore: syncStore,
         keyStore: keyStore,
         workspaceKeys: workspaceKeys,
+        pendingRotations: pendingRotations,
         userTransport: decorated,
         domain: domain,
         clock: clock,
@@ -106,6 +114,7 @@ class StackPhone {
       userTransport: decorated,
       keyStore: keyStore,
       workspaceKeys: workspaceKeys,
+      pendingRotations: pendingRotations,
       syncStore: syncStore,
       storeDirectory: storeDirectory,
       clock: clock,
@@ -118,6 +127,7 @@ class StackPhone {
     required SyncDatabase syncStore,
     required DeviceKeyStore keyStore,
     required WorkspaceKeyStore workspaceKeys,
+    required PendingRotationStore pendingRotations,
     required UserTransport userTransport,
     required GtdDatabase domain,
     required FakeClock clock,
@@ -137,6 +147,7 @@ class StackPhone {
         // capture's key lookup returns "no key" instead of throwing on the
         // missing channel — and a relaunch reuses it, as a keychain would.
         workspaceKeys: workspaceKeys,
+        pendingRotations: pendingRotations,
         kdfParameters: harnessKdfParameters,
         kdfFloor: harnessKdfParameters,
       );
@@ -155,6 +166,11 @@ class StackPhone {
 
   /// The epoch-key store, playing the platform keychain: it outlives [relaunch].
   final InMemoryWorkspaceKeyStore workspaceKeys;
+
+  /// The pending-rotation store, on the same keychain tier: it outlives [relaunch]
+  /// too, which is what lets a rotation stranded before its process death be
+  /// resumed after it.
+  final InMemoryPendingRotationStore pendingRotations;
   final Directory? storeDirectory;
   final FakeClock clock;
 
@@ -212,6 +228,7 @@ class StackPhone {
       syncStore: syncStore,
       keyStore: keyStore,
       workspaceKeys: workspaceKeys,
+      pendingRotations: pendingRotations,
       userTransport: userTransport,
       domain: domain,
       clock: clock,
