@@ -3,15 +3,11 @@ import 'package:go_router/go_router.dart';
 
 import 'auth/auth_mode.dart';
 import 'auth/session_gate.dart';
-// Cutover tooling (#553 Phase 1) — removed by #556.
-import 'cutover/converge_verify/converge_verify_screen.dart';
-import 'screens/enrolment/enrolment_ceremony_screen.dart';
-// Cutover tooling (#553 Phase 2) — removed by #556.
-import 'cutover/reseed/reseed_screen.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/done/done_screen.dart';
+import 'screens/enrolment/enrolment_ceremony_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next/next_screen.dart';
 import 'screens/periodic_review/periodic_review_screen.dart';
@@ -110,25 +106,11 @@ final appRouter = GoRouter(
       path: '/settings',
       builder: (context, state) => const SettingsScreen(),
     ),
-    // Cutover tooling (#553 Phase 1) — removed by #556. Reachable in every
-    // flavour on purpose: the store that has to be verified lives on the
-    // production-flavour phone, and the screen only reads.
-    GoRoute(
-      path: ConvergeVerifyScreen.routePath,
-      builder: (context, state) => const ConvergeVerifyScreen(),
-    ),
     // Onboarding, not a settings page: a signed-in device that is not enrolled
     // is routed here and cannot leave until it is (or signs out).
     GoRoute(
       path: EnrolmentCeremonyScreen.routePath,
       builder: (context, state) => const EnrolmentCeremonyScreen(),
-    ),
-    // Cutover tooling (#553 Phase 2) — removed by #556. Reachable in every
-    // flavour for the same reason as its two siblings above: the store that has
-    // to be reseeded lives on the production-flavour phone.
-    GoRoute(
-      path: ReseedScreen.routePath,
-      builder: (context, state) => const ReseedScreen(),
     ),
     ShellRoute(
       builder: (context, state, child) => AppShell(child: child),

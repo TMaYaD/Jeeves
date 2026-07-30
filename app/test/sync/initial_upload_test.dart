@@ -1,8 +1,6 @@
 /// The uploader's seams: the diff skip, the flush cadence, and the guard that
 /// refuses a preference value carrying no key.
 ///
-/// **Cutover tooling — removed by #556.**
-///
 /// Integration rather than unit: the clients are a real `SimDevice`'s, so the
 /// skip is measured against reduced state the *production* reduce path wrote and
 /// the refusal comes out of `Reducer.guardPayload` at the real call site.

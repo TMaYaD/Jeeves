@@ -1,19 +1,12 @@
 /// The initial-upload transform: local domain rows in, planned ops out. Pure.
 ///
-/// **Permanent sync-layer machinery.** Enrolment triggers it (`sync_lifecycle`),
-/// and the cutover-scoped verification surface (`app/lib/cutover/reseed/`) reads
-/// the same plan — which is what makes that comparison a statement about the data
-/// rather than about two normalisers.
+/// **Permanent sync-layer machinery.** Enrolment triggers it
+/// (`sync_lifecycle`), and `initial_upload.dart` authors what it plans. One
+/// implementation, deliberately: any second copy of the transform could only
+/// ever agree with the uploader by luck.
 ///
-/// One implementation, two consumers. `initial_upload.dart` authors what this
-/// plans; `cutover/reseed/reseed_verifier.dart` compares the *same* plan against
-/// what the spine reduces back from the server. A second copy of the transform on
-/// the verification side could only ever agree with the uploader by luck, so
-/// there is exactly one.
-///
-/// **Which store the walk reads.** The domain read model — today the same
-/// physical file PowerSync manages, `jeeves_domain.sqlite` once #556 swaps it,
-/// with no seam change either time. Reads are `SELECT * FROM <table>`,
+/// **Which store the walk reads.** The domain read model. Reads are
+/// `SELECT * FROM <table>`,
 /// deliberately unfiltered (#582's rule): a row stranded at `user_id = 'local'`,
 /// or under a previous account's id, must reach the plan rather than vanish
 /// behind a predicate. The transform stamps the enrolled `user_id` at authoring,

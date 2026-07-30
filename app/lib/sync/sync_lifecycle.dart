@@ -43,8 +43,7 @@
 /// **Refusals do not hold the marker open.** An entity `capture()` refused (#573)
 /// is a permanent data anomaly, not retryable transport state, so retrying it for
 /// ever would mean never setting the marker on a store that contains one. It is
-/// counted in the report the marker row carries and stays inspectable through the
-/// cutover verification surface.
+/// counted in the report the marker row carries.
 library;
 
 import 'dart:async';

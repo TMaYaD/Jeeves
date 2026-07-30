@@ -1,11 +1,6 @@
 /// One device's op-log stack, assembled: identity, clock, clients, ceremony.
 ///
-/// **Production sync wiring (#553 Phase 2).** Permanent product machinery — the
-/// reseed uploader and the PowerSync flip build on this same assembly, so it is
-/// deliberately *not* marked as cutover tooling even though the first thing to
-/// reach it is the throwaway enrolment-ceremony surface.
-///
-/// Everything a real device needs to run the enrolment ceremony and to sync,
+/// **The production sync wiring.** Everything a real device needs to run the enrolment ceremony and to sync,
 /// with every platform part injected: the store, the key store, the User
 /// transport and the clock. That is what lets the multi-device harness assemble
 /// the *same* closure production runs — including the member-transport
@@ -202,8 +197,8 @@ class SyncStack {
   /// registry every one of them arbitrates under.
   ///
   /// Both are held rather than merely used at assembly because a later slice may
-  /// have to build a *second* reducer over the same device — #553's reseed
-  /// verification builds a throwaway one to reduce the server log from zero — and
+  /// have to build a *second* reducer over the same device — a verification pass
+  /// reducing the server log from zero, say — and
   /// a second reducer reading a different clock or a different registry would
   /// measure the tooling instead of the data: the skew guard's verdict and which
   /// lattice arbitrates a preference are both inputs to what reduction produces.
@@ -228,9 +223,10 @@ class SyncStack {
 
   /// What this device's own store says about its enrolment. **No network.**
   ///
-  /// One reader for two callers — `sync_lifecycle.dart`, which decides whether to
-  /// attach a transport and author anything, and the cutover enrolment-ceremony
-  /// surface, which decides which buttons to offer. Both the reads and the
+  /// One reader for three callers — `sync_lifecycle.dart`, which decides whether
+  /// to attach a transport and author anything; the router's session gate, which
+  /// decides whether the device belongs in onboarding; and the enrolment surface,
+  /// which decides which controls to offer. The reads and the
   /// derivation are here because two copies of either would be free to disagree,
   /// and the lifecycle's answer has to be the one the screen shows.
   Future<EnrolmentCeremonyStatus> readEnrolmentStatus() async {

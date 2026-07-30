@@ -1,7 +1,5 @@
 /// The state machine behind the ceremony surface, as a branch table.
 ///
-/// Cutover tooling — removed by #556.
-///
 /// `test/sync/enrolment_ceremony_runner_test.dart` reaches these states by
 /// staging real crash windows against a real ceremony; this file pins the whole
 /// table, including the combinations a staged failure cannot conveniently
