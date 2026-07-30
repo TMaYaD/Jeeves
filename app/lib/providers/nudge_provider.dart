@@ -16,9 +16,9 @@
 ///
 /// **Persistence**: `dismissed_at` and `snoozed_until` are stored in
 /// synced-preferences under per-Ritual keys (`<keyPrefix>_nudge_dismissed_at`
-/// / `<keyPrefix>_nudge_snoozed_until`). Cross-device LWW via PowerSync —
-/// a dismiss on one device suppresses the Nudge on every other device until
-/// the next Trigger firing edge.
+/// / `<keyPrefix>_nudge_snoozed_until`). Cross-device field-grain LWW over the
+/// op log — a dismiss on one device suppresses the Nudge on every other device
+/// until the next Trigger firing edge.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';

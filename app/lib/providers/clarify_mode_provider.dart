@@ -18,7 +18,8 @@ final clarifyModeProvider = NotifierProvider<ClarifyModeNotifier, ClarifyMode>(
 class ClarifyModeNotifier extends Notifier<ClarifyMode> {
   @override
   ClarifyMode build() {
-    // Re-derive whenever synced preferences change (including PowerSync pulls).
+    // Re-derive whenever synced preferences change, including a pull that
+    // reduces another device's write in.
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
         state = _fromPrefs(next.value);

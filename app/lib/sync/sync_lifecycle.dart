@@ -43,8 +43,7 @@
 /// **Refusals do not hold the marker open.** An entity `capture()` refused (#573)
 /// is a permanent data anomaly, not retryable transport state, so retrying it for
 /// ever would mean never setting the marker on a store that contains one. It is
-/// counted in the report the marker row carries and stays inspectable through the
-/// cutover verification surface.
+/// counted in the report the marker row carries.
 library;
 
 import 'dart:async';
@@ -201,7 +200,6 @@ class SyncLifecycle {
 
   /// Completes the first time step 4 succeeds — the spine's "the initial pull is
   /// in" signal, and what `postSyncHooksProvider` arms its one-shot fixup on.
-  /// PowerSync's `hasSynced` was that signal and no longer flips.
   Future<void> get firstSyncSettled => _firstSyncSettled.future;
 
   /// Run the sequence. Safe to call repeatedly: every step is idempotent, and

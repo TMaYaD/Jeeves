@@ -9,7 +9,7 @@
 /// a stable-id helper for tests that need to name a backfilled Action.
 library;
 
-import 'package:powersync/powersync.dart' show uuid;
+import '../../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 /// The deterministic id of the `current` Action backfilled from an Outcome's

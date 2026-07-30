@@ -223,6 +223,31 @@ class Reducer {
   }
 }
 
+/// Every entity the reduced substrate currently holds any trace of.
+///
+/// Both tables, because either alone is a partial answer: an entity may hold
+/// fields with no tombstone, or a tombstone whose fields a compaction already
+/// took away. The tombstoned ones matter as much as the live ones — a consumer
+/// told only about live entities would leave a deleted row standing.
+///
+/// Device-wide rather than per-Workspace: reduced state is not partitioned by
+/// Workspace, and both consumers (a chain rebuild, and the first-open projection
+/// into a fresh domain store) want everything this device has ever reduced.
+Future<Set<AffectedEntity>> reducedEntities(SyncDatabase db) async {
+  final rows = await db.customSelect(
+    'SELECT collection, entity_id FROM reduced_fields '
+    'UNION SELECT collection, entity_id FROM row_tombstones',
+    readsFrom: {db.reducedFields, db.rowTombstones},
+  ).get();
+  return {
+    for (final row in rows)
+      (
+        collection: row.read<String>('collection'),
+        entityId: row.read<String>('entity_id'),
+      ),
+  };
+}
+
 /// Typed reads over one collection's reduced state.
 ///
 /// Visibility is decided here, at read time, against the tombstone table — see

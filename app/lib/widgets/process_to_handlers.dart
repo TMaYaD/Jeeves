@@ -636,11 +636,11 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
 
   /// Snapshot-based callsites (inbox-clarify, periodic review) can lose a
   /// row between render and tap — sync or another device may hard-delete it.
-  /// PowerSync exposes `todos` and `captures` as SQLite VIEWs with INSTEAD OF
-  /// triggers, so the affected-rows count for an UPDATE is always 0; we can't
-  /// tell from the write whether anything happened. Pre-check existence here
-  /// so we don't fire [onAfterRoute] (which advances the snapshot cursor and
-  /// records a phantom routing record) for a row that no longer exists.
+  /// Pre-check existence here rather than reading the write's affected-row
+  /// count: the routing write is a multi-statement transaction whose count says
+  /// nothing about the subject in particular, and firing [onAfterRoute] (which
+  /// advances the snapshot cursor and records a routing record) for a row that
+  /// no longer exists would leave a phantom behind.
   Future<bool> _subjectExists() => switch (widget.subject) {
         OutcomeSubject(:final todo) => _clarification.exists(todo.id),
         CaptureSubject(:final capture) =>

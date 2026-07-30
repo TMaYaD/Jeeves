@@ -21,12 +21,10 @@ class UserPreferencesDao {
 
   /// Upserts [key] → [jsonValue] for [userId].
   ///
-  /// SQLite forbids UPSERT (`INSERT ... ON CONFLICT DO UPDATE`) at the parser
-  /// level on views, and PowerSync exposes `user_preferences` as a view in
-  /// production (only [NativeDatabase] tests see a real table). To stay
-  /// compatible with both, the row is looked up first and then either UPDATEd
-  /// in place (preserving the existing `id` so PowerSync's CRUD queue stays
-  /// clean) or INSERTed under the derived entity id. The select / write pair
+  /// The row is looked up first and then either UPDATEd in place (preserving the
+  /// existing `id`, so the op the write authors names the entity the peers
+  /// already hold) or INSERTed under the derived entity id. The select / write
+  /// pair
   /// runs inside a transaction so concurrent setters cannot race past the
   /// UNIQUE(user_id, key) constraint.
   Future<void> set(String userId, String key, String? jsonValue) async {

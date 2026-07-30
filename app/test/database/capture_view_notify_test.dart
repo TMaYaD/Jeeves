@@ -1,14 +1,15 @@
-/// ADR-0010 regression test for the Capture views (issue #184).
+/// ADR-0010 regression test for the Capture tables (issue #184).
 ///
-/// In production `captures` / `capture_outcomes` / `capture_tags` are PowerSync
-/// **views** with INSTEAD OF triggers, so a Drift write against them reports
-/// `changes() == 0` and Drift never fires its own stream invalidation. The
-/// async `SqliteAsyncDriftConnection` bridge names the *backing* tables, not the
-/// views, so it cannot refresh view-backed watchers either. The only thing that
-/// keeps `watchInbox` live after a `CaptureDao` write is
-/// [GtdDatabase.notifyCapturesViewWrite] — this test proves a new `CaptureDao`
-/// write that forgets the call would silently freeze the Inbox, exactly the
-/// foot-gun ADR-0010 documents.
+/// Over the **production topology**: `jeeves_domain.sqlite` on disk through
+/// `sqlite_async`, every synced name a real table Drift created (#595). The
+/// PowerSync-view emulation this file used to install went with the engine.
+///
+/// What it still proves is that the Inbox stays live across writes Drift's own
+/// invalidation does not cover: `watchInbox` reads across `captures` and
+/// `capture_tags`, and provenance reads `capture_outcomes`, so a write to one has
+/// to refresh watchers naming another. [GtdDatabase.notifyCapturesViewWrite]
+/// notifies all three as one group, and a new `CaptureDao` write that forgets the
+/// call is the foot-gun ADR-0010 documents.
 @TestOn('!browser')
 library;
 
@@ -35,36 +36,6 @@ Future<void> _waitUntil(
   }
 }
 
-/// Rewrites [table] from a real table into a PowerSync-style view over a
-/// `<table>_data` backing table with INSTEAD OF triggers, mirroring what
-/// `powersync_replace_schema` installs in production.
-Future<void> _convertToView(SqliteDatabase raw, String table) async {
-  final info = await raw.getAll('PRAGMA table_info($table)');
-  final cols = info.map((r) => r['name'] as String).toList();
-  final colList = cols.join(', ');
-  final newValues = cols.map((c) => 'NEW.$c').join(', ');
-  final setClause =
-      cols.where((c) => c != 'id').map((c) => '$c = NEW.$c').join(', ');
-  final data = '${table}_data';
-
-  await raw.writeTransaction((tx) async {
-    await tx.execute('ALTER TABLE $table RENAME TO $data');
-    await tx.execute('CREATE VIEW $table AS SELECT $colList FROM $data');
-    await tx.execute('''
-CREATE TRIGGER ${table}_insert INSTEAD OF INSERT ON $table BEGIN
-  INSERT INTO $data ($colList) VALUES ($newValues);
-END;''');
-    await tx.execute('''
-CREATE TRIGGER ${table}_update INSTEAD OF UPDATE ON $table BEGIN
-  UPDATE $data SET $setClause WHERE id = OLD.id;
-END;''');
-    await tx.execute('''
-CREATE TRIGGER ${table}_delete INSTEAD OF DELETE ON $table BEGIN
-  DELETE FROM $data WHERE id = OLD.id;
-END;''');
-  });
-}
-
 void main() {
   late Directory tempDir;
   late String dbPath;
@@ -78,18 +49,8 @@ void main() {
     raw = SqliteDatabase(path: dbPath);
     await raw.initialize();
 
-    // First open: let Drift's migrator build the schema as real tables.
-    final bootstrap = GtdDatabase(SqliteAsyncDriftConnection(raw));
-    await bootstrap.customSelect('SELECT 1').get();
-    await bootstrap.close();
-
-    // Swap the Capture tables for views + INSTEAD OF triggers (production shape).
-    await _convertToView(raw, 'captures');
-    await _convertToView(raw, 'capture_tags');
-    await _convertToView(raw, 'capture_outcomes');
-
-    // Reopen: user_version already matches, so no migration runs and the DAO
-    // now reads/writes the views through the async bridge.
+    // Drift builds the whole schema as real tables on first open — the store's
+    // production shape since #595.
     db = GtdDatabase(SqliteAsyncDriftConnection(raw));
   });
 
@@ -104,8 +65,7 @@ void main() {
   });
 
   test(
-    'inserting and stamping a Capture refreshes the Inbox watcher even when '
-    'the async bridge never names the captures view',
+    'inserting and stamping a Capture refreshes the Inbox watcher',
     () async {
       final inbox = <List<Capture>>[];
       final sub = db.captureDao.watchInbox().listen(inbox.add);
@@ -121,12 +81,13 @@ void main() {
         userId: const Value('user-1'),
       ));
 
-      // Without notifyCapturesViewWrite this wait times out — the view INSERT
-      // reports changes()==0 and the bridge only names `captures_data`.
+      // `watchInbox` reads across `captures` and `capture_tags`, which is why
+      // the group notify rather than Drift's per-table invalidation is the
+      // contract here.
       await _waitUntil(() => inbox.last.length == 1);
       expect(inbox.last.map((c) => c.id), ['c1']);
 
-      // Stamping (an UPDATE on the view) must drop it from the Inbox live.
+      // Stamping must drop it from the Inbox live.
       await db.captureDao.stampClarified('c1');
       await _waitUntil(() => inbox.last.isEmpty);
       expect(inbox.last, isEmpty);
@@ -134,8 +95,8 @@ void main() {
   );
 
   test(
-    'tag-hint and provenance-link writes on the capture_tags / '
-    'capture_outcomes views refresh their watchers',
+    'tag-hint and provenance-link writes refresh watchers that name a '
+    'different Capture table',
     () async {
       await db.captureDao.insertCapture(CapturesCompanion(
         id: const Value('c1'),
@@ -144,7 +105,7 @@ void main() {
         userId: const Value('user-1'),
       ));
 
-      // Watcher over the capture_tags view: Inbox filtered by a tag hint.
+      // Reads `captures` joined to `capture_tags`: Inbox filtered by a hint.
       final tagged = <List<Capture>>[];
       final subTag =
           db.captureDao.watchInbox(tagIds: {'tag-1'}).listen(tagged.add);
@@ -160,7 +121,7 @@ void main() {
       await _waitUntil(() => tagged.last.isEmpty);
       expect(tagged.last, isEmpty);
 
-      // Watcher over the capture_outcomes view: provenance for an Outcome.
+      // Reads `captures` joined to `capture_outcomes`: an Outcome provenance.
       final prov = <List<Capture>>[];
       final subProv =
           db.captureDao.watchCapturesForOutcome('o1').listen(prov.add);

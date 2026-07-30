@@ -4,14 +4,14 @@
 /// and Capture tag-hint reads/writes.
 ///
 /// Every method that writes a `captures` / `capture_outcomes` / `capture_tags`
-/// view directly calls [GtdDatabase.notifyCapturesViewWrite] right after the
-/// write: in production these are PowerSync views with INSTEAD OF triggers, so
-/// the write reports `changes() == 0` and Drift's built-in stream invalidation
-/// never fires (ADR-0010).
+/// table directly calls [GtdDatabase.notifyCapturesViewWrite] right after the
+/// write: the Inbox reads across all three, so a write to one has to refresh
+/// watchers naming another, which Drift's per-table invalidation does not do
+/// (ADR-0010).
 library;
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import '../../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../../sync/collection_codecs.dart';
@@ -22,9 +22,8 @@ part 'capture_dao.g.dart';
 
 /// Deterministic `capture_outcomes.id` for the (captureId, outcomeId) pair.
 ///
-/// PowerSync exposes `capture_outcomes` as a view whose INSTEAD OF INSERT
-/// trigger writes `NEW.id` into the backing table, so the junction row needs
-/// an explicit id; deriving it from the pair makes re-linking collapse under
+/// The op log names an entity by one id, so the junction row needs
+/// an explicit one; deriving it from the pair makes re-linking collapse under
 /// INSERT OR REPLACE instead of accumulating duplicate rows (todo_tags
 /// precedent).
 String captureOutcomeIdFor(String captureId, String outcomeId) => uuid.v5(
@@ -281,8 +280,9 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   /// Link [captureId] to the Outcome [outcomeId] (idempotent). The
   /// deterministic id makes a repeat link a no-op under INSERT OR IGNORE, so
   /// the *first* link's `created_at` provenance timestamp is preserved rather
-  /// than overwritten. [userId] is denormalized onto the junction row for the
-  /// PowerSync bucket and must match the parent Capture's `user_id`.
+  /// than overwritten. [userId] is denormalized onto the junction row so it
+  /// carries its owner without a JOIN, and must match the parent Capture's
+  /// `user_id`.
   Future<void> linkOutcome(
     String captureId,
     String outcomeId,

@@ -78,12 +78,11 @@ class DomainProjector {
 
   /// Fire the self-notify helper for every collection group in [collections].
   ///
-  /// ADR-0010: in production these tables are PowerSync views with INSTEAD OF
-  /// triggers, so a direct write reports `changes() == 0` and Drift's own
-  /// stream invalidation never fires. A projected row is only visible to a
-  /// watching view once its group is notified — and, since no FTS index exists
-  /// (`search_dao` is a read-only query over the live tables), that notify is
-  /// the whole requirement for search too.
+  /// ADR-0010: these writes go through `customStatement` with no `updates:` set,
+  /// so Drift has nothing to invalidate from, and a watcher that reads across a
+  /// group only refreshes once the whole group is notified. Since no FTS index
+  /// exists (`search_dao` is a read-only query over the live tables), the notify
+  /// is the whole requirement for search too.
   void notify(Set<String> collections) {
     if (collections.contains(todosCollection) ||
         collections.contains(todoTagsCollection)) {

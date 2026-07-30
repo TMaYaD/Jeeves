@@ -13,15 +13,12 @@ import 'package:path_provider/path_provider.dart';
 
 import 'sync_database.dart';
 
-/// The file the op log lives in, beside PowerSync's `jeeves.sqlite` and never
-/// inside it.
+/// The file the op log lives in, beside the domain store and never inside it.
 ///
-/// A separate file, deliberately: the op-log store is Drift-native and owns its
-/// own connection, while `jeeves.sqlite` is opened by PowerSync's
-/// `sqlite_async` stack and shared with `GtdDatabase` through
-/// `drift_sqlite_async`. Putting the two in one file would put a Drift migrator
-/// in charge of PowerSync's schema, and #556 deletes PowerSync's file outright —
-/// which must not take the op log with it.
+/// A separate file, deliberately: the domain store is a projection of this log,
+/// and the store cutover (ADR-0035) deletes and rebuilds a domain store outright.
+/// Sharing one file would put the evidence at the mercy of an operation whose
+/// whole premise is that the read model is disposable.
 const String syncStoreFileName = 'jeeves_sync.sqlite';
 
 class SyncStoreImpl {

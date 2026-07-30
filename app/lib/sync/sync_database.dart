@@ -6,9 +6,10 @@
 /// `chain_verifier.dart` reads them back to derive each author's verified head.
 ///
 /// This database is deliberately separate from `lib/database/gtd_database.dart`
-/// and shares nothing with it. The production app still runs on PowerSync until
-/// the cutover in #553; wiring both paths together now would be exactly the
-/// dual-write branching the Implementation stance forbids.
+/// and shares nothing with it: the substrate is collection-generic and is what
+/// "byte-identical" is measured over, while the domain read model is a typed
+/// projection of it (`sync/domain_projector.dart`). Two files, so the domain
+/// store can be rebuilt from the log without the log being at risk.
 library;
 
 import 'package:drift/drift.dart';

@@ -8,11 +8,11 @@
 /// * stamps `Outcome.last_clarified_at` once, through [_stampOutcome] — the
 ///   stamping rule (CONTEXT.md § Clarification: every Action mutation is a
 ///   clarifying micro-act) is encoded here and nowhere else, and
-/// * self-notifies after commit (ADR-0010): in production `actions` is a
-///   PowerSync view with INSTEAD OF triggers, so a Drift write reports
-///   `changes() == 0` and Drift's stream invalidation never fires — the write
-///   path must call [GtdDatabase.notifyActionsViewWrite] itself, plus
-///   [GtdDatabase.notifyTodosViewWrite] when it touched `todos`.
+/// * self-notifies after commit (ADR-0010): the GTD surfaces read across
+///   `todos`, `actions` and `time_logs`, so a watcher naming one has to hear
+///   about a write to another — the write path calls
+///   [GtdDatabase.notifyActionsViewWrite] itself, plus
+///   [GtdDatabase.notifyTodosViewWrite] whether or not it touched `todos`.
 ///
 /// **The one exception to the stamping rule is [completeCurrentAction]**
 /// (ADR-0001 story 4): finishing the current Action is an *engagement* signal,
@@ -74,7 +74,7 @@
 library;
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import '../../utils/uuid.dart';
 
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
@@ -86,8 +86,8 @@ part 'action_dao.g.dart';
 /// its own transaction commits: [changed] iff any `actions` row was written,
 /// [stamped] iff `last_clarified_at` was moved on the Outcome, [logChanged] iff
 /// a `time_logs` row was written by the terminal-transition hook (issue #476) —
-/// which the caller uses to fire the TimeLog PowerSync view notification, since
-/// `time_logs` is a view whose direct writes report `changes() == 0` (ADR-0010).
+/// which the caller uses to fire the TimeLog notification, since the active-log
+/// and time-spent watchers do not name `actions` (ADR-0010).
 typedef ActionWriteEffect = ({bool changed, bool stamped, bool logChanged});
 
 const ActionWriteEffect _noEffect =
@@ -373,9 +373,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   void _notify(ActionWriteEffect effect) {
     if (effect.changed) attachedDatabase.notifyActionsViewWrite();
     if (effect.stamped) attachedDatabase.notifyTodosViewWrite();
-    // The terminal-transition hook (issue #476) writes `time_logs`, itself a
-    // PowerSync view whose direct writes report changes()==0 (ADR-0010), so its
-    // watchers need the same explicit post-commit notification.
+    // The terminal-transition hook (issue #476) writes `time_logs` inside the
+    // Action transaction, and its watchers do not name `actions` — so they need
+    // the same explicit post-commit notification (ADR-0010).
     if (effect.logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 

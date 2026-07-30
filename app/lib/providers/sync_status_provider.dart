@@ -4,13 +4,12 @@
 /// ops — from **both** of the device's Workspace clients, because a device is two
 /// Workspaces of one User and a wedged preferences queue is a wedged device.
 ///
-/// It deliberately does *not* read PowerSync's status stream any more. The engine
-/// no longer connects (#591), so that stream sits permanently idle and would map
-/// to `synced` — an indicator reading green over a device that is not syncing at
-/// all, during the one window where the user most needs the truth. The
-/// dead-letter watch goes for the matching reason: nothing uploads through the
-/// connector, so no new dead letter can be recorded, and the table itself rides
-/// #556 (ADR-0030's parking).
+/// It reads nothing else, and that is the point. The storage engine it used to
+/// read a status stream from is gone (#591, #595); while that engine sat
+/// connected-to-nothing the stream mapped to `synced`, an indicator reading green
+/// over a device that was not syncing at all — during the one window where the
+/// user most needs the truth. The dead-letter count it also used to fold in went
+/// with the uploader that wrote it.
 ///
 /// Still **informational, never blocking** (docs/ARCHITECTURE.md § the two-stage
 /// boundary): behaviour must not depend on this value.

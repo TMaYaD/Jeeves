@@ -39,8 +39,8 @@
 /// is what [CollectionCodec.unsyncedInsertDefaults] is for: the projector
 /// supplies the column's declared default when it *creates* a row, and never
 /// touches it again. The value is not a merge input, it is excluded from every
-/// cross-device equality assertion, and the column's retirement rides #556 —
-/// see ADR-0030.
+/// cross-device equality assertion. Retiring it is now an ordinary `onUpgrade`
+/// step on the Drift-owned store (ADR-0035) and nothing gates it — see ADR-0030.
 ///
 /// ## The tolerant timestamp grammar
 ///
@@ -54,11 +54,12 @@
 /// the one spelling for a value a column kind refused, so a report names the
 /// offending value the same way wherever it is produced.
 ///
-/// The grammar is frozen — `spec/converge_verify/canonical_row_vectors.json`
-/// carries it, and the converge-verify check's Python twin reads the same
-/// vectors — so `test/cutover/canonical_row_test.dart` asserts
-/// [timestampPattern] and [parseTimestampUtcMs] against that file. Widening it
-/// is a spec change, not a local one.
+/// The grammar is deliberately wider than what [encodeInstant] emits, and stays
+/// that way: a store written under one spelling must still be read under
+/// another. It used to be pinned by golden vectors shared with a server-side
+/// serialiser; both retired with the mirrored schema (#556), so this function is
+/// now the single definition. Widening it is a protocol decision — every peer
+/// reading a value this accepts has to accept it too.
 library;
 
 /// The twelve collections this slice carries, named after their tables.

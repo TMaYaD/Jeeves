@@ -1,7 +1,5 @@
 /// The state machine behind the ceremony surface, as a branch table.
 ///
-/// Cutover tooling — removed by #556.
-///
 /// `test/sync/enrolment_ceremony_runner_test.dart` reaches these states by
 /// staging real crash windows against a real ceremony; this file pins the whole
 /// table, including the combinations a staged failure cannot conveniently
@@ -11,7 +9,7 @@ library;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jeeves/cutover/enrolment_ceremony/enrolment_ceremony_runner.dart';
+import 'package:jeeves/screens/enrolment/enrolment_ceremony_runner.dart';
 import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/sync_transport.dart';

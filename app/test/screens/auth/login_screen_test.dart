@@ -4,38 +4,35 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:jeeves/auth/session_gate.dart';
 import 'package:jeeves/providers/auth_provider.dart';
+import 'package:jeeves/router.dart' show buildAppRouterRedirect;
 import 'package:jeeves/screens/auth/login_screen.dart';
-import 'package:jeeves/services/migration_service.dart';
 
 // ---------------------------------------------------------------------------
 // Fake notifiers
 // ---------------------------------------------------------------------------
 
+/// Signs in a device that is already enrolled: straight into the app.
 class _SuccessAuthNotifier extends AuthNotifier {
   @override
   Future<String?> build() async => null;
 
   @override
-  Future<void> login(Map<String, dynamic> params,
-      {Future<ConflictResolution> Function()? onConflict}) async {
-    authStateNotifier.value = true;
+  Future<void> login(Map<String, dynamic> params) async {
+    sessionGateNotifier.value = SessionGate.ready;
     state = const AsyncData('fake.jwt.token');
   }
 }
 
-class _ConflictAuthNotifier extends AuthNotifier {
+/// Signs in a device whose store says it is not enrolled: into onboarding.
+class _UnenrolledAuthNotifier extends AuthNotifier {
   @override
   Future<String?> build() async => null;
 
   @override
-  Future<void> login(Map<String, dynamic> params,
-      {Future<ConflictResolution> Function()? onConflict}) async {
-    // Trigger the conflict dialog, then succeed.
-    if (onConflict != null) {
-      await onConflict();
-    }
-    authStateNotifier.value = true;
+  Future<void> login(Map<String, dynamic> params) async {
+    sessionGateNotifier.value = SessionGate.needsEnrolment;
     state = const AsyncData('fake.jwt.token');
   }
 }
@@ -45,8 +42,7 @@ class _ConnectionErrorAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> login(Map<String, dynamic> params,
-      {Future<ConflictResolution> Function()? onConflict}) async {
+  Future<void> login(Map<String, dynamic> params) async {
     final err = DioException(
       requestOptions: RequestOptions(path: '/session'),
       type: DioExceptionType.connectionError,
@@ -64,8 +60,7 @@ class _FailAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> login(Map<String, dynamic> params,
-      {Future<ConflictResolution> Function()? onConflict}) async {
+  Future<void> login(Map<String, dynamic> params) async {
     final err = DioException(
       requestOptions: RequestOptions(path: '/session'),
       response: Response(
@@ -119,7 +114,7 @@ Widget _buildScreen({
 // ---------------------------------------------------------------------------
 
 void main() {
-  tearDown(() => authStateNotifier.value = false);
+  tearDown(() => sessionGateNotifier.value = SessionGate.checking);
 
   group('LoginScreen — layout', () {
     testWidgets('renders email field, password field, and Sign In button',
@@ -217,140 +212,91 @@ void main() {
   });
 
   group('LoginScreen — success flow', () {
-    testWidgets('successful login triggers router redirect to /inbox',
-        (tester) async {
-      final router = GoRouter(
-        initialLocation: '/login',
-        refreshListenable: authStateNotifier,
-        redirect: (_, state) {
-          if (authStateNotifier.value && state.uri.path == '/login') {
-            return '/inbox';
-          }
-          return null;
-        },
-        routes: [
-          GoRoute(
-              path: '/login',
-              builder: (_, _) => const LoginScreen()),
-          GoRoute(
-              path: '/inbox',
-              builder: (_, _) => const Scaffold(body: Text('Inbox'))),
-        ],
-      );
+    // The production redirect over the production gate, with stub routes. The
+    // gate is passed rather than left to the redirect's fallback, so what the
+    // onboarding enforcement reads is visible here — it is the same global the
+    // fake AuthNotifiers above write and `tearDown` resets.
+    GoRouter gatedRouter({String initialLocation = '/login'}) => GoRouter(
+          initialLocation: initialLocation,
+          redirect:
+              buildAppRouterRedirect(swsMode: false, gate: sessionGateNotifier),
+          refreshListenable: sessionGateNotifier,
+          routes: [
+            GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
+            GoRoute(
+              path: '/settings',
+              builder: (_, _) => Scaffold(
+                body: Builder(
+                  builder: (ctx) => TextButton(
+                    onPressed: () => ctx.push('/login'),
+                    child: const Text('Open login'),
+                  ),
+                ),
+              ),
+            ),
+            GoRoute(
+                path: '/inbox',
+                builder: (_, _) => const Scaffold(body: Text('Inbox'))),
+            GoRoute(
+                path: '/enrolment',
+                builder: (_, _) => const Scaffold(body: Text('Enrolment'))),
+          ],
+        );
 
-      await tester.pumpWidget(_buildScreen(
-        notifierFactory: _SuccessAuthNotifier.new,
-        router: router,
-      ));
-      await tester.pump();
-
+    Future<void> signIn(WidgetTester tester) async {
       await tester.enterText(
           find.byKey(const Key('email_field')), 'a@b.com');
       await tester.enterText(
           find.byKey(const Key('password_field')), 'password');
       await tester.tap(find.byKey(const Key('sign_in_button')));
       await tester.pumpAndSettle();
+    }
+
+    testWidgets('an enrolled device signs in straight into the app',
+        (tester) async {
+      await tester.pumpWidget(_buildScreen(
+        notifierFactory: _SuccessAuthNotifier.new,
+        router: gatedRouter(),
+      ));
+      await tester.pump();
+
+      await signIn(tester);
 
       expect(find.text('Inbox'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
     });
 
-    testWidgets('when pushed from another route, pops back on success',
+    testWidgets('an un-enrolled device signs in into onboarding',
         (tester) async {
-      final router = GoRouter(
-        initialLocation: '/settings',
-        routes: [
-          GoRoute(
-            path: '/settings',
-            builder: (_, _) => Scaffold(
-              body: Builder(
-                builder: (ctx) => TextButton(
-                  onPressed: () => ctx.push('/login'),
-                  child: const Text('Open login'),
-                ),
-              ),
-            ),
-          ),
-          GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
-          GoRoute(
-              path: '/inbox',
-              builder: (_, _) => const Scaffold(body: Text('Inbox'))),
-        ],
-      );
-
       await tester.pumpWidget(_buildScreen(
-        notifierFactory: _SuccessAuthNotifier.new,
-        router: router,
+        notifierFactory: _UnenrolledAuthNotifier.new,
+        router: gatedRouter(),
+      ));
+      await tester.pump();
+
+      await signIn(tester);
+
+      expect(find.text('Enrolment'), findsOneWidget);
+      expect(find.text('Inbox'), findsNothing);
+    });
+
+    testWidgets('a login pushed from Settings does not pop back to it',
+        (tester) async {
+      // It used to pop, which on an un-enrolled device left the user on
+      // Settings with onboarding unstarted. The gate routes instead.
+      await tester.pumpWidget(_buildScreen(
+        notifierFactory: _UnenrolledAuthNotifier.new,
+        router: gatedRouter(initialLocation: '/settings'),
       ));
       await tester.pump();
 
       await tester.tap(find.text('Open login'));
       await tester.pumpAndSettle();
+      await signIn(tester);
 
-      await tester.enterText(
-          find.byKey(const Key('email_field')), 'a@b.com');
-      await tester.enterText(
-          find.byKey(const Key('password_field')), 'password');
-      await tester.tap(find.byKey(const Key('sign_in_button')));
-      await tester.pumpAndSettle();
-
-      // Should have popped back to /settings, NOT redirected to /inbox.
-      expect(find.text('Open login'), findsOneWidget);
+      expect(find.text('Enrolment'), findsOneWidget);
+      expect(find.text('Open login'), findsNothing);
       expect(find.byKey(const Key('sign_in_button')), findsNothing);
-      expect(find.byType(CircularProgressIndicator), findsNothing);
-    });
-
-    testWidgets(
-        'pushed login + conflict dialog: pops back to caller after resolving',
-        (tester) async {
-      // Matches production: authStateNotifier is NOT in refreshListenable.
-      // Including it would rebuild the route stack when login flips it,
-      // dropping the imperatively-pushed /login entry and breaking pop.
-      final router = GoRouter(
-        initialLocation: '/settings',
-        routes: [
-          GoRoute(
-            path: '/settings',
-            builder: (_, _) => Scaffold(
-              body: Builder(
-                builder: (ctx) => TextButton(
-                  onPressed: () => ctx.push('/login'),
-                  child: const Text('Open login'),
-                ),
-              ),
-            ),
-          ),
-          GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
-        ],
-      );
-
-      await tester.pumpWidget(_buildScreen(
-        notifierFactory: _ConflictAuthNotifier.new,
-        router: router,
-      ));
-      await tester.pump();
-
-      await tester.tap(find.text('Open login'));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-          find.byKey(const Key('email_field')), 'a@b.com');
-      await tester.enterText(
-          find.byKey(const Key('password_field')), 'password');
-      await tester.tap(find.byKey(const Key('sign_in_button')));
-      await tester.pump(); // start async
-      await tester.pump(); // show dialog
-
-      // Conflict dialog is up.
-      expect(find.text('Data conflict'), findsOneWidget);
-
-      await tester.tap(find.text('Merge both'));
-      await tester.pumpAndSettle();
-
-      // Dialog dismissed AND we popped back to /settings.
-      expect(find.text('Data conflict'), findsNothing);
-      expect(find.text('Open login'), findsOneWidget);
-      expect(find.byKey(const Key('sign_in_button')), findsNothing);
-      expect(find.byType(CircularProgressIndicator), findsNothing);
     });
   });
 }
