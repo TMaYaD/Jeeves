@@ -5,7 +5,10 @@
 /// - A field applies iff its HLC is strictly greater than the stored one. Equal
 ///   HLCs are an idempotent skip, which is also what makes a pulled echo of the
 ///   device's own op a no-op.
-/// - A field's HLC is its own when it carries one, else the op-level HLC.
+/// - A field's HLC is its own when it carries one, else the op-level HLC. The
+///   same rule applies one level up to a tombstone, whose `tombstone_hlc` a
+///   compaction op carries so a compacted deletion is re-asserted at the clock it
+///   was made at rather than the compactor's.
 /// - Deletion is a tombstone op with its own HLC. Visibility is decided at read
 ///   time — a field newer than the tombstone is live and revives the entity, a
 ///   field older stays hidden. Nothing is deleted, so reduction is
@@ -136,24 +139,31 @@ class Reducer {
     }
   }
 
+  /// A tombstone applies at [OpPayload.effectiveTombstoneHlc] — its own clock when
+  /// it carries one, else the op's.
+  ///
+  /// Only a compaction op carries one, and for the same reason its fields do: a
+  /// compacted tombstone re-stamped with the compactor's newer clock would bury a
+  /// resurrection the original tombstone could never have buried. The fallback is
+  /// what keeps every content op's behaviour exactly what it was.
   Future<void> _applyTombstone(OpPayload payload) async {
+    final clock = payload.effectiveTombstoneHlc;
     final existing = await (_db.select(_db.rowTombstones)
           ..where((row) =>
               row.collection.equals(payload.collection) &
               row.entityId.equals(payload.entityId)))
         .getSingleOrNull();
     if (existing != null &&
-        !(payload.hlc >
-            Hlc(existing.wallMs, existing.counter, existing.memberIdHex))) {
+        !(clock > Hlc(existing.wallMs, existing.counter, existing.memberIdHex))) {
       return;
     }
     await _db.into(_db.rowTombstones).insertOnConflictUpdate(
           RowTombstonesCompanion.insert(
             collection: payload.collection,
             entityId: payload.entityId,
-            wallMs: payload.hlc.wallMs,
-            counter: payload.hlc.counter,
-            memberIdHex: payload.hlc.memberIdHex,
+            wallMs: clock.wallMs,
+            counter: clock.counter,
+            memberIdHex: clock.memberIdHex,
           ),
         );
   }

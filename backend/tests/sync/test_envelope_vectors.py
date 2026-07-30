@@ -29,7 +29,12 @@ from app.sync.ids import (
     preference_entity_id,
     user_preferences_workspace_id,
 )
-from app.sync.op_payload import MalformedPayloadError, OpPayload
+from app.sync.op_payload import MalformedPayloadError, OpPayload, guard_op_class_shape
+from app.sync.prune_payload import (
+    MAX_PRUNE_TARGETS,
+    PrunePayload,
+    PrunePayloadError,
+)
 from tests.sync.vectors import envelope_vectors
 
 #: The two control types that carry their author's own registration, and are
@@ -78,13 +83,20 @@ def _header_from_json(raw: dict[str, Any]) -> OpHeader:
     )
 
 
-def _receive(envelope: bytes, expected_workspace_id: uuid.UUID, sign_pk: bytes) -> OpPayload:
+def _receive(
+    envelope: bytes, expected_workspace_id: uuid.UUID, sign_pk: bytes
+) -> OpPayload | PrunePayload:
     """The receiving client's fail-closed pipeline, in its normative order.
 
     The real server never runs this — it is content-blind and stops after the
     header.  The Dart client runs the identical sequence in
     ``sync_client.dart``; both are pinned to the same ``reason`` codes by the
     negative vectors, which is what stops the two from drifting apart.
+
+    Class 4 goes through the *content* codec plus the class-4 shape guard, because a
+    compaction op is an ordinary ``OpPayload`` with three extra rules.  Class 5 goes
+    through the prune codec instead: it is the only other class whose payload
+    anybody but the reducer reads.
     """
     header_bytes, body, _signature = env.split_envelope(envelope)
     header = OpHeader.parse(header_bytes)
@@ -92,7 +104,28 @@ def _receive(envelope: bytes, expected_workspace_id: uuid.UUID, sign_pk: bytes) 
     if header.workspace_id != expected_workspace_id:
         raise env.WorkspaceMismatchError("header workspace is not the pulled workspace")
     env.verify_envelope(envelope, sign_pk)
-    return OpPayload.decode(env.parse_body(body))
+    payload_bytes = env.parse_body(body)
+    if header.op_class == env.OP_CLASS_PRUNE:
+        return PrunePayload.decode(payload_bytes)
+    payload = OpPayload.decode(payload_bytes)
+    guard_op_class_shape(payload, op_class=header.op_class)
+    return payload
+
+
+def _receive_encrypted(envelope: bytes, workspace_key: bytes) -> bytes:
+    """The suite-dispatch half of the receive path, for a reader that holds the key.
+
+    Two branches and one order, exactly as ``sync_client.dart`` has them: the
+    one-way-upgrade check first — a plaintext content-carrying op at a keyed epoch is
+    a downgrade, not history — then the AEAD.  The server reaches neither, because it
+    holds no key; these vectors are what keeps the Python codec's classification in
+    step with the Dart receiver's.
+    """
+    header_bytes, body, _signature = env.split_envelope(envelope)
+    header = OpHeader.parse(header_bytes)
+    env.check_served(header)
+    env.check_suite_at_keyed_epoch(header, holds_epoch_key=True)
+    return env.open_body(header_bytes, body, workspace_key)
 
 
 def _member_sign_pk(member_id: str) -> bytes:
@@ -328,7 +361,7 @@ def test_negative_vector_fails_closed_with_the_pinned_reason(
             uuid.UUID(vector["expected_workspace_id"]),
             bytes.fromhex(key_entry["sign_pk_hex"]),
         )
-    except (EnvelopeError, MalformedPayloadError) as rejection:
+    except (EnvelopeError, MalformedPayloadError, PrunePayloadError) as rejection:
         assert rejection.reason == vector["reason"]
     else:
         pytest.fail(f"{vector['name']} was accepted; expected {vector['reason']}")
@@ -395,13 +428,133 @@ def test_aead_vector_opens_back_through_the_receive_order(vector: dict[str, Any]
 def test_negative_aead_vector_fails_closed_with_the_pinned_reason(
     vector: dict[str, Any],
 ) -> None:
-    header_bytes, body, _ = env.split_envelope(bytes.fromhex(vector["envelope_hex"]))
     try:
-        env.open_body(header_bytes, body, bytes.fromhex(vector["workspace_key_hex"]))
+        _receive_encrypted(
+            bytes.fromhex(vector["envelope_hex"]), bytes.fromhex(vector["workspace_key_hex"])
+        )
     except EnvelopeError as rejection:
         assert rejection.reason == vector["reason"]
     else:
         pytest.fail(f"{vector['name']} was accepted; expected {vector['reason']}")
+
+
+def test_the_plaintext_downgrade_rule_covers_compaction_and_not_prune() -> None:
+    """The #554 obligation, split the only way it can be.
+
+    Class 4 carries entity content, so a plaintext one at a keyed epoch is a
+    downgrade and is refused.  Class 5 is *required* to be plaintext — the server
+    acts on it — so extending the same refusal to it would make a prune
+    unauthorable.  The two halves are pinned in opposite directions, which is why
+    the vectors carry ``plaintext_compaction_at_keyed_epoch`` **and**
+    ``encrypted_prune_op``.
+    """
+    assert _PROTOCOL["plaintext_refused_at_keyed_epoch_op_classes"] == sorted(
+        env.PLAINTEXT_REFUSED_AT_KEYED_EPOCH_OP_CLASSES
+    )
+    assert _PROTOCOL["must_stay_plaintext_op_classes"] == sorted(env.MUST_STAY_PLAINTEXT_OP_CLASSES)
+    assert env.OP_CLASS_COMPACTION in env.PLAINTEXT_REFUSED_AT_KEYED_EPOCH_OP_CLASSES
+    assert env.OP_CLASS_PRUNE in env.MUST_STAY_PLAINTEXT_OP_CLASSES
+    assert not (
+        env.PLAINTEXT_REFUSED_AT_KEYED_EPOCH_OP_CLASSES & env.MUST_STAY_PLAINTEXT_OP_CLASSES
+    )
+
+
+def test_a_prune_op_under_suite_aead_v1_is_refused_by_check_served() -> None:
+    vector = next(v for v in _DOCUMENT["negative_vectors"] if v["name"] == "encrypted_prune_op")
+    header_bytes, _, _ = env.split_envelope(bytes.fromhex(vector["envelope_hex"]))
+    header = OpHeader.parse(header_bytes)
+    assert header.suite == env.SUITE_AEAD_V1
+    assert header.op_class == env.OP_CLASS_PRUNE
+    # Both halves are individually served and the *pair* is forbidden, exactly as
+    # for control ops — and it earns its own code, because a client that saw this
+    # has learned something different about its server.
+    assert header.op_class in env.SERVED_OP_CLASSES
+    with pytest.raises(env.EncryptedPruneOpError):
+        env.check_served(header)
+
+
+# ── Compaction and prune (#555) ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("vector", _DOCUMENT["compaction_vectors"], ids=lambda v: str(v["name"]))
+def test_compaction_vector_is_byte_identical_and_receives(vector: dict[str, Any]) -> None:
+    key_entry = _KEYS_BY_LABEL[vector["key"]]
+    header = _header_from_json(vector["header"])
+    assert header.op_class == env.OP_CLASS_COMPACTION
+    assert header.suite == env.SUITE_PLAINTEXT_V1
+
+    payload_bytes = vector["payload_json"].encode("utf-8")
+    body = env.frame_body(payload_bytes)
+    assert body.hex() == vector["body_hex"]
+    envelope = env.build_envelope(header, body, SigningKey(bytes.fromhex(key_entry["seed_hex"])))
+    assert envelope.hex() == vector["envelope_hex"]
+
+    received = _receive(
+        envelope,
+        uuid.UUID(vector["header"]["workspace_id"]),
+        bytes.fromhex(key_entry["sign_pk_hex"]),
+    )
+    assert isinstance(received, OpPayload)
+    # The point of the class: every field carries its own clock, and at least one of
+    # them belongs to somebody other than the compactor.
+    assert received.fields
+    assert all(write.hlc is not None for write in received.fields.values())
+    authors = {write.hlc.member_id_hex for write in received.fields.values() if write.hlc}
+    assert authors != {received.hlc.member_id_hex}
+    # The op-level clock is the compactor's own and newer than every field's, which
+    # is what ``guard_payload`` checks and what F15 exempts the field clocks from.
+    assert all(write.hlc < received.hlc for write in received.fields.values() if write.hlc)
+
+
+def test_the_compacted_tombstone_vector_carries_the_original_clock() -> None:
+    vector = next(
+        v for v in _DOCUMENT["compaction_vectors"] if v["name"] == "compaction_tombstone_snapshot"
+    )
+    payload = OpPayload.decode(vector["payload_json"].encode("utf-8"))
+    assert payload.tombstone is True
+    assert payload.tombstone_hlc is not None
+    assert payload.effective_tombstone_hlc == payload.tombstone_hlc
+    # Older than the compactor's own clock, which is the whole reason the field
+    # exists: the op-level fallback would bury a resurrection the original could not.
+    assert payload.tombstone_hlc < payload.hlc
+
+
+@pytest.mark.parametrize("vector", _DOCUMENT["prune_vectors"], ids=lambda v: str(v["name"]))
+def test_prune_vector_is_byte_identical_and_receives(vector: dict[str, Any]) -> None:
+    key_entry = _KEYS_BY_LABEL[vector["key"]]
+    header = _header_from_json(vector["header"])
+    assert header.op_class == env.OP_CLASS_PRUNE
+    # Plaintext for ever: the server acts on this payload.
+    assert header.suite == env.SUITE_PLAINTEXT_V1
+
+    payload_bytes = vector["payload_json"].encode("utf-8")
+    envelope = env.build_envelope(
+        header, env.frame_body(payload_bytes), SigningKey(bytes.fromhex(key_entry["seed_hex"]))
+    )
+    assert envelope.hex() == vector["envelope_hex"]
+
+    received = _receive(
+        envelope,
+        uuid.UUID(vector["header"]["workspace_id"]),
+        bytes.fromhex(key_entry["sign_pk_hex"]),
+    )
+    assert isinstance(received, PrunePayload)
+    assert received.targets
+    # A target is more than a seq, which is the whole of ADR-0038: the envelope hash
+    # is what a fresh device checks a *survivor*'s prev_author_hash against.
+    for target in received.targets:
+        assert len(target.envelope_hash) == env.PREV_AUTHOR_HASH_BYTES
+        assert target.seq > 0
+        assert target.author_seq > 0
+    assert PrunePayload.decode(received.encode()) == received
+
+
+def test_the_prune_bound_in_the_vectors_is_the_codec_bound() -> None:
+    assert _PROTOCOL["prune"]["max_targets"] == MAX_PRUNE_TARGETS
+    vector = next(v for v in _DOCUMENT["negative_vectors"] if v["name"] == "prune_targets_too_many")
+    _, body, _ = env.split_envelope(bytes.fromhex(vector["envelope_hex"]))
+    raw = json.loads(env.parse_body(body).decode("utf-8"))
+    assert len(raw["targets"]) == MAX_PRUNE_TARGETS + 1
 
 
 @pytest.mark.parametrize("name", ["aead_tampered_ciphertext", "aead_tampered_header_key_epoch"])

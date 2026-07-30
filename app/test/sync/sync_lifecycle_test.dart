@@ -137,8 +137,14 @@ class _UnsubscribableSignalTransport implements SyncTransport {
     String workspaceId, {
     required int since,
     required int limit,
+    bool includeCompacted = false,
   }) =>
-      _inner.pullOps(workspaceId, since: since, limit: limit);
+      _inner.pullOps(
+        workspaceId,
+        since: since,
+        limit: limit,
+        includeCompacted: includeCompacted,
+      );
 
   @override
   Future<List<KeyWrapRecord>> putKeyWraps(

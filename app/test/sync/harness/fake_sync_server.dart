@@ -33,6 +33,7 @@ import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/key_wraps.dart';
+import 'package:jeeves/sync/prune_payload.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/signal_socket.dart';
 import 'package:jeeves/sync/sync_transport.dart';
@@ -186,6 +187,26 @@ class _ControlAdmission {
   final GrantCertificate? grant;
   final RevokeCertificate? revoke;
   final RotateStatement? rotate;
+}
+
+/// One verified prune op, and the rows it will stamp once it has a seq.
+///
+/// The same two-pass shape [_ControlAdmission] has, for the same reason: validation
+/// can refuse the whole batch, and `compactedBy` needs a transport seq that does not
+/// exist until the append.
+class _PruneAdmission {
+  _PruneAdmission({
+    required this.index,
+    required this.targets,
+    required this.isReplay,
+  });
+
+  final int index;
+  final List<PruneTarget> targets;
+
+  /// True when the log already holds this exact op. A replay must not be refused for
+  /// finding its own targets already stamped — it stamped them.
+  final bool isReplay;
 }
 
 class _EscrowSlot {
@@ -830,7 +851,9 @@ class FakeSyncServer {
 
     // Before the chain-gap check below, so a mispositioned register yields
     // `member_register_not_first` and never the 409.
-    final admissions = await _verifyControlOps(member, workspaceId, envelopes, parsed);
+    final prunes = <_PruneAdmission>[];
+    final admissions =
+        await _verifyControlOps(member, workspaceId, envelopes, parsed, prunes);
 
     final lastAuthorSeq = <String, int>{};
     for (final op in _log) {
@@ -905,6 +928,7 @@ class FakeSyncServer {
     // is anchored to a transport seq, and a seq does not exist until the op is
     // stored. The authorization verdict is positional against those numbers, so
     // they have to be the real ones.
+    _materialisePrunes(workspaceId, prunes, results);
     for (final memberId in _materialiseControl(workspaceId, admissions, results)) {
       // Two halves of one revocation: the credential dies so nothing can
       // authenticate a *new* socket or POST, and the live sockets close so an
@@ -932,6 +956,7 @@ class FakeSyncServer {
     String workspaceId,
     List<Uint8List> envelopes,
     List<OpHeader> parsed,
+    List<_PruneAdmission> prunes,
   ) async {
     final grants = _GrantIndex.detachedCopyOf(_grants[workspaceId]);
     var workspaceExists = _workspaces.containsKey(workspaceId);
@@ -947,6 +972,14 @@ class FakeSyncServer {
     final rootPk = _escrows[_slot(workspaceId, member.userId)]?.record.rootPk ?? Uint8List(0);
     final isPreferences = workspaceId == userPreferencesWorkspaceId(member.userId);
     final stagedKinds = <String, String>{};
+    // Class-4 op ids this batch carries but has not yet stored, so a prune later in
+    // the same POST can name one.
+    final stagedCompactionOpIds = <String>{};
+    // Prune targets claimed by an earlier admission in this POST, so a second prune
+    // naming a shared seq is refused here rather than tripping the materialisation
+    // check with a race that did not happen — mirrors `claimed_seqs` in the real
+    // route's `_verify_and_authorize`.
+    final claimedSeqs = <int>{};
     final admissions = <_ControlAdmission>[];
     // Walked forward through the batch exactly as `grants` is, so a `rotate` at index
     // 0 is what the content op at index 1 is judged against.
@@ -960,6 +993,22 @@ class FakeSyncServer {
         }
         _requireRole(grants, member.record.memberId, header.opClass, index);
         _requireFreshKeyEpoch(header, currentEpoch, index);
+        if (header.opClass == opClassCompaction) {
+          // Staged from the header alone, exactly as the real route stages it: a
+          // class-4 body is ciphertext once the Workspace is keyed, so `op_id` and
+          // `op_class` are all a prune's reference can be resolved against.
+          stagedCompactionOpIds.add(header.opId);
+        } else if (header.opClass == opClassPrune) {
+          prunes.add(_verifyPrune(
+            envelopes[index],
+            header,
+            index: index,
+            workspaceId: workspaceId,
+            stagedCompactionOpIds: stagedCompactionOpIds,
+            claimedSeqs: claimedSeqs,
+            isReplay: replayedOpIds.contains(header.opId),
+          ));
+        }
         continue;
       }
 
@@ -1133,6 +1182,154 @@ class FakeSyncServer {
       throw SyncTransportException(409, 'ops[$index]', code: 'rotate_epoch_conflict');
     }
     return rotate;
+  }
+
+  /// Verify one class-5 op: the second body-reading path, mirroring `_verify_prune`.
+  ///
+  /// Every rule here is checkable *because the server holds the envelopes*, which is
+  /// the whole argument for validating attestations at the door: a forged one would
+  /// poison the chain verification of every fresh device that trusts the prune, and a
+  /// fresh device has nothing to check it against.
+  _PruneAdmission _verifyPrune(
+    Uint8List envelope,
+    OpHeader header, {
+    required int index,
+    required String workspaceId,
+    required Set<String> stagedCompactionOpIds,
+    required Set<int> claimedSeqs,
+    required bool isReplay,
+  }) {
+    final PrunePayload payload;
+    try {
+      payload = PrunePayload.decode(parseBody(splitEnvelope(envelope).body));
+    } on SyncRejection catch (rejection) {
+      // The shape rules — empty, duplicate, over-bound — land here, *before* the
+      // materialisation rowcount check, which is what keeps that check's one
+      // remaining cause unambiguous.
+      throw SyncTransportException(422, 'ops[$index]', code: rejection.reason.code);
+    }
+
+    if (!stagedCompactionOpIds.contains(payload.compactionOpId) &&
+        !_log.any((op) =>
+            op.workspaceId == workspaceId &&
+            op.header?.authorMemberId == header.authorMemberId &&
+            op.header?.opId == payload.compactionOpId &&
+            op.header?.opClass == opClassCompaction)) {
+      // Somebody else's compaction does not count: a prune vouches for its own.
+      throw SyncTransportException(422, 'ops[$index]', code: 'prune_compaction_not_found');
+    }
+
+    for (final target in payload.targets) {
+      final row = _log.firstWhere(
+        (op) => op.workspaceId == workspaceId && op.seq == target.seq,
+        orElse: () => throw SyncTransportException(
+          422,
+          'ops[$index]: seq ${target.seq}',
+          code: 'prune_target_not_found',
+        ),
+      );
+      final targetHeader = row.header;
+      if (targetHeader == null) {
+        throw SyncTransportException(422, 'ops[$index]', code: 'prune_target_not_found');
+      }
+      if (compactionExemptOpClasses.contains(targetHeader.opClass)) {
+        // A control op is the authority record and a prune is itself the attestation
+        // that history was removed; folding either away destroys the evidence that
+        // makes the removal auditable.
+        throw SyncTransportException(
+          422,
+          'ops[$index]',
+          code: targetHeader.opClass == opClassControl
+              ? 'prune_target_is_control'
+              : 'prune_target_is_prune',
+        );
+      }
+      if (targetHeader.authorMemberId != target.authorMemberId ||
+          targetHeader.authorSeq != target.authorSeq ||
+          !_sameBytes(envelopeHash(row.envelope), target.envelopeHash)) {
+        throw SyncTransportException(
+          422,
+          'ops[$index]',
+          code: 'prune_target_attestation_mismatch',
+        );
+      }
+      if (row.compactedBy != null && !isReplay) {
+        // The stamp is written once and never moved, mirroring `revokedBySeq`, with
+        // the same verbatim-replay exemption: a replay stamped these rows itself.
+        throw SyncTransportException(
+          422,
+          'ops[$index]',
+          code: 'prune_target_already_compacted',
+        );
+      }
+      if (claimedSeqs.contains(target.seq) && !isReplay) {
+        // An *earlier* prune in this same POST already named this seq. Caught here
+        // rather than at materialisation so `_materialisePrunes`' rowcount guard
+        // keeps its one documented cause — a concurrent prune — instead of an
+        // in-batch collision leaving refused ops in `_log` (the fake has no
+        // `db.rollback()`, so a refusal that fires only after `_log.addAll` would
+        // strand them). Mirrors the real route's `_verify_prune`.
+        throw SyncTransportException(
+          422,
+          'ops[$index]',
+          code: 'prune_target_already_compacted',
+        );
+      }
+      if (targetHeader.opId == payload.compactionOpId) {
+        throw SyncTransportException(
+          422,
+          'ops[$index]',
+          code: 'prune_target_is_its_own_compaction',
+        );
+      }
+    }
+    // Stage this prune's seqs so a later admission in the same POST that names one of
+    // them is refused above. A replay's targets are already stamped, so they never
+    // reach the collision check anyway.
+    claimedSeqs.addAll(payload.targets.map((target) => target.seq));
+    return _PruneAdmission(
+      index: index,
+      targets: payload.targets,
+      isReplay: isReplay,
+    );
+  }
+
+  /// Stamp `compactedBy`. **Never a removal**, exactly as on the real server.
+  ///
+  /// Mirrors `_materialise_prunes` in `backend/app/sync/routes.py`: the row lookup is
+  /// workspace-scoped as `_verifyPrune` is, and an already-stamped target is the
+  /// guarded UPDATE finding fewer rows than it attested — refused as
+  /// `prune_target_already_compacted` rather than silently skipped. With in-batch
+  /// shared targets now refused during verification (`claimedSeqs` in `_verifyPrune`),
+  /// this stamp-time check keeps its one documented cause: a concurrent prune that
+  /// stamped a target between verification and here. Each admission is checked before
+  /// any of its rows are stamped, so a mid-admission refusal never leaves a partial
+  /// stamp behind.
+  void _materialisePrunes(
+    String workspaceId,
+    List<_PruneAdmission> prunes,
+    List<OpAppendResult> results,
+  ) {
+    for (final admission in prunes) {
+      if (results[admission.index].duplicate) continue;
+      final pruneSeq = results[admission.index].seq;
+      final rows = [
+        for (final target in admission.targets)
+          _log.firstWhere(
+            (op) => op.workspaceId == workspaceId && op.seq == target.seq,
+          ),
+      ];
+      if (rows.any((row) => row.compactedBy != null)) {
+        throw SyncTransportException(
+          422,
+          'ops[${admission.index}]',
+          code: 'prune_target_already_compacted',
+        );
+      }
+      for (final row in rows) {
+        row.compactedBy = pruneSeq;
+      }
+    }
   }
 
   /// The `(grant.role, header.op_class)` matrix, content-blind as ever.
@@ -1650,6 +1847,7 @@ class FakeSyncServer {
     String workspaceId, {
     required int since,
     required int limit,
+    bool includeCompacted = false,
   }) {
     final member = _members[memberId];
     if (member == null) {
@@ -1676,7 +1874,9 @@ class FakeSyncServer {
       for (final op in _log)
         if (op.workspaceId == workspaceId &&
             op.seq > floor &&
-            op.compactedBy == null &&
+            // The history view (#555): `include_compacted` widens *what* is served
+            // and never *who* may ask, so it sits inside the same member-GET gate.
+            (includeCompacted || op.compactedBy == null) &&
             !omitSeqs.contains(op.seq))
           op,
     ]..sort((a, b) {
@@ -1887,8 +2087,15 @@ class FakeSyncServerMemberSession implements SyncTransport {
     String workspaceId, {
     required int since,
     required int limit,
+    bool includeCompacted = false,
   }) async =>
-      server._pullOps(memberId, workspaceId, since: since, limit: limit);
+      server._pullOps(
+        memberId,
+        workspaceId,
+        since: since,
+        limit: limit,
+        includeCompacted: includeCompacted,
+      );
 
   @override
   Future<List<KeyWrapRecord>> putKeyWraps(

@@ -305,10 +305,13 @@ void main() {
       );
     });
 
-    for (final opClass in [9, opClassCompaction]) {
+    for (final opClass in [9, opClassSuggestion]) {
       test('unserved op_class $opClass is rejected', () async {
-        // Unknown (9) and known-but-unimplemented (4) fail closed identically.
-        // op_class 2 is no longer among them: this slice serves control.
+        // Unknown (9) and known-but-unimplemented (3) fail closed identically.
+        // Class 3 is the last unserved one — #548 served control and #555 served
+        // compaction and prune — and when #557 serves it the case moves again
+        // rather than disappearing, because "unknown" and "not yet" have to stay
+        // indistinguishable to a receiver.
         final envelope = await author.nextEnvelope(workspaceId, opClass: opClass);
         await expectLater(
           () => session.postOps(workspaceId, [envelope]),

@@ -27,9 +27,9 @@ from app.sync.control_payload import (
 from app.sync.envelope import (
     HEADER_LENGTH_BYTES,
     MINIMUM_ENVELOPE_BYTES,
-    OP_CLASS_COMPACTION,
     OP_CLASS_CONTENT,
     OP_CLASS_CONTROL,
+    OP_CLASS_SUGGESTION,
     OpHeader,
     build_envelope,
     derive_key_id,
@@ -272,11 +272,16 @@ async def test_unserved_suite_is_rejected(client: AsyncClient, session: Session)
     assert detail_of(response) == {"code": "unsupported_suite", "index": 0}
 
 
-@pytest.mark.parametrize("op_class", [9, OP_CLASS_COMPACTION])
+@pytest.mark.parametrize("op_class", [9, OP_CLASS_SUGGESTION])
 async def test_unserved_op_class_is_rejected(
     client: AsyncClient, session: Session, op_class: int
 ) -> None:
-    """Unknown (9) and known-but-unimplemented (4) fail closed identically."""
+    """Unknown (9) and known-but-unimplemented (3) fail closed identically.
+
+    Class 3 is the last unserved class: #555 turned 4 and 5 on, and #557 will turn
+    this one on too — at which point the case moves again rather than disappearing,
+    because "unknown" and "not yet" must stay indistinguishable to a receiver.
+    """
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(session.device.next_envelope(session.workspace_id, op_class=op_class)),

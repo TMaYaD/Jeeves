@@ -107,6 +107,23 @@ enum IntegrityAlarmKind {
   /// never read server grant rows.
   noLiveGrant('no_live_grant'),
 
+  /// A prune's attestation and this device's own evidence disagree about the bytes
+  /// at one chain position.
+  ///
+  /// Both bear real signatures — a gap-reason quarantine row exists only after
+  /// `verifyEnvelope` passed, and an attestation travels inside a signed prune — so
+  /// either the author forked its own chain or the compactor attested a
+  /// fabrication. The codec cannot say which, so the accusation is the disagreement
+  /// itself rather than a guess at its cause.
+  ///
+  /// **Never a heal.** A device holding the originals is the only party that can
+  /// catch a lying compactor; a fresh device necessarily trusts the compactor's
+  /// signature plus the server's POST-time cross-check, which is what the
+  /// most-trusted `compactor` role means. Where this fires the claimant stays
+  /// unreleased, which leaves the gap alarm standing for that author until #575
+  /// lands its reclassification — inherited behaviour, not new debt.
+  pruneAttestationDivergence('prune_attestation_divergence'),
+
   /// An append found the slot it claims already taken.
   ///
   /// [chainVerdict] cannot produce this — it refuses a *chain* position the log
@@ -135,19 +152,36 @@ enum IntegrityAlarmKind {
 /// question asked of it.
 typedef AuthorChainHead = ({int authorSeq, Uint8List envelopeHash});
 
-/// A position attested by a verified prune op, standing in for history that was
-/// compacted away (#555).
+/// The highest position of one author's chain this device can *account for*,
+/// counting positions a verified prune op attested as well as ones the log holds
+/// (#555).
 ///
-/// Dormant: nothing supplies one yet. It is here because the reconciliation rule
-/// it serves — *a chain gap covered by a verified prune op is not an alarm* — has
-/// to be a rule the verdict already knows about, or every honest bootstrap after
-/// a compaction is an alarm storm. When supplied it substitutes for an **absent**
-/// head; a derived head always wins, because the log outranks an attestation
-/// about the log.
+/// The reconciliation rule it serves — *a chain gap covered by a verified prune op
+/// is not an alarm* — has to be a rule the verdict knows about, or every honest
+/// bootstrap after a compaction is an alarm storm.
+///
+/// **The floor wins when it is above the derived head**, which is the one deliberate
+/// change #555 makes to shipped verification logic. Entity-level compaction punches
+/// holes *inside* an author's chain rather than truncating a prefix, so a device may
+/// hold positions 1-2 and need to verify position 53 across attested holes; a rule
+/// that always preferred the derived head could never bridge them. It is sound
+/// because the caller only ever supplies a floor walked contiguously forward from
+/// the real head, filling each step from the log or from a per-position, hash-linked
+/// attestation — there is no gap in it to hide anything in. Below the head the floor
+/// is ignored, because there the log is the better evidence.
 typedef VerifiedChainFloor = ({int seq, Uint8List envelopeHash});
 
 /// One op's stored twin, as the caller read it out of `op_log`.
 typedef StoredChainOp = ({int authorSeq, Uint8List envelope});
+
+/// What a prune attested at the position an arriving op claims, when the log holds
+/// nothing there (#555).
+///
+/// The arrival order opposite to the ordinary bootstrap: attestations first, the
+/// superseded envelope re-served later. Supplying it is what lets the verdict tell
+/// a chatty server re-offering pruned bytes from a server offering *different*
+/// bytes at a position it claims were removed.
+typedef PrunedPositionAttestation = ({int authorSeq, Uint8List envelopeHash});
 
 /// What the chain rules say about one received op.
 enum ChainOutcome {
@@ -158,6 +192,17 @@ enum ChainOutcome {
   /// legitimately re-serve after a cursor reset, and this is also the normal
   /// shape of a device's own op echoing back. Advance past it, re-apply nothing.
   idempotentSkip,
+
+  /// A position a verified prune attested, served with exactly the bytes it
+  /// attested (#555).
+  ///
+  /// Treated like [idempotentSkip] — no log row, no quarantine, no accusation. A
+  /// pruned original re-served is evidence of nothing but a chatty server, and if
+  /// the *serving* was itself illegitimate the stale-prefix accusation already
+  /// covers it. Distinct from [idempotentSkip] because there is no stored op to
+  /// compare against: the comparison is against an attestation, which is a
+  /// different claim and worth naming.
+  supersededByPrune,
 
   /// Refused. [ChainVerdict.rejection] and [ChainVerdict.alarm] say which.
   refuse,
@@ -172,6 +217,11 @@ class ChainVerdict {
 
   const ChainVerdict.idempotentSkip()
       : outcome = ChainOutcome.idempotentSkip,
+        rejection = null,
+        alarm = null;
+
+  const ChainVerdict.supersededByPrune()
+      : outcome = ChainOutcome.supersededByPrune,
         rejection = null,
         alarm = null;
 
@@ -197,8 +247,9 @@ final Uint8List _zeroPrevAuthorHash = Uint8List(prevAuthorHashBytes);
 ///
 /// [storedAtAuthorSeq] is the `op_log` row at `header.authorSeq` for this
 /// author, if any; [storedUnderOpId] is the row under `(author, op_id)`, if any.
-/// [head] is the author's derived head, and [verifiedFloor] the dormant #555
-/// substitute for an absent one.
+/// [head] is the author's derived head, [verifiedFloor] the bridged position
+/// attestations account for, and [storedAttestation] what a prune attested at the
+/// arriving op's own position when the log holds nothing there.
 ///
 /// No latching anywhere: a refusal never moves the head, so the author's stream
 /// is judged against the last position this device actually verified rather than
@@ -210,6 +261,7 @@ ChainVerdict chainVerdict({
   StoredChainOp? storedAtAuthorSeq,
   StoredChainOp? storedUnderOpId,
   VerifiedChainFloor? verifiedFloor,
+  PrunedPositionAttestation? storedAttestation,
 }) {
   // Checked first and independently of position: an op id the log already holds
   // under a *different* position, or under the same one with different bytes, is
@@ -228,12 +280,18 @@ ChainVerdict chainVerdict({
     );
   }
 
-  // A supplied floor substitutes for an absent head, so a post-prune bootstrap
-  // never falls into the zero-hash branch below: seq 0 with the zero hash is
-  // only what "this author's chain starts here" means when nothing at all is
-  // known about it.
-  final headSeq = head?.authorSeq ?? verifiedFloor?.seq ?? 0;
-  final headHash = head?.envelopeHash ?? verifiedFloor?.envelopeHash ?? _zeroPrevAuthorHash;
+  // The **effective** head: the floor when it reaches higher than the log does,
+  // and the derived head otherwise. A supplied floor is walked contiguously
+  // forward from the real head, so above the head it accounts for every skipped
+  // position individually and hash-linked — see [VerifiedChainFloor]. Absent both,
+  // seq 0 with the zero hash is what "this author's chain starts here" means.
+  final floor = verifiedFloor;
+  final derivedHeadSeq = head?.authorSeq ?? 0;
+  final bridged = floor != null && floor.seq > derivedHeadSeq;
+  final headSeq = bridged ? floor.seq : derivedHeadSeq;
+  final headHash = bridged
+      ? floor.envelopeHash
+      : (head?.envelopeHash ?? _zeroPrevAuthorHash);
 
   if (header.authorSeq == headSeq + 1) {
     if (sameBytes(header.prevAuthorHash, headHash)) return const ChainVerdict.accept();
@@ -261,6 +319,25 @@ ChainVerdict chainVerdict({
   // including a header claiming seq 0, which no author ever writes.
   if (storedAtAuthorSeq != null && sameBytes(storedAtAuthorSeq.envelope, envelope)) {
     return const ChainVerdict.idempotentSkip();
+  }
+  // Nothing in the log here, but a prune said what used to be. Matching bytes are
+  // a pruned original re-served; different bytes at a position the compactor
+  // claimed to have removed are the forged-claimant shape, and both signatures are
+  // real, so it is an accusation rather than a refusal on its own.
+  if (storedAtAuthorSeq == null &&
+      storedAttestation != null &&
+      storedAttestation.authorSeq == header.authorSeq) {
+    if (sameBytes(storedAttestation.envelopeHash, envelopeHash(envelope))) {
+      return const ChainVerdict.supersededByPrune();
+    }
+    return ChainVerdict.refuse(
+      SyncRejection(
+        SyncRejectionReason.pruneAttestationDivergence,
+        'author_seq ${header.authorSeq} was served with bytes a verified prune '
+        'attested differently',
+      ),
+      IntegrityAlarmKind.pruneAttestationDivergence,
+    );
   }
   return ChainVerdict.refuse(
     SyncRejection(
@@ -297,6 +374,8 @@ IntegrityAlarmKind? alarmForRejection(SyncRejectionReason reason) => switch (rea
       SyncRejectionReason.ownWritesDivergence => IntegrityAlarmKind.ownWritesDivergence,
       SyncRejectionReason.staleReplayedOp => IntegrityAlarmKind.stalePrefixServed,
       SyncRejectionReason.controlChainFork => IntegrityAlarmKind.controlChainFork,
+      SyncRejectionReason.pruneAttestationDivergence =>
+        IntegrityAlarmKind.pruneAttestationDivergence,
       // An op the server should never have accepted: it holds the same grants
       // index the verdict is about, so serving one is a claim worth surfacing.
       SyncRejectionReason.noLiveGrant => IntegrityAlarmKind.noLiveGrant,

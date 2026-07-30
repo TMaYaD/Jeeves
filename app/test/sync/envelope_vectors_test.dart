@@ -18,6 +18,7 @@ import 'package:jeeves/sync/key_wraps.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/member_identity.dart';
 import 'package:jeeves/sync/op_payload.dart';
+import 'package:jeeves/sync/prune_payload.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/root_authority.dart';
 
@@ -51,7 +52,12 @@ OpHeader _headerFromJson(Map<String, dynamic> raw) => OpHeader(
 
 /// The receiving client's fail-closed pipeline, in the same normative order
 /// `SyncClient` uses and the Python suite mirrors.
-Future<OpPayload> _receive(
+///
+/// Class 4 goes through the *content* codec plus the class-4 shape guard, because a
+/// compaction op is an ordinary [OpPayload] with three extra rules. Class 5 goes
+/// through the prune codec instead: it is the only other class whose payload
+/// anybody but the reducer reads.
+Future<Object> _receive(
   Uint8List envelope,
   String expectedWorkspaceId,
   Uint8List signPk,
@@ -66,7 +72,38 @@ Future<OpPayload> _receive(
     );
   }
   await verifyEnvelope(envelope, signPk);
-  return OpPayload.decode(parseBody(parts.body));
+  final payloadBytes = parseBody(parts.body);
+  if (header.opClass == opClassPrune) return PrunePayload.decode(payloadBytes);
+  final payload = OpPayload.decode(payloadBytes);
+  guardOpClassShape(payload, opClass: header.opClass);
+  return payload;
+}
+
+/// The suite-dispatch half of the receive path, for a reader that holds the key.
+///
+/// Two branches and one order, exactly as `sync_client.dart` has them: the
+/// one-way-upgrade check first — a plaintext content-carrying op at a keyed epoch is
+/// a downgrade, not history — then the AEAD.
+Future<Uint8List> _receiveEncrypted(
+  Uint8List envelope,
+  Uint8List workspaceKey,
+) async {
+  final parts = splitEnvelope(envelope);
+  final header = OpHeader.parse(parts.header);
+  header.checkServed();
+  if (plaintextRefusedAtKeyedEpochOpClasses.contains(header.opClass) &&
+      header.suite == suitePlaintextV1) {
+    throw SyncRejection(
+      SyncRejectionReason.plaintextAtEncryptedEpoch,
+      'an op_class ${header.opClass} op at suite plaintext_v1 arrived at epoch '
+      '${header.keyEpoch}, which this reader holds a key for',
+    );
+  }
+  return openBody(
+    headerBytes: parts.header,
+    body: parts.body,
+    workspaceKey: workspaceKey,
+  );
 }
 
 /// The control half of the receive pipeline, in D6's normative order.
@@ -269,6 +306,23 @@ void main() {
       expect(keywrap['escrow_wrap_bytes'], epochKeyEscrowWrapBytes);
       expect(protocol['served_op_classes'], servedOpClasses.toList()..sort());
       expect(protocol['known_op_classes'], knownOpClasses.toList()..sort());
+      // The two directions the suite rule runs in, as named sets: control and
+      // prune must stay plaintext because the server acts on them, and content and
+      // compaction must *not* be plaintext once their epoch is keyed.
+      expect(
+        protocol['must_stay_plaintext_op_classes'],
+        mustStayPlaintextOpClasses.toList()..sort(),
+      );
+      expect(
+        protocol['plaintext_refused_at_keyed_epoch_op_classes'],
+        plaintextRefusedAtKeyedEpochOpClasses.toList()..sort(),
+      );
+      expect(
+        mustStayPlaintextOpClasses
+            .intersection(plaintextRefusedAtKeyedEpochOpClasses),
+        isEmpty,
+      );
+      expect((protocol['prune'] as Map)['max_targets'], maxPruneTargets);
       expect(protocol['body_size_classes_bytes'], bodySizeClassesBytes);
       expect(protocol['body_oversize_multiple_bytes'], bodyOversizeMultipleBytes);
       expect(protocol['payload_length_prefix_bytes'], payloadLengthPrefixBytes);
@@ -373,7 +427,7 @@ void main() {
         );
         // Re-encoding is not part of verification (the signed artifact is the
         // body bytes), but a decode that loses information would break merges.
-        expect(utf8.decode(payload.encode()), vector['payload_json']);
+        expect(utf8.decode((payload as OpPayload).encode()), vector['payload_json']);
       });
     }
   });
@@ -481,13 +535,11 @@ void main() {
     for (final vector in vectorList(document, 'negative_aead_vectors')) {
       test('${vector['name']} fails closed as ${vector['reason']}', () async {
         final envelope = _fromHex(vector['envelope_hex'] as String);
-        final parts = splitEnvelope(envelope);
         SyncRejection? rejection;
         try {
-          await openBody(
-            headerBytes: parts.header,
-            body: parts.body,
-            workspaceKey: _fromHex(vector['workspace_key_hex'] as String),
+          await _receiveEncrypted(
+            envelope,
+            _fromHex(vector['workspace_key_hex'] as String),
           );
         } on SyncRejection catch (thrown) {
           rejection = thrown;
@@ -524,6 +576,123 @@ void main() {
         header.checkServed,
         throwsRejection(SyncRejectionReason.encryptedControlOp),
       );
+    });
+
+    test('a prune op under suite 0x01 is refused by checkServed', () {
+      final vector = vectorList(document, 'negative_vectors')
+          .firstWhere((entry) => entry['name'] == 'encrypted_prune_op');
+      final header =
+          OpHeader.parse(splitEnvelope(_fromHex(vector['envelope_hex'] as String)).header);
+      expect(header.suite, suiteAeadV1);
+      expect(header.opClass, opClassPrune);
+      // The same shape as the control pair, under its own code: both halves are
+      // individually served and it is the *pair* that is forbidden, so a client that
+      // saw this has learned something different about its server.
+      expect(servedSuites, contains(header.suite));
+      expect(servedOpClasses, contains(header.opClass));
+      expect(
+        header.checkServed,
+        throwsRejection(SyncRejectionReason.encryptedPruneOp),
+      );
+    });
+  });
+
+  group('compaction vectors', () {
+    for (final vector in vectorList(document, 'compaction_vectors')) {
+      test('${vector['name']} is byte-identical and receives', () async {
+        final header = _headerFromJson(vector['header'] as Map<String, dynamic>);
+        expect(header.opClass, opClassCompaction);
+        expect(header.suite, suitePlaintextV1);
+
+        final payload =
+            Uint8List.fromList(utf8.encode(vector['payload_json'] as String));
+        final body = frameBody(payload);
+        expect(_toHex(body), vector['body_hex']);
+        final signer = await signerFor(vector['key'] as String);
+        expect(_toHex(await signer.buildEnvelope(header, body)), vector['envelope_hex']);
+
+        final key = keysByLabel[vector['key'] as String]!;
+        final received = await _receive(
+          _fromHex(vector['envelope_hex'] as String),
+          (vector['header'] as Map<String, dynamic>)['workspace_id'] as String,
+          _fromHex(key['sign_pk_hex'] as String),
+        ) as OpPayload;
+        // The point of the class: every field carries its own clock, and at least
+        // one of them belongs to somebody other than the compactor.
+        expect(received.fields, isNotEmpty);
+        expect(
+          received.fields.values.every((write) => write.hlc != null),
+          isTrue,
+        );
+        expect(
+          received.fields.values.map((write) => write.hlc!.memberIdHex).toSet(),
+          isNot({received.hlc.memberIdHex}),
+        );
+        // The op-level clock is the compactor's own and newer than every field's,
+        // which is what `guardPayload` checks and what F15 exempts them from.
+        expect(
+          received.fields.values.every((write) => received.hlc > write.hlc!),
+          isTrue,
+        );
+      });
+    }
+
+    test('the compacted tombstone vector carries the original clock', () {
+      final vector = vectorList(document, 'compaction_vectors')
+          .firstWhere((entry) => entry['name'] == 'compaction_tombstone_snapshot');
+      final payload = OpPayload.decode(
+        Uint8List.fromList(utf8.encode(vector['payload_json'] as String)),
+      );
+      expect(payload.tombstone, isTrue);
+      expect(payload.tombstoneHlc, isNotNull);
+      expect(payload.effectiveTombstoneHlc, payload.tombstoneHlc);
+      // Older than the compactor's own clock, which is the whole reason the field
+      // exists: the op-level fallback would bury a resurrection the original could
+      // never have buried.
+      expect(payload.hlc > payload.tombstoneHlc!, isTrue);
+    });
+  });
+
+  group('prune vectors', () {
+    for (final vector in vectorList(document, 'prune_vectors')) {
+      test('${vector['name']} is byte-identical and receives', () async {
+        final header = _headerFromJson(vector['header'] as Map<String, dynamic>);
+        expect(header.opClass, opClassPrune);
+        // Plaintext for ever: the server acts on this payload.
+        expect(header.suite, suitePlaintextV1);
+
+        final payload =
+            Uint8List.fromList(utf8.encode(vector['payload_json'] as String));
+        final signer = await signerFor(vector['key'] as String);
+        expect(
+          _toHex(await signer.buildEnvelope(header, frameBody(payload))),
+          vector['envelope_hex'],
+        );
+
+        final key = keysByLabel[vector['key'] as String]!;
+        final received = await _receive(
+          _fromHex(vector['envelope_hex'] as String),
+          (vector['header'] as Map<String, dynamic>)['workspace_id'] as String,
+          _fromHex(key['sign_pk_hex'] as String),
+        ) as PrunePayload;
+        expect(received.targets, isNotEmpty);
+        // A target is more than a seq, which is the whole of ADR-0038: the envelope
+        // hash is what a fresh device checks a *survivor*'s prev_author_hash against.
+        for (final target in received.targets) {
+          expect(target.envelopeHash.length, prevAuthorHashBytes);
+          expect(target.seq, greaterThan(0));
+          expect(target.authorSeq, greaterThan(0));
+        }
+        expect(PrunePayload.decode(received.encode()), received);
+      });
+    }
+
+    test('the target bound in the vectors is the codec bound', () {
+      final vector = vectorList(document, 'negative_vectors')
+          .firstWhere((entry) => entry['name'] == 'prune_targets_too_many');
+      final body = splitEnvelope(_fromHex(vector['envelope_hex'] as String)).body;
+      final raw = jsonDecode(utf8.decode(parseBody(body))) as Map<String, dynamic>;
+      expect((raw['targets'] as List).length, maxPruneTargets + 1);
     });
   });
 

@@ -16,6 +16,11 @@
 ///   clock joins independently of its value has no other observable surface.
 /// * `strategy_overrides` — a preference key's strategy, for keys with no
 ///   production registration (today only `set_merge`).
+///
+/// One per-**op** key, added by #555: `op_class`, present only when it is not 1.
+/// The runner hands it to [guardOpClassShape] before the payload reaches the
+/// reducer, which is where that guard sits on the receive path — so the class-4
+/// shape rules are pinned by the reduction suite as well as by the envelope one.
 library;
 
 import 'dart:convert';
@@ -93,6 +98,13 @@ void main() {
         Uint8List.fromList(utf8.encode(jsonEncode(op['payload']))),
       );
       try {
+        // The class-4 shape guard sits between decode and reduce on the receive
+        // path, so it sits there here too. Absent `op_class` is class 1, which is
+        // every op that predates #555.
+        guardOpClassShape(
+          payload,
+          opClass: (op['op_class'] as int?) ?? opClassContent,
+        );
         await reducer.apply(
           payload,
           authorMemberIdHex: op['author_member_id_hex'] as String,

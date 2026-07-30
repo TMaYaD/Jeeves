@@ -76,10 +76,14 @@ from app.sync.envelope import (  # noqa: E402
     HEADER_LENGTH_BYTES,
     KNOWN_OP_CLASSES,
     MINIMUM_ENVELOPE_BYTES,
+    MUST_STAY_PLAINTEXT_OP_CLASSES,
     OP_CLASS_COMPACTION,
     OP_CLASS_CONTENT,
     OP_CLASS_CONTROL,
+    OP_CLASS_PRUNE,
+    OP_CLASS_SUGGESTION,
     PAYLOAD_LENGTH_PREFIX_BYTES,
+    PLAINTEXT_REFUSED_AT_KEYED_EPOCH_OP_CLASSES,
     SERVED_OP_CLASSES,
     SERVED_SUITES,
     SIGNATURE_LENGTH_BYTES,
@@ -140,6 +144,11 @@ from app.sync.member_auth import (  # noqa: E402
     member_challenge_signing_input,
 )
 from app.sync.op_payload import FieldWrite, Hlc, OpPayload  # noqa: E402
+from app.sync.prune_payload import (  # noqa: E402
+    MAX_PRUNE_TARGETS,
+    PrunePayload,
+    PruneTarget,
+)
 
 SPEC_DIR = Path(__file__).resolve().parents[2] / "spec" / "sync"
 
@@ -579,7 +588,7 @@ def _negative_vectors() -> list[dict[str, Any]]:
     )
     vectors.append(
         _negative(
-            "unimplemented_op_class_compaction",
+            "unimplemented_op_class_suggestion",
             key="device_a",
             reason="unsupported_op_class",
             envelope=build_envelope(
@@ -587,15 +596,59 @@ def _negative_vectors() -> list[dict[str, Any]]:
                     op_id_name="unimplemented_op_class",
                     key="device_a",
                     author_seq=1,
-                    op_class=OP_CLASS_COMPACTION,
+                    op_class=OP_CLASS_SUGGESTION,
                 ),
                 body,
                 SIGNING_KEYS["device_a"],
             ),
             note=(
-                "op_class 4 is a named class this slice does not implement. It "
-                "quarantines on the same surface as an unknown value; #555 turns "
-                "this into a positive vector."
+                "op_class 3 is a named class this build does not implement. It "
+                "quarantines on the same surface as an unknown value, which is what "
+                "keeps 'unknown' and 'not yet' indistinguishable to a receiver. "
+                "Replaces #554's compaction vector, now that #555 serves class 4 — "
+                "the fail-closed negative has to survive the class it named being "
+                "turned on, so it moved to the class #557 will turn on next. Its "
+                "op_id_name stays 'unimplemented_op_class' so the frozen op_id does "
+                "not churn on the move (see spec/sync/README.md); the header and "
+                "envelope bytes still change because op_class moved. Only the "
+                "vector label tracks the class it now names."
+            ),
+        )
+    )
+    # A genuinely sealed prune op, for the same reason the control one is genuine:
+    # the refusal must be the (suite, op_class) pair itself and not a body-shaped
+    # complaint that happens to fire first.
+    encrypted_prune_header = _header(
+        op_id_name="encrypted_prune_op",
+        key="device_a",
+        author_seq=1,
+        suite=SUITE_AEAD_V1,
+        op_class=OP_CLASS_PRUNE,
+        key_epoch=1,
+        nonce=_spec_nonce("aead/encrypted-prune"),
+    )
+    encrypted_prune_header_bytes = encrypted_prune_header.serialize()
+    vectors.append(
+        _negative(
+            "encrypted_prune_op",
+            key="device_a",
+            reason="encrypted_prune_op",
+            envelope=build_envelope(
+                encrypted_prune_header,
+                seal_body(
+                    encrypted_prune_header_bytes,
+                    frame_body(_prune_payload().encode()),
+                    SPEC_EPOCH_KEYS[1],
+                ),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "A validly signed, validly sealed prune under suite 0x01. Refused by "
+                "both codecs for the reason an encrypted control op is: the server "
+                "stamps compacted_by out of this payload and holds no key, so an "
+                "encrypted prune is not a stricter op but one nobody can act on. The "
+                "enumeration is content-free — seqs, author positions and hashes — "
+                "which is what makes keeping it in the clear cost nothing."
             ),
         )
     )
@@ -776,7 +829,353 @@ def _negative_vectors() -> list[dict[str, Any]]:
         )
     )
 
+    vectors.extend(_negative_compaction_vectors())
+    vectors.extend(_negative_prune_vectors())
     return vectors
+
+
+# --- Compaction and prune vectors (op classes 4 and 5, #555) -----------------
+#
+# A compaction op is an *ordinary* ``OpPayload`` with three class-4-specific rules
+# on top, and a prune op is the only other class that carries a payload the server
+# reads.  What the vectors pin is the pair of shapes and every refusal they add;
+# what they deliberately cannot pin is anything stateful — whether a target row
+# exists, whether it is already compacted, whether the named compaction is stored.
+# Those are the route's, and ``test_compaction_routes.py`` holds them.
+
+
+def _compaction_payload(*, tombstone: bool = False) -> OpPayload:
+    """The theme entity's joined state, re-asserted at its *original* clocks.
+
+    The op-level HLC is the compactor's own and is newer than everything in the
+    payload — that is what ``guard_payload`` checks, and F15 exempts the per-field
+    clocks precisely so a compaction can carry other authors' older ones.  Here
+    ``value`` names device_b while device_a authors the envelope, which is the
+    authorship provenance the format exists to preserve: without it the field would
+    be stamped with device_a's newer clock and win merges device_b's op would have
+    lost.
+    """
+    return OpPayload(
+        collection=USER_PREFERENCES_COLLECTION,
+        entity_id=THEME_ENTITY_ID,
+        hlc=Hlc.for_member(MEMBER_IDS["device_a"], BASE_WALL_MS + 10_000),
+        fields={
+            "key": FieldWrite(
+                value=THEME_KEY,
+                hlc=Hlc.for_member(MEMBER_IDS["device_a"], BASE_WALL_MS),
+            ),
+            "value": FieldWrite(
+                value=json.dumps("solarized"),
+                hlc=Hlc.for_member(MEMBER_IDS["device_b"], BASE_WALL_MS + 2_000),
+            ),
+        },
+        tombstone=tombstone,
+        tombstone_hlc=(
+            Hlc.for_member(MEMBER_IDS["device_b"], BASE_WALL_MS + 3_000) if tombstone else None
+        ),
+    )
+
+
+#: The compaction op a prune vector names.  Its ``op_id`` is what the payload's
+#: ``compaction.op_id`` has to resolve to, so the two are derived from one label.
+_COMPACTION_OP_ID_NAME = "compaction_snapshot"
+
+
+def _prune_payload(*, targets: tuple[PruneTarget, ...] | None = None) -> PrunePayload:
+    """Two attestations over device_b's chain, as a real prune carries them.
+
+    device_b's positions rather than device_a's, because that is the case a fresh
+    device cannot resolve any other way: it has no bytes at those positions and no
+    way to learn them, so the envelope hashes here *are* its only link across the
+    hole.
+    """
+    return PrunePayload(
+        compaction_op_id=_op_id(_COMPACTION_OP_ID_NAME),
+        targets=targets
+        if targets is not None
+        else (
+            PruneTarget(
+                seq=41,
+                author_member_id=MEMBER_IDS["device_b"],
+                author_seq=7,
+                envelope_hash=hashlib.sha256(b"jeeves/spec/sync/pruned/1").digest(),
+            ),
+            PruneTarget(
+                seq=42,
+                author_member_id=MEMBER_IDS["device_b"],
+                author_seq=8,
+                envelope_hash=hashlib.sha256(b"jeeves/spec/sync/pruned/2").digest(),
+            ),
+        ),
+    )
+
+
+def _compaction_vectors() -> list[dict[str, Any]]:
+    return [
+        _positive(
+            "compaction_snapshot",
+            key="device_a",
+            header=_header(
+                op_id_name=_COMPACTION_OP_ID_NAME,
+                key="device_a",
+                author_seq=30,
+                op_class=OP_CLASS_COMPACTION,
+            ),
+            payload=_compaction_payload().encode(),
+            note=(
+                "A class-4 snapshot: every field carries its own hlc, and one of them "
+                "names device_b while device_a signs the envelope. Re-asserting "
+                "(joined value, winning clock) per field is what makes merging the "
+                "snapshot absorption rather than a fresh write by the compactor."
+            ),
+        ),
+        _positive(
+            "compaction_tombstone_snapshot",
+            key="device_a",
+            header=_header(
+                op_id_name="compaction_tombstone",
+                key="device_a",
+                author_seq=31,
+                op_class=OP_CLASS_COMPACTION,
+            ),
+            payload=_compaction_payload(tombstone=True).encode(),
+            note=(
+                "The same snapshot with a compacted tombstone. tombstone_hlc is "
+                "device_b's original clock: re-stamped with the compactor's newer one "
+                "it would bury a resurrection the original could never have buried."
+            ),
+        ),
+    ]
+
+
+def _prune_vectors() -> list[dict[str, Any]]:
+    return [
+        _positive(
+            "prune_two_attestations",
+            key="device_a",
+            header=_header(
+                op_id_name="prune_snapshot",
+                key="device_a",
+                author_seq=32,
+                op_class=OP_CLASS_PRUNE,
+            ),
+            payload=_prune_payload().encode(),
+            note=(
+                "A class-5 prune naming its compaction by op_id and attesting two of "
+                "device_b's chain positions. Each target carries the envelope hash a "
+                "fresh device needs to check the *survivor*'s prev_author_hash "
+                "against, which is why a bare seq would not do (ADR-0038). Suite 0x00, "
+                "for ever: the server acts on this payload."
+            ),
+        ),
+    ]
+
+
+def _negative_compaction_vectors() -> list[dict[str, Any]]:
+    unstamped = replace(
+        _compaction_payload(),
+        fields={"value": FieldWrite(value=json.dumps("solarized"))},
+    )
+    vectors = [
+        _negative(
+            "compaction_field_without_hlc",
+            key="device_a",
+            reason="compaction_field_without_hlc",
+            envelope=build_envelope(
+                _header(
+                    op_id_name="compaction_field_without_hlc",
+                    key="device_a",
+                    author_seq=33,
+                    op_class=OP_CLASS_COMPACTION,
+                ),
+                frame_body(unstamped.encode()),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "A class-4 field defaulting to the op-level clock. It would be stamped "
+                "with the compactor's newer clock and win merges the op it supersedes "
+                "would have lost — the one bug entity-level compaction must not have."
+            ),
+        ),
+        _negative(
+            "compaction_tombstone_without_hlc",
+            key="device_a",
+            reason="compaction_tombstone_without_hlc",
+            envelope=build_envelope(
+                _header(
+                    op_id_name="compaction_tombstone_without_hlc",
+                    key="device_a",
+                    author_seq=34,
+                    op_class=OP_CLASS_COMPACTION,
+                ),
+                frame_body(replace(_compaction_payload(), tombstone=True).encode()),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "tombstone: true with no tombstone_hlc. The op-level fallback is the "
+                "compactor's clock, which is exactly the substitution the field exists "
+                "to prevent."
+            ),
+        ),
+        _negative(
+            "tombstone_hlc_on_a_content_op",
+            key="device_a",
+            reason="tombstone_hlc_outside_compaction",
+            envelope=build_envelope(
+                _header(
+                    op_id_name="tombstone_hlc_outside_compaction",
+                    key="device_a",
+                    author_seq=35,
+                ),
+                frame_body(
+                    OpPayload(
+                        collection=USER_PREFERENCES_COLLECTION,
+                        entity_id=THEME_ENTITY_ID,
+                        hlc=Hlc.for_member(MEMBER_IDS["device_a"], BASE_WALL_MS + 4_000),
+                        tombstone=True,
+                        tombstone_hlc=Hlc.for_member(MEMBER_IDS["device_b"], BASE_WALL_MS),
+                    ).encode()
+                ),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=(
+                "tombstone_hlc is fenced to class 4 and refused everywhere else rather "
+                "than ignored: a permitted-and-ignored field is one a future reader may "
+                "start honouring, and two codecs disagreeing about whether it counts is "
+                "a convergence bug. Without this vector the field could leak into "
+                "content ops as a way to backdate a deletion."
+            ),
+        ),
+    ]
+    return vectors
+
+
+def _negative_prune_vectors() -> list[dict[str, Any]]:
+    def _raw_prune(
+        name: str, *, author_seq: int, reason: str, payload: bytes, note: str
+    ) -> dict[str, Any]:
+        return _negative(
+            name,
+            key="device_a",
+            reason=reason,
+            envelope=build_envelope(
+                _header(
+                    op_id_name=name,
+                    key="device_a",
+                    author_seq=author_seq,
+                    op_class=OP_CLASS_PRUNE,
+                ),
+                frame_body(payload),
+                SIGNING_KEYS["device_a"],
+            ),
+            note=note,
+        )
+
+    honest = _prune_payload().targets[0]
+
+    # Built as raw JSON rather than through ``PrunePayload.encode``, which refuses
+    # each of these on the way out: the point of a negative vector is the bytes an
+    # attacker or a buggy peer would actually put on the wire.
+    def _json(targets: list[dict[str, Any]]) -> bytes:
+        return json.dumps(
+            {
+                "compaction": {"op_id": str(_op_id(_COMPACTION_OP_ID_NAME))},
+                "targets": targets,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    duplicate_seq = honest.to_json_dict()
+    duplicate_position = {
+        **honest.to_json_dict(),
+        "seq": honest.seq + 1,
+        "envelope_hash": hashlib.sha256(b"jeeves/spec/sync/pruned/other").digest().hex(),
+    }
+    return [
+        _raw_prune(
+            "prune_targets_empty",
+            author_seq=36,
+            reason="prune_targets_empty",
+            payload=_json([]),
+            note=(
+                "A prune that attests nothing materialises nothing and can only exist "
+                "to spend a chain slot or confuse an audit. Refused at the shape level, "
+                "where both codecs agree, rather than accepted and found inert."
+            ),
+        ),
+        _raw_prune(
+            "prune_duplicate_target_seq",
+            author_seq=37,
+            reason="prune_duplicate_target",
+            payload=_json([duplicate_seq, duplicate_seq]),
+            note=(
+                "Two targets naming one transport seq. Refused at decode so the "
+                "server's materialisation rowcount check has exactly one cause left — "
+                "a concurrent prune — and a race can never be reported as a shape error."
+            ),
+        ),
+        _raw_prune(
+            "prune_duplicate_target_author_position",
+            author_seq=38,
+            reason="prune_duplicate_target",
+            payload=_json([honest.to_json_dict(), duplicate_position]),
+            note=(
+                "Distinct seqs, one (author, author_seq) position. Deduping on seq "
+                "alone would let a forged second attestation for a chain position "
+                "through, and the position is what the chain floor is built from."
+            ),
+        ),
+        _raw_prune(
+            "prune_targets_too_many",
+            author_seq=39,
+            reason="prune_targets_too_many",
+            payload=_json(
+                [
+                    {
+                        "seq": index + 1,
+                        "author_member_id": str(MEMBER_IDS["device_b"]),
+                        "author_seq": index + 1,
+                        "envelope_hash": hashlib.sha256(
+                            f"jeeves/spec/sync/pruned/bulk/{index}".encode()
+                        )
+                        .digest()
+                        .hex(),
+                    }
+                    for index in range(MAX_PRUNE_TARGETS + 1)
+                ]
+            ),
+            note=(
+                f"{MAX_PRUNE_TARGETS + 1} targets. The bound is what keeps one prune "
+                "from becoming an unbounded UPDATE on the server and an unbounded walk "
+                "on every client."
+            ),
+        ),
+        _raw_prune(
+            "prune_target_missing_envelope_hash",
+            author_seq=40,
+            reason="malformed_prune_payload",
+            payload=_json(
+                [{k: v for k, v in honest.to_json_dict().items() if k != "envelope_hash"}]
+            ),
+            note=(
+                "A target with no envelope hash is a bare seq, which is precisely the "
+                "shape ADR-0038 rejected: it cannot bridge a mid-chain hole, so a "
+                "receiver accepting it would have nothing to check a survivor's "
+                "prev_author_hash against."
+            ),
+        ),
+        _raw_prune(
+            "prune_payload_without_compaction",
+            author_seq=41,
+            reason="malformed_prune_payload",
+            payload=json.dumps({"targets": []}, separators=(",", ":")).encode("utf-8"),
+            note=(
+                "A prune that names no compaction. The whole point of the class is to "
+                "attest that a *particular* snapshot supersedes these ops, so the "
+                "reference is mandatory and checked before the targets are read."
+            ),
+        ),
+    ]
 
 
 # --- Control vectors (op_class = 2) -----------------------------------------
@@ -1828,6 +2227,42 @@ def _negative_aead_vectors() -> list[dict[str, Any]]:
             ).hex(),
         }
     )
+
+    # The #554 obligation, discharged for class 4: a compaction op carries the whole
+    # joined state of an entity, so a plaintext one at a keyed epoch is the same
+    # downgrade a plaintext content op is — only worth more. Stateful, and the state
+    # travels in the vector: "here are the bytes, and here is the key this reader
+    # holds for their epoch". Class 5 is pinned the *opposite* way, as
+    # `encrypted_prune_op` among the ordinary negatives.
+    plaintext_compaction_header = _header(
+        op_id_name="plaintext_compaction_at_keyed_epoch",
+        key="device_a",
+        author_seq=42,
+        op_class=OP_CLASS_COMPACTION,
+        key_epoch=1,
+    )
+    vectors.append(
+        {
+            "name": "plaintext_compaction_at_keyed_epoch",
+            "note": (
+                "A class-4 op at suite 0x00 with key_epoch 1, offered to a reader that "
+                "holds K_{w,1}. Refused as plaintext_at_encrypted_epoch: the upgrade is "
+                "one-way, and compaction is in the content family for it because it "
+                "carries the most valuable plaintext in the log. Pre-turn-on history at "
+                "*earlier*, unkeyed epochs stays readable, which is what keeps turn-on "
+                "non-destructive."
+            ),
+            "key": "device_a",
+            "reason": "plaintext_at_encrypted_epoch",
+            "epoch": 1,
+            "workspace_key_hex": SPEC_EPOCH_KEYS[1].hex(),
+            "envelope_hex": build_envelope(
+                plaintext_compaction_header,
+                frame_body(_compaction_payload().encode()),
+                SIGNING_KEYS["device_a"],
+            ).hex(),
+        }
+    )
     return vectors
 
 
@@ -2162,6 +2597,12 @@ def _envelope_vectors_document() -> dict[str, Any]:
             },
             "known_op_classes": sorted(KNOWN_OP_CLASSES),
             "served_op_classes": sorted(SERVED_OP_CLASSES),
+            # The two directions the suite rule runs in, as named sets rather than as
+            # prose, so #557 turning class 3 on is a set membership decision.
+            "must_stay_plaintext_op_classes": sorted(MUST_STAY_PLAINTEXT_OP_CLASSES),
+            "plaintext_refused_at_keyed_epoch_op_classes": sorted(
+                PLAINTEXT_REFUSED_AT_KEYED_EPOCH_OP_CLASSES
+            ),
             "payload_length_prefix_bytes": PAYLOAD_LENGTH_PREFIX_BYTES,
             "body_size_classes_bytes": list(BODY_SIZE_CLASSES_BYTES),
             "body_oversize_multiple_bytes": BODY_OVERSIZE_MULTIPLE_BYTES,
@@ -2236,8 +2677,45 @@ def _envelope_vectors_document() -> dict[str, Any]:
                     "Control ops are never folded into a compaction op, and "
                     "neither are prune ops: compacting a control op away would "
                     "delete the evidence a Grant ever existed, and a prune op is "
-                    "itself the attestation that history was removed. #555 "
-                    "enforces this."
+                    "itself the attestation that history was removed. Enforced by "
+                    "#555 on both sides — the server refuses such a target and the "
+                    "client's candidate scan never proposes one."
+                ),
+            },
+            "prune": {
+                "max_targets": MAX_PRUNE_TARGETS,
+                "target_fields": (
+                    "seq (transport), author_member_id, author_seq, envelope_hash "
+                    "(64 lowercase hex, SHA-256 over the whole envelope)"
+                ),
+                "why_more_than_a_seq": (
+                    "Entity-level pruning punches holes *inside* every contributing "
+                    "author's chain rather than truncating a prefix, because an "
+                    "author's chain interleaves many entities' ops. A fresh device "
+                    "verifying a survivor at author_seq N needs to know head+1..N-1 "
+                    "were legitimately removed and the envelope hash at N-1 to check "
+                    "prev_author_hash against. ADR-0038."
+                ),
+                "shape_rules": (
+                    "Refused at decode wherever the bytes are held: an empty "
+                    "enumeration (prune_targets_empty), a duplicate on either the seq "
+                    "or the (author, author_seq) key (prune_duplicate_target), and more "
+                    "than max_targets entries (prune_targets_too_many). Refusing "
+                    "duplicates at decode leaves the server's materialisation rowcount "
+                    "check exactly one possible cause: a concurrent prune."
+                ),
+                "server_readable": (
+                    "The second deliberate exception to content-blindness after "
+                    "control ops. The server acts on this payload to stamp "
+                    "ops.compacted_by, and can afford to read it because the "
+                    "enumeration carries seqs, positions and hashes and nothing about "
+                    "what any op said."
+                ),
+                "soft_delete_only": (
+                    "A prune stamps ops.compacted_by and never deletes. Default pulls "
+                    "exclude the row, include_compacted=true serves it back, and the "
+                    "envelope bytes are untouched for ever. Soft-to-hard is an easy "
+                    "later shift; the reverse is impossible."
                 ),
             },
             "escrow": {
@@ -2313,6 +2791,8 @@ def _envelope_vectors_document() -> dict[str, Any]:
         "negative_vectors": _negative_vectors(),
         "control_vectors": _control_vectors(),
         "negative_control_vectors": _negative_control_vectors(),
+        "compaction_vectors": _compaction_vectors(),
+        "prune_vectors": _prune_vectors(),
         "aead_vectors": _aead_vectors(),
         "negative_aead_vectors": _negative_aead_vectors(),
         "keywrap_vectors": _keywrap_vectors(),
@@ -2402,6 +2882,8 @@ def _reduce_op(
     hlc: list[Any],
     fields: dict[str, Any] | None = None,
     tombstone: bool = False,
+    tombstone_hlc: list[Any] | None = None,
+    op_class: int = OP_CLASS_CONTENT,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "collection": collection,
@@ -2411,7 +2893,155 @@ def _reduce_op(
     }
     if tombstone:
         payload["tombstone"] = True
-    return {"author_member_id_hex": author, "payload": payload}
+    if tombstone_hlc is not None:
+        payload["tombstone_hlc"] = tombstone_hlc
+    op: dict[str, Any] = {"author_member_id_hex": author, "payload": payload}
+    if op_class != OP_CLASS_CONTENT:
+        # Present only when it is not the default, so every pre-#555 op keeps its
+        # exact bytes in the frozen file.
+        op["op_class"] = op_class
+    return op
+
+
+def _compaction_reduction_cases(t: int) -> list[dict[str, Any]]:
+    """Why a compaction snapshot reduces to the same state as what it supersedes.
+
+    The claim is absorption under ADR-0030's semilattice laws: the snapshot
+    re-asserts ``(joined value, winning clock)`` per field, so merging it into a
+    state that already saw a subset of the originals adds nothing, and merging it
+    into a state that saw none of them produces exactly the join.  Both directions
+    are pinned below, and the permutation flag is what makes the first one an
+    *absorption* claim rather than a claim about one arrival order.
+    """
+    originals = [
+        _reduce_op(author=_MEMBER_A, hlc=[t, 0, _MEMBER_A], fields={"a": {"v": "from_a"}}),
+        _reduce_op(
+            author=_MEMBER_B,
+            hlc=[t + 1000, 0, _MEMBER_B],
+            fields={"b": {"v": "from_b"}},
+        ),
+    ]
+    #: The compactor is device A and its own clock is the newest thing in sight —
+    #: which is exactly why every field carries its own.
+    snapshot = _reduce_op(
+        author=_MEMBER_A,
+        hlc=[t + 5000, 0, _MEMBER_A],
+        op_class=OP_CLASS_COMPACTION,
+        fields={
+            "a": {"v": "from_a", "hlc": [t, 0, _MEMBER_A]},
+            "b": {"v": "from_b", "hlc": [t + 1000, 0, _MEMBER_B]},
+        },
+    )
+    joined_entities = {_HARNESS_COLLECTION: {_DOC_ID: {"a": "from_a", "b": "from_b"}}}
+    joined_clocks = {
+        _HARNESS_COLLECTION: {_DOC_ID: {"a": [t, 0, _MEMBER_A], "b": [t + 1000, 0, _MEMBER_B]}}
+    }
+    return [
+        {
+            "name": "compaction_snapshot_is_absorbed_by_the_originals",
+            "note": (
+                "The snapshot alongside the ops it supersedes, in every order. Equal "
+                "HLC is an idempotent skip per field, so a device holding full history "
+                "applies it as a no-op — and the permutation is what makes that "
+                "absorption rather than a fact about one arrival order."
+            ),
+            "permute": True,
+            "ops": [*originals, snapshot],
+            "expected_entities": joined_entities,
+            "expected_clocks": joined_clocks,
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "compaction_snapshot_alone_reduces_to_the_same_state",
+            "note": (
+                "The fresh-device case: the snapshot with none of its originals. It "
+                "produces the identical reduced state *and* the identical per-field "
+                "clocks as compaction_snapshot_is_absorbed_by_the_originals, which is "
+                "the whole equivalence claim — the compactor's own newer clock appears "
+                "nowhere in the result."
+            ),
+            "ops": [snapshot],
+            "expected_entities": joined_entities,
+            "expected_clocks": joined_clocks,
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "compaction_snapshot_loses_to_a_newer_concurrent_edit",
+            "note": (
+                "An offline device's later write to a compacted field wins exactly as "
+                "it would have won against the original op, because the snapshot "
+                "carries the original's clock and not the compactor's."
+            ),
+            "permute": True,
+            "ops": [
+                snapshot,
+                _reduce_op(
+                    author=_MEMBER_B,
+                    hlc=[t + 2000, 0, _MEMBER_B],
+                    fields={"a": {"v": "later_offline_edit"}},
+                ),
+            ],
+            "expected_entities": {
+                _HARNESS_COLLECTION: {_DOC_ID: {"a": "later_offline_edit", "b": "from_b"}}
+            },
+            "expected_clocks": {
+                _HARNESS_COLLECTION: {
+                    _DOC_ID: {
+                        "a": [t + 2000, 0, _MEMBER_B],
+                        "b": [t + 1000, 0, _MEMBER_B],
+                    }
+                }
+            },
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "compacted_tombstone_applies_at_its_original_clock",
+            "note": (
+                "tombstone_hlc is device A's older clock while field b is device B's "
+                "newer one, so b stays live and the entity is not buried. Re-stamped "
+                "with the compactor's op-level clock the tombstone would swallow b — a "
+                "resurrection the original tombstone could never have swallowed."
+            ),
+            "ops": [
+                _reduce_op(
+                    author=_MEMBER_A,
+                    hlc=[t + 5000, 0, _MEMBER_A],
+                    op_class=OP_CLASS_COMPACTION,
+                    tombstone=True,
+                    tombstone_hlc=[t, 0, _MEMBER_A],
+                    fields={
+                        "a": {"v": "from_a", "hlc": [t, 0, _MEMBER_A]},
+                        "b": {"v": "from_b", "hlc": [t + 1000, 0, _MEMBER_B]},
+                    },
+                )
+            ],
+            "expected_entities": {_HARNESS_COLLECTION: {_DOC_ID: {"b": "from_b"}}},
+            "expected_clocks": joined_clocks,
+            "expected_quarantine_reasons": [],
+        },
+        {
+            "name": "compaction_field_without_its_own_clock_is_refused",
+            "note": (
+                "The class-4 shape guard, at the reducer boundary this time: a field "
+                "defaulting to the op-level clock would be stamped with the "
+                "compactor's and win merges the op it supersedes would have lost. The "
+                "well-formed op after it still applies, so a refusal wedges neither "
+                "the entity nor the stream."
+            ),
+            "ops": [
+                _reduce_op(
+                    author=_MEMBER_A,
+                    hlc=[t + 5000, 0, _MEMBER_A],
+                    op_class=OP_CLASS_COMPACTION,
+                    fields={"a": {"v": "unstamped"}},
+                ),
+                *originals,
+            ],
+            "expected_entities": joined_entities,
+            "expected_clocks": joined_clocks,
+            "expected_quarantine_reasons": ["compaction_field_without_hlc"],
+        },
+    ]
 
 
 def _reducer_vectors_document() -> dict[str, Any]:
@@ -2620,6 +3250,7 @@ def _reducer_vectors_document() -> dict[str, Any]:
         },
     ]
     cases.extend(_collection_and_strategy_cases(t))
+    cases.extend(_compaction_reduction_cases(t))
     return {
         "$frozen": FROZEN_NOTICE,
         "local_now_ms": BASE_WALL_MS,
@@ -2643,7 +3274,9 @@ def _reducer_vectors_document() -> dict[str, Any]:
             "independently of the value and nothing else observes that. "
             "'strategy_overrides': {preference_key: strategy_name} for keys "
             "with no production strategy — today only 'set_merge', which is "
-            "provisioned but unregistered."
+            "provisioned but unregistered. #555 adds a per-*op* key: 'op_class', "
+            "present only when it is not 1, which the runner passes to the class-4 "
+            "shape guard before the payload reaches the reducer."
         ),
         "cases": cases,
     }

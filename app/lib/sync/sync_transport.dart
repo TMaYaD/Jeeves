@@ -269,10 +269,17 @@ abstract class SyncTransport {
   );
 
   /// `since` is a pure client parameter — no server-side cursor exists (F17).
+  ///
+  /// [includeCompacted] drops the server's soft-delete filter and serves superseded
+  /// rows too — the **history view** (#555). Defaulted false and additive, so the
+  /// sync path is exactly what it was: a compacted row is hidden from *sync* so a
+  /// fresh device need not replay it, and the User is still owed it on request. The
+  /// history read is a read, never fed through the receive pipeline.
   Future<PullPage> pullOps(
     String workspaceId, {
     required int since,
     required int limit,
+    bool includeCompacted = false,
   });
 
   /// Upload the **whole** wrap set for one epoch. Owner only, digest-gated.

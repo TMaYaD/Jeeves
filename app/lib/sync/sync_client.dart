@@ -48,7 +48,7 @@
 /// client cannot have.
 library;
 
-import 'dart:math' show Random, min;
+import 'dart:math' show Random, max, min;
 
 import 'package:drift/drift.dart';
 // The append to `op_log` is a plain insert whose uniqueness constraints are the
@@ -69,6 +69,7 @@ import 'ids.dart';
 import 'key_wraps.dart';
 import 'member_identity.dart';
 import 'op_payload.dart';
+import 'prune_payload.dart';
 import 'reducer.dart';
 import 'recovery_escrow.dart';
 import 'sync_database.dart';
@@ -93,6 +94,19 @@ const Set<int> _slotTakenResultCodes = {
 
 /// Whether an arriving control op takes its position, or loses a fork.
 enum _ControlPosition { accept, quarantineThis }
+
+/// One logged op that writes to a particular entity — what a compaction pass needs
+/// to know about a candidate target without re-decoding it.
+///
+/// The envelope travels because the prune's attestation is a hash of it, and the
+/// three header fields because the attestation names them.
+typedef LoggedEntityOp = ({
+  int seq,
+  String authorMemberId,
+  int authorSeq,
+  int opClass,
+  Uint8List envelope,
+});
 
 /// A control op whose bytes have verified, and nothing more.
 ///
@@ -203,14 +217,19 @@ class SyncClient {
 
   SyncTransport? _transport;
 
-  /// The author whose quarantined successors the release scan is currently
-  /// re-admitting, or null.
+  /// The authors whose quarantined successors a release scan is currently
+  /// re-admitting.
   ///
   /// Re-entry suppression, and the reason the fixpoint is one flat loop: a
   /// released op goes back through [_receive], and if that call started a nested
   /// scan of its own then a hostile 500-op reorder would heal in 500 recursive
   /// frames instead of 500 iterations.
-  String? _releasingChainOfAuthor;
+  ///
+  /// A **set** rather than one author since #555: a prune raises several authors'
+  /// chain floors in one apply, so a scan for one author has to be able to trigger
+  /// a scan for another. Only the same author re-entering is suppressed, which is
+  /// the case the flat loop already covers.
+  final Set<String> _releasingChainOfAuthors = <String>{};
 
   /// Set when a control fork resolution invalidated the authorization verdicts
   /// content ops were applied under.
@@ -231,6 +250,13 @@ class SyncClient {
       ));
 
   bool get isEnrolled => _transport != null;
+
+  /// This device's HLC clock.
+  ///
+  /// Exposed for exactly one caller — a compaction pass stamping a snapshot's
+  /// op-level clock — so that clock is the same one every other op of this device
+  /// is stamped with rather than a second source that could disagree with it.
+  HlcClock get clock => _clock;
 
   /// Attach the transport the proof-of-possession exchange returned.
   void useMemberTransport(SyncTransport memberTransport) {
@@ -387,6 +413,250 @@ class SyncClient {
     return _authorAndQueue(opClass: opClassControl, payload: payload, keyEpoch: 0);
   }
 
+  /// Author a class-4 compaction snapshot, and self-apply it.
+  ///
+  /// [capture]'s discipline to the letter — round-trip the payload through the
+  /// receive path's own codec, run the receive path's own guards, *then* sign — with
+  /// one guard more: [guardOpClassShape] at class 4, so a snapshot whose fields do
+  /// not carry their original clocks is a thrown [SyncRejection] here rather than an
+  /// op every peer quarantines.
+  ///
+  /// **The self-apply is a provable no-op**, and this refuses if it ever is not.
+  /// Every field of an honest snapshot carries the clock already stored for it, so
+  /// reduction skips each one as an equal-HLC idempotent write. A snapshot that
+  /// *changes* the compactor's own reduced state is a bug in whatever built it — it
+  /// means the clocks are not the joined ones — and it must never be signed. The
+  /// check runs *before* [_authorAndQueue], as a thrown [StateError] rather than an
+  /// `assert`: an assertion is stripped from release builds and, worse, ran after
+  /// the outbox row and `author_state` were already durable, so a dishonest snapshot
+  /// shipped silently. Applying first is safe precisely because an honest snapshot
+  /// is a no-op — nothing is undone when nothing changed — and the apply plus its
+  /// before/after fingerprint check run inside one [SyncDatabase.transaction] so a
+  /// *dishonest* snapshot's mutation rolls back with the throw rather than staying
+  /// written until the next rebuild. The reducer's own transaction nests as a
+  /// savepoint inside it; [_authorAndQueue] and projection run only once that
+  /// transaction has committed the no-op.
+  Future<String> captureCompaction(OpPayload snapshot) async {
+    final wireBytes = snapshot.encode();
+    final decoded = OpPayload.decode(parseBody(frameBody(wireBytes)));
+    guardOpClassShape(decoded, opClass: opClassCompaction);
+    _reducer.guardPayload(decoded, authorMemberIdHex: identity.memberIdHex);
+
+    final affected = await _db.transaction(() async {
+      final before =
+          await _entityFingerprint(decoded.collection, decoded.entityId);
+      final touched =
+          await _reducer.apply(decoded, authorMemberIdHex: identity.memberIdHex);
+      final after =
+          await _entityFingerprint(decoded.collection, decoded.entityId);
+      if (before != after) {
+        throw StateError(
+          'a compaction snapshot changed its own author\'s reduced state, so its '
+          'per-field clocks are not the joined ones: $before -> $after',
+        );
+      }
+      return touched;
+    });
+
+    final opId = await _authorAndQueue(
+      opClass: opClassCompaction,
+      payload: wireBytes,
+      keyEpoch: await epochFloor(),
+    );
+    await projector?.project(affected);
+    return opId;
+  }
+
+  /// Author a class-5 prune. Nothing is applied here — see below.
+  ///
+  /// The codec round-trip enforces the shape rules (non-empty, no duplicate on
+  /// either key, bounded), and suite 0x00 is picked by
+  /// [mustStayPlaintextOpClasses] rather than by anything this method decides.
+  ///
+  /// **The compactor does not insert its own attestations at authoring**, and that
+  /// is deliberate rather than an omission. A `pruned_attestations` row carries the
+  /// prune's transport seq, which does not exist until the server appends; the
+  /// alternative was a nullable-seq special case plus an echo-time backfill. Instead
+  /// the rows land when the prune's own echo comes back through the ordinary class-5
+  /// receive path — one code path for every device, author included. It costs
+  /// nothing (the compactor's `op_log` holds the full history, so its own verdicts
+  /// never need the bridge) and it buys a self-check: the echo's cross-check runs
+  /// against the very rows the attestations were minted from, so a mismatch there
+  /// would be the compactor accusing itself.
+  Future<String> capturePrune(PrunePayload prune) async {
+    final wireBytes = prune.encode();
+    // Decoded and discarded, exactly as [capture] does: what matters is that the
+    // bytes survive the receiver's own codec before they are signed.
+    PrunePayload.decode(parseBody(frameBody(wireBytes)));
+    return _authorAndQueue(
+      opClass: opClassPrune,
+      payload: wireBytes,
+      keyEpoch: await epochFloor(),
+    );
+  }
+
+  /// One entity's reduced fields and their clocks, as one comparable string.
+  ///
+  /// Only [captureCompaction]'s no-op assertion reads it, which is why it is a
+  /// fingerprint rather than a structured value: the question is "did anything
+  /// move", and a string answers it without a second equality to maintain.
+  Future<String> _entityFingerprint(String collection, String entityId) async {
+    final rows = await _db.customSelect(
+      'SELECT f.field AS field, f.value_json AS value_json, c.wall_ms AS wall_ms, '
+      'c.counter AS counter, c.member_id_hex AS member_id_hex '
+      'FROM reduced_fields f JOIN field_clocks c '
+      '  ON c.collection = f.collection AND c.entity_id = f.entity_id '
+      ' AND c.field = f.field '
+      'WHERE f.collection = ? AND f.entity_id = ? ORDER BY f.field',
+      variables: [Variable<String>(collection), Variable<String>(entityId)],
+      readsFrom: {_db.reducedFields, _db.fieldClocks},
+    ).get();
+    final tombstone = await (_db.select(_db.rowTombstones)
+          ..where((row) =>
+              row.collection.equals(collection) & row.entityId.equals(entityId)))
+        .getSingleOrNull();
+    return [
+      for (final row in rows)
+        '${row.read<String>('field')}=${row.read<String>('value_json')}'
+            '@${row.read<int>('wall_ms')}.${row.read<int>('counter')}'
+            '.${row.read<String>('member_id_hex')}',
+      if (tombstone != null)
+        'tombstone@${tombstone.wallMs}.${tombstone.counter}.${tombstone.memberIdHex}',
+    ].join('|');
+  }
+
+  /// The whole log including superseded rows — the **history view** (#555).
+  ///
+  /// A read, not a sync: the envelopes are returned and deliberately **not** fed
+  /// through the receive pipeline. A device asking for history already holds the
+  /// state those ops reduced to, so re-receiving them would grow the quarantine and
+  /// the alarm table for no gain — and a compacted position is one the chain floor
+  /// already accounts for.
+  Future<List<PulledOp>> history({int since = 0}) async {
+    final ops = <PulledOp>[];
+    var cursor = since;
+    while (true) {
+      final page = await transport.pullOps(
+        workspaceId,
+        since: cursor,
+        limit: pullPageLimit,
+        includeCompacted: true,
+      );
+      if (page.ops.isEmpty) break;
+      ops.addAll(page.ops);
+      final highest = page.ops.map((op) => op.seq).reduce(max);
+      // The same no-forward-progress stop `pull` uses: a server ignoring `since`
+      // on a log longer than one page would otherwise page for ever.
+      if (highest <= cursor) break;
+      cursor = highest;
+      if (!page.hasMore) break;
+    }
+    return ops;
+  }
+
+  /// Every logged op that writes to one entity, oldest first — the scan a
+  /// compaction pass finds its targets with.
+  ///
+  /// Lives here rather than in `compaction.dart` because decoding a body needs the
+  /// suite dispatch and the epoch keys, and both belong to this class. Control and
+  /// prune ops are excluded structurally: they carry no entity write, and both are
+  /// exempt from compaction anyway.
+  ///
+  /// A full decode-scan of the log, and accepted as such for v1: there is no entity
+  /// index on `op_log`, and compaction is a rare background pass rather than
+  /// something on a read path. If it ever becomes hot, an index over the decoded
+  /// `(collection, entity_id)` is the fix, and this is the one call site to change.
+  Future<List<LoggedEntityOp>> loggedOpsForEntity({
+    required String collection,
+    required String entityId,
+  }) async {
+    final rows = await (_db.select(_db.opLog)
+          ..where((row) => row.workspaceId.equals(workspaceId))
+          ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
+        .get();
+    final matches = <LoggedEntityOp>[];
+    for (final row in rows) {
+      try {
+        final parts = splitEnvelope(row.envelope);
+        final header = OpHeader.parse(parts.header);
+        if (header.opClass != opClassContent && header.opClass != opClassCompaction) {
+          continue;
+        }
+        final payload =
+            await _decodeContentPayload(header, parts.header, parts.body);
+        if (payload.collection != collection || payload.entityId != entityId) {
+          continue;
+        }
+        matches.add((
+          seq: row.seq,
+          authorMemberId: header.authorMemberId,
+          authorSeq: header.authorSeq,
+          opClass: header.opClass,
+          envelope: row.envelope,
+        ));
+      } on SyncRejection {
+        // Bytes this device can no longer read are bytes it cannot claim to be
+        // superseding. Skipping them is the fail-closed answer: a prune must attest
+        // what it has actually accounted for.
+        continue;
+      }
+    }
+    return matches;
+  }
+
+  /// Every logged entity op, bucketed by `(collection, entity_id)` in one scan.
+  ///
+  /// The compaction sweep's shape: [Compactor.compactionCandidates] weighs every
+  /// entity at once, and asking [loggedOpsForEntity] per entity would re-decode the
+  /// whole `op_log` once per entity — O(entities × log) full decodes on a mature
+  /// store. This decodes each row once and buckets it by the decoded
+  /// `(collection, entity_id)`, so the sweep costs a single scan. Same structural
+  /// exclusions and the same fail-closed skip on unreadable bytes as the per-entity
+  /// scan, because it is the same scan.
+  Future<Map<(String, String), List<LoggedEntityOp>>> loggedOpsByEntity() async {
+    final rows = await (_db.select(_db.opLog)
+          ..where((row) => row.workspaceId.equals(workspaceId))
+          ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
+        .get();
+    final buckets = <(String, String), List<LoggedEntityOp>>{};
+    for (final row in rows) {
+      try {
+        final parts = splitEnvelope(row.envelope);
+        final header = OpHeader.parse(parts.header);
+        if (header.opClass != opClassContent &&
+            header.opClass != opClassCompaction) {
+          continue;
+        }
+        final payload =
+            await _decodeContentPayload(header, parts.header, parts.body);
+        (buckets[(payload.collection, payload.entityId)] ??= []).add((
+          seq: row.seq,
+          authorMemberId: header.authorMemberId,
+          authorSeq: header.authorSeq,
+          opClass: header.opClass,
+          envelope: row.envelope,
+        ));
+      } on SyncRejection {
+        continue;
+      }
+    }
+    return buckets;
+  }
+
+  /// Every chain position a verified prune has attested, by author.
+  ///
+  /// Read by the compaction pass so it never proposes a target twice, and by the
+  /// floor computation. Exposed rather than kept private because #575's predicate
+  /// has to measure against the same set (see [effectiveChainHeadSeq]).
+  Future<List<PrunedAttestationRow>> prunedAttestations({String? authorMemberId}) =>
+      (_db.select(_db.prunedAttestations)
+            ..where((row) => authorMemberId == null
+                ? row.workspaceId.equals(workspaceId)
+                : row.workspaceId.equals(workspaceId) &
+                    row.authorMemberId.equals(authorMemberId))
+            ..orderBy([(row) => OrderingTerm(expression: row.authorSeq)]))
+          .get();
+
   /// Tail of the authoring queue: every `_authorAndQueue` waits on it.
   ///
   /// The chain head is *read* by [_authorChain], the envelope is *signed*
@@ -452,14 +722,24 @@ class SyncClient {
     // suite. Control ops are `plaintext_v1` for ever (the server materialises their
     // payloads and holds no key), which is why the lookup is skipped for them
     // rather than merely expected to miss.
-    final workspaceKey = opClass == opClassControl
+    // [mustStayPlaintextOpClasses] rather than a bare control test: a prune is
+    // 0x00 for ever for the same reason a control op is — the server acts on the
+    // payload and holds no key — so the lookup is skipped rather than merely
+    // expected to miss.
+    final workspaceKey = mustStayPlaintextOpClasses.contains(opClass)
         ? null
         : await workspaceKeys.keyFor(workspaceId, keyEpoch);
-    if (workspaceKey == null && opClass != opClassControl && keyEpoch > 0) {
-      // **A missing key is never permission to emit plaintext.** Above epoch 0 the
-      // epoch exists only because a `rotate` created it, and a rotate commits to a
-      // wrap set before it is authored — so "no key at epoch >= 1" is always a
-      // delivery gap on this device, never a legitimately unkeyed epoch. Sealing is
+    if (workspaceKey == null &&
+        !mustStayPlaintextOpClasses.contains(opClass) &&
+        keyEpoch > 0) {
+      // **A missing key is never permission to emit plaintext.** The exemption is
+      // [mustStayPlaintextOpClasses], not a bare control test: a prune is 0x00 for
+      // ever for the same reason a control op is, so a missing key at epoch >= 1 is
+      // never its problem — forcing it through this guard would kill compaction
+      // pruning on every rotated Workspace. Above epoch 0 the epoch exists only
+      // because a `rotate` created it, and a rotate commits to a wrap set before it
+      // is authored — so "no key at epoch >= 1" is always a delivery gap on this
+      // device for a *sealed* class, never a legitimately unkeyed epoch. Sealing is
       // still a fact about the epoch rather than a mode; this is the one case where
       // the fact cannot be read off the key alone. Authoring `plaintext_v1` here
       // would put the user's content on the server in the clear at an epoch that is
@@ -854,11 +1134,18 @@ class SyncClient {
       try {
         final parts = splitEnvelope(row.envelope);
         header = OpHeader.parse(parts.header);
-        if (header.opClass == opClassControl) continue;
+        // Neither class reduces to anything. A control op carries no content; a
+        // prune's effect is `pruned_attestations`, which is *evidence* and so is not
+        // among the derived tables the wipe above cleared — replaying it would
+        // re-insert rows that never went away.
+        if (header.opClass == opClassControl || header.opClass == opClassPrune) {
+          continue;
+        }
         // The **same** dispatch the receive path uses, and not a second decode: a
         // rebuild that ran `parseBody` on an `aead_v1` body would find every
         // encrypted row unparseable and quietly un-reduce the entire Workspace.
         payload = await _decodeContentPayload(header, parts.header, parts.body);
+        guardOpClassShape(payload, opClass: header.opClass);
       } on SyncRejection catch (rejection) {
         if (rejection.reason == SyncRejectionReason.missingEpochKey) {
           // A row skipped for a key this device does not yet hold is a delivery
@@ -1023,6 +1310,14 @@ class SyncClient {
         return const {};
       }
 
+      if (header.opClass == opClassPrune) {
+        // The other class whose payload this device *reads* rather than reduces,
+        // and the only one that can move another author's chain floor. Its own
+        // pipeline, because what it does at the end is insert evidence rather than
+        // apply a write — everything before that is the content path's order.
+        return await _receivePrune(pulled, parts.body, header);
+      }
+
       final signPk = directory.publicKeyFor(header.authorMemberId, header.authorKeyId);
       await verifyEnvelope(pulled.envelope, signPk);
       // Verify, **then** decrypt. Ed25519 authenticates the author over
@@ -1030,12 +1325,18 @@ class SyncClient {
       // the plaintext. The other order would have this device decrypting bytes no
       // registered key vouched for.
       final payload = await _decodeContentPayload(header, parts.header, parts.body);
+      // Class 4 reduces through the same reducer as class 1 — the per-field-HLC
+      // machinery already existed for it — so the only new thing on the way in is
+      // the shape guard, and it sits between decode and apply exactly as every
+      // other payload-semantics rule does.
+      guardOpClassShape(payload, opClass: header.opClass);
 
       final verdict = await _chainVerdictFor(header, pulled.envelope);
       if (verdict.isRefusal) throw verdict.rejection!;
       await _checkOwnWrites(header, pulled.envelope);
-      if (verdict.outcome == ChainOutcome.idempotentSkip) {
-        // Already held, byte for byte. Nothing to log, nothing to re-apply, and
+      if (verdict.outcome != ChainOutcome.accept) {
+        // Already held byte for byte, or a pruned original re-served with the bytes
+        // a verified prune attested. Nothing to log, nothing to re-apply, and
         // nothing to accuse: the cursor moves on.
         return const {};
       }
@@ -1104,24 +1405,280 @@ class SyncClient {
     }
   }
 
+  // --- Prune ops, and the chain floor they bridge (#555) -----------------------
+
+  /// The attestations of a class-5 op **currently being judged**, before it is
+  /// applied and its rows exist.
+  ///
+  /// Held on the instance rather than threaded through every call because the whole
+  /// pre-judgement pass — the verdict, the release scan it triggers, and the nested
+  /// [_receive] of every claimant that scan re-admits — has to see the same set. A
+  /// parameter would have to be forwarded through all three, and the one that
+  /// forgot would silently refuse the op.
+  ///
+  /// **Why a prune needs to bridge with its own payload at all.** In the v1
+  /// single-user fleet the owner device self-compacts, so a prune sits *above* the
+  /// holes it attests in its own author chain. Judged against stored attestations
+  /// alone it would be an `author_chain_gap` for ever, and nothing would ever apply
+  /// it to create those attestations — a deadlock in exactly the shape the design
+  /// prescribes. Admitting it on its own signed, per-position, hash-linked
+  /// enumeration is what breaks that, and it concedes nothing: every position the
+  /// bridge steps over is either in the log or individually attested, and every
+  /// claimant the pre-pass releases is still hash-checked against its predecessor.
+  PrunePayload? _provisionalPrune;
+
+  /// Receive one class-5 op: the content pipeline, then evidence instead of a write.
+  ///
+  /// The pipeline is the content one and deliberately not a subset of it —
+  /// signature, chain verdict, [_checkOwnWrites], `op_log`, then the authorization
+  /// verdict at the op's own seq. A prune moves other authors' chain floors, so a
+  /// forged or unauthorized one must get no further than any other op would.
+  Future<Set<AffectedEntity>> _receivePrune(
+    PulledOp pulled,
+    Uint8List body,
+    OpHeader header,
+  ) async {
+    await verifyEnvelope(
+      pulled.envelope,
+      directory.publicKeyFor(header.authorMemberId, header.authorKeyId),
+    );
+    final prune = PrunePayload.decode(parseBody(body));
+
+    final outerProvisional = _provisionalPrune;
+    _provisionalPrune = prune;
+    final ChainVerdict verdict;
+    try {
+      var judged = await _chainVerdictFor(header, pulled.envelope);
+      if (judged.isRefusal &&
+          judged.rejection!.reason == SyncRejectionReason.authorChainGap) {
+        // The self-compaction case: this prune's own position sits above holes only
+        // this prune attests. Bridge with its payload, let the survivors between the
+        // head and here become chain-valid, and ask once more. Bounded to one retry
+        // — the scan runs to fixpoint, so a second attempt would learn nothing new.
+        await _releaseChainSuccessors(
+          header.authorMemberId,
+          attestationBridged: true,
+        );
+        judged = await _chainVerdictFor(header, pulled.envelope);
+      }
+      verdict = judged;
+    } finally {
+      _provisionalPrune = outerProvisional;
+    }
+    if (verdict.isRefusal) throw verdict.rejection!;
+    await _checkOwnWrites(header, pulled.envelope);
+    if (verdict.outcome != ChainOutcome.accept) return const {};
+
+    if (!await _logReceived(pulled, header)) return const {};
+    final authorization = (await grantsView()).verdictFor(
+      authorMemberId: header.authorMemberId,
+      opClass: header.opClass,
+      seq: pulled.seq,
+    );
+    if (authorization != null) {
+      await _stampRefused(pulled.seq, authorization.reason);
+      await _refuse(pulled, authorization, header);
+      return _releaseChainSuccessors(header.authorMemberId);
+    }
+
+    await _applyPrune(pulled.seq, prune);
+    await _stampApplied(pulled.seq);
+
+    // The scan runs for **every author this prune attests**, not just its own: the
+    // floor it just raised is what makes those authors' quarantined survivors
+    // chain-valid, and nothing else would ever ask.
+    final affected = <AffectedEntity>{};
+    for (final author in {header.authorMemberId, ...prune.attestedAuthors}) {
+      affected.addAll(
+        await _releaseChainSuccessors(author, attestationBridged: true),
+      );
+      // Re-asked even when the scan released nothing: a settlement in [_applyPrune]
+      // can empty the unreleased set on its own, and the gap alarm has to notice.
+      if (!await _hasUnreleasedGap(author)) {
+        await _resolveAlarm(IntegrityAlarmKind.authorChainGap, author);
+      }
+    }
+    return affected;
+  }
+
+  /// Insert what a verified prune attested, and cross-check it against what this
+  /// device already holds.
+  ///
+  /// Three steps per attested position, and the order matters:
+  ///
+  /// 1. **Insert the row** — evidence of what a signed op said, and never edited. A
+  ///    position already attested with *different* bytes keeps the first row and
+  ///    earns an accusation: two prunes cannot both be right about one position.
+  /// 2. **Cross-check `op_log`.** A stored row whose hash differs is a device
+  ///    holding the originals catching a lying compactor. A matching one is the
+  ///    full-history case and there is nothing to do.
+  /// 3. **Cross-check `quarantined_ops`.** A gap claimant at the position whose
+  ///    bytes match is the genuine op caught in the quarantine-before-prune race —
+  ///    released *without* re-receiving it, because its content is superseded by the
+  ///    snapshot and the position is now below the effective head. No alarm: the
+  ///    claimant and the compactor agree byte for byte, and a gap row exists only
+  ///    after `verifyEnvelope` passed. A claimant whose bytes *differ* stays
+  ///    quarantined and stands accused.
+  Future<void> _applyPrune(int pruneSeq, PrunePayload prune) async {
+    for (final target in prune.targets) {
+      final existing = await (_db.select(_db.prunedAttestations)
+            ..where((row) =>
+                row.workspaceId.equals(workspaceId) &
+                row.authorMemberId.equals(target.authorMemberId) &
+                row.authorSeq.equals(target.authorSeq)))
+          .getSingleOrNull();
+      if (existing == null) {
+        await _db.into(_db.prunedAttestations).insert(
+              PrunedAttestationsCompanion.insert(
+                workspaceId: workspaceId,
+                authorMemberId: target.authorMemberId,
+                authorSeq: target.authorSeq,
+                envelopeHash: target.envelopeHash,
+                pruneSeq: pruneSeq,
+              ),
+            );
+      } else if (!sameBytes(existing.envelopeHash, target.envelopeHash)) {
+        await _raiseAlarm(
+          IntegrityAlarmKind.pruneAttestationDivergence,
+          authorMemberId: target.authorMemberId,
+          detail: 'the prune at seq $pruneSeq attests author_seq '
+              '${target.authorSeq} with bytes the prune at seq '
+              '${existing.pruneSeq} attested differently',
+        );
+        continue;
+      }
+
+      final stored =
+          await _storedAtAuthorSeq(target.authorMemberId, target.authorSeq);
+      if (stored != null) {
+        if (!sameBytes(envelopeHash(stored.envelope), target.envelopeHash)) {
+          await _raiseAlarm(
+            IntegrityAlarmKind.pruneAttestationDivergence,
+            authorMemberId: target.authorMemberId,
+            detail: 'the prune at seq $pruneSeq attests author_seq '
+                '${target.authorSeq} with bytes this device does not hold there',
+          );
+        }
+        // Agreement with the log needs nothing further, and disagreement is already
+        // an accusation: either way there is no claimant question to ask, because
+        // the position is settled by evidence stronger than a quarantine row.
+        continue;
+      }
+
+      for (final claimant in await _quarantinedGapClaimantsAt(
+        target.authorMemberId,
+        target.authorSeq,
+      )) {
+        if (sameBytes(envelopeHash(claimant.envelope), target.envelopeHash)) {
+          await _markReleased(claimant.id);
+        } else {
+          await _raiseAlarm(
+            IntegrityAlarmKind.pruneAttestationDivergence,
+            authorMemberId: target.authorMemberId,
+            detail: 'a quarantined claimant at author_seq ${target.authorSeq} '
+                'is not the op the prune at seq $pruneSeq attested there; both '
+                'bear real signatures, so either the author forked its own chain '
+                'or the compactor attested a fabrication',
+            quarantineOpRowId: claimant.id,
+          );
+        }
+      }
+    }
+  }
+
+  /// The highest position of one author's chain this device can account for.
+  ///
+  /// `max(derived head, bridged floor)`, factored as one function because **#575
+  /// has to measure against this number rather than the raw derived head**: #555
+  /// widens what "settled" means, and a predicate that excluded gap rows at or
+  /// below the raw head would half-work on a compacted Workspace.
+  Future<int> effectiveChainHeadSeq(String authorMemberId) async {
+    final head = await _chainHead(authorMemberId);
+    final floor = await _bridgedChainFloor(authorMemberId, head: head);
+    return max(head?.authorSeq ?? 0, floor?.seq ?? 0);
+  }
+
+  /// The end of the contiguous run of attested positions starting just above the
+  /// derived head, or null when nothing is bridged.
+  ///
+  /// Contiguity is the whole safety argument: the floor never skips a position, so
+  /// every step above the real head is individually attested and hash-linked. The
+  /// walk needs no `op_log` lookups because the derived head *is* the highest logged
+  /// position, so nothing above it is in the log by definition.
+  ///
+  /// Returns null the moment there are no attestations at all for the author, which
+  /// keeps a Workspace that has never been compacted at exactly the cost it had.
+  Future<VerifiedChainFloor?> _bridgedChainFloor(
+    String authorMemberId, {
+    required AuthorChainHead? head,
+  }) async {
+    final attested = <int, Uint8List>{
+      for (final row in await prunedAttestations(authorMemberId: authorMemberId))
+        row.authorSeq: row.envelopeHash,
+    };
+    for (final target in _provisionalPrune?.targetsOf(authorMemberId) ??
+        const <PruneTarget>[]) {
+      // Stored rows win: they have already been cross-checked against this device's
+      // own evidence, and a provisional one has not.
+      attested.putIfAbsent(target.authorSeq, () => target.envelopeHash);
+    }
+    if (attested.isEmpty) return null;
+
+    var seq = head?.authorSeq ?? 0;
+    Uint8List? hash;
+    while (attested.containsKey(seq + 1)) {
+      seq += 1;
+      hash = attested[seq];
+    }
+    if (hash == null) return null;
+    return (seq: seq, envelopeHash: hash);
+  }
+
+  /// What a prune attested at one position, when this device holds no op there.
+  Future<PrunedPositionAttestation?> _attestationAt(
+    String authorMemberId,
+    int authorSeq,
+  ) async {
+    final row = await (_db.select(_db.prunedAttestations)
+          ..where((r) =>
+              r.workspaceId.equals(workspaceId) &
+              r.authorMemberId.equals(authorMemberId) &
+              r.authorSeq.equals(authorSeq)))
+        .getSingleOrNull();
+    if (row != null) {
+      return (authorSeq: row.authorSeq, envelopeHash: row.envelopeHash);
+    }
+    for (final target in _provisionalPrune?.targetsOf(authorMemberId) ??
+        const <PruneTarget>[]) {
+      if (target.authorSeq == authorSeq) {
+        return (authorSeq: authorSeq, envelopeHash: target.envelopeHash);
+      }
+    }
+    return null;
+  }
+
   // --- Per-author chain enforcement -------------------------------------------
 
   /// The chain rules, against what this device's log already holds.
-  Future<ChainVerdict> _chainVerdictFor(OpHeader header, Uint8List envelope) async =>
-      chainVerdict(
-        header: header,
-        envelope: envelope,
-        head: await _chainHead(header.authorMemberId),
-        storedAtAuthorSeq: await _storedAtAuthorSeq(
-          header.authorMemberId,
-          header.authorSeq,
-        ),
-        storedUnderOpId: await _storedUnderOpId(header.authorMemberId, header.opId),
-        // #555's prune attestation is the only thing that can supply a floor, and
-        // it does not exist yet. Passing null keeps the rule visible at the one
-        // call site that will have to supply it.
-        verifiedFloor: null,
-      );
+  Future<ChainVerdict> _chainVerdictFor(OpHeader header, Uint8List envelope) async {
+    final head = await _chainHead(header.authorMemberId);
+    return chainVerdict(
+      header: header,
+      envelope: envelope,
+      head: head,
+      storedAtAuthorSeq: await _storedAtAuthorSeq(
+        header.authorMemberId,
+        header.authorSeq,
+      ),
+      storedUnderOpId: await _storedUnderOpId(header.authorMemberId, header.opId),
+      // The seam #551 left dormant, now live: a verified prune is the only thing
+      // that can supply a floor, and the floor wins above the derived head so a
+      // mid-chain hole is bridgeable rather than a permanent gap.
+      verifiedFloor: await _bridgedChainFloor(header.authorMemberId, head: head),
+      storedAttestation:
+          await _attestationAt(header.authorMemberId, header.authorSeq),
+    );
+  }
 
   /// One author's verified head, derived from the log rather than stored.
   Future<AuthorChainHead?> _chainHead(String authorMemberId) async {
@@ -1218,17 +1775,33 @@ class SyncClient {
   ///
   /// A genuine drop leaves `author_chain_gap` standing forever, which is correct:
   /// withholding is detectable, not preventable.
-  Future<Set<AffectedEntity>> _releaseChainSuccessors(String authorMemberId) async {
-    if (_releasingChainOfAuthor != null) return const {};
-    _releasingChainOfAuthor = authorMemberId;
+  ///
+  /// [attestationBridged] suppresses the reorder accusation. A prune raising an
+  /// author's floor makes that author's quarantined survivors chain-valid, and a
+  /// documented compaction shape is not a server accused of shuffling a stream —
+  /// which is what `author_stream_reordered` says. The gap alarm still resolves the
+  /// same way, on there being no unreleased gap row left.
+  Future<Set<AffectedEntity>> _releaseChainSuccessors(
+    String authorMemberId, {
+    bool attestationBridged = false,
+  }) async {
+    // Per author, not one global flag: a prune raises several authors' floors at
+    // once, so a scan for one must be able to trigger a scan for another. A nested
+    // scan of the *same* author is still suppressed — the outer loop re-asks the
+    // same question anyway, and recursing would turn a hostile 500-op reorder into
+    // 500 stack frames.
+    if (_releasingChainOfAuthors.contains(authorMemberId)) return const {};
+    _releasingChainOfAuthors.add(authorMemberId);
     final affected = <AffectedEntity>{};
     var releasedAny = false;
     try {
       while (true) {
-        final head = await _chainHead(authorMemberId);
+        // The **effective** head, so the scan looks just above the highest position
+        // this device can account for rather than just above the highest it holds.
+        // On a compacted chain those differ by every hole a prune attested.
         final claimants = await _quarantinedGapClaimantsAt(
           authorMemberId,
-          (head?.authorSeq ?? 0) + 1,
+          await effectiveChainHeadSeq(authorMemberId) + 1,
         );
         if (claimants.isEmpty) break;
 
@@ -1302,12 +1875,14 @@ class SyncClient {
         );
       }
       if (releasedAny) {
-        await _raiseAlarm(
-          IntegrityAlarmKind.authorStreamReordered,
-          authorMemberId: authorMemberId,
-          detail: 'quarantined successors became chain-valid as their '
-              'predecessors arrived',
-        );
+        if (!attestationBridged) {
+          await _raiseAlarm(
+            IntegrityAlarmKind.authorStreamReordered,
+            authorMemberId: authorMemberId,
+            detail: 'quarantined successors became chain-valid as their '
+                'predecessors arrived',
+          );
+        }
         // The standing-gap rule: the gap alarm is only reclassified away once
         // nothing is still missing. While one refused row stands unreleased, the
         // reorder is recorded alongside the gap rather than instead of it.
@@ -1316,7 +1891,7 @@ class SyncClient {
         }
       }
     } finally {
-      _releasingChainOfAuthor = null;
+      _releasingChainOfAuthors.remove(authorMemberId);
     }
     return affected;
   }

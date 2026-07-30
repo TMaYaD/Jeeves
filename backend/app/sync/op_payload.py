@@ -13,13 +13,20 @@ mirrors it field for field.
       "id": "<entity uuid>",
       "fields": {"<field>": {"v": <json>, "hlc": [wall_ms, counter, "<hex32>"]?}},
       "hlc": [wall_ms, counter, "<hex32>"],
-      "tombstone": true?
+      "tombstone": true?,
+      "tombstone_hlc": [wall_ms, counter, "<hex32>"]?
     }
 
 A field's ``hlc`` is optional and defaults to the op-level one.  Only compaction
 ops (#555) populate it per field, re-asserting the original authors' clocks —
 which is exactly why the reducer's sanity guards are scoped to the op-level HLC
 and never to per-field HLCs (review F15, as ruled for this slice).
+
+``tombstone_hlc`` is the same idea one level up, and it is **fenced to class 4**
+by :func:`guard_op_class_shape`: a compacted tombstone has to be re-asserted at
+its *original* clock, because one re-stamped with the compactor's newer clock
+would bury a resurrection the original could never have buried.  Outside class 4
+the field is refused rather than ignored, so the format stays unambiguous.
 """
 
 from __future__ import annotations
@@ -29,6 +36,8 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Final
+
+from app.sync.envelope import OP_CLASS_COMPACTION
 
 #: A member id inside an HLC is exactly 32 lowercase hex characters — the
 #: 16-byte member UUID with no dashes.  The HLC tie-break is a lexicographic
@@ -56,6 +65,33 @@ class MalformedPayloadError(Exception):
 
 class MalformedMemberIdHexError(MalformedPayloadError):
     reason = "malformed_member_id_hex"
+
+
+class CompactionFieldWithoutHlcError(MalformedPayloadError):
+    """A class-4 field that carries no clock of its own.
+
+    It would be stamped with the compactor's op-level clock and win merges the op
+    it supersedes would have lost — the exact bug entity-level compaction has to
+    not have.  An HLC names its author, so a field's own clock *is* its authorship
+    provenance; a class-4 field without one has thrown that away.
+    """
+
+    reason = "compaction_field_without_hlc"
+
+
+class CompactionTombstoneWithoutHlcError(MalformedPayloadError):
+    reason = "compaction_tombstone_without_hlc"
+
+
+class TombstoneHlcOutsideCompactionError(MalformedPayloadError):
+    """``tombstone_hlc`` on anything but a compaction op.
+
+    Refused rather than ignored: a permitted-and-ignored field is one a future
+    reader may start honouring, and two codecs that disagree about whether it
+    counts is a convergence bug.
+    """
+
+    reason = "tombstone_hlc_outside_compaction"
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -108,6 +144,14 @@ class OpPayload:
     hlc: Hlc
     fields: dict[str, FieldWrite] = field(default_factory=dict)
     tombstone: bool = False
+    #: The clock a *compacted* tombstone is re-asserted at — the original one, not
+    #: the compactor's.  Class 4 only; see :func:`guard_op_class_shape`.
+    tombstone_hlc: Hlc | None = None
+
+    @property
+    def effective_tombstone_hlc(self) -> Hlc:
+        """The clock the tombstone applies at: its own if it carries one, else the op's."""
+        return self.hlc if self.tombstone_hlc is None else self.tombstone_hlc
 
     def to_json_dict(self) -> dict[str, Any]:
         fields_json: dict[str, Any] = {}
@@ -124,6 +168,8 @@ class OpPayload:
         }
         if self.tombstone:
             payload["tombstone"] = True
+        if self.tombstone_hlc is not None:
+            payload["tombstone_hlc"] = self.tombstone_hlc.to_json()
         return payload
 
     def encode(self) -> bytes:
@@ -174,10 +220,47 @@ class OpPayload:
         if not isinstance(tombstone, bool):
             raise MalformedPayloadError("tombstone must be a boolean")
 
+        # Same `is None` treatment the two fields above get, for the same reason:
+        # the Dart codec reads a missing key and an explicit `null` alike, so a
+        # `.get` default here would leave the two codecs disagreeing about
+        # `{"tombstone_hlc": null}`.
+        raw_tombstone_hlc = raw.get("tombstone_hlc")
+        tombstone_hlc = None if raw_tombstone_hlc is None else Hlc.from_json(raw_tombstone_hlc)
+
         return cls(
             collection=collection,
             entity_id=entity_id,
             hlc=Hlc.from_json(raw.get("hlc")),
             fields=fields,
             tombstone=tombstone,
+            tombstone_hlc=tombstone_hlc,
+        )
+
+
+def guard_op_class_shape(payload: OpPayload, *, op_class: int) -> None:
+    """The class-4 shape rules, and the fence that keeps them out of every other class.
+
+    Applied between decode and reduce on receive, and again before anything is
+    signed at authoring — one function on both sides of that boundary, so an op no
+    receiver would apply can never reach an outbox.
+
+    The server never runs this on a POST: a class-4 body is ciphertext once the
+    Workspace is keyed, so the rule is codec parity and vector surface rather than
+    a route gate.  That is not a weakening — every *receiver* enforces it, which is
+    where a payload's semantics have always been decided.
+    """
+    if op_class != OP_CLASS_COMPACTION:
+        if payload.tombstone_hlc is not None:
+            raise TombstoneHlcOutsideCompactionError(
+                f"op_class {op_class} carries tombstone_hlc, which is class-4 only"
+            )
+        return
+    for name, write in payload.fields.items():
+        if write.hlc is None:
+            raise CompactionFieldWithoutHlcError(
+                f"compaction field {name!r} carries no hlc of its own"
+            )
+    if payload.tombstone and payload.tombstone_hlc is None:
+        raise CompactionTombstoneWithoutHlcError(
+            "a compacted tombstone must be re-asserted at its original clock"
         )

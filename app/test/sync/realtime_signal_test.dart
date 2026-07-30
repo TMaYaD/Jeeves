@@ -396,8 +396,18 @@ abstract class _DelegatingTransport implements SyncTransport {
       inner.postOps(workspaceId, envelopes);
 
   @override
-  Future<PullPage> pullOps(String workspaceId, {required int since, required int limit}) =>
-      inner.pullOps(workspaceId, since: since, limit: limit);
+  Future<PullPage> pullOps(
+    String workspaceId, {
+    required int since,
+    required int limit,
+    bool includeCompacted = false,
+  }) =>
+      inner.pullOps(
+        workspaceId,
+        since: since,
+        limit: limit,
+        includeCompacted: includeCompacted,
+      );
 
   // The key plane passes straight through: these tests interfere with the socket,
   // and a subscription reveals nothing about which epoch anything is at.
