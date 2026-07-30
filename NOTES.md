@@ -3,7 +3,6 @@
 Corrections to agent instincts — see AGENTS.md § Keep Notes for the criteria.
 Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
-- 2026-04-21: Instinct: assert on affected-row counts (`changes() == 1`) after an UPDATE/DELETE to catch silent no-ops. Here: `todos`/`tags`/`todo_tags` are PowerSync views with INSTEAD OF triggers in production, so `changes()` reports 0 and the assert throws only in prod — never in `NativeDatabase` tests (details: docs/TESTING.md § Frontend, docs/ARCHITECTURE.md live-refresh invariant).
 - 2026-04-25: Instinct: sweep a terminology rename across every matching identifier for consistency. Here: date-encoded SharedPreferences flags were deliberately left un-renamed — they were slated for deletion, and renaming would entrench the bug class under a new label.
 - 2026-04-26: Instinct: treat a CI review bot's scope objection as authoritative and capitulate. Here: issue-author comments override bot interpretations — the bot can't read the comment thread. Re-read the referenced issue's full thread before reverting sanctioned work (capitulating on #183 shipped a silent settings-loss regression).
 - 2026-05-29: Instinct: extract a repeated widget shape into a generic primitive. Here: "flat, explicit code over abstractions" is load-bearing — a shallow extraction (`ListItemReviewStep`) whose shared invariants were tiny got reverted the next day. Extraction must earn its keep with real invariants, not shape similarity.
@@ -20,7 +19,6 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 ## 2026-07-17 (issue #418 — off-Plan dispositions)
 - Instinct: persist an off-Plan Outcome's Review disposition by inserting a `focus_session_tasks` row for it. Here: that auto-grows the Plan (ADR-0002) — off-Plan dispositions have their own table `focus_session_dispositions` (ADR-0016); route by Plan membership in `reviewAndCloseSession`, and UNION the two homes in `getLastClosedSessionRolloverTaskIds`/the stamp.
-- Instinct: a new `with Synced` table is wired once it has a Drift schema + a sync bucket. Here: it also needs an `uploadCrudBatch` case in `backend_connector.dart` (else it hits the `default:` StateError and every local write dead-letters on upload) AND backend POST/PATCH/DELETE routes + Alembic migration + publication, or the write never reaches Postgres.
 
 ## 2026-07-18 (issue #184 Phase 2 — Capture/Outcome UI cutover)
 - Instinct: assert Inbox state in a widget test with `await db.captureDao.watchInbox().first`. Here: awaiting a live drift `watch()` inside `testWidgets` never completes — the test binding owns the clock, so the first event is never delivered and the isolate blocks so hard the per-test timeout can't fire (the run just hangs until the 10-minute file timeout). Read with a plain `select` instead.
@@ -63,3 +61,7 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 ## 2026-07-30 (issue #586 — enrolment ceremony surface)
 - Instinct: attach the member transport where the per-Workspace client is built (inside the memoising factory's `putIfAbsent`). Here: attach on **every** factory call — the ceremony reaches the factory at step 2, before any member credential exists, and again at step 6 to pull, so a one-shot attach leaves the preferences client un-enrolled and step 6 throws `StateError` every single time. `SimDevice` cannot catch it: it hands every client the same omnipresent `DeviceLink` up front.
 - Instinct: "an escrow already exists" surfaces as `escrow_version_regression`. Here: a fresh device founding an already-founded account gets **403 `bad_escrow_signature`** — the server checks the record against the slot's `root_pk` before it compares versions. The 409 is only reachable for the same Root re-writing its own slot, which the ceremony already tolerates internally.
+
+## 2026-07-30 (issue #595 — the greenfield cut)
+- Instinct: stage new sync UX beside the legacy login as cutover tooling, and shield legacy side effects with special branches. Here: the no-branching stance covers UX flows and transitions too — replace the flow; legacy side effects that are harmless under the new model just run.
+- Instinct: the `SqliteAsyncDriftConnection` update bridge cannot refresh a watcher, so ADR-0010's explicit notify is the only refresh path. Here: that was true only while the tables were PowerSync views — the bridge named `ps_data__todos`, not `todos`. Over the Drift-owned store it names the table that actually changed, so it works; the notify still earns its keep for watchers that read across tables the write did not touch, and for the cold-start window #342 was reported from.

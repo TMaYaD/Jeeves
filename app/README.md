@@ -51,18 +51,19 @@ flutter run -d macos
 lib/
 ├── main.dart
 ├── models/           # Freezed data models (Todo, List, Reminder, Location, RecurrenceRule)
+├── database/         # Drift schema + DAOs, and the domain store'''s open path
+├── sync/             # the op-log spine: capture seam, client, reducer, projector
+├── providers/        # Riverpod providers
 ├── services/
-│   ├── sync_service.dart        # PowerSync offline-first sync
 │   ├── api_service.dart         # FastAPI REST client (Dio)
 │   ├── notification_service.dart
-│   ├── location_service.dart
-│   └── ai_service.dart          # NL parse / suggestions (proxied through backend)
-└── screens/          # UI screens (TBD)
+│   └── location_service.dart
+└── screens/          # UI screens
 ```
 
 **State management:** Riverpod  
-**Local storage:** Drift (SQLite, offline-first)  
-**Sync:** PowerSync (`powersync` Dart package, self-hosted service)
+**Local storage:** Drift over two SQLite files — `jeeves_domain.sqlite` (the domain read model) and `jeeves_sync.sqlite` (the op log)  
+**Sync:** the op log, activated at enrolment (docs/SYNC.md, ADR-0026, ADR-0034, ADR-0035)
 
 ## Platform channels
 
