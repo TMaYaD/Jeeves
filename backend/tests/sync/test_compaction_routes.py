@@ -117,9 +117,7 @@ def _prune(
         session.workspace_id,
         op_class=OP_CLASS_PRUNE,
         op_id=op_id,
-        payload=PrunePayload(
-            compaction_op_id=compaction_op_id, targets=tuple(targets)
-        ).encode(),
+        payload=PrunePayload(compaction_op_id=compaction_op_id, targets=tuple(targets)).encode(),
         author_seq=author_seq,
         advance=advance,
     )
@@ -191,9 +189,7 @@ async def test_a_compactor_may_author_a_compaction_and_a_prune(
         op_class=OP_CLASS_PRUNE,
         payload=PrunePayload(
             compaction_op_id=compaction_op_id,
-            targets=(
-                _target(appended[0][0], appended[0][1], session.device, 3),
-            ),
+            targets=(_target(appended[0][0], appended[0][1], session.device, 3),),
         ).encode(),
     )
     response = await _post(client, session, compaction, prune, headers=headers)
@@ -537,9 +533,7 @@ async def test_a_prune_naming_a_content_op_as_its_compaction_is_refused(
 # ── Class 5: the payload shape, refused at decode ─────────────────────────────
 
 
-async def test_a_prune_with_no_targets_is_refused(
-    client: AsyncClient, session: Session
-) -> None:
+async def test_a_prune_with_no_targets_is_refused(client: AsyncClient, session: Session) -> None:
     """A prune that attests nothing materialises nothing.
 
     Refused at the shape level so both codecs agree byte-for-byte rather than one
@@ -603,9 +597,7 @@ async def test_a_prune_over_the_target_bound_is_refused(
     assert detail_of(response)["code"] == "prune_targets_too_many"
 
 
-async def test_a_malformed_prune_payload_is_refused(
-    client: AsyncClient, session: Session
-) -> None:
+async def test_a_malformed_prune_payload_is_refused(client: AsyncClient, session: Session) -> None:
     envelope = session.device.next_envelope(
         session.workspace_id,
         op_class=OP_CLASS_PRUNE,
@@ -704,7 +696,5 @@ async def test_a_freshly_appended_content_op_is_never_pre_stamped(
     """The stamp has exactly one writer, and it is a verified prune op."""
     await _append_content(client, session, 2)
     assert all(
-        op.compacted_by is None
-        for op in await _stored(db)
-        if op.op_class == OP_CLASS_CONTENT
+        op.compacted_by is None for op in await _stored(db) if op.op_class == OP_CLASS_CONTENT
     )

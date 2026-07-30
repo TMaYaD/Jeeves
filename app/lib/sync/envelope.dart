@@ -43,10 +43,21 @@
 /// than the size class it pads to (the Poly1305 tag), so wire-legality is
 /// [isLegalBodyLengthForSuite] rather than [isLegalBodyLength].
 ///
-/// **Control ops are `plaintext_v1` for ever** (review F2): the server must parse
-/// them to materialise memberships, Grants and rotations, and it holds no key.
-/// A control op wearing suite 0x01 is refused as
-/// [SyncRejectionReason.encryptedControlOp] by both codecs.
+/// **Two op classes are `plaintext_v1` for ever**, for one reason: the server has
+/// to *act* on their payloads and holds no key. Control ops (review F2) are the
+/// first — it materialises memberships, Grants and rotations out of them. Prune
+/// ops (#555) are the second — it stamps `ops.compacted_by` from their target
+/// enumeration, which names transport seqs and envelope hashes and carries no
+/// content. Both pairs are refused by both codecs, under their own codes:
+/// [SyncRejectionReason.encryptedControlOp] and
+/// [SyncRejectionReason.encryptedPruneOp].
+///
+/// The rule runs the **opposite** way for the classes that carry entity content.
+/// A class-1 or class-4 body at suite 0x00 whose `key_epoch` this device holds a
+/// key for is a downgrade, refused as
+/// [SyncRejectionReason.plaintextAtEncryptedEpoch] — see
+/// [plaintextRefusedAtKeyedEpochOpClasses]. Class 4 is in that family because a
+/// compaction op carries the whole joined state of an entity.
 library;
 
 import 'dart:convert';
@@ -85,10 +96,37 @@ const Set<int> knownOpClasses = {
   opClassPrune,
 };
 
-/// Control arrived with #548 and carries exactly one type, `member_register`
-/// (see `control_payload.dart`); every other control type is still fail-closed.
-/// Suggestion is #557, compaction and prune #555.
-const Set<int> servedOpClasses = {opClassContent, opClassControl};
+/// Compaction and prune arrived with #555; suggestion is still fail-closed until
+/// #557.
+const Set<int> servedOpClasses = {
+  opClassContent,
+  opClassControl,
+  opClassCompaction,
+  opClassPrune,
+};
+
+/// Op classes the server must be able to **read**, and which are therefore
+/// `plaintext_v1` for ever.
+///
+/// Not a served/unserved question and so not a subset of anything above: both
+/// halves of `(0x01, class)` are served and the *pair* is forbidden. Control
+/// because the server materialises memberships and Grants; prune because it
+/// stamps `compacted_by` from the target enumeration. Neither payload carries
+/// entity content, which is what makes the exemption safe.
+const Set<int> mustStayPlaintextOpClasses = {opClassControl, opClassPrune};
+
+/// Op classes that carry entity content, and for which a `plaintext_v1` body at a
+/// **keyed** epoch is a downgrade rather than history.
+///
+/// Class 4 is here for the same reason class 1 is, only more so: a compaction op
+/// carries the whole joined state of an entity at every original author's clock.
+/// The two sets happen to be complements over `{1, 2, 4, 5}` today; that is
+/// arithmetic, not a rule — class 3 joins the content family when #557 serves it
+/// and belongs to neither set until then.
+const Set<int> plaintextRefusedAtKeyedEpochOpClasses = {
+  opClassContent,
+  opClassCompaction,
+};
 
 // --- Sizes ---------------------------------------------------------------------
 
@@ -217,6 +255,16 @@ enum SyncRejectionReason {
   /// it identically.
   encryptedControlOp('encrypted_control_op'),
 
+  /// An `op_class = prune` op wearing suite `aead_v1`.
+  ///
+  /// The sibling of [encryptedControlOp], forbidden for the same reason: the
+  /// server materialises `ops.compacted_by` out of a prune's target enumeration
+  /// and holds no key, so an encrypted prune is an op nobody can act on. The
+  /// enumeration is content-free by construction — transport seqs, author
+  /// positions and envelope hashes — so keeping it in the clear discloses nothing
+  /// the header did not already. Carries a golden negative vector.
+  encryptedPruneOp('encrypted_prune_op'),
+
   /// The AEAD did not authenticate under a key this device **holds**.
   ///
   /// Never a skipped row: the op quarantines *and* raises an
@@ -246,11 +294,10 @@ enum SyncRejectionReason {
   /// for ever — turn-on mints `K_{w,N+1}`, never `K_{w,N}` — which is what makes
   /// this the only dual-read branch the design needs.
   ///
-  /// **Scoped to content ops today.** Compaction and prune (#555) are the other
-  /// classes that may carry a body, and a plaintext class-4 op at a keyed epoch is
-  /// the same downgrade leak; whichever of #554/#555 lands second extends this
-  /// rule to them. Control ops are exempt by construction — they are 0x00 for
-  /// ever, which is [encryptedControlOp]'s whole point.
+  /// **Scoped to the content-carrying classes**, which since #555 means content
+  /// *and* compaction — see [plaintextRefusedAtKeyedEpochOpClasses]. Control and
+  /// prune are exempt in the opposite direction: they are 0x00 for ever by rule,
+  /// so refusing a plaintext one would make them unauthorable.
   ///
   /// An alarm as well as a quarantine: unlike [missingEpochKey] nothing about this
   /// heals by waiting.
@@ -355,6 +402,54 @@ enum SyncRejectionReason {
   unrepresentableAuthorSeq('unrepresentable_author_seq'),
   malformedPayload('malformed_payload'),
   malformedMemberIdHex('malformed_member_id_hex'),
+
+  // --- Compaction and prune payload shape (#555) ----------------------------
+  //
+  // Payload-semantics verdicts, identical on every device, so each carries a
+  // golden vector. Enforced between decode and apply on receive *and* before
+  // anything is signed at authoring: one rule, both sides of that boundary.
+
+  /// A class-4 field carrying no clock of its own.
+  ///
+  /// It would be stamped with the compactor's op-level clock and win merges the op
+  /// it supersedes would have lost — the exact bug entity-level compaction must
+  /// not have. An HLC names its author, so a field's own clock *is* its authorship
+  /// provenance, and a class-4 field without one has thrown that away.
+  compactionFieldWithoutHlc('compaction_field_without_hlc'),
+
+  /// A class-4 tombstone with no `tombstone_hlc`. Re-stamping it with the
+  /// compactor's newer clock would bury a resurrection the original could never
+  /// have buried.
+  compactionTombstoneWithoutHlc('compaction_tombstone_without_hlc'),
+
+  /// `tombstone_hlc` on anything but a compaction op. Refused rather than
+  /// ignored: a permitted-and-ignored field is one a future reader may start
+  /// honouring, and two codecs disagreeing about whether it counts is a
+  /// convergence bug.
+  tombstoneHlcOutsideCompaction('tombstone_hlc_outside_compaction'),
+
+  malformedPrunePayload('malformed_prune_payload'),
+
+  /// A prune that attests nothing: it materialises nothing and can only exist to
+  /// spend a chain slot or confuse an audit.
+  pruneTargetsEmpty('prune_targets_empty'),
+
+  /// Two targets sharing a `seq` **or** an `(author, author_seq)` position.
+  /// Refused at decode, which is what leaves the server's materialisation
+  /// rowcount check exactly one possible cause — a concurrent prune.
+  pruneDuplicateTarget('prune_duplicate_target'),
+
+  pruneTargetsTooMany('prune_targets_too_many'),
+
+  /// An attestation and this device's own evidence disagree about the bytes at one
+  /// position.
+  ///
+  /// Both bear real signatures — a gap-reason quarantine row exists only after
+  /// `verifyEnvelope` passed — so either the author forked its own chain or the
+  /// compactor attested a fabrication. An accusation, never a heal, and
+  /// client-only: it needs the receiver's own log to detect, so it carries no
+  /// golden vector.
+  pruneAttestationDivergence('prune_attestation_divergence'),
   hlcInTheFuture('hlc_in_the_future'),
   hlcMemberIsNotAuthor('hlc_member_is_not_author'),
 
@@ -540,7 +635,12 @@ class OpHeader {
   }
 
   /// Fail closed on any suite or op class this build does not serve, and on the
-  /// one `(suite, op_class)` pair the protocol forbids outright.
+  /// `(suite, op_class)` pairs the protocol forbids outright.
+  ///
+  /// Two pairs, one per member of [mustStayPlaintextOpClasses], and each gets its
+  /// own code rather than a shared one: a client that saw an encrypted prune has
+  /// learned something different about its server than one that saw an encrypted
+  /// control op, and the remediation differs with it.
   void checkServed() {
     if (!servedSuites.contains(suite)) {
       throw SyncRejection(
@@ -562,6 +662,13 @@ class OpHeader {
         SyncRejectionReason.encryptedControlOp,
         'control ops are plaintext_v1 for ever: the server materialises their '
         'payloads and holds no key',
+      );
+    }
+    if (suite == suiteAeadV1 && opClass == opClassPrune) {
+      throw const SyncRejection(
+        SyncRejectionReason.encryptedPruneOp,
+        'prune ops are plaintext_v1 for ever: the server stamps compacted_by '
+        'from their target enumeration and holds no key',
       );
     }
   }

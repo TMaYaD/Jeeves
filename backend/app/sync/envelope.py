@@ -48,10 +48,21 @@ op is the header index and opaque bytes.  ``seal_body``/``open_body`` exist in
 this module so the golden-vector generator and the two codecs pin one
 construction — no request path calls them.
 
-**Control ops are ``plaintext_v1`` for ever** (review F2): the server materialises
-memberships, Grants and rotations out of their payloads and holds no key, so an
-encrypted control op is not a stricter op but one nobody can act on.  Both codecs
-refuse it as ``encrypted_control_op``.
+**Two op classes are ``plaintext_v1`` for ever**, and for one reason: the server
+must *act* on their payloads and holds no key.  Control ops (review F2) are the
+first — it materialises memberships, Grants and rotations out of them.  Prune ops
+(#555) are the second — it stamps ``ops.compacted_by`` from their target
+enumeration, which names transport seqs and envelope hashes and carries no
+content.  An encrypted op of either class is not a stricter op but one nobody can
+act on, so both codecs refuse the pair: ``encrypted_control_op`` and
+``encrypted_prune_op``.
+
+The rule runs the **opposite** way for the two classes that carry entity content.
+A class-1 or class-4 body at suite 0x00 whose ``key_epoch`` the reader holds a key
+for is a downgrade, refused as ``plaintext_at_encrypted_epoch``
+(:func:`check_suite_at_keyed_epoch`).  Class 4 is in that family because a
+compaction op carries the *whole* joined state of an entity — the most valuable
+plaintext in the log.
 """
 
 from __future__ import annotations
@@ -94,10 +105,34 @@ KNOWN_OP_CLASSES: Final[frozenset[int]] = frozenset(
         OP_CLASS_PRUNE,
     }
 )
-#: Op classes this build serves.  Control arrived with #548 and carries exactly
-#: one type, ``member_register`` (see ``app.sync.control_payload``); every other
-#: control type is still fail-closed.  Suggestion is #557, compaction/prune #555.
-SERVED_OP_CLASSES: Final[frozenset[int]] = frozenset({OP_CLASS_CONTENT, OP_CLASS_CONTROL})
+#: Op classes this build serves.  Compaction and prune arrived with #555;
+#: suggestion is still fail-closed until #557.
+SERVED_OP_CLASSES: Final[frozenset[int]] = frozenset(
+    {OP_CLASS_CONTENT, OP_CLASS_CONTROL, OP_CLASS_COMPACTION, OP_CLASS_PRUNE}
+)
+
+#: Op classes the server must be able to **read**, and which are therefore
+#: ``plaintext_v1`` for ever.  Not a served/unserved question and so not a subset
+#: of anything above: both halves of ``(0x01, class)`` are served and the *pair*
+#: is forbidden.  Control because the server materialises memberships and Grants;
+#: prune because it stamps ``compacted_by`` from the target enumeration.  Neither
+#: payload carries entity content, which is what makes the exemption safe.
+MUST_STAY_PLAINTEXT_OP_CLASSES: Final[frozenset[int]] = frozenset(
+    {OP_CLASS_CONTROL, OP_CLASS_PRUNE}
+)
+
+#: Op classes that carry entity content, and for which a ``plaintext_v1`` body at
+#: a **keyed** epoch is a downgrade rather than history.  The one-way upgrade,
+#: enforced at the read boundary by :func:`check_suite_at_keyed_epoch`.
+#:
+#: Class 4 is here for the same reason class 1 is, only more so: a compaction op
+#: carries the whole joined state of an entity at every original author's clock.
+#: The two sets are complements over ``{1, 2, 4, 5}`` today and that is a
+#: coincidence of arithmetic, not a rule — class 3 joins the content family when
+#: #557 serves it, and it belongs to neither set until then.
+PLAINTEXT_REFUSED_AT_KEYED_EPOCH_OP_CLASSES: Final[frozenset[int]] = frozenset(
+    {OP_CLASS_CONTENT, OP_CLASS_COMPACTION}
+)
 
 # --- Sizes ------------------------------------------------------------------
 
@@ -255,6 +290,33 @@ class EncryptedControlOpError(EnvelopeError):
     """
 
     reason = "encrypted_control_op"
+
+
+class EncryptedPruneOpError(EnvelopeError):
+    """An ``op_class = prune`` op wearing suite ``aead_v1``.
+
+    The sibling of :class:`EncryptedControlOpError`, and forbidden for the same
+    reason: the server materialises ``ops.compacted_by`` out of a prune's target
+    enumeration and holds no key, so an encrypted prune is an op nobody can act
+    on.  The enumeration is content-free by construction — transport seqs, author
+    positions and envelope hashes — so keeping it in the clear discloses nothing
+    the header did not already.
+    """
+
+    reason = "encrypted_prune_op"
+
+
+class PlaintextAtEncryptedEpochError(EnvelopeError):
+    """A content-carrying op at suite 0x00 whose ``key_epoch`` is keyed.
+
+    The read-boundary half of "the upgrade is one-way", and a **stateful** verdict:
+    the same envelope is ordinary pre-turn-on history for a reader with no key at
+    that epoch and a downgrade for one that holds it.  The server never raises it —
+    it holds no key — so this exists for the golden-vector runner and for parity
+    with the Dart receive path, which is where it fires in production.
+    """
+
+    reason = "plaintext_at_encrypted_epoch"
 
 
 class AeadFailureError(EnvelopeError):
@@ -467,7 +529,13 @@ def envelope_hash(envelope: bytes) -> bytes:
 
 
 def check_served(header: OpHeader) -> None:
-    """Fail closed on any unserved suite or op class, and on the one forbidden pair."""
+    """Fail closed on any unserved suite or op class, and on the forbidden pairs.
+
+    Two pairs, one per member of :data:`MUST_STAY_PLAINTEXT_OP_CLASSES`, and each
+    gets its own code rather than a shared one: a client that saw an encrypted
+    prune has learned something different about its server than one that saw an
+    encrypted control op, and the remediation differs with it.
+    """
     if header.suite not in SERVED_SUITES:
         raise UnsupportedSuiteError(f"suite 0x{header.suite:02x} is not served")
     if header.op_class not in SERVED_OP_CLASSES:
@@ -477,6 +545,30 @@ def check_served(header: OpHeader) -> None:
             "control ops are plaintext_v1 for ever: the server materialises their "
             "payloads and holds no key"
         )
+    if header.suite == SUITE_AEAD_V1 and header.op_class == OP_CLASS_PRUNE:
+        raise EncryptedPruneOpError(
+            "prune ops are plaintext_v1 for ever: the server stamps compacted_by "
+            "from their target enumeration and holds no key"
+        )
+
+
+def check_suite_at_keyed_epoch(header: OpHeader, *, holds_epoch_key: bool) -> None:
+    """Refuse a content-carrying plaintext op at an epoch the reader can decrypt.
+
+    Scoped to :data:`PLAINTEXT_REFUSED_AT_KEYED_EPOCH_OP_CLASSES`.  A prune op is
+    exempt because it is plaintext for ever by rule, not by accident, and a control
+    op for the same reason; refusing them here would make them unauthorable.
+    """
+    if not holds_epoch_key:
+        return
+    if header.op_class not in PLAINTEXT_REFUSED_AT_KEYED_EPOCH_OP_CLASSES:
+        return
+    if header.suite != SUITE_PLAINTEXT_V1:
+        return
+    raise PlaintextAtEncryptedEpochError(
+        f"an op_class {header.op_class} op at suite plaintext_v1 arrived at "
+        f"epoch {header.key_epoch}, which this reader holds a key for"
+    )
 
 
 # --- aead_v1: sealing and opening a body ------------------------------------

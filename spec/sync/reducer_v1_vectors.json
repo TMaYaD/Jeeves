@@ -3,7 +3,7 @@
   "local_now_ms": 1800000000000,
   "future_skew_bound_ms": 300000,
   "$note": "Ops here are payload-level, paired with the header author the reducer's guards check against. Envelope framing is envelope_v1_vectors.json's job. 'expected_entities' lists the live fields of every live entity after applying the ops in order; an entity with no live field is absent from the map.",
-  "$case_schema": "Three optional per-case keys, all added by #550 and honoured by every runner. 'permute': apply the ops in every order and assert the reduced state is identical across all of them \u2014 a values-only pairwise case cannot catch an associativity failure. 'expected_clocks': the stored per-field HLC as {collection: {entity_id: {field: [wall_ms, counter, member_hex]}}}, asserted against `field_clocks` regardless of tombstone visibility, because a non-LWW strategy joins the clock independently of the value and nothing else observes that. 'strategy_overrides': {preference_key: strategy_name} for keys with no production strategy \u2014 today only 'set_merge', which is provisioned but unregistered.",
+  "$case_schema": "Three optional per-case keys, all added by #550 and honoured by every runner. 'permute': apply the ops in every order and assert the reduced state is identical across all of them \u2014 a values-only pairwise case cannot catch an associativity failure. 'expected_clocks': the stored per-field HLC as {collection: {entity_id: {field: [wall_ms, counter, member_hex]}}}, asserted against `field_clocks` regardless of tombstone visibility, because a non-LWW strategy joins the clock independently of the value and nothing else observes that. 'strategy_overrides': {preference_key: strategy_name} for keys with no production strategy \u2014 today only 'set_merge', which is provisioned but unregistered. #555 adds a per-*op* key: 'op_class', present only when it is not 1, which the runner passes to the class-4 shape guard before the payload reaches the reducer.",
   "cases": [
     {
       "name": "single_write",
@@ -1792,6 +1792,397 @@
       "expected_quarantine_reasons": [
         "preference_value_without_key",
         "preference_value_without_key"
+      ]
+    },
+    {
+      "name": "compaction_snapshot_is_absorbed_by_the_originals",
+      "note": "The snapshot alongside the ops it supersedes, in every order. Equal HLC is an idempotent skip per field, so a device holding full history applies it as a no-op \u2014 and the permutation is what makes that absorption rather than a fact about one arrival order.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "from_a"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "b": {
+                "v": "from_b"
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "from_a",
+                "hlc": [
+                  1800000000000,
+                  0,
+                  "bb0ed91aa6e058d5b26cbf810533e512"
+                ]
+              },
+              "b": {
+                "v": "from_b",
+                "hlc": [
+                  1800000001000,
+                  0,
+                  "7b1f9b7ebc6156cbb599b381b220645f"
+                ]
+              }
+            },
+            "hlc": [
+              1800000005000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          },
+          "op_class": 4
+        }
+      ],
+      "expected_entities": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": "from_a",
+            "b": "from_b"
+          }
+        }
+      },
+      "expected_clocks": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "b": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "compaction_snapshot_alone_reduces_to_the_same_state",
+      "note": "The fresh-device case: the snapshot with none of its originals. It produces the identical reduced state *and* the identical per-field clocks as compaction_snapshot_is_absorbed_by_the_originals, which is the whole equivalence claim \u2014 the compactor's own newer clock appears nowhere in the result.",
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "from_a",
+                "hlc": [
+                  1800000000000,
+                  0,
+                  "bb0ed91aa6e058d5b26cbf810533e512"
+                ]
+              },
+              "b": {
+                "v": "from_b",
+                "hlc": [
+                  1800000001000,
+                  0,
+                  "7b1f9b7ebc6156cbb599b381b220645f"
+                ]
+              }
+            },
+            "hlc": [
+              1800000005000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          },
+          "op_class": 4
+        }
+      ],
+      "expected_entities": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": "from_a",
+            "b": "from_b"
+          }
+        }
+      },
+      "expected_clocks": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "b": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "compaction_snapshot_loses_to_a_newer_concurrent_edit",
+      "note": "An offline device's later write to a compacted field wins exactly as it would have won against the original op, because the snapshot carries the original's clock and not the compactor's.",
+      "permute": true,
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "from_a",
+                "hlc": [
+                  1800000000000,
+                  0,
+                  "bb0ed91aa6e058d5b26cbf810533e512"
+                ]
+              },
+              "b": {
+                "v": "from_b",
+                "hlc": [
+                  1800000001000,
+                  0,
+                  "7b1f9b7ebc6156cbb599b381b220645f"
+                ]
+              }
+            },
+            "hlc": [
+              1800000005000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          },
+          "op_class": 4
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "later_offline_edit"
+              }
+            },
+            "hlc": [
+              1800000002000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": "later_offline_edit",
+            "b": "from_b"
+          }
+        }
+      },
+      "expected_clocks": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": [
+              1800000002000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ],
+            "b": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "compacted_tombstone_applies_at_its_original_clock",
+      "note": "tombstone_hlc is device A's older clock while field b is device B's newer one, so b stays live and the entity is not buried. Re-stamped with the compactor's op-level clock the tombstone would swallow b \u2014 a resurrection the original tombstone could never have swallowed.",
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "from_a",
+                "hlc": [
+                  1800000000000,
+                  0,
+                  "bb0ed91aa6e058d5b26cbf810533e512"
+                ]
+              },
+              "b": {
+                "v": "from_b",
+                "hlc": [
+                  1800000001000,
+                  0,
+                  "7b1f9b7ebc6156cbb599b381b220645f"
+                ]
+              }
+            },
+            "hlc": [
+              1800000005000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "tombstone": true,
+            "tombstone_hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          },
+          "op_class": 4
+        }
+      ],
+      "expected_entities": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "b": "from_b"
+          }
+        }
+      },
+      "expected_clocks": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "b": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": []
+    },
+    {
+      "name": "compaction_field_without_its_own_clock_is_refused",
+      "note": "The class-4 shape guard, at the reducer boundary this time: a field defaulting to the op-level clock would be stamped with the compactor's and win merges the op it supersedes would have lost. The well-formed op after it still applies, so a refusal wedges neither the entity nor the stream.",
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "unstamped"
+              }
+            },
+            "hlc": [
+              1800000005000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          },
+          "op_class": 4
+        },
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "from_a"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "b": {
+                "v": "from_b"
+              }
+            },
+            "hlc": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": "from_a",
+            "b": "from_b"
+          }
+        }
+      },
+      "expected_clocks": {
+        "harness_docs": {
+          "05da3673-f2b2-5e77-994f-b23b3c1e8ebc": {
+            "a": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ],
+            "b": [
+              1800000001000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      },
+      "expected_quarantine_reasons": [
+        "compaction_field_without_hlc"
       ]
     }
   ]

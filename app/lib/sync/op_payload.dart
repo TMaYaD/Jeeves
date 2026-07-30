@@ -8,7 +8,8 @@
 ///   "id": "<entity uuid>",
 ///   "fields": {"<field>": {"v": <json>, "hlc": [wall_ms, counter, "<hex32>"]?}},
 ///   "hlc": [wall_ms, counter, "<hex32>"],
-///   "tombstone": true?
+///   "tombstone": true?,
+///   "tombstone_hlc": [wall_ms, counter, "<hex32>"]?
 /// }
 /// ```
 ///
@@ -16,6 +17,12 @@
 /// compaction ops (#555) populate it per field, re-asserting the original
 /// authors' clocks — which is why the reducer's sanity guards are scoped to the
 /// op-level HLC and never to per-field HLCs (review F15).
+///
+/// `tombstone_hlc` is the same idea one level up, and [guardOpClassShape] fences
+/// it to class 4: a compacted tombstone has to be re-asserted at its *original*
+/// clock, because one re-stamped with the compactor's newer clock would bury a
+/// resurrection the original could never have buried. Outside class 4 the field is
+/// refused rather than ignored, so the format stays unambiguous.
 ///
 /// There is no canonical-JSON requirement: the signed artifact is the
 /// serialized body bytes, and receivers parse them rather than re-serializing
@@ -59,6 +66,7 @@ class OpPayload {
     required this.hlc,
     this.fields = const {},
     this.tombstone = false,
+    this.tombstoneHlc,
   });
 
   factory OpPayload.decode(Uint8List payload) {
@@ -126,12 +134,16 @@ class OpPayload {
       );
     }
 
+    final rawTombstoneHlc = raw['tombstone_hlc'];
+
     return OpPayload(
       collection: collection,
       entityId: entityId,
       hlc: Hlc.fromJson(raw['hlc']),
       fields: fields,
       tombstone: tombstone,
+      tombstoneHlc:
+          rawTombstoneHlc == null ? null : Hlc.fromJson(rawTombstoneHlc),
     );
   }
 
@@ -141,8 +153,15 @@ class OpPayload {
   final Map<String, FieldWrite> fields;
   final bool tombstone;
 
+  /// The clock a *compacted* tombstone is re-asserted at — the original one, not
+  /// the compactor's. Class 4 only; see [guardOpClassShape].
+  final Hlc? tombstoneHlc;
+
   /// The HLC that decides this field: its own if it carries one, else the op's.
   Hlc clockFor(String field) => fields[field]?.hlc ?? hlc;
+
+  /// The clock the tombstone applies at: its own if it carries one, else the op's.
+  Hlc get effectiveTombstoneHlc => tombstoneHlc ?? hlc;
 
   Map<String, Object?> toJson() {
     final fieldsJson = <String, Object?>{};
@@ -158,8 +177,45 @@ class OpPayload {
       'fields': fieldsJson,
       'hlc': hlc.toJson(),
       if (tombstone) 'tombstone': true,
+      if (tombstoneHlc != null) 'tombstone_hlc': tombstoneHlc!.toJson(),
     };
   }
 
   Uint8List encode() => Uint8List.fromList(utf8.encode(jsonEncode(toJson())));
+}
+
+/// The class-4 shape rules, and the fence that keeps them out of every other class.
+///
+/// Applied between decode and reduce on receive, and again before anything is
+/// signed at authoring — one function on both sides of that boundary, so an op no
+/// receiver would apply can never reach an outbox.
+///
+/// The server never runs this on a POST: a class-4 body is ciphertext once the
+/// Workspace is keyed, so the rule is codec parity and vector surface rather than a
+/// route gate. That is not a weakening — every *receiver* enforces it, which is
+/// where a payload's semantics have always been decided.
+void guardOpClassShape(OpPayload payload, {required int opClass}) {
+  if (opClass != opClassCompaction) {
+    if (payload.tombstoneHlc != null) {
+      throw SyncRejection(
+        SyncRejectionReason.tombstoneHlcOutsideCompaction,
+        'op_class $opClass carries tombstone_hlc, which is class-4 only',
+      );
+    }
+    return;
+  }
+  for (final entry in payload.fields.entries) {
+    if (entry.value.hlc == null) {
+      throw SyncRejection(
+        SyncRejectionReason.compactionFieldWithoutHlc,
+        'compaction field "${entry.key}" carries no hlc of its own',
+      );
+    }
+  }
+  if (payload.tombstone && payload.tombstoneHlc == null) {
+    throw const SyncRejection(
+      SyncRejectionReason.compactionTombstoneWithoutHlc,
+      'a compacted tombstone must be re-asserted at its original clock',
+    );
+  }
 }
