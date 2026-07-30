@@ -44,9 +44,6 @@ class Settings(BaseSettings):
     # driver suffix.  Both are handled by `_normalize_database_url` below.
     database_url: str = "postgresql+asyncpg://jeeves:jeeves@localhost:5432/jeeves"
 
-    # PowerSync
-    powersync_url: str = "http://localhost:8080"
-
     # Auth
     secret_key: str = "insecure-dev-key"
 
@@ -99,10 +96,6 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15  # short-lived; renewed via refresh token
     refresh_token_expire_days: int = 365  # 1 year
 
-    # PowerSync's JWKS validator selects a key by `kid`.  Must match the
-    # `kid` declared in infra/powersync/sync-config.yaml's client_auth.jwks.
-    jwt_kid: str = "jeeves-dev"
-
     # Member proof-of-possession challenges (`POST /members/{m}/challenge`).
     # The route is unauthenticated on purpose — possession of the Device's
     # signing key is the credential being proved — so the only thing standing
@@ -134,14 +127,9 @@ class Settings(BaseSettings):
     # CORS — set to actual Flutter app origin(s) in production
     allowed_origins: list[str] = ["*"]
 
-    # AI
-    anthropic_api_key: str = ""
-
-    # Redis (Celery broker)
+    # Redis.  Backs the auth nonce/rate-limit counters and the sync context's
+    # escrow and member-auth state (``app/redis.py``) — not a task-queue broker.
     redis_url: str = "redis://localhost:6379/0"
-
-    # Push notifications
-    firebase_credentials_path: str = ""
 
 
 settings = Settings()

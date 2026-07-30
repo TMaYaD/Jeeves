@@ -47,6 +47,53 @@ _SCRATCH_DB = "jeeves_migration_chain_test"
 # must already exist to hold the rows whose shape triggers the backfill.
 _SEED_AT_REVISION = "0027"
 
+# The last revision at which the mirrored domain tables still exist: 0034 drops
+# all fifteen of them (#556).  Every assertion below that reads `todos` or
+# `actions` stops here rather than at head — not to dodge the drop, but because
+# those assertions are about 0028's backfill semantics, which are a statement
+# about the schema while the mirror was live.  The drop itself is asserted
+# separately, at head, by the two tests at the end of this module.
+_LAST_MIRRORED_REVISION = "0033"
+
+# Head after 0034.  Spelled out so adding a revision without deciding what it
+# means for the drop assertions fails this test rather than silently moving.
+_HEAD_REVISION = "0034"
+
+# Dropped by 0034, children first (the migration's own order).
+_MIRRORED_TABLES = (
+    "todo_tags",
+    "capture_tags",
+    "capture_outcomes",
+    "focus_session_dispositions",
+    "focus_session_tasks",
+    "time_logs",
+    "reminders",
+    "recurrence_rules",
+    "actions",
+    "focus_sessions",
+    "captures",
+    "todos",
+    "tags",
+    "locations",
+    "user_preferences",
+)
+
+# Server-owned and therefore untouched by 0034: the op log and Member registry
+# (0031), the identity-root escrow (0032), Workspaces and Grants (0033), and
+# auth's own two tables.  The op log *is* the data now — a drop migration that
+# clipped any of these would be the failure this list exists to catch.
+_SERVER_OWNED_TABLES = (
+    "ops",
+    "members",
+    "workspaces",
+    "grants",
+    "recovery_escrows",
+    "recovery_escrow_fetches",
+    "users",
+    "refresh_tokens",
+    "alembic_version",
+)
+
 _OUTCOME_WITH_CURSOR = "chain-todo-with-cursor"
 _OUTCOME_WITHOUT_CLARIFIED_AT = "chain-todo-fallback"
 _OUTCOME_BLANK_CURSOR = "chain-todo-blank-cursor"
@@ -226,7 +273,7 @@ def test_chain_reaches_head_with_seeded_data(scratch_database: str) -> None:
     _upgrade("head", scratch_database)
 
     stamped = asyncio.run(_fetch(scratch_database, "SELECT version_num FROM alembic_version"))
-    assert stamped == [{"version_num": "0033"}]
+    assert stamped == [{"version_num": _HEAD_REVISION}]
 
 
 def test_backfill_mints_one_current_action_per_non_blank_cursor(
@@ -235,7 +282,7 @@ def test_backfill_mints_one_current_action_per_non_blank_cursor(
     """0028's backfill, verified on the rows Postgres actually stored."""
     _upgrade(_SEED_AT_REVISION, scratch_database)
     asyncio.run(_seed_representative_rows(scratch_database))
-    _upgrade("head", scratch_database)
+    _upgrade(_LAST_MIRRORED_REVISION, scratch_database)
 
     actions = asyncio.run(
         _fetch(
@@ -264,18 +311,20 @@ def test_backfill_mints_one_current_action_per_non_blank_cursor(
     assert with_cursor["user_id"] == "chain-user"
 
 
-def test_rerunning_upgrade_head_is_a_no_op(scratch_database: str) -> None:
+def test_rerunning_upgrade_is_a_no_op(scratch_database: str) -> None:
     """ADR-0012's re-runnable contract, exercised against real Postgres.
 
-    A second ``upgrade head`` must neither fail nor duplicate backfilled rows —
-    the guard 0028 relies on for drift recovery and for runs that land after
-    clients have already uploaded their own backfill Actions (ADR-0019).
+    A second ``upgrade`` must neither fail nor duplicate backfilled rows — the
+    guard 0028 relies on for drift recovery and for runs that land after clients
+    have already uploaded their own backfill Actions (ADR-0019).  Both passes
+    stop at the last mirrored revision so ``actions`` is still there to count;
+    re-runnability at head is covered by the drop test below.
     """
     _upgrade(_SEED_AT_REVISION, scratch_database)
     asyncio.run(_seed_representative_rows(scratch_database))
-    _upgrade("head", scratch_database)
+    _upgrade(_LAST_MIRRORED_REVISION, scratch_database)
 
-    _upgrade("head", scratch_database)
+    _upgrade(_LAST_MIRRORED_REVISION, scratch_database)
 
     actions = asyncio.run(_fetch(scratch_database, "SELECT id FROM actions"))
     assert len(actions) == len(_BACKFILL_IDS)
@@ -348,7 +397,7 @@ def test_0028_backfill_reapplied_over_existing_rows_is_a_no_op(
 
     # Force re-entry: the stamp goes back to 0027, the data stays put.
     asyncio.run(_execute(scratch_database, ["UPDATE alembic_version SET version_num = '0027'"]))
-    _upgrade("head", scratch_database)
+    _upgrade(_LAST_MIRRORED_REVISION, scratch_database)
 
     actions = asyncio.run(
         _fetch(scratch_database, "SELECT id, outcome_id, text FROM actions ORDER BY outcome_id")
@@ -371,3 +420,84 @@ def test_0028_backfill_reapplied_over_existing_rows_is_a_no_op(
     #    stale cursor text was not written back over it.
     assert by_outcome[_OUTCOME_WITH_CURSOR]["text"] == _CLIENT_EDITED_TEXT
     assert by_outcome[_OUTCOME_WITH_CURSOR]["text"] != _CURSOR_TEXT
+
+
+# --- 0034: the mirrored schema drop (#556) ----------------------------------
+
+
+def test_head_drops_every_mirrored_table_and_keeps_the_server_owned_ones(
+    scratch_database: str,
+) -> None:
+    """0034 removes the mirror and nothing else, over real rows.
+
+    An empty database cannot distinguish "the drop worked" from "there was
+    nothing to drop", and it cannot exercise the FK-safe ordering at all — a
+    child dropped after its parent raises on Postgres and only on Postgres.  So
+    this seeds the mirror at 0027, walks to head, and then asserts both halves
+    of the migration's contract: all fifteen mirrored tables gone, all nine
+    server-owned tables still there.  The op log is the data now; a drop that
+    clipped ``ops`` would be silent otherwise.
+    """
+    _upgrade(_SEED_AT_REVISION, scratch_database)
+    asyncio.run(_seed_representative_rows(scratch_database))
+
+    _upgrade("head", scratch_database)
+
+    present = {
+        row["table_name"]
+        for row in asyncio.run(
+            _fetch(
+                scratch_database,
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+            )
+        )
+    }
+
+    assert present.isdisjoint(_MIRRORED_TABLES), (
+        f"0034 left mirrored tables behind: {sorted(present & set(_MIRRORED_TABLES))}"
+    )
+    assert set(_SERVER_OWNED_TABLES) <= present, (
+        f"0034 dropped server-owned tables: {sorted(set(_SERVER_OWNED_TABLES) - present)}"
+    )
+
+    # The publication went with the tables it replicated.
+    publications = asyncio.run(
+        _fetch(scratch_database, "SELECT pubname FROM pg_publication WHERE pubname = 'powersync'")
+    )
+    assert publications == []
+
+
+def test_head_is_reached_twice_without_error(scratch_database: str) -> None:
+    """ADR-0012's re-runnable contract across the drop itself.
+
+    The release phase runs ``alembic upgrade head`` on every deploy, and a
+    redeploy of the same build runs it against a database already at head.  A
+    ``drop_table`` without ``if_exists`` would make the *second* pass the one
+    that crash-loops, which is exactly the failure a green first deploy hides.
+    """
+    _upgrade("head", scratch_database)
+
+    _upgrade("head", scratch_database)
+
+    stamped = asyncio.run(_fetch(scratch_database, "SELECT version_num FROM alembic_version"))
+    assert stamped == [{"version_num": _HEAD_REVISION}]
+
+
+def test_downgrading_past_the_drop_refuses_loudly(scratch_database: str) -> None:
+    """0034's downgrade must fail before touching schema, not recreate an empty mirror.
+
+    Recreating fifteen empty tables would restore the shape of a cache and none
+    of its contents.  The migration says so and raises; this pins that the raise
+    is what an operator reaching for ``alembic downgrade`` actually gets, and
+    that the stamp does not move.
+    """
+    _upgrade("head", scratch_database)
+
+    result = _alembic("downgrade", _LAST_MIRRORED_REVISION, scratch_database)
+
+    assert result.returncode != 0
+    assert "irreversible" in result.stderr
+    assert "alembic stamp" in result.stderr
+
+    stamped = asyncio.run(_fetch(scratch_database, "SELECT version_num FROM alembic_version"))
+    assert stamped == [{"version_num": _HEAD_REVISION}]
