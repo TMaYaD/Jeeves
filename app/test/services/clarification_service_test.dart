@@ -340,8 +340,10 @@ void main() {
       );
 
       final outcome = await _row(db, outcomeId);
-      // Every timestamp column must land in UTC (PowerSync upload contract),
-      // not just last_clarified_at.
+      // Every timestamp column must land in UTC, not just last_clarified_at:
+      // the op log's canonical instant form is ISO-8601 UTC to the millisecond
+      // (`FieldKind.instant` / `encodeInstant`), so a column holding local
+      // wall-clock time would encode to a different instant than it names.
       expect(outcome.createdAt.isUtc, isTrue);
       expect(outcome.createdAt, localNow.toUtc());
       expect(outcome.updatedAt!.isUtc, isTrue);

@@ -70,7 +70,9 @@ void main() {
       expect(rows.length, 2);
       expect(rows[0].read<String>('task_id'), 'tA');
       expect(rows[1].read<String>('task_id'), 'tB');
-      // Each row must have a non-null, non-empty id for PowerSync compatibility.
+      // `id` is the sync row identifier the op log names the entity by — the
+      // domain key is (focus_session_id, task_id), so the row carries one
+      // anyway, NOT NULL and unique (ADR-0025).
       for (final row in rows) {
         final id = row.read<String?>('id');
         expect(id, isNotNull);
@@ -78,8 +80,8 @@ void main() {
       }
     });
 
-    test('inserts task rows carrying the session user_id (denormalized for '
-        'PowerSync per-user bucketing)', () async {
+    test('inserts task rows carrying the session user_id (denormalized so a '
+        'junction row names its owner without a JOIN)', () async {
       await _insertTodo(db, id: 'tA', title: 'Task A');
       await _insertTodo(db, id: 'tB', title: 'Task B');
 

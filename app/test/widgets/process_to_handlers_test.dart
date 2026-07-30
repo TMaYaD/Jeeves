@@ -988,11 +988,11 @@ void main() {
         'does NOT fire when the row was deleted between render and tap',
         (tester) async {
       // Snapshot-based callsites can lose a row between render and tap
-      // (sync/another device hard-deletes it). PowerSync's INSTEAD OF
-      // triggers return 0 affected rows whether the write hit anything or
-      // not, so the widget pre-checks existence and bails before firing
-      // onAfterRoute (which would advance the cursor + record a phantom
-      // routing record).
+      // (sync/another device hard-deletes it). The widget pre-checks existence
+      // rather than reading the write's affected-row count — the routing write
+      // is a multi-statement transaction whose count says nothing about the
+      // subject in particular — and bails before firing onAfterRoute (which
+      // would advance the cursor + record a phantom routing record).
       final todo = await _insertTodo(db, id: 'gone1');
       final fired = <ProcessAction>[];
       await tester.pumpWidget(_harness(
