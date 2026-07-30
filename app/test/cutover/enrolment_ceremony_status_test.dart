@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/cutover/enrolment_ceremony/enrolment_ceremony_runner.dart';
+import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 

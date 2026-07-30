@@ -12,6 +12,7 @@ import 'providers/focus_session_planning_settings_provider.dart';
 import 'providers/onboarding_provider.dart';
 import 'providers/periodic_review_settings_provider.dart';
 import 'providers/post_sync_hooks_provider.dart';
+import 'providers/sync_lifecycle_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
 import 'services/notification_service.dart';
@@ -150,6 +151,12 @@ class JeevesApp extends ConsumerWidget {
     // listener attaches at startup.  Without this read it stays lazy and
     // the dedupe pass never fires.
     ref.watch(postSyncHooksProvider);
+
+    // Eagerly materialise [syncLifecycleProvider] so an enrolled device starts
+    // syncing at launch: it re-mints its member credential, resumes an
+    // interrupted initial upload and subscribes.  Nothing else reads it, so
+    // without this read it stays lazy and the device never syncs.
+    ref.watch(syncLifecycleProvider);
     return MaterialApp.router(
       title: 'Jeeves',
       theme: ThemeData(

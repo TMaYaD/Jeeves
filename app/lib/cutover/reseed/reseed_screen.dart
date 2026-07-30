@@ -10,7 +10,7 @@
 ///
 /// Deliberately plain: a diagnostic surface, not a designed product one, and it
 /// will be deleted rather than maintained. **Re-tapping Run is safe** — the run is
-/// idempotent by construction (see `reseed_uploader.dart`), which is why the
+/// idempotent by construction (see `sync/initial_upload.dart`), which is why the
 /// button says so rather than being disabled after a pass.
 library;
 
@@ -20,7 +20,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'reseed_plan.dart';
+import '../../sync/initial_upload_plan.dart';
 import 'reseed_report.dart';
 import 'reseed_runner.dart';
 import 'reseed_verifier.dart';
@@ -227,7 +227,7 @@ class _ReseedScreenState extends ConsumerState<ReseedScreen> {
               'data is being claimed.',
       };
 
-  Widget _areaExclusivityTile(ReseedPlan plan) => ExpansionTile(
+  Widget _areaExclusivityTile(InitialUploadPlan plan) => ExpansionTile(
         key: const Key('reseed_area_exclusivity'),
         title: const Text('Area exclusivity (ADR-0025)'),
         subtitle: Text(

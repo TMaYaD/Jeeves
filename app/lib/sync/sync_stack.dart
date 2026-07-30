@@ -11,16 +11,28 @@
 /// the *same* closure production runs — including the member-transport
 /// propagation below, which no harness fake can stand in for.
 ///
-/// Not here, on purpose: the domain projector and the DAO capture seam. The
-/// running app still writes through PowerSync (`NoopDomainOpCapture`), so a
-/// stack that attached a projector would be claiming a flip that has not
-/// happened. #553's later slices add it at this one site.
+/// **The domain projector is attached here, at assembly**, to every client the
+/// factory builds — not later, on activation. Enrolment *pulls* the existing log,
+/// and on a second device that pull has to project into the domain store on the
+/// way in; a projector attached after activation would strand the ceremony's own
+/// pull as reduced-but-unprojected. Attaching before enrolment is harmless: an
+/// un-enrolled client never pulls. Pass no `domain` and reduction stays headless,
+/// which is what the collection-generic reducer tests want.
+///
+/// The DAO capture seam is *not* here: it is bound onto the `GtdDatabase`
+/// construction site by `sync_lifecycle.dart`, because an un-enrolled device must
+/// author nothing and the store is built before sign-in.
 library;
 
 import 'dart:math';
 
+import '../database/gtd_database.dart';
+import 'control_payload.dart' show zeroPrevControlHash;
 import 'device_key_store.dart';
 import 'enrolment.dart';
+import 'domain_projector.dart';
+import 'enrolment_state.dart';
+import 'envelope.dart' show sameBytes;
 import 'hlc.dart';
 import 'ids.dart';
 import 'member_identity.dart';
@@ -37,6 +49,7 @@ class SyncStack {
     required this.userId,
     required this.database,
     required this.keyStore,
+    required this.userTransport,
     required this.identity,
     required this.clock,
     required this.nowMs,
@@ -65,6 +78,7 @@ class SyncStack {
     required DeviceKeyStore keyStore,
     required UserTransport userTransport,
     required int Function() nowMs,
+    GtdDatabase? domain,
     MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
     PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
     Argon2idParameters kdfParameters = Argon2idParameters.floor,
@@ -82,6 +96,16 @@ class SyncStack {
     final clock = HlcClock(memberIdHex: identity.memberIdHex, nowMs: nowMs);
     DateTime now() => DateTime.fromMillisecondsSinceEpoch(nowMs(), isUtc: true);
 
+    // One registry and one projector over the whole device: reduced state is
+    // keyed by collection and entity id, so both Workspaces feed the same read
+    // model through the same views.
+    final projector = domain == null
+        ? null
+        : DomainProjector(
+            registry: CollectionRegistry(database),
+            domain: domain,
+          );
+
     final defaultClient = SyncClient(
       workspaceId: defaultWorkspaceId(userId),
       userId: userId,
@@ -90,7 +114,7 @@ class SyncStack {
       clock: clock,
       reducer: Reducer(database, nowMs: nowMs, strategies: strategies),
       now: now,
-    );
+    )..projector = projector;
 
     // One client per Workspace over the *same* store, identity, clock and
     // member directory: a device is two Workspaces of one User, not two devices.
@@ -111,7 +135,7 @@ class SyncStack {
           // stranger in the other.
           directory: defaultClient.directory,
           now: now,
-        ),
+        )..projector = projector,
       );
       // **Lazily, on every call, and never at construction.** The ceremony
       // reaches this factory twice at different points of its own progress:
@@ -132,6 +156,7 @@ class SyncStack {
       userId: userId,
       database: database,
       keyStore: keyStore,
+      userTransport: userTransport,
       identity: identity,
       clock: clock,
       nowMs: nowMs,
@@ -160,6 +185,16 @@ class SyncStack {
   final SyncDatabase database;
 
   final DeviceKeyStore keyStore;
+
+  /// The User-credential transport the stack was assembled with.
+  ///
+  /// Held rather than merely passed to [enrolment] because the member credential
+  /// is memory-only: a relaunched enrolled device has its keys and its whole log
+  /// and no transport, and re-minting one is a proof-of-possession exchange over
+  /// *this* transport. `sync_lifecycle.dart` does that on activation, which is
+  /// why the stack has to keep the seam rather than consume it.
+  final UserTransport userTransport;
+
   final MemberIdentity identity;
   final HlcClock clock;
 
@@ -190,4 +225,27 @@ class SyncStack {
 
   /// Every Workspace this User's devices reach without a Grant round-trip.
   List<String> get workspaceIds => derivableWorkspaceIds(userId);
+
+  /// What this device's own store says about its enrolment. **No network.**
+  ///
+  /// One reader for two callers — `sync_lifecycle.dart`, which decides whether to
+  /// attach a transport and author anything, and the cutover enrolment-ceremony
+  /// surface, which decides which buttons to offer. Both the reads and the
+  /// derivation are here because two copies of either would be free to disagree,
+  /// and the lifecycle's answer has to be the one the screen shows.
+  Future<EnrolmentCeremonyStatus> readEnrolmentStatus() async {
+    final founded = <String>[];
+    for (final workspaceId in workspaceIds) {
+      final client = await workspaceClientFactory(workspaceId);
+      final head = await client.appliedControlHead();
+      if (!sameBytes(head, zeroPrevControlHash)) founded.add(workspaceId);
+    }
+    return deriveEnrolmentCeremonyStatus(
+      workspaceIds: workspaceIds,
+      foundedWorkspaceIds: founded,
+      storedMemberId: (await keyStore.read(defaultClient.workspaceId))?.memberId,
+      pinnedRootPk: await defaultClient.pinnedRootPk(),
+      highestEscrowVersionSeen: await defaultClient.highestEscrowVersionSeen(),
+    );
+  }
 }

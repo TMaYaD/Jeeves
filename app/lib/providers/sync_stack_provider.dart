@@ -1,14 +1,11 @@
 /// The op-log stack's production wiring: store, key store, transports, stack.
 ///
-/// **Production sync wiring (#553 Phase 2).** Permanent — the reseed uploader
-/// and the PowerSync flip read the same providers. Only the enrolment-ceremony
-/// *surface* that currently reaches them is throwaway.
-///
-/// Nothing here starts syncing. There is no `SignalListener`, no periodic pull
-/// and no DAO capture: the running app still writes through PowerSync, and a
-/// provider that quietly began pushing ops would be the dual-write branching the
-/// proposal's Implementation stance forbids. The stack exists so a ceremony can
-/// be run, and so the later slices have one construction site to flip.
+/// **The production sync path.** Assembling the stack does not start syncing —
+/// `sync_lifecycle_provider.dart` does that, and only for a device whose own
+/// store says it is enrolled. What this provider does is give the device
+/// everything it needs: its identity out of the platform key store, its own
+/// `jeeves_sync.sqlite`, the User transport on the session Dio, and the domain
+/// read model to project into.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +18,7 @@ import '../sync/sync_stack.dart';
 import '../sync/sync_store.dart';
 import '../sync/sync_transport.dart';
 import 'auth_provider.dart';
+import 'database_provider.dart';
 import 'user_constants.dart';
 
 /// The process-wide op-log store, opened once and closed on disposal.
@@ -68,6 +66,9 @@ final FutureProvider<SyncStack> syncStackProvider =
     database: await ref.watch(syncDatabaseProvider.future),
     keyStore: ref.watch(deviceKeyStoreProvider),
     userTransport: ref.watch(userTransportProvider),
+    // The domain read model, attached at assembly so every client this stack
+    // builds projects — including the one the enrolment ceremony pulls through.
+    domain: ref.watch(databaseProvider),
     nowMs: () => DateTime.now().millisecondsSinceEpoch,
   );
 });

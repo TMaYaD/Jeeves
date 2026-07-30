@@ -31,9 +31,13 @@ An **all-zero ``prev_control_hash`` is genesis-only** (ADR-0031).  A
 ``member_register`` — or a grant, or a revoke — carrying a zero link is refused
 even by a receiver whose control state is empty, so a fresh device served a
 truncated history always detects it.  The corollary: any pre-genesis dev-era log
-(one that opens with a zero-link ``member_register``) is permanently unadoptable,
-which is acceptable because PowerSync is still the production sync path and the
-op-log store ships empty at the #553 cutover.
+(one that opens with a zero-link ``member_register``) is permanently unadoptable.
+That was acceptable because no store the server had ever seen predated the #553
+cutover — every op-log store shipped empty and the ones that could hold
+pre-genesis rows were disposable dev and harness stores.  Since #591 the op log
+**is** the production sync path: a device's store is authored into on enrolment
+and is no longer disposable, so a pre-genesis log is now a store to be recreated
+rather than a rounding error.
 
 Every certificate is **signed bytes, never re-serialized JSON** (same stance as
 ``OpPayload.encode``): a verifier checks the signature over the literal decoded

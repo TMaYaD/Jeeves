@@ -9,8 +9,8 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jeeves/cutover/reseed/reseed_plan.dart';
-import 'package:jeeves/cutover/reseed/reseed_uploader.dart';
+import 'package:jeeves/sync/initial_upload_plan.dart';
+import 'package:jeeves/sync/initial_upload.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/merge_strategy.dart';
@@ -68,7 +68,7 @@ void main() {
     });
   });
 
-  group('runReseedUpload', () {
+  group('runInitialUpload', () {
     late SimWorkspace workspace;
     late SimDevice device;
     late SyncClient preferencesClient;
@@ -84,7 +84,7 @@ void main() {
 
     tearDown(() async => workspace.close());
 
-    ReseedPlan planOf(List<PlannedEntity> entities) => ReseedPlan(
+    InitialUploadPlan planOf(List<PlannedEntity> entities) => InitialUploadPlan(
           entities: entities,
           resolutions: const [],
           anomalies: const [],
@@ -93,13 +93,13 @@ void main() {
           endorsedEntityIdsByCollection: const {},
         );
 
-    Future<ReseedUploadReport> upload(
-      ReseedPlan plan, {
-      int flushEveryOpCount = reseedFlushEveryOpCount,
-      int progressEveryEntityCount = reseedProgressEveryEntityCount,
-      void Function(ReseedUploadProgress)? onProgress,
+    Future<InitialUploadReport> upload(
+      InitialUploadPlan plan, {
+      int flushEveryOpCount = initialUploadFlushEveryOpCount,
+      int progressEveryEntityCount = initialUploadProgressEveryEntityCount,
+      void Function(InitialUploadProgress)? onProgress,
     }) =>
-        runReseedUpload(
+        runInitialUpload(
           plan: plan,
           gtdClient: device.client,
           preferencesClient: preferencesClient,
@@ -111,7 +111,7 @@ void main() {
         );
 
     PlannedEntity tag(String label, {String name = 'Home'}) => PlannedEntity(
-          workspace: ReseedWorkspace.gtd,
+          workspace: InitialUploadWorkspace.gtd,
           collection: tagsCollection,
           entityId: _id(label),
           fields: {
@@ -202,7 +202,7 @@ void main() {
       // device's own echo.
       final plan = planOf([
         PlannedEntity(
-          workspace: ReseedWorkspace.preferences,
+          workspace: InitialUploadWorkspace.preferences,
           collection: userPreferencesCollection,
           entityId: preferenceEntityId(
             preferencesClient.workspaceId,
@@ -233,7 +233,7 @@ void main() {
       );
       final report = await upload(planOf([
         PlannedEntity(
-          workspace: ReseedWorkspace.preferences,
+          workspace: InitialUploadWorkspace.preferences,
           collection: userPreferencesCollection,
           entityId: entityId,
           fields: {

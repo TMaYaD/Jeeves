@@ -1,84 +1,126 @@
+/// The sync indicator's one adapter, over the op-log spine.
+///
+/// It reads `SyncHealth` — outbox depth, unresolved integrity alarms, quarantined
+/// ops — from **both** of the device's Workspace clients, because a device is two
+/// Workspaces of one User and a wedged preferences queue is a wedged device.
+///
+/// It deliberately does *not* read PowerSync's status stream any more. The engine
+/// no longer connects (#591), so that stream sits permanently idle and would map
+/// to `synced` — an indicator reading green over a device that is not syncing at
+/// all, during the one window where the user most needs the truth. The
+/// dead-letter watch goes for the matching reason: nothing uploads through the
+/// connector, so no new dead letter can be recorded, and the table itself rides
+/// #556 (ADR-0030's parking).
+///
+/// Still **informational, never blocking** (docs/ARCHITECTURE.md § the two-stage
+/// boundary): behaviour must not depend on this value.
+library;
+
 import 'dart:async';
 
-import 'package:powersync/powersync.dart' as ps;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../sync/enrolment_state.dart';
+import '../sync/sync_health.dart';
 import 'auth_provider.dart';
-import 'database_provider.dart';
-import 'powersync_provider.dart';
+import 'sync_lifecycle_provider.dart';
+import 'sync_stack_provider.dart';
+import 'user_constants.dart';
 
 enum SyncStatus { localOnly, connecting, syncing, synced, error }
 
-SyncStatus _map(ps.SyncStatus status) {
-  if (status.anyError != null) return SyncStatus.error;
-  if (status.downloading || status.uploading) return SyncStatus.syncing;
-  if (status.connecting) return SyncStatus.connecting;
+/// The status two Workspaces' health adds up to, given what the store says about
+/// enrolment and whether a member credential is in hand.
+///
+/// Pure, so the table is asserted directly rather than through a staged device.
+/// Worst news first: an accusation that still stands, or an op this device refused
+/// to apply, outranks a queue that is merely busy.
+SyncStatus syncStatusFor({
+  required EnrolmentState enrolment,
+  required bool hasMemberCredential,
+  required Iterable<SyncHealth> health,
+}) {
+  // A device that has not finished enrolling has no log to sync with. That is the
+  // ordinary offline case, not a degraded one.
+  if (enrolment != EnrolmentState.enrolled) return SyncStatus.localOnly;
+  if (health.any((one) => one.degraded)) return SyncStatus.error;
+  // Enrolled, and the credential has not been re-minted yet — the window between
+  // launch and the lifecycle's proof-of-possession exchange.
+  if (!hasMemberCredential) return SyncStatus.connecting;
+  if (health.any((one) => one.pendingOpCount > 0)) return SyncStatus.syncing;
   return SyncStatus.synced;
 }
 
 /// Stream of the current sync status.
 ///
-/// Returns [SyncStatus.localOnly] immediately when the user is unauthenticated.
-/// Once authenticated, combines PowerSync's connection status stream with the
-/// dead-letter count from `sync_dead_letters`: any recorded non-retryable
-/// upload failure (see `JeevesBackendConnector.classifyUploadError`) forces
-/// [SyncStatus.error] so the drawer's sync indicator surfaces it — even while
-/// the engine itself reports a healthy connection.
+/// [SyncStatus.localOnly] while nobody is signed in, and while a signed-in device
+/// has not finished enrolling.
 final syncStatusProvider = StreamProvider<SyncStatus>((ref) async* {
   final userId = ref.watch(currentUserIdProvider);
-
-  if (userId == 'local') {
+  if (userId == kLocalUserId) {
     yield SyncStatus.localOnly;
     return;
   }
 
-  final psDb = await ref.read(powerSyncInstanceProvider.future);
-  final db = ref.read(databaseProvider);
+  // Watched rather than merely read so the indicator exists on a device that has
+  // never enrolled — the lifecycle is null only for the `'local'` placeholder,
+  // which the branch above has already handled.
+  await ref.watch(syncLifecycleProvider.future);
+  final stack = await ref.watch(syncStackProvider.future);
 
-  // Hand-rolled combine-latest over the two inputs.  Seeded with the current
-  // engine status: [statusStream] only emits on *changes*, so a subscriber
-  // that attaches after PowerSync has already reached a stable state would
-  // otherwise stay in AsyncLoading forever (asData == null), leaving the UI
-  // stuck on the "local only" fallback icon.  The dead-letter count starts at
-  // zero and corrects itself when the watch query's first row arrives.
   final controller = StreamController<SyncStatus>();
-  var engine = _map(psDb.currentStatus);
-  var deadLetters = 0;
+  final health = <String, SyncHealth>{};
   SyncStatus? lastEmitted;
 
-  void emit() {
+  // Every failure lands on the stream, because most emissions are un-awaited
+  // (below): a throw from the enrolment read would otherwise be an unhandled
+  // async error and the indicator would sit frozen on its last status — the one
+  // failure mode this rewrite exists to prevent. Same treatment the health
+  // streams' own `onError` gets.
+  Future<void> emit() async {
     if (controller.isClosed) return;
-    final next = deadLetters > 0 ? SyncStatus.error : engine;
-    if (next == lastEmitted) return; // Both inputs re-fire independently.
-    lastEmitted = next;
-    controller.add(next);
+    try {
+      // Re-read enrolment on every emission rather than once: a device that
+      // enrols *while the indicator is on screen* must stop saying "local only",
+      // and the ceremony's own pull stamps `sync_cursors.last_sync_completed_at`,
+      // which is one of the columns the health query watches — so the tick
+      // arrives.
+      final next = syncStatusFor(
+        enrolment: (await stack.readEnrolmentStatus()).state,
+        hasMemberCredential: stack.defaultClient.isEnrolled,
+        health: health.values,
+      );
+      if (controller.isClosed || next == lastEmitted) return;
+      lastEmitted = next;
+      controller.add(next);
+    } on Object catch (error, stackTrace) {
+      if (!controller.isClosed) controller.addError(error, stackTrace);
+    }
   }
 
-  void forwardError(Object error, StackTrace stackTrace) {
-    if (controller.isClosed) return;
-    controller.addError(error, stackTrace);
+  final subscriptions = <StreamSubscription<SyncHealth>>[];
+  for (final workspaceId in stack.workspaceIds) {
+    final client = await stack.workspaceClientFactory(workspaceId);
+    subscriptions.add(client.watchSyncHealth().listen(
+          (value) {
+            health[workspaceId] = value;
+            unawaited(emit());
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!controller.isClosed) controller.addError(error, stackTrace);
+          },
+        ));
   }
-
-  final engineSub = psDb.statusStream.listen(
-    (status) {
-      engine = _map(status);
-      emit();
-    },
-    onError: forwardError,
-  );
-  final deadLetterSub = db.watchSyncDeadLetterCount().listen(
-    (count) {
-      deadLetters = count;
-      emit();
-    },
-    onError: forwardError,
-  );
   ref.onDispose(() {
-    engineSub.cancel();
-    deadLetterSub.cancel();
+    for (final subscription in subscriptions) {
+      subscription.cancel();
+    }
     controller.close();
   });
 
-  emit();
+  // Seeded, because the watch streams emit on *change*: a subscriber attaching to
+  // a settled device would otherwise stay in `AsyncLoading` for ever and the UI
+  // would sit on its "local only" fallback.
+  await emit();
   yield* controller.stream;
 });

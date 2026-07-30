@@ -6,8 +6,8 @@
 ///
 /// ## Value encodings (protocol surface)
 ///
-/// Byte-identical convergence makes these encodings part of the protocol —
-/// #553's reseed uploader reuses these codecs so it cannot emit anything else.
+/// Byte-identical convergence makes these encodings part of the protocol — the
+/// initial upload reuses these codecs, so it cannot emit anything else.
 ///
 /// * **Drift `dateTime` columns** encode as an ISO-8601 UTC instant with
 ///   sub-millisecond precision **truncated** (never rounded), always exactly
@@ -41,6 +41,24 @@
 /// touches it again. The value is not a merge input, it is excluded from every
 /// cross-device equality assertion, and the column's retirement rides #556 —
 /// see ADR-0030.
+///
+/// ## The tolerant timestamp grammar
+///
+/// [parseTimestampUtcMs] is the *reading* half of the instant encoding, and it
+/// lives here for the same reason [encodeInstant] does: it is protocol surface.
+/// [encodeInstant] answers "what does a Drift `dateTime` become on the wire";
+/// this answers "which stored strings are the same instant as that". The
+/// initial upload needs it because a store written before the encoding existed
+/// holds microsecond-bearing and offset-bearing strings that must map onto the
+/// millisecond-truncated wire value rather than being refused. [rawAsText] is
+/// the one spelling for a value a column kind refused, so a report names the
+/// offending value the same way wherever it is produced.
+///
+/// The grammar is frozen — `spec/converge_verify/canonical_row_vectors.json`
+/// carries it, and the converge-verify check's Python twin reads the same
+/// vectors — so `test/cutover/canonical_row_test.dart` asserts
+/// [timestampPattern] and [parseTimestampUtcMs] against that file. Widening it
+/// is a spec change, not a local one.
 library;
 
 /// The twelve collections this slice carries, named after their tables.
@@ -92,6 +110,93 @@ String? encodeInstant(DateTime? value) {
 DateTime? decodeInstant(Object? value) {
   if (value is! String) return null;
   return DateTime.tryParse(value)?.toUtc();
+}
+
+// --- the tolerant timestamp grammar ---------------------------------------
+
+/// `[ \t]` rather than `\s`: Dart's and Python's regex engines disagree about
+/// which exotic code points `\s` covers, and a grammar the two sides read
+/// differently is exactly the divergence the frozen spec exists to prevent.
+final RegExp timestampPattern = RegExp(
+  r'^[ \t]*(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2})'
+  r'(?::(\d{2})(?:\.(\d+))?)?[ \t]*(Z|z|[+-]\d{2}(?::?\d{2})?)?[ \t]*$',
+);
+
+/// Signed minutes east of UTC, or null when the offset is out of range.
+int? _offsetMinutes(String? raw) {
+  if (raw == null || raw == 'Z' || raw == 'z') return 0;
+  final sign = raw.startsWith('-') ? -1 : 1;
+  final digits = raw.substring(1).replaceAll(':', '');
+  final hours = int.parse(digits.substring(0, 2));
+  final minutes = digits.length > 2 ? int.parse(digits.substring(2, 4)) : 0;
+  if (hours > 23 || minutes > 59) return null;
+  return sign * (hours * 60 + minutes);
+}
+
+String _pad(int value, int width) => value.toString().padLeft(width, '0');
+
+String? _formatInstant(DateTime moment) {
+  final utc = moment.toUtc();
+  // The intersection of what Dart's and Python's date types can both represent
+  // and format.
+  if (utc.year < 1 || utc.year > 9999) return null;
+  return '${_pad(utc.year, 4)}-${_pad(utc.month, 2)}-${_pad(utc.day, 2)}'
+      'T${_pad(utc.hour, 2)}:${_pad(utc.minute, 2)}:${_pad(utc.second, 2)}'
+      '.${_pad(utc.millisecond, 3)}Z';
+}
+
+/// `YYYY-MM-DDTHH:MM:SS.mmmZ`, or null when the rules refuse the value.
+///
+/// Accepts a [DateTime] — Dart has no zone-less value, so one carrying local
+/// time is converted with `toUtc()` rather than reinterpreted — or a string
+/// under the tolerant grammar frozen in the spec, where a zone-less string *is*
+/// read as UTC. The instant truncates, never rounds, to millisecond precision:
+/// milliseconds are the client-authorship grain, and a server-minted microsecond
+/// value reaches the device carrying the same microseconds, so both sides
+/// truncate identically.
+String? parseTimestampUtcMs(Object? value) {
+  if (value is DateTime) return _formatInstant(value);
+  if (value is! String) return null;
+
+  final match = timestampPattern.firstMatch(value);
+  if (match == null) return null;
+  final year = int.parse(match.group(1)!);
+  final month = int.parse(match.group(2)!);
+  final day = int.parse(match.group(3)!);
+  final hour = int.parse(match.group(4)!);
+  final minute = int.parse(match.group(5)!);
+  final second = match.group(6) == null ? 0 : int.parse(match.group(6)!);
+  final fraction = match.group(7) ?? '';
+  final millis =
+      fraction.isEmpty ? 0 : int.parse('${fraction}000'.substring(0, 3));
+  if (month < 1 || month > 12 || day < 1) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  final offset = _offsetMinutes(match.group(8));
+  if (offset == null) return null;
+
+  // DateTime.utc normalises out-of-range components (Feb 30 becomes Mar 2), so
+  // the round-trip check below is what rejects an impossible date.
+  final base = DateTime.utc(year, month, day, hour, minute, second, millis);
+  if (base.year != year || base.month != month || base.day != day) return null;
+  return _formatInstant(base.subtract(Duration(minutes: offset)));
+}
+
+/// One shared spelling for a value a column kind refused (the spec's
+/// `raw_as_text`), so every report names the offending value identically.
+String rawAsText(Object? value) {
+  if (value == null) return 'null';
+  if (value is bool) return value ? 'true' : 'false';
+  if (value is int) return '$value';
+  if (value is double) {
+    if (value.isFinite && value == value.roundToDouble()) {
+      return '${value.toInt()}';
+    }
+    // Deliberately not formatted: shortest-round-trip float formatting is not
+    // guaranteed identical across the two languages.
+    return '<number>';
+  }
+  if (value is String) return value;
+  return '<unknown>';
 }
 
 /// One collection's column contract.

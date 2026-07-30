@@ -5,7 +5,7 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jeeves/cutover/reseed/reseed_plan.dart';
+import 'package:jeeves/sync/initial_upload_plan.dart';
 import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/ids.dart';
@@ -25,15 +25,15 @@ String Function() _minter() {
 
 /// A row source over a literal store, so the transform's inputs are visible in
 /// the test rather than assembled by a fixture.
-ReseedRowSource _rows(Map<String, List<Map<String, Object?>>> store) =>
+InitialUploadRowSource _rows(Map<String, List<Map<String, Object?>>> store) =>
     (table) async => store[table] ?? const [];
 
-Future<ReseedPlan> _plan(
+Future<InitialUploadPlan> _plan(
   Map<String, List<Map<String, Object?>>> store, {
-  Map<String, ReseedTagRef> spineLabels = const {},
+  Map<String, InitialUploadTagRef> spineLabels = const {},
   String Function()? mintTagId,
 }) =>
-    buildReseedPlan(
+    buildInitialUploadPlan(
       readLegacyRows: _rows(store),
       userId: _userId,
       preferencesWorkspaceId: _preferencesWorkspaceId,
@@ -188,10 +188,10 @@ void main() {
     });
   });
 
-  group('reseedEntityIdFor', () {
+  group('initialUploadEntityIdFor', () {
     test('keeps the legacy id for an owned entity', () {
       expect(
-        reseedEntityIdFor(
+        initialUploadEntityIdFor(
           collection: todosCollection,
           row: {'id': _id('todo/one')},
           preferencesWorkspaceId: _preferencesWorkspaceId,
@@ -202,7 +202,7 @@ void main() {
 
     test('derives a junction id from its pair', () {
       expect(
-        reseedEntityIdFor(
+        initialUploadEntityIdFor(
           collection: todoTagsCollection,
           row: {
             'id': _id('junction/random'),
@@ -217,7 +217,7 @@ void main() {
 
     test('derives a preference id from its key and Workspace', () {
       expect(
-        reseedEntityIdFor(
+        initialUploadEntityIdFor(
           collection: userPreferencesCollection,
           row: {'id': _id('preference/random'), 'key': 'clarify_mode'},
           preferencesWorkspaceId: _preferencesWorkspaceId,
@@ -228,7 +228,7 @@ void main() {
 
     test('has no answer for a junction missing half its pair', () {
       expect(
-        reseedEntityIdFor(
+        initialUploadEntityIdFor(
           collection: todoTagsCollection,
           row: {'id': _id('junction/orphan'), 'todo_id': _id('todo/one')},
           preferencesWorkspaceId: _preferencesWorkspaceId,
@@ -238,7 +238,7 @@ void main() {
     });
   });
 
-  group('buildReseedPlan', () {
+  group('buildInitialUploadPlan', () {
     Map<String, List<Map<String, Object?>>> storeWith({
       required List<Map<String, Object?>> tags,
       required List<Map<String, Object?>> todoTags,
@@ -417,7 +417,7 @@ void main() {
 
     test('merges onto a Label the spine already holds instead of minting',
         () async {
-      final spineLabel = ReseedTagRef(id: _id('tag/spine-work'), name: 'Work');
+      final spineLabel = InitialUploadTagRef(id: _id('tag/spine-work'), name: 'Work');
       final plan = await _plan(
         storeWith(
           tags: [
@@ -500,7 +500,7 @@ void main() {
           membership('junction/work', 'todo/one', 'tag/work'),
         ],
       );
-      String describe(ReseedPlan plan) => [
+      String describe(InitialUploadPlan plan) => [
             for (final entity in plan.entities)
               '${entity.collection}/${entity.entityId}/${entity.fields}',
             for (final resolution in plan.resolutions) '${resolution.toJson()}',
@@ -548,7 +548,7 @@ void main() {
         ],
       });
       final entity = plan.entitiesFor(userPreferencesCollection).single;
-      expect(entity.workspace, ReseedWorkspace.preferences);
+      expect(entity.workspace, InitialUploadWorkspace.preferences);
       expect(
         entity.entityId,
         preferenceEntityId(_preferencesWorkspaceId, 'clarify_mode'),

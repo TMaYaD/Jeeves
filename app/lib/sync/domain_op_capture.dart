@@ -1,11 +1,11 @@
 /// The seam every DAO write path describes its domain effect through.
 ///
-/// The production binding is [NoopDomainOpCapture]: the live app still writes
-/// through PowerSync until the cutover in #553, and teeing writes into both
-/// paths would be exactly the dual-write branching the Implementation stance
-/// forbids. The seam exists now so #553's flip is one construction-site change
-/// — build `GtdDatabase` with `SyncOpCapture(syncClient)` instead of the no-op
-/// — and so the harness can drive the whole app through the op log today.
+/// The production binding is [WorkspaceRoutingOpCapture]: one instance built at
+/// the `GtdDatabase` construction site, bound to this device's two Workspace
+/// clients once it is enrolled, and dropping silently until then — an
+/// un-enrolled device authors nothing. [NoopDomainOpCapture] remains what a
+/// caller passes when it means "never author", which is every test that is not
+/// about capture.
 ///
 /// **Buffered until commit.** Calls made inside a DAO transaction accumulate
 /// and are emitted only once the transaction commits: a rolled-back write must
@@ -18,6 +18,7 @@
 /// [CaptureScope].
 library;
 
+import 'collection_codecs.dart' show userPreferencesCollection;
 import 'sync_client.dart';
 
 /// One coalesced domain effect, ready to be authored as an op.
@@ -250,7 +251,9 @@ abstract class BufferedDomainOpCapture implements DomainOpCapture {
   }
 }
 
-/// The real binding #553 flips on: every coalesced effect becomes a signed op.
+/// One client, every collection: the single-Workspace binding the harness and the
+/// capture-contract tests drive. Production uses [WorkspaceRoutingOpCapture],
+/// which cannot mis-route a preference write.
 class SyncOpCapture extends BufferedDomainOpCapture {
   SyncOpCapture(this.client);
 
@@ -264,6 +267,66 @@ class SyncOpCapture extends BufferedDomainOpCapture {
       fields: op.fields,
       tombstone: op.tombstone,
     );
+  }
+}
+
+/// The production binding: routes each coalesced effect to the Workspace whose
+/// log its entity id belongs to, or drops it while unbound.
+///
+/// Two reasons this exists rather than `SyncOpCapture(client)`:
+///
+/// * **Routing.** `UserPreferencesDao` describes its effects into
+///   `user_preferences`, whose entity id is `uuid5(preferences_workspace_id,
+///   key)`. An op authored into the *GTD* Workspace would land in a log whose id
+///   derivation nobody there shares, so two devices would converge on an id
+///   neither Workspace holds. Everything else goes to the default Workspace.
+/// * **Late binding.** `GtdDatabase` is constructed at process start — before
+///   sign-in, before enrolment — and an un-enrolled device must author nothing at
+///   all. Unbound, [emit] drops silently, which is semantically the old
+///   `NoopDomainOpCapture`. `sync_lifecycle.dart` binds it once a device is
+///   enrolled, and [unbind] restores the pre-enrolment state on sign-out.
+///
+/// It extends [BufferedDomainOpCapture] rather than reimplementing the buffer, so
+/// scope, coalescing and rollback semantics are the ones every other binding is
+/// tested under; only [emit] varies.
+class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
+  SyncClient? _gtdClient;
+  SyncClient? _preferencesClient;
+
+  /// Called after each authored op, so a caller can schedule an outbox flush
+  /// without this class knowing what a flush is. Never called for a dropped op.
+  void Function()? onOpAuthored;
+
+  bool get isBound => _gtdClient != null && _preferencesClient != null;
+
+  void bind({
+    required SyncClient gtdClient,
+    required SyncClient preferencesClient,
+  }) {
+    _gtdClient = gtdClient;
+    _preferencesClient = preferencesClient;
+  }
+
+  /// Stop authoring. Buffers and scopes are untouched: a scope open across a
+  /// sign-out still closes cleanly, and its ops are simply dropped.
+  void unbind() {
+    _gtdClient = null;
+    _preferencesClient = null;
+  }
+
+  @override
+  Future<void> emit(CapturedOp op) async {
+    final client = op.collection == userPreferencesCollection
+        ? _preferencesClient
+        : _gtdClient;
+    if (client == null) return;
+    await client.capture(
+      collection: op.collection,
+      entityId: op.entityId,
+      fields: op.fields,
+      tombstone: op.tombstone,
+    );
+    onOpAuthored?.call();
   }
 }
 

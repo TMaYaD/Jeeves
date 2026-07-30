@@ -2,15 +2,17 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately and are replicated to PostgreSQL by PowerSync when connectivity is available. This document describes how conflicts between a local row and the server's copy are resolved — with the focus on the `user_preferences` synced key-value store — and the [`todos`](#the-todos-upload-contract) and [focus-session](#the-focus-session-upload-contract) upload contracts: which columns must round-trip verbatim through the REST schemas.
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). This document describes how conflicts are resolved — with the focus on the `user_preferences` synced key-value store — and the [`todos`](#the-todos-upload-contract) and [focus-session](#the-focus-session-upload-contract) upload contracts.
 
-For the transport architecture (buckets, sync shapes, the BackendConnector, credentials), see [ARCHITECTURE.md § Sync Engine](./ARCHITECTURE.md#sync-engine). For the vocabulary (Sync Shape, Bucket, LWW, Tombstone), see [CONTEXT.md § Sync](../CONTEXT.md#sync).
+**The legacy PowerSync path is disconnected (#591).** Everything below about the CRUD queue, `uploadData()`, dead letters, the write-checkpoint windows and the REST upload contracts describes machinery that is still *present* — on the device as a store engine, and on the server as the mirrored tables and routes — and is no longer *live*: the app never connects the engine, so nothing uploads through the connector and no new dead letter can be recorded. It is documented rather than deleted for two reasons. The mirrored tables and their REST schemas still exist server-side until #556 removes them, and the shapes they imposed are the shapes the rows on a device that ran on that path still have — which is what the initial upload reads. The wholesale rewrite of this document belongs with that removal.
+
+For the transport architecture, see [ARCHITECTURE.md § Minimal Sync Server](./ARCHITECTURE.md#minimal-sync-server) — and § Sync Engine for the disconnected engine. For the vocabulary, see [CONTEXT.md § Sync](../CONTEXT.md#sync).
 
 ## The two directions of a preference conflict
 
 A `user_preferences` write can be lost in two mirror-image ways:
 
-- **Upload side** — the local write never reaches the server. Guarded by `JeevesBackendConnector.uploadData()`, which routes every table to a REST endpoint and throws for any unmapped table so the CRUD queue is never silently drained. A non-retryable `4xx` is classified per status ([ARCHITECTURE.md § Upload-error policy](./ARCHITECTURE.md#upload-error-policy)) and dead-lettered — recorded in the local `sync_dead_letters` table with its payload and surfaced through the sync indicator — never silently dropped. On a `user_preferences` row a dead-letter additionally trips a debug assert (`backend_connector.dart`) so a systematic rejection surfaces in development. `POST /user_preferences/` follows the shared [create-dedupe contract](#the-create-dedupe-contract): a same-user id replay upserts the submitted `value`/`updated_at` and converges — consistent with, not a substitute for, the reconciliation strategies below (the server route is last-arrival for the row it owns).
+- **Upload side** — the local write never reaches the server. Guarded by `JeevesBackendConnector.uploadData()`, which routes every table to a REST endpoint and throws for any unmapped table so the CRUD queue is never silently drained. A non-retryable `4xx` is classified per status ([ARCHITECTURE.md § Upload-error policy](./ARCHITECTURE.md#upload-error-policy)) and dead-lettered — recorded in the local `sync_dead_letters` table with its payload — never silently dropped. (The sync indicator no longer reads that table: it reports the op log's health, and since #591 nothing uploads through the connector for a dead letter to record.) On a `user_preferences` row a dead-letter additionally trips a debug assert (`backend_connector.dart`) so a systematic rejection surfaces in development. `POST /user_preferences/` follows the shared [create-dedupe contract](#the-create-dedupe-contract): a same-user id replay upserts the submitted `value`/`updated_at` and converges — consistent with, not a substitute for, the reconciliation strategies below (the server route is last-arrival for the row it owns).
 - **Download / reconciliation side** — the local row exists, the server snapshot omits it, and the next pull deletes the local row. This is the case this document's conflict rules govern.
 
 ## The tombstone invariant
@@ -21,7 +23,9 @@ Deletion in `user_preferences` is modelled as a **tombstone** — a present row 
 
 Therefore the rule **server-absent → keep local** can never swallow a legitimate delete. A delete is a value, not a gap.
 
-## PowerSync reconciliation behaviour (write-checkpoint)
+## PowerSync reconciliation behaviour (write-checkpoint) — the disconnected path
+
+The engine no longer connects, so none of these windows can occur on a shipped device; they are what shaped the rows a pre-#591 device holds. On the op log the equivalent question has a different answer entirely: a device's own writes are durable in the outbox from the moment they are signed, and reduced state is a join-semilattice, so nothing is ever "held" against a checkpoint or wiped by an absence — deletion is a tombstone op.
 
 PowerSync keeps CRUD-queue mutations applied on top of synced data and holds them until a downloaded checkpoint reaches the *write checkpoint* issued after `uploadData()` succeeds. The wipe windows and whether the engine self-heals:
 
@@ -29,9 +33,9 @@ PowerSync keeps CRUD-queue mutations applied on top of synced data and holds the
 |---|---|---|
 | 1. Pending upload | Local write queued, not yet uploaded; pull omits the row | Held — the CRUD-queue mutation stays applied until its write checkpoint is reached. No local wipe. |
 | 2. Replication lag | REST returned 201, row in Postgres, not yet in the publication snapshot | Held — the write checkpoint is not reached until replication catches up. |
-| 3. Dead-lettered upload | Connector hits a non-retryable `4xx`, dead-letters the entry, the write checkpoint advances | **Not covered by the engine.** The next pull can still delete the local row — but the entry's payload is preserved in `sync_dead_letters` and the failure is surfaced via the sync indicator, so the write is diagnosable rather than silently lost. |
+| 3. Dead-lettered upload | Connector hits a non-retryable `4xx`, dead-letters the entry, the write checkpoint advances | **Not covered by the engine.** The next pull can still delete the local row — but the entry's payload is preserved in `sync_dead_letters`, so the write stayed diagnosable rather than silently lost. |
 
-Windows 1–2 are the engine's built-in "hold pending mutations" guarantee; plain last-write-wins keys ride on it and need no bespoke download-arbitration code. Window 3 is prevented by keeping the backend routes idempotent/permissive so a legitimate write never `4xx`s; if one does, the connector records a dead letter (payload + response body), the sync indicator shows the error, and debug builds additionally assert on `user_preferences` rows. Recording preserves the evidence and surfaces the failure — it does not stop the read-side wipe of the local row in release.
+Windows 1–2 are the engine's built-in "hold pending mutations" guarantee; plain last-write-wins keys ride on it and need no bespoke download-arbitration code. Window 3 is prevented by keeping the backend routes idempotent/permissive so a legitimate write never `4xx`s; if one does, the connector records a dead letter (payload + response body) and debug builds additionally assert on `user_preferences` rows. Recording preserves the evidence and surfaces the failure — it does not stop the read-side wipe of the local row in release.
 
 > **No automated coverage of the engine path.** The delete-on-absent behaviour is a PowerSync view/engine effect. The entire Dart test harness runs on `NativeDatabase.memory()` — a real SQLite table with no PowerSync engine — so windows 1–3 cannot be reproduced in unit tests. They are verified manually/on emulator (see [TESTING.md § Sync conflict resolution](./TESTING.md#sync-conflict-resolution-manual)). A standing PowerSync-client + docker-compose integration harness is deferred to its own infra issue.
 
@@ -48,7 +52,7 @@ ResolvedPreference resolvePreferenceConflict(...);    // (key, local, server) �
 ResolvedPreference resolveWithStrategy(...);          // strategy-explicit variant
 ```
 
-`resolvePreferenceConflict` is a pure function covering the three cases below; it is unit-tested in isolation (`app/test/services/user_preferences_conflict_test.dart`). `lww` keys rely on PowerSync's engine hold (windows 1–2) at runtime; the registry actively governs the exceptions (`maxTimestampValue`, `setMerge`) and every future key.
+`resolvePreferenceConflict` is a pure function covering the three cases below; it is unit-tested in isolation (`app/test/services/user_preferences_conflict_test.dart`). `lww` keys relied on PowerSync's engine hold (windows 1–2) on the legacy path and are arbitrated on the op log by the reducer's field-grain HLC last-write-wins (`app/lib/sync/reducer.dart`); the registry actively governs the exceptions (`maxTimestampValue`, `setMerge`) and every future key.
 
 ### Strategies
 
@@ -97,7 +101,7 @@ Every current key, grouped by family:
 
 ## Sign-in migration
 
-A separate LWW pass runs once at sign-in, when local-only rows (`user_id = 'local'`) are reassigned to the authenticated user (`LocalDataMigrationService.migrate`, `migration_service.dart`). It applies the `lww` strategy in SQL — reassigning non-conflicting keys and, for conflicting keys, keeping the row with the newer `updated_at`. This is the account-merge path, distinct from the ongoing PowerSync download reconciliation above.
+A separate LWW pass runs once at sign-in, when local-only rows (`user_id = 'local'`) are reassigned to the authenticated user (`LocalDataMigrationService.migrate`, `migration_service.dart`). It applies the `lww` strategy in SQL — reassigning non-conflicting keys and, for conflicting keys, keeping the row with the newer `updated_at`. It is a raw-SQL pass over the mirror and authors no op, which is correct: the initial upload reads its tables **unfiltered** and stamps the enrolled `user_id` at authoring, so a row this pass missed still reaches the log under the account that is syncing (#582's rule).
 
 ## The create-dedupe contract
 

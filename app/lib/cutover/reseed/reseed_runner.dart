@@ -3,10 +3,15 @@
 /// **Cutover tooling — removed by #556.**
 ///
 /// [runReseed] is the whole ceremony with every dependency injected, so the run
-/// under test is the run that happens on the phone: production hands in
-/// PowerSync's `getAll`, the enrolled clients off `syncStackProvider` and native
-/// scratch stores; a test hands in a seeded legacy database, a `SimDevice`'s
-/// clients and in-memory ones. There is no second code path.
+/// under test is the run that happens on the phone: production hands in a read
+/// over the **domain store**, the enrolled clients off `syncStackProvider` and
+/// native scratch stores; a test hands in a seeded domain database, a
+/// `SimDevice`'s clients and in-memory ones. There is no second code path.
+///
+/// The row source is `GtdDatabase` rather than PowerSync's own `getAll`: the
+/// domain read model is what the initial upload walks, and reading it through the
+/// domain store keeps this surface pointed at the same rows when #556 moves that
+/// store off PowerSync's file.
 ///
 /// The stage order is load-bearing in one place: **pull before authoring**. The
 /// diff skip that makes a re-run safe compares against the new spine's reduced
@@ -18,19 +23,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:powersync/powersync.dart' as ps;
 
 import '../../database/gtd_database.dart';
+import '../../providers/database_provider.dart';
 import '../../providers/powersync_provider.dart';
 import '../../providers/sync_stack_provider.dart';
-import '../../sync/collection_codecs.dart';
 import '../../sync/ids.dart';
+import '../../sync/initial_upload.dart';
+import '../../sync/initial_upload_plan.dart';
 import '../../sync/reducer.dart';
 import '../../sync/sync_client.dart';
 import '../../sync/sync_stack.dart';
 import '../converge_verify/converge_differ.dart'
     show ReadOnlyProof, buildLocalConvergeReport;
-import 'reseed_plan.dart';
 import 'reseed_report.dart';
 import 'reseed_scratch_store.dart';
-import 'reseed_uploader.dart';
 import 'reseed_verifier.dart';
 
 /// Where a run has got to, for the screen's stage list.
@@ -55,7 +60,7 @@ class ReseedProgress {
   const ReseedProgress({required this.stage, this.upload});
 
   final ReseedStage stage;
-  final ReseedUploadProgress? upload;
+  final InitialUploadProgress? upload;
 
   String get summaryLine => upload?.summaryLine ?? _stageLine;
 
@@ -72,7 +77,7 @@ class ReseedProgress {
 
 /// Run the reseed: plan, author, flush, then verify against the server log.
 Future<ReseedOutcome> runReseed({
-  required ReseedRowSource readLegacyRows,
+  required InitialUploadRowSource readLegacyRows,
   required SyncClient gtdClient,
   required SyncClient preferencesClient,
   required ReducedCollectionReader readReducedCollection,
@@ -80,9 +85,9 @@ Future<ReseedOutcome> runReseed({
   required Future<int?> Function() powerSyncUploadQueueCount,
   required String Function() mintTagId,
   void Function(ReseedProgress)? onProgress,
-  int flushEveryOpCount = reseedFlushEveryOpCount,
+  int flushEveryOpCount = initialUploadFlushEveryOpCount,
 }) async {
-  void report(ReseedStage stage, [ReseedUploadProgress? upload]) =>
+  void report(ReseedStage stage, [InitialUploadProgress? upload]) =>
       onProgress?.call(ReseedProgress(stage: stage, upload: upload));
 
   report(ReseedStage.checkingPreconditions);
@@ -109,7 +114,7 @@ Future<ReseedOutcome> runReseed({
   }
 
   report(ReseedStage.planning);
-  final plan = await buildReseedPlan(
+  final plan = await buildInitialUploadPlan(
     readLegacyRows: readLegacyRows,
     userId: gtdClient.userId,
     preferencesWorkspaceId: preferencesClient.workspaceId,
@@ -119,13 +124,13 @@ Future<ReseedOutcome> runReseed({
         : const {},
   );
 
-  ReseedUploadReport? upload;
+  InitialUploadReport? upload;
   final tables = <ReseedTableDiff>[];
   var pendingOpCount = 0;
 
   if (pulledBeforeAuthoring) {
     report(ReseedStage.authoring);
-    upload = await runReseedUpload(
+    upload = await runInitialUpload(
       plan: plan,
       gtdClient: gtdClient,
       preferencesClient: preferencesClient,
@@ -137,8 +142,8 @@ Future<ReseedOutcome> runReseed({
         (await preferencesClient.health()).pendingOpCount;
 
     report(ReseedStage.verifying);
-    for (final workspace in ReseedWorkspace.values) {
-      final live = workspace == ReseedWorkspace.preferences
+    for (final workspace in InitialUploadWorkspace.values) {
+      final live = workspace == InitialUploadWorkspace.preferences
           ? preferencesClient
           : gtdClient;
       final stack = await buildScratchStack(live.workspaceId);
@@ -174,9 +179,9 @@ Future<ReseedOutcome> runReseed({
 
   // The tables are collected per Workspace; the report reads in the one order
   // the rest of this library uses.
-  tables.sort((a, b) => reseedCollectionOrder
+  tables.sort((a, b) => initialUploadCollectionOrder
       .indexOf(a.table)
-      .compareTo(reseedCollectionOrder.indexOf(b.table)));
+      .compareTo(initialUploadCollectionOrder.indexOf(b.table)));
 
   report(ReseedStage.done);
   return ReseedOutcome(
@@ -192,35 +197,6 @@ Future<ReseedOutcome> runReseed({
     readOnlyProof: readOnlyProof,
     preconditions: preconditions,
   );
-}
-
-/// The new spine's Labels, keyed by casefolded name.
-///
-/// What makes a re-run stable: run 1 minted a Label for a converted Area, run 2
-/// finds it here and merges onto it rather than minting a second one. Same-name
-/// Labels resolve by `(casefolded name, id)` — the one total order the plan uses
-/// everywhere — so two Labels called "Home" cannot make the pick depend on read
-/// order.
-Future<Map<String, ReseedTagRef>> readSpineLabelTags(
-  ReducedCollectionReader readReducedCollection,
-) async {
-  final reduced = await readReducedCollection(tagsCollection);
-  final labels = <ReseedTagRef>[];
-  for (final entry in reduced.entries) {
-    if (entry.value['type'] != labelTagType) continue;
-    final name = entry.value['name'];
-    if (name is! String) continue;
-    labels.add(ReseedTagRef(id: entry.key, name: name));
-  }
-  labels.sort((a, b) {
-    final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
-    return byName != 0 ? byName : a.id.compareTo(b.id);
-  });
-  final byName = <String, ReseedTagRef>{};
-  for (final label in labels) {
-    byName.putIfAbsent(label.name.toLowerCase(), () => label);
-  }
-  return byName;
 }
 
 // --- production wiring ------------------------------------------------------
@@ -245,8 +221,9 @@ class RiverpodReseedRunner implements ReseedRunner {
   /// SELECTs only — this is the read-only half, and the proof in the report is
   /// the evidence rather than this comment.
   Future<List<Map<String, Object?>>> _readLegacyRows(String table) async {
-    final rows = await (await _powerSync).getAll('SELECT * FROM $table');
-    return [for (final row in rows) Map<String, Object?>.of(row)];
+    final rows =
+        await _ref.read(databaseProvider).customSelect('SELECT * FROM $table').get();
+    return [for (final row in rows) Map<String, Object?>.of(row.data)];
   }
 
   Future<int?> _uploadQueueCount() async =>
@@ -271,7 +248,7 @@ class RiverpodReseedRunner implements ReseedRunner {
       readReducedCollection: (collection) =>
           registry.register(collection).readAll(),
       powerSyncUploadQueueCount: _uploadQueueCount,
-      mintTagId: reseedRandomTagId,
+      mintTagId: initialUploadRandomTagId,
       onProgress: onProgress,
       buildScratchStack: (workspaceId) async {
         final live = await stack.workspaceClientFactory(workspaceId);

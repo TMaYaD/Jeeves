@@ -16,14 +16,14 @@
 /// exactly the state the reseed has to refuse to carry. A Drift-declared schema
 /// would make it unrepresentable and the held-back case untestable.
 ///
-/// Reads go through [readRows], the same `ReseedRowSource` seam production hands
+/// Reads go through [readRows], the same `InitialUploadRowSource` seam production hands
 /// PowerSync's `getAll` to, so the read-only proof in the report is a real
 /// observation about a real mutable store here too.
 library;
 
 import 'package:jeeves/cutover/converge_verify/canonical_row.dart'
     show convergeVerifyTables;
-import 'package:jeeves/cutover/reseed/reseed_plan.dart' show ReseedRowSource;
+import 'package:jeeves/sync/initial_upload_plan.dart' show InitialUploadRowSource;
 import 'package:jeeves/database/powersync_schema.g.dart';
 import 'package:powersync/powersync.dart' as ps;
 import 'package:sqlite3/sqlite3.dart';
@@ -84,8 +84,8 @@ class ReseedLegacyStore {
     );
   }
 
-  /// The `ReseedRowSource` seam. Unfiltered, exactly as production reads it.
-  ReseedRowSource get readRows => (String table) async {
+  /// The `InitialUploadRowSource` seam. Unfiltered, exactly as production reads it.
+  InitialUploadRowSource get readRows => (String table) async {
         final result = _db.select('SELECT * FROM "$table"');
         return [for (final row in result) Map<String, Object?>.of(row)];
       };

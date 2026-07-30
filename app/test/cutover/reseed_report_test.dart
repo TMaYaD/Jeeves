@@ -13,9 +13,9 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/cutover/converge_verify/converge_differ.dart'
     show ReadOnlyProof;
-import 'package:jeeves/cutover/reseed/reseed_plan.dart';
+import 'package:jeeves/sync/initial_upload_plan.dart';
 import 'package:jeeves/cutover/reseed/reseed_report.dart';
-import 'package:jeeves/cutover/reseed/reseed_uploader.dart';
+import 'package:jeeves/sync/initial_upload.dart';
 import 'package:jeeves/cutover/reseed/reseed_verifier.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 
@@ -40,7 +40,7 @@ const _clean = ReseedPreconditions(
   pendingOpCountAfterFlush: 0,
 );
 
-ReseedPlan _plan({Map<String, List<String>> excluded = const {}}) => ReseedPlan(
+InitialUploadPlan _plan({Map<String, List<String>> excluded = const {}}) => InitialUploadPlan(
       entities: const [],
       resolutions: const [],
       anomalies: const [],
@@ -208,7 +208,7 @@ void main() {
       final outcome = ReseedOutcome(
         verdict: ReseedVerdict.reseededAndConverged,
         plan: _plan(),
-        upload: const ReseedUploadReport(
+        upload: const InitialUploadReport(
           plannedEntityCount: 1,
           authoredOpCount: 1,
           skippedEntityCount: 0,
@@ -244,11 +244,11 @@ void main() {
     test('gathers plan, upload and verification anomalies into one list', () {
       final outcome = ReseedOutcome(
         verdict: ReseedVerdict.diverged,
-        plan: ReseedPlan(
+        plan: InitialUploadPlan(
           entities: const [],
           resolutions: const [],
           anomalies: const [
-            ReseedAnomaly(
+            InitialUploadAnomaly(
               table: todosCollection,
               kind: nullRequiredColumn,
               column: 'title',
@@ -258,14 +258,14 @@ void main() {
           excludedRowIdsByTable: const {},
           endorsedEntityIdsByCollection: const {},
         ),
-        upload: const ReseedUploadReport(
+        upload: const InitialUploadReport(
           plannedEntityCount: 1,
           authoredOpCount: 0,
           skippedEntityCount: 0,
           reassertedEntityCount: 0,
           refusedEntityCount: 1,
           anomalies: [
-            ReseedAnomaly(table: todosCollection, kind: uploadRefused),
+            InitialUploadAnomaly(table: todosCollection, kind: uploadRefused),
           ],
         ),
         tables: [
@@ -280,7 +280,7 @@ void main() {
             heldBackIds: const ['entity-a'],
             legacyAnomalies: const [],
             reducedAnomalies: const [
-              ReseedAnomaly(table: todosCollection, kind: projectionHeldBack),
+              InitialUploadAnomaly(table: todosCollection, kind: projectionHeldBack),
             ],
           ),
         ],
