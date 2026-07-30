@@ -480,8 +480,7 @@ class SyncClient {
   /// Flush the outbox, then pull. A transport failure on either half leaves the
   /// queue and the cursor exactly where they were.
   ///
-  /// Returns the post-sync [SyncHealth] — the surface that replaces PowerSync's
-  /// status indicator.
+  /// Returns the post-sync [SyncHealth] — what the sync indicator reads.
   Future<SyncHealth> sync() async {
     await flushOutbox();
     await pull();
@@ -804,25 +803,9 @@ class SyncClient {
     return affected..addAll(reducedBefore);
   }
 
-  /// Every entity the reduced substrate currently holds any trace of.
-  ///
-  /// Both tables, because either alone is a partial answer: an entity may hold
-  /// fields with no tombstone, or a tombstone whose fields a compaction already
-  /// took away.
-  Future<Set<AffectedEntity>> _reducedEntities() async {
-    final rows = await _db.customSelect(
-      'SELECT collection, entity_id FROM reduced_fields '
-      'UNION SELECT collection, entity_id FROM row_tombstones',
-      readsFrom: {_db.reducedFields, _db.rowTombstones},
-    ).get();
-    return {
-      for (final row in rows)
-        (
-          collection: row.read<String>('collection'),
-          entityId: row.read<String>('entity_id'),
-        ),
-    };
-  }
+  /// Every entity the reduced substrate currently holds any trace of — see the
+  /// top-level [reducedEntities], which the first-open domain rebuild shares.
+  Future<Set<AffectedEntity>> _reducedEntities() => reducedEntities(_db);
 
   Future<void> _clearRefused(int seq) async {
     await (_db.update(_db.opLog)

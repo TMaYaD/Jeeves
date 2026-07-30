@@ -12,7 +12,7 @@ library;
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import '../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../database/daos/tag_dao.dart' show todoTagIdFor;

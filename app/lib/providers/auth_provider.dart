@@ -1,18 +1,12 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth_mode.dart';
+import '../auth/session_gate.dart';
 import '../services/auth_service.dart';
-import '../services/migration_service.dart';
-
-// ---------------------------------------------------------------------------
-// Router refresh notifier
-// ---------------------------------------------------------------------------
-
-/// Flips whenever auth state changes so GoRouter re-evaluates its redirect.
-final authStateNotifier = ValueNotifier<bool>(false);
+import '../sync/enrolment_state.dart';
+import 'sync_stack_provider.dart';
 
 // ---------------------------------------------------------------------------
 // Current user ID
@@ -22,7 +16,8 @@ final authStateNotifier = ValueNotifier<bool>(false);
 ///
 /// Defaults to `'local'` (the pre-auth placeholder) and is updated to the
 /// real user ID when [AuthNotifier] completes its build or after login.
-/// [powerSyncInstanceProvider] listens to this to drive sync lifecycle.
+/// `syncStackProvider` and `syncLifecycleProvider` both watch it: the Workspace
+/// ids, the escrow slot and the Grants are all derived from the account.
 final currentUserIdProvider =
     NotifierProvider<CurrentUserIdNotifier, String>(CurrentUserIdNotifier.new);
 
@@ -56,7 +51,7 @@ class AuthNotifier extends AsyncNotifier<String?> {
 
     if (result != null) {
       ref.read(currentUserIdProvider.notifier).setUserId(result.userId);
-      authStateNotifier.value = true;
+      sessionGateNotifier.value = await _enrolmentGate();
       return result.accessToken;
     }
 
@@ -65,29 +60,27 @@ class AuthNotifier extends AsyncNotifier<String?> {
       await ref.read(authServiceProvider).clearTokens();
     } catch (_) {}
     ref.read(currentUserIdProvider.notifier).reset();
-    authStateNotifier.value = false;
+    sessionGateNotifier.value = SessionGate.signedOut;
     return null;
   }
 
-  /// Sign in and optionally migrate local data to the authenticated account.
+  /// Sign in.
   ///
   /// [params] shape depends on the active [AuthProvider]:
   /// - password mode: `{'email': ..., 'password': ...}`
   /// - sws mode: `{}` (the provider handles wallet interaction internally)
   ///
-  /// [onConflict] is called when the local device has data AND the server
-  /// already has data for this user.  Pass `null` to silently merge.
-  Future<void> login(
-    Map<String, dynamic> params, {
-    Future<ConflictResolution> Function()? onConflict,
-  }) async {
+  /// There is no local→server data migration and therefore no conflict to
+  /// resolve: the store is the device's own, the op log is what converges it
+  /// with the account's other devices, and the initial upload authors it under
+  /// the identity enrolment mints.
+  Future<void> login(Map<String, dynamic> params) async {
     state = const AsyncLoading();
     try {
       final provider = ref.read(authImplProvider);
       final result = await provider.signIn(params);
-      await _handleMigration(result.userId, onConflict: onConflict);
       ref.read(currentUserIdProvider.notifier).setUserId(result.userId);
-      authStateNotifier.value = true;
+      sessionGateNotifier.value = await _enrolmentGate();
       state = AsyncData(result.accessToken);
     } catch (e, st) {
       state = AsyncError(e, st);
@@ -95,15 +88,11 @@ class AuthNotifier extends AsyncNotifier<String?> {
     }
   }
 
-  /// Register a new account and migrate local data to the new user.
+  /// Register a new account.
   ///
   /// Registration is still handled directly by [AuthService] because it is
   /// password-only — SWS users are upserted on first login.
-  Future<void> register(
-    String email,
-    String password, {
-    Future<ConflictResolution> Function()? onConflict,
-  }) async {
+  Future<void> register(String email, String password) async {
     state = const AsyncLoading();
     try {
       final service = ref.read(authServiceProvider);
@@ -114,10 +103,8 @@ class AuthNotifier extends AsyncNotifier<String?> {
         await service.clearTokens();
         throw StateError('Server returned a token without a valid user ID.');
       }
-      // New registrations have no server-side data yet; skip conflict check.
-      await _handleMigration(userId, skipConflictCheck: true);
       ref.read(currentUserIdProvider.notifier).setUserId(userId);
-      authStateNotifier.value = true;
+      sessionGateNotifier.value = await _enrolmentGate();
       state = AsyncData(accessToken);
     } catch (e, st) {
       state = AsyncError(e, st);
@@ -125,27 +112,13 @@ class AuthNotifier extends AsyncNotifier<String?> {
     }
   }
 
+  /// Sign out: tell the server, drop the tokens, and go back to local-only.
+  ///
+  /// **No local data is touched.** The row-reassignment sweep this used to run
+  /// existed because sign-in migrated the local store into the account; nothing
+  /// filters domain reads by user id, and the op log carries the identity, so
+  /// there is nothing left for a sign-out to fix up.
   Future<void> logout() async {
-    // Reassign rows owned by the authenticated user back to the `'local'`
-    // placeholder before resetting the user id.  Without this, queries —
-    // which filter by [currentUserIdProvider] — would match nothing after
-    // sign-out and the user's tasks/tags appear to vanish.  Signing in
-    // again runs the mirror migration in [_handleMigration], so data
-    // round-trips correctly through a logout/login cycle.
-    final previousUserId = ref.read(currentUserIdProvider);
-    if (previousUserId != 'local') {
-      try {
-        await ref.read(migrationServiceProvider).migrate(
-              fromUserId: previousUserId,
-              toUserId: 'local',
-            );
-      } catch (_) {
-        // Best-effort: if the local reassignment fails the rows stay
-        // under the old user id and will be recovered when the same
-        // user signs in again.  Don't block sign-out on it.
-      }
-    }
-
     try {
       final refreshToken =
           await ref.read(authServiceProvider).getRefreshToken() ?? '';
@@ -155,45 +128,28 @@ class AuthNotifier extends AsyncNotifier<String?> {
     }
     ref.read(currentUserIdProvider.notifier).reset();
     state = const AsyncData(null);
-    authStateNotifier.value = false;
+    sessionGateNotifier.value = SessionGate.signedOut;
   }
 
-  // ---------------------------------------------------------------------------
-  // Migration helper
-  // ---------------------------------------------------------------------------
-
-  Future<void> _handleMigration(
-    String toUserId, {
-    Future<ConflictResolution> Function()? onConflict,
-    bool skipConflictCheck = false,
-  }) async {
-    final migrationService = ref.read(migrationServiceProvider);
-    final hasLocal = await migrationService.hasLocalData();
-    if (!hasLocal) return; // Nothing to migrate.
-
-    ConflictResolution resolution = ConflictResolution.merge;
-
-    if (!skipConflictCheck) {
-      // Treat remote-check failures as "possibly has data" so the user still
-      // gets a chance to resolve a conflict instead of silently merging.
-      bool serverHasData;
-      try {
-        serverHasData = await ref.read(authServiceProvider).serverHasTodos();
-      } catch (_) {
-        serverHasData = true;
-      }
-      if (serverHasData && onConflict != null) {
-        resolution = await onConflict();
-      }
-    }
-
-    switch (resolution) {
-      case ConflictResolution.keepLocal:
-        await migrationService.migrate(fromUserId: 'local', toUserId: toUserId);
-      case ConflictResolution.keepServer:
-        await migrationService.deleteLocalData('local');
-      case ConflictResolution.merge:
-        await migrationService.migrate(fromUserId: 'local', toUserId: toUserId);
+  /// Where a signed-in device belongs: the app, or onboarding.
+  ///
+  /// Read from this device's own store, with **no network** — a device that has
+  /// never enrolled holds no member credential to ask with, and the answer has
+  /// to be the same offline.
+  ///
+  /// **Fails open to [SessionGate.ready].** A store that cannot be read is a bug
+  /// to fix, not a reason to lock somebody out of an app that works offline; the
+  /// worst case is a device that is not syncing and does not say so on this
+  /// surface, which the drawer indicator still reports honestly.
+  Future<SessionGate> _enrolmentGate() async {
+    try {
+      final stack = await ref.read(syncStackProvider.future);
+      return (await stack.readEnrolmentStatus()).state ==
+              EnrolmentState.enrolled
+          ? SessionGate.ready
+          : SessionGate.needsEnrolment;
+    } catch (_) {
+      return SessionGate.ready;
     }
   }
 }

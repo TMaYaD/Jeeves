@@ -462,9 +462,10 @@ EXISTS (
     await attachedDatabase.capturing(() async {
       await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
         // Store UTC so Drift's storeDateTimeAsText path emits a standard
-        // ISO-8601 string (no leading-space offset).  Otherwise PowerSync
-        // uploads "...000 +05:30" which asyncpg's TIMESTAMPTZ encoder
-        // rejects, poisoning the CRUD queue.
+        // ISO-8601 string (no leading-space offset). An offset-bearing spelling
+        // like "...000 +05:30" is not what the op log's instant encoding
+        // accepts, so a local-time row would author an op nothing can read
+        // back (`sync/collection_codecs.dart`).
         dueDate: Value(newDueDate.toUtc()),
         lastClarifiedAt: Value(ts),
         updatedAt: Value(ts),
@@ -561,9 +562,9 @@ EXISTS (
     final normalized = text.trim();
     final logChanged = await attachedDatabase.capturing(() => transaction(
         () => _applySetCurrentActionText(todoId, normalized, ts)));
-    // Both `todos` and `actions` are PowerSync views in production, so the
-    // writes report changes()==0; notify Drift explicitly so watchers refresh
-    // without relying solely on the async bridge (#342, ADR-0010).
+    // The GTD lists read across `todos` and `actions`, so a watcher naming one
+    // must hear about a write to the other; notify both explicitly rather than
+    // relying on Drift's per-table invalidation (#342, ADR-0010).
     attachedDatabase.notifyTodosViewWrite();
     attachedDatabase.notifyActionsViewWrite();
     // A blank text supersedes the current Action, closing its open TimeLog
@@ -902,8 +903,8 @@ AND (
           'updated_at': encodeInstant(ts),
         });
       });
-      // `todos` / `todo_tags` are PowerSync views in production, so the writes
-      // above report `changes() == 0` and Drift skips its own invalidation.
+      // Person-tag edits move `todo_tags`, which the Outcome surfaces read
+      // alongside `todos` — so both groups are notified (ADR-0010).
       attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
     });
   }
@@ -1052,11 +1053,11 @@ AND (
       }
     }));
 
-    // `todos` is a PowerSync view in production, so the INSTEAD OF trigger makes
-    // the write above report `changes() == 0` and Drift skips its own stream
-    // invalidation. Notify explicitly so the Inbox / Next Actions lists refresh
-    // without depending solely on the async update bridge (#342). Person-tag
-    // edits also touch the `todo_tags` view, so refresh those watchers too.
+    // Notify explicitly so the Inbox / Next Actions lists refresh even when the
+    // write touched a table they do not name — and so they do not depend solely
+    // on the async update bridge, which was observed silent on the first cold
+    // start of a new planning day (#342). Person-tag edits also touch
+    // `todo_tags`, so refresh those watchers too.
     attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
     if (touchesAction || actionTerminated) {
       attachedDatabase.notifyActionsViewWrite();
@@ -1222,8 +1223,8 @@ AND (
     // Normalise to UTC once and reuse for every timestamp column: a non-UTC
     // injected [now] must not land createdAt/updatedAt in local time while
     // lastClarifiedAt is UTC. UTC also keeps Drift's storeDateTimeAsText path
-    // emitting standard ISO-8601 strings PowerSync can upload (see
-    // rescheduleTask for the offset-string rationale).
+    // emitting the standard ISO-8601 spelling the op log's instant encoding
+    // accepts (see rescheduleTask for the offset-string rationale).
     final ts = (now ?? DateTime.now()).toUtc();
     await attachedDatabase.capturing(() async {
       await into(todos).insert(TodosCompanion(
@@ -1270,11 +1271,12 @@ AND (
   /// provenance, only the just-carved Outcome is removed. Returns 1 if a row
   /// existed and was deleted, 0 if [id] was already gone.
   ///
-  /// The affected-row count is derived from a pre-delete existence check, not
-  /// from the delete's return value: in production `todos` is a PowerSync view
-  /// whose INSTEAD OF trigger makes every write report `changes() == 0`, so
-  /// `delete(...).go()` can't distinguish "deleted one row" from "matched
-  /// nothing". Both run in one transaction so the count can't race the delete.
+  /// The affected-row count is derived from a pre-delete existence check rather
+  /// than the delete's return value. Over the Drift-owned store `changes()`
+  /// would in fact answer, but the check is also what tells the cascade what to
+  /// enumerate on the op log, so deriving the count from it keeps one read
+  /// instead of two answers that could disagree. Both run in one transaction so
+  /// the count can't race the delete.
   /// The cascade set this delete enumerates on the op log, which is **wider
   /// than the local delete above**. The shipped path removes only the `actions`
   /// rows and the todo, leaving `todo_tags`, `capture_outcomes` and
@@ -1327,9 +1329,9 @@ AND (
               .getSingleOrNull() !=
           null;
       await _captureDeleteOutcomeCascade(id);
-      // Cascade the Outcome's Action rows explicitly (ADR-0001 story 2): the
-      // local PowerSync `actions` view enforces no FK cascade, so carve-undo
-      // must remove them itself to leave no orphans — mirroring the
+      // Cascade the Outcome's Action rows explicitly (ADR-0001 story 2): the op
+      // log has no cascade of its own, so carve-undo must enumerate them to
+      // leave no orphans on a peer that reduces this delete — mirroring the
       // `capture_outcomes` cascade convention. Deleted before the Outcome so
       // the delete never trips FK enforcement on the real-table test path. The
       // queued `DELETE /actions/{id}` uploads may 404 if the server's

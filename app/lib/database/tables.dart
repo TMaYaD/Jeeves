@@ -1,22 +1,20 @@
-/// Drift table declarations for the local GTD database.
+/// Drift table declarations for the domain read model.
 ///
-/// These mirror the backend PostgreSQL schema so PowerSync can replicate
-/// rows bidirectionally without column-name mismatches.
+/// Drift owns this schema outright — see `gtd_database.dart`. Which of these
+/// tables the op-log spine carries is declared in `sync/collection_codecs.dart`,
+/// the one registry that decides what travels on the wire; there is no marker on
+/// the table classes, because a build-time marker and a runtime codec map are two
+/// answers to one question.
 library;
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
-
-/// Marks a Drift table as replicated via PowerSync.
-/// The powersync_schema_builder reads this marker to decide which tables
-/// to include in the generated powersync_schema.g.dart.
-mixin Synced on Table {}
+import '../utils/uuid.dart';
 
 // ---------------------------------------------------------------------------
 // todos
 // ---------------------------------------------------------------------------
 
-class Todos extends Table with Synced {
+class Todos extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get title => text().withLength(max: 500)();
   TextColumn get notes => text().nullable()();
@@ -85,12 +83,13 @@ class Todos extends Table with Synced {
 // time_logs
 // ---------------------------------------------------------------------------
 
-/// One row per focus stint on a task. PowerSync manages `id`.
+/// One row per focus stint on a task.
 ///
 /// Timestamps are ISO-8601 UTC text strings.
 /// `ended_at` is null while the stint is still running.
-class TimeLogs extends Table with Synced {
-  /// PowerSync-managed primary key — no clientDefault.
+class TimeLogs extends Table {
+  /// Supplied by the writer — `TimeLogDao` mints it, so there is no
+  /// `clientDefault` to disagree with the id the authored op carries.
   TextColumn get id => text()();
   TextColumn get userId => text()();
   TextColumn get taskId => text().references(Todos, #id)();
@@ -131,7 +130,7 @@ class TimeLogs extends Table with Synced {
 /// One row per planning session. An open session (ended_at IS NULL) is the
 /// single source of truth for "what tasks are on today's plan" and
 /// "which task is currently focused."
-class FocusSessions extends Table with Synced {
+class FocusSessions extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get userId => text()();
   TextColumn get startedAt => text()();
@@ -150,8 +149,11 @@ class FocusSessions extends Table with Synced {
 // ---------------------------------------------------------------------------
 
 /// Junction table: which todos are part of a focus session, in what order.
-class FocusSessionTasks extends Table with Synced {
-  /// PowerSync sync row identifier — not the domain key.
+class FocusSessionTasks extends Table {
+  /// Sync row identifier — not the domain key, which is (focus_session_id,
+  /// task_id). The projector realigns it onto
+  /// `focusSessionTaskIdFor(sessionId, taskId)` so every device converges on one
+  /// row identity regardless of which authored the create (ADR-0025).
   TextColumn get id => text().unique().clientDefault(() => uuid.v4())();
   TextColumn get focusSessionId => text().references(FocusSessions, #id)();
   TextColumn get taskId => text().references(Todos, #id)();
@@ -167,9 +169,8 @@ class FocusSessionTasks extends Table with Synced {
   /// 'maybe' = defer; FocusSessionReviewNotifier writes intent='maybe' to todos.
   TextColumn get disposition => text().nullable()();
 
-  /// Denormalized from `focus_sessions.user_id` so PowerSync can filter
-  /// junction rows with a per-user parameter bucket (see Alembic 0025 and
-  /// sync-config.yaml).
+  /// Denormalized from `focus_sessions.user_id` so a junction row carries its
+  /// owner without a JOIN.
   TextColumn get userId => text()();
 
   @override
@@ -197,8 +198,8 @@ class FocusSessionTasks extends Table with Synced {
 /// stamp). Keeping this separate from `focus_session_tasks` preserves the
 /// load-bearing invariant "the Plan *is* the set of `focus_session_tasks`
 /// rows" — no Plan reader has to remember to filter a discriminator column.
-class FocusSessionDispositions extends Table with Synced {
-  /// PowerSync sync row identifier — not the domain key. Required (no random
+class FocusSessionDispositions extends Table {
+  /// Sync row identifier — not the domain key. Required (no random
   /// client default): callers must derive it deterministically via
   /// `focusSessionDispositionIdFor(sessionId, taskId)` (see focus_session_dao.dart)
   /// so re-recording the same pair collapses under INSERT OR REPLACE onto one
@@ -212,9 +213,8 @@ class FocusSessionDispositions extends Table with Synced {
   /// a row exists only once the user has dispositioned the off-Plan Outcome.
   TextColumn get disposition => text().nullable()();
 
-  /// Denormalized from `focus_sessions.user_id` so PowerSync can filter
-  /// junction rows with a per-user parameter bucket (see Alembic 0027 and
-  /// sync-config.yaml).
+  /// Denormalized from `focus_sessions.user_id` so a disposition row carries its
+  /// owner without a JOIN.
   TextColumn get userId => text()();
 
   @override
@@ -225,7 +225,7 @@ class FocusSessionDispositions extends Table with Synced {
 // tags
 // ---------------------------------------------------------------------------
 
-class Tags extends Table with Synced {
+class Tags extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get name => text().withLength(max: 100)();
   TextColumn get color => text().nullable()();
@@ -242,13 +242,12 @@ class Tags extends Table with Synced {
 
   /// Test-only tripwire against duplicate `(name, type)` rows.
   ///
-  /// Drift emits `UNIQUE (name, type)` in the test DB's `CREATE TABLE`, so any
-  /// regression that mints a second row with the same `(name, type)` fails
-  /// the suite loudly. In production `tags` is a PowerSync-managed view over
-  /// `ps_data__tags`; `uniqueKeys` does not propagate to the backing table, so
-  /// production behaviour is unchanged — the invariant is enforced at the
-  /// application layer via `TagDao.findOrCreateTag` and a one-time
-  /// `dedupeTags` pass on startup.
+  /// Drift emits `UNIQUE (name, type)` in the `CREATE TABLE`, so any regression
+  /// that mints a second row with the same `(name, type)` fails loudly. The
+  /// constraint is local, and convergence is not: two devices can each create
+  /// "Home" offline and reduce to two rows, so `TagDao.findOrCreateTag` and the
+  /// one-time `dedupeTags` startup pass remain the application-layer half of the
+  /// invariant.
   @override
   List<Set<Column<Object>>> get uniqueKeys => [
         {name, type},
@@ -264,7 +263,7 @@ class Tags extends Table with Synced {
 /// One row per (user_id, key) pair. `value` is JSON-encoded; NULL is a
 /// tombstone. `updated_at` drives LWW arbitration when local and server rows
 /// conflict at sign-in (see MigrationService).
-class UserPreferences extends Table with Synced {
+class UserPreferences extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get userId => text()();
   TextColumn get key => text()();
@@ -281,65 +280,13 @@ class UserPreferences extends Table with Synced {
 }
 
 // ---------------------------------------------------------------------------
-// sync_dead_letters  (local-only diagnostics)
-// ---------------------------------------------------------------------------
-
-/// Dead Letter: a durable record of a CRUD-queue upload that failed with a
-/// non-retryable status (see `JeevesBackendConnector.classifyUploadError`).
-///
-/// Deliberately **not** `with Synced` — this is a plain local SQLite table,
-/// excluded from the PowerSync schema, never replicated. It is developer
-/// telemetry for root-cause diagnosis (which operation × table × status
-/// combinations fail in the wild), not a user-facing retry queue; the goal
-/// is for it to trend toward empty as root causes are fixed.
-class SyncDeadLetters extends Table {
-  /// Auto-incrementing insertion order — pruning tie-breaker. Pruning itself
-  /// orders by [createdAt] (last occurrence), so a repeatedly-refreshed
-  /// failure outlives newer one-offs regardless of its original insertion.
-  IntColumn get id => integer().autoIncrement()();
-
-  /// The synced table the failed entry targeted (e.g. 'todos').
-  /// Named explicitly: `tableName` collides with Drift's `Table.tableName`.
-  TextColumn get targetTable => text().named('table_name')();
-
-  /// The CRUD operation: PUT | PATCH | DELETE.
-  TextColumn get op => text()();
-
-  /// The id of the row the entry targeted.
-  TextColumn get rowId => text()();
-
-  /// JSON-encoded `opData` of the failed entry; null for deletes.
-  TextColumn get opData => text().nullable()();
-
-  /// HTTP status the backend returned.
-  IntColumn get statusCode => integer()();
-
-  /// Error response body, truncated by the connector before recording.
-  TextColumn get responseBody => text().nullable()();
-
-  /// When this failure was last recorded — refreshed when the same failure
-  /// repeats (see [uniqueKeys]).
-  DateTimeColumn get createdAt => dateTime().clientDefault(DateTime.now)();
-
-  /// One row per distinct failure: a batch retried after a partial failure
-  /// re-uploads entries that were already dead-lettered, and the repeat
-  /// occurrence must refresh the existing row, not accumulate duplicates.
-  /// `GtdDatabase.recordSyncDeadLetter` upserts against this key.
-  @override
-  List<Set<Column<Object>>> get uniqueKeys => [
-        {targetTable, rowId, op, statusCode},
-      ];
-}
-
-// ---------------------------------------------------------------------------
 // todo_tags  (junction)
 // ---------------------------------------------------------------------------
 
-class TodoTags extends Table with Synced {
-  /// PowerSync exposes `todo_tags` as a view over `ps_data__todo_tags` whose
-  /// INSTEAD OF INSERT trigger writes `NEW.id` into the backing table — so
-  /// an explicit `id` is required even though the *logical* identity of a
-  /// junction row is (todo_id, tag_id).  Callers should derive it
+class TodoTags extends Table {
+  /// A sync row identifier, carried even though the *logical* identity of a
+  /// junction row is (todo_id, tag_id): the op log names an entity by one id, so
+  /// the pair has to reduce to a single derived one.  Callers should derive it
   /// deterministically via `todoTagIdFor(todoId, tagId)` (see tag_dao.dart)
   /// so re-assigning the same tag collapses under INSERT OR REPLACE instead
   /// of accumulating duplicate rows.
@@ -348,8 +295,8 @@ class TodoTags extends Table with Synced {
   TextColumn get todoId => text().references(Todos, #id)();
   TextColumn get tagId => text().references(Tags, #id)();
 
-  /// Denormalized from `todos.user_id` so PowerSync can filter junction rows
-  /// with a per-user parameter bucket (see Alembic 0008 and sync-config.yaml).
+  /// Denormalized from `todos.user_id` so a junction row carries its owner
+  /// without a JOIN.
   TextColumn get userId => text()();
 
   @override
@@ -372,7 +319,7 @@ class TodoTags extends Table with Synced {
 /// provenance for the Outcomes it clarified into. `last_clarified_at` on the
 /// Outcome is a distinct concept (staleness of the *current* clarification)
 /// and lives on `todos`, not here.
-class Captures extends Table with Synced {
+class Captures extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get title => text().withLength(max: 500)();
   TextColumn get notes => text().nullable()();
@@ -401,8 +348,8 @@ class Captures extends Table with Synced {
 /// (`todos`). The join *is* the provenance — "this Outcome was captured from
 /// these N Captures" — there is no separate audit table (ADR-0006). Merge
 /// links, never consumes: a Capture keeps its rows here after it is stamped.
-class CaptureOutcomes extends Table with Synced {
-  /// PowerSync sync row identifier — not the domain key. Derive it
+class CaptureOutcomes extends Table {
+  /// Sync row identifier — not the domain key. Derive it
   /// deterministically via `captureOutcomeIdFor(captureId, outcomeId)`
   /// (see capture_dao.dart) so a repeat link is a stable no-op under INSERT OR
   /// IGNORE (preserving the original `created_at`) instead of accumulating
@@ -417,9 +364,8 @@ class CaptureOutcomes extends Table with Synced {
   /// into) this Outcome.
   DateTimeColumn get createdAt => dateTime()();
 
-  /// Denormalized from the parent's `user_id` so PowerSync can filter junction
-  /// rows with a per-user parameter bucket (see Alembic 0026 and
-  /// sync-config.yaml).
+  /// Denormalized from the parent's `user_id` so a junction row carries its
+  /// owner without a JOIN.
   TextColumn get userId => text()();
 
   @override
@@ -435,8 +381,8 @@ class CaptureOutcomes extends Table with Synced {
 /// only as removable chips on the Outcome draft at clarify time and as prefill
 /// when merging into an existing Outcome (issue #184). Mirrors `todo_tags`
 /// conventions.
-class CaptureTags extends Table with Synced {
-  /// PowerSync sync row identifier — derive it deterministically via
+class CaptureTags extends Table {
+  /// Sync row identifier — derive it deterministically via
   /// `captureTagIdFor(captureId, tagId)` (see capture_dao.dart).
   TextColumn get id => text().unique()();
   TextColumn get captureId =>
@@ -473,7 +419,15 @@ class CaptureTags extends Table with Synced {
 /// from the Outcome id (see `backfillActionIdFor`, ADR-0019) so no version
 /// skew can duplicate a row. The `todos.next_action_text` cursor it read from
 /// no longer exists (ADR-0024).
-class Actions extends Table with Synced {
+///
+/// The `(outcome_id, role)` index is declared rather than left to the query
+/// planner: the "has a current Action" `EXISTS` predicate behind the Next List
+/// and the re-clarification queue (ADR-0001 story 3) runs once per candidate
+/// Outcome on every re-emission, and without the index that is a full scan of
+/// `actions` per candidate. It used to be installed by the storage engine on the
+/// engine's own backing table; a Drift-owned store has to declare it.
+@TableIndex(name: 'idx_actions_outcome_role', columns: {#outcomeId, #role})
+class Actions extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get outcomeId =>
       text().references(Todos, #id, onDelete: KeyAction.cascade)();

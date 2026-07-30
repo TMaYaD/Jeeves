@@ -3,7 +3,7 @@
 library;
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import '../../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../../sync/collection_codecs.dart';
@@ -18,9 +18,8 @@ part 'focus_session_dao.g.dart';
 /// Deterministic `focus_session_dispositions.id` for the (sessionId, taskId)
 /// pair.
 ///
-/// PowerSync exposes `focus_session_dispositions` as a view whose INSTEAD OF
-/// INSERT trigger writes `NEW.id` into the backing table, so the row needs an
-/// explicit id; deriving it from the pair makes re-recording a disposition
+/// The op log names an entity by one id, so the row needs an
+/// explicit one; deriving it from the pair makes re-recording a disposition
 /// collapse under INSERT OR REPLACE onto the same row instead of accumulating
 /// duplicates (todo_tags / capture_outcomes precedent).
 String focusSessionDispositionIdFor(String sessionId, String taskId) => uuid.v5(
@@ -47,9 +46,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// there is no implicit close of a still-open prior session (issue #460,
   /// ADR-0020). If a session is already open, this throws [StateError] — the
   /// caller must have the user close it via Evening Shutdown first. This throw
-  /// is the **sole** enforcement of the single-open-session invariant: the
-  /// production tables are PowerSync views, which cannot carry a partial unique
-  /// constraint on `ended_at IS NULL`, so no schema-level guard is possible.
+  /// is the **sole** enforcement of the single-open-session invariant: reduced
+  /// state converges without consulting a local constraint, so two devices can
+  /// each open a session offline and a schema-level guard would only fail the
+  /// projection rather than prevent the conflict.
   ///
   /// Returns the new session's id. Runs atomically in a transaction.
   ///
@@ -68,9 +68,9 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // dispositions. Refuse to open a second session; the UI gates on this by
       // routing the user through Evening Shutdown first.
       //
-      // Fetch at most one open row rather than `getSingleOrNull()`: because the
-      // production tables are PowerSync views with no partial unique constraint
-      // (see above), a sync conflict can leave more than one session open, and
+      // Fetch at most one open row rather than `getSingleOrNull()`: no
+      // constraint prevents it (see above), so a sync conflict can leave more
+      // than one session open, and
       // `getSingleOrNull()` would then throw Drift's opaque "Too many elements"
       // error instead of the ADR-specific guidance below.
       final openRows = await (select(focusSessions)

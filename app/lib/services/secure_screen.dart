@@ -1,11 +1,10 @@
 /// Keeps a screen out of screenshots, the recents thumbnail and screen mirrors.
 ///
-/// **Permanent, and deliberately not marked as cutover tooling** even though the
-/// first caller is the throwaway enrolment-ceremony surface (#553 Phase 2). Any
-/// surface that shows a secret exactly once needs this, and the real onboarding
-/// flow that replaces the ceremony screen must keep calling it — a security
-/// control that gets deleted along with the scaffolding around it is how the
-/// scaffolding's protection quietly stops applying.
+/// Any surface that shows a secret exactly once needs this. Today that is the
+/// enrolment ceremony, whose recovery passphrase is the account's encryption
+/// ceiling; the control is deliberately general, because a security measure that
+/// belongs to one screen is one that quietly stops applying when the screen
+/// changes.
 ///
 /// Android's `FLAG_SECURE` is the whole mechanism: the window is excluded from
 /// `screencap`, from non-secure displays, and — the one that matters for a

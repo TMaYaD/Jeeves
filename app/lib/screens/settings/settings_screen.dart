@@ -2,12 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-// Cutover tooling (#553 Phase 1) — removed by #556.
-import '../../cutover/converge_verify/converge_verify_screen.dart';
-// Cutover tooling (#553 Phase 2) — removed by #556.
-import '../../cutover/enrolment_ceremony/enrolment_ceremony_screen.dart';
-// Cutover tooling (#553 Phase 2) — removed by #556.
-import '../../cutover/reseed/reseed_screen.dart';
+import '../../auth/session_gate.dart';
 import '../../models/clarify_mode.dart';
 import '../../models/focus_session_planning_settings.dart';
 import '../../providers/auth_provider.dart';
@@ -18,30 +13,37 @@ import '../../providers/focus_settings_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
-import '../../providers/sync_status_provider.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/jeeves_logo.dart';
 
+/// Settings.
+///
+/// The SYNC section has exactly **two** states — an offer to sign in, or a way
+/// to sign out — and says nothing about how sync is going. Sync *state* is the
+/// drawer indicator's job (`app_shell.dart`, derived from the op-log spine's
+/// `SyncHealth`): a second presentation here was where the untruth lived, a
+/// "Sync active" subtitle that a device syncing nothing still showed.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final syncAsync = ref.watch(syncStatusProvider);
-    final syncStatus = syncAsync.hasError
-        ? SyncStatus.error
-        : syncAsync.asData?.value;
-
     return Scaffold(
       appBar: AppTitleBar(
         title: 'Settings',
         pinnedAction: captureAction(context),
       ),
       backgroundColor: Colors.white,
-      body: ValueListenableBuilder<bool>(
-        valueListenable: authStateNotifier,
-        builder: (context, isAuthenticated, _) => ListView(
+      body: ValueListenableBuilder<SessionGate>(
+        valueListenable: sessionGateNotifier,
+        builder: (context, gate, _) {
+          // `checking` shows the signed-out offer: it is the honest thing to say
+          // while restore is in flight, and the tile is an offer rather than a
+          // claim about the account.
+          final isAuthenticated = gate == SessionGate.needsEnrolment ||
+              gate == SessionGate.ready;
+          return ListView(
         children: [
           _sectionHeader('SYNC'),
           if (!isAuthenticated) ...[
@@ -64,20 +66,7 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ] else ...[
             ListTile(
-              leading: _syncIcon(syncStatus),
-              title: const Text(
-                'Sync enabled',
-                style: TextStyle(
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF374151),
-                ),
-              ),
-              subtitle: Text(
-                _syncLabel(syncStatus),
-                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-              ),
-            ),
-            ListTile(
+              key: const Key('sign_out_tile'),
               leading: const Icon(Icons.logout, color: Color(0xFF9CA3AF)),
               title: const Text(
                 'Sign out',
@@ -125,55 +114,6 @@ class SettingsScreen extends ConsumerWidget {
           _sectionHeader('EVENING SHUTDOWN'),
           _EveningShutdownSettings(),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
-          // Cutover tooling (#553 Phase 1) — removed by #556 along with the
-          // screen and its route.
-          _sectionHeader('CUTOVER TOOLING'),
-          ListTile(
-            key: const Key('converge_verify_tile'),
-            leading: const Icon(Icons.rule, color: Color(0xFF9CA3AF)),
-            title: const Text(
-              'Converge-verify',
-              style: TextStyle(
-                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-            ),
-            subtitle: const Text(
-              'Compare this device\'s store with the server mirror, table by '
-              'table. Read-only.',
-              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-            ),
-            onTap: () => context.push(ConvergeVerifyScreen.routePath),
-          ),
-          ListTile(
-            key: const Key('enrolment_ceremony_tile'),
-            leading: const Icon(Icons.vpn_key, color: Color(0xFF9CA3AF)),
-            title: const Text(
-              'Enrolment ceremony',
-              style: TextStyle(
-                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-            ),
-            subtitle: const Text(
-              'Found the Workspace from this phone: passphrase → Root → escrow '
-              '→ genesis.',
-              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-            ),
-            onTap: () => context.push(EnrolmentCeremonyScreen.routePath),
-          ),
-          ListTile(
-            key: const Key('reseed_tile'),
-            leading: const Icon(Icons.upload_file, color: Color(0xFF9CA3AF)),
-            title: const Text(
-              'Reseed',
-              style: TextStyle(
-                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-            ),
-            subtitle: const Text(
-              'Author this store onto the op-log spine, then prove the spine '
-              'reduces back to it. Safe to run again.',
-              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-            ),
-            onTap: () => context.push(ReseedScreen.routePath),
-          ),
-          const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('ABOUT'),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
@@ -213,7 +153,8 @@ class SettingsScreen extends ConsumerWidget {
                 showLicensePage(context: context, applicationName: 'Jeeves'),
           ),
         ],
-      ),
+      );
+        },
       ),
     );
   }
@@ -231,37 +172,6 @@ class SettingsScreen extends ConsumerWidget {
         ),
       ),
     );
-  }
-
-  Widget _syncIcon(SyncStatus? status) {
-    switch (status) {
-      case SyncStatus.synced:
-        return const Icon(Icons.cloud_done, color: Color(0xFF16A34A));
-      case SyncStatus.syncing:
-        return const Icon(Icons.cloud_sync, color: Color(0xFF2563EB));
-      case SyncStatus.connecting:
-        return const Icon(Icons.cloud_upload_outlined,
-            color: Color(0xFF9CA3AF));
-      case SyncStatus.error:
-        return const Icon(Icons.cloud_off, color: Color(0xFFDC2626));
-      default:
-        return const Icon(Icons.cloud_outlined, color: Color(0xFF9CA3AF));
-    }
-  }
-
-  String _syncLabel(SyncStatus? status) {
-    switch (status) {
-      case SyncStatus.synced:
-        return 'All changes saved';
-      case SyncStatus.syncing:
-        return 'Syncing\u2026';
-      case SyncStatus.connecting:
-        return 'Connecting\u2026';
-      case SyncStatus.error:
-        return 'Sync error';
-      default:
-        return 'Sync active';
-    }
   }
 
   Future<void> _confirmLogout(BuildContext context, WidgetRef ref) async {

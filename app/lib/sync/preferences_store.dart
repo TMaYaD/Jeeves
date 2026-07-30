@@ -1,10 +1,7 @@
 /// `user_preferences` on the op-log spine.
 ///
 /// Same semantics as today's `UserPreferencesDao` — JSON-string values, delete
-/// hides the key — reached by authoring ops instead of writing rows. This is a
-/// parallel implementation, not a hook into the live DAO: the production app
-/// stays on PowerSync until the cutover in #553, and teeing writes into both
-/// would be exactly the dual-write branching the Implementation stance forbids.
+/// hides the key — reached by authoring ops instead of writing rows.
 ///
 /// Two differences from the DAO, both deliberate:
 ///

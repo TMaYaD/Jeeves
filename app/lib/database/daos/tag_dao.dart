@@ -2,7 +2,7 @@
 library;
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import '../../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../../sync/collection_codecs.dart';
@@ -13,13 +13,12 @@ part 'tag_dao.g.dart';
 
 /// Deterministic `todo_tags.id` for the (todoId, tagId) pair.
 ///
-/// PowerSync's view INSERT trigger inserts `NEW.id` into the backing
-/// `ps_data__todo_tags` table, so the junction row needs an explicit id.
-/// Deriving it as a UUID v5 of the pair makes re-assignment of the same
-/// tag produce the same id, so `INSERT OR REPLACE` collapses to a no-op
-/// rather than inserting a duplicate row each time the user taps the tag.
-/// The backend's `create_todo_tag` handler also dedupes by id, so replays
-/// through the PowerSync upload queue stay idempotent.
+/// The op log names an entity by one id, so the junction row needs an
+/// explicit one. Deriving it as a UUID v5 of the pair makes re-assignment of the
+/// same tag produce the same id, so `INSERT OR REPLACE` collapses to a no-op
+/// rather than inserting a duplicate row each time the user taps the tag — and
+/// two devices assigning the same tag offline reduce to one junction entity
+/// rather than forking (`sync/ids.dart`).
 String todoTagIdFor(String todoId, String tagId) =>
     uuid.v5(Namespace.url.value, 'jeeves://todo_tag/$todoId/$tagId');
 
@@ -147,9 +146,9 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Insert or replace a tag row (upsert by primary key).
   ///
-  /// Uses INSERT OR REPLACE instead of INSERT ... ON CONFLICT DO UPDATE because
-  /// todos/tags/todo_tags are PowerSync SQLite views — SQLite forbids UPSERT
-  /// syntax on views even when INSTEAD OF triggers are present.
+  /// Uses INSERT OR REPLACE rather than INSERT ... ON CONFLICT DO UPDATE: the
+  /// fill-from-stored-row step below is what makes a partial companion safe, and
+  /// expressing it as an UPSERT would move that logic into SQL for no gain.
   ///
   /// When updating an existing row, any absent fields in [tag] are filled from
   /// the stored row before replacing, so partial companions never wipe columns
@@ -324,15 +323,15 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Associate a tag with a todo (idempotent).
   ///
-  /// [userId] is denormalized onto the junction row so PowerSync can sync it
-  /// in a per-user bucket (see sync-config.yaml `by_user_todo_tags`).  It
+  /// [userId] is denormalized onto the junction row so it carries its owner
+  /// without a JOIN.  It
   /// must match the parent todo's `user_id`; callers typically pass
   /// `ref.read(currentUserIdProvider)`.
   ///
   /// Uses INSERT OR REPLACE for the same reason as [upsertTag].  The `id`
   /// column is derived deterministically from (todoId, tagId) via
-  /// [todoTagIdFor] so repeated calls collapse on the PowerSync view's
-  /// backing table instead of accumulating rows.
+  /// [todoTagIdFor] so repeated calls collapse onto one row instead of
+  /// accumulating.
   Future<void> assignTag(String todoId, String tagId, String userId) {
     return attachedDatabase.capturing(() async {
       await into(todoTags).insert(
@@ -362,9 +361,9 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Collapse duplicate `(name, type)` tag rows into a single canonical row.
   ///
-  /// Operates on the `tags` view so PowerSync's `INSTEAD OF` triggers fire and
-  /// the deletes/updates flow into the upload queue, reaching the backend
-  /// instead of leaving cloud duplicates that resync on next startup.
+  /// Runs through the DAO rather than raw SQL so every write is captured as an
+  /// op: a dedupe that only fixed the local store would be undone by the next
+  /// pull, which still carries the peer's duplicate.
   ///
   /// Canonicalisation rule for each `(name, type)` group with > 1 row:
   /// the row with the most `todo_tags` references wins, with `MIN(id)` as the

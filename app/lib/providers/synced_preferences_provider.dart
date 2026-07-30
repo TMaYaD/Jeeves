@@ -1,5 +1,5 @@
 /// Riverpod provider for cross-device synced user preferences backed by the
-/// `user_preferences` Drift table (replicated via PowerSync).
+/// `user_preferences` Drift table (carried on the op log).
 ///
 /// All preferences are stored as JSON-encoded TEXT. Reads decode on the fly;
 /// writes JSON-encode before persisting. A NULL value is a tombstone — treated
@@ -107,7 +107,8 @@ class SyncedPreferencesNotifier
     if (!ref.mounted) return const SyncedPreferences({});
     final decoded = _decode(initial);
 
-    // Subscribe to future changes (including cross-device PowerSync updates).
+    // Subscribe to future changes, including another device's write reduced in
+    // by a pull.
     final sub = dao.watchAll(userId).listen((rows) {
       if (!ref.mounted) return;
       final tombstonedKeys = {

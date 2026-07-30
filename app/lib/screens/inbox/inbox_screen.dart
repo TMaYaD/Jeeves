@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/database_provider.dart';
 import '../../providers/inbox_provider.dart';
-import '../../providers/powersync_provider.dart';
 import '../../widgets/active_filter_bar.dart';
 import 'widgets/inbox_list.dart';
 import 'widgets/quick_add_bar.dart';
@@ -58,14 +58,13 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
             Expanded(
               child: InboxList(
                 onRefresh: () async {
-                  // PowerSync syncs continuously while connected — pull-to-
-                  // refresh is purely a UX affordance.  Awaiting the
-                  // provider's future ensures the DB has been opened at
-                  // least once before we return control to the gesture.
-                  // Failures (e.g. PowerSync init error) are surfaced via a
+                  // The spine pulls on its own signal — pull-to-refresh is
+                  // purely a UX affordance. Awaiting the store's open ensures
+                  // the list is reading a database that exists before control
+                  // returns to the gesture; a failure to open is surfaced via a
                   // snackbar so the gesture resolves cleanly.
                   try {
-                    await ref.read(powerSyncInstanceProvider.future);
+                    await ref.read(domainStoreProvider.future);
                   } catch (_) {
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(

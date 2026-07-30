@@ -1,7 +1,5 @@
-/// The reseed transform as a pure function: field encoding, id derivation, and
-/// ADR-0025's auto-resolve.
-///
-/// **Cutover tooling — removed by #556.**
+/// The initial-upload transform as a pure function: field encoding, id
+/// derivation, and ADR-0025's auto-resolve.
 library;
 
 import 'package:flutter_test/flutter_test.dart';

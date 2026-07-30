@@ -1,10 +1,10 @@
 /// What this device's own store says about its enrolment, and how to read it.
 ///
-/// **Permanent sync-layer machinery.** Two callers derive the same three states
+/// **Permanent sync-layer machinery.** Three callers derive the same three states
 /// from the same evidence: `sync_lifecycle.dart` decides whether to attach a
-/// transport and author anything, and the cutover-scoped enrolment-ceremony
-/// surface decides which buttons to offer. Deriving it twice is how the two
-/// would drift.
+/// transport and author anything, the router's session gate decides whether the
+/// device belongs in onboarding, and the enrolment surface decides which controls
+/// to offer. Deriving it more than once is how they would drift.
 ///
 /// Read from the store alone — **no network**. The answer must be the same
 /// offline, and a relaunched enrolled device holds no member credential to ask

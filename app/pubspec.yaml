@@ -22,20 +22,14 @@ dependencies:
   riverpod_annotation: ^4.0.2
   meta: ^1.17.0
 
-  # Builder interface used by the in-tree powersync_schema_builder (lib/tool/builders/).
-  # Must be in dependencies (not dev) because the builder file lives under lib/.
-  build: ^4.0.6
-
   # Local storage (offline-first)
   drift: ^2.34.0
-  # Bridges Drift to the sqlite_async connection that PowerSync owns, so one
-  # shared SQLite file backs both.  Without this, Drift and PowerSync would
-  # each open their own connection and their watchers would never see each
-  # other's writes.
+  # Bridges Drift to a sqlite_async connection, which is what the domain store
+  # (`database/domain_store_io.dart`) is opened over: one shared connection with
+  # a proper write lock, and an update stream that names the tables a write
+  # touched so live queries refresh.
   drift_sqlite_async: ^0.3.1
-  # sqlite_async itself is a transitive dependency of both powersync and
-  # drift_sqlite_async, but imported directly in gtd_database.dart for the
-  # `SqliteConnection` type in the production constructor signature.
+  # Imported directly for `SqliteDatabase` in the domain store's open path.
   sqlite_async: ^0.14.0
   sqlite3_flutter_libs: ^0.6.0+eol
   path_provider: ^2.1.6
@@ -45,12 +39,8 @@ dependencies:
   dio: ^5.10.0
   retrofit: ^4.9.2
   # The op-log sync stack's realtime signal socket (dio does not speak
-  # WebSocket). Already in the graph transitively via PowerSync, so making it
-  # direct adds no resolution risk — it only makes the import honest.
+  # WebSocket).
   web_socket_channel: ^3.0.3
-
-  # Sync (PowerSync — bidirectional offline-first sync)
-  powersync: ^2.3.0
 
   # Notifications
   flutter_local_notifications: ^22.0.1

@@ -1,10 +1,9 @@
 /// Drives the enrolment ceremony from the phone, and says what state it is in.
 ///
-/// **Cutover tooling — removed by #556**, together with the settings entry and
-/// the route that reach it. The *ceremony* is permanent product machinery
-/// (`sync/enrolment.dart`, `sync/sync_stack.dart`); only this way of starting it
-/// by hand is throwaway. When the real onboarding flow lands it calls the same
-/// `EnrolmentService` over the same `SyncStack`.
+/// The ceremony is the app's onboarding step: signing in or up leads here, and a
+/// device leaves it enrolled and syncing. The machinery it drives lives in
+/// `sync/enrolment.dart` and `sync/sync_stack.dart`; this is the surface's own
+/// seam onto it.
 ///
 /// The screen depends on [EnrolmentCeremonyRunner] and never on the stack, so a
 /// widget test scripts states and failures without a store, while the production
@@ -14,6 +13,7 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../auth/session_gate.dart';
 import '../../providers/sync_lifecycle_provider.dart';
 import '../../providers/sync_stack_provider.dart';
 import '../../sync/enrolment.dart';
@@ -124,6 +124,18 @@ abstract class EnrolmentCeremonyRunner {
   /// relaunched device holds no member credential to ask with anyway.
   Future<EnrolmentCeremonyStatus> status();
 
+  /// Whether this account's recovery-escrow slot is already occupied.
+  ///
+  /// The one question [status] cannot answer, and the one the screen needs to
+  /// decide which door to open: a store that says `notEnrolled` looks identical
+  /// on the first device of a new account and on the second device of an
+  /// existing one. Founding is only possible in the first case — in the second
+  /// the escrow PUT could only ever be refused — so the presentation is chosen
+  /// from this, not guessed from the store.
+  ///
+  /// Over the *User* credential, so a device with no member credential can ask.
+  Future<bool> escrowExists();
+
   /// A fresh diceware passphrase, drawn under the *service's* own policy so the
   /// phrase offered and the phrase accepted cannot drift apart. Async for that
   /// reason only.
@@ -156,16 +168,22 @@ class StackEnrolmentCeremonyRunner implements EnrolmentCeremonyRunner {
 
   /// Start syncing, once a ceremony has produced an enrolled device.
   ///
-  /// **This call site is throwaway; what it calls is not.** The screen above it
-  /// goes with #556, and the onboarding flow that replaces it drives the same
-  /// `SyncLifecycle.activate` over the same `SyncStack` — which is also what the
-  /// app calls at every launch, so a missed call here costs one relaunch rather
-  /// than a device that never syncs.
+  /// It drives the same `SyncLifecycle.activate` over the same `SyncStack` that
+  /// the app calls at every launch, so a missed call here costs one relaunch
+  /// rather than a device that never syncs.
   final Future<void> Function()? _onEnrolled;
 
   @override
   Future<EnrolmentCeremonyStatus> status() async =>
       (await _stack()).readEnrolmentStatus();
+
+  @override
+  Future<bool> escrowExists() async {
+    final stack = await _stack();
+    return await stack.userTransport
+            .fetchRecoveryEscrow(stack.defaultClient.workspaceId) !=
+        null;
+  }
 
   @override
   Future<String> generatePassphrase() async =>
@@ -207,6 +225,11 @@ final enrolmentCeremonyRunnerProvider = Provider<EnrolmentCeremonyRunner>(
   (ref) => StackEnrolmentCeremonyRunner(
     () => ref.read(syncStackProvider.future),
     onEnrolled: () async {
+      // Onboarding is finished, so the router stops pinning the device here.
+      // Flipped before the activation because activation is a network round trip
+      // and possibly a walk of the whole store: the user should not be held on
+      // the ceremony screen waiting for their first upload.
+      sessionGateNotifier.value = SessionGate.ready;
       final lifecycle = await ref.read(syncLifecycleProvider.future);
       if (lifecycle == null) return;
       await activateAndLog(lifecycle);

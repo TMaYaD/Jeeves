@@ -28,7 +28,7 @@ library;
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import 'package:jeeves/utils/uuid.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import '../test_helpers.dart';

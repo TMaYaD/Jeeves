@@ -54,11 +54,10 @@
 /// the one spelling for a value a column kind refused, so a report names the
 /// offending value the same way wherever it is produced.
 ///
-/// The grammar is frozen — `spec/converge_verify/canonical_row_vectors.json`
-/// carries it, and the converge-verify check's Python twin reads the same
-/// vectors — so `test/cutover/canonical_row_test.dart` asserts
-/// [timestampPattern] and [parseTimestampUtcMs] against that file. Widening it
-/// is a spec change, not a local one.
+/// The grammar is frozen: `spec/converge_verify/canonical_row_vectors.json`
+/// carries it and the backend's serialiser is pinned to the same vectors, so a
+/// store written under one spelling is still read under another. Widening it is a
+/// spec change, not a local one.
 library;
 
 /// The twelve collections this slice carries, named after their tables.

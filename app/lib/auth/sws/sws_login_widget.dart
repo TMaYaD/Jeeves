@@ -26,15 +26,11 @@ class _SwsLoginWidgetState extends ConsumerState<SwsLoginWidget> {
       _errorMessage = null;
     });
     try {
-      await ref
-          .read(authTokenProvider.notifier)
-          .login({}, onConflict: null);
+      await ref.read(authTokenProvider.notifier).login({});
       if (!mounted) return;
-      if (context.canPop()) {
-        context.pop();
-      } else {
-        context.go('/inbox');
-      }
+      // The router's session gate routes from here — an un-enrolled device
+      // lands in onboarding rather than back on the caller's screen.
+      context.go('/inbox');
     } catch (e) {
       if (!mounted) return;
       setState(() {

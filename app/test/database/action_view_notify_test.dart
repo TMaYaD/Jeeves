@@ -1,25 +1,21 @@
-/// ADR-0010 view-notify regression for `actions` (issue #472), sibling of
+/// ADR-0010 notify regression for `actions` (issue #472), sibling of
 /// `clarify_routing_view_notify_test.dart`.
 ///
-/// In production `actions` is a PowerSync **view** with INSTEAD OF triggers, so
-/// a Drift write against it reports `changes() == 0` and Drift's own stream
-/// invalidation (gated on `rows > 0`) never fires — the only thing that
-/// refreshes an `actions`-view watcher is the explicit
-/// `GtdDatabase.notifyActionsViewWrite` an [ActionDao] write issues after
-/// commit. This recreates that exact topology on a real sqlite_async database
-/// and proves (a) an ActionDao primitive refreshes an `actions` watcher, and
-/// (b) the `TodoDao` one-field surfaces refresh both the `todos`- and
-/// `actions`-view watchers.
+/// Over the **production topology**: a `jeeves_domain.sqlite` on disk, opened
+/// through `sqlite_async`, with every synced name a real table Drift created
+/// (#595). This file used to rewrite those tables into PowerSync-style views with
+/// INSTEAD OF triggers, because that was what production served and a Drift write
+/// against a view reports `changes() == 0`. The store is Drift's own now, so the
+/// emulation would be testing a topology nothing runs.
 ///
-/// **Why the `todos` watchers assert on emission counts, not values.** These
-/// tests used to read `todos.next_action_text` and treat a changed value as
-/// proof the watcher refreshed. The cursor is gone (ADR-0022, ADR-0024) and
-/// several of these transactions write nothing to `todos` at all — but the `todos`
-/// notify must still fire, because two list watchers name only
-/// `{todoTags, tags}` in `readsFrom` and the async bridge is briefly silent on
-/// cold start. A value-based assertion cannot express that any more; counting
-/// emissions can, and it is the stronger claim: it fails if the notify is
-/// dropped as "redundant" even though the value would not have moved anyway.
+/// What is still under test is the part real tables do not give for free: **a
+/// write to one table refreshing a watcher on another.** Drift will not
+/// invalidate a `todos` watcher because `actions` changed, and several of these
+/// transactions write nothing to `todos` at all — but the `todos` notify must
+/// still fire, because two GTD list watchers name only `{todoTags, tags}` in
+/// `readsFrom`. That is why the `todos` watchers assert on emission *counts*
+/// rather than values: counting fails if the notify is dropped as "redundant"
+/// even though no value would have moved.
 @TestOn('!browser')
 library;
 
@@ -46,35 +42,6 @@ Future<void> _waitUntil(
   }
 }
 
-/// Rewrites [table] from a real table into a PowerSync-style view over a
-/// `<table>_data` backing table with INSTEAD OF triggers, mirroring what
-/// `powersync_replace_schema` installs in production.
-Future<void> _convertTableToView(SqliteDatabase raw, String table) async {
-  final info = await raw.getAll('PRAGMA table_info($table)');
-  final cols = info.map((r) => r['name'] as String).toList();
-  final colList = cols.join(', ');
-  final newValues = cols.map((c) => 'NEW.$c').join(', ');
-  final setClause =
-      cols.where((c) => c != 'id').map((c) => '$c = NEW.$c').join(', ');
-
-  await raw.writeTransaction((tx) async {
-    await tx.execute('ALTER TABLE $table RENAME TO ${table}_data');
-    await tx.execute('CREATE VIEW $table AS SELECT $colList FROM ${table}_data');
-    await tx.execute('''
-CREATE TRIGGER ${table}_insert INSTEAD OF INSERT ON $table BEGIN
-  INSERT INTO ${table}_data ($colList) VALUES ($newValues);
-END;''');
-    await tx.execute('''
-CREATE TRIGGER ${table}_update INSTEAD OF UPDATE ON $table BEGIN
-  UPDATE ${table}_data SET $setClause WHERE id = OLD.id;
-END;''');
-    await tx.execute('''
-CREATE TRIGGER ${table}_delete INSTEAD OF DELETE ON $table BEGIN
-  DELETE FROM ${table}_data WHERE id = OLD.id;
-END;''');
-  });
-}
-
 void main() {
   late Directory tempDir;
   late SqliteDatabase raw;
@@ -87,21 +54,9 @@ void main() {
     raw = SqliteDatabase(path: dbPath);
     await raw.initialize();
 
-    // Let Drift build the full schema as real tables on first open.
-    final bootstrap = GtdDatabase(SqliteAsyncDriftConnection(raw));
-    await bootstrap.customSelect('SELECT 1').get();
-    await bootstrap.close();
-
-    // Swap `todos`, `actions` and `time_logs` for view + INSTEAD OF triggers
-    // (production topology): a Drift write reports changes()==0 and a watcher on
-    // the view only refreshes via the DAO's explicit post-commit notify.
-    await _convertTableToView(raw, 'todos');
-    await _convertTableToView(raw, 'actions');
-    await _convertTableToView(raw, 'time_logs');
-
+    // Drift builds the whole schema as real tables on first open — the store's
+    // production shape since #595.
     db = GtdDatabase(SqliteAsyncDriftConnection(raw));
-    // Insert through the Drift API so column defaults (e.g. the NOT NULL
-    // `intent`) are applied before the view's INSTEAD OF trigger forwards them.
     await db.into(db.todos).insert(TodosCompanion(
           id: const Value('o1'),
           title: const Value('Outcome'),
@@ -149,8 +104,7 @@ void main() {
       .watch()
       .map((rows) => rows.map((r) => r.read<String?>('energy_level')).toList());
 
-  test('an ActionDao primitive refreshes an actions-view watcher even though '
-      'the trigger makes the write report changes()==0', () async {
+  test('an ActionDao primitive refreshes an actions watcher', () async {
     final seen = <List<String>>[];
     final sub = watchActionTexts().listen(seen.add);
     addTearDown(sub.cancel);
@@ -168,8 +122,8 @@ void main() {
   // else. The task-detail widget test cannot catch a dropped notify — its
   // harness hand-cranks the plan-section streams off DAO reads rather than
   // subscribing to the real one — so the live-refresh claim is pinned here,
-  // against the production view topology.
-  test('editAction refreshes an actions-view watcher on a metadata-only edit',
+  // against the production store topology.
+  test('editAction refreshes an actions watcher on a metadata-only edit',
       () async {
     await db.actionDao.addPlannedAction('o1', 'draft the brief');
     final planned = await db.actionDao.getPlannedActions('o1');
@@ -189,7 +143,7 @@ void main() {
     expect(seen.last, ['high']);
   });
 
-  test('editAction refreshes an actions-view watcher when a clear flag nulls '
+  test('editAction refreshes an actions watcher when a clear flag nulls '
       'the metadata', () async {
     await db.actionDao.addPlannedAction('o1', 'draft the brief',
         energyLevel: 'high', timeEstimate: 45);
@@ -208,7 +162,7 @@ void main() {
     expect(seen.last, [null]);
   });
 
-  test('completeCurrentAction refreshes both view watchers — it now writes '
+  test('completeCurrentAction refreshes both watchers — it now writes '
       'nothing to `todos` at all, so the todos notify is unconditional and '
       'cannot be gated on the stamp (which completion never moves)', () async {
     await db.todoDao.setCurrentActionText('o1', 'call the plumber');
@@ -240,10 +194,10 @@ void main() {
         todoEmissions.length > todoEmissionsBefore);
     expect(actionRoles.last, ['done']);
     expect(todoEmissions.length, greaterThan(todoEmissionsBefore),
-        reason: 'the todos view watcher must still be refreshed');
+        reason: 'the todos watcher must still be refreshed');
   });
 
-  test('clearCurrentAction refreshes both view watchers — its `todos` write is '
+  test('clearCurrentAction refreshes both watchers — its `todos` write is '
       'now only the stamp, which an abandon always moves', () async {
     await db.todoDao.setCurrentActionText('o1', 'call the plumber');
 
@@ -274,14 +228,14 @@ void main() {
         todoEmissions.length > todoEmissionsBefore);
     expect(actionRoles.last, ['superseded']);
     expect(todoEmissions.length, greaterThan(todoEmissionsBefore),
-        reason: 'the todos view watcher must still be refreshed');
+        reason: 'the todos watcher must still be refreshed');
   });
 
-  test('completeCurrentAction refreshes a time_logs-view watcher when it '
+  test('completeCurrentAction refreshes a time_logs watcher when it '
       'closes the open log (ADR-0010, issue #476)', () async {
     await db.actionDao.setCurrentAction('o1', 'call the plumber');
     final current = await db.actionDao.getCurrentAction('o1');
-    // Open a stint against the current Action (through the view's trigger).
+    // Open a stint against the current Action.
     await db.into(db.timeLogs).insert(TimeLogsCompanion(
           id: const Value('log-1'),
           userId: const Value('u1'),
@@ -304,15 +258,17 @@ void main() {
 
     await _waitUntil(() => openCounts.isNotEmpty && openCounts.last == 1);
 
-    // Completing the Action closes the log; the time_logs view write reports
-    // changes()==0, so only notifyTimeLogsViewWrite refreshes this watcher.
+    // Completing the Action closes the log from inside an `actions`-grain
+    // transaction, and `notifyTimeLogsViewWrite` is fired by the caller after
+    // that transaction commits — which is what this watcher refreshes on, rather
+    // than on the async bridge's own invalidation (#342, ADR-0010).
     await db.actionDao.completeCurrentAction('o1');
 
     await _waitUntil(() => openCounts.last == 0);
     expect(openCounts.last, 0);
   });
 
-  test('TodoDao.setCurrentActionText refreshes both the todos- and actions-view '
+  test('TodoDao.setCurrentActionText refreshes both the todos and actions '
       'watchers', () async {
     final todoEmissions = <List<String>>[];
     final actionTexts = <List<String>>[];
@@ -332,6 +288,6 @@ void main() {
         todoEmissions.length > todoEmissionsBefore);
     expect(actionTexts.last, ['draft the plan']);
     expect(todoEmissions.length, greaterThan(todoEmissionsBefore),
-        reason: 'the todos view watcher must still be refreshed');
+        reason: 'the todos watcher must still be refreshed');
   });
 }

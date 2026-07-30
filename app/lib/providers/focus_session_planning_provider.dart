@@ -666,11 +666,10 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// rapid re-taps: the cursor advance check at the end discards a second
   /// call's state mutation when the first call has already advanced.
   ///
-  /// Note: PowerSync exposes [captures] as a SQLite VIEW backed by an
-  /// INSTEAD OF trigger, so Drift's "affected rows" return value is always
-  /// 0 even on a successful update. We pre-check for row existence via
-  /// [ClarificationService.captureExists] and otherwise trust the snapshot's
-  /// claim that the row exists.
+  /// Note: the routing write is a multi-statement transaction whose
+  /// affected-rows count says nothing about the subject in particular, so we
+  /// pre-check for row existence via [ClarificationService.captureExists] and
+  /// otherwise trust the snapshot's claim that the row exists.
   Future<void> _routeInboxItem(
     String captureId, {
     required RoutingKind to,

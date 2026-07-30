@@ -1,24 +1,14 @@
 # Drift code-generator configuration.
 #
-# `store_date_time_values_as_text: true` is required because the shared
-# SQLite file is owned by PowerSync in production, and PowerSync persists
-# timestamps as ISO-8601 text.  Drift's default (epoch int) would mis-read
-# every date replicated from Postgres.  This setting makes Drift use text
-# serialization end-to-end, which is also what sqlite_async / PowerSync's
-# own helpers produce.
+# `store_date_time_values_as_text: true` is load-bearing rather than stylistic.
+# The op log encodes instants as ISO-8601 UTC text (`sync/collection_codecs.dart`,
+# `FieldKind.instant`), and this schema backs a store holding both rows the
+# projector writes from those ops and rows the DAOs write locally — so the two
+# paths have to spell a timestamp the same way. Drift's default (epoch int) would
+# make a projected row and a locally authored one incomparable.
 targets:
   $default:
     builders:
       drift_dev:
         options:
           store_date_time_values_as_text: true
-      jeeves|powersync_schema:
-        enabled: true
-
-builders:
-  powersync_schema:
-    import: "package:jeeves/tool/builders/powersync_schema_builder.dart"
-    builder_factories: ["powersyncSchemaBuilder"]
-    build_extensions: {"lib/database/gtd_database.g.dart": ["lib/database/powersync_schema.g.dart"]}
-    auto_apply: root_package
-    build_to: source

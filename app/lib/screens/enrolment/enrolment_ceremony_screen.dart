@@ -1,13 +1,19 @@
-/// The enrolment ceremony surface (#553 Phase 2, issue #586).
+/// The enrolment ceremony surface — the app's onboarding step (issues #586,
+/// #595).
 ///
-/// **Cutover tooling — removed by #556**, together with the settings entry and
-/// the route that reach it. The *ceremony* is permanent product machinery; this
-/// is only the by-hand way of starting it, so the user can found the Workspace on
-/// the phone that holds the only copy of their store before the reseed uploads
-/// anything.
+/// Signing in or up routes here whenever this device's store says it is not yet
+/// enrolled, and leaving it enrolled is what starts sync. A device that lands
+/// here on a session it no longer wants signs out from the app bar.
 ///
-/// Deliberately plain, like its converge-verify sibling — with two divergences
-/// that are not stylistic:
+/// Two presentations, chosen from the account rather than guessed: an account
+/// whose recovery-escrow slot is empty is **founded** from here (generate a
+/// passphrase, write it down, found); an account that already has an escrow is
+/// **joined** with the passphrase from the device that founded it. A store that
+/// says `notEnrolled` looks the same in both cases, which is why the screen
+/// probes ([EnrolmentCeremonyRunner.escrowExists]) instead of offering a founding
+/// the server could only refuse.
+///
+/// Deliberately plain — with two divergences that are not stylistic:
 ///
 /// - **No copy-to-clipboard.** The passphrase is the ceiling on the account's
 ///   end-to-end encryption; a clipboard manager or a cloud clipboard sync would
@@ -20,6 +26,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/auth_provider.dart';
 import '../../services/secure_screen.dart';
 import '../../sync/enrolment_state.dart';
 import 'enrolment_ceremony_runner.dart';
@@ -27,7 +34,7 @@ import 'enrolment_ceremony_runner.dart';
 class EnrolmentCeremonyScreen extends ConsumerStatefulWidget {
   const EnrolmentCeremonyScreen({super.key});
 
-  static const String routePath = '/settings/enrolment-ceremony';
+  static const String routePath = '/enrolment';
 
   @override
   ConsumerState<EnrolmentCeremonyScreen> createState() =>
@@ -39,6 +46,14 @@ class _EnrolmentCeremonyScreenState
   EnrolmentCeremonyStatus? _status;
   Object? _statusError;
   bool _loadingStatus = true;
+
+  /// Whether the account's escrow slot is occupied — `null` while unknown,
+  /// which after [_probingEscrow] clears means the probe could not reach the
+  /// server. Founding and joining are both online operations, so an unknown
+  /// answer is a retry rather than a guess.
+  bool? _escrowExists;
+  Object? _escrowProbeError;
+  bool _probingEscrow = false;
 
   /// The generated passphrase, held for this screen's lifetime only.
   ///
@@ -103,6 +118,34 @@ class _EnrolmentCeremonyScreenState
         _status = null;
         _statusError = error;
         _loadingStatus = false;
+      });
+      return;
+    }
+    // Only `notEnrolled` is ambiguous. `foundingIncomplete` already knows the
+    // escrow landed, and `enrolled` is terminal.
+    if (_status?.state == EnrolmentState.notEnrolled) await _probeEscrow();
+  }
+
+  /// Ask the account whether it has been founded already, so the screen offers
+  /// the one door that can actually open.
+  Future<void> _probeEscrow() async {
+    setState(() {
+      _probingEscrow = true;
+      _escrowProbeError = null;
+    });
+    try {
+      final exists = await _runner.escrowExists();
+      if (!mounted) return;
+      setState(() {
+        _escrowExists = exists;
+        _probingEscrow = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _escrowExists = null;
+        _escrowProbeError = error;
+        _probingEscrow = false;
       });
     }
   }
@@ -173,18 +216,35 @@ class _EnrolmentCeremonyScreenState
   Widget build(BuildContext context) {
     final status = _status;
     return Scaffold(
-      appBar: AppBar(title: const Text('Enrolment ceremony')),
+      appBar: AppBar(
+        title: const Text('Enrolment ceremony'),
+        actions: [
+          // The escape hatch, and the only one: the router pins an un-enrolled
+          // session here, so without this a session the user no longer wants —
+          // a restored legacy one, or the wrong account — would have nowhere to
+          // go. It is also the fresh-signup path off such a session.
+          IconButton(
+            key: const Key('enrolment_sign_out'),
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign out',
+            onPressed: _running
+                ? null
+                : () => ref.read(authTokenProvider.notifier).logout(),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           const Text(
-            'Founds this account\'s Workspaces from this phone: it generates a '
-            'recovery passphrase, mints a Root key and escrows it under that '
-            'passphrase, registers this device, and writes each Workspace\'s '
-            'genesis plus this device\'s owner grant. The passphrase is the '
-            'ceiling on your encryption — anyone who guesses it can read your '
-            'data, and nobody, including us, can reset it for you. Cutover '
-            'tooling — removed once the sync pivot lands.',
+            'This device has to be enrolled before it can sync. Founding a new '
+            'account generates a recovery passphrase, mints a Root key and '
+            'escrows it under that passphrase, registers this device, and writes '
+            'each Workspace\'s genesis plus this device\'s owner grant; joining '
+            'an account that already exists takes the passphrase instead. The '
+            'passphrase is the ceiling on your encryption — anyone who guesses '
+            'it can read your data, and nobody, including us, can reset it for '
+            'you.',
             key: Key('enrolment_blurb'),
           ),
           const SizedBox(height: 16),
@@ -288,7 +348,66 @@ class _EnrolmentCeremonyScreenState
         ..._resumeControls(),
       ];
 
+  /// The un-enrolled device, split by what the account's escrow slot says.
+  ///
+  /// Three shapes, and the ordering of the guards is the whole rule: an occupied
+  /// slot means founding is impossible, so it is not offered; an unreachable
+  /// probe means *neither* path can proceed, so a retry is offered instead of a
+  /// button that would fail — **unless** a passphrase from an earlier attempt is
+  /// still on screen, in which case hiding the block would take the only copy of
+  /// it with it.
   List<Widget> _notEnrolledBlock() {
+    if (_probingEscrow) {
+      return const [
+        Center(
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: CircularProgressIndicator(
+              key: Key('enrolment_escrow_probe_loading'),
+            ),
+          ),
+        ),
+      ];
+    }
+    if (_escrowExists == true) return _joinBlock();
+    if (_escrowExists == null && _passphrase == null) return _probeFailedBlock();
+    return _foundBlock();
+  }
+
+  /// The account already holds an escrow: this device joins it with the
+  /// passphrase the founding device wrote down. No founding control at all — the
+  /// escrow PUT is not this device's to make, and the server would refuse it.
+  List<Widget> _joinBlock() => [
+        const Text(
+          'This account has already been founded. Enter the recovery passphrase '
+          'from the device that founded it to enrol this one.',
+          key: Key('enrolment_state_join'),
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        ..._resumeControls(),
+      ];
+
+  /// The probe could not reach the server. Honest rather than optimistic:
+  /// founding and joining both need the network, so there is nothing to offer
+  /// but a retry.
+  List<Widget> _probeFailedBlock() => [
+        Text(
+          'This account\'s enrolment could not be checked: $_escrowProbeError. '
+          'Both founding this account and joining an existing one need the '
+          'server, so there is nothing to do offline — try again once you have '
+          'a connection.',
+          key: const Key('enrolment_escrow_probe_error'),
+        ),
+        const SizedBox(height: 12),
+        FilledButton(
+          key: const Key('enrolment_escrow_probe_retry'),
+          onPressed: _probingEscrow ? null : _loadStatus,
+          child: const Text('Try again'),
+        ),
+      ];
+
+  List<Widget> _foundBlock() {
     final passphrase = _passphrase;
     return [
       const Text(

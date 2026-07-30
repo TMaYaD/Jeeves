@@ -4,9 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:jeeves/auth/session_gate.dart';
 import 'package:jeeves/providers/auth_provider.dart';
+import 'package:jeeves/router.dart' show buildAppRouterRedirect;
 import 'package:jeeves/screens/auth/register_screen.dart';
-import 'package:jeeves/services/migration_service.dart';
 
 // ---------------------------------------------------------------------------
 // Fake notifiers
@@ -17,9 +18,10 @@ class _SuccessAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> register(String email, String password,
-      {Future<ConflictResolution> Function()? onConflict}) async {
-    authStateNotifier.value = true;
+  Future<void> register(String email, String password) async {
+    // What the real notifier does for a brand-new account: it is signed in and
+    // by definition not enrolled.
+    sessionGateNotifier.value = SessionGate.needsEnrolment;
     state = const AsyncData('fake.jwt.token');
   }
 }
@@ -29,8 +31,7 @@ class _NetworkErrorAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> register(String email, String password,
-      {Future<ConflictResolution> Function()? onConflict}) async {
+  Future<void> register(String email, String password) async {
     final err = DioException(
       requestOptions: RequestOptions(path: '/user'),
       type: DioExceptionType.connectionError,
@@ -48,8 +49,7 @@ class _FailAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
 
   @override
-  Future<void> register(String email, String password,
-      {Future<ConflictResolution> Function()? onConflict}) async {
+  Future<void> register(String email, String password) async {
     final err = DioException(
       requestOptions: RequestOptions(path: '/user'),
       response: Response(
@@ -101,7 +101,7 @@ Widget _buildScreen({
 // ---------------------------------------------------------------------------
 
 void main() {
-  tearDown(() => authStateNotifier.value = false);
+  tearDown(() => sessionGateNotifier.value = SessionGate.checking);
 
   group('RegisterScreen — layout', () {
     testWidgets('renders email field, password field, and Create Account button',
@@ -191,30 +191,43 @@ void main() {
   });
 
   group('RegisterScreen — success flow', () {
-    testWidgets('successful registration triggers router redirect to /inbox',
-        (tester) async {
-      final router = GoRouter(
-        initialLocation: '/register',
-        refreshListenable: authStateNotifier,
-        redirect: (_, state) {
-          if (authStateNotifier.value && state.uri.path == '/register') {
-            return '/inbox';
-          }
-          return null;
-        },
-        routes: [
-          GoRoute(
-              path: '/register',
-              builder: (_, _) => const RegisterScreen()),
-          GoRoute(
-              path: '/inbox',
-              builder: (_, _) => const Scaffold(body: Text('Inbox'))),
-        ],
-      );
+    // The production redirect over the production gate, with stub routes: what
+    // is under test is that signing up needs no navigation decision of its own.
+    // The gate is passed rather than left to the redirect's fallback, so what
+    // the onboarding enforcement reads is visible here — it is the same global
+    // the fake AuthNotifiers above write and `tearDown` resets.
+    GoRouter gatedRouter({String initialLocation = '/register'}) => GoRouter(
+          initialLocation: initialLocation,
+          redirect:
+              buildAppRouterRedirect(swsMode: false, gate: sessionGateNotifier),
+          refreshListenable: sessionGateNotifier,
+          routes: [
+            GoRoute(path: '/register', builder: (_, _) => const RegisterScreen()),
+            GoRoute(
+              path: '/settings',
+              builder: (_, _) => Scaffold(
+                body: Builder(
+                  builder: (ctx) => TextButton(
+                    onPressed: () => ctx.push('/register'),
+                    child: const Text('Open register'),
+                  ),
+                ),
+              ),
+            ),
+            GoRoute(
+                path: '/inbox',
+                builder: (_, _) => const Scaffold(body: Text('Inbox'))),
+            GoRoute(
+                path: '/enrolment',
+                builder: (_, _) => const Scaffold(body: Text('Enrolment'))),
+          ],
+        );
 
+    testWidgets('a fresh account is taken straight into enrolment',
+        (tester) async {
       await tester.pumpWidget(_buildScreen(
         notifierFactory: _SuccessAuthNotifier.new,
-        router: router,
+        router: gatedRouter(),
       ));
       await tester.pump();
 
@@ -225,56 +238,25 @@ void main() {
       await tester.tap(find.byKey(const Key('create_account_button')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Inbox'), findsOneWidget);
+      // No detour through the app and no pop back to the caller: the whole
+      // point of AC-2 is that sign-up flows into onboarding.
+      expect(find.text('Enrolment'), findsOneWidget);
+      expect(find.byKey(const Key('create_account_button')), findsNothing);
     });
 
-    testWidgets(
-        'Settings → login → register link → register: pops back to Settings',
+    testWidgets('a register pushed from Settings does not pop back to it',
         (tester) async {
-      final router = GoRouter(
-        initialLocation: '/settings',
-        routes: [
-          GoRoute(
-            path: '/settings',
-            builder: (_, _) => Scaffold(
-              body: Builder(
-                builder: (ctx) => TextButton(
-                  onPressed: () => ctx.push('/login'),
-                  child: const Text('Open login'),
-                ),
-              ),
-            ),
-          ),
-          GoRoute(
-            path: '/login',
-            builder: (_, _) => Scaffold(
-              body: Builder(
-                builder: (ctx) => TextButton(
-                  onPressed: () => ctx.pushReplacement('/register'),
-                  child: const Text('Go to register'),
-                ),
-              ),
-            ),
-          ),
-          GoRoute(path: '/register', builder: (_, _) => const RegisterScreen()),
-        ],
-      );
-
+      // It used to: the screen popped when it could, which on a signed-up but
+      // un-enrolled device left the user on Settings with onboarding unstarted.
       await tester.pumpWidget(_buildScreen(
         notifierFactory: _SuccessAuthNotifier.new,
-        router: router,
+        router: gatedRouter(initialLocation: '/settings'),
       ));
       await tester.pump();
 
-      // Settings → login (push)
-      await tester.tap(find.text('Open login'));
+      await tester.tap(find.text('Open register'));
       await tester.pumpAndSettle();
 
-      // login → register (pushReplacement, keeps /settings below)
-      await tester.tap(find.text('Go to register'));
-      await tester.pumpAndSettle();
-
-      // Register
       await tester.enterText(
           find.byKey(const Key('email_field')), 'a@b.com');
       await tester.enterText(
@@ -282,9 +264,8 @@ void main() {
       await tester.tap(find.byKey(const Key('create_account_button')));
       await tester.pumpAndSettle();
 
-      // Should have popped back to /settings.
-      expect(find.text('Open login'), findsOneWidget);
-      expect(find.byKey(const Key('create_account_button')), findsNothing);
+      expect(find.text('Enrolment'), findsOneWidget);
+      expect(find.text('Open register'), findsNothing);
     });
   });
 
