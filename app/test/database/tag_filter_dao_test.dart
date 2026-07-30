@@ -102,6 +102,13 @@ void main() {
           .map((rows) => rows.first.count);
       final expectation = expectLater(counts, emitsInOrder([1, 0]));
 
+      // Let the initial query emit `1` before the write. `markDone` is now
+      // atomic (it runs inside GtdDatabase.capturing's transaction), so it
+      // holds the single connection until commit; without this settle the
+      // subscription's opening SELECT would queue behind the write and the
+      // stream would only ever see the post-commit `0`.
+      await pumpEventQueue();
+
       // Mark done — should push a new emission on the same stream.
       await db.todoDao.markDone(t1);
 

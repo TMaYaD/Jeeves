@@ -287,7 +287,7 @@ class DaoClarificationService implements ClarificationService {
       );
     }
     final id = outcomeId ?? uuid.v4();
-    return _db.transaction(() async {
+    return _db.capturing(() async {
       // Require the Capture at commit time, inside the transaction: the
       // [captureExists] pre-check callers run can go stale (sync/another device
       // hard-deletes the row between snapshot and tap). Guarding here — not just
@@ -333,7 +333,7 @@ class DaoClarificationService implements ClarificationService {
 
   @override
   Future<void> discardCapture(String captureId, {DateTime? now}) async {
-    await _db.transaction(() async {
+    await _db.capturing(() async {
       // Require the Capture at commit time (see clarifyCaptureToOutcome): a
       // discard must not silently "succeed" against a row that already vanished.
       if (await _db.captureDao.getCapture(captureId) == null) {
@@ -400,7 +400,7 @@ class DaoClarificationService implements ClarificationService {
     DateTime? now,
   }) async {
     final id = outcomeId ?? uuid.v4();
-    return _db.transaction(() async {
+    return _db.capturing(() async {
       // Same commit-time guard as clarifyCaptureToOutcome: a Capture that
       // vanished between render and tap must not mint an orphan Outcome behind
       // a dangling link.
@@ -444,7 +444,7 @@ class DaoClarificationService implements ClarificationService {
     required String userId,
     DateTime? now,
   }) async {
-    await _db.transaction(() async {
+    await _db.capturing(() async {
       if (await _db.captureDao.getCapture(captureId) == null) {
         throw StateError('Capture $captureId not found');
       }
@@ -464,7 +464,7 @@ class DaoClarificationService implements ClarificationService {
     String outcomeId, {
     required bool deleteCarved,
   }) async {
-    await _db.transaction(
+    await _db.capturing(
       () => _retractClaim(captureId, outcomeId, deleteIfOrphaned: deleteCarved),
     );
   }
@@ -474,7 +474,7 @@ class DaoClarificationService implements ClarificationService {
     String captureId, {
     DateTime? now,
   }) async {
-    await _db.transaction(() async {
+    await _db.capturing(() async {
       if (await _db.captureDao.getCapture(captureId) == null) {
         throw StateError('Capture $captureId not found');
       }

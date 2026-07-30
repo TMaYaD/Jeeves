@@ -8,6 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/import/nirvana_local_import.dart';
 import 'package:jeeves/import/nirvana_parser.dart' show ParseError;
+import 'package:jeeves/sync/collection_codecs.dart' show tagsCollection;
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 
 import '../test_helpers.dart';
 
@@ -518,6 +521,73 @@ void main() {
         ),
         throwsA(isA<ParseError>()),
       );
+    });
+  });
+
+  // T5 — the import is one capturing scope: the whole file is one transaction,
+  // emission is post-commit, and a mid-apply failure rolls the rows back and
+  // authors no ops. Pre-fix the import's bare `transaction` let each DAO call's
+  // op emit mid-transaction, so a failing import left signed tag ops behind.
+  group('importNirvanaLocally — capture atomicity', () {
+    late RecordingDomainOpCapture capture;
+    late GtdDatabase db;
+
+    setUp(() {
+      capture = RecordingDomainOpCapture();
+      db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    });
+    tearDown(() => db.close());
+
+    test('a clean import authors the project tag op it describes today',
+        () async {
+      const json = '['
+          '{"cancelled":0,"deleted":0,"name":"Proj","type":1,"id":"p1"},'
+          '{"cancelled":0,"deleted":0,"name":"Child","type":0,"state":1,'
+          '"id":"c1","parentid":"p1"}'
+          ']';
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+      // The project tag goes through TagDao, so it authors a coalesced `tags`
+      // op; the raw todo/todo_tags inserts describe none (the #610 gap, out of
+      // scope here).
+      expect(capture.forCollection(tagsCollection), hasLength(1));
+    });
+
+    test('a mid-apply failure rolls back every row and authors no op', () async {
+      // A second task whose title exceeds the 500-char column limit fails
+      // drift's insert-time validation — mid-transaction, after the project tag
+      // and the first child have already been written.
+      final longName = 'x' * 501;
+      final json = '['
+          '{"cancelled":0,"deleted":0,"name":"Proj","type":1,"id":"p1"},'
+          '{"cancelled":0,"deleted":0,"name":"Child","type":0,"state":1,'
+          '"id":"c1","parentid":"p1"},'
+          '{"cancelled":0,"deleted":0,"name":"$longName","type":0,"state":1,'
+          '"id":"toolong"}'
+          ']';
+
+      await expectLater(
+        importNirvanaLocally(
+          bytes: _bytes(json),
+          filename: 'test.json',
+          format: 'json',
+          userId: _userId,
+          db: db,
+        ),
+        throwsA(anything),
+      );
+
+      expect(capture.recorded, isEmpty,
+          reason: 'a failed import must leave no signed op behind');
+      expect(await db.select(db.tags).get(), isEmpty,
+          reason: 'the project tag write rolls back with the transaction');
+      expect(await db.select(db.todos).get(), isEmpty);
+      expect(await db.select(db.todoTags).get(), isEmpty);
     });
   });
 }

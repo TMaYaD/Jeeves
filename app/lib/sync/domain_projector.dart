@@ -58,7 +58,11 @@ class DomainProjector {
   Future<void> project(Iterable<AffectedEntity> affected) async {
     if (affected.isEmpty) return;
     final touched = <String>{};
-    await domain.transaction(() async {
+    // The projector materialises reduced state that is already on the op log,
+    // so it must author nothing — the one sanctioned un-captured domain
+    // transaction (GtdDatabase refuses a bare `transaction` outside a capturing
+    // zone).
+    await domain.uncapturedTransaction(() async {
       for (final entity in affected) {
         final codec = collectionCodecs[entity.collection];
         // Reduction is collection-generic; projection is not. An op for a

@@ -579,5 +579,99 @@ void main() {
       expect(only(todosCollection).fields['intent'], 'next');
       expect(only(todosCollection).fields.containsKey('last_clarified_at'), isTrue);
     });
+
+    // T1 — the AC. A capturing body composing several capturing DAO writes and
+    // then throwing must leave both the tables and the op log empty. Red under
+    // the pre-fix seam, where each DAO's inner transaction auto-commits its rows
+    // before the outer scope rolls its ops back: the rows survive, so the op log
+    // asserts a write the store never kept the other half of.
+    test('a rolled-back multi-DAO composition writes no row and authors no op',
+        () async {
+      await expectLater(
+        db.capturing(() async {
+          await db.captureDao.insertCapture(
+            CapturesCompanion(
+              id: const Value('cap-1'),
+              title: const Value('Buy milk'),
+              userId: const Value(_userId),
+              createdAt: Value(_ts),
+              updatedAt: Value(_ts),
+            ),
+          );
+          await db.captureDao.assignTagHint('cap-1', 'tag-1', _userId);
+          throw StateError('rolled back after both writes committed');
+        }),
+        throwsStateError,
+      );
+      expect(capture.recorded, isEmpty,
+          reason: 'a rolled-back write must never be signed and queued');
+      expect(await db.select(db.captures).get(), isEmpty,
+          reason: 'the outer rollback must undo the DAO writes too');
+      expect(await db.select(db.captureTags).get(), isEmpty);
+    });
+
+    // T2 — the commit direction. The same composition committing: every row is
+    // durable and every entity's op is emitted exactly once, coalesced per
+    // entity, in write order. Guards the reverse hazard — a committed write that
+    // lost its op.
+    test('a committed multi-DAO composition writes every row and one op per '
+        'entity in write order', () async {
+      await db.capturing(() async {
+        await db.captureDao.insertCapture(
+          CapturesCompanion(
+            id: const Value('cap-1'),
+            title: const Value('Buy milk'),
+            userId: const Value(_userId),
+            createdAt: Value(_ts),
+            updatedAt: Value(_ts),
+          ),
+        );
+        await db.captureDao.assignTagHint('cap-1', 'tag-1', _userId);
+      });
+      expect(await db.select(db.captures).get(), hasLength(1));
+      expect(await db.select(db.captureTags).get(), hasLength(1));
+      expect(capture.keys, [
+        '$capturesCollection/cap-1',
+        '$captureTagsCollection/${captureTagIdFor('cap-1', 'tag-1')}',
+      ]);
+    });
+
+    // T3 — the guard. A bare `transaction` outside a capturing zone is refused
+    // before any write lands; the named escape hatch runs and authors nothing.
+    test('a bare transaction outside a capturing zone is refused before any '
+        'write', () async {
+      expect(
+        () => db.transaction(() async {
+          await db.into(db.captures).insert(
+                CapturesCompanion(
+                  id: const Value('cap-1'),
+                  title: const Value('never'),
+                  userId: const Value(_userId),
+                  createdAt: Value(_ts),
+                  updatedAt: Value(_ts),
+                ),
+              );
+        }),
+        throwsStateError,
+      );
+      expect(await db.select(db.captures).get(), isEmpty);
+    });
+
+    test('uncapturedTransaction runs the write and authors nothing', () async {
+      await db.uncapturedTransaction(() async {
+        await db.into(db.captures).insert(
+              CapturesCompanion(
+                id: const Value('cap-1'),
+                title: const Value('projected'),
+                userId: const Value(_userId),
+                createdAt: Value(_ts),
+                updatedAt: Value(_ts),
+              ),
+            );
+      });
+      expect(await db.select(db.captures).get(), hasLength(1));
+      expect(capture.recorded, isEmpty,
+          reason: 'the escape hatch is for writes that must never author ops');
+    });
   });
 }

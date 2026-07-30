@@ -17,6 +17,8 @@
 /// both work again, which they did not while the targets were views.
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import '../utils/uuid.dart';
 
@@ -48,28 +50,91 @@ class GtdDatabase extends _$GtdDatabase {
   /// activation.
   final DomainOpCapture opCapture;
 
-  /// Runs [body] as one capture scope: everything the DAO describes through
-  /// [opCapture] inside it is buffered, coalesced per entity, and emitted only
-  /// once [body] has completed — so a rolled-back write is never signed and
-  /// queued. Scopes nest; only the outermost emits.
+  /// The transactional write primitive: a capturing scope **is** one
+  /// transaction. Runs [body] inside [transaction] and inside a capture scope,
+  /// so scope lifetime and transaction lifetime are the same object's lifetime.
+  /// Everything the DAO describes through [opCapture] inside it is buffered,
+  /// coalesced per entity, and emitted only once the transaction has
+  /// committed — a rolled-back write is never signed and queued, and a
+  /// committed write can never lose its op (the two failure directions #598
+  /// closed).
   ///
-  /// The scope is identified by the token [DomainOpCapture.beginScope] returns,
-  /// not by stack position, so two overlapping un-awaited calls cannot close
-  /// each other's scope.
+  /// Scopes nest; only the outermost emits, and the inner [transaction] a
+  /// nested `capturing` opens is a savepoint that merges into the outer commit
+  /// (drift ≥ 2.0 nested transactions). The scope is identified by the token
+  /// [DomainOpCapture.beginScope] returns, not by stack position, so two
+  /// overlapping un-awaited calls cannot close each other's scope.
   ///
-  /// Every public DAO write method wraps its whole body (transaction, writes
-  /// and post-commit view notifies) in this.
+  /// Every domain write — a single DAO method or a multi-DAO service
+  /// composition — runs its whole body (transaction, writes and post-commit
+  /// view notifies) through this. Composing writes with a bare [transaction]
+  /// instead is refused; see the [transaction] override.
   Future<T> capturing<T>(Future<T> Function() body) async {
     final scope = opCapture.beginScope();
     T result;
     try {
-      result = await body();
+      result = await _capturedTransaction(body);
     } catch (_) {
       opCapture.rollbackScope(scope);
       rethrow;
     }
     await opCapture.commitScope(scope);
     return result;
+  }
+
+  /// A transaction for writes that must **never** author ops — the one
+  /// deliberate un-captured write path. Its sole production caller is
+  /// [DomainProjector], which materialises reduced state that is already on the
+  /// op log: re-authoring it would be a feedback loop. Runs [action] inside a
+  /// real [transaction] but marks the capturing zone, so nested DAO writes it
+  /// makes (the projector's own `customStatement`s never describe effects, but
+  /// the marker keeps the [transaction] guard satisfied) do not trip the guard.
+  Future<T> uncapturedTransaction<T>(Future<T> Function() action) =>
+      _capturedTransaction(action);
+
+  /// Runs [action] inside a real drift [transaction], having first marked the
+  /// current zone as a capturing zone so the [transaction] override lets the
+  /// nested call through. Shared by [capturing] and [uncapturedTransaction] —
+  /// the two, and only two, legitimate ways to open a domain-store transaction.
+  Future<T> _capturedTransaction<T>(Future<T> Function() action) => runZoned(
+        () => super.transaction(action),
+        zoneValues: {_capturingZoneKey: true},
+      );
+
+  /// Marks a zone opened by [capturing] / [uncapturedTransaction]. Present ⇒ a
+  /// [transaction] call is inside a sanctioned scope; absent ⇒ refuse.
+  static final Object _capturingZoneKey = Object();
+
+  /// Refuses a bare domain-store [transaction] opened outside a capturing zone.
+  ///
+  /// Post-flip a bare `transaction` composing capturing DAO writes emits each
+  /// DAO's ops the moment that DAO returns — while the outer transaction is
+  /// still open — so a later rollback leaves the op log asserting a write the
+  /// store never kept. Refusing loudly beats corrupting quietly: domain writes
+  /// go through [capturing]; writes that must author nothing go through
+  /// [uncapturedTransaction].
+  ///
+  /// **The guard's reach is the db object, honestly.** This override intercepts
+  /// only `GtdDatabase.transaction` — calls made on the database object. A DAO
+  /// is a `DatabaseAccessor`, so a DAO-internal bare `transaction(...)`
+  /// dispatches through `DatabaseConnectionUser.transaction` and bypasses this
+  /// override entirely. The invariant "the broken shape cannot be composed
+  /// silently" therefore holds at the db-object level — which is where the
+  /// service/import compositions that #598 fixed live — and, after the collapse
+  /// that leaves no DAO spelling `transaction` at all, in practice everywhere;
+  /// but the enforcement itself reaches only db-object callers.
+  @override
+  Future<T> transaction<T>(Future<T> Function() action,
+      {bool requireNew = false}) {
+    if (Zone.current[_capturingZoneKey] != true) {
+      throw StateError(
+        'Domain writes go through GtdDatabase.capturing, which is the '
+        'transaction boundary; a bare GtdDatabase.transaction is refused so a '
+        'rolled-back write can never leave a signed op behind. For writes that '
+        'must never author ops, use GtdDatabase.uncapturedTransaction.',
+      );
+    }
+    return super.transaction(action, requireNew: requireNew);
   }
 
   /// Plain-class DAO for universal search (no code generation required).
