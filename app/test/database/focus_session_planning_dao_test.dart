@@ -457,6 +457,106 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // The multi-open-session conflict (issue #600)
+  //
+  // `openSession`'s StateError is the *sole* enforcement of the
+  // single-open-session invariant (ADR-0020) — reduced state converges without
+  // consulting a local constraint, so two devices can each open a session
+  // offline and both rows land here on the next pull. The rows are inserted
+  // directly, which is exactly what the projector does on that pull.
+  //
+  // Every read then has to answer, and answer the *same* row: a reader that
+  // raised would take the Focus surface down, and readers that disagreed would
+  // render one session's Plan under another session's identity.
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — two open sessions (sync conflict)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    /// Lands an open session the way a pull does: straight into the table,
+    /// past the writer's guard.
+    Future<void> project(String id, DateTime startedAt) =>
+        db.into(db.focusSessions).insert(FocusSessionsCompanion(
+              id: Value(id),
+              userId: const Value(_userId),
+              startedAt: Value(startedAt.toUtc().toIso8601String()),
+              endedAt: const Value(null),
+            ));
+
+    /// Inserted oldest-first, so a query with no ORDER BY answers `older`
+    /// (rowid order) and only the blessed ordering answers `newer`.
+    Future<void> twoOpen() async {
+      await project('older', DateTime.utc(2026, 7, 28, 9));
+      await project('newer', DateTime.utc(2026, 7, 29, 9));
+    }
+
+    test('getActiveSession answers the winner rather than raising', () async {
+      await twoOpen();
+
+      final session = await db.focusSessionDao.getActiveSession();
+
+      expect(session, isNotNull);
+      expect(session!.id, 'newer',
+          reason: 'greatest started_at wins, tie-break smallest id');
+    });
+
+    test('watchActiveSession emits the winner rather than erroring', () async {
+      await twoOpen();
+
+      await expectLater(
+        db.focusSessionDao.watchActiveSession().first,
+        completion(isA<FocusSession>().having((s) => s.id, 'id', 'newer')),
+      );
+    });
+
+    test('the Plan reads agree with the active-session reader', () async {
+      await _insertTodo(db, id: 'tOld', title: 'Yesterday');
+      await _insertTodo(db, id: 'tNew', title: 'Today');
+      await twoOpen();
+      await db.into(db.focusSessionTasks).insert(FocusSessionTasksCompanion(
+            id: const Value('fst-old'),
+            focusSessionId: const Value('older'),
+            taskId: const Value('tOld'),
+            position: const Value(0),
+            userId: const Value(_userId),
+          ));
+      await db.into(db.focusSessionTasks).insert(FocusSessionTasksCompanion(
+            id: const Value('fst-new'),
+            focusSessionId: const Value('newer'),
+            taskId: const Value('tNew'),
+            position: const Value(0),
+            userId: const Value(_userId),
+          ));
+
+      final active = await db.focusSessionDao.getActiveSession();
+      final tasks = await db.focusSessionDao.watchActiveSessionTasks().first;
+      final review =
+          await db.focusSessionDao.watchActiveSessionReviewSurface().first;
+
+      expect(active!.id, 'newer');
+      expect(tasks.map((t) => t.id), ['tNew'],
+          reason: 'the Plan must belong to the session the readers call active');
+      expect(review.map((t) => t.id), ['tNew']);
+    });
+
+    test('openSession names the session the readers call active', () async {
+      await twoOpen();
+
+      await expectLater(
+        db.focusSessionDao.openSession(userId: _userId, taskIds: []),
+        throwsA(isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('newer'),
+        )),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // watchActiveSessionTasks
   // ---------------------------------------------------------------------------
 

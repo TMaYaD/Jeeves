@@ -17,12 +17,15 @@
 ///    `time_logs.action_id` the shipped local delete left to the server's
 ///    `ON DELETE CASCADE`, which the op log does not have; and
 /// 2. the **derived-id realignment** — for the two collections whose domain key
-///    is not their `id` column, the projector locates the row by that key and
-///    rewrites `id` to the derivation: `focusSessionTaskIdFor(sessionId,
-///    taskId)` for `focus_session_tasks`, and `preferenceEntityId(workspace,
-///    key)` for `user_preferences`, whose DAO still mints a random `id`
-///    locally. Every device converges on the same row identity regardless of
-///    which one authored the create.
+///    is not their `id` column (`focus_session_tasks` and `user_preferences`),
+///    the projector locates the row by that key and rewrites `id` to the op's
+///    entity id. Both DAOs already mint the derivation locally
+///    (`focusSessionTaskIdFor(sessionId, taskId)` and
+///    `preferenceEntityId(workspace, key)`), as does the initial upload when it
+///    authors a row that predates the id policy — so on this build the rewrite
+///    is a no-op. It stays because it is what still realigns a row some *other*
+///    build created at random, which is how every device converges on one row
+///    identity regardless of which one authored the create.
 ///
 /// Nothing else: with the TEXT pass-through rule every other field round-trips
 /// to the author's own value (down to the millisecond floor the `dateTime`
@@ -153,7 +156,8 @@ class DomainProjector {
       return true;
     }
     // The identity columns are already what they are; `id` is set too, which is
-    // the `focus_session_tasks` realignment (and a no-op everywhere else).
+    // the derived-id realignment for `focus_session_tasks` and
+    // `user_preferences` (and a no-op everywhere else).
     final assignments = <String>[];
     final bound = <Variable<Object>>[];
     for (final entry in values.entries) {

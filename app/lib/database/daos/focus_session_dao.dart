@@ -39,6 +39,40 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     with _$FocusSessionDaoMixin {
   FocusSessionDao(super.db);
 
+  /// Which open session is *the* open one when more than one exists: greatest
+  /// `started_at`, tie-break smallest `id`. The most recently begun session wins,
+  /// mirroring [ActionDao.winnerFirstOrderSql]'s rule for a multi-`current` set
+  /// — the newer intent is the live one.
+  ///
+  /// The single-open-session invariant is enforced solely by [openSession]'s
+  /// throw (ADR-0020), so a cross-device race can leave two open rows here. Every
+  /// read therefore has to answer, and answer the *same* row: a reader that
+  /// raised would take the Focus surface down over a state the writer's own
+  /// documentation calls reachable, and readers disagreeing would render one
+  /// session's Plan under another session's identity.
+  ///
+  /// Repair is not a read's job — the ordering resolves the conflict for display
+  /// and leaves the losing row for Evening Shutdown to close, matching
+  /// `ActionDao`'s split (writers converge, reads only order). One home so the
+  /// rule cannot drift between the Dart readers and the SQL subselects below.
+  static const openSessionWinnerFirstSql = 'ORDER BY started_at DESC, id ASC';
+
+  /// [openSessionWinnerFirstSql] as Drift ordering terms.
+  static List<OrderClauseGenerator<$FocusSessionsTable>>
+      get _openSessionWinnerFirst => [
+            (s) => OrderingTerm(
+                expression: s.startedAt, mode: OrderingMode.desc),
+            (s) => OrderingTerm(expression: s.id),
+          ];
+
+  /// Scalar subquery for the active session's id, for the list queries that
+  /// join through it. Same winner rule as [getActiveSession], so the Plan and
+  /// Review surfaces can never render one session's rows while the Focus surface
+  /// names another.
+  static const _activeSessionIdSql =
+      '(SELECT id FROM focus_sessions WHERE ended_at IS NULL '
+      '$openSessionWinnerFirstSql LIMIT 1)';
+
   /// Opens a new planning session for [userId] with [taskIds] as the day's
   /// task list.
   ///
@@ -72,9 +106,12 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // constraint prevents it (see above), so a sync conflict can leave more
       // than one session open, and
       // `getSingleOrNull()` would then throw Drift's opaque "Too many elements"
-      // error instead of the ADR-specific guidance below.
+      // error instead of the ADR-specific guidance below. Ordered by the
+      // winner rule so the id the guidance names is the session the readers
+      // call active — the one Evening Shutdown will actually close.
       final openRows = await (select(focusSessions)
             ..where((s) => s.endedAt.isNull())
+            ..orderBy(_openSessionWinnerFirst)
             ..limit(1))
           .get();
       final existing = openRows.isEmpty ? null : openRows.first;
@@ -263,14 +300,22 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }
 
   /// Stream that emits the currently open session, or null.
-  Stream<FocusSession?> watchActiveSession() =>
-      (select(focusSessions)..where((s) => s.endedAt.isNull()))
-          .watchSingleOrNull();
+  ///
+  /// Resolves a two-open-session conflict by [openSessionWinnerFirstSql] rather
+  /// than raising on it — see that constant for why a reader must answer.
+  Stream<FocusSession?> watchActiveSession() => (select(focusSessions)
+        ..where((s) => s.endedAt.isNull())
+        ..orderBy(_openSessionWinnerFirst)
+        ..limit(1))
+      .watchSingleOrNull();
 
-  /// One-shot query for the currently open session.
-  Future<FocusSession?> getActiveSession() =>
-      (select(focusSessions)..where((s) => s.endedAt.isNull()))
-          .getSingleOrNull();
+  /// One-shot query for the currently open session. Same winner rule as
+  /// [watchActiveSession].
+  Future<FocusSession?> getActiveSession() => (select(focusSessions)
+        ..where((s) => s.endedAt.isNull())
+        ..orderBy(_openSessionWinnerFirst)
+        ..limit(1))
+      .getSingleOrNull();
 
   /// Stream of whether a session qualifies as belonging to the current
   /// planning period — i.e. one exists whose `started_at >= [esAnchor]`, the
@@ -623,9 +668,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     return customSelect(
       'SELECT $_todoColumnsSql FROM todos t '
       'JOIN focus_session_tasks fst ON fst.task_id = t.id '
-      'WHERE fst.focus_session_id = ('
-      '  SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
-      ') '
+      'WHERE fst.focus_session_id = $_activeSessionIdSql '
       'ORDER BY fst.position',
       variables: [],
       readsFrom: {
@@ -668,22 +711,17 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       'SELECT $_todoColumnsSql, 0 AS surface_order, fst.position AS sort_key '
       'FROM todos t '
       'JOIN focus_session_tasks fst ON fst.task_id = t.id '
-      'WHERE fst.focus_session_id = ('
-      '  SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
-      ') '
+      'WHERE fst.focus_session_id = $_activeSessionIdSql '
       'UNION ALL '
       'SELECT $_todoColumnsSql, 1 AS surface_order, '
       '       CAST(strftime(\'%s\', MIN(tl.started_at)) AS INTEGER) AS sort_key '
       'FROM todos t '
       'JOIN time_logs tl ON tl.task_id = t.id '
-      'WHERE tl.focus_session_id = ('
-      '  SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
-      ') '
+      'WHERE tl.focus_session_id = $_activeSessionIdSql '
       '  AND NOT EXISTS ('
       '    SELECT 1 FROM focus_session_tasks fst2 '
-      '    WHERE fst2.focus_session_id = ('
-      '      SELECT id FROM focus_sessions WHERE ended_at IS NULL LIMIT 1'
-      '    ) AND fst2.task_id = t.id'
+      '    WHERE fst2.focus_session_id = $_activeSessionIdSql '
+      '      AND fst2.task_id = t.id'
       '  ) '
       'GROUP BY t.id '
       'ORDER BY surface_order, sort_key',
