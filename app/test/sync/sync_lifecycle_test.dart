@@ -234,11 +234,16 @@ void main() {
   test('a relaunched device re-mints its member credential and resumes',
       () async {
     final device = await phone(fileBacked: true);
+    // A legacy row — one that predates authoring (PowerSync-era migration data,
+    // ADR-0035). Settle the seam silent so the seed lands in the domain store
+    // without being buffered: the **initial upload**, not the capture buffer, is
+    // what authors these, which is exactly the path this test exercises.
+    device.capture.unbind();
     await seedOneOutcome(device, id: '33333333-3333-4333-8333-333333333333');
     await device.enrolAsFirstDevice();
 
-    // The POST lands, the response is lost: every capture succeeded, the flush
-    // did not, and the marker stays unset.
+    // The upload's POST lands, the response is lost: the walk authored every op,
+    // the post did not confirm, and the marker stays unset.
     device.link.dropPostResponse = true;
     expect(await device.activate(), SyncActivation.uploadIncomplete);
     expect(
