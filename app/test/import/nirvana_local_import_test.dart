@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show InvalidDataException, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
@@ -579,7 +579,7 @@ void main() {
           userId: _userId,
           db: db,
         ),
-        throwsA(anything),
+        throwsA(isA<InvalidDataException>()),
       );
 
       expect(capture.recorded, isEmpty,
