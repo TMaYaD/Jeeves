@@ -1,12 +1,11 @@
 /// The enrolment ceremony surface over a scripted runner.
 ///
-/// Cutover tooling — removed by #556.
-///
-/// What is asserted here is what the screen is *for*: the passphrase is shown
-/// once and confirmed before anything runs, an enrolled device is offered no
-/// second founding, a half-founded one is offered the passphrase, every failure
-/// says what it left behind — and the window carries `FLAG_SECURE` while the
-/// secret is on it. The ceremony itself is
+/// What is asserted here is what the screen is *for*: the account's escrow slot
+/// decides whether this device founds or joins, the passphrase is shown once and
+/// confirmed before anything runs, an enrolled device is offered no second
+/// founding, a half-founded one is offered the passphrase, every failure says
+/// what it left behind — and the window carries `FLAG_SECURE` while the secret is
+/// on it. The ceremony itself is
 /// `test/sync/enrolment_ceremony_runner_test.dart`.
 library;
 
@@ -15,8 +14,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:jeeves/cutover/enrolment_ceremony/enrolment_ceremony_runner.dart';
-import 'package:jeeves/cutover/enrolment_ceremony/enrolment_ceremony_screen.dart';
+import 'package:jeeves/screens/enrolment/enrolment_ceremony_runner.dart';
+import 'package:jeeves/screens/enrolment/enrolment_ceremony_screen.dart';
 import 'package:jeeves/services/secure_screen.dart';
 import 'package:jeeves/sync/enrolment.dart';
 import 'package:jeeves/sync/enrolment_state.dart';
@@ -45,13 +44,26 @@ EnrolmentCeremonyStatus _status(
 /// shows the store's truth after an attempt, not the attempt's hope" is exactly
 /// the behaviour under test.
 class _StubRunner implements EnrolmentCeremonyRunner {
-  _StubRunner(this._statuses, {this.foundFailure, this.resumeFailure});
+  _StubRunner(
+    this._statuses, {
+    this.foundFailure,
+    this.resumeFailure,
+    this.escrow = false,
+    this.escrowProbeFailure,
+  });
 
   final List<EnrolmentCeremonyStatus> _statuses;
   final Object? foundFailure;
   final Object? resumeFailure;
 
+  /// What the account's escrow slot holds. `false` — an empty slot, i.e. a fresh
+  /// account this device founds — is the default because it is the case most of
+  /// the older cases here were written against.
+  final bool escrow;
+  final Object? escrowProbeFailure;
+
   int statusReads = 0;
+  int escrowProbes = 0;
   int generated = 0;
   final List<String> foundedWith = [];
   final List<String> resumedWith = [];
@@ -61,6 +73,13 @@ class _StubRunner implements EnrolmentCeremonyRunner {
     final index = statusReads < _statuses.length ? statusReads : _statuses.length - 1;
     statusReads++;
     return _statuses[index];
+  }
+
+  @override
+  Future<bool> escrowExists() async {
+    escrowProbes++;
+    if (escrowProbeFailure case final failure?) throw failure;
+    return escrow;
   }
 
   @override
@@ -170,10 +189,97 @@ void main() {
     expect(find.byKey(const Key('enrolment_found_button')), findsNothing);
     expect(runner.generated, 0);
     expect(runner.foundedWith, isEmpty);
-    // The blurb has to name both the #556 fate and what the passphrase costs.
+    // The blurb has to name what enrolment is for and what the passphrase costs,
+    // and must carry no trace of the cutover tooling this surface grew out of.
     final blurb = tester.widget<Text>(find.byKey(const Key('enrolment_blurb'))).data!;
-    expect(blurb, contains('removed once the sync pivot lands'));
+    expect(blurb, contains('before it can sync'));
     expect(blurb, contains('ceiling on your encryption'));
+    expect(blurb, isNot(contains('Cutover')));
+    expect(blurb, isNot(contains('#556')));
+  });
+
+  testWidgets('an account that already holds an escrow is joined, not founded',
+      (tester) async {
+    final runner = await _pump(
+      tester,
+      _StubRunner(
+        [
+          _status(EnrolmentState.notEnrolled),
+          _status(EnrolmentState.enrolled,
+              memberId: 'member-2',
+              founded: const ['workspace-default', 'workspace-preferences']),
+        ],
+        escrow: true,
+      ),
+    );
+
+    expect(runner.escrowProbes, 1);
+    expect(find.byKey(const Key('enrolment_state_join')), findsOneWidget);
+    // Founding could only ever be refused for this account, so it is not drawn.
+    expect(find.byKey(const Key('enrolment_generate_button')), findsNothing);
+    expect(find.byKey(const Key('enrolment_found_button')), findsNothing);
+    expect(find.byKey(const Key('enrolment_state_not_enrolled')), findsNothing);
+
+    await tester.enterText(
+      find.byKey(const Key('enrolment_resume_field')),
+      _generated,
+    );
+    await _tapScrolled(tester, const Key('enrolment_resume_button'));
+
+    expect(runner.resumedWith, [_generated]);
+    expect(find.byKey(const Key('enrolment_state_enrolled')), findsOneWidget);
+  });
+
+  testWidgets('an empty escrow slot opens the founding door', (tester) async {
+    final runner = await _pump(
+      tester,
+      _StubRunner([_status(EnrolmentState.notEnrolled)]),
+    );
+
+    expect(runner.escrowProbes, 1);
+    expect(find.byKey(const Key('enrolment_state_not_enrolled')), findsOneWidget);
+    expect(find.byKey(const Key('enrolment_generate_button')), findsOneWidget);
+    expect(find.byKey(const Key('enrolment_state_join')), findsNothing);
+  });
+
+  testWidgets('an unreachable escrow probe offers a retry, not a guess',
+      (tester) async {
+    final runner = await _pump(
+      tester,
+      _StubRunner(
+        [_status(EnrolmentState.notEnrolled)],
+        escrowProbeFailure:
+            const SyncTransportException.unreachable('no route to host'),
+      ),
+    );
+
+    // Neither door can open offline, so the screen says so rather than drawing a
+    // button whose only possible outcome is a failure.
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('enrolment_escrow_probe_error')))
+          .data,
+      allOf(contains('could not be checked'), contains('no route to host')),
+    );
+    expect(find.byKey(const Key('enrolment_generate_button')), findsNothing);
+    expect(find.byKey(const Key('enrolment_resume_button')), findsNothing);
+
+    await _tapScrolled(tester, const Key('enrolment_escrow_probe_retry'));
+    expect(runner.escrowProbes, 2);
+  });
+
+  testWidgets('an enrolled or half-founded device is never probed',
+      (tester) async {
+    final enrolled = await _pump(
+      tester,
+      _StubRunner([
+        _status(EnrolmentState.enrolled,
+            memberId: 'member-1',
+            founded: const ['workspace-default', 'workspace-preferences']),
+      ]),
+    );
+    expect(enrolled.escrowProbes, 0,
+        reason: 'an enrolled store answers the question on its own');
   });
 
   testWidgets('the passphrase is shown, confirmed, then gone', (tester) async {
@@ -469,6 +575,9 @@ class _ThrowingRunner implements EnrolmentCeremonyRunner {
 
   @override
   Future<EnrolmentCeremonyStatus> status() async => throw StateError(message);
+
+  @override
+  Future<bool> escrowExists() async => throw StateError(message);
 
   @override
   Future<String> generatePassphrase() async => throw StateError(message);

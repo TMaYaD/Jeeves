@@ -6,8 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'auth/auth_mode.dart';
 // Cutover tooling (#553 Phase 1) — removed by #556.
 import 'cutover/converge_verify/converge_verify_screen.dart';
-// Cutover tooling (#553 Phase 2) — removed by #556.
-import 'cutover/enrolment_ceremony/enrolment_ceremony_screen.dart';
+import 'screens/enrolment/enrolment_ceremony_screen.dart';
 // Cutover tooling (#553 Phase 2) — removed by #556.
 import 'cutover/reseed/reseed_screen.dart';
 import 'screens/app_shell.dart';
@@ -99,9 +98,8 @@ final appRouter = GoRouter(
       path: ConvergeVerifyScreen.routePath,
       builder: (context, state) => const ConvergeVerifyScreen(),
     ),
-    // Cutover tooling (#553 Phase 2) — removed by #556. Reachable in every
-    // flavour for the same reason as its sibling above: the device that has to
-    // found the Workspace is the production-flavour phone.
+    // Onboarding, not a settings page: a signed-in device that is not enrolled
+    // is routed here and cannot leave until it is (or signs out).
     GoRoute(
       path: EnrolmentCeremonyScreen.routePath,
       builder: (context, state) => const EnrolmentCeremonyScreen(),

@@ -19,7 +19,7 @@ import 'dart:typed_data';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jeeves/cutover/enrolment_ceremony/enrolment_ceremony_runner.dart';
+import 'package:jeeves/screens/enrolment/enrolment_ceremony_runner.dart';
 import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/ids.dart';
@@ -201,6 +201,38 @@ void main() {
               .workspaceClientFactory(userPreferencesWorkspaceId(_userId)))
           .isEnrolled,
       isTrue,
+    );
+  });
+
+  test('escrowExists distinguishes a fresh account from a founded one',
+      () async {
+    final device = await phone();
+
+    // The question the store cannot answer: this device reads `notEnrolled`
+    // either way, and only the account's slot says which door can open.
+    expect(await device.runner.escrowExists(), isFalse);
+    expect((await device.runner.status()).state, EnrolmentState.notEnrolled);
+
+    await device.runner.found(await device.runner.generatePassphrase());
+    expect(await device.runner.escrowExists(), isTrue);
+
+    // And on a *second* device of the same account — the case the join-first
+    // presentation exists for: an un-enrolled store over an occupied slot.
+    final second = await phone();
+    expect((await second.runner.status()).state, EnrolmentState.notEnrolled);
+    expect(await second.runner.escrowExists(), isTrue);
+  });
+
+  test('an unreachable server makes escrowExists throw rather than answer',
+      () async {
+    final device = await phone();
+    device.link.online = false;
+
+    // Never `false`: reporting "no escrow" offline would send a second device
+    // into a founding the account cannot accept.
+    await expectLater(
+      device.runner.escrowExists(),
+      throwsA(isA<SyncTransportException>()),
     );
   });
 

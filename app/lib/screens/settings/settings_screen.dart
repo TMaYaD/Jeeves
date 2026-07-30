@@ -4,8 +4,7 @@ import 'package:go_router/go_router.dart';
 
 // Cutover tooling (#553 Phase 1) — removed by #556.
 import '../../cutover/converge_verify/converge_verify_screen.dart';
-// Cutover tooling (#553 Phase 2) — removed by #556.
-import '../../cutover/enrolment_ceremony/enrolment_ceremony_screen.dart';
+import '../enrolment/enrolment_ceremony_screen.dart';
 // Cutover tooling (#553 Phase 2) — removed by #556.
 import '../../cutover/reseed/reseed_screen.dart';
 import '../../models/clarify_mode.dart';
