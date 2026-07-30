@@ -335,6 +335,17 @@ void main() {
         reason: 'the downgrade is misconduct by its author, and holding the key is '
             'not what makes it so',
       );
+      // The alarm alone would not prove the op was kept *out*: an accusation that
+      // still reduced the cleartext is the failure this test exists to catch.
+      final quarantined = await a.client.quarantined(includeReleased: false);
+      expect(
+        quarantined.single.reason,
+        SyncRejectionReason.plaintextAtEncryptedEpoch.code,
+      );
+      expect(
+        await canonicalReducedState(a.database),
+        isNot(contains(_entityId('keyless-downgrade'))),
+      );
     });
 
     test('a Device without the epoch key refuses to author rather than downgrade',
