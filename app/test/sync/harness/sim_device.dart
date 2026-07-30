@@ -17,7 +17,8 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart'
+    show ApplyInterceptor, QueryInterceptor, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/sync/device_key_store.dart';
@@ -445,6 +446,7 @@ class SimDevice {
     Duration keepaliveInterval = signalKeepaliveInterval,
     int pullPageLimit = defaultPullPageLimit,
     bool fileBacked = false,
+    QueryInterceptor? syncStoreInterceptor,
   }) async {
     if (passphrase != null && chosenPassphrase != null) {
       throw ArgumentError(
@@ -460,10 +462,16 @@ class SimDevice {
     // device that has to prove it gets a real file it can be reopened over.
     final storeDirectory =
         fileBacked ? Directory.systemTemp.createTempSync('jeeves-sim-device-') : null;
+    final storeExecutor = storeDirectory == null
+        ? NativeDatabase.memory()
+        : NativeDatabase(File('${storeDirectory.path}/sync.sqlite'));
+    // A fault injector wraps the executor so a test can kill one write mid-apply
+    // and prove the receive pipeline recovers (#618). The interceptor is armed by
+    // the test *after* enrolment, so construction here just installs it disarmed.
     final database = SyncDatabase(
-      storeDirectory == null
-          ? NativeDatabase.memory()
-          : NativeDatabase(File('${storeDirectory.path}/sync.sqlite')),
+      syncStoreInterceptor == null
+          ? storeExecutor
+          : storeExecutor.interceptWith(syncStoreInterceptor),
     );
     final identity = await MemberIdentity.generate(
       memberId: memberId,
@@ -682,6 +690,10 @@ class SimDevice {
   /// The live sync store — [database] until [reopenSyncStore] replaces it.
   SyncDatabase _syncStore;
 
+  /// The currently-open store, so a test can inspect rows after a
+  /// [reopenSyncStore] (where [database] is the closed pre-crash handle).
+  SyncDatabase get syncStore => _syncStore;
+
   SimTimers get timers => link.timers;
 
   /// Close this device's sync store and open it again over the same file.
@@ -691,7 +703,26 @@ class SimDevice {
   /// alarms, which is what "survives restart" has to mean to be worth asserting.
   /// Enrolment is deliberately not re-run — a real relaunch reloads its identity
   /// from the key store rather than registering itself a second time.
-  Future<SyncClient> reopenSyncStore() async {
+  ///
+  /// The reopened store is a plain `NativeDatabase`, never the fault injector the
+  /// pre-crash store may have carried: "reopen" is a clean process, and the
+  /// interrupted write must not fault a second time on recovery.
+  ///
+  /// [attachTransport] wires this device's live transport onto the reopened
+  /// client so a crash-recovery test can *re-pull* the op it was killed applying,
+  /// not merely inspect the wreckage. The directory is fresh (only this device's
+  /// own keys, via [SyncClient]'s constructor), so a re-pulled op it must verify
+  /// has to be one this device itself authored — which every #618 crash case is.
+  ///
+  /// The reopened client gets its own [DomainProjector], over a fresh
+  /// [CollectionRegistry] bound to [reopened] rather than the pre-crash
+  /// [database] the original `registry` closed over — [CollectionRegistry]
+  /// holds that binding as a `final` field, so the original instance cannot
+  /// simply be reattached (it would read a closed connection). [domain] itself
+  /// is untouched: it is memory-backed and independent of the sync store file,
+  /// so the same read model keeps accumulating projected rows across the
+  /// "restart".
+  Future<SyncClient> reopenSyncStore({bool attachTransport = false}) async {
     final directory = storeDirectory;
     if (directory == null) {
       throw StateError('a memory-backed device has no file to reopen');
@@ -706,8 +737,10 @@ class SimDevice {
       database: reopened,
       clock: hlc,
       reducer: Reducer(reopened, nowMs: () => clock.nowMs, strategies: strategies),
+      transport: attachTransport ? link : null,
+      workspaceKeys: workspaceKeys,
       now: () => clock.asDateTime,
-    );
+    )..projector = DomainProjector(registry: CollectionRegistry(reopened), domain: domain);
   }
 
   /// The subscription lifecycle, on this device's deterministic hooks: the

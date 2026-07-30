@@ -1289,24 +1289,54 @@ class SyncClient {
         // so a server spending one transport `seq` on two chain-valid control ops
         // gets the second one's authority with nothing for a later content op to
         // chain to. A taken slot ends the op here, without applying anything.
+        // A non-nullable capture: `header` is a nullable field, so its promotion
+        // at the branch guard above does not carry into the transaction closure.
+        final controlHeader = header;
         final verified = await _verifyControlOp(pulled, parts.body, header);
-        if (!await _logReceived(pulled, header)) return const {};
-        try {
-          await _applyControlOp(pulled, header, verified);
-        } on SyncRejection catch (rejection) {
-          // Logged-but-refused, the same shape the content path uses: the envelope
-          // stays as chain evidence, no authority effect landed, and the row
-          // records which guard fired. Rethrown so the outer catch still
-          // quarantines and accuses.
-          await _stampRefused(pulled.seq, rejection.reason);
-          rethrow;
-        }
-        // A control op reduces to nothing, so it contributes no projection work;
-        // it is logged because later content ops from the same author chain to it.
-        // `applied_at` is stamped only now — after verification and application
-        // both succeeded — so a refused control op is logged-but-unapplied
-        // evidence rather than a row claiming an apply that never happened.
-        await _stampApplied(pulled.seq);
+        // Log, apply and stamp as **one** transaction, so a crash mid-apply leaves
+        // either all of it or none — never a raised epoch floor with no
+        // applied-control record, nor an `op_log` row claiming an apply that never
+        // completed (#618). `_db` is a [SyncDatabase], so `transaction()` is the
+        // ordinary drift transaction the reducer already nests as a savepoint;
+        // `_verifyControlOp` above has no side effects and stays outside it.
+        SyncRejection? refused;
+        RegistrationCertificate? learned;
+        final logged = await _db.transaction(() async {
+          // A taken slot ends the op here. On an own-reserve re-serve [_logReceived]
+          // wrote nothing and returns false; on a genuine collision it wrote the
+          // alarm and returns false. Returning normally (never throwing) commits
+          // either way — the alarm, when there is one, must persist.
+          if (!await _logReceived(pulled, controlHeader)) return false;
+          try {
+            learned = await _applyControlOp(pulled, controlHeader, verified);
+          } on SyncRejection catch (rejection) {
+            // Logged-but-refused (#551), the same shape the content path uses: the
+            // envelope stays as chain evidence, no authority effect landed, and the
+            // row records which guard fired. The stamp commits *with* the log row;
+            // the rejection is rethrown *outside* the transaction (below) so the
+            // outer catch still quarantines and accuses.
+            await _stampRefused(pulled.seq, rejection.reason);
+            refused = rejection;
+            return true;
+          }
+          // `applied_at` is stamped only now — after verification and application
+          // both succeeded — so a refused control op is logged-but-unapplied
+          // evidence rather than a row claiming an apply that never happened.
+          await _stampApplied(pulled.seq);
+          return true;
+        });
+        // A genuine storage fault inside the body rolls the whole unit back and
+        // propagates out here (caught by the outer `on SqliteException`); only a
+        // refusal or a taken slot returns normally.
+        if (refused != null) throw refused!;
+        if (!logged) return const {};
+        // The op taught this device a chained key. Remembered **after** the commit
+        // and **only** on the committed, non-refused path, so a `controlChainFork`
+        // throw (which never sets `learned`) never remembers one, and no in-memory
+        // key outlives a durable record that rolled back.
+        if (learned != null) directory.rememberChained(learned!);
+        // A control op reduces to nothing, so it contributes no projection work; it
+        // is logged because later content ops from the same author chain to it.
         return const {};
       }
 
@@ -1469,20 +1499,37 @@ class SyncClient {
     await _checkOwnWrites(header, pulled.envelope);
     if (verdict.outcome != ChainOutcome.accept) return const {};
 
-    if (!await _logReceived(pulled, header)) return const {};
-    final authorization = (await grantsView()).verdictFor(
-      authorMemberId: header.authorMemberId,
-      opClass: header.opClass,
-      seq: pulled.seq,
-    );
-    if (authorization != null) {
-      await _stampRefused(pulled.seq, authorization.reason);
-      await _refuse(pulled, authorization, header);
+    // Log, then either refuse-and-stamp or apply-and-stamp, as **one**
+    // transaction: a crash between the attestation inserts and the stamp leaves
+    // the evidence and the stamp all-or-nothing, never an orphan `op_log` row
+    // (#618). The release scan re-enters [_receive] (which opens its own
+    // transaction), so it stays **outside** this unit — below.
+    SyncRejection? authorizationRefusal;
+    final logged = await _db.transaction(() async {
+      if (!await _logReceived(pulled, header)) return false;
+      final authorization = (await grantsView()).verdictFor(
+        authorMemberId: header.authorMemberId,
+        opClass: header.opClass,
+        seq: pulled.seq,
+      );
+      if (authorization != null) {
+        await _stampRefused(pulled.seq, authorization.reason);
+        authorizationRefusal = authorization;
+        return true;
+      }
+      await _applyPrune(pulled.seq, prune);
+      await _stampApplied(pulled.seq);
+      return true;
+    });
+    if (!logged) return const {};
+    if (authorizationRefusal != null) {
+      // Quarantined **outside** the unit, mirroring the control path (#618): a
+      // storage fault raised by `_refuse`'s own insert must not roll back the
+      // log-and-stamp row this transaction just committed.
+      await _refuse(pulled, authorizationRefusal!, header);
+      // The chain head advanced, so a quarantined successor may now be valid.
       return _releaseChainSuccessors(header.authorMemberId);
     }
-
-    await _applyPrune(pulled.seq, prune);
-    await _stampApplied(pulled.seq);
 
     // The scan runs for **every author this prune attests**, not just its own: the
     // floor it just raised is what makes those authors' quarantined survivors
@@ -2040,7 +2087,11 @@ class SyncClient {
   /// `applied_control_log` row — must never exist without a row behind them, or a
   /// server spending one transport `seq` on two chain-valid control ops lands the
   /// second one's authority with nothing for a later content op to chain to.
-  Future<void> _applyControlOp(
+  /// Returns the [RegistrationCertificate] this op teaches the directory, or null.
+  /// The caller applies it to [directory] **after** the receive transaction
+  /// commits (see [_receive]'s control branch), so a rolled-back durable record
+  /// never leaves a live chained key behind it.
+  Future<RegistrationCertificate?> _applyControlOp(
     PulledOp pulled,
     OpHeader header,
     _VerifiedControlOp verified,
@@ -2061,9 +2112,10 @@ class SyncClient {
       );
     }
 
-    // Verified *and* positioned: now the op may teach this device something.
+    // Verified *and* positioned: the op may now teach this device a chained key,
+    // but the caller remembers it post-commit (see [_receive]) rather than here,
+    // so no in-memory key outlives a durable record that rolled back.
     final learned = verified.learned;
-    if (learned != null) directory.rememberChained(learned);
     if (payload.controlType == controlTypeWorkspaceGenesis) {
       // Genesis fixes the epoch floor at 0. Recorded rather than assumed, so a
       // Workspace's floor exists from the moment the Workspace does.
@@ -2086,6 +2138,7 @@ class SyncClient {
       _epochKeyRefreshRequired = true;
     }
     await _appendAppliedControlOp(pulled, payload, header, verified.payloadBytes);
+    return learned;
   }
 
   /// The registering pair's binding steps: the certificate must be *about* this
@@ -2816,6 +2869,24 @@ class SyncClient {
       return true;
     } on SqliteException catch (error) {
       if (!_slotTakenResultCodes.contains(error.extendedResultCode)) rethrow;
+      // Our own already-committed reserve, re-served because the cursor save
+      // ([pull]'s [_saveCursor]) never landed before a crash: the row at this
+      // transport seq is byte-identical to what we are re-serving. Skip silently —
+      // it is already logged and, under the receive-path transaction wrap, already
+      // fully applied. No alarm, and the caller returns `{}` so nothing re-applies;
+      // the cursor then advances on the next pull and self-heals. The same
+      // `(workspaceId, seq)` byte-compare [_refuseStaleServe] uses.
+      final existing = await (_db.select(_db.opLog)
+            ..where((row) =>
+                row.workspaceId.equals(workspaceId) & row.seq.equals(pulled.seq)))
+          .getSingleOrNull();
+      if (existing != null && sameBytes(existing.envelope, pulled.envelope)) {
+        return false;
+      }
+      // Divergent bytes at one transport seq (a genuine double-serve), or a real
+      // author-chain slot collision on the `(authorMemberId, authorSeq)` unique
+      // index with no byte-identical row at `pulled.seq`: the accusation stands,
+      // exactly as before.
       await _raiseAlarm(
         IntegrityAlarmKind.authorChainSlotCollision,
         authorMemberId: header.authorMemberId,
