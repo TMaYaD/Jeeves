@@ -1,5 +1,4 @@
-/// What the sync surface reports — the replacement for the PowerSync
-/// `SyncStatus` indicator.
+/// What the sync surface reports.
 ///
 /// **One class, one file.** [unresolvedAlarmCount] and [alarmKinds] come from the
 /// `integrity_alarms` rows with `resolved_at IS NULL`; [pendingOpCount],
@@ -16,8 +15,9 @@
 ///   [pendingOpCount], and withholding the timestamp would only make a device
 ///   that is receiving fine look like one that is not.
 ///
-/// The PowerSync dead-letter machinery does not carry over — quarantine plus
-/// this surface is its successor. Its removal ships with #556.
+/// There is no dead-letter table behind this: quarantine plus the alarm counts
+/// above are the successor, and a refused op is evidence held in the log rather
+/// than a row in a side table nothing drains.
 library;
 
 class SyncHealth {

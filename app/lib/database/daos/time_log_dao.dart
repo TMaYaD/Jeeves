@@ -2,7 +2,7 @@
 library;
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import '../../utils/uuid.dart';
 
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';

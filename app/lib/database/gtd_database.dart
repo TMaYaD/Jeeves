@@ -18,7 +18,7 @@
 library;
 
 import 'package:drift/drift.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import '../utils/uuid.dart';
 
 import 'daos/action_dao.dart';
 import 'daos/capture_dao.dart';

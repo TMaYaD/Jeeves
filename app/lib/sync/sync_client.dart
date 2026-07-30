@@ -480,8 +480,7 @@ class SyncClient {
   /// Flush the outbox, then pull. A transport failure on either half leaves the
   /// queue and the cursor exactly where they were.
   ///
-  /// Returns the post-sync [SyncHealth] — the surface that replaces PowerSync's
-  /// status indicator.
+  /// Returns the post-sync [SyncHealth] — what the sync indicator reads.
   Future<SyncHealth> sync() async {
     await flushOutbox();
     await pull();

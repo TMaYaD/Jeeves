@@ -266,8 +266,8 @@ class SearchDao {
         if (!query.tagIds.any(todoTagIds.contains)) continue;
       }
 
-      // Text filter applied in Dart so the SQL query stays simple and
-      // compatible with PowerSync views.
+      // Text filter applied in Dart so the SQL query stays simple — there is no
+      // FTS index to consult (see the class doc).
       if (term.isNotEmpty) {
         final titleHit = todo.title.toLowerCase().contains(term);
         final notesHit = todo.notes?.toLowerCase().contains(term) ?? false;

@@ -23,7 +23,7 @@
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:powersync/powersync.dart' show uuid;
+import '../utils/uuid.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
@@ -36,11 +36,11 @@ import '../providers/database_provider.dart';
 abstract class ClarificationService {
   /// Whether the Capture [captureId] still exists. Capture clarify surfaces
   /// (standalone inbox-clarify, both ceremonies) load a snapshot of Inbox
-  /// Captures and can lose a row between render and tap — sync or another
-  /// device may hard-delete it. `captures` is a PowerSync VIEW, so a write's
-  /// affected-rows count can't signal a missing row; callers pre-check here so
-  /// they don't advance cursors or record phantom routings for a vanished
-  /// Capture.
+  /// Captures and can lose a row between render and tap — a pull or another
+  /// device may hard-delete it. The routing write is a multi-statement
+  /// transaction whose affected-rows count cannot signal a missing subject;
+  /// callers pre-check here so they don't advance cursors or record phantom
+  /// routings for a vanished Capture.
   Future<bool> captureExists(String captureId);
 
   /// Clarifies the Capture [captureId] into a **new** Outcome (ADR-0006:
@@ -177,11 +177,10 @@ abstract class ClarificationService {
 
   /// Whether the clarify subject still exists. Snapshot-based callsites
   /// (inbox-clarify, periodic review) can lose a row between render and
-  /// tap — sync or another device may hard-delete it. PowerSync exposes
-  /// `todos` as a SQLite VIEW with INSTEAD OF triggers, so the
-  /// affected-rows count for an UPDATE is always 0 and the write itself
-  /// can't signal a missing row; callers pre-check here so they don't
-  /// advance cursors or record phantom routings for a vanished row.
+  /// tap — a pull or another device may hard-delete it. The routing write is a
+  /// multi-statement transaction whose affected-rows count cannot signal a
+  /// missing subject; callers pre-check here so they don't advance cursors or
+  /// record phantom routings for a vanished row.
   Future<bool> exists(String id);
 
   /// IDs of the person-typed tags currently attached to [id]. Used to

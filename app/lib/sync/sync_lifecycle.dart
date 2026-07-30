@@ -200,7 +200,6 @@ class SyncLifecycle {
 
   /// Completes the first time step 4 succeeds — the spine's "the initial pull is
   /// in" signal, and what `postSyncHooksProvider` arms its one-shot fixup on.
-  /// PowerSync's `hasSynced` was that signal and no longer flips.
   Future<void> get firstSyncSettled => _firstSyncSettled.future;
 
   /// Run the sequence. Safe to call repeatedly: every step is idempotent, and

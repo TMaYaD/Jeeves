@@ -5,11 +5,9 @@
 /// ceremony reaches it from the phone (#553 Phase 2). [HttpSyncTransport] arrives
 /// the only way it can — out of the proof-of-possession exchange below.
 ///
-/// What the live app still does *not* do is push domain writes through here: DAO
-/// capture stays `NoopDomainOpCapture` and PowerSync remains the sync path until
-/// the flip. The convergence properties are still asserted against the
-/// in-process double in `test/sync/harness/`, which is contract-tested
-/// case-for-case against these routes.
+/// The convergence properties are asserted against the in-process double in
+/// `test/sync/harness/`, which is contract-tested case-for-case against these
+/// routes — so a harness assertion is evidence about the real thing.
 ///
 /// [HttpUserTransport] carries the User's session; [HttpSyncTransport] carries
 /// a member token and is *only* reachable by completing the proof-of-possession

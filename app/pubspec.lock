@@ -58,7 +58,7 @@ packages:
     source: hosted
     version: "2.1.2"
   build:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: build
       sha256: a156715e7cd728130c592f30552575908aae5b100005fbc1f0fb16b3c03a3d10
@@ -983,22 +983,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.5.0"
-  powersync:
-    dependency: "direct main"
-    description:
-      name: powersync
-      sha256: fd497501e9adbfcafb65870311c6c2b48f6146cbf67bb4e2d92f3f8da23bd9ab
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.3.1"
-  powersync_flutter_libs:
-    dependency: transitive
-    description:
-      name: powersync_flutter_libs
-      sha256: "24324947bffee25912abd3534203d7ab070b99d3186a8de658205ffb44902971"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.5.0+eol"
   process:
     dependency: transitive
     description:
@@ -1252,14 +1236,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.1"
-  sqlcipher_flutter_libs:
-    dependency: transitive
-    description:
-      name: sqlcipher_flutter_libs
-      sha256: "38d62d659d2fb8739bf25a42c9a350d1fdd6c29a5a61f13a946778ec75d27929"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.7.0+eol"
   sqlite3:
     dependency: "direct main"
     description:

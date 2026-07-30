@@ -1,12 +1,10 @@
 // One-shot post-sync fixups that have to wait until the first sync has brought
 // other devices' rows in.
 //
-// **Repointed at the spine (#591).** It used to wait on PowerSync's
-// `hasSynced`, which never flips now that the engine does not connect: the hook
-// would never fire and the provider would hold a dangling status-stream listener
-// for the process's lifetime. The equivalent signal is
+// **Keyed on the spine (#591).** The signal is
 // `SyncLifecycle.firstSyncSettled`, which completes once both Workspace clients
-// have pulled.
+// have pulled — the successor to the storage engine's own `hasSynced`, which
+// stopped flipping when the engine stopped connecting and took the hook with it.
 //
 // Kept rather than pruned with the #556 inventory because the job survives the
 // flip. `dedupeTags` merges Tags two devices minted independently, and Tag ids
