@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/ritual.dart';
 import 'providers/auth_provider.dart';
+import 'providers/database_provider.dart';
 import 'providers/evening_shutdown_provider.dart';
 import 'providers/focus_session_planning_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
@@ -140,6 +141,13 @@ class JeevesApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Eagerly materialise [domainStoreRebuildProvider] so a device whose domain
+    // store was just created replays its local op log into it. Read first, and
+    // before anything that reads the store, so the replay starts as early as the
+    // app can start it; it is not awaited (see the provider's own note on why
+    // the ADR-0010 notifies make that safe).
+    ref.watch(domainStoreRebuildProvider);
+
     // Eagerly materialise [authTokenProvider] so its async build() runs at
     // startup and restores the persisted session from secure storage.  The
     // provider is lazy — without this, stored tokens are ignored until the

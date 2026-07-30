@@ -1,17 +1,23 @@
-/// ADR-0010 for the projector: a reduced-in row must reach watching views.
+/// ADR-0010 for the projector: a reduced-in row must reach watching queries.
 ///
-/// In production every synced table is a PowerSync **view** with INSTEAD OF
-/// triggers, so a direct write reports `changes() == 0` and Drift's own stream
-/// invalidation never fires — leaving the async bridge as the only refresh
-/// path, and the bridge names the *backing* table, not the view. A projected
-/// row would therefore land in the store and never appear on screen.
+/// Over the **production topology**: `jeeves_domain.sqlite` on disk through
+/// `sqlite_async`, every synced name a real table Drift created (#595). The
+/// PowerSync-view emulation this file used to install went with the engine.
 ///
-/// This recreates that topology on a real on-disk sqlite_async database, the
-/// same way `test/database/clarify_routing_view_notify_test.dart` does for the
-/// DAO write path, and drives it through [DomainProjector] per collection
-/// group. The negative case is asserted too: the identical write *without* the
-/// notify leaves the watcher stale, which is what makes the positive case
-/// evidence rather than coincidence.
+/// **The hazard is smaller than it was, and that is worth stating.** ADR-0010's
+/// failure mode was that the `SqliteAsyncDriftConnection` bridge named PowerSync's
+/// *backing* table (`ps_data__todos`), never the `todos` view a watcher read, so
+/// a projector write invalidated nothing at all. Over real tables the bridge names
+/// `todos` — the table that actually changed and the one the watcher declares — so
+/// it is now a working second refresh path. The negative assertion this file used
+/// to carry ("the same write without the notify is invisible") is therefore false
+/// on the new topology and has been removed rather than propped up.
+///
+/// The notify stays, for the two cases the bridge still does not cover: a watcher
+/// that reads across tables the write did not touch (asserted by emission counts
+/// in `test/database/action_view_notify_test.dart`), and the window where the
+/// bridge is momentarily silent — observed on the first cold start of a new
+/// planning day (#342), which is the incident ADR-0010 came out of.
 ///
 /// It also covers search: no FTS index exists — `search_dao` is a read-only
 /// query over the live tables — so the notify is the whole requirement for a
@@ -47,48 +53,6 @@ const _baseWallMs = 1800000000000;
 
 String _id(String label) => const Uuid().v5(jeevesWorkspaceNamespace, 'notify/$label');
 
-/// Rewrites [table] from a real table into a PowerSync-style view over a
-/// `<table>_data` backing table with INSTEAD OF triggers.
-///
-/// The backing table is deliberately **unconstrained** beyond its primary key,
-/// which is what PowerSync's `ps_data__*` really is (an id and a JSON blob), and
-/// the view projects it verbatim. That is what makes this emulation able to
-/// catch a projector that leaves a NOT NULL column null: nothing downstream
-/// supplies a default, so the null reaches the Drift row read exactly as it
-/// would on a store the server has never replicated into.
-Future<void> _convertToView(SqliteDatabase raw, String table) async {
-  final info = await raw.getAll('PRAGMA table_info($table)');
-  final cols = info.map((r) => r['name'] as String).toList();
-  final colList = cols.map((c) => '"$c"').join(', ');
-  final newValues = cols.map((c) => 'NEW."$c"').join(', ');
-  final setClause =
-      cols.where((c) => c != 'id').map((c) => '"$c" = NEW."$c"').join(', ');
-  final backingCols = [
-    for (final column in cols)
-      column == 'id' ? '"id" TEXT PRIMARY KEY' : '"$column"',
-  ].join(', ');
-
-  await raw.writeTransaction((tx) async {
-    await tx.execute('CREATE TABLE ${table}_data ($backingCols)');
-    await tx.execute('INSERT INTO ${table}_data ($colList) '
-        'SELECT $colList FROM $table');
-    await tx.execute('DROP TABLE $table');
-    await tx.execute('CREATE VIEW $table AS SELECT $colList FROM ${table}_data');
-    await tx.execute('''
-CREATE TRIGGER ${table}_insert INSTEAD OF INSERT ON $table BEGIN
-  INSERT INTO ${table}_data ($colList) VALUES ($newValues);
-END;''');
-    await tx.execute('''
-CREATE TRIGGER ${table}_update INSTEAD OF UPDATE ON $table BEGIN
-  UPDATE ${table}_data SET $setClause WHERE id = OLD.id;
-END;''');
-    await tx.execute('''
-CREATE TRIGGER ${table}_delete INSTEAD OF DELETE ON $table BEGIN
-  DELETE FROM ${table}_data WHERE id = OLD.id;
-END;''');
-  });
-}
-
 void main() {
   late Directory tempDir;
   late SqliteDatabase raw;
@@ -98,33 +62,14 @@ void main() {
   late Reducer reducer;
   late DomainProjector projector;
 
-  const viewed = [
-    'todos',
-    'todo_tags',
-    'tags',
-    'actions',
-    'time_logs',
-    'captures',
-    'capture_outcomes',
-    'capture_tags',
-    'focus_sessions',
-    'focus_session_tasks',
-    'focus_session_dispositions',
-    'user_preferences',
-  ];
-
   setUp(() async {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
     tempDir = Directory.systemTemp.createTempSync('jeeves_550_notify_');
-    raw = SqliteDatabase(path: '${tempDir.path}/jeeves.sqlite');
+    raw = SqliteDatabase(path: '${tempDir.path}/jeeves_domain.sqlite');
     await raw.initialize();
 
-    final bootstrap = GtdDatabase(SqliteAsyncDriftConnection(raw));
-    await bootstrap.customSelect('SELECT 1').get();
-    await bootstrap.close();
-    for (final table in viewed) {
-      await _convertToView(raw, table);
-    }
+    // Drift builds the whole schema as real tables on first open — the store's
+    // production shape since #595.
     domain = GtdDatabase(SqliteAsyncDriftConnection(raw));
 
     sync = SyncDatabase(NativeDatabase.memory());
@@ -173,8 +118,7 @@ void main() {
         'intent': 'next',
       };
 
-  test('a projected Outcome reaches the todos watcher — and does not without '
-      'the notify', () async {
+  test('a projected Outcome reaches the todos watcher', () async {
     final id = _id('outcome');
     final seen = <List<Todo>>[];
     final subscription = domain.todoDao.watchNext().listen(seen.add);
@@ -182,29 +126,9 @@ void main() {
     await waitUntil(() => seen.isNotEmpty);
     expect(seen.last, isEmpty);
 
-    // The negative case first: the same INSERT the projector runs, with no
-    // notify. The view's INSTEAD OF trigger reports changes()==0, the bridge
-    // names `todos_data`, and the watcher never re-queries.
-    await domain.customInsert(
-      'INSERT INTO "todos" ("id", "title", "created_at", "user_id", '
-      '"clarified", "intent") VALUES (?, ?, ?, ?, 1, ?)',
-      variables: [
-        Variable<String>(_id('silent')),
-        const Variable<String>('written silently'),
-        Variable<DateTime>(DateTime.utc(2026, 7, 28, 9)),
-        const Variable<String>(_userId),
-        const Variable<String>('next'),
-      ],
-    );
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-    expect(seen.last, isEmpty, reason: 'a write without the notify must be invisible');
-
-    // The projector's notify re-queries the view, and the silent row surfaces
-    // along with the projected one — the store held it all along, the watcher
-    // simply had no reason to look.
     await projector.project(await reduce('todos', id, outcomeFields('Ship it')));
-    await waitUntil(() => seen.last.length == 2);
-    expect(seen.last.map((todo) => todo.id), containsAll([id, _id('silent')]));
+    await waitUntil(() => seen.last.length == 1);
+    expect(seen.last.single.id, id);
   });
 
   test('a projected Action reaches the actions watcher', () async {
@@ -351,9 +275,9 @@ void main() {
     // carries nothing about (ADR-0030), but it is declared NOT NULL, so a
     // projected row that omitted it read back as null and threw on the null
     // check the moment anything did a raw row read — `SearchDao` among them.
-    // Nothing downstream of this emulation supplies a default: the backing
-    // table is unconstrained and the view projects it verbatim, exactly like a
-    // store the server has never replicated into.
+    // On a real table the omission is louder still — the INSERT itself would
+    // violate the constraint — which is why the codec declares the default
+    // rather than leaving it to whatever the storage layer happens to tolerate.
     final id = _id('outcome');
     await projector.project(await reduce('todos', id, outcomeFields('Ship it')));
 
