@@ -33,7 +33,6 @@ Todo _todo(String id, String title) => Todo(
       clarified: true,
       intent: 'next',
       userId: kLocalUserId,
-      timeSpentMinutes: 0,
     );
 
 void main() {

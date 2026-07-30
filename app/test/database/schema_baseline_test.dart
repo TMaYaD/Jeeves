@@ -16,6 +16,7 @@ library;
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqlite3/sqlite3.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import '../test_helpers.dart';
@@ -48,16 +49,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 1 — a fresh file, with no ladder behind it', () async {
+    test('is 2 — one onUpgrade step behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 1);
-      // Proves onCreate ran rather than onUpgrade.
+      expect(db.schemaVersion, 2);
+      // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        1,
+        2,
       );
     });
   });
@@ -116,6 +117,9 @@ void main() {
           'blocked_by_todo_id',
           // v28 (issue #525, ADR-0024) — `actions` is the only next-action grain.
           'next_action_text',
+          // Dropped by the v2 onUpgrade (issue #604) — time spent is a
+          // `SUM(time_logs)` derivation, never a stored cache (ADR-0030).
+          'time_spent_minutes',
           // Never dropped by the ladder (SQLite DROP COLUMN was unreliable
           // across OS versions) and invisible to Drift; a fresh file simply
           // never has it. `done_at` is the completion record.
@@ -191,8 +195,87 @@ void main() {
       final row = await db.select(db.todos).getSingle();
       expect(row.clarified, isTrue, reason: 'a created Outcome is clarified');
       expect(row.intent, 'next');
-      expect(row.timeSpentMinutes, 0);
       expect(row.doneAt, isNull);
+    });
+  });
+
+  group('v2 onUpgrade drops todos.time_spent_minutes', () {
+    test('the upgrade drops the column and preserves every row', () async {
+      // One raw sqlite3 database kept alive across two Drift opens: an
+      // in-memory NativeDatabase is destroyed when its connection closes, so
+      // the seed and the upgrade have to share the SAME underlying handle.
+      // `closeUnderlyingOnClose: false` is what lets the first Drift
+      // wrapper close without taking the data with it.
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      // Open 1: onCreate builds the v2 schema. Add the dropped column back and
+      // rewind user_version to 1 so the second open sees a v1 store to upgrade.
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      await seed.customStatement(
+        'ALTER TABLE todos ADD COLUMN time_spent_minutes '
+        'INTEGER NOT NULL DEFAULT 0',
+      );
+
+      final createdMs = DateTime.parse('2026-07-30T09:00:00.000Z')
+          .millisecondsSinceEpoch;
+      // Seed through raw SQL naming the column explicitly — the generated
+      // companion no longer knows it — with a non-default value that must be
+      // seen to have survived (well, its row must).
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified, '
+        '  time_spent_minutes) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next', 1, 42)",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified, '
+        '  time_spent_minutes) '
+        "VALUES ('t2', 'And another', 'u1', ?, 'maybe', 0, 0)",
+        [createdMs],
+      );
+      // A time_logs child of t1: the drop recreates `todos`, so this proves the
+      // FK survives the swap rather than being severed with the old table.
+      await seed.customStatement(
+        'INSERT INTO time_logs (id, user_id, task_id, started_at) '
+        "VALUES ('tl1', 'u1', 't1', '2026-07-30T09:30:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 1');
+      await seed.close();
+
+      // Open 2: Drift sees user_version=1, schemaVersion=2, runs the onUpgrade.
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        2,
+      );
+      expect(await _columnNames(upgraded, 'todos'),
+          isNot(contains('time_spent_minutes')),
+          reason: 'v2 drops the dead cache column');
+
+      final rows = await upgraded
+          .customSelect('SELECT id, title, intent, clarified, user_id '
+              'FROM todos ORDER BY id')
+          .get();
+      expect(rows.map((r) => r.read<String>('id')), ['t1', 't2'],
+          reason: 'no row lost in the table recreate');
+      expect(rows.first.read<String>('title'), 'Ship it');
+      expect(rows.first.read<String>('intent'), 'next');
+      expect(rows.last.read<String>('intent'), 'maybe');
+
+      // The FK child survived, still attributed to its parent.
+      final logs = await upgraded
+          .customSelect("SELECT task_id FROM time_logs WHERE id = 'tl1'")
+          .get();
+      expect(logs.single.read<String>('task_id'), 't1');
     });
   });
 }

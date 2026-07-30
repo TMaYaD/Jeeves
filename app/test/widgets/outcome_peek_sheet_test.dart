@@ -40,7 +40,6 @@ Todo _todo({
     createdAt: now,
     updatedAt: now,
     userId: _userId,
-    timeSpentMinutes: 0,
     timeEstimate: timeEstimate,
     energyLevel: energyLevel,
     dueDate: dueDate,

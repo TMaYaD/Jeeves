@@ -10,6 +10,8 @@
 /// - Notification skip/snooze helpers used by main.dart on action taps.
 /// - [completedTodayProvider], [unfinishedSelectedTodayProvider] — stream
 ///   providers driven by the active focus session's members.
+/// - [loggedMinutesByOutcomeProvider] — the derived time-spent total the Review
+///   steps render beside those Outcomes.
 /// - [eveningShutdownProvider] — step / disposition state for the ritual.
 library;
 
@@ -136,6 +138,21 @@ final completedTodayProvider = StreamProvider<List<Todo>>((ref) {
   return db.focusSessionDao.watchActiveSessionReviewSurface().map(
         (tasks) => tasks.where((t) => t.doneAt != null).toList(),
       );
+});
+
+/// Minutes logged per Outcome, keyed by Outcome id — the derived time-spent
+/// total both Review steps render (issue #604).
+///
+/// Nothing stores a time-spent total; it is summed from `time_logs` on every
+/// read, so this is a stream rather than a field on the Outcome rows the two
+/// providers above emit. One watcher serves the whole step: the Completed
+/// Review needs a per-card figure *and* a fold across the completed set, and a
+/// read per card would settle a frame late in the summary bar.
+///
+/// An Outcome with no stints is **absent from the map**, not zero — read it as
+/// `map[id] ?? 0`.
+final loggedMinutesByOutcomeProvider = StreamProvider<Map<String, int>>((ref) {
+  return ref.watch(databaseProvider).timeLogDao.watchTotalMinutesByTask();
 });
 
 /// Outcomes on the active session's Review surface (Plan ∪ off-Plan engaged)

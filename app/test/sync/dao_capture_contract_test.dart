@@ -6,9 +6,8 @@
 /// through the **real DAOs** on a real store, against a recording seam — no
 /// mocks, and no way for a path to pass by not being exercised.
 ///
-/// It also pins the two places where the log is deliberately *wider* or
-/// *narrower* than the local write: `deleteOutcome`'s enumerated cascade set
-/// (§ 2.4) and the absence of `todos.time_spent_minutes` (ADR-0030).
+/// It also pins where the log is deliberately *wider* than the local write:
+/// `deleteOutcome`'s enumerated cascade set (§ 2.4).
 @TestOn('!browser')
 library;
 
@@ -64,7 +63,7 @@ void main() {
   }
 
   group('todo_dao', () {
-    test('insertOutcome asserts the whole row, minus the dead cache', () async {
+    test('insertOutcome asserts the whole row', () async {
       await db.todoDao
           .insertOutcome(id: 'o1', title: 'Ship it', userId: _userId, now: _ts);
       final op = only(todosCollection);
@@ -75,9 +74,8 @@ void main() {
       expect(op.fields['created_at'], '2026-07-28T09:00:00.000Z');
       expect(op.fields['intent'], 'next');
       expect(op.fields['clarified'], isTrue);
-      // ADR-0030: the dead denormalised cache never reaches the wire.
-      expect(op.fields.containsKey('time_spent_minutes'), isFalse);
-      // Every other synced column is present, so a peer can build the row.
+      // Exactly the synced columns — no more, no less — so a peer can build the
+      // row and nothing off-contract slips onto the wire.
       final expected = collectionCodecs[todosCollection]!.columns.keys.toSet();
       expect(op.fields.keys.toSet(), expected);
     });

@@ -45,7 +45,6 @@ Todo _todo({
     createdAt: now,
     updatedAt: now,
     userId: 'local',
-    timeSpentMinutes: 0,
     timeEstimate: timeEstimate,
   );
 }
