@@ -1,10 +1,9 @@
 version: "3.9"
 
 # Local development stack:
-#   postgres   — primary datastore
-#   powersync  — PowerSync sync layer (Postgres → clients)
+#   postgres   — primary datastore (the op log and the server-owned tables)
 #   backend    — FastAPI service
-#   redis      — Celery broker
+#   redis      — auth nonce/rate-limit counters, escrow and member-auth state
 
 services:
   postgres:
@@ -19,12 +18,15 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
-    # PowerSync requires logical replication
+    # Connection logging only.  Nothing streams the WAL any more, so the
+    # logical-replication settings this override also used to carry are gone.
+    # A `postgres_data` volume that predates #556 still holds the orphaned
+    # `powersync` slot, and Postgres refuses to start on the default `wal_level`
+    # while a logical slot exists (FATAL: logical replication slot 'powersync'
+    # exists, but 'wal_level' < 'logical').  Drop it once — see
+    # README.md#one-time-powersync-replication-slot-cleanup.
     command: >
       postgres
-        -c wal_level=logical
-        -c max_wal_senders=10
-        -c max_replication_slots=10
         -c log_connections=on
         -c log_disconnections=on
     healthcheck:
@@ -32,36 +34,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
-  # --- Shared JWT secret -----------------------------------------------------
-  # Backend signs JWTs with `SECRET_KEY` (raw bytes).  PowerSync
-  # validates them using `PS_SECRET_KEY_B64` (base64url-encoded, no
-  # padding) declared in sync-config.yaml's JWKS block.  Both must derive
-  # from the SAME material — mismatch = every login-time sync fails with
-  # `invalid token signature` and is hard to debug from the client side.
-  #
-  # For dev parity both default to "insecure-dev-key" / its base64url form.
-  # To override, export ONE of these in the shell before `compose up`:
-  #   export SECRET_KEY="my-real-secret"
-  #   export PS_SECRET_KEY_B64="$(printf 'my-real-secret' | \
-  #     base64 | tr -d '=' | tr '/+' '_-')"
-  # Both variables are then picked up below.
-
-  powersync:
-    image: journeyapps/powersync-service:1.23.3@sha256:b6b22fa7d0d862f04bdff62846e656756d17bcf3dd6eca399a0633671051438b
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      POWERSYNC_CONFIG_PATH: /config/sync-config.yaml
-      # Base64url-encoded (no padding).  Default encodes "insecure-dev-key".
-      PS_SECRET_KEY_B64: "${PS_SECRET_KEY_B64:-aW5zZWN1cmUtZGV2LWtleQ}"
-      PS_DATA_SOURCE_URI: "postgresql://jeeves:jeeves@postgres:5432/jeeves"
-    volumes:
-      - ./powersync:/config
-    ports:
-      - "8080:8080"
 
   backend:
     build:
@@ -71,16 +43,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      powersync:
-        condition: service_started
       redis:
         condition: service_started
     environment:
       DATABASE_URL: "postgresql+asyncpg://jeeves:jeeves@postgres:5432/jeeves"
-      POWERSYNC_URL: "${POWERSYNC_URL:-http://localhost:8080}"
       REDIS_URL: "redis://redis:6379/0"
-      # Raw form of the same key PowerSync validates against.  Default matches
-      # the base64url default above: base64url("insecure-dev-key") = "aW5zZWN1cmUtZGV2LWtleQ".
+      # Signs access tokens.  The insecure default is what makes the dev stack
+      # start with no shell setup; override it in the shell before `compose up`
+      # if you need a real one:  export SECRET_KEY="my-real-secret"
       SECRET_KEY: "${SECRET_KEY:-insecure-dev-key}"
     ports:
       - "8000:8000"

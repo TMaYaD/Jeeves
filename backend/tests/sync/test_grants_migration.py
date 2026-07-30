@@ -12,10 +12,8 @@ from __future__ import annotations
 
 import pytest
 import sqlalchemy as sa
-from alembic.script import ScriptDirectory
 from sqlalchemy.pool import StaticPool
 
-from app import migrate
 from app.sync.models import Grant, Member, Workspace
 from tests.sync.helpers import load_migration, run_migration
 
@@ -54,12 +52,12 @@ def _apply_0033(engine: sa.engine.Engine) -> None:
     run_migration(engine, load_migration("migration_0033", "0033_add_workspaces_and_grants.py"))
 
 
-def test_0033_chains_from_0032_and_is_the_current_head() -> None:
+def test_0033_chains_from_0032() -> None:
+    # Head moved to 0034 (#556); that assertion lives with the revision that
+    # owns it, in tests/test_mirror_drop_migration.py.
     module = load_migration("migration_0033", "0033_add_workspaces_and_grants.py")
     assert module.revision == "0033"
     assert module.down_revision == "0032"
-    script = ScriptDirectory.from_config(migrate._alembic_config())
-    assert script.get_heads() == ["0033"]
 
 
 def test_0033_matches_the_models_it_backs() -> None:

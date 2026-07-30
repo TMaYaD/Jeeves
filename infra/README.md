@@ -1,15 +1,15 @@
 # Jeeves — Infrastructure
 
-Local development stack using Docker Compose.
+Local development stack using Docker Compose, plus the server-version
+computation Backend CD runs (`ci/`).
 
 ## Services
 
 | Service    | Port  | Description                                        |
 |------------|-------|----------------------------------------------------|
-| postgres   | 5432  | PostgreSQL 16 (WAL logical replication enabled)    |
-| powersync  | 8080  | PowerSync sync layer (bidirectional client sync)   |
+| postgres   | 5432  | PostgreSQL — the op log and the server-owned tables |
 | backend    | 8000  | FastAPI service                                    |
-| redis      | 6379  | Redis (Celery broker)                              |
+| redis      | 6379  | Auth nonce/rate-limit counters, escrow and member-auth state |
 
 ## Start
 
@@ -27,11 +27,14 @@ cd backend
 alembic upgrade head
 ```
 
-## Verify PowerSync is connected
+## Verify the backend is up
 
 ```bash
-curl http://localhost:8080/api/v1/status
+curl http://localhost:8000/health
 ```
+
+The response carries the running `SERVER_VERSION` — the check that distinguishes
+"deployed" from "working" after a release.
 
 ## Stop
 
@@ -40,6 +43,49 @@ docker compose down
 # To also remove volumes (destroys data):
 docker compose down -v
 ```
+
+## One-time PowerSync replication-slot cleanup
+
+Alembic 0034 drops the `powersync` publication, but a publication and a
+replication slot are separate objects: `DROP PUBLICATION` leaves the slot
+behind, and destroying the PowerSync Dokku app does not drop it either. An
+orphaned logical slot has no consumer and reserves WAL for ever, so it must be
+dropped by hand — once per database that ever ran PowerSync.
+
+**Production**, immediately after the deploy that carries 0034 (the Dokku
+Postgres service still runs `wal_level=logical`, so the drop needs no restart):
+
+```bash
+dokku postgres:connect jeeves-db
+```
+
+```sql
+SELECT slot_name, wal_status, pg_size_pretty(
+  pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS wal_retained
+FROM pg_replication_slots;
+SELECT pg_drop_replication_slot('powersync');
+```
+
+**Local dev** with a persisted `postgres_data` volume needs the extra step,
+because this stack's compose no longer passes `wal_level=logical`: Postgres
+refuses to start while a logical slot exists under a lower `wal_level`, exiting
+with `FATAL: logical replication slot "powersync" exists, but "wal_level" <
+"logical"`. Bring it up once on the old setting, drop the slot, then go back:
+
+```bash
+podman compose run --rm --no-deps -d --name pg-slotfix postgres \
+  postgres -c wal_level=logical -c max_replication_slots=10
+timeout 30 bash -c \
+  'until podman exec pg-slotfix pg_isready -U jeeves -d jeeves >/dev/null 2>&1; do sleep 1; done' \
+  || { echo "pg-slotfix did not become ready within 30s" >&2; podman rm -f pg-slotfix; exit 1; }
+podman exec pg-slotfix psql -U jeeves -d jeeves \
+  -c "SELECT pg_drop_replication_slot('powersync')"
+podman rm -f pg-slotfix
+podman compose up -d postgres
+```
+
+Volumes created after #556 never had a slot; `podman compose down -v` followed by
+a fresh `up` is the other way out in dev, and destroys all data.
 
 ## Recovering from schema/version drift
 
@@ -88,19 +134,26 @@ Recovery options, in order of preference:
    podman compose down -v
    ```
 
-## PowerSync configuration
+## Backend CD
 
-The sync rules and auth config live in `powersync/sync-config.yaml` — the
-single source of truth for every environment. PowerSync uses the same
-`SECRET_KEY` as the backend to validate client JWTs. Bucket storage is
-colocated in Postgres — no additional database is required.
+`.github/workflows/backend-cd.yml` runs on every successful Backend CI on
+`main`:
 
-The same bytes reach each environment by a different route: locally, Compose
-mounts the file at `/config` and PowerSync reads it via
-`POWERSYNC_CONFIG_PATH`; in production `infra/dokku/publish-sync-config.sh`
-delivers it as `POWERSYNC_CONFIG_B64` on every backend deploy, so schema
-migrations and bucket definitions ship together. Production deployments mount
-no config; an environment bootstrapped before ADR-0017 may still carry an inert
-`/config` mount until it is removed by hand. See
-[ADR-0017](../docs/adr/0017-sync-rules-as-dokku-config-var.md) and
-[dokku/README.md](./dokku/README.md), which has the one-line unmount.
+1. A freshness check — skip when `workflow_run.head_sha` is no longer `main`'s
+   tip. Two Backend CI runs finish in whatever order their test jobs take, so a
+   *successful* run need not be the *latest*; deploying a superseded one would
+   force-push older code over migrations that have already run. The run for the
+   newer commit deploys it.
+2. `git push` to the Dokku remote, only when the commit touched `backend/`.
+   Dokku's release phase runs `python -m app.migrate` (Alembic) before the new
+   container takes traffic, and the push blocks until that finishes.
+
+Migrations are therefore never hand-run, and a merge to `main` is a deploy.
+There is no separate sync-rules publish step: the op log ships as ordinary
+backend code (ADR-0026), so schema and sync behaviour move in the same push.
+
+`ci/compute-server-version.sh` derives the version that push injects as
+`SERVER_VERSION`, from the conventional commits since the last `server/` tag
+(ADR-0029). A `!` commit or `BREAKING CHANGE:` footer bumps the inner major.
+Its test harness is `ci/tests/test-compute-server-version.sh`, run by Backend
+CI's `infra-shell` job alongside `shellcheck`.

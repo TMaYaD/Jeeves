@@ -134,8 +134,8 @@ def test_0031_uniques_the_author_chain() -> None:
 
 
 def test_0031_leaves_existing_tables_untouched() -> None:
-    """Additive only: the walking skeleton runs alongside the old stack (#553
-    cuts over), so nothing here may touch a PowerSync-mirrored table."""
+    """Additive only: 0031 built the op log beside whatever already existed, and
+    dropping anything is 0034's job — this revision must still touch nothing."""
     engine = _engine_with_users()
     with engine.begin() as conn:
         conn.execute(sa.text("INSERT INTO users (id) VALUES ('u1')"))

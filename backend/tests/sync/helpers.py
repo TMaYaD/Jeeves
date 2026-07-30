@@ -1,4 +1,4 @@
-"""Scaffolding shared across the sync suite.
+"""Scaffolding shared across the sync and migration suites.
 
 Neither a fixture module nor a builder: these are the two chores every sync test
 file was re-copying — unwrapping a route's structured error, and running a single
