@@ -72,20 +72,30 @@ final syncStatusProvider = StreamProvider<SyncStatus>((ref) async* {
   final health = <String, SyncHealth>{};
   SyncStatus? lastEmitted;
 
+  // Every failure lands on the stream, because most emissions are un-awaited
+  // (below): a throw from the enrolment read would otherwise be an unhandled
+  // async error and the indicator would sit frozen on its last status — the one
+  // failure mode this rewrite exists to prevent. Same treatment the health
+  // streams' own `onError` gets.
   Future<void> emit() async {
     if (controller.isClosed) return;
-    // Re-read enrolment on every emission rather than once: a device that enrols
-    // *while the indicator is on screen* must stop saying "local only", and the
-    // ceremony's own pull stamps `sync_cursors.last_sync_completed_at`, which is
-    // one of the columns the health query watches — so the tick arrives.
-    final next = syncStatusFor(
-      enrolment: (await stack.readEnrolmentStatus()).state,
-      hasMemberCredential: stack.defaultClient.isEnrolled,
-      health: health.values,
-    );
-    if (controller.isClosed || next == lastEmitted) return;
-    lastEmitted = next;
-    controller.add(next);
+    try {
+      // Re-read enrolment on every emission rather than once: a device that
+      // enrols *while the indicator is on screen* must stop saying "local only",
+      // and the ceremony's own pull stamps `sync_cursors.last_sync_completed_at`,
+      // which is one of the columns the health query watches — so the tick
+      // arrives.
+      final next = syncStatusFor(
+        enrolment: (await stack.readEnrolmentStatus()).state,
+        hasMemberCredential: stack.defaultClient.isEnrolled,
+        health: health.values,
+      );
+      if (controller.isClosed || next == lastEmitted) return;
+      lastEmitted = next;
+      controller.add(next);
+    } on Object catch (error, stackTrace) {
+      if (!controller.isClosed) controller.addError(error, stackTrace);
+    }
   }
 
   final subscriptions = <StreamSubscription<SyncHealth>>[];

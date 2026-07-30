@@ -17,6 +17,7 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -38,14 +39,26 @@ import 'harness/stack_phone.dart';
 
 const String _userId = 'lifecycle-user';
 
-/// A [UserTransport] that fails `POST /members` on demand — the ceremony's
-/// keys-stored-but-nothing-founded crash window, staged against the production
-/// path rather than described in a comment.
-class _FaultyUserTransport implements UserTransport {
-  _FaultyUserTransport(this._inner);
+/// A [UserTransport] with two scripted knobs, staged against the production path
+/// rather than described in a comment:
+///
+/// * [failRegisterMemberTimes] fails `POST /members` — the ceremony's
+///   keys-stored-but-nothing-founded crash window.
+/// * [holdMemberChallenge] parks the proof-of-possession round trip, which is the
+///   only way to be *inside* an activation's step 2 when a sign-out lands.
+class _ScriptedUserTransport implements UserTransport {
+  _ScriptedUserTransport(this._inner);
 
   final UserTransport _inner;
   int failRegisterMemberTimes = 0;
+
+  /// Armed by a test to park the exchange; completed by it to let it through.
+  Completer<void>? holdMemberChallenge;
+  final Completer<void> _parked = Completer<void>();
+
+  /// Fires when a caller has actually arrived at the armed gate, so no test has
+  /// to guess how many event-loop turns reaching step 2 takes.
+  Future<void> get memberChallengeParked => _parked.future;
 
   @override
   Future<MemberRecord> registerMember({
@@ -72,8 +85,14 @@ class _FaultyUserTransport implements UserTransport {
       _inner.putRecoveryEscrow(workspaceId, record);
 
   @override
-  Future<Uint8List> requestMemberChallenge(String memberId) =>
-      _inner.requestMemberChallenge(memberId);
+  Future<Uint8List> requestMemberChallenge(String memberId) async {
+    final gate = holdMemberChallenge;
+    if (gate != null) {
+      if (!_parked.isCompleted) _parked.complete();
+      await gate.future;
+    }
+    return _inner.requestMemberChallenge(memberId);
+  }
 
   @override
   Future<SyncTransport> completeMemberChallenge({
@@ -86,6 +105,39 @@ class _FaultyUserTransport implements UserTransport {
         nonce: nonce,
         signature: signature,
       );
+}
+
+/// A [SyncTransport] whose *socket* refuses to open while armed. Only the signal
+/// side is scripted: posting and pulling stay real, so an activation reaches step
+/// 6 normally and fails exactly there.
+class _UnsubscribableSignalTransport implements SyncTransport {
+  _UnsubscribableSignalTransport(this._inner);
+
+  final SyncTransport _inner;
+  bool refuseSubscribe = false;
+
+  @override
+  Stream<void> newSeqSignals(String workspaceId) {
+    if (refuseSubscribe) {
+      throw const SyncTransportException.unreachable('no socket for you');
+    }
+    return _inner.newSeqSignals(workspaceId);
+  }
+
+  @override
+  Future<List<OpAppendResult>> postOps(
+    String workspaceId,
+    List<Uint8List> envelopes,
+  ) =>
+      _inner.postOps(workspaceId, envelopes);
+
+  @override
+  Future<PullPage> pullOps(
+    String workspaceId, {
+    required int since,
+    required int limit,
+  }) =>
+      _inner.pullOps(workspaceId, since: since, limit: limit);
 }
 
 int _contentOpCount(FakeSyncServer server) => server.storedOps
@@ -144,9 +196,9 @@ void main() {
   });
 
   test('a half-founded device activates nothing either', () async {
-    final faults = <_FaultyUserTransport>[];
+    final faults = <_ScriptedUserTransport>[];
     final device = await phone(userTransport: (link) {
-      final faulty = _FaultyUserTransport(link);
+      final faulty = _ScriptedUserTransport(link);
       faults.add(faulty);
       return faulty;
     });
@@ -236,6 +288,69 @@ void main() {
     );
     // The healthy row still landed, and the queue is drained.
     expect((await device.stack.defaultClient.health()).pendingOpCount, 0);
+  });
+
+  test('a sign-out mid-activation abandons the rest of the sequence', () async {
+    final transports = <_ScriptedUserTransport>[];
+    final device = await phone(fileBacked: true, userTransport: (link) {
+      final scripted = _ScriptedUserTransport(link);
+      transports.add(scripted);
+      return scripted;
+    });
+    await seedOneOutcome(device, id: '55555555-5555-4555-8555-555555555555');
+    await device.enrolAsFirstDevice();
+
+    // Relaunch first, so the activation has a proof-of-possession exchange to be
+    // parked in: an in-process credential would make step 2 a no-op.
+    await device.relaunch();
+    final scripted = transports.single;
+    scripted.holdMemberChallenge = Completer<void>();
+
+    // The provider starts an activation un-awaited and disposes on the next
+    // sign-out. This is that pair, in that order, with the round trip in between.
+    final activation = device.activate();
+    await scripted.memberChallengeParked;
+    await device.lifecycle!.deactivate();
+    scripted.holdMemberChallenge!.complete();
+
+    expect(await activation, SyncActivation.deactivated);
+    expect(device.capture.isBound, isFalse,
+        reason: 'the process-wide seam must not be bound to a signed-out account');
+    expect(
+      await InitialUploadMarkerStore(device.syncStore).read(_userId),
+      isNull,
+    );
+    expect(_contentOpCount(server), 0);
+    for (final workspaceId in device.stack.workspaceIds) {
+      expect(server.signalSubscriberCount(workspaceId), 0,
+          reason: 'no socket may outlive the session that opened it');
+    }
+  });
+
+  test('a listener that cannot start is not retained, so the next activation '
+      'retries', () async {
+    final device = await phone();
+    await seedOneOutcome(device, id: '66666666-6666-4666-8666-666666666666');
+    await device.enrolAsFirstDevice();
+    final signals = _UnsubscribableSignalTransport(device.link)
+      ..refuseSubscribe = true;
+
+    await expectLater(
+      device.activate(signalTransport: signals),
+      throwsA(isA<SyncTransportException>()),
+    );
+    for (final workspaceId in device.stack.workspaceIds) {
+      expect(server.signalSubscriberCount(workspaceId), 0);
+    }
+
+    signals.refuseSubscribe = false;
+    // The same lifecycle instance, which is the whole point: `_listeners` is its
+    // state, and a retained dead entry would make step 6 a no-op for ever.
+    expect(await device.activate(), SyncActivation.active);
+    for (final workspaceId in device.stack.workspaceIds) {
+      expect(server.signalSubscriberCount(workspaceId), 1,
+          reason: 'a failed startup must not spend the retry step 6 promises');
+    }
   });
 
   test('the marker is per account, not per device', () async {

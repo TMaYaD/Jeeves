@@ -43,6 +43,7 @@ class StackPhone {
     required this.domain,
     required this.capture,
     required this.link,
+    required this.userTransport,
     required this.keyStore,
     required this.syncStore,
     required this.storeDirectory,
@@ -78,19 +79,23 @@ class StackPhone {
     // nothing: this is the pre-enrolment state a real process starts in.
     final capture = WorkspaceRoutingOpCapture();
     final domain = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    // Decorated once and kept: the wrapper is the injected fault, and a relaunch
+    // is a process death, not an unwrapping.
+    final decorated = userTransport?.call(link) ?? link;
     return StackPhone._(
       label: label,
       stack: await _assemble(
         userId: userId,
         syncStore: syncStore,
         keyStore: keyStore,
-        userTransport: userTransport?.call(link) ?? link,
+        userTransport: decorated,
         domain: domain,
         clock: clock,
       ),
       domain: domain,
       capture: capture,
       link: link,
+      userTransport: decorated,
       keyStore: keyStore,
       syncStore: syncStore,
       storeDirectory: storeDirectory,
@@ -125,6 +130,12 @@ class StackPhone {
   final GtdDatabase domain;
   final WorkspaceRoutingOpCapture capture;
   final DeviceLink link;
+
+  /// The transport the stack is assembled over: [link] itself, or the decorator a
+  /// test wrapped it in. Reused across [relaunch] so an injected fault survives a
+  /// process death the way a real server-side fault would.
+  final UserTransport userTransport;
+
   final InMemoryDeviceKeyStore keyStore;
   final Directory? storeDirectory;
   final FakeClock clock;
@@ -146,16 +157,18 @@ class StackPhone {
   /// an enrolment completes.
   ///
   /// The signal listeners run over the harness's timer wheel so no test waits on
-  /// a real backoff.
+  /// a real backoff. [signalTransport] replaces [link] as the socket side only —
+  /// what a test wraps to make subscribing itself fail.
   Future<SyncActivation> activate({
     Duration flushDebounce = const Duration(seconds: 3),
     String Function()? mintTagId,
+    SyncTransport? signalTransport,
   }) {
     final existing = lifecycle ??= SyncLifecycle(
       stack: stack,
       domain: domain,
       capture: capture,
-      signalTransport: link,
+      signalTransport: signalTransport ?? link,
       timerFactory: link.timers.create,
       listenerDelay: link.timers.delay,
       flushDebounce: flushDebounce,
@@ -180,7 +193,7 @@ class StackPhone {
       userId: stack.userId,
       syncStore: syncStore,
       keyStore: keyStore,
-      userTransport: link,
+      userTransport: userTransport,
       domain: domain,
       clock: clock,
     );

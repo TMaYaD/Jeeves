@@ -130,6 +130,12 @@ enum SyncActivation {
   /// and this value is how a caller learns of it without reading the store.
   uploadIncomplete,
 
+  /// A [SyncLifecycle.deactivate] landed while the sequence was mid-await — a
+  /// sign-out during the proof-of-possession round trip, most likely. Everything
+  /// after that point is abandoned: nothing is bound, uploaded or subscribed for
+  /// an account nobody is signed into any more.
+  deactivated,
+
   /// The whole sequence ran. Says nothing about whether the upload authored
   /// anything: a completed marker means it had nothing to do.
   active,
@@ -181,6 +187,16 @@ class SyncLifecycle {
   /// the same clients and walk a store the first is already walking.
   Future<SyncActivation>? _inFlight;
 
+  /// Bumped by [deactivate], and re-read after every await in [_activate].
+  ///
+  /// Single-flight collapses concurrent *activations*; it says nothing about a
+  /// deactivation that lands mid-sequence, and `sync_lifecycle_provider.dart`
+  /// starts an activation un-awaited and then disposes on the next sign-out — so
+  /// an ordinary sign-out during step 2's network round trip would otherwise let
+  /// the abandoned activation bind the process-wide capture seam to the previous
+  /// account's clients and open sockets `deactivate` has already stopped tracking.
+  int _generation = 0;
+
   final Completer<void> _firstSyncSettled = Completer<void>();
 
   /// Completes the first time step 4 succeeds — the spine's "the initial pull is
@@ -199,6 +215,9 @@ class SyncLifecycle {
   }
 
   Future<SyncActivation> _activate() async {
+    final generation = _generation;
+    bool deactivated() => generation != _generation;
+
     final status = await _stack.readEnrolmentStatus();
     switch (status.state) {
       case EnrolmentState.notEnrolled:
@@ -208,12 +227,15 @@ class SyncLifecycle {
       case EnrolmentState.enrolled:
         break;
     }
+    if (deactivated()) return SyncActivation.deactivated;
 
     await _attachMemberTransportIfAbsent();
+    if (deactivated()) return SyncActivation.deactivated;
 
     final gtdClient = _stack.defaultClient;
     final preferencesClient = await _stack
         .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId));
+    if (deactivated()) return SyncActivation.deactivated;
     _capture
       ..bind(gtdClient: gtdClient, preferencesClient: preferencesClient)
       ..onOpAuthored = _scheduleOutboxFlush;
@@ -226,6 +248,7 @@ class SyncLifecycle {
       // the marker stays untouched, so the next activation resumes.
       return SyncActivation.syncFailed;
     }
+    if (deactivated()) return SyncActivation.deactivated;
     if (!_firstSyncSettled.isCompleted) _firstSyncSettled.complete();
 
     var uploaded = true;
@@ -241,7 +264,15 @@ class SyncLifecycle {
       // happen is the device ending up un-subscribed because of it.
       uploaded = false;
     }
+    if (deactivated()) return SyncActivation.deactivated;
     await _startListeners(gtdClient, preferencesClient);
+    if (deactivated()) {
+      // Sign-out landed while the sockets were opening. Run the teardown again
+      // rather than leave listeners this instance has already stopped tracking:
+      // every step of it is idempotent.
+      await deactivate();
+      return SyncActivation.deactivated;
+    }
     return uploaded ? SyncActivation.active : SyncActivation.uploadIncomplete;
   }
 
@@ -249,7 +280,13 @@ class SyncLifecycle {
   ///
   /// The marker is deliberately left alone: it records what this device did for
   /// an account, and signing out does not un-author it.
+  ///
+  /// It does not wait on an activation in flight — that one may be blocked on a
+  /// network round trip, and a sign-out cannot hang on the server it is signing
+  /// out of. It invalidates it instead: [_generation] is what makes the abandoned
+  /// sequence stop at its next step rather than finish binding and subscribing.
   Future<void> deactivate() async {
+    _generation++;
     _pendingFlush?.cancel();
     _pendingFlush = null;
     _capture
@@ -334,15 +371,29 @@ class SyncLifecycle {
     if (_listeners.isNotEmpty) return;
     // One listener per Workspace, because one socket is per Workspace: a poke on
     // the default Workspace's signal says nothing about the preferences log.
-    for (final client in [gtdClient, preferencesClient]) {
-      final listener = SignalListener(
-        client: client,
-        transport: _signalTransport ?? client.transport,
-        delay: _listenerDelay,
-      );
-      _listeners.add(listener);
-      await listener.start();
+    //
+    // Recorded only once *both* are up, because `_listeners` being non-empty is
+    // what makes this a no-op next time: retaining a listener whose `start()`
+    // threw would spend the retry the header's step 6 promises on a socket that
+    // never opened, for the life of this instance.
+    final started = <SignalListener>[];
+    try {
+      for (final client in [gtdClient, preferencesClient]) {
+        final listener = SignalListener(
+          client: client,
+          transport: _signalTransport ?? client.transport,
+          delay: _listenerDelay,
+        );
+        await listener.start();
+        started.add(listener);
+      }
+    } on Object {
+      for (final listener in started) {
+        await listener.dispose();
+      }
+      rethrow;
     }
+    _listeners.addAll(started);
   }
 
   /// Debounced, and re-armed rather than extended: the first authored op of a

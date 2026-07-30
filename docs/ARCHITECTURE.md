@@ -41,7 +41,8 @@ Located in `app/`.
 - **Local Storage:** Offline-first architecture using `drift` and `sqlite3_flutter_libs` as the structured SQL engine.
 - **API Communication:** `dio` and `retrofit`.
 - **Data Models:** `freezed` and `json_serializable` for robust immutable models.
-- **Sync:** PowerSync (`powersync ^2.x` Dart package) — bidirectional sync via `JeevesBackendConnector` and a self-hosted `journeyapps/powersync-service` instance.
+- **Sync:** the minimal sync server's op log — signed ops over per-Workspace logs, authored from enrolment onward and replicated device to device ([§ Minimal Sync Server](#minimal-sync-server), ADR-0026, ADR-0034).
+- **Local store engine:** PowerSync (`powersync ^2.x` Dart package), **disconnected** — the on-device SQLite store only. `JeevesBackendConnector` and the self-hosted `journeyapps/powersync-service` instance are on no live path; see [§ Sync Engine](#sync-engine-powersync--the-local-store-engine-disconnected). #556 removes both with the engine.
 - **Web storage:** OPFS-backed SQLite via `WebPowerSyncOpenFactory` from `package:powersync/web.dart`, using the WASM worker assets in `app/web/`.
 
 ### Backend (Python/FastAPI)
