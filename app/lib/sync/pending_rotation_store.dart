@@ -42,6 +42,23 @@ import 'key_wraps.dart';
 /// The `toEpoch -> set` map, as stored.
 typedef PendingRotationsByEpoch = Map<int, EpochKeySet>;
 
+/// Raised by [PendingRotationStore.put] when a *different* set is already pending for
+/// the same `(workspaceId, epoch)` — the fail-closed guard against two concurrent
+/// ceremonies preparing distinct key sets for one target epoch and the later `put`
+/// silently orphaning the epoch the earlier one commits to.
+class ConflictingPendingRotation implements Exception {
+  ConflictingPendingRotation(this.workspaceId, this.epoch);
+
+  final String workspaceId;
+  final int epoch;
+
+  @override
+  String toString() =>
+      'ConflictingPendingRotation: a different pending set already exists for '
+      '$workspaceId epoch $epoch; refusing to overwrite it (a concurrent ceremony '
+      'would orphan the epoch the earlier set commits to)';
+}
+
 abstract class PendingRotationStore {
   /// Every pending rotation this device holds for [workspaceId], read on the same
   /// per-Workspace mutation chain [put] and [remove] run on. Empty when none is in
@@ -85,15 +102,34 @@ abstract class PendingRotationStore {
     return next;
   }
 
-  /// Record one prepared set, keyed by its own [EpochKeySet.epoch]. Overwriting an
-  /// identical epoch is the idempotent re-run: a ceremony that persists, crashes
-  /// before authoring, and is re-run draws a fresh set for the same `toEpoch`, and
-  /// the newer one is the only one that could be published anyway.
+  /// Record one prepared set, keyed by its own [EpochKeySet.epoch].
+  ///
+  /// A byte-identical re-put for an epoch already pending is the idempotent path (a
+  /// resume that re-persists what it read) and succeeds untouched. A *different* set
+  /// for an epoch that already has one is refused with a [ConflictingPendingRotation]
+  /// rather than silently overwritten: two ceremonies that both resume, read the same
+  /// epoch floor, and prepare distinct sets for the same `toEpoch` would otherwise let
+  /// the later `put` replace the earlier — and if the earlier rotate then materialises
+  /// and the device crashes before publishing, recovery would hold only the mismatched
+  /// key set and the materialised epoch would be permanently unreadable (the exact
+  /// orphaning this store exists to prevent). Failing closed here turns that silent
+  /// clobber into a loud error before the second ceremony authors anything.
   Future<void> put(String workspaceId, EpochKeySet set) =>
       _serialised(workspaceId, () async {
         final held = await readRaw(workspaceId);
+        final existing = held[set.epoch];
+        if (existing != null && !_sameEpochKeySet(existing, set)) {
+          throw ConflictingPendingRotation(workspaceId, set.epoch);
+        }
         await write(workspaceId, {...held, set.epoch: set});
       });
+
+  /// Byte-identity of two prepared sets, compared through the on-disk codec so the
+  /// answer is exactly "would these two persist to the same record" — the same
+  /// notion the server's byte-identical-replay idempotency turns on.
+  static bool _sameEpochKeySet(EpochKeySet a, EpochKeySet b) =>
+      jsonEncode(encodePendingEpochKeySet(a)) ==
+      jsonEncode(encodePendingEpochKeySet(b));
 
   /// Drop one epoch's pending set — what `publish` succeeding calls.
   Future<void> remove(String workspaceId, int epoch) =>

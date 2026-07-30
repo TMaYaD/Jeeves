@@ -465,17 +465,19 @@ void main() {
     // issues — will self-heal it by deleting the key (`clearRaw`).
     storage.backing[storeKey] = 'not json at all';
 
-    // Hold that self-heal delete mid-flight, then start a `put` while it is parked.
-    // If `read` were off the mutation chain the put's write would land inside the
-    // window and the resumed delete would wipe it; because `read` shares the chain,
-    // the put simply queues behind the whole read (self-heal included).
+    // Hold the self-heal delete at an explicit gate, wait for a signal that it has
+    // actually reached that gate (no event-loop-yield guessing), then queue a `put`
+    // while the delete is parked. `store.put` registers on the mutation chain
+    // synchronously before it returns, so by the time it returns the put is queued
+    // behind the parked read. If `read` were off the chain the put's write would land
+    // inside the delete's window and the resumed delete would wipe it; because `read`
+    // shares the chain, the put simply waits for the whole read (self-heal included).
     final gate = Completer<void>();
     storage.deleteGate = gate; // the handler disarms the field, so hold our own ref
     final readFuture = store.read(ws);
-    await Future<void>.delayed(Duration.zero); // let read reach its gated delete
-    final putFuture = store.put(ws, _placeholderSet(9));
-    await Future<void>.delayed(Duration.zero); // give the put a chance to interleave
-    gate.complete();
+    await storage.deleteAtGate.future; // the self-heal delete is now parked
+    final putFuture = store.put(ws, _placeholderSet(9)); // synchronously queued behind it
+    gate.complete(); // release the delete; the queued put runs strictly after
 
     await Future.wait([readFuture, putFuture]);
 
@@ -484,6 +486,52 @@ void main() {
         reason: 'the put survived: a chained read cannot let its self-heal delete '
             'land after the put and clobber the set it just persisted');
     expect(after[9]!.epoch, 9);
+  });
+
+  test('put refuses a different set for an epoch already pending, but a '
+      'byte-identical re-put still succeeds', () async {
+    final store = InMemoryPendingRotationStore();
+    const ws = 'rotation-resume-conflict-ws';
+
+    // The first ceremony's prepared set for epoch 1.
+    final first = EpochKeySet(
+      epoch: 1,
+      workspaceKey: _filled(workspaceKeyBytes, 0x11),
+      memberWraps: const [],
+      escrowWrap: _filled(epochKeyEscrowWrapBytes, 0x22),
+      digest: _filled(keyWrapDigestBytes, 0x33),
+    );
+    await store.put(ws, first);
+
+    // The idempotent path — a resume re-persisting byte-identical bytes — is allowed.
+    await store.put(ws, EpochKeySet(
+      epoch: 1,
+      workspaceKey: _filled(workspaceKeyBytes, 0x11),
+      memberWraps: const [],
+      escrowWrap: _filled(epochKeyEscrowWrapBytes, 0x22),
+      digest: _filled(keyWrapDigestBytes, 0x33),
+    ));
+    expect((await store.read(ws))[1]!.digest, first.digest);
+
+    // A *different* set for the same epoch is the orphaning hazard: a second
+    // concurrent ceremony that prepared distinct entropy for the same `toEpoch`. It
+    // must be refused, not silently overwrite the first.
+    final second = EpochKeySet(
+      epoch: 1,
+      workspaceKey: _filled(workspaceKeyBytes, 0xAA),
+      memberWraps: const [],
+      escrowWrap: _filled(epochKeyEscrowWrapBytes, 0xBB),
+      digest: _filled(keyWrapDigestBytes, 0xCC),
+    );
+    await expectLater(
+      store.put(ws, second),
+      throwsA(isA<ConflictingPendingRotation>()),
+    );
+
+    // The first set survived untouched — the epoch it commits to stays recoverable.
+    final held = await store.read(ws);
+    expect(held[1]!.workspaceKey, first.workspaceKey);
+    expect(held[1]!.digest, first.digest);
   });
 
   test('the EpochKeySet codec round-trips byte-for-byte through JSON', () async {
@@ -547,6 +595,11 @@ class _FakeSecureStorage {
   /// mid-flight while a concurrent `put` tries to interleave.
   Completer<void>? deleteGate;
 
+  /// Completed the instant a gated `delete` enters its wait — the explicit signal a
+  /// race test awaits to know the self-heal has reached its storage delete and is
+  /// parked, rather than guessing with event-loop yields.
+  final Completer<void> deleteAtGate = Completer<void>();
+
   void install() {
     const channel =
         MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
@@ -565,6 +618,7 @@ class _FakeSecureStorage {
           final gate = deleteGate;
           if (gate != null) {
             deleteGate = null;
+            if (!deleteAtGate.isCompleted) deleteAtGate.complete();
             await gate.future;
           }
           backing.remove(key);
