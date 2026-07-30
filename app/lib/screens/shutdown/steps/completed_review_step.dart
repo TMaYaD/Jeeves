@@ -9,12 +9,22 @@ import '../../../providers/evening_shutdown_provider.dart';
 ///
 /// Shows each completed task alongside its time estimate and actual time spent,
 /// letting the user reflect on the day's work before proceeding.
+///
+/// Actual time spent is derived from `time_logs` via
+/// [loggedMinutesByOutcomeProvider] — no Outcome row carries a total. The map is
+/// read once for the whole step and serves both the per-card chip and the
+/// summary bar's fold, so the two can never disagree.
 class CompletedReviewStep extends ConsumerWidget {
   const CompletedReviewStep({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncCompleted = ref.watch(completedTodayProvider);
+    // Absent while the first emission is in flight, and absent per Outcome that
+    // has no stints: an unresolved total reads as 0, which is what the chips
+    // suppress on.
+    final loggedMinutes =
+        ref.watch(loggedMinutesByOutcomeProvider).value ?? const {};
 
     if (asyncCompleted.isLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -48,8 +58,8 @@ class CompletedReviewStep extends ConsumerWidget {
 
     final totalEstimated =
         completed.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
-    final totalActual =
-        completed.fold<int>(0, (sum, t) => sum + t.timeSpentMinutes);
+    final totalActual = completed.fold<int>(
+        0, (sum, t) => sum + (loggedMinutes[t.id] ?? 0));
 
     return Column(
       children: [
@@ -70,7 +80,10 @@ class CompletedReviewStep extends ConsumerWidget {
                 _SectionLabel(
                     'COMPLETED TODAY (${completed.length})'),
                 const SizedBox(height: 8),
-                ...completed.map((t) => _CompletedTaskCard(todo: t)),
+                ...completed.map((t) => _CompletedTaskCard(
+                      todo: t,
+                      loggedMinutes: loggedMinutes[t.id] ?? 0,
+                    )),
               ],
             ),
           ),
@@ -216,14 +229,17 @@ class _StatChip extends StatelessWidget {
 }
 
 class _CompletedTaskCard extends StatelessWidget {
-  const _CompletedTaskCard({required this.todo});
+  const _CompletedTaskCard({required this.todo, required this.loggedMinutes});
 
   final Todo todo;
+
+  /// Minutes summed from this Outcome's `time_logs` rows; 0 when it has none.
+  final int loggedMinutes;
 
   @override
   Widget build(BuildContext context) {
     final estimated = todo.timeEstimate;
-    final actual = todo.timeSpentMinutes;
+    final actual = loggedMinutes;
     final hasTimeData = estimated != null || actual > 0;
 
     return Card(

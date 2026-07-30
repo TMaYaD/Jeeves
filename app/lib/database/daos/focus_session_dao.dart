@@ -96,7 +96,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
     final newId = uuid.v4();
 
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       // Single-open-session invariant (ADR-0020): never auto-close a prior
       // session — that would silently destroy it without recording Review
       // dispositions. Refuse to open a second session; the UI gates on this by
@@ -166,7 +166,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           },
         );
       }
-    }));
+    });
 
     return newId;
   }
@@ -178,7 +178,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   Future<void> closeSession({required String sessionId, DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
 
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
@@ -197,7 +197,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         entityId: sessionId,
         fields: {'ended_at': ts, 'current_task_id': null},
       );
-    }));
+    });
   }
 
   /// Close every open log attributed to [sessionId], capturing an `ended_at`
@@ -239,7 +239,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
 
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
@@ -296,7 +296,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         entityId: sessionId,
         fields: {'current_task_id': taskId},
       );
-    }));
+    });
   }
 
   /// Stream that emits the currently open session, or null.
@@ -364,7 +364,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       'WHERE fst.focus_session_id = ? '
       'ORDER BY fst.position',
       variables: [Variable<String>(sessionId)],
-      readsFrom: {focusSessionTasks, todos, attachedDatabase.actions, timeLogs},
+      readsFrom: {focusSessionTasks, todos, attachedDatabase.actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -432,7 +432,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     // the time logs) pass through opaque and keep [ts].
     final tsCanonical = encodeInstant(tsInstant)!;
 
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
@@ -595,7 +595,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         entityId: sessionId,
         fields: {'ended_at': ts, 'current_task_id': null},
       );
-    }));
+    });
   }
 
   /// Returns the task IDs with [disposition] = 'rollover' from the most
@@ -655,7 +655,6 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         focusSessionDispositions,
         todos,
         attachedDatabase.actions,
-        timeLogs,
       },
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
@@ -676,16 +675,14 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         focusSessions,
         todos,
         attachedDatabase.actions,
-        timeLogs,
       },
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
   /// Explicit `todos` projection (alias `t`) shared by every Review-surface
   /// query. `energy_level` / `time_estimate` resolve to the current Action
-  /// (ADR-0001 story 7, D2) and `time_spent_minutes` is derived live from
-  /// `SUM(time_logs)` (issue #480) — both raw columns are write-mirror
-  /// compatibility only. The single source of truth is [TodoDao.todoProjectionSql].
+  /// (ADR-0001 story 7, D2); the raw columns are write-mirror compatibility only.
+  /// The single source of truth is [TodoDao.todoProjectionSql].
   static final String _todoColumnsSql = TodoDao.todoProjectionSql('t');
 
   /// Reactive Review surface for the currently open session — the union of
@@ -703,9 +700,9 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// engaged Outcomes follow, ordered by the start time of their earliest
   /// TimeLog for the session. Returns an empty list when no session is open.
   ///
-  /// [Todo.timeSpentMinutes] on the surfaced rows is derived live from
-  /// `SUM(time_logs)` — the `todos.time_spent_minutes` column is a dead cache
-  /// with no write path and must not be surfaced (issue #480).
+  /// The surfaced rows carry no time-spent total — nothing does. A Review step
+  /// that renders one watches [TimeLogDao.watchTotalMinutesByTask] alongside this
+  /// stream (issue #604).
   Stream<List<Todo>> watchActiveSessionReviewSurface() {
     return customSelect(
       'SELECT $_todoColumnsSql, 0 AS surface_order, fst.position AS sort_key '
@@ -749,8 +746,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   ///
   /// Plan members are ordered by their [focus_session_tasks.position];
   /// off-Plan engaged Outcomes follow, ordered by the start time of their
-  /// earliest TimeLog for the session. The list contains no duplicates.
-  /// [Todo.timeSpentMinutes] is derived live from `SUM(time_logs)`.
+  /// earliest TimeLog for the session. The list contains no duplicates, and
+  /// carries no time-spent total (see [watchActiveSessionReviewSurface]).
   Future<List<Todo>> getReviewSurface(String sessionId) async {
     final rows = await customSelect(
       // Plan members first (ordered by position), then off-Plan engaged

@@ -5,7 +5,7 @@
 #
 # Quick reference:
 #   make setup              install Flutter deps + run code generators
-#   make backend            start Postgres/PowerSync/FastAPI/Redis via podman
+#   make backend            start Postgres/FastAPI/Redis via podman
 #   make android            launch Android emulator and run the app on it
 #   make iphone             boot iOS Simulator and run the app on it
 #   make web                run the app in Chrome
@@ -61,7 +61,7 @@ setup: ## Fetch Flutter packages and run build_runner
 # Backend (podman)
 # -----------------------------------------------------------------------------
 
-backend: ## Start backend stack (postgres, powersync, fastapi, redis)
+backend: ## Start backend stack (postgres, fastapi, redis)
 	$(COMPOSE) up -d --build
 
 backend-down: ## Stop backend stack

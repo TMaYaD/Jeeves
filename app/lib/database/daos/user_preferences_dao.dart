@@ -44,7 +44,7 @@ class UserPreferencesDao {
     // address one row from the start rather than waiting for the projector to
     // realign a random one.
     final entityId = preferenceEntityId(userPreferencesWorkspaceId(userId), key);
-    await _db.capturing(() => _db.transaction(() async {
+    await _db.capturing(() async {
       final existing = await _db.customSelect(
         'SELECT id FROM user_preferences WHERE user_id = ? AND "key" = ?',
         variables: [Variable(userId), Variable(key)],
@@ -86,7 +86,7 @@ class UserPreferencesDao {
           'updated_at': now,
         },
       );
-    }));
+    });
   }
 
   /// Returns the raw JSON-encoded value for [key] and [userId], or null if
@@ -132,10 +132,10 @@ class UserPreferencesDao {
   /// Upserts multiple entries in a single transaction.
   Future<void> setAll(String userId, Map<String, String?> entries) async {
     if (entries.isEmpty) return;
-    await _db.capturing(() => _db.transaction(() async {
+    await _db.capturing(() async {
       for (final entry in entries.entries) {
         await set(userId, entry.key, entry.value);
       }
-    }));
+    });
   }
 }

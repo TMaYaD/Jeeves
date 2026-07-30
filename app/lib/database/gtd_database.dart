@@ -5,17 +5,20 @@
 /// `DatabaseConnection.delayed`) and tests (`NativeDatabase.memory()`).
 ///
 /// **Drift owns the schema, and every table is a real table.** The store is a
-/// file of its own, created by [MigrationStrategy.onCreate] — so there is no
-/// migration ladder: the previous store was PowerSync-managed, its
-/// application-visible names were views over `ps_data__*`, and it is deleted
-/// rather than converted (see `domain_store_io.dart` and ADR-0035). A device
-/// whose local op log holds reduced state has it projected into the fresh file at
-/// first open; a device without one starts empty.
+/// file of its own, created by [MigrationStrategy.onCreate] — the previous store
+/// was PowerSync-managed, its application-visible names were views over
+/// `ps_data__*`, and it is deleted rather than converted (see
+/// `domain_store_io.dart` and ADR-0035). A device whose local op log holds
+/// reduced state has it projected into the fresh file at first open; a device
+/// without one starts empty.
 ///
-/// Schema changes from here are ordinary Drift migrations — [schemaVersion] goes
-/// to 2 with an `onUpgrade` step. `ALTER TABLE ... ADD COLUMN` and `DROP COLUMN`
-/// both work again, which they did not while the targets were views.
+/// Schema changes are ordinary Drift migrations from there: bump [schemaVersion]
+/// and add a step to `onUpgrade`. Structural `ALTER TABLE` works again, which it
+/// did not while the targets were views. `schema_baseline_test.dart` pins both
+/// the shape `onCreate` builds and each `onUpgrade` step's effect.
 library;
+
+import 'dart:async';
 
 import 'package:drift/drift.dart';
 import '../utils/uuid.dart';
@@ -48,28 +51,110 @@ class GtdDatabase extends _$GtdDatabase {
   /// activation.
   final DomainOpCapture opCapture;
 
-  /// Runs [body] as one capture scope: everything the DAO describes through
-  /// [opCapture] inside it is buffered, coalesced per entity, and emitted only
-  /// once [body] has completed — so a rolled-back write is never signed and
-  /// queued. Scopes nest; only the outermost emits.
+  /// The transactional write primitive: a capturing scope **is** one
+  /// transaction. Runs [body] inside [transaction] and inside a capture scope,
+  /// so scope lifetime and transaction lifetime are the same object's lifetime.
+  /// Everything the DAO describes through [opCapture] inside it is buffered,
+  /// coalesced per entity, and emitted only once the transaction has
+  /// committed — a rolled-back write is never signed and queued, and a
+  /// committed write can never lose its op (the two failure directions #598
+  /// closed).
   ///
-  /// The scope is identified by the token [DomainOpCapture.beginScope] returns,
-  /// not by stack position, so two overlapping un-awaited calls cannot close
-  /// each other's scope.
+  /// Scopes nest; only the outermost emits, and the inner [transaction] a
+  /// nested `capturing` opens is a savepoint that merges into the outer commit
+  /// (drift ≥ 2.0 nested transactions). The scope is identified by the token
+  /// [DomainOpCapture.beginScope] returns, not by stack position, so two
+  /// overlapping un-awaited calls cannot close each other's scope.
   ///
-  /// Every public DAO write method wraps its whole body (transaction, writes
-  /// and post-commit view notifies) in this.
+  /// Every domain write — a single DAO method or a multi-DAO service
+  /// composition — runs its whole body (transaction, writes and post-commit
+  /// view notifies) through this. Composing writes with a bare [transaction]
+  /// instead is refused; see the [transaction] override.
   Future<T> capturing<T>(Future<T> Function() body) async {
     final scope = opCapture.beginScope();
     T result;
     try {
-      result = await body();
+      result = await _capturedTransaction(body);
     } catch (_) {
       opCapture.rollbackScope(scope);
       rethrow;
     }
     await opCapture.commitScope(scope);
     return result;
+  }
+
+  /// A transaction for writes that must **never** author ops — the one
+  /// deliberate un-captured write path. Its sole production caller is
+  /// [DomainProjector], which materialises reduced state that is already on the
+  /// op log: re-authoring it would be a feedback loop. Runs [action] inside a
+  /// real [transaction] but marks the capturing zone, so nested DAO writes it
+  /// makes (the projector's own `customStatement`s never describe effects, but
+  /// the marker keeps the [transaction] guard satisfied) do not trip the guard.
+  Future<T> uncapturedTransaction<T>(Future<T> Function() action) =>
+      _capturedTransaction(action);
+
+  /// Runs [action] inside a real drift [transaction], having first marked the
+  /// current zone as a capturing zone so the [transaction] override lets the
+  /// nested call through. Shared by [capturing] and [uncapturedTransaction] —
+  /// the two, and only two, legitimate ways to open a domain-store transaction.
+  Future<T> _capturedTransaction<T>(Future<T> Function() action) => runZoned(
+        () => super.transaction(action),
+        zoneValues: {_capturingZoneKey: true},
+      );
+
+  /// Runs a schema-migration [body] with the [transaction] guard held open,
+  /// but — unlike [_capturedTransaction] — WITHOUT opening a transaction of its
+  /// own. Drift's `Migrator` recreate steps (e.g. `alterTable`) open their own
+  /// `transaction` on this db object, which hits the [transaction] override,
+  /// *and* toggle `PRAGMA foreign_keys` immediately outside that transaction —
+  /// a sequence sqlite only honours when nothing has already wrapped the
+  /// migration in an outer transaction (the pragma is silently a no-op inside
+  /// one). So this marks the zone and nothing more: the migrator keeps
+  /// ownership of the transaction boundary, and the marker keeps the guard
+  /// satisfied while it does. Migrations are the same op-free category as
+  /// [uncapturedTransaction] — they run during `onCreate`/`onUpgrade`, before
+  /// any DAO write path is live, so nothing describes an effect and nothing is
+  /// ever signed or queued.
+  Future<T> _duringMigration<T>(Future<T> Function() body) => runZoned(
+        body,
+        zoneValues: {_capturingZoneKey: true},
+      );
+
+  /// Marks a zone opened by [capturing] / [uncapturedTransaction] / a schema
+  /// migration ([_duringMigration]). Present ⇒ a [transaction] call is inside a
+  /// sanctioned scope; absent ⇒ refuse.
+  static final Object _capturingZoneKey = Object();
+
+  /// Refuses a bare domain-store [transaction] opened outside a capturing zone.
+  ///
+  /// Post-flip a bare `transaction` composing capturing DAO writes emits each
+  /// DAO's ops the moment that DAO returns — while the outer transaction is
+  /// still open — so a later rollback leaves the op log asserting a write the
+  /// store never kept. Refusing loudly beats corrupting quietly: domain writes
+  /// go through [capturing]; writes that must author nothing go through
+  /// [uncapturedTransaction].
+  ///
+  /// **The guard's reach is the db object, honestly.** This override intercepts
+  /// only `GtdDatabase.transaction` — calls made on the database object. A DAO
+  /// is a `DatabaseAccessor`, so a DAO-internal bare `transaction(...)`
+  /// dispatches through `DatabaseConnectionUser.transaction` and bypasses this
+  /// override entirely. The invariant "the broken shape cannot be composed
+  /// silently" therefore holds at the db-object level — which is where the
+  /// service/import compositions that #598 fixed live — and, after the collapse
+  /// that leaves no DAO spelling `transaction` at all, in practice everywhere;
+  /// but the enforcement itself reaches only db-object callers.
+  @override
+  Future<T> transaction<T>(Future<T> Function() action,
+      {bool requireNew = false}) {
+    if (Zone.current[_capturingZoneKey] != true) {
+      throw StateError(
+        'Domain writes go through GtdDatabase.capturing, which is the '
+        'transaction boundary; a bare GtdDatabase.transaction is refused so a '
+        'rolled-back write can never leave a signed op behind. For writes that '
+        'must never author ops, use GtdDatabase.uncapturedTransaction.',
+      );
+    }
+    return super.transaction(action, requireNew: requireNew);
   }
 
   /// Plain-class DAO for universal search (no code generation required).
@@ -79,11 +164,34 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
-  MigrationStrategy get migration =>
-      MigrationStrategy(onCreate: (m) => m.createAll());
+  MigrationStrategy get migration => MigrationStrategy(
+        // Every migration entry point runs inside [_duringMigration]: drift's
+        // recreate steps open a `transaction` on this db object, which the
+        // [transaction] guard would otherwise refuse (a migration is outside
+        // any [capturing] scope). Migrations author no ops, so the marker lets
+        // them through without weakening the guard's runtime teeth.
+        onCreate: (m) => _duringMigration(m.createAll),
+        onUpgrade: (m, from, to) => _duringMigration(() async {
+          // v2 (issue #604): drop `todos.time_spent_minutes`, a denormalised
+          // time-spent cache with no write path — time spent is derived from
+          // `SUM(time_logs)` at read time. The column carried nothing on a v1
+          // store: every row held the declared `0`, so this loses no data.
+          //
+          // A recreate rather than `ALTER TABLE ... DROP COLUMN`: that statement
+          // needs sqlite 3.35, and the bundled library's version is a property
+          // of whatever `sqlite3_flutter_libs` build a device ended up with.
+          // `alterTable` copies the surviving columns into a table built from
+          // the current declaration, re-creates the indices, and cycles
+          // `PRAGMA foreign_keys` itself, so `time_logs.task_id` survives the
+          // swap.
+          if (from < 2) {
+            await m.alterTable(TableMigration(todos));
+          }
+        }),
+      );
 
   /// Invalidates Drift stream queries reading `todos` (and, when
   /// [includeTodoTags] is set, `todo_tags`) after a write, independent of what

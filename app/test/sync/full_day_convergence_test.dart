@@ -13,9 +13,9 @@
 ///    same bytes — bootstrap is replay;
 /// 3. A rewinding its cursor and re-pulling changes nothing — replay is
 ///    idempotent, and tombstones never resurrect;
-/// 4. every domain projection agrees per collection group, as **full rows**,
-///    with `todos.time_spent_minutes` the single excluded column (a dead cache
-///    the log never carries — ADR-0030).
+/// 4. every domain projection agrees per collection group, as **full rows** —
+///    no column excluded, because every domain column is synced or derived at
+///    read time (`todos.time_spent_minutes` was dropped in #604).
 @TestOn('!browser')
 library;
 
@@ -48,9 +48,9 @@ const _setMergeKey = 'spec_set_merge';
 String _id(String label) => const Uuid().v5(jeevesWorkspaceNamespace, 'day/$label');
 
 /// Every collection group's table, and the columns excluded from the row-level
-/// comparison. Only the dead cache is ever excluded.
+/// comparison — none: every domain column is synced or derived at read time.
 const _tables = <String, Set<String>>{
-  'todos': {'time_spent_minutes'},
+  'todos': {},
   'actions': {},
   'tags': {},
   'todo_tags': {},

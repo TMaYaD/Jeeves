@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# Stub `sleep` for the bootstrap test only: deploy-powersync.sh's smoke-test
-# and postgres-restart loops would otherwise cost ~60s of real waiting to
-# assert an ordering that has nothing to do with timing.
-exit 0

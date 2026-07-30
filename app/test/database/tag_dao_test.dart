@@ -130,62 +130,31 @@ void main() {
     });
 
     test(
-        'upsertTag and assignTag work on PowerSync view-backed schema — '
-        'regression guard: no ON CONFLICT DO UPDATE on views', () async {
-      // Replace real tables with views + INSTEAD OF INSERT triggers to
-      // simulate the PowerSync schema.  SQLite rejects the UPSERT syntax
-      // "ON CONFLICT DO UPDATE" on views at parse time; any regression to
-      // insertOnConflictUpdate() will throw a SqliteException here.
-      await db.customStatement('''
-        CREATE TABLE ps_data__tags (
-          id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT,
-          type TEXT NOT NULL DEFAULT 'context', user_id TEXT NOT NULL
-        )
-      ''');
-      await db.customStatement('DROP TABLE IF EXISTS tags');
-      await db.customStatement(
-        'CREATE VIEW tags AS SELECT * FROM ps_data__tags',
-      );
-      await db.customStatement('''
-        CREATE TRIGGER tags_insert INSTEAD OF INSERT ON tags BEGIN
-          INSERT OR REPLACE INTO ps_data__tags (id, name, color, type, user_id)
-          VALUES (NEW.id, NEW.name, NEW.color, NEW.type, NEW.user_id);
-        END
-      ''');
-
-      await db.customStatement('''
-        CREATE TABLE ps_data__todo_tags (
-          id TEXT PRIMARY KEY, todo_id TEXT NOT NULL,
-          tag_id TEXT NOT NULL, user_id TEXT NOT NULL
-        )
-      ''');
-      await db.customStatement('DROP TABLE IF EXISTS todo_tags');
-      await db.customStatement(
-        'CREATE VIEW todo_tags AS SELECT * FROM ps_data__todo_tags',
-      );
-      await db.customStatement('''
-        CREATE TRIGGER todo_tags_insert INSTEAD OF INSERT ON todo_tags BEGIN
-          INSERT OR REPLACE INTO ps_data__todo_tags (id, todo_id, tag_id, user_id)
-          VALUES (NEW.id, NEW.todo_id, NEW.tag_id, NEW.user_id);
-        END
-      ''');
-
+        'upsertTag with a fresh id claiming an occupied (name, type) replaces '
+        'the incumbent instead of duplicating it', () async {
       await db.tagDao.upsertTag(TagsCompanion(
-        id: const Value('ctx-view'),
+        id: const Value('ctx-incumbent'),
         name: const Value('phone'),
         type: const Value('context'),
         userId: const Value(_userId),
       ));
 
-      // Two calls — idempotency requires exactly one row.
-      await db.tagDao.assignTag('todo-view', 'ctx-view', _userId);
-      await db.tagDao.assignTag('todo-view', 'ctx-view', _userId);
+      // `upsertTag` finds no row under the new id and falls through to
+      // INSERT OR REPLACE, which resolves the table's `UNIQUE (name, type)`
+      // conflict by *deleting* the incumbent — id and all. That is precisely
+      // why nothing in the app creates a tag by calling this directly:
+      // `findOrCreateTag` reuses the existing row, and `rename` folds into
+      // `merge` rather than writing a colliding one.
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('ctx-usurper'),
+        name: const Value('phone'),
+        type: const Value('context'),
+        userId: const Value(_userId),
+      ));
 
-      final rows = await (db.select(db.todoTags)
-            ..where((jt) => jt.todoId.equals('todo-view')))
-          .get();
-      expect(rows.length, 1);
-      expect(rows.first.id, todoTagIdFor('todo-view', 'ctx-view'));
+      final tags = await db.tagDao.watchByType('context').first;
+      expect(tags, hasLength(1));
+      expect(tags.single.id, 'ctx-usurper');
     });
 
     test('enforceSingleProject removes old project and assigns new one',
@@ -282,8 +251,14 @@ void main() {
     });
 
     test(
-        'tripwire: raw insert of duplicate (name, type) throws under unique constraint',
-        () async {
+        'tripwire: a plain insert of a duplicate (name, type) throws under the '
+        'unique key', () async {
+      // The `UNIQUE (name, type)` tripwire on the real table (`tables.dart`),
+      // asserted through the statement shape production actually issues raw:
+      // `DomainProjector._upsert` locates a tag by `id` and, finding none,
+      // INSERTs. So this is not only a guard on the DAO — it is the reason a
+      // duplicate `(name, type)` cannot reach disk at all (see the
+      // `TagDao.dedupeTags` group below).
       await db.into(db.tags).insert(TagsCompanion(
             id: const Value('dup1'),
             name: const Value('Alice'),
@@ -303,117 +278,40 @@ void main() {
     });
   });
 
+  // **`dedupeTags`' collapse path is unreachable on the real schema, so only
+  // its no-op contract is asserted here.**
+  //
+  // `tags` carries `UNIQUE (name, type)` (`tables.dart`), and nothing can put a
+  // second row with a duplicate pair behind it: DAO writes go through
+  // `INSERT OR REPLACE`, which resolves the conflict by replacing rather than
+  // duplicating, and production's one raw `INSERT INTO tags` —
+  // `DomainProjector._upsert`, which locates a tag by `id` — raises
+  // `SqliteException(2067)` instead (the `tripwire:` test above pins that
+  // statement shape). The pre-#595 store was where duplicates could exist:
+  // `tags` was a constraint-free view over a PowerSync backing table, so a
+  // peer's independently minted "Home" landed as a second row. That topology is
+  // gone (ADR-0035) and the old local store is deleted rather than converted,
+  // so it cannot arrive on disk either. The test that used to cover the collapse
+  // rebuilt that view topology purely so its own fixture could get past the
+  // unique key.
+  //
+  // The behaviours it asserted are covered on the real schema elsewhere, by the
+  // reachable route to the same collapse — `TagDao.merge` and the `rename` that
+  // folds into it, in `tag_filter_dao_test.dart`: junction rows repointed onto
+  // the surviving tag id, the resulting `(todo_id, tag_id)` PK collision
+  // collapsing to one row, the losing tag deleted, unrelated tags untouched.
+  // Its deterministic junction id is pinned by `assignTag is idempotent` above.
+  // What is left uncovered is `dedupeTags`' own group ranking (most references
+  // wins, `MIN(id)` as tiebreaker), because no input can reach it.
+  //
+  // The projector raising instead of converging is a live defect rather than a
+  // property of the design — see #605, which also decides whether the fix makes
+  // this path reachable again or retires the dedupe machinery.
   group('TagDao.dedupeTags', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
-
-    test(
-        'collapses duplicate (name, type) rows, repoints todo_tags, '
-        'survives PK collision on (todo_id, canonical_tag_id)', () async {
-      // Use the view-backed schema so the unique-key tripwire on the real
-      // table doesn't block the test setup — production duplicates land in
-      // ps_data__tags via PowerSync, not via direct table inserts.
-      await db.customStatement('''
-        CREATE TABLE ps_data__tags (
-          id TEXT PRIMARY KEY, name TEXT NOT NULL, color TEXT,
-          type TEXT NOT NULL DEFAULT 'context', user_id TEXT NOT NULL
-        )
-      ''');
-      await db.customStatement('DROP TABLE IF EXISTS tags');
-      await db.customStatement(
-        'CREATE VIEW tags AS SELECT * FROM ps_data__tags',
-      );
-      await db.customStatement('''
-        CREATE TRIGGER tags_insert INSTEAD OF INSERT ON tags BEGIN
-          INSERT OR REPLACE INTO ps_data__tags (id, name, color, type, user_id)
-          VALUES (NEW.id, NEW.name, NEW.color, NEW.type, NEW.user_id);
-        END
-      ''');
-      await db.customStatement('''
-        CREATE TRIGGER tags_delete INSTEAD OF DELETE ON tags BEGIN
-          DELETE FROM ps_data__tags WHERE id = OLD.id;
-        END
-      ''');
-
-      await db.customStatement('''
-        CREATE TABLE ps_data__todo_tags (
-          id TEXT PRIMARY KEY, todo_id TEXT NOT NULL,
-          tag_id TEXT NOT NULL, user_id TEXT NOT NULL
-        )
-      ''');
-      await db.customStatement('DROP TABLE IF EXISTS todo_tags');
-      await db.customStatement(
-        'CREATE VIEW todo_tags AS SELECT * FROM ps_data__todo_tags',
-      );
-      await db.customStatement('''
-        CREATE TRIGGER todo_tags_insert INSTEAD OF INSERT ON todo_tags BEGIN
-          INSERT OR REPLACE INTO ps_data__todo_tags (id, todo_id, tag_id, user_id)
-          VALUES (NEW.id, NEW.todo_id, NEW.tag_id, NEW.user_id);
-        END
-      ''');
-      await db.customStatement('''
-        CREATE TRIGGER todo_tags_delete INSTEAD OF DELETE ON todo_tags BEGIN
-          DELETE FROM ps_data__todo_tags WHERE id = OLD.id;
-        END
-      ''');
-
-      // Two duplicate "Alice" person rows + one unrelated "Bob" row.
-      Future<void> rawInsertTag(String id, String name, String type) async {
-        await db.into(db.tags).insert(TagsCompanion(
-              id: Value(id),
-              name: Value(name),
-              type: Value(type),
-              userId: const Value(_userId),
-            ));
-      }
-
-      await rawInsertTag('alice-a', 'Alice', 'person');
-      await rawInsertTag('alice-b', 'Alice', 'person');
-      await rawInsertTag('bob', 'Bob', 'person');
-
-      // Insert two junction rows pointing at the two Alice ids for the SAME
-      // todo, so the rewrite forces a collision on the canonical junction id.
-      // Use the same deterministic id scheme production uses (todoTagIdFor)
-      // so the replay collapses via INSERT OR REPLACE on the backing table's
-      // id PK — mirroring how junction rows are minted by assignTag.
-      await db.into(db.todoTags).insert(TodoTagsCompanion(
-            id: Value(todoTagIdFor('todo-1', 'alice-a')),
-            todoId: const Value('todo-1'),
-            tagId: const Value('alice-a'),
-            userId: const Value(_userId),
-          ));
-      await db.into(db.todoTags).insert(TodoTagsCompanion(
-            id: Value(todoTagIdFor('todo-1', 'alice-b')),
-            todoId: const Value('todo-1'),
-            tagId: const Value('alice-b'),
-            userId: const Value(_userId),
-          ));
-
-      await db.tagDao.dedupeTags();
-
-      // Exactly one Alice row remains; Bob untouched.
-      final aliceRows = await (db.select(db.tags)
-            ..where((t) => t.name.equals('Alice')))
-          .get();
-      expect(aliceRows, hasLength(1));
-      final canonicalAlice = aliceRows.single.id;
-
-      final bobRows = await (db.select(db.tags)
-            ..where((t) => t.name.equals('Bob')))
-          .get();
-      expect(bobRows, hasLength(1));
-
-      // One junction row survives, repointed to the canonical Alice id, with
-      // the deterministic id derived from (todo_id, canonical_tag_id).
-      final allLinks = await (db.select(db.todoTags)
-            ..where((tt) => tt.todoId.equals('todo-1')))
-          .get();
-      expect(allLinks, hasLength(1));
-      expect(allLinks.single.tagId, canonicalAlice);
-      expect(allLinks.single.id, todoTagIdFor('todo-1', canonicalAlice));
-    });
 
     test('dedupeTags is a no-op when no duplicates exist', () async {
       await db.tagDao.findOrCreateTag('Alice', 'person', _userId);

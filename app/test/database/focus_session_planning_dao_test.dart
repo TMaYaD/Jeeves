@@ -70,7 +70,9 @@ void main() {
       expect(rows.length, 2);
       expect(rows[0].read<String>('task_id'), 'tA');
       expect(rows[1].read<String>('task_id'), 'tB');
-      // Each row must have a non-null, non-empty id for PowerSync compatibility.
+      // `id` is the sync row identifier the op log names the entity by — the
+      // domain key is (focus_session_id, task_id), so the row carries one
+      // anyway, NOT NULL and unique (ADR-0025).
       for (final row in rows) {
         final id = row.read<String?>('id');
         expect(id, isNotNull);
@@ -78,8 +80,8 @@ void main() {
       }
     });
 
-    test('inserts task rows carrying the session user_id (denormalized for '
-        'PowerSync per-user bucketing)', () async {
+    test('inserts task rows carrying the session user_id (denormalized so a '
+        'junction row names its owner without a JOIN)', () async {
       await _insertTodo(db, id: 'tA', title: 'Task A');
       await _insertTodo(db, id: 'tB', title: 'Task B');
 
@@ -651,13 +653,9 @@ void main() {
     });
 
     test(
-        'derives timeSpentMinutes from time_logs, ignoring the stale '
-        'todos.time_spent_minutes column (issue #480)', () async {
+        'time spent on a Review-surface Outcome sums its session time_logs '
+        '(issue #480, #604)', () async {
       await _insertTodo(db, id: 'X', title: 'X');
-      // Poison the column with a stale value: nothing has maintained it since
-      // transitionState was retired, so the query must not surface it.
-      await db.customStatement(
-          'UPDATE todos SET time_spent_minutes = 999 WHERE id = ?', ['X']);
 
       final sessionId = await db.focusSessionDao.openSession(
         userId: _userId,
@@ -686,14 +684,17 @@ void main() {
 
       final surface =
           await db.focusSessionDao.watchActiveSessionReviewSurface().first;
-      expect(surface.single.id, 'X');
-      expect(surface.single.timeSpentMinutes, 35,
-          reason: 'must be SUM(time_logs), not the dead cache column');
+      expect(surface.single.id, 'X',
+          reason: 'the Outcome is on the Review surface');
+      // The surface carries no total; the derivation lives on TimeLogDao and is
+      // what every consumer reads (issue #604).
+      expect(await db.timeLogDao.totalMinutesForTask('X'), 35,
+          reason: 'SUM(time_logs) across both stints');
     });
 
     test(
-        'derived timeSpentMinutes spans all sessions, not just the open one '
-        '(cumulative, matching TimeLogDao.totalMinutesForTask)', () async {
+        'time spent spans all sessions, not just the open one '
+        '(cumulative, TimeLogDao.totalMinutesForTask)', () async {
       await _insertTodo(db, id: 'X', title: 'X');
 
       final priorId = await db.focusSessionDao.openSession(
@@ -730,7 +731,8 @@ void main() {
 
       final surface =
           await db.focusSessionDao.watchActiveSessionReviewSurface().first;
-      expect(surface.single.timeSpentMinutes, 35,
+      expect(surface.single.id, 'X');
+      expect(await db.timeLogDao.totalMinutesForTask('X'), 35,
           reason: '20m from the prior session + 15m today');
     });
 

@@ -49,10 +49,10 @@ String _id(String label) =>
     const Uuid().v5(jeevesWorkspaceNamespace, 'signup/$label');
 
 /// Every collection group's table, and the columns excluded from the row-level
-/// comparison. Only the dead `todos.time_spent_minutes` cache is ever excluded
-/// (ADR-0030).
+/// comparison — none: every domain column is synced or derived at read time
+/// (`todos.time_spent_minutes` was dropped in #604).
 const Map<String, Set<String>> _tables = {
-  'todos': {'time_spent_minutes'},
+  'todos': {},
   'actions': {},
   'tags': {},
   'todo_tags': {},
@@ -239,8 +239,8 @@ void main() {
     await b.lifecycle!.flushOutboxNow();
     await a.stack.defaultClient.sync();
     expect(
-      await domainRows(a.domain, 'todos', exclude: {'time_spent_minutes'}),
-      await domainRows(b.domain, 'todos', exclude: {'time_spent_minutes'}),
+      await domainRows(a.domain, 'todos'),
+      await domainRows(b.domain, 'todos'),
     );
   });
 
@@ -252,11 +252,18 @@ void main() {
       clock: clock,
     );
     addTearDown(a.close);
+    // Legacy rows — data that predates authoring (PowerSync-era, ADR-0035).
+    // Settle the seam silent so the seed lands in the domain store without being
+    // buffered: the **initial upload** is what authors these, which is the path
+    // this test is about. (A captured pre-enrolment write would instead be
+    // drained at bind and flushed at the first sync — a different path.)
+    a.capture.unbind();
     await _seedOfflineWork(a.domain, clock);
     await a.enrolAsFirstDevice();
 
-    // The POST lands and the response is lost — indistinguishable, from here,
-    // from one that never arrived. Every capture succeeded; the flush did not.
+    // The upload's POST lands and the response is lost — indistinguishable, from
+    // here, from one that never arrived. The walk authored every op; the post
+    // did not confirm.
     a.link.dropPostResponse = true;
     expect(await a.activate(), SyncActivation.uploadIncomplete);
     expect(

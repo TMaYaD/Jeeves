@@ -54,23 +54,28 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// The full `todos` column projection every Todo-producing query selects, so
   /// `todos.map(row.data)` hydrates the [Todo] model with **Action-grain**
-  /// `energy_level` / `time_estimate` (D2) and live-derived `time_spent_minutes`
-  /// (issue #480) — leaving UI and providers untouched. The raw
-  /// `todos.energy_level` / `time_estimate` columns remain the write mirror and
-  /// the Actionless draft store (D1/D3). `last_next_action_completion_at` is
-  /// live — stamped by the focus-session close and read by the
-  /// re-clarification predicate. [t] is the `todos` table's SQL alias in the
-  /// enclosing query.
+  /// `energy_level` / `time_estimate` (D2) — leaving UI and providers untouched.
+  /// The raw `todos.energy_level` / `time_estimate` columns remain the write
+  /// mirror and the Actionless draft store (D1/D3).
+  /// `last_next_action_completion_at` is live — stamped by the focus-session
+  /// close and read by the re-clarification predicate. [t] is the `todos`
+  /// table's SQL alias in the enclosing query.
   ///
-  /// Queries carrying this projection must list `actions` and `time_logs` in
-  /// `readsFrom` so a synced Action or TimeLog write re-emits their watchers.
+  /// Queries carrying this projection must list `actions` in `readsFrom` so a
+  /// synced Action write re-emits their watchers.
+  ///
+  /// Time spent is **not** here and no [Todo] carries it: it is a TimeLog
+  /// derivation at the Outcome grain, and a surface that displays it reads
+  /// [TimeLogDao.totalMinutesForTask] or [TimeLogDao.watchTotalMinutesByTask]
+  /// for itself. Projecting it onto a row class would put a value on every
+  /// [Todo] that only some queries had derived — the asymmetry the dropped
+  /// `time_spent_minutes` column used to hide (issue #604).
   static String todoProjectionSql(String t) =>
       '$t.id, $t.title, $t.notes, $t.priority, $t.due_date, $t.created_at, '
       '$t.updated_at, $t.done_at, $t.clarified, $t.intent, '
       '${effectiveTimeEstimateSql(t)} AS time_estimate, '
       '${effectiveEnergyLevelSql(t)} AS energy_level, '
       '$t.capture_source, $t.location_id, $t.user_id, $t.last_clarified_at, '
-      '${TimeLogDao.totalMinutesSubquery('$t.id')} AS time_spent_minutes, '
       '$t.last_next_action_completion_at';
 
   // ---------------------------------------------------------------------------
@@ -87,7 +92,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos WHERE todos.id = ?',
       variables: [Variable(todoId)],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).getSingleOrNull().then((r) => r == null ? null : todos.map(r.data));
   }
 
@@ -97,7 +102,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos WHERE todos.id = ?',
       variables: [Variable(todoId)],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).watchSingleOrNull().map((r) => r == null ? null : todos.map(r.data));
   }
 
@@ -169,8 +174,8 @@ EXISTS (
         'ORDER BY created_at',
         variables: [intentVar],
         readsFrom: excludeActionlessPersonBlocked
-            ? {todos, todoTags, tags, actions, attachedDatabase.timeLogs}
-            : {todos, actions, attachedDatabase.timeLogs},
+            ? {todos, todoTags, tags, actions}
+            : {todos, actions},
       ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
     }
     final n = tagIds.length;
@@ -187,8 +192,8 @@ EXISTS (
       'ORDER BY todos.created_at',
       variables: [intentVar, ...tagIds.map(Variable.new)],
       readsFrom: excludeActionlessPersonBlocked
-          ? {todos, todoTags, tags, actions, attachedDatabase.timeLogs}
-          : {todos, todoTags, actions, attachedDatabase.timeLogs},
+          ? {todos, todoTags, tags, actions}
+          : {todos, todoTags, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -251,7 +256,7 @@ EXISTS (
           Variable('person'),
           Variable('next'),
         ],
-        readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+        readsFrom: {todos, todoTags, tags, actions},
       ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
     }
     final n = tagIds.length;
@@ -272,7 +277,7 @@ EXISTS (
         Variable('next'),
         ...tagIds.map(Variable.new),
       ],
-      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions},
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
@@ -283,9 +288,8 @@ EXISTS (
   /// then todo creation date — insertion order matches the grouped view.
   Stream<Map<Tag, List<Todo>>> watchPersonTaggedGrouped() {
     return customSelect(
-      // Shared Todo projection (Action-grain energy/time via D2, live-derived
-      // time_spent_minutes per #480) plus the person-tag columns this grouped
-      // view needs.
+      // Shared Todo projection (Action-grain energy/time via D2) plus the
+      // person-tag columns this grouped view needs.
       'SELECT ${todoProjectionSql('todos')}, '
       '  tg.id AS ptag_id, tg.name AS ptag_name, '
       '  tg.color AS ptag_color, tg.user_id AS ptag_user_id '
@@ -300,7 +304,7 @@ EXISTS (
         Variable('person'),
         Variable('next'),
       ],
-      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions},
     ).watch().map((rows) {
       final result = <Tag, List<Todo>>{};
       for (final row in rows) {
@@ -349,7 +353,7 @@ EXISTS (
     late final int affected;
     var actionTerminated = false;
     var logChanged = false;
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       affected = await customUpdate(
         'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
         'WHERE id = ?',
@@ -375,7 +379,7 @@ EXISTS (
           .applyCompleteCurrentAction(todoId, ts: ts);
       actionTerminated = effect.changed;
       logChanged = effect.logChanged;
-    }));
+    });
     if (actionTerminated) attachedDatabase.notifyActionsViewWrite();
     // Completing the Outcome closes the current Action's open TimeLog (#476);
     // the `time_logs` view needs the same explicit post-commit notify (ADR-0010).
@@ -394,7 +398,7 @@ EXISTS (
       "WHERE done_at IS NOT NULL AND intent != 'trash' "
       'ORDER BY done_at DESC',
       variables: [],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -423,7 +427,7 @@ EXISTS (
       "WHERE intent = 'trash' "
       'ORDER BY COALESCE(last_clarified_at, updated_at, created_at) DESC',
       variables: [],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -442,7 +446,7 @@ EXISTS (
       'WHERE id IN ($placeholders) '
       'ORDER BY created_at',
       variables: [...ids.map(Variable.new)],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -560,8 +564,8 @@ EXISTS (
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final normalized = text.trim();
-    final logChanged = await attachedDatabase.capturing(() => transaction(
-        () => _applySetCurrentActionText(todoId, normalized, ts)));
+    final logChanged = await attachedDatabase.capturing(
+        () => _applySetCurrentActionText(todoId, normalized, ts));
     // The GTD lists read across `todos` and `actions`, so a watcher naming one
     // must hear about a write to the other; notify both explicitly rather than
     // relying on Drift's per-table invalidation (#342, ADR-0010).
@@ -603,13 +607,13 @@ EXISTS (
       );
     }
     var logChanged = false;
-    final wrote = await attachedDatabase.capturing(() => transaction(() async {
+    final wrote = await attachedDatabase.capturing(() async {
       final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
       if (current != null) return false;
       // Non-blank text here, so this never supersedes — logChanged stays false.
       logChanged = await _applySetCurrentActionText(todoId, normalized, ts);
       return true;
-    }));
+    });
     if (wrote) {
       // See [setCurrentActionText]: view writes report changes()==0 (#342, ADR-0010).
       attachedDatabase.notifyTodosViewWrite();
@@ -712,7 +716,7 @@ AND (
       ') '
       'ORDER BY todos.created_at',
       variables: [Variable('next'), Variable('person')],
-      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -740,7 +744,7 @@ AND (
       'ORDER BY todos.title '
       'LIMIT ?',
       variables: [Variable('%$escaped%'), Variable<int>(limit)],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -762,7 +766,7 @@ AND (
       'SELECT ${todoProjectionSql('todos')} FROM todos '
       'WHERE $_needsReviewWhere ORDER BY created_at',
       variables: [],
-      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -820,7 +824,7 @@ AND (
     Set<String> targetPersonTagIds,
     String userId,
   ) async {
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final allPersonTagIds = await (select(tags)
             ..where((t) => t.type.equals('person')))
           .map((t) => t.id)
@@ -870,7 +874,7 @@ AND (
           fields: {'todo_id': todoId, 'tag_id': tagId, 'user_id': userId},
         );
       }
-    }));
+    });
   }
 
   /// [setPersonTagsForTodo] plus a `last_clarified_at` stamp, in one
@@ -886,22 +890,20 @@ AND (
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
     await attachedDatabase.capturing(() async {
-      await transaction(() async {
-        await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
-        // Stamped inline rather than through [stampLastClarifiedAt]: that
-        // method notifies view watchers itself, and firing that mid-transaction
-        // would have them re-read pre-commit state. Notify once below, after
-        // commit.
-        await (update(todos)..where((t) => t.id.equals(todoId))).write(
-          TodosCompanion(
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-        );
-        _captureTodo(todoId, {
-          'last_clarified_at': encodeInstant(ts),
-          'updated_at': encodeInstant(ts),
-        });
+      await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
+      // Stamped inline rather than through [stampLastClarifiedAt]: that
+      // method notifies view watchers itself, and firing that mid-transaction
+      // would have them re-read pre-commit state. Notify once below, after
+      // commit.
+      await (update(todos)..where((t) => t.id.equals(todoId))).write(
+        TodosCompanion(
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      );
+      _captureTodo(todoId, {
+        'last_clarified_at': encodeInstant(ts),
+        'updated_at': encodeInstant(ts),
       });
       // Person-tag edits move `todo_tags`, which the Outcome surfaces read
       // alongside `todos` — so both groups are notified (ADR-0010).
@@ -961,7 +963,7 @@ AND (
         actionText != null;
     var actionTerminated = false;
     var logChanged = false;
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final captured = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
             'clarified': true,
@@ -1051,7 +1053,7 @@ AND (
         }
         await setPersonTagsForTodo(todoId, personTagIds, userId);
       }
-    }));
+    });
 
     // Notify explicitly so the Inbox / Next Actions lists refresh even when the
     // write touched a table they do not name — and so they do not depend solely
@@ -1166,7 +1168,7 @@ AND (
       if (clearDueDate) 'due_date': null else 'due_date': ?encodeInstant(dueDate),
     };
     var actionTouched = false;
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
       _captureTodo(todoId, captured);
       if (touchesMetadata) {
@@ -1189,7 +1191,7 @@ AND (
           actionTouched = effect.changed;
         }
       }
-    }));
+    });
     attachedDatabase.notifyTodosViewWrite();
     if (actionTouched) attachedDatabase.notifyActionsViewWrite();
   }
@@ -1241,8 +1243,8 @@ AND (
         clarified: const Value(true),
         lastClarifiedAt: Value(ts),
       ));
-      // Creation asserts the whole row (minus the dead `time_spent_minutes`
-      // cache) so a peer that has never seen this Outcome can build it.
+      // Creation asserts the whole row so a peer that has never seen this
+      // Outcome can build it.
       _captureTodo(id, {
         'title': title,
         'notes': notes,
@@ -1335,7 +1337,7 @@ AND (
   }
 
   Future<int> deleteOutcome(String id) async {
-    return attachedDatabase.capturing(() => transaction(() async {
+    return attachedDatabase.capturing(() async {
       final existed = await (select(todos)..where((t) => t.id.equals(id)))
               .getSingleOrNull() !=
           null;
@@ -1354,6 +1356,6 @@ AND (
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();
       return 1;
-    }));
+    });
   }
 }

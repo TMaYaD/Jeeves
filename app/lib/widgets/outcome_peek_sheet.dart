@@ -11,8 +11,8 @@
 /// and selection).
 ///
 /// Time logged is derived from the `time_logs` table via
-/// [TimeLogDao.totalMinutesForTask], not the `todos.time_spent_minutes` cursor
-/// column, whose freshness is being verified separately.
+/// [TimeLogDao.totalMinutesForTask] — the only source of truth for time spent
+/// (nothing stores a total).
 library;
 
 import 'package:flutter/material.dart';

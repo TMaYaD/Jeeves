@@ -16,6 +16,14 @@ import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
+import 'package:jeeves/sync/collection_codecs.dart'
+    show
+        actionsCollection,
+        captureOutcomesCollection,
+        capturesCollection,
+        todosCollection;
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -340,8 +348,10 @@ void main() {
       );
 
       final outcome = await _row(db, outcomeId);
-      // Every timestamp column must land in UTC (PowerSync upload contract),
-      // not just last_clarified_at.
+      // Every timestamp column must land in UTC, not just last_clarified_at:
+      // the op log's canonical instant form is ISO-8601 UTC to the millisecond
+      // (`FieldKind.instant` / `encodeInstant`), so a column holding local
+      // wall-clock time would encode to a different instant than it names.
       expect(outcome.createdAt.isUtc, isTrue);
       expect(outcome.createdAt, localNow.toUtc());
       expect(outcome.updatedAt!.isUtc, isTrue);
@@ -525,6 +535,72 @@ void main() {
         container.read(clarificationServiceProvider),
         isA<DaoClarificationService>(),
       );
+    });
+  });
+
+  // T4 — the service seam is one capturing scope: a committed method emits one
+  // coalesced op per entity (not one per DAO call), and a rolled-back method
+  // emits none and writes nothing.
+  group('capture contract (op emission per service call)', () {
+    late RecordingDomainOpCapture capture;
+    late GtdDatabase captureDb;
+    late ClarificationService captureService;
+
+    setUp(() {
+      capture = RecordingDomainOpCapture();
+      captureDb = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+      captureService = DaoClarificationService(captureDb);
+    });
+    tearDown(() => captureDb.close());
+
+    test('clarifyCaptureToOutcome emits exactly one op per touched entity',
+        () async {
+      await captureDb.captureDao.insertCapture(
+        _captureRow(id: 'c1', title: 'Draft'),
+      );
+      capture.clear();
+
+      await captureService.clarifyCaptureToOutcome(
+        'c1',
+        to: RoutingKind.nextAction,
+        userId: _userId,
+        title: 'Draft outline',
+        action: const ActionDraft(text: 'Draft outline'),
+      );
+
+      // insertOutcome + applyRouting both write `todos`; pre-fix each DAO's own
+      // scope was outermost and emitted separately, so `todos` was authored
+      // twice. One capturing scope coalesces them to a single op — the
+      // deliberate behavioral change, convergence-identical (one HLC per net
+      // effect).
+      expect(capture.forCollection(todosCollection), hasLength(1),
+          reason: 'the two todos writes coalesce to one op');
+      expect(capture.forCollection(actionsCollection), hasLength(1));
+      expect(capture.forCollection(captureOutcomesCollection), hasLength(1));
+      expect(capture.forCollection(capturesCollection), hasLength(1));
+      // No entity is authored more than once.
+      expect(capture.keys.toSet(), hasLength(capture.keys.length),
+          reason: 'exactly one coalesced op per entity');
+    });
+
+    test('a rolled-back service method authors nothing and writes nothing',
+        () async {
+      await captureDb.captureDao.insertCapture(
+        _captureRow(id: 'c1', title: 'Present'),
+      );
+      capture.clear();
+
+      // The Outcome vanished between the snapshot pick and the write: the
+      // in-transaction guard throws, the whole capturing scope rolls back.
+      await expectLater(
+        captureService.mergeIntoOutcome('c1', 'gone', userId: _userId),
+        throwsStateError,
+      );
+
+      expect(capture.recorded, isEmpty,
+          reason: 'a rolled-back write is never signed');
+      expect(await captureDb.select(captureDb.captureOutcomes).get(), isEmpty,
+          reason: 'no link row survives the rollback');
     });
   });
 }

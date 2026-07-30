@@ -13,7 +13,13 @@ _redis_pool: aioredis.Redis | None = None
 def _get_pool() -> aioredis.Redis:
     global _redis_pool
     if _redis_pool is None:
-        _redis_pool = aioredis.from_url(  # type: ignore[no-untyped-call]
+        # `from_url` is untyped in redis-py 6 and typed from 8 on, and the two
+        # resolutions are both live: `uv.lock` pins 6.4.0 while CI's
+        # `pip install -e ".[dev]"` floats to the newest matching `redis>=5.0.4`.
+        # `unused-ignore` keeps the suppression honest under both — without it,
+        # whichever set mypy runs against fails the other.  Dropping
+        # `no-untyped-call` once the floor is raised past 6 is the tidy-up.
+        _redis_pool = aioredis.from_url(  # type: ignore[no-untyped-call,unused-ignore]
             settings.redis_url,
             encoding="utf-8",
             decode_responses=True,

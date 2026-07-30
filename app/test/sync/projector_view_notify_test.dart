@@ -6,7 +6,7 @@
 ///
 /// **The hazard is smaller than it was, and that is worth stating.** ADR-0010's
 /// failure mode was that the `SqliteAsyncDriftConnection` bridge named PowerSync's
-/// *backing* table (`ps_data__todos`), never the `todos` view a watcher read, so
+/// own *backing* table, never the `todos` view a watcher read, so
 /// a projector write invalidated nothing at all. Over real tables the bridge names
 /// `todos` — the table that actually changed and the one the watcher declares — so
 /// it is now a working second refresh path. The negative assertion this file used
@@ -269,29 +269,23 @@ void main() {
     await waitUntil(() => seen.last.any((hit) => hit.todo?.id == id));
   });
 
-  test('a projected row survives a plain select(todos) — the unsynced NOT NULL '
-      'column is filled at create time', () async {
-    // The trap this closes: `todos.time_spent_minutes` is a dead cache the log
-    // carries nothing about (ADR-0030), but it is declared NOT NULL, so a
-    // projected row that omitted it read back as null and threw on the null
-    // check the moment anything did a raw row read — `SearchDao` among them.
-    // On a real table the omission is louder still — the INSERT itself would
-    // violate the constraint — which is why the codec declares the default
-    // rather than leaving it to whatever the storage layer happens to tolerate.
+  test('a projected row round-trips through a plain select(todos), and a '
+      're-projection updates only the fields it carries', () async {
     final id = _id('outcome');
     await projector.project(await reduce('todos', id, outcomeFields('Ship it')));
 
+    // A raw row read (as SearchDao does) must not throw — the projected INSERT
+    // satisfied every NOT NULL the table declares.
     final row = await (domain.select(domain.todos)
           ..where((todo) => todo.id.equals(id)))
         .getSingle();
-    expect(row.timeSpentMinutes, 0);
     expect(row.title, 'Ship it');
 
-    // Projecting again must not touch the column — it is not a merge input, so
-    // whatever the local row holds is what it keeps.
+    // A field the op names is updated; a field it omits (here, a local edit to
+    // `notes`) is left exactly as the local row holds it.
     await domain.customUpdate(
-      'UPDATE "todos" SET "time_spent_minutes" = 42 WHERE "id" = ?',
-      variables: [Variable<String>(id)],
+      'UPDATE "todos" SET "notes" = ? WHERE "id" = ?',
+      variables: [Variable<String>('local note'), Variable<String>(id)],
     );
     await projector.project(
         await reduce('todos', id, {'title': 'Ship it, revised'}));
@@ -299,8 +293,8 @@ void main() {
           ..where((todo) => todo.id.equals(id)))
         .getSingle();
     expect(reread.title, 'Ship it, revised');
-    expect(reread.timeSpentMinutes, 42,
-        reason: 'projection overwrote a column it does not own');
+    expect(reread.notes, 'local note',
+        reason: 'projection overwrote a field the op did not carry');
   });
 
   test('a projected tombstone deletes the row and refreshes the watcher',
