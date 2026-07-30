@@ -19,7 +19,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,7 +52,7 @@ async def _post(
     session: Session,
     *envelopes: bytes,
     headers: dict[str, str] | None = None,
-) -> object:
+) -> Response:
     return await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(*envelopes),
@@ -463,7 +463,6 @@ async def test_a_second_prune_of_an_already_compacted_target_is_refused(
     assert response.status_code == 422, response.text
     detail = detail_of(response)
     assert detail["code"] == "prune_target_already_compacted"
-    assert detail["code"] != "prune_duplicate_target"
 
 
 async def test_a_prune_whose_compaction_is_neither_stored_nor_staged_is_refused(
