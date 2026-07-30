@@ -62,6 +62,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'package:drift/drift.dart';
 
@@ -297,9 +298,23 @@ class SyncLifecycle {
     // ceremony, and must not turn a healthy activation into a failure.
     try {
       await _stack.enrolment.resumePendingRotations();
-    } on Object {
-      // Left durable; the pull-tail trigger retries it.
+    } on Object catch (error, stackTrace) {
+      // Left durable; the pull-tail trigger retries it. Off `syncFailures` on
+      // purpose — a healthy activation is not a sync failure — but logged, so a
+      // resume that keeps failing (a server persistently refusing the replay) is
+      // diagnosable rather than merely silent-and-durable.
+      developer.log(
+        'launch resume of a pending key rotation failed; left durable for retry',
+        name: 'jeeves.sync.rotation_resume',
+        level: 900, // WARNING
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
+    // Re-read the generation: the resume above is an await like any other, and a
+    // sign-out that landed during it must stop the abandoned activation here rather
+    // than let it run the initial upload through the previous account's clients.
+    if (deactivated()) return SyncActivation.deactivated;
 
     var uploaded = true;
     try {

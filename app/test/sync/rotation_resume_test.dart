@@ -19,8 +19,8 @@
 library;
 
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart'
     show authorKeyIdBytes, opClassContent, suiteAeadV1, workspaceKeyBytes;
@@ -59,8 +59,12 @@ class _RotationFaults {
 
   /// workspaceId -> how many more `putKeyWraps` to forward (so the set commits
   /// server-side) and *then* throw on, so `publish` never reaches `remember`. This
-  /// is the AC-4 shape: the set is written, the device does not hold the key, and
-  /// the resume must re-PUT byte-identical and get a 200.
+  /// is the AC-4 shape: the set is written server-side but the device never
+  /// remembered the key and the record stands. On recovery the ordinary pull
+  /// re-learns that committed wrap (`refreshEpochKeys`, no passphrase), so the
+  /// resume finds the key already held and discards the stale record — the
+  /// byte-identical-200 server idempotency (`#590`) is the belt-and-braces backstop
+  /// for the resume-before-pull ordering, not the route this scenario takes.
   final Map<String, int> commitThenThrow = {};
 
   int putKeyWrapsCallCount = 0;
@@ -323,6 +327,12 @@ void main() {
     expect(await a.activate(), SyncActivation.active);
     expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNotNull);
     expect(await a.pendingRotations.read(defaultWs()), isEmpty);
+    expect(faults.putKeyWrapsCallCount, 1,
+        reason: 'the set was PUT exactly once — the ceremony commit that lost its '
+            'ack. On relaunch the ordinary pull re-learns that committed wrap '
+            '(refreshEpochKeys, no passphrase), so the resume finds the key already '
+            'held and discards the stale record rather than issuing a redundant '
+            'second PUT');
   });
 
   test('a rotation interrupted partway through the two Workspaces leaves only the '
@@ -376,6 +386,67 @@ void main() {
     await a.stack.enrolment.resumePendingRotations(workspaceId: defaultWs());
     expect(await a.pendingRotations.read(defaultWs()), isEmpty,
         reason: 'a record for an already-held epoch is dropped, never re-published');
+  });
+
+  test('a corrupt pending record is discarded per entry, never wedging the '
+      'good records beside it', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    // A map-backed FlutterSecureStorage: the real store over the real JSON codec,
+    // only the keychain replaced. Corruption is injected by writing raw bytes the
+    // codec cannot parse — exactly a truncated keychain value on disk.
+    final backing = <String, String>{};
+    const channel =
+        MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      final args = (call.arguments as Map).cast<String, Object?>();
+      final key = args['key'] as String?;
+      switch (call.method) {
+        case 'read':
+          return backing[key];
+        case 'write':
+          backing[key!] = args['value']! as String;
+          return null;
+        case 'delete':
+          backing.remove(key);
+          return null;
+        case 'containsKey':
+          return backing.containsKey(key);
+        case 'readAll':
+          return Map<String, String>.from(backing);
+        case 'deleteAll':
+          backing.clear();
+          return null;
+        default:
+          return null;
+      }
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    const ws = 'rotation-resume-corrupt-ws';
+    const storeKey = 'jeeves/sync/pending_rotations/$ws';
+    final store = SecureStoragePendingRotationStore();
+
+    // One decodable epoch and one that cannot decode (a truncated value), side by
+    // side in the same Workspace record.
+    backing[storeKey] = jsonEncode({
+      '3': encodePendingEpochKeySet(_placeholderSet(3)),
+      '5': {'epoch': 5, 'workspace_key': 'not valid base64 %%%'},
+    });
+
+    final read = await store.read(ws);
+    expect(read.keys.toList(), [3],
+        reason: 'the good epoch survives; the corrupt one is skipped, not thrown');
+    expect(read[3]!.epoch, 3);
+
+    // A wholly undecodable record self-discards rather than throwing on every read
+    // — otherwise it would wedge `resumePendingRotations` and every later ceremony.
+    backing[storeKey] = 'not json at all';
+    expect(await store.read(ws), isEmpty);
+    expect(backing.containsKey(storeKey), isFalse,
+        reason: 'an unparseable record is cleared, not re-read for ever');
   });
 
   test('the EpochKeySet codec round-trips byte-for-byte through JSON', () async {

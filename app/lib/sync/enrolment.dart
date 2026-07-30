@@ -687,6 +687,13 @@ class EnrolmentService {
   /// finished (key now held) or that never materialised a rotate to finish.
   Future<void> resumePendingRotations({String? workspaceId}) async {
     final targets = workspaceId == null ? _workspaces : [workspaceId];
+    // Per-record best-effort: a transient failure on one record must not abandon
+    // the epochs behind it or the other Workspaces — they are independent. Hold the
+    // first such failure and rethrow it once the whole pass has run, so the caller
+    // still learns the pass did less than complete (the pull tail and launch swallow
+    // it; a fresh ceremony propagates it).
+    Object? firstFailure;
+    StackTrace? firstStackTrace;
     for (final workspace in targets) {
       final pending = await pendingRotations.read(workspace);
       if (pending.isEmpty) continue;
@@ -723,12 +730,18 @@ class EnrolmentService {
             await pendingRotations.remove(workspace, epoch);
             continue;
           }
-          // Offline or transient: leave the record for the next trigger. Anything
-          // else (a server refusal that should not happen for a byte-identical
-          // replay) surfaces to the caller, which the pull seam swallows.
-          rethrow;
+          // Offline or transient: leave the record for the next trigger and keep
+          // going — the remaining epochs and Workspaces are independent. The first
+          // such failure is rethrown after the pass so the caller still learns.
+          // A server refusal that should not happen for a byte-identical replay
+          // lands here too, and surfaces the same way (the pull seam swallows it).
+          firstFailure ??= error;
+          firstStackTrace ??= StackTrace.current;
         }
       }
+    }
+    if (firstFailure != null) {
+      Error.throwWithStackTrace(firstFailure, firstStackTrace ?? StackTrace.current);
     }
   }
 

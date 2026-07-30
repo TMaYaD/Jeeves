@@ -51,8 +51,11 @@ abstract class PendingRotationStore {
   /// that drop one go through [remove].
   Future<void> write(String workspaceId, PendingRotationsByEpoch setsByEpoch);
 
-  /// Forget every pending rotation for this Workspace.
-  Future<void> clear(String workspaceId);
+  /// Forget every pending rotation for this Workspace, straight to storage and
+  /// off the mutation chain. Callers go through [clear], which runs this on the
+  /// same per-Workspace chain [put] and [remove] use; [read] calls it directly on
+  /// the corruption path, where it is already inside a chained body.
+  Future<void> clearRaw(String workspaceId);
 
   /// The tail of the last mutation per Workspace, so read-modify-writes chain.
   ///
@@ -85,6 +88,12 @@ abstract class PendingRotationStore {
         if (!held.containsKey(epoch)) return;
         await write(workspaceId, {...held}..remove(epoch));
       });
+
+  /// Forget every pending rotation for this Workspace, on the same per-Workspace
+  /// mutation chain [put] and [remove] run on — so a clear cannot land between
+  /// another mutation's `read` and its `write` and be silently undone.
+  Future<void> clear(String workspaceId) =>
+      _serialised(workspaceId, () => clearRaw(workspaceId));
 }
 
 /// One store per instance, holding nothing beyond the process.
@@ -104,7 +113,7 @@ class InMemoryPendingRotationStore extends PendingRotationStore {
   }
 
   @override
-  Future<void> clear(String workspaceId) async {
+  Future<void> clearRaw(String workspaceId) async {
     _sets.remove(workspaceId);
   }
 }
@@ -144,12 +153,32 @@ class SecureStoragePendingRotationStore extends PendingRotationStore {
   Future<PendingRotationsByEpoch> read(String workspaceId) async {
     final raw = await _storage.read(key: _key(workspaceId));
     if (raw == null) return {};
-    final decoded = jsonDecode(raw) as Map<String, Object?>;
-    return {
-      for (final entry in decoded.entries)
-        int.parse(entry.key):
-            _decodeEpochKeySet(entry.value! as Map<String, Object?>),
-    };
+    // A corrupt record is unpublishable, and if it threw on every read it would
+    // also be unremovable — wedging `resumePendingRotations` and every later
+    // ceremony that resumes first, for good. So corruption self-discards here per
+    // record: a set that never round-trips materialised nothing, and nothing is
+    // stranded by dropping it. `clearRaw` (not `clear`) because `read` runs inside
+    // `put`/`remove`'s chained bodies, where the serialised `clear` would deadlock.
+    final Map<String, Object?> decoded;
+    try {
+      decoded = jsonDecode(raw) as Map<String, Object?>;
+    } on Object {
+      await clearRaw(workspaceId);
+      return {};
+    }
+    final sets = <int, EpochKeySet>{};
+    for (final entry in decoded.entries) {
+      try {
+        sets[int.parse(entry.key)] =
+            _decodeEpochKeySet(entry.value! as Map<String, Object?>);
+      } on Object {
+        // One bad epoch is skipped, not fatal: the other Workspaces' — and this
+        // Workspace's other epochs' — resumes must not be stranded by it. Left on
+        // disk (inert, always skipped) rather than rewriting from a read.
+        continue;
+      }
+    }
+    return sets;
   }
 
   @override
@@ -163,7 +192,7 @@ class SecureStoragePendingRotationStore extends PendingRotationStore {
       );
 
   @override
-  Future<void> clear(String workspaceId) =>
+  Future<void> clearRaw(String workspaceId) =>
       _storage.delete(key: _key(workspaceId));
 }
 

@@ -8,6 +8,7 @@
 library;
 
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:math';
 
 import 'signal_socket.dart';
@@ -266,10 +267,20 @@ class SignalListener {
     if (onSyncComplete != null) {
       try {
         await onSyncComplete();
-      } on Object {
+      } on Object catch (error, stackTrace) {
         // The pull itself succeeded; a post-pull hook that failed is its own
         // concern and retries on the next pull. Letting it throw here would mark a
-        // healthy sync as failed and fight the reconnect ladder.
+        // healthy sync as failed and fight the reconnect ladder — so it stays off
+        // `syncFailures`. Logged, though: a hook that keeps failing (a stranded key
+        // rotation the server persistently refuses to re-publish) is otherwise
+        // invisible, and durable-but-silent is a hard state to diagnose.
+        developer.log(
+          'post-sync hook failed; not a pull failure, retries on the next pull',
+          name: 'jeeves.sync.signal_listener',
+          level: 900, // WARNING
+          error: error,
+          stackTrace: stackTrace,
+        );
       }
     }
   }
