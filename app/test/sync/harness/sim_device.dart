@@ -713,6 +713,15 @@ class SimDevice {
   /// not merely inspect the wreckage. The directory is fresh (only this device's
   /// own keys, via [SyncClient]'s constructor), so a re-pulled op it must verify
   /// has to be one this device itself authored — which every #618 crash case is.
+  ///
+  /// The reopened client gets its own [DomainProjector], over a fresh
+  /// [CollectionRegistry] bound to [reopened] rather than the pre-crash
+  /// [database] the original `registry` closed over — [CollectionRegistry]
+  /// holds that binding as a `final` field, so the original instance cannot
+  /// simply be reattached (it would read a closed connection). [domain] itself
+  /// is untouched: it is memory-backed and independent of the sync store file,
+  /// so the same read model keeps accumulating projected rows across the
+  /// "restart".
   Future<SyncClient> reopenSyncStore({bool attachTransport = false}) async {
     final directory = storeDirectory;
     if (directory == null) {
@@ -731,7 +740,7 @@ class SimDevice {
       transport: attachTransport ? link : null,
       workspaceKeys: workspaceKeys,
       now: () => clock.asDateTime,
-    );
+    )..projector = DomainProjector(registry: CollectionRegistry(reopened), domain: domain);
   }
 
   /// The subscription lifecycle, on this device's deterministic hooks: the

@@ -1514,7 +1514,6 @@ class SyncClient {
       );
       if (authorization != null) {
         await _stampRefused(pulled.seq, authorization.reason);
-        await _refuse(pulled, authorization, header);
         authorizationRefusal = authorization;
         return true;
       }
@@ -1524,6 +1523,10 @@ class SyncClient {
     });
     if (!logged) return const {};
     if (authorizationRefusal != null) {
+      // Quarantined **outside** the unit, mirroring the control path (#618): a
+      // storage fault raised by `_refuse`'s own insert must not roll back the
+      // log-and-stamp row this transaction just committed.
+      await _refuse(pulled, authorizationRefusal!, header);
       // The chain head advanced, so a quarantined successor may now be valid.
       return _releaseChainSuccessors(header.authorMemberId);
     }

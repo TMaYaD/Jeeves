@@ -52,7 +52,10 @@ class FaultInjectingInterceptor extends QueryInterceptor {
     List<Object?> args,
   ) {
     final target = _failNextInsertIntoTable;
-    if (target != null && statement.contains('"$target"')) {
+    // Anchored to `INSERT INTO "table"` rather than a bare `"table"` substring,
+    // so a column or literal that happens to share the target's name elsewhere
+    // in the statement can never mistakenly arm the fault on the wrong insert.
+    if (target != null && statement.contains('INSERT INTO "$target"')) {
       _failNextInsertIntoTable = null;
       firedCount++;
       throw SqliteException(

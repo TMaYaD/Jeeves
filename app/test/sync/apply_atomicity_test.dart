@@ -241,6 +241,13 @@ void main() {
         throwsA(isA<SqliteException>()),
       );
       expect(faults.firedCount, 1, reason: 'the revoke apply was interrupted');
+      expect(
+        await _appliedOfType(a, controlTypeRevoke),
+        isEmpty,
+        reason: 'the injected fault interrupted the revoke itself, not a '
+            'later applied-control insert (the rotate, or B\'s register/grant '
+            'echo) landing in the same pull',
+      );
 
       final reopened = await a.reopenSyncStore(attachTransport: true);
       await reopened.pull();
