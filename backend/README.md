@@ -1,16 +1,19 @@
 # Jeeves — FastAPI Backend
 
-Async Python backend powering the Jeeves todos app.
+Async Python backend powering the Jeeves app. It is a Minimal Sync Server
+(ADR-0026): it authenticates Devices, appends opaque op envelopes to a
+per-Workspace log, and serves them back. It holds no domain schema — the client
+is the source of truth for every Task, Action, Tag and preference, and the
+server never interprets an envelope's contents. See `docs/SYNC.md`.
 
 ## Stack
 
 - **Framework:** FastAPI (async)
 - **ORM:** SQLAlchemy 2 (async) + asyncpg
 - **Migrations:** Alembic
-- **Database:** PostgreSQL
-- **Sync layer:** PowerSync (self-hosted alongside Postgres, bidirectional)
-- **AI:** Anthropic Python SDK (`claude-haiku-4-5-20251001` for task parsing)
-- **Background tasks:** Celery + Redis
+- **Database:** PostgreSQL — the op log, the Member/Workspace/Grant registry,
+  the identity-root escrow, and auth's own two tables. Nothing else.
+- **Redis:** auth nonce and rate-limit counters, escrow and member-auth state
 
 ## Setup
 
@@ -28,7 +31,7 @@ cp .env.example .env
 
 ## Run (development)
 
-Start Postgres and PowerSync first (see `../infra/`), then:
+Start Postgres and Redis first (see `../infra/`), then:
 
 ```bash
 alembic upgrade head
@@ -58,20 +61,24 @@ recovery guidance instead of an opaque `DuplicateColumnError` traceback. See
 
 ## Project layout
 
+Grouped by bounded context, not by layer — each package owns its own models,
+schemas and routes.
+
 ```
 backend/
 ├── app/
-│   ├── main.py         # FastAPI app, lifespan, middleware
+│   ├── main.py         # FastAPI app, lifespan, middleware, router includes
 │   ├── config.py       # Settings (pydantic-settings, env vars)
 │   ├── database.py     # Async SQLAlchemy engine + session
-│   ├── models/         # ORM models (Todo, List, Reminder, Location, RecurrenceRule)
-│   └── api/
-│       ├── health.py   # /health, /health/db
-│       ├── todos.py    # /todos CRUD
-│       └── ai.py       # /ai/parse, /ai/suggestions, /ai/summarize
+│   ├── migrate.py      # `python -m app.migrate` — drift-detecting Alembic runner
+│   ├── redis.py        # Shared Redis client
+│   ├── health/         # /health, /health/db
+│   ├── auth/           # Users, refresh tokens, the SWS nonce/strategy providers
+│   └── sync/           # The Minimal Sync Server: op log, Members, Workspaces,
+│                       # Grants, recovery escrow, envelope + control payloads,
+│                       # the realtime signal hub
 ├── alembic/
 │   ├── env.py
-│   └── versions/
-│       └── 0001_initial_schema.py
+│   └── versions/       # 0001 … 0034, applied in order by app.migrate
 └── alembic.ini
 ```
