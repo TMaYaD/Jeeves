@@ -674,12 +674,10 @@ class ControlPayload:
 
     def to_json_dict(self) -> dict[str, Any]:
         if self.control_type == CONTROL_TYPE_ROTATE:
-            if self.rotate is None:
-                raise MalformedControlPayloadError("a rotate payload carries a rotate statement")
             return {
                 "type": self.control_type,
                 "prev_control_hash": self.prev_control_hash.hex(),
-                **self.rotate.to_json_dict(),
+                **self.rotate_statement().to_json_dict(),
             }
         base: dict[str, Any] = {
             "type": self.control_type,

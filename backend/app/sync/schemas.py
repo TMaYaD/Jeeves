@@ -115,7 +115,7 @@ class KeyWrapEntry(BaseModel):
 
     member_id: uuid.UUID
     #: Base64 of the server-derived 8-byte id of the KEX key this was sealed to.
-    kex_key_id: str
+    kex_key_id_b64: str
     #: Base64 of ``epk 32B || nonce 24B || XChaCha20-Poly1305(...)``.
     wrap_b64: str
 
@@ -145,7 +145,7 @@ class PutKeyWrapsRequest(BaseModel):
 class KeyWrapOut(BaseModel):
     epoch: int
     member_id: uuid.UUID
-    kex_key_id: str
+    kex_key_id_b64: str
     wrap_b64: str
 
 

@@ -1168,6 +1168,18 @@ def _require_fresh_key_epoch(header: OpHeader, current_epoch: int | None, index:
             key_epoch=header.key_epoch,
             current_epoch=current_epoch,
         )
+    if header.key_epoch > current_epoch:
+        # An epoch the Workspace has not rotated to has no wrap set, so nobody could
+        # ever open the body: admitting it would park a permanently unreadable op in
+        # the log and raise an integrity alarm on every puller (AC-5).  Refused
+        # instead — the ceiling is as cheap as the floor, and ``current_epoch`` is
+        # already walked forward across a rotate earlier in the same batch.
+        raise _conflict(
+            "key_epoch_unknown",
+            index=index,
+            key_epoch=header.key_epoch,
+            current_epoch=current_epoch,
+        )
 
 
 def _verify_rotate(
@@ -1782,7 +1794,7 @@ async def put_keywraps(
         wrap = _decode_base64(entry.wrap_b64, "malformed_keywrap", index=position)
         if len(wrap) != KEYWRAP_BYTES:
             raise _unprocessable("malformed_keywrap", index=position, expected_bytes=KEYWRAP_BYTES)
-        kex_key_id = _decode_base64(entry.kex_key_id, "malformed_kex_key_id", index=position)
+        kex_key_id = _decode_base64(entry.kex_key_id_b64, "malformed_kex_key_id", index=position)
         member = await db.get(Member, entry.member_id)
         if member is None or member.user_id != current_member.user_id:
             raise _unprocessable("unknown_keywrap_member", index=position)
@@ -1868,7 +1880,25 @@ async def put_keywraps(
             # true independently of the hash.
             raise _conflict("keywrap_already_written", epoch=body.epoch)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # A concurrent retry of the same ceremony committed between this request's
+        # reads and its inserts — the same TOCTOU ``post_ops`` handles for the ops
+        # constraint.  The set is digest-committed, so what the winner wrote is
+        # either byte-identical (a replay, which must read as an acknowledgement:
+        # the ceremonies' retry loops depend on it) or a different set, refused
+        # with the same verdicts the sequential path gives.
+        await db.rollback()
+        stored_epoch = await db.get(WorkspaceEpoch, (workspace_id, body.epoch))
+        if stored_epoch is None or stored_epoch.keywrap_digest != computed:
+            raise _unprocessable("keywrap_digest_mismatch", epoch=body.epoch) from exc
+        for member_id, kex_key_id, wrap in entries:
+            existing = await db.get(KeyWrap, (workspace_id, member_id, body.epoch))
+            if existing is None or existing.wrap != wrap or existing.kex_key_id != kex_key_id:
+                # Unreachable while the digest equality above holds; kept so the
+                # write-once rule is true independently of the hash.
+                raise _conflict("keywrap_already_written", epoch=body.epoch) from exc
     return await _keywraps_for_member(db, workspace_id, current_member.member_id)
 
 
@@ -1913,7 +1943,7 @@ async def _keywraps_for_member(
             KeyWrapOut(
                 epoch=row.epoch,
                 member_id=row.member_id,
-                kex_key_id=base64.b64encode(row.kex_key_id).decode("ascii"),
+                kex_key_id_b64=base64.b64encode(row.kex_key_id).decode("ascii"),
                 wrap_b64=base64.b64encode(row.wrap).decode("ascii"),
             )
             for row in rows

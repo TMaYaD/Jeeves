@@ -668,6 +668,22 @@ void main() {
         )),
         isNot(vector['digest_hex']),
       );
+      expect(
+        _toHex(keyWrapDigest(
+          epoch: vector['epoch'] as int,
+          memberWraps: [...wraps, wraps.first],
+          escrowWrap: escrowWrap,
+        )),
+        isNot(vector['digest_hex']),
+      );
+      expect(
+        _toHex(keyWrapDigest(
+          epoch: vector['epoch'] as int,
+          memberWraps: wraps,
+          escrowWrap: Uint8List(escrowWrap.length),
+        )),
+        isNot(vector['digest_hex']),
+      );
     });
 
     for (final name in [
@@ -703,6 +719,30 @@ void main() {
           epoch: 1,
           memberId: (keysByLabel['device_a']!)['member_id'] as String,
           kexKeyId: Uint8List(authorKeyIdBytes),
+        ),
+        throwsRejection(SyncRejectionReason.malformedKeyWrap),
+      );
+    });
+
+    test('a low-order epk is refused before any key is derived', () async {
+      // Contributory behaviour: an all-zero epk yields an all-zero shared secret,
+      // a constant the wrap's author also knows — so a hostile server could mint a
+      // wrap that authenticates while installing a key it chose. The refusal must
+      // be malformed_keywrap, not an AEAD failure after deriving from a constant.
+      final vector = wrapVector('keywrap_device_a_epoch_1');
+      final genuine = _fromHex(vector['wrap_hex'] as String);
+      final zeroEpkWrap = Uint8List.fromList([
+        ...Uint8List(ephemeralPublicKeyBytes),
+        ...genuine.sublist(ephemeralPublicKeyBytes),
+      ]);
+      await expectLater(
+        unwrapEpochKeyForMember(
+          wrap: zeroEpkWrap,
+          kexKeyPair: await kexKeyPairOf(vector),
+          workspaceId: vector['workspace_id'] as String,
+          epoch: vector['epoch'] as int,
+          memberId: vector['member_id'] as String,
+          kexKeyId: _fromHex(vector['kex_key_id_hex'] as String),
         ),
         throwsRejection(SyncRejectionReason.malformedKeyWrap),
       );

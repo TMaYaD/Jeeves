@@ -651,6 +651,16 @@ Future<Uint8List> openBody({
       'the aead_v1 body did not authenticate under the epoch key this device '
       'holds: $error',
     );
+  } on Object catch (error) {
+    // Any other failure out of the cipher on these untrusted bytes gets the same
+    // fail-closed verdict: the body reached `decrypt` past the length gate, so a
+    // raw throw here would land in `unexpectedReceiveFailure` instead of the
+    // accusation the codec owes the caller.
+    throw SyncRejection(
+      SyncRejectionReason.aeadFailure,
+      'the aead_v1 body could not be opened under the epoch key this device '
+      'holds: $error',
+    );
   }
 }
 

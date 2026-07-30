@@ -592,6 +592,28 @@ def test_a_wrap_of_the_wrong_width_is_refused_before_any_crypto_runs() -> None:
         )
 
 
+def test_a_low_order_epk_is_refused_before_any_key_is_derived() -> None:
+    """Contributory behaviour: an all-zero ``epk`` yields a constant shared secret.
+
+    A hostile server minting a wrap around a low-order point would know the whole
+    key schedule, so the wrap could authenticate while installing a key the server
+    chose — the exact property ADR-0037 claims the wrap format denies it.  The
+    refusal must be ``malformed_keywrap``, not a bare ``RuntimeError`` escaping
+    from libsodium.
+    """
+    genuine = bytes.fromhex(_wrap_vector("keywrap_device_a_epoch_1")["wrap_hex"])
+    zero_epk_wrap = bytes(kw.EPHEMERAL_PUBLIC_KEY_BYTES) + genuine[kw.EPHEMERAL_PUBLIC_KEY_BYTES :]
+    with pytest.raises(kw.MalformedKeyWrapError):
+        kw.unwrap_epoch_key_for_member(
+            wrap=zero_epk_wrap,
+            kex_secret_key=bytes.fromhex(_wrap_vector("keywrap_device_a_epoch_1")["kex_seed_hex"]),
+            workspace_id=uuid.UUID(_IDENTITIES["workspace_id"]),
+            epoch=1,
+            member_id=uuid.UUID(_KEYS_BY_LABEL["device_a"]["member_id"]),
+            kex_key_id=bytes.fromhex(_wrap_vector("keywrap_device_a_epoch_1")["kex_key_id_hex"]),
+        )
+
+
 def test_the_hand_rolled_hkdf_matches_rfc_5869_test_case_1() -> None:
     """RFC 5869 A.1, so the hand-rolled expansion is checked against the standard.
 
@@ -600,10 +622,10 @@ def test_the_hand_rolled_hkdf_matches_rfc_5869_test_case_1() -> None:
     just as happily.  This anchors both of them to the RFC.
     """
     okm = kw.hkdf_sha256(
-        bytes.fromhex("0b" * 22),
-        bytes.fromhex("000102030405060708090a0b0c"),
-        bytes.fromhex("f0f1f2f3f4f5f6f7f8f9"),
-        42,
+        ikm=bytes.fromhex("0b" * 22),
+        salt=bytes.fromhex("000102030405060708090a0b0c"),
+        info=bytes.fromhex("f0f1f2f3f4f5f6f7f8f9"),
+        length=42,
     )
     assert okm.hex() == (
         "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"

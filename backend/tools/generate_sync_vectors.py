@@ -1120,32 +1120,9 @@ def _control_vectors() -> list[dict[str, Any]]:
     # The rotation that turns encryption on for this Workspace.  It chains off the
     # revoke above, which is also the shape `revokeAndRotate` produces: revoke, then
     # rotate, back to back in one authoring queue.
+    rotate_member_wraps, rotate_escrow_wrap = _epoch_1_wrap_set()
     rotate_digest = keywrap_digest(
-        epoch=1,
-        member_wraps=[
-            (
-                MEMBER_IDS[label],
-                derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS[label]),
-                wrap_epoch_key_for_member(
-                    workspace_key=SPEC_EPOCH_KEYS[1],
-                    kex_pk=KEYWRAP_KEX_PUBLIC_KEYS[label],
-                    workspace_id=WORKSPACE_ID,
-                    epoch=1,
-                    member_id=MEMBER_IDS[label],
-                    kex_key_id=derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS[label]),
-                    ephemeral_secret_key=_spec_ephemeral_seed(label),
-                    nonce=_spec_nonce(f"keywrap/{label}"),
-                ),
-            )
-            for label in KEY_LABELS
-        ],
-        escrow_wrap=wrap_epoch_key_for_escrow(
-            workspace_key=SPEC_EPOCH_KEYS[1],
-            master_wrap_key=SPEC_MASTER_WRAP_KEY,
-            workspace_id=WORKSPACE_ID,
-            epoch=1,
-            nonce=_spec_nonce("epoch-key-escrow/1"),
-        ),
+        epoch=1, member_wraps=rotate_member_wraps, escrow_wrap=rotate_escrow_wrap
     )
     append(
         "rotate_to_epoch_1",
@@ -1569,6 +1546,52 @@ KEYWRAP_KEX_PUBLIC_KEYS = {
 }
 
 
+def _epoch_1_member_wrap(label: str) -> bytes:
+    """One member's epoch-1 KeyWrap, from the labelled seeds and nonces — defined once.
+
+    Both the frozen ``rotate_to_epoch_1`` control op and ``_keywrap_vectors`` build
+    from this same function, so the rotate's committed digest and
+    ``keywrap_digest_two_members_epoch_1`` agree *structurally* rather than by two
+    call sites hand-copying the same inputs.
+    """
+    return wrap_epoch_key_for_member(
+        workspace_key=SPEC_EPOCH_KEYS[1],
+        kex_pk=KEYWRAP_KEX_PUBLIC_KEYS[label],
+        workspace_id=WORKSPACE_ID,
+        epoch=1,
+        member_id=MEMBER_IDS[label],
+        kex_key_id=derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS[label]),
+        ephemeral_secret_key=_spec_ephemeral_seed(label),
+        nonce=_spec_nonce(f"keywrap/{label}"),
+    )
+
+
+def _epoch_1_escrow_wrap() -> bytes:
+    """The epoch-1 escrow wrap, shared the same way as :func:`_epoch_1_member_wrap`."""
+    return wrap_epoch_key_for_escrow(
+        workspace_key=SPEC_EPOCH_KEYS[1],
+        master_wrap_key=SPEC_MASTER_WRAP_KEY,
+        workspace_id=WORKSPACE_ID,
+        epoch=1,
+        nonce=_spec_nonce("epoch-key-escrow/1"),
+    )
+
+
+def _epoch_1_wrap_set() -> tuple[list[tuple[uuid.UUID, bytes, bytes]], bytes]:
+    """``(member_wraps, escrow_wrap)`` in :func:`keywrap_digest`'s vocabulary."""
+    return (
+        [
+            (
+                MEMBER_IDS[label],
+                derive_key_id(KEYWRAP_KEX_PUBLIC_KEYS[label]),
+                _epoch_1_member_wrap(label),
+            )
+            for label in KEY_LABELS
+        ],
+        _epoch_1_escrow_wrap(),
+    )
+
+
 def _aead_positive(
     name: str,
     *,
@@ -1629,7 +1652,8 @@ def _aead_vectors() -> list[dict[str, Any]]:
             note=(
                 "The plaintext_v1 vector content_set_preference, sealed. Same framed "
                 "body, same 256-byte size class inside; the wire body is that plus a "
-                f"{AEAD_TAG_BYTES}-byte tag. AAD is the 158 header bytes exactly."
+                f"{AEAD_TAG_BYTES}-byte tag. AAD is the {HEADER_LENGTH_BYTES} header "
+                "bytes exactly."
             ),
         )
     ]
@@ -1826,16 +1850,7 @@ def _keywrap_vectors() -> list[dict[str, Any]]:
         kex_key_id = derive_key_id(kex_pk)
         ephemeral_seed = _spec_ephemeral_seed(label)
         nonce = _spec_nonce(f"keywrap/{label}")
-        wrap = wrap_epoch_key_for_member(
-            workspace_key=workspace_key,
-            kex_pk=kex_pk,
-            workspace_id=WORKSPACE_ID,
-            epoch=epoch,
-            member_id=member_id,
-            kex_key_id=kex_key_id,
-            ephemeral_secret_key=ephemeral_seed,
-            nonce=nonce,
-        )
+        wrap = _epoch_1_member_wrap(label)
         member_wraps.append((member_id, kex_key_id, wrap))
         vectors.append(
             {
@@ -1873,13 +1888,7 @@ def _keywrap_vectors() -> list[dict[str, Any]]:
         )
 
     escrow_nonce = _spec_nonce(f"epoch-key-escrow/{epoch}")
-    escrow_wrap = wrap_epoch_key_for_escrow(
-        workspace_key=workspace_key,
-        master_wrap_key=SPEC_MASTER_WRAP_KEY,
-        workspace_id=WORKSPACE_ID,
-        epoch=epoch,
-        nonce=escrow_nonce,
-    )
+    escrow_wrap = _epoch_1_escrow_wrap()
     vectors.append(
         {
             "name": f"epoch_key_escrow_wrap_epoch_{epoch}",
@@ -1929,7 +1938,7 @@ def _keywrap_vectors() -> list[dict[str, Any]]:
     # The binding, demonstrated rather than asserted: device_a's wrap offered in
     # device_b's slot. Everything else is honest and it still refuses, because
     # member_id is inside the info and therefore inside the derived key.
-    a_member_id, a_kex_key_id, a_wrap = member_wraps[0]
+    _, _, a_wrap = member_wraps[0]
     vectors.append(
         {
             "name": "keywrap_replayed_into_another_member_slot",
@@ -1950,10 +1959,8 @@ def _keywrap_vectors() -> list[dict[str, Any]]:
             "wrap_hex": a_wrap.hex(),
         }
     )
-    del a_member_id, a_kex_key_id
-
     # The epoch binding, the same way: the genuine epoch-1 wrap read as epoch 2.
-    _, b_kex_key_id, _ = member_wraps[1]
+    _, b_kex_key_id, b_wrap = member_wraps[1]
     vectors.append(
         {
             "name": "keywrap_replayed_into_another_epoch",
@@ -1970,7 +1977,7 @@ def _keywrap_vectors() -> list[dict[str, Any]]:
             "epoch": 2,
             "kex_seed_hex": KEYWRAP_KEX_SEEDS["device_b"].hex(),
             "kex_key_id_hex": b_kex_key_id.hex(),
-            "wrap_hex": member_wraps[1][2].hex(),
+            "wrap_hex": b_wrap.hex(),
         }
     )
     return vectors
@@ -2070,12 +2077,14 @@ def _envelope_vectors_document() -> dict[str, Any]:
                 "tag_bytes": AEAD_TAG_BYTES,
                 "workspace_key_bytes": WORKSPACE_KEY_BYTES,
                 "aad": (
-                    "the 158 serialized header bytes, exactly — so the suite, the "
-                    "key_epoch and the nonce are all bound with no second binding to "
-                    "keep in step"
+                    f"the {HEADER_LENGTH_BYTES} serialized header bytes, exactly — so "
+                    "the suite, the key_epoch and the nonce are all bound with no "
+                    "second binding to keep in step"
                 ),
                 "nonce_source": (
-                    "the header's own nonce field at offset 134, 24 random bytes minted "
+                    "the header's own nonce field at offset "
+                    f"{dict((name, offset) for name, offset, _ in HEADER_FIELD_LAYOUT)['nonce']}"
+                    ", 24 random bytes minted "
                     "at authoring. Production draws them from a CSPRNG; these vectors "
                     "pin explicit values, and no seeded-nonce scheme exists in "
                     "production code."

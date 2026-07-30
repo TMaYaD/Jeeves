@@ -122,10 +122,26 @@ class WorkspaceKeyCeremony {
   }) async {
     final view = await client.grantsView();
     final survivors = <String>{};
+    var excluded = false;
     for (final grant in view.grants.values) {
       if (!grant.isLive) continue;
-      if (grant.memberId == excludeMemberId) continue;
+      if (grant.memberId == excludeMemberId) {
+        excluded = true;
+        continue;
+      }
       survivors.add(grant.memberId);
+    }
+    if (excludeMemberId != null && !excluded) {
+      // The revocation half of the ceremony named a Member with no live Grant in
+      // this view (stale id, wrong member): matching nothing would publish a wrap
+      // set that still *includes* whoever the revoke was meant to cut off, attested
+      // by the owner's own signature. Everything else here fails loudly before
+      // authoring; this exclusion must not be the one that fails open.
+      throw SyncRejection(
+        SyncRejectionReason.unknownGrant,
+        'no live Grant for $excludeMemberId in ${client.workspaceId}: refusing to '
+        'rotate rather than publish a wrap set that does not exclude it',
+      );
     }
     // Sorted, so a set built twice from one grants view is built in one order. The
     // digest sorts its own input, so this is about the *upload* being reproducible.

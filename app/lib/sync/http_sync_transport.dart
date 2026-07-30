@@ -115,7 +115,7 @@ class HttpSyncTransport implements SyncTransport {
             for (final wrap in wraps)
               {
                 'member_id': wrap.memberId,
-                'kex_key_id': base64Encode(wrap.kexKeyId),
+                'kex_key_id_b64': base64Encode(wrap.kexKeyId),
                 'wrap_b64': base64Encode(wrap.wrap),
               },
           ],
@@ -156,7 +156,7 @@ class HttpSyncTransport implements SyncTransport {
           KeyWrapRecord(
             epoch: (wrap as Map<String, dynamic>)['epoch'] as int,
             memberId: wrap['member_id'] as String,
-            kexKeyId: base64Decode(wrap['kex_key_id'] as String),
+            kexKeyId: base64Decode(wrap['kex_key_id_b64'] as String),
             wrap: base64Decode(wrap['wrap_b64'] as String),
           ),
       ];

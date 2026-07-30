@@ -15,7 +15,6 @@ The byte-level construction of a wrap is pinned by
 from __future__ import annotations
 
 import base64
-import uuid
 
 import pytest
 import pytest_asyncio
@@ -36,6 +35,7 @@ from app.sync.key_wraps import (
 )
 from app.sync.models import KeyWrap, WorkspaceEpoch
 from app.sync.op_payload import Hlc
+from tests.conftest import auth_header
 from tests.sync.builders import (
     Session,
     SpecDevice,
@@ -44,6 +44,7 @@ from tests.sync.builders import (
     open_session,
 )
 from tests.sync.helpers import detail_of
+from tests.sync.test_ops_routes import _join_sibling
 
 #: A Workspace content key, and the master wrap key the escrow carries.  Fixed
 #: rather than random so a failure message names the same bytes twice.
@@ -97,7 +98,7 @@ def _put_body(
         "wraps": [
             {
                 "member_id": str(device.member_id),
-                "kex_key_id": base64.b64encode(device.kex_key_id_for_wraps).decode("ascii"),
+                "kex_key_id_b64": base64.b64encode(device.kex_key_id_for_wraps).decode("ascii"),
                 "wrap_b64": base64.b64encode(wrap).decode("ascii"),
             }
             for device, wrap in entries
@@ -176,28 +177,31 @@ async def test_a_rotate_materialises_an_epoch_row_with_no_wraps_yet(
     assert (await db.execute(select(KeyWrap))).scalars().all() == []
 
 
-async def test_a_rotate_needs_a_live_owner_grant(client: AsyncClient) -> None:
+async def test_a_rotate_needs_a_live_owner_grant(client: AsyncClient, session: Session) -> None:
     """No certificate means no Root shortcut: the role matrix is the whole gate.
 
     Every other control type can land on a Root signature alone, which is how an
     ungranted device's register-plus-grant batch gets in.  A rotate cannot, and that
-    is the intended consequence of it carrying no certificate.
+    is the intended consequence of it carrying no certificate.  The rotate is posted
+    into a *founded* Workspace by a registered-but-ungranted sibling, so the refusal
+    is the authority verdict itself and not ``workspace_not_created`` upstream of it.
     """
-    ungranted = await open_session(client, "keywrap-ungranted@example.com", genesis=False)
+    sibling, sibling_token = await _join_sibling(client, session)
     response = await client.post(
-        f"/w/{ungranted.workspace_id}/ops",
+        f"/w/{session.workspace_id}/ops",
         json=encode_all(
-            ungranted.device.rotate_envelope(
-                ungranted.workspace_id,
-                # A non-zero link: the zero link is genesis-only, and this must fail
-                # on authority rather than on chain shape.
-                prev_control_hash=b"\x11" * 32,
+            sibling.rotate_envelope(
+                session.workspace_id,
+                # The genuine control head: this must fail on authority rather than
+                # on chain shape.
+                prev_control_hash=session.control_head,
                 keywrap_digest=b"\x22" * 32,
             )
         ),
-        headers=ungranted.headers,
+        headers=auth_header(sibling_token),
     )
-    assert response.status_code in (403, 409), response.text
+    assert response.status_code == 403, response.text
+    assert detail_of(response)["code"] == "no_live_grant"
 
 
 async def test_a_rotate_from_the_wrong_epoch_is_refused(
@@ -494,7 +498,7 @@ async def test_a_wrap_naming_an_unregistered_kex_key_is_refused(
     body = _put_body(session, [session.device])
     wraps = body["wraps"]
     assert isinstance(wraps, list)
-    wraps[0]["kex_key_id"] = base64.b64encode(bytes(8)).decode("ascii")
+    wraps[0]["kex_key_id_b64"] = base64.b64encode(bytes(8)).decode("ascii")
     response = await client.put(
         f"/w/{session.workspace_id}/keywraps",
         json=body,
@@ -698,8 +702,56 @@ async def test_content_two_epochs_behind_is_refused(client: AsyncClient, session
     assert (detail["key_epoch"], detail["current_epoch"]) == (0, 2)
 
 
+async def test_content_at_a_future_epoch_is_refused(client: AsyncClient, session: Session) -> None:
+    """The ceiling is as load-bearing as the floor.
+
+    An epoch the Workspace has not rotated to has no wrap set, so nobody could ever
+    open the body: admitting the op would park a permanently unreadable row in the
+    log and raise an integrity alarm on every puller.
+    """
+    await _rotate(client, session, [session.device])
+    response = await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(
+            session.device.next_envelope(
+                session.workspace_id, op_class=OP_CLASS_CONTENT, key_epoch=4096
+            )
+        ),
+        headers=session.headers,
+    )
+    assert response.status_code == 409, response.text
+    detail = detail_of(response)
+    assert detail["code"] == "key_epoch_unknown"
+    assert (detail["key_epoch"], detail["current_epoch"]) == (4096, 1)
+
+
+async def test_a_rotate_that_skips_an_epoch_is_refused(
+    client: AsyncClient, session: Session
+) -> None:
+    """``to_epoch == from_epoch + 1`` is the codec's rule, enforced at decode.
+
+    A rotate claiming ``0 -> 2`` would materialise epoch 2 with epoch 1 owning no
+    row and no wrap set, and the freshness floor would then refuse every honest op
+    below epoch 1.
+    """
+    envelope = session.device.rotate_envelope(
+        session.workspace_id,
+        prev_control_hash=session.control_head,
+        keywrap_digest=b"\x22" * 32,
+        from_epoch=0,
+        to_epoch=2,
+    )
+    response = await client.post(
+        f"/w/{session.workspace_id}/ops",
+        json=encode_all(envelope),
+        headers=session.headers,
+    )
+    assert response.status_code == 422, response.text
+    assert detail_of(response)["code"] == "malformed_control_payload"
+
+
 async def test_an_unkeyed_workspace_refuses_no_epoch(client: AsyncClient, session: Session) -> None:
-    """The property that keeps ``plaintext_v1`` clients working after 0034.
+    """The property that keeps ``plaintext_v1`` clients working after 0035.
 
     With no epoch rows there is nothing to be stale against, and content at epoch 0
     is exactly what a pre-turn-on Workspace writes.
@@ -722,4 +774,3 @@ async def test_the_escrow_wrap_width_is_what_the_codec_says(
     """A guard against the route and the codec disagreeing about a width."""
     assert len(_escrow_wrap_for(session)) == EPOCH_KEY_ESCROW_WRAP_BYTES
     assert len(_wrap_for(session, session.device)) == KEYWRAP_BYTES
-    assert isinstance(session.workspace_id, uuid.UUID)

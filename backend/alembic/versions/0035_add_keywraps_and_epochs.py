@@ -97,7 +97,7 @@ def downgrade() -> None:
     # cached the epoch key locally — which, for a device enrolling afterwards, is
     # all of them.  Fail loudly BEFORE touching any schema.
     raise RuntimeError(
-        "Migration 0034 (add_keywraps_and_epochs) is irreversible: dropping "
+        "Migration 0035 (add_keywraps_and_epochs) is irreversible: dropping "
         "keywraps and workspace_epochs would destroy every server-held copy of "
         "every Workspace content key, making all aead_v1 history unreadable to any "
         "device that enrols afterwards. Restore from a backup and `alembic stamp` "

@@ -174,6 +174,9 @@ Future<Uint8List> sealEpochKeyForMember({
   if (nonce.length != wrapNonceBytes) {
     throw ArgumentError('nonce must be $wrapNonceBytes bytes');
   }
+  if (ephemeralSeed.length != keyWrapSeedBytes) {
+    throw ArgumentError('ephemeral seed must be $keyWrapSeedBytes bytes');
+  }
   final ephemeral = await _kex.newKeyPairFromSeed(ephemeralSeed);
   final epk = Uint8List.fromList((await ephemeral.extractPublicKey()).bytes);
   final info = keyWrapInfo(
@@ -441,8 +444,21 @@ Future<SecretKey> _wrapKey({
     keyPair: keyPair,
     remotePublicKey: SimplePublicKey(peerPublicKey, type: KeyPairType.x25519),
   );
+  final sharedBytes = await shared.extractBytes();
+  if (sharedBytes.every((byte) => byte == 0)) {
+    // Contributory behaviour: a low-order or all-zero peer key yields an all-zero
+    // shared secret, a constant the peer key's chooser also knows. Binding `epk`
+    // into `info` does not save the schedule then — the wrap's whole key would be
+    // public arithmetic — so both directions refuse before deriving anything.
+    // libsodium performs this same check on the Python side.
+    throw const SyncRejection(
+      SyncRejectionReason.malformedKeyWrap,
+      'the X25519 peer key is a low-order point: the wrap\'s key schedule would '
+      'be constant',
+    );
+  }
   return _hkdf.deriveKey(
-    secretKey: SecretKey(await shared.extractBytes()),
+    secretKey: SecretKey(sharedBytes),
     // `nonce` is this package's name for RFC 5869's *salt*, and empty means the
     // RFC's default of HashLen zero bytes. The Python side hand-rolls the same
     // reading (PyNaCl ships no HKDF) and the golden vectors prove the two agree.

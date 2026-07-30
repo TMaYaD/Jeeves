@@ -47,32 +47,50 @@ abstract class WorkspaceKeyStore {
   /// Forget every epoch key for this Workspace — the local half of being revoked.
   Future<void> clear(String workspaceId);
 
+  /// The tail of the last [remember] per Workspace, so read-modify-writes chain.
+  ///
+  /// A lost epoch key is unrecoverable content, so two `remember`s racing on one
+  /// secure-storage record (a pull-triggered refresh overlapping a ceremony on the
+  /// shared store) must never interleave — the same future-chain discipline
+  /// `SyncClient._authoring` uses to serialise authoring.
+  final Map<String, Future<void>> _rememberTail = {};
+
+  Future<T> _serialised<T>(String workspaceId, Future<T> Function() body) {
+    final previous = _rememberTail[workspaceId] ?? Future<void>.value();
+    final next = previous.then((_) => body());
+    _rememberTail[workspaceId] = next.then<void>((_) {}, onError: (Object _) {});
+    return next;
+  }
+
   /// Add one epoch's key, keeping every epoch already held.
   ///
   /// Read-modify-write rather than a keyed insert, because the production store is
-  /// a single secure-storage entry per Workspace: the map *is* the record. The
-  /// ceremonies that call it are serialised by their own awaits.
-  Future<void> remember(String workspaceId, int epoch, Uint8List key) async {
+  /// a single secure-storage entry per Workspace: the map *is* the record. Chained
+  /// through [_serialised] per Workspace, so overlapping calls cannot drop each
+  /// other's epoch on the shared record.
+  Future<void> remember(String workspaceId, int epoch, Uint8List key) {
     if (key.length != workspaceKeyBytes) {
       throw ArgumentError(
         'a workspace key is $workspaceKeyBytes bytes, got ${key.length}',
       );
     }
-    final held = await read(workspaceId);
-    final existing = held[epoch];
-    if (existing != null) {
-      // Two different keys for one epoch is not a state to overwrite silently:
-      // whichever is wrong, one of them cannot open the ops already reduced under
-      // the other. An identical re-remember is the idempotent ceremony retry.
-      if (!_sameBytes(existing, key)) {
-        throw StateError(
-          'this device already holds a different key for epoch $epoch of '
-          '$workspaceId',
-        );
+    return _serialised(workspaceId, () async {
+      final held = await read(workspaceId);
+      final existing = held[epoch];
+      if (existing != null) {
+        // Two different keys for one epoch is not a state to overwrite silently:
+        // whichever is wrong, one of them cannot open the ops already reduced under
+        // the other. An identical re-remember is the idempotent ceremony retry.
+        if (!_sameBytes(existing, key)) {
+          throw StateError(
+            'this device already holds a different key for epoch $epoch of '
+            '$workspaceId',
+          );
+        }
+        return;
       }
-      return;
-    }
-    await write(workspaceId, {...held, epoch: key});
+      await write(workspaceId, {...held, epoch: key});
+    });
   }
 
   /// The key for one epoch, or null when this device holds none.

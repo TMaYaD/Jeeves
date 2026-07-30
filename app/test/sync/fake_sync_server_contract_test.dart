@@ -1091,7 +1091,7 @@ void main() {
 
   final epochKey = Uint8List.fromList(List<int>.generate(workspaceKeyBytes, (i) => i + 1));
   final masterWrapKey =
-      Uint8List.fromList(List<int>.generate(workspaceKeyBytes, (i) => i + 100));
+      Uint8List.fromList(List<int>.generate(masterWrapKeyBytes, (i) => i + 100));
   final ephemeralSeed = Uint8List.fromList(List<int>.generate(32, (i) => i + 200));
   final wrapNonce = Uint8List.fromList(List<int>.generate(wrapNonceBytes, (i) => i + 50));
   final escrowNonce = Uint8List.fromList(List<int>.generate(wrapNonceBytes, (i) => i + 80));

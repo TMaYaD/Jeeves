@@ -825,7 +825,15 @@ class SyncClient {
         // rebuild that ran `parseBody` on an `aead_v1` body would find every
         // encrypted row unparseable and quietly un-reduce the entire Workspace.
         payload = await _decodeContentPayload(header, parts.header, parts.body);
-      } on SyncRejection {
+      } on SyncRejection catch (rejection) {
+        if (rejection.reason == SyncRejectionReason.missingEpochKey) {
+          // A row skipped for a key this device does not yet hold is a delivery
+          // gap, not unparseable bytes: without this flag a rebuild during the
+          // post-rotation window would silently un-reduce the new epoch's
+          // content until an unrelated event forced another rebuild. The pull
+          // tail sees the flag and heals it once the wrap arrives.
+          _epochKeyRefreshRequired = true;
+        }
         // Bytes that no longer parse cannot be re-applied, and the row stays as
         // the evidence it is. Refusing to replay it is the fail-closed answer.
         continue;

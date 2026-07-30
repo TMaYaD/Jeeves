@@ -454,6 +454,14 @@ class EnrolmentService {
       return;
     }
     if (!encryptFromGenesis) return;
+    if (await scoped.workspaceKeys.highestEpochHeld(workspaceId) != null) {
+      // Adoption learning nothing does not mean the Workspace is unkeyed: a re-run
+      // on a device that already holds every epoch's key learns zero too. Minting
+      // is only for a Workspace with no keyed epoch at all — publishing a second
+      // `K_{w,0}` over a keyed one would be refused by the stored digest anyway,
+      // so this turns a guaranteed refusal into the idempotent re-run it is.
+      return;
+    }
     await ceremony.publish(await ceremony.prepare(
       epoch: 0,
       masterWrapKey: masterWrapKey,

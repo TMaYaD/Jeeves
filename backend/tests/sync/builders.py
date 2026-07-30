@@ -159,6 +159,7 @@ class SpecDevice:
         prev_control_hash: bytes,
         keywrap_digest: bytes,
         from_epoch: int = 0,
+        to_epoch: int | None = None,
         wall_ms: int = 1_800_000_000_000,
         author_seq: int | None = None,
     ) -> bytes:
@@ -168,6 +169,10 @@ class SpecDevice:
         no certificate: its authority is the author's own live ``owner`` Grant, so
         the envelope signature is the only signature there is.  Every other control
         builder hangs off Root for the opposite reason.
+
+        ``to_epoch`` defaults to the one legal transition, ``from_epoch + 1``;
+        overriding it exists so the negative-path tests can author the skipped or
+        backwards transitions the codec must refuse.
         """
         return self.next_envelope(
             workspace_id,
@@ -178,7 +183,7 @@ class SpecDevice:
                 rotate=RotateStatement(
                     workspace_id=workspace_id,
                     from_epoch=from_epoch,
-                    to_epoch=from_epoch + 1,
+                    to_epoch=from_epoch + 1 if to_epoch is None else to_epoch,
                     keywrap_digest=keywrap_digest,
                     rotated_at_hlc=Hlc.for_member(self.member_id, wall_ms),
                 ),

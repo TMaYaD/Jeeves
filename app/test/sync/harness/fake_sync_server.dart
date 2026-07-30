@@ -402,6 +402,12 @@ class FakeSyncServer {
     _log.removeWhere((op) => op.workspaceId == workspaceId);
     _workspaces.remove(workspaceId);
     _grants.remove(workspaceId);
+    // The key plane goes with the Workspace, as the real server's rows do: a
+    // re-founded Workspace starting life with a stale current epoch would refuse
+    // its own genesis-era content as `key_epoch_stale` — a failure mode the real
+    // server cannot produce.
+    _workspaceEpochs.remove(workspaceId);
+    _keyWraps.remove(workspaceId);
   }
 
   /// Truncate the log above [seq] and hand the freed seqs back out.
@@ -1091,6 +1097,12 @@ class FakeSyncServer {
     if (currentEpoch == null) return;
     if (header.keyEpoch < currentEpoch - 1) {
       throw SyncTransportException(409, 'ops[$index]', code: 'key_epoch_stale');
+    }
+    if (header.keyEpoch > currentEpoch) {
+      // The ceiling, mirroring the real route: an epoch the Workspace has not
+      // rotated to has no wrap set, so admitting the op would park a permanently
+      // unreadable row in the log.
+      throw SyncTransportException(409, 'ops[$index]', code: 'key_epoch_unknown');
     }
   }
 

@@ -73,7 +73,12 @@ from typing import Final
 from nacl import bindings
 from nacl.exceptions import CryptoError
 
-from app.sync.envelope import AEAD_TAG_BYTES, WORKSPACE_KEY_BYTES, AeadFailureError
+from app.sync.envelope import (
+    AEAD_TAG_BYTES,
+    AUTHOR_KEY_ID_BYTES,
+    WORKSPACE_KEY_BYTES,
+    AeadFailureError,
+)
 
 #: Every use of every key is domain-separated (review F7), the wraps included.
 KEYWRAP_INFO_DOMAIN: Final = b"jeeves/keywrap/v1"
@@ -122,6 +127,10 @@ def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int) -> bytes:
     the Dart side's empty ``nonce`` argument means too — the golden vectors are
     what proves those two readings agree.
     """
+    if length > 255 * hashlib.sha256().digest_size:
+        # RFC 5869's ceiling on the expand phase, stated rather than left to the
+        # single-byte counter overflowing.
+        raise ValueError(f"HKDF-SHA256 can produce at most {255 * 32} bytes, asked for {length}")
     prk = hmac.new(salt or bytes(hashlib.sha256().digest_size), ikm, hashlib.sha256).digest()
     okm = b""
     block = b""
@@ -150,8 +159,8 @@ def keywrap_info(
     """The HKDF ``info`` and the AEAD AAD — deliberately the same bytes."""
     if len(ephemeral_public_key) != EPHEMERAL_PUBLIC_KEY_BYTES:
         raise ValueError(f"epk must be {EPHEMERAL_PUBLIC_KEY_BYTES} bytes")
-    if len(kex_key_id) != 8:
-        raise ValueError("kex_key_id must be 8 bytes")
+    if len(kex_key_id) != AUTHOR_KEY_ID_BYTES:
+        raise ValueError(f"kex_key_id must be {AUTHOR_KEY_ID_BYTES} bytes")
     return (
         KEYWRAP_INFO_DOMAIN
         + ephemeral_public_key
@@ -199,9 +208,13 @@ def wrap_epoch_key_for_member(
         member_id=member_id,
         kex_key_id=kex_key_id,
     )
-    key = hkdf_sha256(
-        bindings.crypto_scalarmult(ephemeral_secret_key, kex_pk), b"", info, WORKSPACE_KEY_BYTES
-    )
+    try:
+        shared = bindings.crypto_scalarmult(ephemeral_secret_key, kex_pk)
+    except RuntimeError as exc:
+        # libsodium refuses an all-zero shared secret — a low-order ``kex_pk``.
+        # Sealing to one would mint a wrap whose key its author did not choose alone.
+        raise ValueError("kex_pk is a low-order point: refusing to seal to it") from exc
+    key = hkdf_sha256(shared, b"", info, WORKSPACE_KEY_BYTES)
     sealed = bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(workspace_key, info, nonce, key)
     return epk + nonce + sealed
 
@@ -235,9 +248,17 @@ def unwrap_epoch_key_for_member(
         member_id=member_id,
         kex_key_id=kex_key_id,
     )
-    key = hkdf_sha256(
-        bindings.crypto_scalarmult(kex_secret_key, epk), b"", info, WORKSPACE_KEY_BYTES
-    )
+    try:
+        shared = bindings.crypto_scalarmult(kex_secret_key, epk)
+    except RuntimeError as exc:
+        # libsodium's contributory-behaviour check: a low-order or all-zero ``epk``
+        # yields an all-zero shared secret, a constant the wrap's author also knows.
+        # Binding ``epk`` into ``info`` does not save the schedule then, so the wrap
+        # is refused as malformed before any key is derived from it.
+        raise MalformedKeyWrapError(
+            "epk is a low-order point: the wrap's key schedule would be constant"
+        ) from exc
+    key = hkdf_sha256(shared, b"", info, WORKSPACE_KEY_BYTES)
     try:
         return bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(sealed, info, nonce, key)
     except CryptoError as exc:
@@ -315,8 +336,8 @@ def keywrap_digest(
     ):
         if len(wrap) != KEYWRAP_BYTES:
             raise MalformedKeyWrapError(f"a keywrap is {KEYWRAP_BYTES} bytes, got {len(wrap)}")
-        if len(kex_key_id) != 8:
-            raise MalformedKeyWrapError("kex_key_id must be 8 bytes")
+        if len(kex_key_id) != AUTHOR_KEY_ID_BYTES:
+            raise MalformedKeyWrapError(f"kex_key_id must be {AUTHOR_KEY_ID_BYTES} bytes")
         digest.update(member_id.bytes)
         digest.update(kex_key_id)
         digest.update(hashlib.sha256(wrap).digest())

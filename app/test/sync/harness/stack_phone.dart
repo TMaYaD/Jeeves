@@ -46,6 +46,7 @@ class StackPhone {
     required this.link,
     required this.userTransport,
     required this.keyStore,
+    required this.workspaceKeys,
     required this.syncStore,
     required this.storeDirectory,
     required this.clock,
@@ -75,6 +76,11 @@ class StackPhone {
           : NativeDatabase(File('${storeDirectory.path}/sync.sqlite')),
     );
     final keyStore = InMemoryDeviceKeyStore();
+    // Held by the phone, not minted per assembly: the production store is the
+    // platform keychain, which survives a process death, so [relaunch] must hand
+    // the fresh stack the same instance or every relaunch test would read its
+    // `aead_v1` history as a delivery gap instead of decrypting it.
+    final workspaceKeys = InMemoryWorkspaceKeyStore();
     final link = DeviceLink(server.connectAsUser(userId));
     // The capture seam exists before the store it writes through, and is bound to
     // nothing: this is the pre-enrolment state a real process starts in.
@@ -89,6 +95,7 @@ class StackPhone {
         userId: userId,
         syncStore: syncStore,
         keyStore: keyStore,
+        workspaceKeys: workspaceKeys,
         userTransport: decorated,
         domain: domain,
         clock: clock,
@@ -98,6 +105,7 @@ class StackPhone {
       link: link,
       userTransport: decorated,
       keyStore: keyStore,
+      workspaceKeys: workspaceKeys,
       syncStore: syncStore,
       storeDirectory: storeDirectory,
       clock: clock,
@@ -109,6 +117,7 @@ class StackPhone {
     required String userId,
     required SyncDatabase syncStore,
     required DeviceKeyStore keyStore,
+    required WorkspaceKeyStore workspaceKeys,
     required UserTransport userTransport,
     required GtdDatabase domain,
     required FakeClock clock,
@@ -123,10 +132,11 @@ class StackPhone {
         userTransport: userTransport,
         domain: domain,
         nowMs: () => clock.nowMs,
-        // The platform keychain is unreachable in a unit test; the in-memory store
-        // is the same swap `sim_device` makes, so a plaintext_v1 capture's
-        // key lookup returns "no key" instead of throwing on the missing channel.
-        workspaceKeys: InMemoryWorkspaceKeyStore(),
+        // The platform keychain is unreachable in a unit test; the phone-held
+        // in-memory store is the same swap `sim_device` makes, so a plaintext_v1
+        // capture's key lookup returns "no key" instead of throwing on the
+        // missing channel — and a relaunch reuses it, as a keychain would.
+        workspaceKeys: workspaceKeys,
         kdfParameters: harnessKdfParameters,
         kdfFloor: harnessKdfParameters,
       );
@@ -142,6 +152,9 @@ class StackPhone {
   final UserTransport userTransport;
 
   final InMemoryDeviceKeyStore keyStore;
+
+  /// The epoch-key store, playing the platform keychain: it outlives [relaunch].
+  final InMemoryWorkspaceKeyStore workspaceKeys;
   final Directory? storeDirectory;
   final FakeClock clock;
 
@@ -198,6 +211,7 @@ class StackPhone {
       userId: stack.userId,
       syncStore: syncStore,
       keyStore: keyStore,
+      workspaceKeys: workspaceKeys,
       userTransport: userTransport,
       domain: domain,
       clock: clock,
