@@ -54,23 +54,28 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// The full `todos` column projection every Todo-producing query selects, so
   /// `todos.map(row.data)` hydrates the [Todo] model with **Action-grain**
-  /// `energy_level` / `time_estimate` (D2) and live-derived `time_spent_minutes`
-  /// (issue #480) — leaving UI and providers untouched. The raw
-  /// `todos.energy_level` / `time_estimate` columns remain the write mirror and
-  /// the Actionless draft store (D1/D3). `last_next_action_completion_at` is
-  /// live — stamped by the focus-session close and read by the
-  /// re-clarification predicate. [t] is the `todos` table's SQL alias in the
-  /// enclosing query.
+  /// `energy_level` / `time_estimate` (D2) — leaving UI and providers untouched.
+  /// The raw `todos.energy_level` / `time_estimate` columns remain the write
+  /// mirror and the Actionless draft store (D1/D3).
+  /// `last_next_action_completion_at` is live — stamped by the focus-session
+  /// close and read by the re-clarification predicate. [t] is the `todos`
+  /// table's SQL alias in the enclosing query.
   ///
-  /// Queries carrying this projection must list `actions` and `time_logs` in
-  /// `readsFrom` so a synced Action or TimeLog write re-emits their watchers.
+  /// Queries carrying this projection must list `actions` in `readsFrom` so a
+  /// synced Action write re-emits their watchers.
+  ///
+  /// Time spent is **not** here and no [Todo] carries it: it is a TimeLog
+  /// derivation at the Outcome grain, and a surface that displays it reads
+  /// [TimeLogDao.totalMinutesForTask] or [TimeLogDao.watchTotalMinutesByTask]
+  /// for itself. Projecting it onto a row class would put a value on every
+  /// [Todo] that only some queries had derived — the asymmetry the dropped
+  /// `time_spent_minutes` column used to hide (issue #604).
   static String todoProjectionSql(String t) =>
       '$t.id, $t.title, $t.notes, $t.priority, $t.due_date, $t.created_at, '
       '$t.updated_at, $t.done_at, $t.clarified, $t.intent, '
       '${effectiveTimeEstimateSql(t)} AS time_estimate, '
       '${effectiveEnergyLevelSql(t)} AS energy_level, '
       '$t.capture_source, $t.location_id, $t.user_id, $t.last_clarified_at, '
-      '${TimeLogDao.totalMinutesSubquery('$t.id')} AS time_spent_minutes, '
       '$t.last_next_action_completion_at';
 
   // ---------------------------------------------------------------------------
@@ -87,7 +92,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos WHERE todos.id = ?',
       variables: [Variable(todoId)],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).getSingleOrNull().then((r) => r == null ? null : todos.map(r.data));
   }
 
@@ -97,7 +102,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos WHERE todos.id = ?',
       variables: [Variable(todoId)],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).watchSingleOrNull().map((r) => r == null ? null : todos.map(r.data));
   }
 
@@ -169,8 +174,8 @@ EXISTS (
         'ORDER BY created_at',
         variables: [intentVar],
         readsFrom: excludeActionlessPersonBlocked
-            ? {todos, todoTags, tags, actions, attachedDatabase.timeLogs}
-            : {todos, actions, attachedDatabase.timeLogs},
+            ? {todos, todoTags, tags, actions}
+            : {todos, actions},
       ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
     }
     final n = tagIds.length;
@@ -187,8 +192,8 @@ EXISTS (
       'ORDER BY todos.created_at',
       variables: [intentVar, ...tagIds.map(Variable.new)],
       readsFrom: excludeActionlessPersonBlocked
-          ? {todos, todoTags, tags, actions, attachedDatabase.timeLogs}
-          : {todos, todoTags, actions, attachedDatabase.timeLogs},
+          ? {todos, todoTags, tags, actions}
+          : {todos, todoTags, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -251,7 +256,7 @@ EXISTS (
           Variable('person'),
           Variable('next'),
         ],
-        readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+        readsFrom: {todos, todoTags, tags, actions},
       ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
     }
     final n = tagIds.length;
@@ -272,7 +277,7 @@ EXISTS (
         Variable('next'),
         ...tagIds.map(Variable.new),
       ],
-      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions},
     ).watch().map((rows) => rows.map((row) => todos.map(row.data)).toList());
   }
 
@@ -283,9 +288,8 @@ EXISTS (
   /// then todo creation date — insertion order matches the grouped view.
   Stream<Map<Tag, List<Todo>>> watchPersonTaggedGrouped() {
     return customSelect(
-      // Shared Todo projection (Action-grain energy/time via D2, live-derived
-      // time_spent_minutes per #480) plus the person-tag columns this grouped
-      // view needs.
+      // Shared Todo projection (Action-grain energy/time via D2) plus the
+      // person-tag columns this grouped view needs.
       'SELECT ${todoProjectionSql('todos')}, '
       '  tg.id AS ptag_id, tg.name AS ptag_name, '
       '  tg.color AS ptag_color, tg.user_id AS ptag_user_id '
@@ -300,7 +304,7 @@ EXISTS (
         Variable('person'),
         Variable('next'),
       ],
-      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions},
     ).watch().map((rows) {
       final result = <Tag, List<Todo>>{};
       for (final row in rows) {
@@ -394,7 +398,7 @@ EXISTS (
       "WHERE done_at IS NOT NULL AND intent != 'trash' "
       'ORDER BY done_at DESC',
       variables: [],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -423,7 +427,7 @@ EXISTS (
       "WHERE intent = 'trash' "
       'ORDER BY COALESCE(last_clarified_at, updated_at, created_at) DESC',
       variables: [],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -442,7 +446,7 @@ EXISTS (
       'WHERE id IN ($placeholders) '
       'ORDER BY created_at',
       variables: [...ids.map(Variable.new)],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -712,7 +716,7 @@ AND (
       ') '
       'ORDER BY todos.created_at',
       variables: [Variable('next'), Variable('person')],
-      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -740,7 +744,7 @@ AND (
       'ORDER BY todos.title '
       'LIMIT ?',
       variables: [Variable('%$escaped%'), Variable<int>(limit)],
-      readsFrom: {todos, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -762,7 +766,7 @@ AND (
       'SELECT ${todoProjectionSql('todos')} FROM todos '
       'WHERE $_needsReviewWhere ORDER BY created_at',
       variables: [],
-      readsFrom: {todos, todoTags, tags, actions, attachedDatabase.timeLogs},
+      readsFrom: {todos, todoTags, tags, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
@@ -1239,8 +1243,8 @@ AND (
         clarified: const Value(true),
         lastClarifiedAt: Value(ts),
       ));
-      // Creation asserts the whole row (minus the dead `time_spent_minutes`
-      // cache) so a peer that has never seen this Outcome can build it.
+      // Creation asserts the whole row so a peer that has never seen this
+      // Outcome can build it.
       _captureTodo(id, {
         'title': title,
         'notes': notes,

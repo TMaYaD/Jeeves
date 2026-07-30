@@ -283,30 +283,24 @@ void main() {
     });
 
     test(
-        'watchPersonTaggedGrouped derives timeSpentMinutes from time_logs and '
-        're-emits when a log lands, ignoring the stale '
-        'todos.time_spent_minutes column (issue #480)', () async {
+        'watchTotalMinutesByTask derives time spent from time_logs and '
+        're-emits when a log lands (issue #480, #604)', () async {
       await _insertTodo(db, id: 'wg1', title: 'Grouped waiting');
-      await _insertPersonTag(db, id: 'pg1', name: 'Dave');
-      await db.tagDao.assignTag('wg1', 'pg1', _userId);
-      // Poison the dead cache column; the query must not surface it.
-      await db.customStatement(
-          'UPDATE todos SET time_spent_minutes = 999 WHERE id = ?', ['wg1']);
 
       // Subscribe BEFORE inserting the log, so the second emission proves
       // time_logs is in the watcher's readsFrom set — not just that the
-      // initial projection derives correctly.
-      final timeSpentMinutesEmissions = <int>[];
-      final subscription = db.todoDao
-          .watchPersonTaggedGrouped()
-          .map((grouped) => grouped.values.single.single.timeSpentMinutes)
-          .listen(timeSpentMinutesEmissions.add);
+      // initial derivation is correct. An Outcome with no stints is absent from
+      // the map, read as 0.
+      final loggedMinutesEmissions = <int>[];
+      final subscription = db.timeLogDao
+          .watchTotalMinutesByTask()
+          .map((byTask) => byTask['wg1'] ?? 0)
+          .listen(loggedMinutesEmissions.add);
       addTearDown(subscription.cancel);
 
-      await _waitUntil(() => timeSpentMinutesEmissions.isNotEmpty);
-      expect(timeSpentMinutesEmissions.last, 0,
-          reason: 'no logs yet — the poisoned cache column (999) must be '
-              'ignored');
+      await _waitUntil(() => loggedMinutesEmissions.isNotEmpty);
+      expect(loggedMinutesEmissions.last, 0,
+          reason: 'no logs yet — the Outcome is absent from the map');
 
       await db.into(db.timeLogs).insert(TimeLogsCompanion(
             id: const Value('tl-wg1'),
@@ -317,9 +311,9 @@ void main() {
             endedAt: Value(DateTime.utc(2026, 5, 1, 9, 25).toIso8601String()),
           ));
 
-      await _waitUntil(() => timeSpentMinutesEmissions.last == 25);
-      expect(timeSpentMinutesEmissions.last, 25,
-          reason: 'must be SUM(time_logs), not the dead cache column');
+      await _waitUntil(() => loggedMinutesEmissions.last == 25);
+      expect(loggedMinutesEmissions.last, 25,
+          reason: 'SUM(time_logs) for the Outcome');
     });
 
     test('watchMaybe returns only intent=maybe todos (not done)', () async {

@@ -5,16 +5,17 @@
 /// `DatabaseConnection.delayed`) and tests (`NativeDatabase.memory()`).
 ///
 /// **Drift owns the schema, and every table is a real table.** The store is a
-/// file of its own, created by [MigrationStrategy.onCreate] — so there is no
-/// migration ladder: the previous store was PowerSync-managed, its
-/// application-visible names were views over `ps_data__*`, and it is deleted
-/// rather than converted (see `domain_store_io.dart` and ADR-0035). A device
-/// whose local op log holds reduced state has it projected into the fresh file at
-/// first open; a device without one starts empty.
+/// file of its own, created by [MigrationStrategy.onCreate] — the previous store
+/// was PowerSync-managed, its application-visible names were views over
+/// `ps_data__*`, and it is deleted rather than converted (see
+/// `domain_store_io.dart` and ADR-0035). A device whose local op log holds
+/// reduced state has it projected into the fresh file at first open; a device
+/// without one starts empty.
 ///
-/// Schema changes from here are ordinary Drift migrations — [schemaVersion] goes
-/// to 2 with an `onUpgrade` step. `ALTER TABLE ... ADD COLUMN` and `DROP COLUMN`
-/// both work again, which they did not while the targets were views.
+/// Schema changes are ordinary Drift migrations from there: bump [schemaVersion]
+/// and add a step to `onUpgrade`. Structural `ALTER TABLE` works again, which it
+/// did not while the targets were views. `schema_baseline_test.dart` pins both
+/// the shape `onCreate` builds and each `onUpgrade` step's effect.
 library;
 
 import 'dart:async';
@@ -144,11 +145,29 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
-  MigrationStrategy get migration =>
-      MigrationStrategy(onCreate: (m) => m.createAll());
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) => m.createAll(),
+        onUpgrade: (m, from, to) async {
+          // v2 (issue #604): drop `todos.time_spent_minutes`, a denormalised
+          // time-spent cache with no write path — time spent is derived from
+          // `SUM(time_logs)` at read time. The column carried nothing on a v1
+          // store: every row held the declared `0`, so this loses no data.
+          //
+          // A recreate rather than `ALTER TABLE ... DROP COLUMN`: that statement
+          // needs sqlite 3.35, and the bundled library's version is a property
+          // of whatever `sqlite3_flutter_libs` build a device ended up with.
+          // `alterTable` copies the surviving columns into a table built from
+          // the current declaration, re-creates the indices, and cycles
+          // `PRAGMA foreign_keys` itself, so `time_logs.task_id` survives the
+          // swap.
+          if (from < 2) {
+            await m.alterTable(TableMigration(todos));
+          }
+        },
+      );
 
   /// Invalidates Drift stream queries reading `todos` (and, when
   /// [includeTodoTags] is set, `todo_tags`) after a write, independent of what

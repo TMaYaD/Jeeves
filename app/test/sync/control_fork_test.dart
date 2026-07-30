@@ -101,7 +101,7 @@ Future<Uint8List> _todoOp(
 }
 
 Future<List<Map<String, Object?>>> _todoRows(SimDevice device) =>
-    domainRows(device.domain, 'todos', exclude: {'time_spent_minutes'});
+    domainRows(device.domain, 'todos');
 
 Future<Map<String, Map<String, Object?>>> _todos(SimDevice device) =>
     device.registry.register(todosCollection).readAll();

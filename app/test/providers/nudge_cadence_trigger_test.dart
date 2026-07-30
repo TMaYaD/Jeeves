@@ -57,7 +57,6 @@ Todo _todo() => Todo(
       clarified: true,
       intent: 'next',
       userId: 'u',
-      timeSpentMinutes: 0,
     );
 
 ProviderContainer _makeContainer({

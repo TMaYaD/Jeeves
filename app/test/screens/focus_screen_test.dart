@@ -57,7 +57,6 @@ Todo _todo(String id, String title, {String? doneAt}) => Todo(
       clarified: true,
       intent: 'next',
       userId: 'test-user',
-      timeSpentMinutes: 0,
     );
 
 Widget _buildScreen({

@@ -38,14 +38,13 @@ Future<Todo> _insertAt(
 }) async {
   final now = DateTime.now();
   await db.customInsert(
-    'INSERT INTO todos (id, title, user_id, created_at, time_spent_minutes, '
-    'intent) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO todos (id, title, user_id, created_at, intent) '
+    'VALUES (?, ?, ?, ?, ?)',
     variables: [
       Variable.withString(id),
       Variable.withString(title),
       Variable.withString(_userId),
       Variable.withDateTime(now),
-      Variable.withInt(0),
       Variable.withString(intent),
     ],
   );
