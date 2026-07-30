@@ -15,10 +15,8 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/sync_stack_provider.dart';
-import '../../sync/control_payload.dart';
 import '../../sync/enrolment.dart';
 import '../../sync/enrolment_state.dart';
-import '../../sync/envelope.dart';
 import '../../sync/recovery_escrow.dart';
 import '../../sync/sync_stack.dart';
 import '../../sync/sync_transport.dart';
@@ -155,25 +153,8 @@ class StackEnrolmentCeremonyRunner implements EnrolmentCeremonyRunner {
   final Future<SyncStack> Function() _stack;
 
   @override
-  Future<EnrolmentCeremonyStatus> status() async {
-    final stack = await _stack();
-    final workspaceIds = stack.workspaceIds;
-    final founded = <String>[];
-    for (final workspaceId in workspaceIds) {
-      final client = await stack.workspaceClientFactory(workspaceId);
-      final head = await client.appliedControlHead();
-      if (!sameBytes(head, zeroPrevControlHash)) founded.add(workspaceId);
-    }
-    return deriveEnrolmentCeremonyStatus(
-      workspaceIds: workspaceIds,
-      foundedWorkspaceIds: founded,
-      storedMemberId: (await stack.keyStore.read(stack.defaultClient.workspaceId))
-          ?.memberId,
-      pinnedRootPk: await stack.defaultClient.pinnedRootPk(),
-      highestEscrowVersionSeen:
-          await stack.defaultClient.highestEscrowVersionSeen(),
-    );
-  }
+  Future<EnrolmentCeremonyStatus> status() async =>
+      (await _stack()).readEnrolmentStatus();
 
   @override
   Future<String> generatePassphrase() async =>

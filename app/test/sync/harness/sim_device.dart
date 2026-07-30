@@ -465,17 +465,20 @@ class SimDevice {
       pullPageLimit: pullPageLimit,
       now: () => clock.asDateTime,
     );
-    // The two stores and the wiring #553 flips on, in the order the cycle
-    // allows: the capture seam needs the client, the domain store needs the
-    // seam, and the projector needs the domain store.
+    // The two stores and the production wiring, in the order the cycle allows:
+    // the domain store needs the capture seam, and the projector needs the domain
+    // store. The seam is the production one — [WorkspaceRoutingOpCapture] — and it
+    // is bound below, once the preferences Workspace's client exists. Binding
+    // `SyncOpCapture(client)` instead would route a DAO-path preference write into
+    // the *GTD* Workspace, whose id derivation nobody there shares; the harness
+    // only got away with it because it writes preferences through
+    // `PreferencesStore`.
     //
     // All of it before the ceremony below: a real device has its read model
     // attached from construction, so whatever enrolment pulls must project on
     // the way in rather than land in a store nothing is listening to yet.
-    final domain = GtdDatabase(
-      NativeDatabase.memory(),
-      opCapture: SyncOpCapture(client),
-    );
+    final capture = WorkspaceRoutingOpCapture();
+    final domain = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
     final projector = DomainProjector(registry: registry, domain: domain);
     client.projector = projector;
 
@@ -502,6 +505,12 @@ class SimDevice {
             now: () => clock.asDateTime,
           )..projector = projector,
         );
+
+    capture.bind(
+      gtdClient: client,
+      preferencesClient:
+          await workspaceClientFactory(userPreferencesWorkspaceId(userId)),
+    );
 
     final keyStore = InMemoryDeviceKeyStore();
     final enrolment = EnrolmentService(

@@ -26,7 +26,6 @@ import '../../database/gtd_database.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/powersync_provider.dart';
 import '../../providers/sync_stack_provider.dart';
-import '../../sync/collection_codecs.dart';
 import '../../sync/ids.dart';
 import '../../sync/initial_upload.dart';
 import '../../sync/initial_upload_plan.dart';
@@ -198,35 +197,6 @@ Future<ReseedOutcome> runReseed({
     readOnlyProof: readOnlyProof,
     preconditions: preconditions,
   );
-}
-
-/// The new spine's Labels, keyed by casefolded name.
-///
-/// What makes a re-run stable: run 1 minted a Label for a converted Area, run 2
-/// finds it here and merges onto it rather than minting a second one. Same-name
-/// Labels resolve by `(casefolded name, id)` — the one total order the plan uses
-/// everywhere — so two Labels called "Home" cannot make the pick depend on read
-/// order.
-Future<Map<String, InitialUploadTagRef>> readSpineLabelTags(
-  ReducedCollectionReader readReducedCollection,
-) async {
-  final reduced = await readReducedCollection(tagsCollection);
-  final labels = <InitialUploadTagRef>[];
-  for (final entry in reduced.entries) {
-    if (entry.value['type'] != labelTagType) continue;
-    final name = entry.value['name'];
-    if (name is! String) continue;
-    labels.add(InitialUploadTagRef(id: entry.key, name: name));
-  }
-  labels.sort((a, b) {
-    final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
-    return byName != 0 ? byName : a.id.compareTo(b.id);
-  });
-  final byName = <String, InitialUploadTagRef>{};
-  for (final label in labels) {
-    byName.putIfAbsent(label.name.toLowerCase(), () => label);
-  }
-  return byName;
 }
 
 // --- production wiring ------------------------------------------------------

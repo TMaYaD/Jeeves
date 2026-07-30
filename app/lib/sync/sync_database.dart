@@ -340,6 +340,38 @@ class EpochFloors extends Table {
   Set<Column<Object>> get primaryKey => {workspaceId};
 }
 
+/// Whether this device has finished authoring its pre-enrolment domain store
+/// into the log, per account.
+///
+/// Keyed by **user id**, not by device: a device re-enrolled under a different
+/// account holds a store that account's log has never seen, so it walks again.
+/// The row exists only once a pass *completed* — a mid-walk transport failure
+/// leaves it absent, and the next sync resumes through the diff skip. An empty
+/// store's walk is a trivially complete pass, so no `hasLocalData` gate is
+/// needed and none exists.
+///
+/// [lastReportJson] is the completed pass's report, kept so a refusal
+/// (`capture()` guards, #573) or an excluded row stays inspectable long after
+/// the walk: refusals are permanent data anomalies rather than retryable
+/// transport state, so they do **not** hold the marker open, and this row is the
+/// only record that they happened.
+///
+/// Not named `cached_*`: the row is not derived from anything. It is the record
+/// that an event happened, and its absence is the retry condition.
+@DataClassName('InitialUploadStateRow')
+class InitialUploadState extends Table {
+  TextColumn get userId => text()();
+
+  /// When the completed pass finished, epoch milliseconds UTC — the same grain
+  /// the stack's injected `nowMs` reads, so nothing converts.
+  IntColumn get completedAtUtcMs => integer()();
+
+  TextColumn get lastReportJson => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {userId};
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -355,6 +387,7 @@ class EpochFloors extends Table {
     ControlChainState,
     AppliedControlLog,
     EpochFloors,
+    InitialUploadState,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -365,9 +398,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// store, the quarantine and op-log columns the chain verdict needs, and the
   /// three indexes it reads through (#551); v5 adds the applied-control log the
   /// grants view is derived from and the per-Workspace `epoch_floor` (#549);
-  /// v6 turns the documented integrity-alarm upsert key into a constraint.
+  /// v6 turns the documented integrity-alarm upsert key into a constraint; v7
+  /// adds the per-account initial-upload marker (#591).
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -436,6 +470,13 @@ class SyncDatabase extends _$SyncDatabase {
               recovery: 'delete and recreate this sync store',
             );
             await migrator.create(integrityAlarmsKey);
+          }
+          if (from < 7) {
+            // One new table, no backfill. An absent row is exactly the right
+            // answer for a device that predates the marker: it has never
+            // authored its store into the log, so it walks — and the walk is
+            // idempotent, so a device that somehow had would skip everything.
+            await migrator.createTable(initialUploadState);
           }
         },
       );
