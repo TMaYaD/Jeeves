@@ -1,12 +1,22 @@
 """The Minimal Sync Server's HTTP and WebSocket surface.
 
 Content ops stay opaque: the server reads the 158-byte header and never a body.
-**Control ops are the deliberate exception** — ``op_class=2`` payloads are
-unencrypted precisely so the server can check that a Member was registered by
-Root before it materialises the membership (ADR-0028, review F2).  That is the
-only body-reading path here, and it is fail-closed at every step.  The realtime
-signal socket is content-blind in the strongest sense available: a poke is a
-zero-length frame, so the channel carries no seq, no author and no count.
+**Two op classes are the deliberate exception**, and both for the same reason —
+the server has to *act* on their payloads, so they are unencrypted for ever:
+
+* ``op_class=2`` (control) so it can check that a Member was registered by Root
+  before it materialises the membership (ADR-0028, review F2);
+* ``op_class=5`` (prune, #555) so it can stamp ``ops.compacted_by`` from the
+  target enumeration.  That payload names transport seqs, author positions and
+  envelope hashes and **nothing about what any op said**, which is what makes
+  reading it cost no content-blindness: the server already holds all four.
+
+Those are the only two body-reading paths here, and both are fail-closed at every
+step.  ``op_class=4`` (compaction) is *not* one of them — a compaction body is
+ciphertext once the Workspace is keyed, so its shape rules are every receiver's
+and this module treats it exactly as it treats content.  The realtime signal
+socket is content-blind in the strongest sense available: a poke is a zero-length
+frame, so the channel carries no seq, no author and no count.
 
 Transport auth is member-scoped, and uniformly so.  The sync data routes
 (``GET``/``POST /w/{w}/ops``, ``GET /w/{w}/members``) and the signal socket
@@ -64,7 +74,7 @@ import base64
 import binascii
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -91,6 +101,7 @@ from app.config import settings
 from app.database import get_db
 from app.redis import get_redis
 from app.sync.control_payload import (
+    COMPACTION_EXEMPT_OP_CLASSES,
     CONTROL_TYPE_GRANT,
     CONTROL_TYPE_MEMBER_REGISTER,
     CONTROL_TYPE_REVOKE,
@@ -116,13 +127,16 @@ from app.sync.control_payload import (
     verify_revoke_certificate,
 )
 from app.sync.envelope import (
+    OP_CLASS_COMPACTION,
     OP_CLASS_CONTROL,
+    OP_CLASS_PRUNE,
     SIGN_PUBLIC_KEY_BYTES,
     EnvelopeError,
     EnvelopeTooShortError,
     OpHeader,
     check_served,
     derive_key_id,
+    envelope_hash,
     minimum_envelope_bytes_for_suite,
     parse_body,
     split_envelope,
@@ -167,6 +181,7 @@ from app.sync.models import (
     Workspace,
     WorkspaceEpoch,
 )
+from app.sync.prune_payload import PrunePayload, PrunePayloadError, PruneTarget
 from app.sync.schemas import (
     EpochKeyListResponse,
     EpochKeyOut,
@@ -869,8 +884,10 @@ async def post_ops(
     # anchored to a transport seq, and a seq does not exist until the op is
     # stored.  That is not an implementation accident: the authorization verdict
     # is positional against `granted_seq`/`revoked_by_seq`, so those numbers have
-    # to be the real ones.
-    revoked_members = await _materialise_control(db, workspace_id, admissions, results)
+    # to be the real ones.  A prune's ``compacted_by`` is the same shape of fact
+    # about a different table, so it runs in the same transaction.
+    revoked_members = await _materialise_control(db, workspace_id, admissions.control, results)
+    await _materialise_prunes(db, workspace_id, admissions.prunes, results)
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -906,7 +923,7 @@ async def post_ops(
 async def _resolve_commit_conflict(
     db: AsyncSession,
     workspace_id: uuid.UUID,
-    admissions: list[_ControlAdmission],
+    admissions: _BatchAdmissions,
     exc: IntegrityError,
 ) -> BaseException:
     """Name the constraint a rolled-back commit lost, or hand the failure back.
@@ -923,7 +940,7 @@ async def _resolve_commit_conflict(
     genesis = next(
         (
             admission
-            for admission in admissions
+            for admission in admissions.control
             if admission.control_type == CONTROL_TYPE_WORKSPACE_GENESIS
         ),
         None,
@@ -954,12 +971,41 @@ class _ControlAdmission:
     rotate: RotateStatement | None = None
 
 
+@dataclass(slots=True)
+class _PruneAdmission:
+    """One verified prune op, and the rows it will stamp once it has a seq.
+
+    The same two-pass shape :class:`_ControlAdmission` has, for the same reason:
+    validation can refuse the whole batch, and ``compacted_by`` needs a transport
+    seq that does not exist until the append.  Carrying the parsed targets between
+    the passes means the bytes are read and cross-checked exactly once.
+    """
+
+    index: int
+    targets: tuple[PruneTarget, ...]
+    #: True when the log already holds this exact op.  A replay must not be refused
+    #: for finding its own targets already stamped — it stamped them.
+    is_replay: bool
+
+
+@dataclass(slots=True)
+class _BatchAdmissions:
+    """What one POST's ordered walk concluded, per materialisation surface.
+
+    Two lists rather than one heterogeneous one: control ops write authority rows
+    and prune ops write a soft-delete stamp, and nothing sensible reads both.
+    """
+
+    control: list[_ControlAdmission] = field(default_factory=list)
+    prunes: list[_PruneAdmission] = field(default_factory=list)
+
+
 async def _verify_and_authorize(
     db: AsyncSession,
     workspace_id: uuid.UUID,
     current_member: Member,
     parsed: list[tuple[bytes, OpHeader]],
-) -> list[_ControlAdmission]:
+) -> _BatchAdmissions:
     """Verify every control op and authorize every op, in arrival order.
 
     The walk is ordered on purpose: the server materialises a batch's control ops
@@ -971,6 +1017,15 @@ async def _verify_and_authorize(
     family, so #554 opens a control type up by adding a case rather than by
     loosening the failure mode.  Authorization rejections are a 403, matching
     ``author_member_mismatch`` — the caller's credential is the thing at fault.
+
+    **The walk is what makes a same-POST compaction-plus-prune legal.**  A prune
+    names its compaction by ``op_id``, and the compaction usually has no transport
+    seq yet: the ``Compactor`` authors both back to back and the flusher uploads
+    them in ``author_seq`` order.  So the walk stages every class-4 ``op_id`` as it
+    passes — cleartext *header* fields, which matters because a class-4 body is
+    ciphertext — and a prune resolves its compaction against those or against the
+    stored log.  The same rule makes a batch-boundary split equally valid, since by
+    then the compaction is stored.
     """
     grants = await _grant_index(db, workspace_id)
     workspace_exists = await db.get(Workspace, workspace_id) is not None
@@ -1003,17 +1058,38 @@ async def _verify_and_authorize(
     # Member kinds this batch certifies but has not yet materialised — the
     # enrolment batch grants itself in the same POST that registers it.
     staged_kinds: dict[uuid.UUID, str] = {}
+    # Class-4 op ids this batch carries but has not yet stored, so a prune later in
+    # the same POST can name one.  Header fields only: a class-4 body is ciphertext.
+    staged_compaction_op_ids: set[uuid.UUID] = set()
 
-    admissions: list[_ControlAdmission] = []
+    admissions = _BatchAdmissions()
     for index, (envelope, header) in enumerate(parsed):
         if header.op_class != OP_CLASS_CONTROL:
-            # Content today; suggestion and compaction when #557/#555 widen
-            # SERVED_OP_CLASSES.  Both need a Workspace somebody signed into
+            # Content, compaction and prune; suggestion when #557 widens
+            # SERVED_OP_CLASSES.  All of them need a Workspace somebody signed into
             # existence and a live Grant whose role the matrix admits.
             if not workspace_exists:
                 raise _conflict("workspace_not_created", index=index)
             _require_role(grants, current_member.member_id, header.op_class, index)
             _require_fresh_key_epoch(header, current_epoch, index)
+            if header.op_class == OP_CLASS_COMPACTION:
+                # Staged from the header alone.  Nothing here reads the body: the
+                # class-4 shape rules are every *receiver's*, and the body is
+                # ciphertext the moment the Workspace is keyed.
+                staged_compaction_op_ids.add(header.op_id)
+            elif header.op_class == OP_CLASS_PRUNE:
+                admissions.prunes.append(
+                    await _verify_prune(
+                        db,
+                        envelope,
+                        header,
+                        index=index,
+                        workspace_id=workspace_id,
+                        current_member=current_member,
+                        staged_compaction_op_ids=staged_compaction_op_ids,
+                        is_replay=header.op_id in replayed_op_ids,
+                    )
+                )
             continue
 
         payload = _decode_control_payload(envelope, index)
@@ -1035,7 +1111,7 @@ async def _verify_and_authorize(
             founder = genesis.as_registration()
             workspace_exists = True
             staged_kinds[founder.member_id] = founder.member_kind
-            admissions.append(
+            admissions.control.append(
                 _ControlAdmission(
                     index=index,
                     control_type=payload.control_type,
@@ -1064,7 +1140,7 @@ async def _verify_and_authorize(
                 root_pk=root_pk,
             )
             staged_kinds[registration.member_id] = registration.member_kind
-            admissions.append(
+            admissions.control.append(
                 _ControlAdmission(
                     index=index,
                     control_type=payload.control_type,
@@ -1086,7 +1162,7 @@ async def _verify_and_authorize(
                 is_replay=header.op_id in replayed_op_ids,
             )
             grants.add(grant.grant_id, grant.member_id, grant.role)
-            admissions.append(
+            admissions.control.append(
                 _ControlAdmission(index=index, control_type=payload.control_type, grant=grant)
             )
         elif payload.control_type == CONTROL_TYPE_REVOKE:
@@ -1101,7 +1177,7 @@ async def _verify_and_authorize(
                 is_replay=header.op_id in replayed_op_ids,
             )
             grants.revoke(revoke.grant_id)
-            admissions.append(
+            admissions.control.append(
                 _ControlAdmission(index=index, control_type=payload.control_type, revoke=revoke)
             )
         elif payload.control_type == CONTROL_TYPE_ROTATE:
@@ -1115,13 +1191,156 @@ async def _verify_and_authorize(
             # Walked forward like ``grants``: a content op later in this same batch is
             # judged against the epoch this rotate establishes, not the one before it.
             current_epoch = rotate.to_epoch
-            admissions.append(
+            admissions.control.append(
                 _ControlAdmission(index=index, control_type=payload.control_type, rotate=rotate)
             )
         else:  # pragma: no cover — ``require_served_type`` already refused it
             raise _unprocessable("unsupported_control_type", index=index)
 
     return admissions
+
+
+async def _verify_prune(
+    db: AsyncSession,
+    envelope: bytes,
+    header: OpHeader,
+    *,
+    index: int,
+    workspace_id: uuid.UUID,
+    current_member: Member,
+    staged_compaction_op_ids: set[uuid.UUID],
+    is_replay: bool,
+) -> _PruneAdmission:
+    """The second body-reading path, and everything it refuses.
+
+    Every rule here is checkable *because the server holds the envelopes*, which is
+    the whole argument for validating attestations at the door rather than leaving
+    them to the clients: a forged one would poison the chain verification of every
+    fresh device that trusts this prune, and a fresh device has nothing to check it
+    against.  One code per rule, all 422 with the batch ``index``.
+    """
+    _header_bytes, body, _signature = split_envelope(envelope)
+    try:
+        payload_bytes = parse_body(body)
+    except EnvelopeError as exc:
+        raise _unprocessable(exc.reason, index=index) from exc
+    try:
+        payload = PrunePayload.decode(payload_bytes)
+    except PrunePayloadError as exc:
+        # Shape rules — empty, duplicate, over-bound — land here, *before* the
+        # materialisation rowcount check, which is what keeps that check's one
+        # remaining cause unambiguous.
+        raise _unprocessable(exc.reason, index=index) from exc
+
+    # Staged earlier in this POST, or already stored under this author.  Somebody
+    # else's compaction does not count: a prune vouches for its own.
+    if payload.compaction_op_id not in staged_compaction_op_ids:
+        stored_compaction = (
+            await db.execute(
+                select(Op.seq).where(
+                    Op.workspace_id == workspace_id,
+                    Op.author_member_id == header.author_member_id,
+                    Op.op_id == payload.compaction_op_id,
+                    Op.op_class == OP_CLASS_COMPACTION,
+                )
+            )
+        ).scalar_one_or_none()
+        if stored_compaction is None:
+            raise _unprocessable(
+                "prune_compaction_not_found",
+                index=index,
+                compaction_op_id=str(payload.compaction_op_id),
+            )
+
+    rows = {
+        row.seq: row
+        for row in (
+            await db.execute(
+                select(Op).where(
+                    Op.workspace_id == workspace_id,
+                    Op.seq.in_([target.seq for target in payload.targets]),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    }
+    for target in payload.targets:
+        row = rows.get(target.seq)
+        if row is None:
+            raise _unprocessable("prune_target_not_found", index=index, seq=target.seq)
+        if row.op_class in COMPACTION_EXEMPT_OP_CLASSES:
+            # Control ops are the authority record and a prune is itself the
+            # attestation that history was removed; folding either away would
+            # destroy the evidence that makes the removal auditable at all.
+            raise _unprocessable(
+                "prune_target_is_control"
+                if row.op_class == OP_CLASS_CONTROL
+                else "prune_target_is_prune",
+                index=index,
+                seq=target.seq,
+            )
+        if (
+            row.author_member_id != target.author_member_id
+            or row.author_seq != target.author_seq
+            or envelope_hash(row.envelope) != target.envelope_hash
+        ):
+            raise _unprocessable("prune_target_attestation_mismatch", index=index, seq=target.seq)
+        if row.compacted_by is not None and not is_replay:
+            # The stamp is written once and never moved, mirroring
+            # ``revoked_by_seq``'s immutability — with the same verbatim-replay
+            # exemption, because a replay stamped these rows itself.
+            raise _unprocessable("prune_target_already_compacted", index=index, seq=target.seq)
+        if row.op_id == payload.compaction_op_id:
+            # A compaction cannot supersede itself.  Only reachable against a
+            # *stored* target: a same-batch compaction has no transport seq yet, so
+            # it structurally cannot appear in ``targets``.
+            raise _unprocessable("prune_target_is_its_own_compaction", index=index, seq=target.seq)
+    del current_member
+    return _PruneAdmission(index=index, targets=payload.targets, is_replay=is_replay)
+
+
+async def _materialise_prunes(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    prunes: list[_PruneAdmission],
+    results: list[OpResult],
+) -> None:
+    """Stamp ``compacted_by``.  **Never a DELETE.**
+
+    Soft-to-hard is an easy later shift and the reverse is impossible, so v1 does
+    the reversible thing: the row stays, the default pull hides it, and
+    ``include_compacted`` serves it back.
+
+    The ``UPDATE`` is guarded on ``compacted_by IS NULL`` and its rowcount checked
+    against the target count.  With duplicates refused at decode that mismatch has
+    exactly one cause left: a **concurrent prune** stamped a shared target between
+    this batch's validation and its append.  The loser rolls back and learns the
+    same ``prune_target_already_compacted`` the sequential case gives it, which is
+    the whole point of naming the two conditions apart.
+    """
+    for admission in prunes:
+        if results[admission.index].duplicate:
+            # A verbatim replay: the stamp already names the op that did the
+            # pruning, and re-running the UPDATE would find nothing to move anyway.
+            continue
+        prune_seq = results[admission.index].seq
+        seqs = [target.seq for target in admission.targets]
+        stamped = cast(
+            CursorResult[Any],
+            await db.execute(
+                update(Op)
+                .where(
+                    Op.workspace_id == workspace_id,
+                    Op.seq.in_(seqs),
+                    Op.compacted_by.is_(None),
+                )
+                .values(compacted_by=prune_seq)
+            ),
+        )
+        if (stamped.rowcount or 0) != len(seqs):
+            await db.rollback()
+            raise _unprocessable("prune_target_already_compacted", index=admission.index)
 
 
 async def _current_key_epoch(db: AsyncSession, workspace_id: uuid.UUID) -> int | None:
@@ -1685,6 +1904,7 @@ async def pull_ops(
     workspace_id: uuid.UUID,
     since: int = Query(default=0, ge=0),
     limit: int = Query(default=DEFAULT_OPS_PAGE_LIMIT, ge=1, le=MAX_OPS_PAGE_LIMIT),
+    include_compacted: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
     current_member: Member = Depends(get_current_member),
 ) -> PullOpsResponse:
@@ -1694,22 +1914,20 @@ async def pull_ops(
     observation the enrolment ceremony branches on when it decides whether to
     author a genesis, and it runs while the device holds a member credential and
     no Grant at all.  ``workspace_not_created`` is a POST-path refusal only.
+
+    ``include_compacted=true`` drops the soft-delete filter and serves the whole
+    log, superseded rows included — the **history view** (#555).  It is behind the
+    same member-GET bar as every other pull and no more: a v1 prune hides history
+    from the *sync* path so a fresh device need not replay it, and the User is still
+    owed it on request.  Widening what is served is not widening who may ask.
     """
     _require_derivable_workspace(workspace_id, current_member.user_id)
     await _refuse_if_revoked(db, workspace_id, current_member)
+    conditions = [Op.workspace_id == workspace_id, Op.seq > since]
+    if not include_compacted:
+        conditions.append(Op.compacted_by.is_(None))
     rows = (
-        (
-            await db.execute(
-                select(Op)
-                .where(
-                    Op.workspace_id == workspace_id,
-                    Op.seq > since,
-                    Op.compacted_by.is_(None),
-                )
-                .order_by(Op.seq)
-                .limit(limit + 1)
-            )
-        )
+        (await db.execute(select(Op).where(*conditions).order_by(Op.seq).limit(limit + 1)))
         .scalars()
         .all()
     )

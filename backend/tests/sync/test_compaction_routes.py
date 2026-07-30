@@ -14,6 +14,7 @@ shift; the reverse is impossible.
 from __future__ import annotations
 
 import base64
+import json
 import uuid
 
 import pytest
@@ -123,6 +124,42 @@ def _prune(
     )
 
 
+def _malformed_prune(
+    session: Session,
+    *,
+    compaction_op_id: uuid.UUID,
+    targets: list[dict[str, object]],
+) -> bytes:
+    """A prune whose payload the codec would refuse to *encode*.
+
+    Built as raw JSON on purpose: the shape rules run on the way out as well as in,
+    so a well-behaved author cannot produce these bytes.  What a route test needs is
+    what a buggy peer or an attacker would actually put on the wire.
+    """
+    return session.device.next_envelope(
+        session.workspace_id,
+        op_class=OP_CLASS_PRUNE,
+        payload=json.dumps(
+            {"compaction": {"op_id": str(compaction_op_id)}, "targets": targets},
+            separators=(",", ":"),
+        ).encode("utf-8"),
+    )
+
+
+def _any_target(session: Session) -> PruneTarget:
+    """A shape-valid target that names nothing real.
+
+    For the cases refused *before* the enumeration is looked up — the role check —
+    where a well-formed payload is required and its contents are beside the point.
+    """
+    return PruneTarget(
+        seq=1,
+        author_member_id=session.device.member_id,
+        author_seq=1,
+        envelope_hash=bytes(32),
+    )
+
+
 async def _sibling_with_role(
     client: AsyncClient, session: Session, role: str
 ) -> tuple[SpecDevice, dict[str, str]]:
@@ -140,7 +177,9 @@ async def _sibling_with_role(
     headers = {"Authorization": f"Bearer {token}"}
 
     register = session.advance_control_head(
-        session.root.member_register_envelope(sibling, session.workspace_id)
+        session.root.member_register_envelope(
+            sibling, session.workspace_id, prev_control_hash=session.control_head
+        )
     )
     grant = session.advance_control_head(
         session.root.grant_envelope(
@@ -208,7 +247,7 @@ async def test_a_participant_may_not_author_compaction_or_prune(
         session.workspace_id,
         op_class=op_class,
         payload=(
-            PrunePayload(compaction_op_id=uuid.uuid4(), targets=()).encode()
+            PrunePayload(compaction_op_id=uuid.uuid4(), targets=(_any_target(session),)).encode()
             if op_class == OP_CLASS_PRUNE
             else b'{"collection":"harness_docs"}'
         ),
@@ -540,7 +579,7 @@ async def test_a_prune_with_no_targets_is_refused(client: AsyncClient, session: 
     of them storing an op the other quarantines.
     """
     compaction, compaction_op_id = _compaction(session)
-    prune = _prune(session, compaction_op_id=compaction_op_id, targets=[])
+    prune = _malformed_prune(session, compaction_op_id=compaction_op_id, targets=[])
     response = await _post(client, session, compaction, prune)
     assert response.status_code == 422, response.text
     assert detail_of(response)["code"] == "prune_targets_empty"
@@ -569,7 +608,11 @@ async def test_a_prune_with_duplicate_targets_is_refused_at_decode(
         )
     )
     compaction, compaction_op_id = _compaction(session)
-    prune = _prune(session, compaction_op_id=compaction_op_id, targets=[first, second])
+    prune = _malformed_prune(
+        session,
+        compaction_op_id=compaction_op_id,
+        targets=[first.to_json_dict(), second.to_json_dict()],
+    )
     response = await _post(client, session, compaction, prune)
     assert response.status_code == 422, response.text
     assert detail_of(response)["code"] == "prune_duplicate_target"
@@ -579,7 +622,7 @@ async def test_a_prune_over_the_target_bound_is_refused(
     client: AsyncClient, session: Session
 ) -> None:
     compaction, compaction_op_id = _compaction(session)
-    prune = _prune(
+    prune = _malformed_prune(
         session,
         compaction_op_id=compaction_op_id,
         targets=[
@@ -588,7 +631,7 @@ async def test_a_prune_over_the_target_bound_is_refused(
                 author_member_id=session.device.member_id,
                 author_seq=index + 1,
                 envelope_hash=bytes(32),
-            )
+            ).to_json_dict()
             for index in range(MAX_PRUNE_TARGETS + 1)
         ],
     )
