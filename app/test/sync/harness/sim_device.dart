@@ -506,7 +506,7 @@ class SimDevice {
           )..projector = projector,
         );
 
-    capture.bind(
+    await capture.bind(
       gtdClient: client,
       preferencesClient:
           await workspaceClientFactory(userPreferencesWorkspaceId(userId)),

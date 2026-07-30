@@ -1,11 +1,13 @@
 /// The seam every DAO write path describes its domain effect through.
 ///
 /// The production binding is [WorkspaceRoutingOpCapture]: one instance built at
-/// the `GtdDatabase` construction site, bound to this device's two Workspace
-/// clients once it is enrolled, and dropping silently until then — an
-/// un-enrolled device authors nothing. [NoopDomainOpCapture] remains what a
-/// caller passes when it means "never author", which is every test that is not
-/// about capture.
+/// the `GtdDatabase` construction site, buffering the ops it is handed until the
+/// enrolment decision is made — bound to this device's two Workspace clients once
+/// it is enrolled (which drains the buffer), settled silent once it is not (which
+/// discards it). A *decision*, never launch timing, disposes of an op, so a write
+/// on the very first turn of a cold start cannot fall through the window before
+/// the lifecycle binds. [NoopDomainOpCapture] remains what a caller passes when it
+/// means "never author", which is every test that is not about capture.
 ///
 /// **Buffered until commit.** Calls made inside a DAO transaction accumulate
 /// and are emitted only once the transaction commits: a rolled-back write must
@@ -270,10 +272,32 @@ class SyncOpCapture extends BufferedDomainOpCapture {
   }
 }
 
-/// The production binding: routes each coalesced effect to the Workspace whose
-/// log its entity id belongs to, or drops it while unbound.
+/// Which disposition the routing seam has reached for the ops it is handed.
 ///
-/// Two reasons this exists rather than `SyncOpCapture(client)`:
+/// The seam is constructed at process start — before sign-in, before the
+/// enrolment status has even been read — so its very first state is *neither*
+/// "author" nor "drop" but "not yet decided". What disposes of an op is the
+/// **decision**, never launch timing: an op emitted before the decision is held,
+/// not lost, so no write can fall through the window between the store becoming
+/// writable and the lifecycle reaching its bind step.
+enum _CaptureDecision {
+  /// The enrolment decision has not been made yet. Emitted ops accumulate in
+  /// [WorkspaceRoutingOpCapture._pending] until [WorkspaceRoutingOpCapture.bind]
+  /// or [WorkspaceRoutingOpCapture.unbind] settles it.
+  undecided,
+
+  /// Enrolled: route each op to its Workspace client and author it.
+  bound,
+
+  /// Not enrolled (or signed out): author nothing, drop the pending buffer.
+  silent,
+}
+
+/// The production binding: routes each coalesced effect to the Workspace whose
+/// log its entity id belongs to, buffering until the enrolment decision is made
+/// and dropping once it is made "author nothing".
+///
+/// Three reasons this exists rather than `SyncOpCapture(client)`:
 ///
 /// * **Routing.** `UserPreferencesDao` describes its effects into
 ///   `user_preferences`, whose entity id is `uuid5(preferences_workspace_id,
@@ -281,10 +305,17 @@ class SyncOpCapture extends BufferedDomainOpCapture {
 ///   derivation nobody there shares, so two devices would converge on an id
 ///   neither Workspace holds. Everything else goes to the default Workspace.
 /// * **Late binding.** `GtdDatabase` is constructed at process start — before
-///   sign-in, before enrolment — and an un-enrolled device must author nothing at
-///   all. Unbound, [emit] drops silently, which is semantically the old
-///   `NoopDomainOpCapture`. `sync_lifecycle.dart` binds it once a device is
-///   enrolled, and [unbind] restores the pre-enrolment state on sign-out.
+///   sign-in, before enrolment — so at construction there is no client to route
+///   to. `sync_lifecycle.dart` [bind]s it once a device is enrolled, and
+///   [unbind] settles it silent on sign-out or an un-enrolled launch.
+/// * **A decision, never timing, disposes of an op.** The seam exists before the
+///   app can render a frame, so an enrolled device that writes on the very first
+///   turn of a cold start must not lose that write to the async chain the
+///   lifecycle runs before it reaches [bind]. While [undecided] every emitted op
+///   is buffered; [bind] drains the buffer in write order (authoring each, firing
+///   [onOpAuthored] so the debounced flush is scheduled) before any live op; and
+///   [unbind] discards it. A write landing mid-drain is appended behind the
+///   pending tail, so authoring order always matches domain write order.
 ///
 /// It extends [BufferedDomainOpCapture] rather than reimplementing the buffer, so
 /// scope, coalescing and rollback semantics are the ones every other binding is
@@ -293,29 +324,83 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
   SyncClient? _gtdClient;
   SyncClient? _preferencesClient;
 
+  _CaptureDecision _decision = _CaptureDecision.undecided;
+
+  /// Coalesced ops emitted before the enrolment decision, in emission order.
+  /// Drained by [bind], discarded by [unbind]. Also the holding pen for a write
+  /// that lands while [bind] is mid-drain, so it authors behind the tail rather
+  /// than jumping the queue.
+  final List<CapturedOp> _pending = <CapturedOp>[];
+
+  /// True while [bind] is draining [_pending]. A live [emit] during the drain
+  /// must append rather than author directly, or it would author ahead of ops
+  /// buffered before it and break the write-order contract.
+  bool _draining = false;
+
   /// Called after each authored op, so a caller can schedule an outbox flush
-  /// without this class knowing what a flush is. Never called for a dropped op.
+  /// without this class knowing what a flush is. Never called for a dropped op,
+  /// and never for a buffered one — it fires at authoring, which for a buffered
+  /// op is when [bind] drains it.
   void Function()? onOpAuthored;
 
-  bool get isBound => _gtdClient != null && _preferencesClient != null;
+  bool get isBound => _decision == _CaptureDecision.bound;
 
-  void bind({
+  /// Settle the decision to "author": record the clients, arm [onOpAuthored]
+  /// (before the drain, so buffered ops schedule the flush they need), and drain
+  /// the pending buffer in write order. Awaited by the lifecycle so a caller can
+  /// know the buffer is flushed.
+  Future<void> bind({
     required SyncClient gtdClient,
     required SyncClient preferencesClient,
-  }) {
+    void Function()? onOpAuthored,
+  }) async {
     _gtdClient = gtdClient;
     _preferencesClient = preferencesClient;
+    if (onOpAuthored != null) this.onOpAuthored = onOpAuthored;
+    _decision = _CaptureDecision.bound;
+    await _drainPending();
   }
 
-  /// Stop authoring. Buffers and scopes are untouched: a scope open across a
-  /// sign-out still closes cleanly, and its ops are simply dropped.
+  /// Settle the decision to "author nothing": drop the clients, discard the
+  /// pending buffer, and drop every op from here on. Idempotent — a second call,
+  /// or a call from [_CaptureDecision.undecided], is a no-op beyond clearing.
+  /// A scope open across the transition still closes cleanly; its ops are
+  /// dropped. A later [bind] authors only the writes made after it.
   void unbind() {
     _gtdClient = null;
     _preferencesClient = null;
+    _pending.clear();
+    _decision = _CaptureDecision.silent;
   }
 
-  @override
-  Future<void> emit(CapturedOp op) async {
+  Future<void> _drainPending() async {
+    _draining = true;
+    try {
+      while (_pending.isNotEmpty) {
+        // A deactivate can land mid-drain (its synchronous `unbind` clears the
+        // list and settles silent): stop rather than author into a nulled client
+        // for an account nobody is signed into any more.
+        if (_decision != _CaptureDecision.bound) {
+          _pending.clear();
+          return;
+        }
+        final op = _pending.removeAt(0);
+        try {
+          await _author(op);
+        } on Object {
+          // Skip-and-continue: a buffered op `capture()` refuses (#573) is a
+          // permanent anomaly on that one entity, not a reason to strand every
+          // op queued behind it — the same stance as "a refusal does not hold
+          // the marker open".
+          continue;
+        }
+      }
+    } finally {
+      _draining = false;
+    }
+  }
+
+  Future<void> _author(CapturedOp op) async {
     final client = op.collection == userPreferencesCollection
         ? _preferencesClient
         : _gtdClient;
@@ -327,6 +412,22 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
       tombstone: op.tombstone,
     );
     onOpAuthored?.call();
+  }
+
+  @override
+  Future<void> emit(CapturedOp op) async {
+    switch (_decision) {
+      case _CaptureDecision.undecided:
+        _pending.add(op);
+      case _CaptureDecision.silent:
+        return;
+      case _CaptureDecision.bound:
+        if (_draining) {
+          _pending.add(op);
+        } else {
+          await _author(op);
+        }
+    }
   }
 }
 

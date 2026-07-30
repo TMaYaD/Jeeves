@@ -32,7 +32,19 @@ import 'user_constants.dart';
 final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
   ref.keepAlive();
   final userId = ref.watch(currentUserIdProvider);
-  if (userId == kLocalUserId) return null;
+  if (userId == kLocalUserId) {
+    // A local-only user never builds a lifecycle, so nobody would ever *decide*
+    // the capture seam — and the seam buffers from construction, so an
+    // undecided seam grows for the session. Settle it silent, but only once
+    // session restore has **answered**: while restore is in flight the user
+    // still reads `'local'`, and that is exactly the enrolled-relaunch window
+    // that must keep buffering until the real id arrives. The narrow `select`
+    // keeps a token refresh from churning this provider.
+    final restorePending =
+        ref.watch(authTokenProvider.select((token) => token.isLoading));
+    if (!restorePending) ref.watch(domainOpCaptureProvider).unbind();
+    return null;
+  }
 
   final lifecycle = SyncLifecycle(
     stack: await ref.watch(syncStackProvider.future),

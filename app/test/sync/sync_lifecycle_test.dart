@@ -181,12 +181,21 @@ void main() {
     );
   }
 
-  test('an un-enrolled device activates nothing', () async {
+  test('an un-enrolled device activates nothing, before or after the decision',
+      () async {
     final device = await phone();
+    // A write before activation is buffered while the seam is undecided; the
+    // `notEnrolled` decision must discard it, not author it.
     await seedOneOutcome(device, id: '11111111-1111-4111-8111-111111111111');
 
     expect(await device.activate(), SyncActivation.notEnrolled);
     expect(device.capture.isBound, isFalse);
+
+    // A write *after* the decision authors nothing either: the seam is settled
+    // silent, not merely unbound-by-timing.
+    await seedOneOutcome(device, id: '1a1a1a1a-1a1a-4a1a-8a1a-1a1a1a1a1a1a');
+    expect(device.capture.isBound, isFalse);
+
     expect(_contentOpCount(server), 0);
     expect(
       await InitialUploadMarkerStore(device.syncStore).read(_userId),
@@ -316,6 +325,12 @@ void main() {
     expect(await activation, SyncActivation.deactivated);
     expect(device.capture.isBound, isFalse,
         reason: 'the process-wide seam must not be bound to a signed-out account');
+
+    // The seam ended silent, not merely unbound: a write after the sign-out
+    // authors nothing, and no re-bind resurrects the abandoned account's clients.
+    await seedOneOutcome(device, id: '5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a');
+    expect(device.capture.isBound, isFalse);
+
     expect(
       await InitialUploadMarkerStore(device.syncStore).read(_userId),
       isNull,
@@ -351,6 +366,81 @@ void main() {
       expect(server.signalSubscriberCount(workspaceId), 1,
           reason: 'a failed startup must not spend the retry step 6 promises');
     }
+  });
+
+  test('a cold-start write authors before the PoP round trip returns, and so '
+      'does one made mid-activation', () async {
+    final transports = <_ScriptedUserTransport>[];
+    final device = await phone(fileBacked: true, userTransport: (link) {
+      final scripted = _ScriptedUserTransport(link);
+      transports.add(scripted);
+      return scripted;
+    });
+    await device.enrolAsFirstDevice();
+
+    // Process death: a fresh stack, no in-memory credential, the seam undecided.
+    await device.relaunch();
+    final scripted = transports.single;
+    scripted.holdMemberChallenge = Completer<void>();
+
+    // A DAO write on the very first turn of the cold start, before activate().
+    // Buffered by the undecided seam.
+    await seedOneOutcome(device, id: '77777777-7777-4777-8777-777777777777');
+
+    // Start activation and park it at the proof-of-possession round trip.
+    final activation = device.activate();
+    await scripted.memberChallengeParked;
+
+    // Bind happened before the network step, and drained the buffered op: it is
+    // already authored while the PoP is still parked.
+    expect(device.capture.isBound, isTrue);
+    final pendingAfterBind =
+        (await device.stack.defaultClient.health()).pendingOpCount;
+    expect(pendingAfterBind, greaterThan(0),
+        reason: 'the buffered write authored at bind, ahead of the PoP');
+
+    // A write made mid-activation — after bind, PoP still parked — authors at
+    // once too, rather than being lost or re-buffered.
+    await seedOneOutcome(device, id: '78787878-7878-4787-8787-787878787878');
+    expect((await device.stack.defaultClient.health()).pendingOpCount,
+        greaterThan(pendingAfterBind),
+        reason: 'a live write while bound authors immediately');
+
+    // Release the PoP: the device finishes activating and both ops converge.
+    scripted.holdMemberChallenge!.complete();
+    expect(await activation, SyncActivation.active);
+    expect((await device.stack.defaultClient.health()).pendingOpCount, 0,
+        reason: 'the queue drained to the server');
+    expect(_contentOpCount(server), greaterThanOrEqualTo(2));
+  });
+
+  test('an offline enrolled relaunch returns syncFailed, and the write it '
+      'queues converges when the device comes back online', () async {
+    final device = await phone(fileBacked: true);
+    await device.enrolAsFirstDevice();
+    expect(await device.activate(), SyncActivation.active);
+    final contentBefore = _contentOpCount(server);
+
+    // Relaunch with no network: the PoP cannot complete.
+    await device.relaunch();
+    device.goOffline();
+
+    // Classified as syncFailed rather than escaping unclassified — and capture
+    // is bound, so the offline device queues rather than dropping.
+    expect(await device.activate(), SyncActivation.syncFailed);
+    expect(device.capture.isBound, isTrue);
+
+    await seedOneOutcome(device, id: '99999999-9999-4999-8999-999999999999');
+    expect((await device.stack.defaultClient.health()).pendingOpCount,
+        greaterThan(0),
+        reason: 'the write queued behind a bound-but-offline seam');
+
+    // Back online, the next activation attaches the transport and drains.
+    device.goOnline();
+    expect(await device.activate(), SyncActivation.active);
+    expect((await device.stack.defaultClient.health()).pendingOpCount, 0);
+    expect(_contentOpCount(server), greaterThan(contentBefore),
+        reason: 'the offline write reached the server on reconnect');
   });
 
   test('the marker is per account, not per device', () async {
