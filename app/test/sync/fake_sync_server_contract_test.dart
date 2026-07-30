@@ -1489,10 +1489,12 @@ void main() {
       // The ceiling, and it is as load-bearing as the floor: an epoch the Workspace
       // has not rotated to has no wrap set, so the op could never be opened by
       // anyone — it would sit in the log as a guaranteed alarm on every puller.
+      // At `current + 1` exactly, which is where an off-by-one would hide: the
+      // stale side has a deliberate `- 1` of slack and this side has none.
       await rotate([author]);
       await expectLater(
         session.postOps(workspaceId, [
-          await author.nextEnvelope(workspaceId, keyEpoch: 4096),
+          await author.nextEnvelope(workspaceId, keyEpoch: 2),
         ]),
         throwsStatus(409, 'key_epoch_unknown'),
       );

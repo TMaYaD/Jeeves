@@ -302,6 +302,41 @@ void main() {
       );
     });
 
+    test('a Device awaiting its wrap still refuses a plaintext op at a keyed epoch',
+        () async {
+      // The read boundary is judged on the epoch, never on local key availability.
+      // A device whose wrap has not arrived is exactly the one that would
+      // otherwise reduce cleartext its keyed peers refuse — one Workspace
+      // disagreeing with itself about what applied.
+      final workspace = await SimWorkspace.create(deviceCount: 1);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      await a.enrolment.turnOnEncryption(passphrase: workspace.passphrase);
+      await a.sync();
+
+      final downgrader = await AuthorFixture.create();
+      final session = await workspace.enrolFixture(downgrader);
+      await session.postOps(workspace.workspaceId, [
+        await downgrader.nextEnvelope(
+          workspace.workspaceId,
+          keyEpoch: 1,
+          payloadJson:
+              '{"collection":"$_collection","entity_id":"${_entityId('keyless-downgrade')}"}',
+        ),
+      ]);
+
+      // Drop the key *after* the op is on the server: this device now stands at a
+      // keyed epoch holding nothing, which is the delayed-wrap state.
+      await a.workspaceKeys.clear(workspace.workspaceId);
+      final health = await a.sync();
+      expect(
+        health.alarmKinds,
+        contains(IntegrityAlarmKind.plaintextAtEncryptedEpoch.code),
+        reason: 'the downgrade is misconduct by its author, and holding the key is '
+            'not what makes it so',
+      );
+    });
+
     test('a Device without the epoch key refuses to author rather than downgrade',
         () async {
       // The *write* half of the one-way rule, and the reason it cannot be left to

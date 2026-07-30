@@ -708,13 +708,16 @@ async def test_content_at_a_future_epoch_is_refused(client: AsyncClient, session
     An epoch the Workspace has not rotated to has no wrap set, so nobody could ever
     open the body: admitting the op would park a permanently unreadable row in the
     log and raise an integrity alarm on every puller.
+
+    Pinned at ``current + 1`` exactly, which is where an off-by-one would hide: the
+    stale side carries a deliberate one epoch of slack and this side carries none.
     """
     await _rotate(client, session, [session.device])
     response = await client.post(
         f"/w/{session.workspace_id}/ops",
         json=encode_all(
             session.device.next_envelope(
-                session.workspace_id, op_class=OP_CLASS_CONTENT, key_epoch=4096
+                session.workspace_id, op_class=OP_CLASS_CONTENT, key_epoch=2
             )
         ),
         headers=session.headers,
@@ -722,7 +725,7 @@ async def test_content_at_a_future_epoch_is_refused(client: AsyncClient, session
     assert response.status_code == 409, response.text
     detail = detail_of(response)
     assert detail["code"] == "key_epoch_unknown"
-    assert (detail["key_epoch"], detail["current_epoch"]) == (4096, 1)
+    assert (detail["key_epoch"], detail["current_epoch"]) == (2, 1)
 
 
 async def test_a_rotate_that_skips_an_epoch_is_refused(

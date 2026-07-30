@@ -765,7 +765,7 @@ class SyncClient {
     // freshness race F14b names (the wraps PUT landing moments after the rotate op)
     // resolves on the next pull rather than as a mystery decryption failure.
     if (_epochKeyRefreshRequired || await _hasOpsAwaitingEpochKeys()) {
-      await refreshEpochKeys();
+      final learnedEpochKeys = await refreshEpochKeys();
       // Cleared only once the fetch has actually happened. A rotate can raise this
       // flag while nothing is quarantined yet — no content at the new epoch has
       // arrived — so clearing it before a fetch that then fails on transport would
@@ -778,6 +778,16 @@ class SyncClient {
       // release on *this* fetch having learned something would leave those ops
       // quarantined for ever.
       affected.addAll(await _releaseOpsAwaitingEpochKeys());
+      if (learnedEpochKeys > 0) {
+        // A rebuild skips rows it cannot decode, and those rows are in `op_log`
+        // rather than the quarantine — the release scan above will never reach
+        // them. A newly arrived epoch key is the one event that can change that
+        // verdict, so it re-arms the replay. Gated on *learning* rather than on
+        // the skip, because an unconditional re-arm would replay the whole log on
+        // every pull for as long as a key stayed missing, and a key is learned at
+        // most once per epoch.
+        _rebuildRequired = true;
+      }
     }
     if (_rebuildRequired) {
       // A control fork resolved during this pull, so the authorization verdicts
@@ -2010,11 +2020,17 @@ class SyncClient {
         workspaceKey: workspaceKey,
       )));
     }
-    if (workspaceKey != null) {
+    if (header.keyEpoch > 0 || workspaceKey != null) {
+      // Judged on the **epoch**, not on whether this device happens to hold the
+      // key. Above epoch 0 the epoch exists only because a `rotate` created it, so
+      // a plaintext content op there is a downgrade whoever is reading — and
+      // deciding it on local key availability would have devices awaiting their
+      // wrap quietly reduce cleartext that every keyed peer refuses, which is the
+      // two halves of one Workspace disagreeing about what applied.
       throw SyncRejection(
         SyncRejectionReason.plaintextAtEncryptedEpoch,
         'a content op at suite plaintext_v1 arrived at epoch ${header.keyEpoch}, '
-        'which this Workspace has a key for',
+        'which is a keyed epoch of this Workspace',
       );
     }
     return OpPayload.decode(parseBody(body));
@@ -2075,10 +2091,20 @@ class SyncClient {
 
   /// Re-receive the ops quarantined for a key that has since arrived.
   ///
-  /// The healing half of [SyncRejectionReason.missingEpochKey]. Released *before*
-  /// re-entry, exactly as the chain-successor scan does it: a re-receive that
-  /// refuses for some later reason must leave the row released rather than
-  /// re-examined for ever.
+  /// The healing half of [SyncRejectionReason.missingEpochKey]. Released *after*
+  /// [_receive] returns, which is the opposite of the chain-successor scan and for
+  /// a reason that scan does not share: this one walks a list fetched once, so
+  /// nothing about termination depends on the row leaving the unreleased set
+  /// early, while `_releaseChainSuccessors` re-queries the unreleased rows every
+  /// iteration and would loop for ever without it.
+  ///
+  /// The ordering matters because [_receive] rethrows [SqliteException] rather
+  /// than quarantining it — a storage failure is about *our* database, not the
+  /// envelope. Releasing first would drop the row out of this scan while the
+  /// cursor has already moved past the op, so the envelope would exist nowhere
+  /// and the write would be lost. A re-receive that *refuses* still returns
+  /// normally, having quarantined a fresh row, so releasing afterwards keeps the
+  /// "never re-examined for ever" property the early release was there for.
   Future<Set<AffectedEntity>> _releaseOpsAwaitingEpochKeys() async {
     final rows = await (_db.select(_db.quarantinedOps)
           ..where((row) =>
@@ -2098,8 +2124,8 @@ class SyncClient {
         continue;
       }
       if (await workspaceKeys.keyFor(workspaceId, header.keyEpoch) == null) continue;
-      await _markReleased(row.id);
       affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
+      await _markReleased(row.id);
     }
     return affected;
   }
