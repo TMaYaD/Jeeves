@@ -1279,6 +1279,17 @@ AND (
   /// enumerate on the op log, so deriving the count from it keeps one read
   /// instead of two answers that could disagree. Both run in one transaction so
   /// the count can't race the delete.
+  ///
+  /// **The check gates the cascade, not just the count** (issue #600). An
+  /// absent Outcome makes this a no-op on the log too: a tombstone this store
+  /// authored for a `todos` row it never held is a delete a peer that *does*
+  /// hold the Outcome would faithfully apply. Both callers can reach it — a
+  /// snapshot surface holding an id a pull has since removed, and
+  /// `ClarificationService`'s orphan retraction, since the projector never
+  /// enforces referential existence and so leaves junction rows pointing at a
+  /// deleted Outcome. The cascade enumerates by `todo_id`, so it would tombstone
+  /// exactly those survivors — junctions and `capture_outcomes` links this
+  /// delete never established.
   /// The cascade set this delete enumerates on the op log, which is **wider
   /// than the local delete above**. The shipped path removes only the `actions`
   /// rows and the todo, leaving `todo_tags`, `capture_outcomes` and
@@ -1330,6 +1341,7 @@ AND (
       final existed = await (select(todos)..where((t) => t.id.equals(id)))
               .getSingleOrNull() !=
           null;
+      if (!existed) return 0;
       await _captureDeleteOutcomeCascade(id);
       // Cascade the Outcome's Action rows explicitly (ADR-0001 story 2): the op
       // log has no cascade of its own, so carve-undo must enumerate them to
@@ -1343,7 +1355,7 @@ AND (
       await (delete(todos)..where((t) => t.id.equals(id))).go();
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();
-      return existed ? 1 : 0;
+      return 1;
     });
   }
 }

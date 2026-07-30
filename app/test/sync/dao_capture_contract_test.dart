@@ -181,6 +181,50 @@ void main() {
       expect(logOp.tombstone, isFalse);
       expect(logOp.fields, {'action_id': null});
     });
+
+    test('deleteOutcome authors nothing when the Outcome is already gone',
+        () async {
+      // The contract the method's docstring states — "0 if [id] was already
+      // gone" — is a claim about the log too, not only the return value. A
+      // snapshot callsite can hold an id this store never had (issue #600); a
+      // tombstone authored for it is a delete a peer that *does* hold the
+      // Outcome would apply.
+      final removed = await db.todoDao.deleteOutcome('never-existed');
+
+      expect(removed, 0);
+      expect(capture.recorded, isEmpty,
+          reason: 'a delete that removed nothing must assert nothing');
+    });
+
+    test('deleteOutcome leaves a dangling junction alone', () async {
+      // Reachable without a typo: the projector never enforces referential
+      // existence, so a pulled `deleteOutcome` can take the `todos` row while a
+      // `todo_tags` row for the same id is still on its way. The cascade
+      // enumerates by `todo_id`, so an ungated one tombstones junctions it never
+      // established — and `capture_outcomes` links the *surviving* Capture holds.
+      final id = await seedOutcome();
+      final tag = await db.tagDao.findOrCreateTag('errand', 'context', _userId);
+      await db.tagDao.assignTag(id, tag, _userId);
+      await db.customStatement('DELETE FROM todos WHERE id = ?', [id]);
+      final danglingBefore = await (db.select(db.todoTags)
+            ..where((row) => row.todoId.equals(id)))
+          .get();
+      expect(danglingBefore, hasLength(1),
+          reason: 'the raw parent delete must leave the junction dangling — '
+              'otherwise this is the already-gone case, not the regression');
+      capture.clear();
+
+      final removed = await db.todoDao.deleteOutcome(id);
+
+      expect(removed, 0);
+      expect(capture.recorded, isEmpty,
+          reason: 'the junction is not this absent Outcome\'s to tombstone');
+      final danglingAfter = await (db.select(db.todoTags)
+            ..where((row) => row.todoId.equals(id)))
+          .get();
+      expect(danglingAfter, hasLength(1),
+          reason: 'the surviving junction is left untouched');
+    });
   });
 
   group('action_dao', () {
@@ -471,6 +515,32 @@ void main() {
       final rows =
           await db.customSelect('SELECT id FROM user_preferences').get();
       expect(rows.single.read<String>('id'), op.entityId);
+    });
+
+    test('the update branch keeps row and op on one id', () async {
+      // The invariant that makes the derived id the *only* id in circulation,
+      // and so makes the "existing row holds a different id" divergence
+      // unreachable rather than merely unlikely (issue #600). Both writers
+      // derive: this DAO on INSERT, and `initial_upload_plan` when it authors a
+      // pre-existing row. The projector's realignment — locating by
+      // (user_id, key) and rewriting `id` — is what still catches a row some
+      // *other* build minted at random; it is not what this store relies on.
+      await db.userPreferencesDao.set(_userId, 'theme', '"dark"');
+      capture.clear();
+      await db.userPreferencesDao.set(_userId, 'theme', '"light"');
+
+      final derived =
+          preferenceEntityId(userPreferencesWorkspaceId(_userId), 'theme');
+      final rows =
+          await db.customSelect('SELECT id, value FROM user_preferences').get();
+      expect(rows, hasLength(1), reason: 'UNIQUE(user_id, key) upsert');
+      expect(rows.single.read<String>('id'), derived);
+      expect(rows.single.read<String>('value'), '"light"');
+      final ops = capture.forCollection(userPreferencesCollection);
+      expect(ops, hasLength(1),
+          reason: 'the update authors exactly one op, not none');
+      expect(ops.single.entityId, derived,
+          reason: 'the op names the entity the row is');
     });
 
     test('a captured value write always names its key', () async {

@@ -21,12 +21,14 @@ class UserPreferencesDao {
 
   /// Upserts [key] → [jsonValue] for [userId].
   ///
-  /// The row is looked up first and then either UPDATEd in place (preserving the
-  /// existing `id`, so the op the write authors names the entity the peers
-  /// already hold) or INSERTed under the derived entity id. The select / write
-  /// pair
-  /// runs inside a transaction so concurrent setters cannot race past the
-  /// UNIQUE(user_id, key) constraint.
+  /// The row is looked up by `(user_id, key)` — the domain key — and then either
+  /// UPDATEd in place or INSERTed under the derived entity id. The op names the
+  /// derivation either way, which is the entity the peers hold because the
+  /// derivation is the *only* id in circulation: this DAO mints it on INSERT,
+  /// `initial_upload_plan` derives it when it authors a pre-existing row, and
+  /// `DomainProjector` realigns a pulled row onto the op's entity id. The select
+  /// / write pair runs inside a transaction so concurrent setters cannot race
+  /// past the UNIQUE(user_id, key) constraint.
   Future<void> set(String userId, String key, String? jsonValue) async {
     final now = DateTime.now().toUtc().toIso8601String();
     // The KV entity id policy: `uuid5(workspace_id, key)`, so two devices that
