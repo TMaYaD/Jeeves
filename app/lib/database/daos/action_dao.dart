@@ -152,7 +152,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applySetCurrentAction(
         outcomeId,
         text,
@@ -160,7 +160,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         timeEstimate: timeEstimate,
         ts: ts,
       ),
-    ));
+    );
     _notify(effect);
   }
 
@@ -186,7 +186,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applyEditAction(
         actionId,
         text: text,
@@ -196,7 +196,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         clearTimeEstimate: clearTimeEstimate,
         ts: ts,
       ),
-    ));
+    );
     _notify(effect);
   }
 
@@ -217,7 +217,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applySupersedeCurrentAction(
         outcomeId,
         newActionText: newActionText,
@@ -225,7 +225,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         newTimeEstimate: newTimeEstimate,
         ts: ts,
       ),
-    ));
+    );
     _notify(effect);
   }
 
@@ -249,9 +249,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// rows or push the completion timestamp forward.
   Future<void> completeCurrentAction(String outcomeId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applyCompleteCurrentAction(outcomeId, ts: ts),
-    ));
+    );
     if (effect.changed) {
       attachedDatabase.notifyActionsViewWrite();
       // Deliberately notify the `todos` view even though this transaction no
@@ -285,7 +285,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applyAddPlannedAction(
         outcomeId,
         text,
@@ -294,7 +294,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         position: position,
         ts: ts,
       ),
-    ));
+    );
     _notify(effect);
   }
 
@@ -310,9 +310,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applyReorderPlannedActions(outcomeId, orderedIds, ts: ts),
-    ));
+    );
     _notify(effect);
   }
 
@@ -323,9 +323,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// or is already `current` (idempotent under double-tap / replay). Stamps.
   Future<void> promotePlannedAction(String actionId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applyPromotePlannedAction(actionId, ts: ts),
-    ));
+    );
     _notify(effect);
   }
 
@@ -336,9 +336,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// Stamps once.
   Future<void> supersedeAndPromote(String actionId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applySupersedeAndPromote(actionId, ts: ts),
-    ));
+    );
     _notify(effect);
   }
 
@@ -352,9 +352,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applyDemoteCurrentAction(actionId, position: position, ts: ts),
-    ));
+    );
     _notify(effect);
   }
 
@@ -364,9 +364,9 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// gone or is not `planned`. Stamps.
   Future<void> removePlannedAction(String actionId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final effect = await attachedDatabase.capturing(() => transaction(
+    final effect = await attachedDatabase.capturing(
       () => applyRemovePlannedAction(actionId, ts: ts),
-    ));
+    );
     _notify(effect);
   }
 

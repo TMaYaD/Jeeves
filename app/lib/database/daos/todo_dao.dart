@@ -353,7 +353,7 @@ EXISTS (
     late final int affected;
     var actionTerminated = false;
     var logChanged = false;
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       affected = await customUpdate(
         'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
         'WHERE id = ?',
@@ -379,7 +379,7 @@ EXISTS (
           .applyCompleteCurrentAction(todoId, ts: ts);
       actionTerminated = effect.changed;
       logChanged = effect.logChanged;
-    }));
+    });
     if (actionTerminated) attachedDatabase.notifyActionsViewWrite();
     // Completing the Outcome closes the current Action's open TimeLog (#476);
     // the `time_logs` view needs the same explicit post-commit notify (ADR-0010).
@@ -564,8 +564,8 @@ EXISTS (
       String todoId, String text, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final normalized = text.trim();
-    final logChanged = await attachedDatabase.capturing(() => transaction(
-        () => _applySetCurrentActionText(todoId, normalized, ts)));
+    final logChanged = await attachedDatabase.capturing(
+        () => _applySetCurrentActionText(todoId, normalized, ts));
     // The GTD lists read across `todos` and `actions`, so a watcher naming one
     // must hear about a write to the other; notify both explicitly rather than
     // relying on Drift's per-table invalidation (#342, ADR-0010).
@@ -607,13 +607,13 @@ EXISTS (
       );
     }
     var logChanged = false;
-    final wrote = await attachedDatabase.capturing(() => transaction(() async {
+    final wrote = await attachedDatabase.capturing(() async {
       final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
       if (current != null) return false;
       // Non-blank text here, so this never supersedes — logChanged stays false.
       logChanged = await _applySetCurrentActionText(todoId, normalized, ts);
       return true;
-    }));
+    });
     if (wrote) {
       // See [setCurrentActionText]: view writes report changes()==0 (#342, ADR-0010).
       attachedDatabase.notifyTodosViewWrite();
@@ -824,7 +824,7 @@ AND (
     Set<String> targetPersonTagIds,
     String userId,
   ) async {
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final allPersonTagIds = await (select(tags)
             ..where((t) => t.type.equals('person')))
           .map((t) => t.id)
@@ -874,7 +874,7 @@ AND (
           fields: {'todo_id': todoId, 'tag_id': tagId, 'user_id': userId},
         );
       }
-    }));
+    });
   }
 
   /// [setPersonTagsForTodo] plus a `last_clarified_at` stamp, in one
@@ -890,22 +890,20 @@ AND (
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
     await attachedDatabase.capturing(() async {
-      await transaction(() async {
-        await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
-        // Stamped inline rather than through [stampLastClarifiedAt]: that
-        // method notifies view watchers itself, and firing that mid-transaction
-        // would have them re-read pre-commit state. Notify once below, after
-        // commit.
-        await (update(todos)..where((t) => t.id.equals(todoId))).write(
-          TodosCompanion(
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-        );
-        _captureTodo(todoId, {
-          'last_clarified_at': encodeInstant(ts),
-          'updated_at': encodeInstant(ts),
-        });
+      await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
+      // Stamped inline rather than through [stampLastClarifiedAt]: that
+      // method notifies view watchers itself, and firing that mid-transaction
+      // would have them re-read pre-commit state. Notify once below, after
+      // commit.
+      await (update(todos)..where((t) => t.id.equals(todoId))).write(
+        TodosCompanion(
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      );
+      _captureTodo(todoId, {
+        'last_clarified_at': encodeInstant(ts),
+        'updated_at': encodeInstant(ts),
       });
       // Person-tag edits move `todo_tags`, which the Outcome surfaces read
       // alongside `todos` — so both groups are notified (ADR-0010).
@@ -965,7 +963,7 @@ AND (
         actionText != null;
     var actionTerminated = false;
     var logChanged = false;
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final captured = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
             'clarified': true,
@@ -1055,7 +1053,7 @@ AND (
         }
         await setPersonTagsForTodo(todoId, personTagIds, userId);
       }
-    }));
+    });
 
     // Notify explicitly so the Inbox / Next Actions lists refresh even when the
     // write touched a table they do not name — and so they do not depend solely
@@ -1170,7 +1168,7 @@ AND (
       if (clearDueDate) 'due_date': null else 'due_date': ?encodeInstant(dueDate),
     };
     var actionTouched = false;
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
       _captureTodo(todoId, captured);
       if (touchesMetadata) {
@@ -1193,7 +1191,7 @@ AND (
           actionTouched = effect.changed;
         }
       }
-    }));
+    });
     attachedDatabase.notifyTodosViewWrite();
     if (actionTouched) attachedDatabase.notifyActionsViewWrite();
   }
@@ -1328,7 +1326,7 @@ AND (
   }
 
   Future<int> deleteOutcome(String id) async {
-    return attachedDatabase.capturing(() => transaction(() async {
+    return attachedDatabase.capturing(() async {
       final existed = await (select(todos)..where((t) => t.id.equals(id)))
               .getSingleOrNull() !=
           null;
@@ -1346,6 +1344,6 @@ AND (
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();
       return existed ? 1 : 0;
-    }));
+    });
   }
 }

@@ -66,7 +66,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// crash `getSingleOrNull`.
   Future<String> findOrCreateTag(String name, String type, String userId) {
     final trimmed = name.trim();
-    return attachedDatabase.capturing(() => transaction(() async {
+    return attachedDatabase.capturing(() async {
       final existing = await (select(tags)
             ..where((t) => t.name.equals(trimmed) & t.type.equals(type))
             ..orderBy([(t) => OrderingTerm.asc(t.id)])
@@ -83,7 +83,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         userId: Value(userId),
       ));
       return id;
-    }));
+    });
   }
 
   /// Create a new person-typed tag with the given [name] for [userId].
@@ -156,7 +156,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// SELECT and INSERT run inside a single transaction to prevent two
   /// concurrent partial updates from racing and clobbering each other.
   Future<void> upsertTag(TagsCompanion tag) {
-    return attachedDatabase.capturing(() => transaction(() async {
+    return attachedDatabase.capturing(() async {
       if (tag.id.present) {
         final existing = await (select(tags)
               ..where((t) => t.id.equals(tag.id.value)))
@@ -200,7 +200,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
           });
         }
       }
-    }));
+    });
   }
 
   void _captureTag(String tagId, Map<String, Object?> fields) {
@@ -238,7 +238,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Silently returns when [tagId] is unknown or the name is unchanged.
   Future<void> rename(String tagId, String newName) {
     final trimmed = newName.trim();
-    return attachedDatabase.capturing(() => transaction(() async {
+    return attachedDatabase.capturing(() async {
       final current = await (select(tags)..where((t) => t.id.equals(tagId)))
           .getSingleOrNull();
       if (current == null) return;
@@ -258,7 +258,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       }
 
       await upsertTag(TagsCompanion(id: Value(tagId), name: Value(trimmed)));
-    }));
+    });
   }
 
   /// Update the colour of a tag; pass null to clear it.
@@ -273,14 +273,14 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// every startup — so intentional NULLs set via [updateColor] after the
   /// migration are never overwritten.
   Future<void> backfillAllMissingColors() {
-    return attachedDatabase.capturing(() => transaction(() async {
+    return attachedDatabase.capturing(() async {
       final nullColorTags =
           await (select(tags)..where((t) => t.color.isNull())).get();
       for (final tag in nullColorTags) {
         final colorHex = tagColorToHex(tagColorForName(tag.name));
         await upsertTag(TagsCompanion(id: Value(tag.id), color: Value(colorHex)));
       }
-    }));
+    });
   }
 
   /// Merge [sourceTagId] into [targetTagId].
@@ -299,7 +299,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         'Source and target tags must differ',
       );
     }
-    return attachedDatabase.capturing(() => transaction(() async {
+    return attachedDatabase.capturing(() async {
       final sourceTodoTags = await (select(todoTags)
             ..where((tt) => tt.tagId.equals(sourceTagId)))
           .get();
@@ -318,7 +318,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       await (delete(tags)..where((t) => t.id.equals(sourceTagId))).go();
       attachedDatabase.opCapture
           .tombstone(collection: tagsCollection, entityId: sourceTagId);
-    }));
+    });
   }
 
   /// Associate a tag with a todo (idempotent).
@@ -375,7 +375,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Idempotent: a no-op when there are no duplicates, so it is safe to run on
   /// every startup without a version gate.
   Future<void> dedupeTags() {
-    return attachedDatabase.capturing(() => transaction(() async {
+    return attachedDatabase.capturing(() async {
       final groups = await customSelect(
         'SELECT name, type FROM tags GROUP BY name, type HAVING COUNT(*) > 1',
         readsFrom: {tags},
@@ -428,7 +428,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
               .tombstone(collection: tagsCollection, entityId: dupId);
         }
       }
-    }));
+    });
   }
 
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].

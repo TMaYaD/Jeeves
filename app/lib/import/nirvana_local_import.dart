@@ -87,11 +87,14 @@ Future<ImportResult> importNirvanaLocally({
     }
   }
 
-  // All writes inside a single transaction for atomicity.
+  // All writes inside a single capturing scope for atomicity: the scope is the
+  // transaction (GtdDatabase.capturing), so a mid-file failure rolls the rows
+  // back and authors no ops, and a clean import emits one coalesced op per
+  // entity after commit.
   int importedCount = 0;
   int projectTagsCreated = 0;
 
-  await db.transaction(() async {
+  await db.capturing(() async {
     // --- Upsert project tags ---
     final existingTagRows = await (db.select(db.tags)
           ..where((t) => t.type.equals('project')))

@@ -9,11 +9,18 @@
 /// the lifecycle binds. [NoopDomainOpCapture] remains what a caller passes when it
 /// means "never author", which is every test that is not about capture.
 ///
-/// **Buffered until commit.** Calls made inside a DAO transaction accumulate
-/// and are emitted only once the transaction commits: a rolled-back write must
-/// never be signed and queued. The flush coalesces every write to one entity
-/// within a transaction into a single op, so a method that touches a row three
-/// times authors one op, not three.
+/// **The scope is the transaction.** `GtdDatabase.capturing` runs its body
+/// inside a real transaction, so a capture scope and a transaction have the
+/// same lifetime. Calls made inside it accumulate and are emitted only once the
+/// transaction commits — a rolled-back write is never signed and queued, and a
+/// committed write can never lose its op (the two directions issue #598
+/// closed). The flush coalesces every write to one entity within the scope into
+/// a single op, so a method that touches a row three times authors one op, not
+/// three. A bare `GtdDatabase.transaction` opened outside a capturing zone is
+/// refused; the projector's op-free writes use `GtdDatabase.uncapturedTransaction`.
+/// That guard binds db-object callers only (a DAO is a `DatabaseAccessor`, so a
+/// DAO-internal bare `transaction` would dispatch past the override) — moot in
+/// practice, since no DAO spells `transaction`.
 ///
 /// **Scopes are token-bound.** Two `capturing` calls can overlap, so neither
 /// "the innermost scope" nor a shared buffer of marks identifies a scope; see
