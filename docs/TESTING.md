@@ -59,6 +59,8 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 
   Linked worktrees don't carry their own `app/.fvm/flutter_sdk` (it's gitignored and only materialized by `fvm use`), so the hook's resolution loop also checks the main checkout's — resolved via `git rev-parse --git-common-dir`, which always points at the main worktree's `.git` regardless of which worktree is running the hook. If no SDK can be resolved anywhere (local, main checkout, or the system fallback paths), the hook fails loudly with a clear message rather than silently running with no `flutter`/`dart` on `PATH`.
 
+  The `cd` into the SDK's directory isn't sufficient by itself: when `git commit` runs the hook from a linked worktree, it sets `GIT_DIR`/`GIT_INDEX_FILE` (and other `GIT_*` vars) in the hook's own environment, pointing at the worktree's git-dir. Those survive the `cd` — git prefers an explicit `GIT_DIR` over cwd-based discovery — so flutter's internal git calls would still resolve to Jeeves unless the hook clears them first (`unset $(git rev-parse --local-env-vars)`) before invoking `flutter --version`.
+
   If the shared cache is ever corrupted by some other means (e.g. running `flutter --version` by hand from inside `app/`), confirm the diagnosis by reading `frameworkRevision` in `bin/cache/flutter.version.json`: if it matches a *Jeeves* commit rather than a Flutter one, the SDK computed its version from this repo. Repair by running `flutter --version` from inside the SDK's own directory (e.g. `(cd ~/fvm/versions/<version> && bin/flutter --version)`), not from `app/`.
 
 ### Backend (FastAPI)

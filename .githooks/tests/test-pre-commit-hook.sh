@@ -176,6 +176,37 @@ else
   bad "SDK cache identity changed: ${before_identity} -> ${after_identity}"
 fi
 
+start_case "linked worktree, invoked with git's own hook env: self-heal doesn't leak the outer worktree's identity into the SDK cache"
+new_fake_sdk
+new_repo
+before_identity=$(sdk_cache_identity)
+linked_wt="${WORK}/linked-wt-git-env-${REPO_SEQ}"
+git -C "${REPO}" worktree add -q -b "wt-env-branch-${REPO_SEQ}" "${linked_wt}"
+stage_app_change "${linked_wt}"
+# `git commit` sets GIT_DIR/GIT_INDEX_FILE on the hook's own environment when
+# run from a linked worktree — pointing at the worktree's git-dir, not the
+# SDK's. Reproduce that env directly rather than shelling the hook out
+# through a real `git commit`, so this stays a targeted regression test.
+worktree_git_dir=$(git -C "${linked_wt}" rev-parse --absolute-git-dir)
+OUT=$(cd "${linked_wt}" && PATH="${BARE_PATH}" HOME="${WORK}/empty-home" \
+  GIT_DIR="${worktree_git_dir}" GIT_INDEX_FILE="${worktree_git_dir}/index" \
+  sh "${HOOK}" 2>&1)
+RC=$?
+if [ "${RC}" -eq 0 ]; then
+  ok "hook exits 0 under an outer-repo git env"
+else
+  bad "hook exited ${RC} under an outer-repo git env: ${OUT}"
+fi
+after_identity=$(sdk_cache_identity)
+jeeves_rev=$(git -C "${linked_wt}" rev-parse HEAD)
+if [ "${after_identity}" = "${jeeves_rev}" ]; then
+  bad "SDK cache was stamped with the outer worktree's revision (${jeeves_rev}) — inherited GIT_DIR/GIT_INDEX_FILE leaked past the cd (#594)"
+elif [ "${after_identity}" = "${before_identity}" ]; then
+  ok "SDK cache still carries the SDK's own revision (${after_identity})"
+else
+  bad "SDK cache identity changed unexpectedly: ${before_identity} -> ${after_identity}"
+fi
+
 start_case "no SDK anywhere: hook fails loudly, does not attempt build_runner"
 new_repo
 rm -rf "${REPO}/app/.fvm"
