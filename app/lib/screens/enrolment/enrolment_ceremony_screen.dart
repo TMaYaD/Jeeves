@@ -26,6 +26,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/auth_provider.dart';
 import '../../services/secure_screen.dart';
 import '../../sync/enrolment_state.dart';
 import 'enrolment_ceremony_runner.dart';
@@ -215,7 +216,23 @@ class _EnrolmentCeremonyScreenState
   Widget build(BuildContext context) {
     final status = _status;
     return Scaffold(
-      appBar: AppBar(title: const Text('Enrolment ceremony')),
+      appBar: AppBar(
+        title: const Text('Enrolment ceremony'),
+        actions: [
+          // The escape hatch, and the only one: the router pins an un-enrolled
+          // session here, so without this a session the user no longer wants —
+          // a restored legacy one, or the wrong account — would have nowhere to
+          // go. It is also the fresh-signup path off such a session.
+          IconButton(
+            key: const Key('enrolment_sign_out'),
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign out',
+            onPressed: _running
+                ? null
+                : () => ref.read(authTokenProvider.notifier).logout(),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

@@ -13,6 +13,7 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../auth/session_gate.dart';
 import '../../providers/sync_lifecycle_provider.dart';
 import '../../providers/sync_stack_provider.dart';
 import '../../sync/enrolment.dart';
@@ -224,6 +225,11 @@ final enrolmentCeremonyRunnerProvider = Provider<EnrolmentCeremonyRunner>(
   (ref) => StackEnrolmentCeremonyRunner(
     () => ref.read(syncStackProvider.future),
     onEnrolled: () async {
+      // Onboarding is finished, so the router stops pinning the device here.
+      // Flipped before the activation because activation is a network round trip
+      // and possibly a walk of the whole store: the user should not be held on
+      // the ceremony screen waiting for their first upload.
+      sessionGateNotifier.value = SessionGate.ready;
       final lifecycle = await ref.read(syncLifecycleProvider.future);
       if (lifecycle == null) return;
       await activateAndLog(lifecycle);

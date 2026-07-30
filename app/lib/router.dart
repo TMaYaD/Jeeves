@@ -1,9 +1,8 @@
-import 'dart:async';
-
-import 'package:flutter/widgets.dart';
+import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
 
 import 'auth/auth_mode.dart';
+import 'auth/session_gate.dart';
 // Cutover tooling (#553 Phase 1) — removed by #556.
 import 'cutover/converge_verify/converge_verify_screen.dart';
 import 'screens/enrolment/enrolment_ceremony_screen.dart';
@@ -29,15 +28,47 @@ import 'screens/inbox/inbox_clarify_screen.dart';
 import 'screens/search/search_screen.dart';
 import 'screens/shutdown/shutdown_ritual_screen.dart';
 
-/// Creates the router redirect function with a configurable [swsMode] flag.
+/// Creates the router redirect function with a configurable [swsMode] flag and
+/// session [gate].
 ///
-/// The production router uses [appRouterRedirect] which bakes in the
-/// [isSwsMode] compile-time constant. This factory lets tests simulate SWS
-/// mode without requiring a separate build flavour.
-GoRouterRedirect buildAppRouterRedirect({bool swsMode = isSwsMode}) =>
+/// The production router uses [appRouterRedirect], which bakes in the
+/// [isSwsMode] compile-time constant and the live [sessionGateNotifier]. This
+/// factory lets tests drive both without a build flavour and without a
+/// `ProviderScope`.
+GoRouterRedirect buildAppRouterRedirect({
+  bool swsMode = isSwsMode,
+  ValueListenable<SessionGate>? gate,
+}) =>
     (context, state) {
+      // In SWS mode the wallet is the identity — there is no email signup, so
+      // /register is meaningless. Bounce any stale deep link / nav entry back to
+      // /login where the "Connect wallet" flow lives.
       if (swsMode && state.matchedLocation == '/register') return '/login';
-      return null;
+
+      // Onboarding is one decision, taken here rather than by each screen's
+      // success handler: sign-in and sign-up both just `go('/inbox')` and this
+      // routes them, a deep link cannot skip enrolment, and a cold start that
+      // restores a half-founded session lands straight on the resume controls.
+      switch ((gate ?? sessionGateNotifier).value) {
+        case SessionGate.checking:
+          // Nothing is known yet; guessing would flash onboarding at an
+          // enrolled device.
+          return null;
+        case SessionGate.needsEnrolment:
+          return state.matchedLocation == EnrolmentCeremonyScreen.routePath
+              ? null
+              : EnrolmentCeremonyScreen.routePath;
+        case SessionGate.signedOut:
+        case SessionGate.ready:
+          // The screen has no reason to exist for either: a signed-out device
+          // has no account to enrol against, and an enrolled one is done.
+          return state.matchedLocation == EnrolmentCeremonyScreen.routePath
+              ? '/inbox'
+              : null;
+      }
+      // Unauthenticated users are deliberately *not* forced to /login: the app
+      // is fully usable local-only, so signing out from Settings stays on
+      // Settings and /login is always something the user can back out of.
     };
 
 /// Top-level redirect callback used by [appRouter].
@@ -45,27 +76,15 @@ GoRouterRedirect buildAppRouterRedirect({bool swsMode = isSwsMode}) =>
 /// Exported as a named symbol so router unit tests can wire up a stub-route
 /// router with the real redirect logic, catching regressions without needing
 /// every screen's provider dependencies.
-FutureOr<String?> appRouterRedirect(BuildContext context, GoRouterState state) {
-  // In SWS mode the wallet is the identity — there is no email signup, so
-  // /register is meaningless. Bounce any stale deep link / nav entry back to
-  // /login where the "Connect wallet" flow lives.
-  if (isSwsMode && state.matchedLocation == '/register') {
-    return '/login';
-  }
-  // We intentionally do NOT force unauthenticated users to /login: the app
-  // is fully usable in local-only mode (logout() reassigns rows back to the
-  // 'local' user), so:
-  //   - signing out from Settings should stay on Settings
-  //   - a user on /login must be able to back out to /inbox and use the app
-  //     without creating an account
-  // /login remains reachable from Settings → "Sign in to sync" whenever the
-  // user does want to sync.
-  return null;
-}
+final GoRouterRedirect appRouterRedirect = buildAppRouterRedirect();
 
 final appRouter = GoRouter(
   initialLocation: '/inbox',
   redirect: appRouterRedirect,
+  // Without this the gate would only be consulted on the next navigation, so a
+  // sign-in from Settings would leave the user sitting on Settings with
+  // onboarding unfinished.
+  refreshListenable: sessionGateNotifier,
   routes: [
     GoRoute(
       path: '/login',

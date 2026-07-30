@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/screens/enrolment/enrolment_ceremony_runner.dart';
 import 'package:jeeves/screens/enrolment/enrolment_ceremony_screen.dart';
 import 'package:jeeves/services/secure_screen.dart';
@@ -553,6 +554,33 @@ void main() {
     expect(error, isNot(contains('did not open the escrow')));
   });
 
+  testWidgets('sign out is one tap away, because the router pins this screen',
+      (tester) async {
+    final logouts = <int>[];
+    tester.view.physicalSize = const Size(1200, 4000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          enrolmentCeremonyRunnerProvider.overrideWithValue(
+            _StubRunner([_status(EnrolmentState.notEnrolled)]),
+          ),
+          authTokenProvider.overrideWith(() => _RecordingAuthNotifier(logouts)),
+        ],
+        child: const MaterialApp(home: EnrolmentCeremonyScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('enrolment_sign_out')));
+    await tester.pumpAndSettle();
+
+    // The ordinary logout path, not a ceremony-specific shim: it is the only way
+    // off a session the user does not want, and the fresh-signup route.
+    expect(logouts, hasLength(1));
+  });
+
   testWidgets('a state that could not be read is reported, not blank',
       (tester) async {
     // Through `_pump` for its tall viewport: on the default surface the generate
@@ -566,6 +594,18 @@ void main() {
     );
     expect(find.byKey(const Key('enrolment_generate_button')), findsNothing);
   });
+}
+
+class _RecordingAuthNotifier extends AuthNotifier {
+  _RecordingAuthNotifier(this.logouts);
+
+  final List<int> logouts;
+
+  @override
+  Future<String?> build() async => 'session.jwt.token';
+
+  @override
+  Future<void> logout() async => logouts.add(logouts.length);
 }
 
 class _ThrowingRunner implements EnrolmentCeremonyRunner {

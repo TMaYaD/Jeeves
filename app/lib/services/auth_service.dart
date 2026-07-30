@@ -134,16 +134,6 @@ class AuthService {
     } catch (_) {}
     await clearTokens();
   }
-
-  /// Check whether the server has any todos for the current authenticated user.
-  Future<bool> serverHasTodos() async {
-    try {
-      final todos = await _api.getList('/todos/');
-      return todos.isNotEmpty;
-    } catch (_) {
-      return false;
-    }
-  }
 }
 
 final authServiceProvider = Provider<AuthService>((ref) {

@@ -40,13 +40,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             _passwordController.text,
           );
       if (!mounted) return;
-      // Pop back to the caller (e.g. Settings) if we were pushed on top of
-      // an existing route. Otherwise navigate to the app home.
-      if (context.canPop()) {
-        context.pop();
-      } else {
-        context.go('/inbox');
-      }
+      // Never a pop back to the caller: a brand-new account is by definition
+      // un-enrolled, and the router's session gate takes it to onboarding from
+      // here.
+      context.go('/inbox');
     } on DioException catch (e) {
       if (!mounted) return;
       setState(() {
