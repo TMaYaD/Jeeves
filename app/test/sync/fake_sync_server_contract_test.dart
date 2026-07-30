@@ -1485,6 +1485,19 @@ void main() {
       );
     });
 
+    test('content at a future epoch is refused', () async {
+      // The ceiling, and it is as load-bearing as the floor: an epoch the Workspace
+      // has not rotated to has no wrap set, so the op could never be opened by
+      // anyone — it would sit in the log as a guaranteed alarm on every puller.
+      await rotate([author]);
+      await expectLater(
+        session.postOps(workspaceId, [
+          await author.nextEnvelope(workspaceId, keyEpoch: 4096),
+        ]),
+        throwsStatus(409, 'key_epoch_unknown'),
+      );
+    });
+
     test('an unkeyed workspace refuses no epoch', () async {
       // There is no epoch to be stale against, and content at epoch 0 is exactly what
       // a pre-turn-on Workspace writes.

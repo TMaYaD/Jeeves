@@ -455,6 +455,24 @@ class SyncClient {
     final workspaceKey = opClass == opClassControl
         ? null
         : await workspaceKeys.keyFor(workspaceId, keyEpoch);
+    if (workspaceKey == null && opClass != opClassControl && keyEpoch > 0) {
+      // **A missing key is never permission to emit plaintext.** Above epoch 0 the
+      // epoch exists only because a `rotate` created it, and a rotate commits to a
+      // wrap set before it is authored — so "no key at epoch >= 1" is always a
+      // delivery gap on this device, never a legitimately unkeyed epoch. Sealing is
+      // still a fact about the epoch rather than a mode; this is the one case where
+      // the fact cannot be read off the key alone. Authoring `plaintext_v1` here
+      // would put the user's content on the server in the clear at an epoch that is
+      // supposed to be encrypted, and every peer holding the key would refuse it as
+      // `plaintext_at_encrypted_epoch` — a silent divergence where the capture
+      // looks saved locally and reaches nobody. Refusing is loud and heals: the
+      // pull tail fetches the wrap and the next capture seals.
+      throw SyncRejection(
+        SyncRejectionReason.missingEpochKey,
+        'refusing to author at key_epoch $keyEpoch without K_{w,$keyEpoch}: the '
+        'epoch is keyed and this device does not hold its key yet',
+      );
+    }
     final chain = await _authorChain();
     final header = OpHeader(
       workspaceId: workspaceId,
@@ -747,8 +765,14 @@ class SyncClient {
     // freshness race F14b names (the wraps PUT landing moments after the rotate op)
     // resolves on the next pull rather than as a mystery decryption failure.
     if (_epochKeyRefreshRequired || await _hasOpsAwaitingEpochKeys()) {
-      _epochKeyRefreshRequired = false;
       await refreshEpochKeys();
+      // Cleared only once the fetch has actually happened. A rotate can raise this
+      // flag while nothing is quarantined yet — no content at the new epoch has
+      // arrived — so clearing it before a fetch that then fails on transport would
+      // leave neither the flag nor a quarantine row to trigger the next attempt,
+      // and this device would sit keyless at a keyed epoch until unrelated traffic
+      // happened to quarantine something.
+      _epochKeyRefreshRequired = false;
       // Unconditional on what the fetch learned: a key can also have arrived through
       // the escrow path (an enrolling device adopting the history), and gating the
       // release on *this* fetch having learned something would leave those ops

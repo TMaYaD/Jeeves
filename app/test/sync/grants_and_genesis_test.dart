@@ -621,6 +621,17 @@ void main() {
       // raised it from writing at all. An ordinary `capture()` picks up the
       // current epoch, so it clears every floor it is itself subject to —
       // otherwise the first rotation would be an outage for its own author.
+      //
+      // The epoch key is part of the setup rather than decoration: a floor above
+      // zero exists only where a `rotate` put it, and a rotation leaves its author
+      // holding `K_{w,toEpoch}`. Authoring at a keyed epoch *without* the key is
+      // refused rather than downgraded to plaintext, so a bare raise is a state
+      // production cannot reach.
+      final epochKey =
+          Uint8List.fromList(List<int>.generate(workspaceKeyBytes, (index) => index + 7));
+      for (final device in [workspace.a, workspace.b]) {
+        await device.workspaceKeys.remember(workspace.workspaceId, 7, epochKey);
+      }
       await workspace.a.client.raiseEpochFloor(7);
       await workspace.a.client.capture(
         collection: _harnessCollection,
@@ -629,6 +640,12 @@ void main() {
       );
       final authored = await workspace.a.client.authoredEnvelopes();
       expect(OpHeader.parse(splitEnvelope(authored.last).header).keyEpoch, 7);
+      expect(
+        OpHeader.parse(splitEnvelope(authored.last).header).suite,
+        suiteAeadV1,
+        reason: 'sealing is a fact about the epoch: the key is held, so the op is '
+            'sealed under it',
+      );
 
       // And it converges: the op is authored at an epoch every peer accepts.
       await workspace.syncAll();

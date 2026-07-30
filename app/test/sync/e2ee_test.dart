@@ -301,6 +301,48 @@ void main() {
         SyncRejectionReason.plaintextAtEncryptedEpoch.code,
       );
     });
+
+    test('a Device without the epoch key refuses to author rather than downgrade',
+        () async {
+      // The *write* half of the one-way rule, and the reason it cannot be left to
+      // the read boundary above: a device whose wrap has not arrived would
+      // otherwise put the user's content on the server in the clear at an epoch
+      // that is supposed to be encrypted, and every peer holding the key would
+      // refuse it — a capture that looks saved here and reaches nobody.
+      final workspace = await SimWorkspace.create(deviceCount: 1);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      await a.enrolment.turnOnEncryption(passphrase: workspace.passphrase);
+      await a.sync();
+      final before = _contentOps(workspace.server, workspace.workspaceId).length;
+
+      // The rotation window: the floor stands at the new epoch and this device
+      // does not hold its key. Reached here by dropping the key, and reachable in
+      // production whenever the wraps PUT has not landed yet.
+      await a.workspaceKeys.clear(workspace.workspaceId);
+      expect(await a.client.epochFloor(), 1);
+
+      await expectLater(
+        a.client.capture(
+          collection: _collection,
+          entityId: _entityId('keyless'),
+          fields: {'title': '$_marker-keyless'},
+        ),
+        throwsA(
+          predicate<Object>(
+            (error) =>
+                error is SyncRejection &&
+                error.reason == SyncRejectionReason.missingEpochKey,
+            'a missing_epoch_key rejection',
+          ),
+        ),
+      );
+      expect(
+        _contentOps(workspace.server, workspace.workspaceId),
+        hasLength(before),
+        reason: 'nothing was authored, so nothing plaintext reached the server',
+      );
+    });
   });
 
   group('revoke and rotate', () {
