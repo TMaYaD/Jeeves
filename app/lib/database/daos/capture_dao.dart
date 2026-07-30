@@ -227,7 +227,7 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   /// afresh.
   Future<void> stampClarified(String id, {DateTime? at}) async {
     final ts = (at ?? DateTime.now()).toUtc();
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       // The stamp is conditional on the row being unstamped, so the op is
       // captured only when the write actually moved it — otherwise a repeat
       // call would author an op that re-asserts the original moment.
@@ -250,7 +250,7 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
         );
       }
       attachedDatabase.notifyCapturesViewWrite();
-    }));
+    });
   }
 
   /// Reverse a stamp (Ceremony Back / in-session undo): return the Capture to
@@ -522,10 +522,10 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
     String tagId,
     String userId,
   ) async {
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       await _deleteHintsOfType(captureId, 'project');
       await assignTagHint(captureId, tagId, userId);
-    }));
+    });
   }
 
   /// Drop the Capture's project-typed tag hint, if any.

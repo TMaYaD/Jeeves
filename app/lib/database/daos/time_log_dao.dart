@@ -32,7 +32,7 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       // Resolve the Outcome's current Action *inside* the transaction so a
       // concurrent supersede between resolve and insert cannot mis-attribute,
       // and so attributing to a planned/terminated row is impossible by
@@ -66,7 +66,7 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         startedAtIso: ts.toIso8601String(),
         focusSessionId: focusSessionId,
       );
-    }));
+    });
   }
 
   /// A stint's full field set — the create assertion every peer builds the row
@@ -114,7 +114,7 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<void> closeLog({required String taskId, DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final open = await (select(timeLogs)
             ..where((t) => t.taskId.equals(taskId) & t.endedAt.isNull()))
           .get();
@@ -124,7 +124,7 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
       for (final row in open) {
         captureLogClosed(row.id, ts);
       }
-    }));
+    });
   }
 
   /// Stream that emits the currently-open log, or null.

@@ -62,7 +62,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
     final newId = uuid.v4();
 
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       // Single-open-session invariant (ADR-0020): never auto-close a prior
       // session — that would silently destroy it without recording Review
       // dispositions. Refuse to open a second session; the UI gates on this by
@@ -129,7 +129,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           },
         );
       }
-    }));
+    });
 
     return newId;
   }
@@ -141,7 +141,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   Future<void> closeSession({required String sessionId, DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
 
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
@@ -160,7 +160,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         entityId: sessionId,
         fields: {'ended_at': ts, 'current_task_id': null},
       );
-    }));
+    });
   }
 
   /// Close every open log attributed to [sessionId], capturing an `ended_at`
@@ -202,7 +202,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
 
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
@@ -259,7 +259,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         entityId: sessionId,
         fields: {'current_task_id': taskId},
       );
-    }));
+    });
   }
 
   /// Stream that emits the currently open session, or null.
@@ -387,7 +387,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     // the time logs) pass through opaque and keep [ts].
     final tsCanonical = encodeInstant(tsInstant)!;
 
-    await attachedDatabase.capturing(() => transaction(() async {
+    await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
             ..where((s) => s.id.equals(sessionId) & s.endedAt.isNull()))
           .getSingleOrNull();
@@ -550,7 +550,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         entityId: sessionId,
         fields: {'ended_at': ts, 'current_task_id': null},
       );
-    }));
+    });
   }
 
   /// Returns the task IDs with [disposition] = 'rollover' from the most
