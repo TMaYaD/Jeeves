@@ -176,38 +176,62 @@ Future<ImportResult> importNirvanaLocally({
             : <String>{};
         final personTagsChanged = existingPersonNames != incomingPersonNames;
 
+        // One read serves both decisions below: whether this is a first import
+        // or a re-import, and which lastClarifiedAt to carry forward.
+        final existingRow = await (db.select(db.todos)
+              ..where((t) => t.id.equals(todoId)))
+            .getSingleOrNull();
+
         // Preserve lastClarifiedAt when unchanged; stamp now on any mutation
         // (both additions and removals count as clarification events).
-        DateTime? computedLastClarifiedAt;
-        if (personTagsChanged) {
-          computedLastClarifiedAt = now.toUtc();
-        } else {
-          final existingRow = await (db.select(db.todos)
-                ..where((t) => t.id.equals(todoId)))
-              .getSingleOrNull();
-          computedLastClarifiedAt = existingRow?.lastClarifiedAt;
-        }
+        final DateTime? computedLastClarifiedAt = personTagsChanged
+            ? now.toUtc()
+            : existingRow?.lastClarifiedAt;
 
-        await db.into(db.todos).insert(
-              TodosCompanion(
-                id: Value(todoId),
-                title: Value(item.name),
-                notes: Value(item.notes),
-                doneAt: item.doneAt != null
-                    ? Value(item.doneAt!.toUtc().toIso8601String())
-                    : const Value(null),
-                clarified: Value(item.clarified),
-                dueDate: Value(dueDate),
-                timeEstimate: Value(item.timeEstimate),
-                energyLevel: Value(item.energyLevel),
-                lastClarifiedAt: Value(computedLastClarifiedAt),
-                captureSource: const Value('nirvana_import'),
-                userId: Value(userId),
-                createdAt: Value(now),
-                updatedAt: Value(now),
-              ),
-              mode: InsertMode.insertOrReplace,
-            );
+        // The columns the export owns, written on both the insert and the
+        // update path. Everything absent here is deliberately left to the
+        // insert path's defaults or, on a re-import, to whatever the user has
+        // since made it.
+        final exportOwnedColumns = TodosCompanion(
+          title: Value(item.name),
+          notes: Value(item.notes),
+          doneAt: item.doneAt != null
+              ? Value(item.doneAt!.toUtc().toIso8601String())
+              : const Value(null),
+          clarified: Value(item.clarified),
+          dueDate: Value(dueDate),
+          timeEstimate: Value(item.timeEstimate),
+          energyLevel: Value(item.energyLevel),
+          lastClarifiedAt: Value(computedLastClarifiedAt),
+          captureSource: const Value('nirvana_import'),
+          userId: Value(userId),
+          updatedAt: Value(now),
+        );
+
+        // Update in place rather than INSERT OR REPLACE (issue #641). REPLACE
+        // is delete-then-insert in SQLite, so every column the companion omits
+        // is re-defaulted: `intent` back to 'next', and `priority`,
+        // `location_id` and `last_next_action_completion_at` back to NULL —
+        // silently undoing the user's own later edits on every re-import. It
+        // also re-stamped `created_at`, and would fire the declared
+        // ON DELETE CASCADE onto the Outcome's Actions and capture_outcomes
+        // provenance wherever foreign-key enforcement is on. An update touches
+        // only the columns the export actually carries.
+        if (existingRow == null) {
+          await db.into(db.todos).insert(
+                exportOwnedColumns.copyWith(
+                  id: Value(todoId),
+                  // The next/waiting bucket state, stated outright rather than
+                  // leaned on the column default — the maybe/trash buckets are
+                  // applied through TodoDao below.
+                  intent: Value(Intent.next.value),
+                  createdAt: Value(now),
+                ),
+              );
+        } else {
+          await (db.update(db.todos)..where((t) => t.id.equals(todoId)))
+              .write(exportOwnedColumns);
+        }
 
         if (personTagsChanged) {
           await _deletePersonTagLinksForTodo(db, todoId);

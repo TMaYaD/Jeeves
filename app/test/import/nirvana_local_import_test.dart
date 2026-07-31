@@ -8,7 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/import/nirvana_local_import.dart';
 import 'package:jeeves/import/nirvana_parser.dart' show ParseError;
-import 'package:jeeves/sync/collection_codecs.dart' show tagsCollection;
+import 'package:jeeves/sync/collection_codecs.dart'
+    show tagsCollection, todosCollection;
 import 'package:jeeves/sync/domain_op_capture.dart'
     show RecordingDomainOpCapture;
 
@@ -336,6 +337,29 @@ void main() {
       expect(junctions.length, 1);
     });
 
+    test('re-import preserves createdAt on an already-imported task (#641)',
+        () async {
+      final bytes = _fixtureBytes('nirvana_sample.csv');
+      Future<void> run() => importNirvanaLocally(
+            bytes: bytes,
+            filename: 'nirvana_sample.csv',
+            format: 'csv',
+            userId: _userId,
+            db: db,
+          );
+
+      await run();
+      final before = (await db.select(db.todos).get())
+          .firstWhere((t) => t.title == 'Read the Book');
+
+      await run();
+
+      final after = (await db.select(db.todos).get())
+          .firstWhere((t) => t.title == 'Read the Book');
+      expect(after.createdAt, before.createdAt,
+          reason: 'an update in place must not re-stamp created_at');
+    });
+
     test('latin-1 bytes are decoded without error', () async {
       // Build a minimal CSV with a latin-1 encoded character (é = 0xE9)
       final latin1Bytes = Uint8List.fromList([
@@ -524,6 +548,111 @@ void main() {
     });
   });
 
+  // Issue #641 — a re-import repairs the user's data instead of destroying it.
+  // Pre-fix the todos write was INSERT OR REPLACE with a companion that omitted
+  // four columns, so every re-import snapped them back to their defaults.
+  group('importNirvanaLocally — re-import preserves the user\'s later edits',
+      () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() => db.close());
+
+    /// A single clarified Next task; its CSV id (and so its todo id) is
+    /// derived from the name, so a second run lands on the same row.
+    const csv =
+        'TYPE,NAME,STATE,COMPLETED,NOTES,TAGS,TIME,ENERGY,WAITINGFOR,DUEDATE,PARENT\n'
+        'Task,Ship the thing,Next,,,,,,,,\n';
+
+    Future<void> runImport(GtdDatabase db) => importNirvanaLocally(
+          bytes: _bytes(csv),
+          filename: 'test.csv',
+          format: 'csv',
+          userId: _userId,
+          db: db,
+        );
+
+    /// Imports once and returns the id of the single resulting todo row.
+    Future<String> importOnce(GtdDatabase db) async {
+      await runImport(db);
+      return (await db.select(db.todos).get()).single.id;
+    }
+
+    Future<Todo> reloadTodo(GtdDatabase db, String todoId) =>
+        (db.select(db.todos)..where((t) => t.id.equals(todoId))).getSingle();
+
+    test('a locally demoted intent survives a re-import', () async {
+      final todoId = await importOnce(db);
+      expect((await reloadTodo(db, todoId)).intent, 'next');
+
+      // The user demotes it to Someday/Maybe through the real DAO.
+      await db.todoDao.deferTaskToMaybe(todoId);
+
+      await runImport(db);
+
+      expect((await reloadTodo(db, todoId)).intent, 'maybe',
+          reason: 're-import must not snap intent back to the default');
+    });
+
+    test('a locally set priority survives a re-import', () async {
+      final todoId = await importOnce(db);
+
+      await (db.update(db.todos)..where((t) => t.id.equals(todoId)))
+          .write(const TodosCompanion(priority: Value(3)));
+
+      await runImport(db);
+
+      expect((await reloadTodo(db, todoId)).priority, 3);
+    });
+
+    test('a locally set locationId survives a re-import', () async {
+      final todoId = await importOnce(db);
+
+      await (db.update(db.todos)..where((t) => t.id.equals(todoId)))
+          .write(const TodosCompanion(locationId: Value('location-1')));
+
+      await runImport(db);
+
+      expect((await reloadTodo(db, todoId)).locationId, 'location-1');
+    });
+
+    test('a recorded lastNextActionCompletionAt survives a re-import',
+        () async {
+      final todoId = await importOnce(db);
+
+      // In production the focus-session review stamps this column; the write
+      // itself is what a re-import must not undo.
+      final stampedAt = DateTime.utc(2026, 7, 30, 9, 15);
+      await (db.update(db.todos)..where((t) => t.id.equals(todoId))).write(
+        TodosCompanion(lastNextActionCompletionAt: Value(stampedAt)),
+      );
+
+      await runImport(db);
+
+      expect((await reloadTodo(db, todoId)).lastNextActionCompletionAt,
+          stampedAt);
+    });
+
+    test('a re-import still refreshes the columns the export owns', () async {
+      final todoId = await importOnce(db);
+
+      // Local drift on an export-owned column is expected to be overwritten:
+      // the export is the source of truth for title, notes and the rest.
+      await (db.update(db.todos)..where((t) => t.id.equals(todoId)))
+          .write(const TodosCompanion(title: Value('stale title')));
+
+      await runImport(db);
+
+      expect((await reloadTodo(db, todoId)).title, 'Ship the thing');
+    });
+
+    test('a fresh import sets intent explicitly, not by column default',
+        () async {
+      final todoId = await importOnce(db);
+      expect((await reloadTodo(db, todoId)).intent, 'next');
+    });
+  });
+
   // T5 — the import is one capturing scope: the whole file is one transaction,
   // emission is post-commit, and a mid-apply failure rolls the rows back and
   // authors no ops. Pre-fix the import's bare `transaction` let each DAO call's
@@ -553,9 +682,11 @@ void main() {
         db: db,
       );
       // The project tag goes through TagDao, so it authors a coalesced `tags`
-      // op; the raw todo/todo_tags inserts describe none (the #610 gap, out of
-      // scope here).
+      // op; the raw todo/todo_tags writes describe none (the #610 gap, out of
+      // scope here). The second expectation pins that gap so #641's switch
+      // from INSERT OR REPLACE to update-in-place stays op-neutral.
       expect(capture.forCollection(tagsCollection), hasLength(1));
+      expect(capture.forCollection(todosCollection), isEmpty);
     });
 
     test('a mid-apply failure rolls back every row and authors no op', () async {

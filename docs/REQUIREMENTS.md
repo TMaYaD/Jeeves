@@ -129,6 +129,10 @@ To build a hybrid productivity application that merges the rigid organizational 
 
   JSON exports carry state ints rather than literals: the recognised (clarified) set is `{1–7, 9, 10}`, of which `{3, 4, 5, 9, 10}` map to Maybe and `{6}` to Trash, with auto-tags 3 → `@scheduled`, 9 → `@repeating`, 10 → `@reference`; 0 and unrecognised ints fall to the Inbox row above.
 
+  Re-importing the same export is safe to repeat. Item ids are deterministic, so a second run lands on the rows the first run wrote and updates them in place rather than replacing them. It refreshes only what the export owns — title, notes, `done_at`, `clarified`, due date, time estimate, energy level, `capture_source` — while the user's own later edits survive untouched: `priority`, `location_id`, `last_next_action_completion_at`, and `created_at`. A Capture the user has since clarified likewise keeps its `clarified_at` and its provenance links instead of being pushed back to the Inbox.
+
+  `intent` survives in one direction only. A row the export buckets into Next or Waiting is left at whatever `intent` the user has since given it, so a locally demoted Outcome stays demoted. A row the export buckets into Maybe or Trash is re-bucketed there on every run, so a local promotion of such a row back to Next does not survive a re-import — a known asymmetry, not a deliberate ownership rule.
+
 ---
 
 ## 4. Prioritization Roadmap
