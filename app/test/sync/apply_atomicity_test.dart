@@ -629,6 +629,8 @@ void main() {
       final marked = await _reArmMarked(a);
       expect(marked.map((row) => row.authorMemberId).toSet(), {pruner.memberId},
           reason: 'only the prune winner is marked; the attested author is not');
+      expect(marked, hasLength(1),
+          reason: 'exactly one row carries the durable marker');
 
       // The rollback left both the prune winner and the attested author's
       // successor unreleased claimants — the state the recovery pull must clear.
@@ -636,18 +638,38 @@ void main() {
       expect(stranded.map((row) => row.authorMemberId).toSet(),
           {pruner.memberId, subject.memberId},
           reason: 'the prune and the attested successor are both stranded');
+      expect(stranded, hasLength(2),
+          reason: 'exactly one stranded claimant per author, no duplicates');
 
       // The conclusion the review draws — "the subject is never retried" — does not
       // follow: the prune author IS marked, and re-driving its scan re-applies the
       // prune, whose attested-author loop re-releases the subject. The server
       // re-serves nothing (the cursor is already past every seq), so the re-arm is
       // the only thing that can drive this.
+      //
+      // The recovery pull is driven on the *same* client rather than a reopened
+      // one. Reopening (`SimDevice.reopenSyncStore`) hands the new `SyncClient` a
+      // fresh, empty `MemberDirectory` (see the file-level doc comment above: "a
+      // real relaunch rebuilds no peer directory") — fine for the self-authored
+      // #618/#620 cases, but `pruner` and `subject` are peers here, learned only
+      // via `_enrolPeer`'s live pull. A reopened client would have no record of
+      // their keys, and the attested-author loop's envelope verification would
+      // reject with `memberNotChainedToRoot` instead of recovering. Proving the
+      // durable-marker path (`_authorsWithInterruptedChainReplay`) rather than the
+      // transient `_chainSuccessorReplayRetryRequired` flag would need the harness
+      // to rehydrate the peer directory on reopen, which it does not currently do.
       faults.disarm();
       await a.client.pull();
       expect(await a.client.quarantined(includeReleased: false), isEmpty,
           reason: 'the prune-author re-drive re-released the attested author');
       expect(await _reArmMarked(a), isEmpty,
           reason: 'a clean scan clears the marker');
+      final attested = await _attestations(a);
+      expect(
+        attested.map((row) => (row.authorMemberId, row.authorSeq)).toSet(),
+        hasLength(attested.length),
+        reason: 'no duplicate attestation for the recovered subject position',
+      );
     });
 
     test('a standing fork never carries the marker, so repeated pulls do not '
