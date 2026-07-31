@@ -19,11 +19,17 @@
 # rather than falling through into whichever ruff/mypy/pytest happens to sit
 # on the outer PATH (#539).
 #
-# The backend cases run under BOTH `sh` and `zsh`, because that difference is
-# the whole substance of #539: a failed `. .venv/bin/activate` aborts the
-# script under bash/dash but is NON-FATAL under zsh, where execution falls
-# through to unactivated tools and can still reach `exit 0`. A suite that only
-# exercised `sh` would go green while the reported bug was still live.
+# The backend cases run under EVERY shell available, not just one. Git executes
+# the hook through the `#!/bin/sh` in its shebang, so `sh` is the production
+# path; `bash` and `zsh` are deliberate cross-shell compatibility coverage. That
+# breadth is the substance of #539, because a bare `. .venv/bin/activate` fails
+# two different ways: in POSIX mode (`sh`, dash) `.` is a special builtin, so the
+# failure exits the script — the unguarded hook already returned non-zero there,
+# and the guard is what makes the message actionable. Under `zsh` and plain
+# `bash` the same failure is non-fatal, so the unguarded hook fell through to
+# unactivated tools and, when those resolve on the outer PATH, reached `exit 0`
+# and let the commit proceed unchecked. An `sh`-only suite would go green on
+# that fall-through.
 #
 # Usage: ./test-pre-commit-hook.sh
 set -uo pipefail
@@ -174,9 +180,12 @@ stage_backend_change() {
   git -C "${target_repo}" add -A
 }
 
-# Stub ruff/mypy/pytest that all pass. A real toolchain isn't available in CI
-# and installing one would make these tests slow and network-dependent; what's
-# under test is the prerequisite check, not the linters themselves.
+# Stub ruff/mypy/pytest that all pass. What's under test here is the hook's
+# prerequisite resolution, not the linters: these stubs are the *control* that
+# makes the guard the only variable. Real tools would defeat that — a genuine
+# ruff failure is indistinguishable from the guard firing, so the negative cases
+# below could no longer prove which one stopped the hook. Whether ruff/mypy/pytest
+# themselves pass is covered for real by the backend-ci lint and test jobs.
 write_passing_tool_stubs() {
   local bin_dir="$1"
   mkdir -p "${bin_dir}"
@@ -205,16 +214,22 @@ ACTIVATE
 OUTER_TOOLS="${WORK}/outer-tools"
 write_passing_tool_stubs "${OUTER_TOOLS}"
 
-# The interpreters every backend case runs under. zsh is not a nicety here: a
-# failed `. .venv/bin/activate` aborts the script under bash/dash but is
-# non-fatal under zsh, so zsh is the only interpreter where the unguarded
-# source actually reproduces #539's silent success.
+# The interpreters every backend case runs under. `sh` is the production path —
+# git invokes the hook via its `#!/bin/sh` shebang — and covers the POSIX-mode
+# abort. `bash` and `zsh` are cross-shell compatibility coverage, and they earn
+# their place rather than padding the matrix: outside POSIX mode a failed `.` is
+# non-fatal, so they are the interpreters that exercise the fall-through into
+# unactivated tools which reaches `exit 0`. Note `sh` and `bash` are genuinely
+# different runs even where /bin/sh *is* bash, since POSIX mode is what makes
+# the failed source fatal.
 BACKEND_SHELLS="sh"
-if command -v zsh >/dev/null 2>&1; then
-  BACKEND_SHELLS="sh zsh"
-else
-  skip "zsh not on PATH — the interpreter where #539's silent-success path is live goes unexercised"
-fi
+for optional_shell in bash zsh; do
+  if command -v "${optional_shell}" >/dev/null 2>&1; then
+    BACKEND_SHELLS="${BACKEND_SHELLS} ${optional_shell}"
+  else
+    skip "${optional_shell} not on PATH — a non-POSIX-mode interpreter, where #539's fall-through reaches exit 0, goes unexercised"
+  fi
+done
 
 run_backend_hook() {
   # $1 = cwd, $2 = interpreter name, $3 = optional PATH prefix
@@ -237,7 +252,7 @@ assert_backend_guard_fired() {
   if [ "${RC}" -ne 0 ]; then
     ok "${label}: hook exits non-zero (${RC})"
   else
-    bad "${label}: hook exited 0 — 'git commit' would report success and commit nothing (#539)"
+    bad "${label}: hook exited 0 — git would go ahead and commit with the backend checks never having run (#539)"
   fi
   if printf '%s' "${OUT}" | grep -qF 'backend/.venv'; then
     ok "${label}: message names the missing prerequisite (backend/.venv)"

@@ -12,12 +12,16 @@ if git diff --cached --name-only | grep -q "^backend/"; then
     cd backend || exit 1
 
     # backend/.venv is gitignored and only materialized by `uv sync`, so a
-    # freshly created linked worktree does not have one. Check before sourcing:
-    # a failed `. .venv/bin/activate` aborts the script under bash/dash, but is
-    # NON-FATAL under zsh, where execution would fall through to whichever
-    # unactivated ruff/mypy/pytest happens to sit on the outer PATH and could
-    # still reach `exit 0` — a `git commit` that reports success and commits
-    # nothing. Fail loudly and name the fix instead (#539).
+    # freshly created linked worktree does not have one. Check before sourcing,
+    # because the failure mode of a bare `. .venv/bin/activate` is
+    # interpreter-dependent. In POSIX mode — dash, or the /bin/sh this hook's
+    # shebang selects when git runs it — `.` is a special builtin, so a failed
+    # source exits the script: cryptic, but it does stop. Under zsh (and plain
+    # bash) the same failure is NON-FATAL, so execution falls through to
+    # whichever unactivated ruff/mypy/pytest sits on the outer PATH; those
+    # "pass" against the wrong environment and the hook reaches `exit 0`, which
+    # tells git to go ahead and commit with the checks never having run.
+    # Assert the prerequisite explicitly instead (#539).
     if [ ! -f .venv/bin/activate ]; then
         echo "❌ No backend venv found at backend/.venv (needed for ruff/mypy/pytest)."
         echo "   Run 'cd backend && uv sync --extra dev' and retry."
