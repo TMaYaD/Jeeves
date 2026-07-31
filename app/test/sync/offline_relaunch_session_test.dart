@@ -266,14 +266,23 @@ class _Device {
       }),
     ]);
 
-    return _Launch(
+    // Registered before the restore is awaited, not after the test's assertions
+    // pass: the first failing `expect` — the situation these regression tests
+    // exist to produce — would otherwise leave the container and both native
+    // database files open while [close] deletes the directory under them.
+    // [_Launch.end] is idempotent, so the explicit call in the test body and this
+    // one are safe in either order.
+    final launch = _Launch(
       container: container,
       syncStore: syncStore,
       adapter: adapter,
-      // Eager materialisation, exactly as `main.dart` does it: the restore is
-      // what everything downstream waits on.
-      accessToken: await container.read(authTokenProvider.future),
     );
+    addTearDown(launch.end);
+
+    // Eager materialisation, exactly as `main.dart` does it: the restore is what
+    // everything downstream waits on.
+    launch.accessToken = await container.read(authTokenProvider.future);
+    return launch;
   }
 
   void close() => files.deleteSync(recursive: true);
@@ -284,7 +293,6 @@ class _Launch {
     required this.container,
     required this.syncStore,
     required this.adapter,
-    required this.accessToken,
   });
 
   final ProviderContainer container;
@@ -293,7 +301,12 @@ class _Launch {
 
   /// What `authTokenProvider` resolved to — non-null whenever the device stayed
   /// signed in, including on the retained-but-unverified path.
-  final String? accessToken;
+  ///
+  /// Assigned once by [_Device.launch] after teardown is registered, so a restore
+  /// that throws still releases the container and both database files.
+  late final String? accessToken;
+
+  bool _ended = false;
 
   String get userId => container.read(currentUserIdProvider);
   SessionGate get gate => sessionGateNotifier.value;
@@ -329,7 +342,12 @@ class _Launch {
 
   /// Process death: dispose the container (which deactivates the lifecycle) and
   /// release both files before the next launch reopens them.
+  ///
+  /// Idempotent, so the test body may end a launch explicitly before relaunching
+  /// while the registered teardown still guarantees release on a failed assertion.
   Future<void> end() async {
+    if (_ended) return;
+    _ended = true;
     final domainStore = domain;
     final lifecycle = await container.read(syncLifecycleProvider.future);
     await lifecycle?.deactivate();
