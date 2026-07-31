@@ -1083,6 +1083,24 @@ class SyncClient {
       affected.addAll(await _releaseOpsAwaitingEpoch());
       _epochFloorRaised = false;
     }
+    // A chain-successor replay was interrupted by a storage fault mid-release,
+    // so the winner is a claimant again but the cursor has long since moved past
+    // its transport seq — the server will not re-serve it, and re-serving its
+    // predecessor does not re-run the scan (the predecessor is already logged).
+    // Re-arm the scan here, on the same shape as the epoch re-arm above: the
+    // transient flag catches the same-session retry, and the durable
+    // `release_started_at` marker ([_hasInterruptedChainReplay]) is the
+    // restart-safe fallback across process death. Gated so a pull that
+    // interrupted nothing *and* holds no marked row skips the scan — a standing
+    // fork never carries the marker, so this re-runs for interrupted replays
+    // only and re-raises no fork alarm (AC-4).
+    if (_chainSuccessorReplayRetryRequired ||
+        await _hasInterruptedChainReplay()) {
+      _chainSuccessorReplayRetryRequired = false;
+      for (final author in await _authorsWithInterruptedChainReplay()) {
+        affected.addAll(await _releaseChainSuccessors(author));
+      }
+    }
     if (_rebuildRequired) {
       // A control fork resolved during this pull, so the authorization verdicts
       // the content ops applied under are no longer the right ones.
@@ -1922,19 +1940,48 @@ class SyncClient {
         // Nothing at head + 1 chains to the head: a lone refusing claimant ends
         // the scan exactly as it always did.
         if (winner == null) break;
-        // Released *before* re-entry: the loop is driven by the unreleased rows,
-        // and a re-entry that refuses for some later reason must not leave this
-        // claimant to be picked up forever. Losers keep no `released_at` and are
+        final releasing = winner;
+        // Durable re-arm marker, committed as its **own** statement *before* the
+        // replay unit below so a storage fault that rolls the release back cannot
+        // take it with it. Only the winner is ever marked — a fork/mismatch
+        // claimant never reaches here (`winner` is set only for a non-refusing
+        // verdict) — so `release_started_at` names an interrupted replay and
+        // nothing else, which is what keeps the re-arm off a standing fork.
+        await _markReleaseStarted(releasing.id);
+        // Release + re-entry as one **top-level** unit (#620). A storage fault
+        // rolls the `_markReleased` back and keeps the row a claimant, while the
+        // pre-committed marker above survives to re-arm the next pull. Released
+        // *before* re-entry so the loop's unreleased set strictly shrinks and it
+        // still terminates; the winner's own #618 `_receive` transaction nests
+        // under this one as a savepoint. Losers keep no `released_at` and are
         // re-alarmed at most once per iteration — if the winner's re-receive
-        // refuses, the head does not advance and the next iteration sees them
-        // again — and the loop still terminates because the unreleased set at the
-        // contested position strictly shrinks on every pass.
-        await _markReleased(winner.id);
+        // refuses for a *non-storage* reason it returns normally, the head does
+        // not advance, and the next iteration sees them again.
+        try {
+          affected.addAll(await _db.transaction(() async {
+            await _markReleased(releasing.id);
+            return _receive(
+              PulledOp(seq: releasing.seq!, envelope: releasing.envelope),
+            );
+          }));
+        } on SqliteException {
+          // The transaction rolled `_markReleased` back, so the row is a claimant
+          // again and the pre-committed `release_started_at` re-arms the next
+          // pull. A storage fault is about our DB, not the envelope — retrying
+          // the same write in a spin would not help — so it unwinds the whole
+          // scan rather than continuing the loop.
+          _chainSuccessorReplayRetryRequired = true;
+          rethrow;
+        }
         releasedAny = true;
-        affected.addAll(
-          await _receive(PulledOp(seq: winner.seq!, envelope: winner.envelope)),
-        );
       }
+      // A full scan completed with no storage fault (a fault rethrows above and
+      // never reaches here). Every marker still standing on an unreleased row now
+      // belongs to a claimant this pass did not release — a standing fork/gap,
+      // not an in-flight replay — so clear it. This is what keeps the re-arm
+      // predicate off a winner that has since become a fork, so repeated pulls
+      // neither re-run the scan nor re-raise its alarm (AC-4).
+      await _clearReleaseStarted(authorMemberId);
       if (releasedAny) {
         if (!attestationBridged) {
           await _raiseAlarm(
@@ -1992,6 +2039,64 @@ class SyncClient {
   Future<void> _markReleased(int quarantineRowId) async {
     await (_db.update(_db.quarantinedOps)..where((row) => row.id.equals(quarantineRowId)))
         .write(QuarantinedOpsCompanion(releasedAt: Value(_now())));
+  }
+
+  /// Stamp the interrupted-chain-replay re-arm marker on one winner (#620).
+  ///
+  /// Written as its own committed statement *before* the release transaction, so
+  /// a storage fault that rolls the release back leaves this timestamp standing —
+  /// the signal that a replay began and never finished.
+  Future<void> _markReleaseStarted(int quarantineRowId) async {
+    await (_db.update(_db.quarantinedOps)..where((row) => row.id.equals(quarantineRowId)))
+        .write(QuarantinedOpsCompanion(releaseStartedAt: Value(_now())));
+  }
+
+  /// Clear the re-arm marker for every one of [authorMemberId]'s rows that still
+  /// carries it, once a full scan has completed without a storage fault.
+  ///
+  /// After a clean pass, any marked row is either released (its `released_at` is
+  /// set) or a claimant the scan did not release — a standing fork/gap, no longer
+  /// an interrupted replay. Clearing the marker keeps [_hasInterruptedChainReplay]
+  /// from matching it, so the standing-fork steady state never re-runs the scan.
+  Future<void> _clearReleaseStarted(String authorMemberId) async {
+    await (_db.update(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.authorMemberId.equals(authorMemberId) &
+              row.releaseStartedAt.isNotNull()))
+        .write(const QuarantinedOpsCompanion(releaseStartedAt: Value(null)));
+  }
+
+  /// Whether any row is mid-interrupted-replay — the restart-safe half of the
+  /// chain-successor re-arm, counterpart to [_hasOpsAwaitingEpoch].
+  ///
+  /// A row released to a claimant by a rolled-back replay reads
+  /// `released_at IS NULL AND release_started_at IS NOT NULL`. A standing fork
+  /// never carries `release_started_at`, so this stays false for it and the
+  /// re-arm reintroduces none of the churn AC-4 forbids. The `LIMIT 1` gates a
+  /// pull that interrupted nothing out of the scan entirely.
+  Future<bool> _hasInterruptedChainReplay() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.releaseStartedAt.isNotNull())
+          ..limit(1))
+        .get();
+    return rows.isNotEmpty;
+  }
+
+  /// The authors with an interrupted chain-successor replay to retry — the scan
+  /// runs per author, so the re-arm has to know whose chains to re-drive.
+  Future<List<String>> _authorsWithInterruptedChainReplay() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.releaseStartedAt.isNotNull() &
+              row.authorMemberId.isNotNull()))
+        .get();
+    return {for (final row in rows) row.authorMemberId!}.toList();
   }
 
   /// Per-type control verification, in D7's normative order, before anything is
@@ -2719,6 +2824,15 @@ class SyncClient {
   /// only when the floor genuinely rose — a re-served older rotate clamps to a no-op
   /// and must not arm it — and cleared once the scan has run.
   bool _epochFloorRaised = false;
+
+  /// Set when a storage fault rolled a chain-successor replay back this session
+  /// (#620), so the winner is a claimant again with its release unfinished.
+  ///
+  /// The same-session trigger for the re-arm at the end of [pull], mirroring
+  /// [_epochFloorRaised]. The durable [_hasInterruptedChainReplay] marker is the
+  /// restart-safe fallback across process death; this flag saves the read on the
+  /// pull that raised it. Cleared once the re-arm scan has run.
+  bool _chainSuccessorReplayRetryRequired = false;
 
   /// Fetch this Member's KeyWraps and learn every epoch key they carry.
   ///

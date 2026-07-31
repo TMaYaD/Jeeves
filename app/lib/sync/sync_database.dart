@@ -138,6 +138,19 @@ class QuarantinedOps extends Table {
   /// something the user gets to inspect, and the timestamp is what separates
   /// "reordered and converged" from "withheld and still missing".
   DateTimeColumn get releasedAt => dateTime().nullable()();
+
+  /// When a chain-successor release began for the row picked as the winner —
+  /// stamped by `_releaseChainSuccessors` as its own committed statement just
+  /// before it re-receives the winner (#620).
+  ///
+  /// The re-arm marker for an interrupted replay. A storage fault mid-replay
+  /// rolls [releasedAt] back to null but leaves this timestamp standing, so the
+  /// row reads `released_at IS NULL AND release_started_at IS NOT NULL` — "a
+  /// release started that never finished" — and the next pull retries it. Only
+  /// ever set on a winner (a fork/mismatch claimant is never selected as one),
+  /// so the re-arm predicate matches interrupted replays alone, never a
+  /// permanently standing fork.
+  DateTimeColumn get releaseStartedAt => dateTime().nullable()();
 }
 
 /// What the server or an author stands accused of — the per-event vocabulary,
@@ -437,9 +450,11 @@ class SyncDatabase extends _$SyncDatabase {
   /// grants view is derived from and the per-Workspace `epoch_floor` (#549);
   /// v6 turns the documented integrity-alarm upsert key into a constraint; v7
   /// adds the per-account initial-upload marker (#591); v8 adds the prune
-  /// attestations the verified chain floor is built from (#555).
+  /// attestations the verified chain floor is built from (#555); v9 adds
+  /// `quarantined_ops.release_started_at`, the interrupted-chain-replay re-arm
+  /// marker (#620).
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -523,6 +538,17 @@ class SyncDatabase extends _$SyncDatabase {
             // by decree. Every byte of its log, quarantine and reduced state
             // survives untouched.
             await migrator.createTable(prunedAttestations);
+          }
+          if (from < 9) {
+            // One nullable column, no backfill: a null reads as "no release was
+            // ever interrupted for this row", which is exactly right for every
+            // pre-existing quarantine row — the marker only ever names a release
+            // this device itself started and a storage fault cut short. Every
+            // byte of the existing quarantine survives untouched.
+            await migrator.addColumn(
+              quarantinedOps,
+              quarantinedOps.releaseStartedAt,
+            );
           }
         },
       );

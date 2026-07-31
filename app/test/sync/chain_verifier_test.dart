@@ -631,9 +631,12 @@ CREATE TABLE quarantined_ops (
 
     /// The v5 shape of the one table v6 constrains, plus the rows asked for.
     ///
-    /// Only `integrity_alarms` is written: v6 touches nothing else, so a store
-    /// carrying just this table is enough to exercise the leg, and building the
-    /// rest would assert the v5 schema twice.
+    /// `integrity_alarms` is what v6 constrains, so its rows are what the leg
+    /// asserts on. `quarantined_ops` (in its v5 shape — the v4 author/release
+    /// columns already added) is created empty because opening this store at the
+    /// current schema runs *every* later migration step, and v9 adds a column to
+    /// it (#620): a real v5 store always holds this table, so the fixture must
+    /// too, or the upgrade fails on a table only this partial fixture omitted.
     void writeV5Alarms(List<String?> authorMemberIds) {
       final database = raw.sqlite3.open(file.path);
       database.execute('''
@@ -648,6 +651,19 @@ CREATE TABLE integrity_alarms (
   first_detected_at TEXT NOT NULL,
   last_detected_at TEXT NOT NULL,
   resolved_at TEXT
+)''');
+      database.execute('''
+CREATE TABLE quarantined_ops (
+  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL,
+  seq INTEGER,
+  reason TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  envelope BLOB NOT NULL,
+  detected_at TEXT NOT NULL,
+  author_member_id TEXT,
+  author_seq INTEGER,
+  released_at TEXT
 )''');
       for (final authorMemberId in authorMemberIds) {
         database.execute(

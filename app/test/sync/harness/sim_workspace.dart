@@ -9,6 +9,7 @@ library;
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:drift/drift.dart' show QueryInterceptor;
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
@@ -239,6 +240,8 @@ class SimWorkspace {
     SimTimers? timers,
     Duration keepaliveInterval = signalKeepaliveInterval,
     int pullPageLimit = defaultPullPageLimit,
+    QueryInterceptor? aSyncStoreInterceptor,
+    bool fileBacked = false,
   }) async {
     final sharedServer = server ?? FakeSyncServer();
     final sharedClock = clock ?? FakeClock(simulationStartWallMs);
@@ -269,6 +272,13 @@ class SimWorkspace {
           // is all a real user carries from one device to the next.
           passphrase: index == 0 ? null : devices.first.outcome.passphrase,
           random: Random(1000 + index),
+          // Only device A carries an interceptor: the fault-injection cases
+          // stage a storage fault on the enrolled device's own store, and
+          // arming it before its ceremony would fail enrolment's control writes.
+          syncStoreInterceptor: index == 0 ? aSyncStoreInterceptor : null,
+          // File-backed only when a test needs to reopen the store to simulate
+          // process death; memory-backed otherwise, which is cheaper.
+          fileBacked: fileBacked,
         ),
       );
     }

@@ -24,14 +24,17 @@
 @TestOn('!browser')
 library;
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:drift/drift.dart'
     show BooleanExpressionOperators, OrderingTerm, Value;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/compaction.dart';
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
+import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
@@ -98,6 +101,58 @@ Future<void> _fill(SimDevice device, String entityId, {int count = 24}) async {
   }
   await device.sync();
 }
+
+/// The shared entity the chain-successor cases author a peer's stream onto.
+String _replayDocId(SimWorkspace workspace) =>
+    preferenceEntityId(workspace.workspaceId, 'chain-replay-doc');
+
+/// One content op from [peer] carrying `{step: value}` — a peer's stream so a
+/// withheld predecessor can quarantine its successor, the shape the release scan
+/// (and its #620 storage-fault path) exists for.
+Future<Uint8List> _peerOp(
+  SimWorkspace workspace,
+  AuthorFixture peer,
+  Object? value,
+) async {
+  workspace.clock.advance(10);
+  return peer.nextEnvelope(
+    workspace.workspaceId,
+    payloadJson: jsonEncode({
+      'collection': _collection,
+      'id': _replayDocId(workspace),
+      'fields': {
+        'step': {'v': value},
+      },
+      'hlc': [workspace.clock.nowMs, 0, memberIdToHex(peer.memberId)],
+    }),
+  );
+}
+
+/// The reduced value of the shared chain-replay doc on [device].
+Future<Map<String, Object?>?> _replayDoc(SimDevice device, SimWorkspace workspace) =>
+    device.registry.register(_collection).readEntity(_replayDocId(workspace));
+
+/// The quarantine rows on [device]'s live store carrying the #620 interrupted-
+/// replay re-arm marker — the set `_hasInterruptedChainReplay` reads.
+Future<List<QuarantineRow>> _reArmMarked(SimDevice device) =>
+    (device.syncStore.select(device.syncStore.quarantinedOps)
+          ..where((row) => row.releaseStartedAt.isNotNull()))
+        .get();
+
+/// Enrol [peer] into [workspace] and land its registration on device A, leaving
+/// the peer's chain ready at its first content position (author_seq 3).
+Future<FakeSyncServerMemberSession> _enrolPeer(
+  SimWorkspace workspace,
+  AuthorFixture peer,
+) async {
+  final session = await workspace.enrolFixture(peer);
+  await workspace.a.client.pull();
+  return session;
+}
+
+/// One integrity alarm of [kind] on [client], or fails the lookup.
+Future<IntegrityAlarmRow> _alarmOfKind(SyncClient client, IntegrityAlarmKind kind) async =>
+    (await client.integrityAlarms()).firstWhere((alarm) => alarm.kind == kind.code);
 
 void main() {
   late FakeSyncServer server;
@@ -372,6 +427,179 @@ void main() {
         reason: 'divergent bytes at one slot are a genuine double-serve, and the '
             'fix must not silence it',
       );
+    });
+  });
+
+  // #620: a storage fault while re-receiving a released chain successor must not
+  // strand the op. The winner is marked released *before* re-entry so the release
+  // scan terminates, but that is exactly what loses a replay when `_receive`
+  // rethrows a `SqliteException`: the cursor is long past the op's transport seq,
+  // so nothing re-serves it, and re-serving its predecessor does not re-run the
+  // scan (the predecessor is already logged). The fix rolls the release back and
+  // re-arms the next pull off a durable `release_started_at` marker set only for
+  // the winner — never for a standing fork, which keeps AC-4's occurrence
+  // semantics.
+  group('a storage fault mid chain-successor replay stays retryable (#620)', () {
+    // Two chained peer ops, served successor-first so the successor quarantines
+    // as a gap and the predecessor's arrival drives the release scan.
+    Future<void> stageReorderedPair(
+      SimWorkspace workspace,
+      AuthorFixture peer,
+      FakeSyncServerMemberSession peerSession,
+    ) async {
+      final predecessor = await _peerOp(workspace, peer, 'one');
+      final successor = await _peerOp(workspace, peer, 'two');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [predecessor, successor],
+      );
+      workspace.server.serveOrder = [appended[1].seq, appended[0].seq];
+    }
+
+    test('the fault keeps the successor a claimant, and the re-arm — not a '
+        're-served predecessor — replays it (AC#1, AC#3)', () async {
+      final faults = FaultInjectingInterceptor();
+      final workspace = await SimWorkspace.create(
+        deviceCount: 1,
+        server: server,
+        aSyncStoreInterceptor: faults,
+      );
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final peer = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 91)),
+      );
+      final peerSession = await _enrolPeer(workspace, peer);
+      await stageReorderedPair(workspace, peer, peerSession);
+
+      // The predecessor's own `op_log` write is the 1st insert in the pull; the
+      // successor replay's is the 2nd — the write to interrupt.
+      faults.failNthInsertInto('op_log', 2);
+      await expectLater(a.client.pull(), throwsA(isA<SqliteException>()));
+      expect(faults.firedCount, 1, reason: 'the successor replay was interrupted');
+
+      // The rolled-back release left the winner a claimant, marked interrupted.
+      final stranded = await a.client.quarantined(includeReleased: false);
+      expect(stranded, hasLength(1));
+      expect(stranded.single.releasedAt, isNull,
+          reason: 'the transaction rolled `_markReleased` back');
+      final marked = await _reArmMarked(a);
+      expect(
+        marked.map((row) => row.id).toSet(),
+        stranded.map((row) => row.id).toSet(),
+        reason: 'only the interrupted winner carries `release_started_at`',
+      );
+
+      // A subsequent pull that delivers NOTHING new: the cursor is already past
+      // both transport seqs, so the server re-serves neither op. If the fix
+      // leaned on a re-served predecessor re-running the scan, this would strand
+      // the successor for ever — the durable re-arm is what replays it.
+      await a.client.pull();
+
+      expect(await a.client.quarantined(includeReleased: false), isEmpty,
+          reason: 'the re-arm replayed and released the successor');
+      expect(await _reArmMarked(a), isEmpty,
+          reason: 'a clean scan clears the marker');
+      expect(await _replayDoc(a, workspace), {'step': 'two'},
+          reason: 'the successor applied over its predecessor');
+      expect(
+        (await _alarmOfKind(a.client, IntegrityAlarmKind.authorChainGap)).resolvedAt,
+        isNotNull,
+        reason: 'nothing is missing any more',
+      );
+    });
+
+    test('the re-arm marker is durable: an interrupted replay survives a restart '
+        'so a relaunched client re-arms from disk, not a lost in-memory flag',
+        () async {
+      final faults = FaultInjectingInterceptor();
+      final workspace = await SimWorkspace.create(
+        deviceCount: 1,
+        server: server,
+        aSyncStoreInterceptor: faults,
+        fileBacked: true,
+      );
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final peer = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 71)),
+      );
+      final peerSession = await _enrolPeer(workspace, peer);
+      await stageReorderedPair(workspace, peer, peerSession);
+
+      faults.failNthInsertInto('op_log', 2);
+      await expectLater(a.client.pull(), throwsA(isA<SqliteException>()));
+
+      // Process death: reopen the store over the same file. The transient retry
+      // flag dies with the old client, so only the durable marker can re-arm.
+      final reopened = await a.reopenSyncStore();
+      final onDisk = await (a.syncStore.select(a.syncStore.quarantinedOps)
+            ..where((row) =>
+                row.releasedAt.isNull() & row.releaseStartedAt.isNotNull()))
+          .get();
+      expect(onDisk, hasLength(1),
+          reason: '`release_started_at` survived the reopen, so the row still '
+              'reads "a release started that never finished" — the exact '
+              'predicate the next pull re-arms on');
+      expect(onDisk.single.reason, SyncRejectionReason.authorChainGap.code);
+      expect(await reopened.quarantined(includeReleased: false), hasLength(1),
+          reason: 'the reopened client still surfaces the unreleased claimant');
+    });
+
+    test('a standing fork never carries the marker, so repeated pulls do not '
+        're-run the scan or inflate its occurrence count (AC#4)', () async {
+      final workspace = await SimWorkspace.create(deviceCount: 1, server: server);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final peer = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 53)),
+      );
+      final peerSession = await _enrolPeer(workspace, peer);
+
+      // Head at the peer's first content position (author_seq 3).
+      const firstContentSeq = 3;
+      final head = await _peerOp(workspace, peer, 'head');
+      await peerSession.postOps(workspace.workspaceId, [head]);
+      await a.client.pull();
+      final headHash = envelopeHash(head);
+
+      // A successor at author_seq 5 chained to a predecessor at 4 that never
+      // arrives → quarantines as a gap.
+      await _peerOp(workspace, peer, 'never-arrives'); // author_seq 4, withheld
+      final successor = await _peerOp(workspace, peer, 'successor'); // author_seq 5
+      workspace.server.injectUnchecked(workspace.workspaceId, successor);
+      await a.client.pull();
+
+      // A validly signed alternate at author_seq 4 chained to the real head, so
+      // the head advances to 4 and the successor at 5 becomes a *fork* claimant:
+      // its `prev_author_hash` names the never-arriving predecessor, not the
+      // alternate now occupying seq 4.
+      peer.nextAuthorSeq = firstContentSeq + 1;
+      peer.lastEnvelopeHash = headHash;
+      final alternate = await _peerOp(workspace, peer, 'alternate');
+      workspace.server.injectUnchecked(workspace.workspaceId, alternate);
+      await a.client.pull();
+
+      final forkBefore =
+          await _alarmOfKind(a.client, IntegrityAlarmKind.authorChainFork);
+      expect(forkBefore.resolvedAt, isNull, reason: 'the fork stands');
+      expect(await _reArmMarked(a), isEmpty,
+          reason: 'a fork claimant is never selected as a winner, so it is never '
+              'marked — the re-arm predicate cannot match it');
+
+      // Repeated pulls that deliver nothing new must neither re-run the scan nor
+      // re-raise the fork alarm. This fails if the marker were written for a
+      // non-winner, or if the re-arm predicate matched any unreleased gap row.
+      final occurrenceBefore = forkBefore.occurrenceCount;
+      await a.client.pull();
+      await a.client.pull();
+      await a.client.pull();
+      final forkAfter =
+          await _alarmOfKind(a.client, IntegrityAlarmKind.authorChainFork);
+      expect(forkAfter.occurrenceCount, occurrenceBefore,
+          reason: 'the standing fork does not churn: its occurrence count is '
+              'stable across pulls');
+      expect(await _reArmMarked(a), isEmpty);
     });
   });
 }
