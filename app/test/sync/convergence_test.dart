@@ -606,6 +606,129 @@ void main() {
     );
   });
 
+  test('a genesis naming a foreign Root is refused as a root-pk mismatch',
+      () async {
+    // The narrowed half of the certificate-binding family (#580, ADR-0039). The
+    // Root signature here *verifies* — this workspace's own Root signed exactly
+    // these bytes — so the refusal is not about the signature at all: what
+    // disagrees is the `root_pk` inside the signed document. Asserted on the
+    // Quarantine row a real device writes, because that row is the whole
+    // point: it is what a skewed Device has to explain itself with when there
+    // is no server to ask.
+    await workspace.syncAll();
+    final impostor = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 101)),
+    );
+    final root = await workspace.recoverRoot();
+    final foreignRoot = await RootAuthority.generate();
+    workspace.server.injectUnchecked(
+      workspace.workspaceId,
+      await workspaceGenesisEnvelope(
+        device: impostor,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        rootPk: foreignRoot.rootPk,
+        wallMs: workspace.clock.nowMs,
+      ),
+    );
+    root.drop();
+    foreignRoot.drop();
+
+    await workspace.a.sync();
+    expect(
+      (await workspace.a.client.quarantined()).single.reason,
+      SyncRejectionReason.certRootPkMismatch.code,
+    );
+    expect(workspace.a.client.directory.isChained(impostor.memberId), isFalse);
+  });
+
+  test('a certificate naming another Workspace is refused as a cert mismatch',
+      () async {
+    // Not `workspace_mismatch`: the envelope *header* names this Workspace, so
+    // the server served the right log and the accusation is against the
+    // document. Those are two different events with two different remediations,
+    // and until #580 a Quarantine row could not say which had happened.
+    await workspace.syncAll();
+    final newcomer = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 111)),
+    );
+    final root = await workspace.recoverRoot();
+    workspace.server.injectUnchecked(
+      workspace.workspaceId,
+      await memberRegisterEnvelope(
+        device: newcomer,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: workspace.controlChainHead(),
+        wallMs: workspace.clock.nowMs,
+        certificate: RegistrationCertificate(
+          workspaceId: defaultWorkspaceId('somebody-else'),
+          memberId: newcomer.memberId,
+          signPk: newcomer.signPk,
+          kexPk: newcomer.kexPk,
+          registeredAtHlc:
+              Hlc.forMember(newcomer.memberId, workspace.clock.nowMs),
+        ),
+      ),
+    );
+    root.drop();
+
+    await workspace.a.sync();
+    expect(
+      (await workspace.a.client.quarantined()).single.reason,
+      SyncRejectionReason.certWorkspaceMismatch.code,
+    );
+    expect(workspace.a.client.directory.isChained(newcomer.memberId), isFalse);
+  });
+
+  test('a Grant whose certificate disagrees about the granter is refused',
+      () async {
+    // Root signs the certificate and the payload nominates Root, so
+    // `verifyGrantCertificate` passes — `bad_grant_signature` would accuse a
+    // signature nothing is wrong with. Authority rides in the signed bytes; the
+    // payload field only says which key to check them against.
+    await workspace.syncAll();
+    final granter = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 121)),
+    );
+    final root = await workspace.recoverRoot();
+    // The Grant's author has to be in the chain-gated directory, or the envelope
+    // check refuses it as a stranger long before its certificate is read. So the
+    // author registers itself first, honestly, and only the Grant is malformed.
+    final register = await memberRegisterEnvelope(
+      device: granter,
+      workspaceId: workspace.workspaceId,
+      root: root,
+      prevControlHash: workspace.controlChainHead(),
+      wallMs: workspace.clock.nowMs,
+    );
+    workspace.server.injectUnchecked(workspace.workspaceId, register);
+    workspace.server.injectUnchecked(
+      workspace.workspaceId,
+      await grantEnvelope(
+        device: granter,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash:
+            controlPayloadHash(parseBody(splitEnvelope(register).body)),
+        memberId: granter.memberId,
+        wallMs: workspace.clock.nowMs,
+        // `participant`, not `owner`: an owner Grant under a member granter is
+        // refused as `owner_grant_requires_root` at decode, before this check.
+        role: roleParticipant,
+        granter: granter.memberId,
+        authority: granterRoot,
+      ),
+    );
+    root.drop();
+
+    await workspace.a.sync();
+    expect(
+      (await workspace.a.client.quarantined()).single.reason,
+      SyncRejectionReason.certGranterMismatch.code,
+    );
+  });
+
   test('a zero prev_control_hash into a populated chain is a chain break',
       () async {
     await workspace.syncAll();

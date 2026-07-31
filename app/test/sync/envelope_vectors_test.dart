@@ -160,6 +160,12 @@ Future<void> _bindRegistration(
 /// `member_register`, a [GenesisCertificate] for a `workspace_genesis` (which
 /// *embeds* one), a [GrantCertificate], or a [RevokeCertificate].
 ///
+/// `expectedWorkspaceId` is the Workspace this receiver pulled from, so every
+/// Root-signed document's own `workspace_id` can be compared against it. That
+/// comparison is *not* the header check — a header naming another Workspace
+/// accuses the server, a certificate naming one is a forged document — so it
+/// refuses as `cert_workspace_mismatch` and never as `workspace_mismatch`.
+///
 /// Everything needing receiver **state** is deliberately absent, because a vector
 /// cannot carry it: the position rule, the chain rule against what has been
 /// applied, an unmaterialised grantee, a Service grant into the preferences
@@ -170,6 +176,7 @@ Future<Object> _receiveControl(
   Uint8List envelope,
   Uint8List rootPk,
   Map<String, dynamic> identities,
+  String expectedWorkspaceId,
 ) async {
   final parts = splitEnvelope(envelope);
   final header = OpHeader.parse(parts.header);
@@ -184,11 +191,21 @@ Future<Object> _receiveControl(
     case controlTypeWorkspaceGenesis:
       await verifyGenesisCertificate(payload.certBytes, payload.rootSig, rootPk);
       final genesis = payload.genesisCertificate();
+      // Workspace before Root, as `SyncClient` and the ops route both ask them:
+      // the sub-order decides which code a genesis disagreeing on *both* fields
+      // earns, and all three verifiers must earn the same one.
+      if (genesis.workspaceId != expectedWorkspaceId) {
+        throw const SyncRejection(
+          SyncRejectionReason.certWorkspaceMismatch,
+          'the genesis names another workspace',
+        );
+      }
       if (!sameBytes(genesis.rootPk, rootPk)) {
         // The Root inside the signed genesis must be the Root this receiver
-        // pinned: that cross-check is why it is in there at all.
+        // pinned: that cross-check is why it is in there at all. The Root
+        // signature verified, so nothing is wrong with the signature.
         throw const SyncRejection(
-          SyncRejectionReason.badRootSignature,
+          SyncRejectionReason.certRootPkMismatch,
           'the genesis names a different Root',
         );
       }
@@ -200,6 +217,12 @@ Future<Object> _receiveControl(
     case controlTypeMemberRegister:
       await verifyRegistrationCertificate(payload.certBytes, payload.rootSig, rootPk);
       final certificate = payload.certificate();
+      if (certificate.workspaceId != expectedWorkspaceId) {
+        throw const SyncRejection(
+          SyncRejectionReason.certWorkspaceMismatch,
+          'the registration names another workspace',
+        );
+      }
       await _bindRegistration(certificate, envelope, header);
       return certificate;
 
@@ -211,7 +234,14 @@ Future<Object> _receiveControl(
       // harness suites.
       await verifyEnvelope(envelope, _specSignPk(identities, header.authorMemberId));
       expect(payload.isRootSigned, isFalse);
-      return payload.rotateStatement();
+      final rotate = payload.rotateStatement();
+      if (rotate.workspaceId != expectedWorkspaceId) {
+        throw const SyncRejection(
+          SyncRejectionReason.certWorkspaceMismatch,
+          'the rotate names another workspace',
+        );
+      }
+      return rotate;
 
     default:
       // Grant and Revoke: the authority is Root or an owning Member, and *which*
@@ -225,11 +255,18 @@ Future<Object> _receiveControl(
       if (payload.controlType == controlTypeGrant) {
         await verifyGrantCertificate(payload.certBytes, payload.signature, authorityPk);
         final grant = payload.grantCertificate();
+        if (grant.workspaceId != expectedWorkspaceId) {
+          throw const SyncRejection(
+            SyncRejectionReason.certWorkspaceMismatch,
+            'the grant names another workspace',
+          );
+        }
         if (grant.granter != payload.authority) {
           // The signed certificate names its own granter; the payload field only
-          // says which key to check it against.
+          // says which key to check it against. The certificate verified under
+          // that key, so this is a forgery attempt rather than a bad signature.
           throw const SyncRejection(
-            SyncRejectionReason.badGrantSignature,
+            SyncRejectionReason.certGranterMismatch,
             'the certificate and the payload disagree about the granter',
           );
         }
@@ -237,9 +274,17 @@ Future<Object> _receiveControl(
       }
       await verifyRevokeCertificate(payload.certBytes, payload.signature, authorityPk);
       final revoke = payload.revokeCertificate();
-      if (revoke.revoker != payload.authority) {
+      if (revoke.workspaceId != expectedWorkspaceId) {
         throw const SyncRejection(
-          SyncRejectionReason.badRevokeSignature,
+          SyncRejectionReason.certWorkspaceMismatch,
+          'the revoke names another workspace',
+        );
+      }
+      if (revoke.revoker != payload.authority) {
+        // Under the same code as the Grant half, because the server does not
+        // split granter from revoker at 422 either.
+        throw const SyncRejection(
+          SyncRejectionReason.certGranterMismatch,
           'the certificate and the payload disagree about the revoker',
         );
       }
@@ -1121,7 +1166,12 @@ void main() {
       test('${vector['name']} round-trips through the receive pipeline',
           () async {
         final envelope = _fromHex(vector['envelope_hex'] as String);
-        final decoded = await _receiveControl(envelope, rootPk, identities);
+        final decoded = await _receiveControl(
+          envelope,
+          rootPk,
+          identities,
+          identities['workspace_id'] as String,
+        );
 
         final payload =
             ControlPayload.decode(parseBody(splitEnvelope(envelope).body));
@@ -1200,7 +1250,12 @@ void main() {
           // very key that signed the envelope, or the envelope could not be
           // verified at all.
           final decoded =
-              await _receiveControl(_fromHex(vector['envelope_hex'] as String), rootPk, identities);
+              await _receiveControl(
+            _fromHex(vector['envelope_hex'] as String),
+            rootPk,
+            identities,
+            identities['workspace_id'] as String,
+          );
           final registration = decoded is GenesisCertificate
               ? decoded.asRegistration()
               : decoded as RegistrationCertificate;
@@ -1307,6 +1362,7 @@ void main() {
             _fromHex(vector['envelope_hex'] as String),
             rootPk,
             identities,
+            vector['expected_workspace_id'] as String,
           );
         } on SyncRejection catch (thrown) {
           rejection = thrown;
@@ -1329,7 +1385,12 @@ void main() {
       final forged = await forger.buildEnvelope(header, frameBody(payload));
 
       await expectLater(
-        _receiveControl(forged, rootPk, identities),
+        _receiveControl(
+          forged,
+          rootPk,
+          identities,
+          identities['workspace_id'] as String,
+        ),
         throwsRejection(SyncRejectionReason.badSignature),
       );
     });
