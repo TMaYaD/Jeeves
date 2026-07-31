@@ -1655,8 +1655,34 @@ class SyncClient {
   /// below the raw head would half-work on a compacted Workspace.
   Future<int> effectiveChainHeadSeq(String authorMemberId) async {
     final head = await _chainHead(authorMemberId);
-    final floor = await _bridgedChainFloor(authorMemberId, head: head);
+    final floor =
+        _bridgedChainFloor(await _attestedPositions(authorMemberId), head: head);
     return max(head?.authorSeq ?? 0, floor?.seq ?? 0);
+  }
+
+  /// Every position a verified prune — or the class-5 op currently being judged —
+  /// has attested for one author, keyed by `author_seq`.
+  ///
+  /// Fetched once per received op so a single verdict answers both the
+  /// bridged-floor walk ([_bridgedChainFloor]) and the arriving op's stored
+  /// attestation lookup ([_attestationAt]) from one round-trip rather than two
+  /// (#621). The point query [_attestationAt] used to issue against the same table
+  /// for the same author was already an entry in the map this build produces.
+  ///
+  /// Stored rows win over provisional ones at the same position: a stored row has
+  /// already been cross-checked against this device's own evidence, and a
+  /// provisional one has not — so the point lookup keeps the same precedence it
+  /// had when it read the row directly.
+  Future<Map<int, Uint8List>> _attestedPositions(String authorMemberId) async {
+    final attested = <int, Uint8List>{
+      for (final row in await prunedAttestations(authorMemberId: authorMemberId))
+        row.authorSeq: row.envelopeHash,
+    };
+    for (final target in _provisionalPrune?.targetsOf(authorMemberId) ??
+        const <PruneTarget>[]) {
+      attested.putIfAbsent(target.authorSeq, () => target.envelopeHash);
+    }
+    return attested;
   }
 
   /// The end of the contiguous run of attested positions starting just above the
@@ -1669,20 +1695,10 @@ class SyncClient {
   ///
   /// Returns null the moment there are no attestations at all for the author, which
   /// keeps a Workspace that has never been compacted at exactly the cost it had.
-  Future<VerifiedChainFloor?> _bridgedChainFloor(
-    String authorMemberId, {
+  VerifiedChainFloor? _bridgedChainFloor(
+    Map<int, Uint8List> attested, {
     required AuthorChainHead? head,
-  }) async {
-    final attested = <int, Uint8List>{
-      for (final row in await prunedAttestations(authorMemberId: authorMemberId))
-        row.authorSeq: row.envelopeHash,
-    };
-    for (final target in _provisionalPrune?.targetsOf(authorMemberId) ??
-        const <PruneTarget>[]) {
-      // Stored rows win: they have already been cross-checked against this device's
-      // own evidence, and a provisional one has not.
-      attested.putIfAbsent(target.authorSeq, () => target.envelopeHash);
-    }
+  }) {
     if (attested.isEmpty) return null;
 
     var seq = head?.authorSeq ?? 0;
@@ -1696,26 +1712,15 @@ class SyncClient {
   }
 
   /// What a prune attested at one position, when this device holds no op there.
-  Future<PrunedPositionAttestation?> _attestationAt(
-    String authorMemberId,
+  ///
+  /// Answered from the shared [_attestedPositions] map, which already resolves the
+  /// stored-row-over-provisional precedence, so a stored row still wins.
+  PrunedPositionAttestation? _attestationAt(
+    Map<int, Uint8List> attested,
     int authorSeq,
-  ) async {
-    final row = await (_db.select(_db.prunedAttestations)
-          ..where((r) =>
-              r.workspaceId.equals(workspaceId) &
-              r.authorMemberId.equals(authorMemberId) &
-              r.authorSeq.equals(authorSeq)))
-        .getSingleOrNull();
-    if (row != null) {
-      return (authorSeq: row.authorSeq, envelopeHash: row.envelopeHash);
-    }
-    for (final target in _provisionalPrune?.targetsOf(authorMemberId) ??
-        const <PruneTarget>[]) {
-      if (target.authorSeq == authorSeq) {
-        return (authorSeq: authorSeq, envelopeHash: target.envelopeHash);
-      }
-    }
-    return null;
+  ) {
+    final hash = attested[authorSeq];
+    return hash == null ? null : (authorSeq: authorSeq, envelopeHash: hash);
   }
 
   // --- Per-author chain enforcement -------------------------------------------
@@ -1723,6 +1728,9 @@ class SyncClient {
   /// The chain rules, against what this device's log already holds.
   Future<ChainVerdict> _chainVerdictFor(OpHeader header, Uint8List envelope) async {
     final head = await _chainHead(header.authorMemberId);
+    // One fetch of this author's attested positions answers both the floor walk
+    // and the arriving op's stored-attestation lookup (#621).
+    final attested = await _attestedPositions(header.authorMemberId);
     return chainVerdict(
       header: header,
       envelope: envelope,
@@ -1735,9 +1743,8 @@ class SyncClient {
       // The seam #551 left dormant, now live: a verified prune is the only thing
       // that can supply a floor, and the floor wins above the derived head so a
       // mid-chain hole is bridgeable rather than a permanent gap.
-      verifiedFloor: await _bridgedChainFloor(header.authorMemberId, head: head),
-      storedAttestation:
-          await _attestationAt(header.authorMemberId, header.authorSeq),
+      verifiedFloor: _bridgedChainFloor(attested, head: head),
+      storedAttestation: _attestationAt(attested, header.authorSeq),
     );
   }
 
