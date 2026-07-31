@@ -28,10 +28,55 @@ if git diff --cached --name-only | grep -q "^backend/"; then
         exit 1
     fi
 
-    # Activate the project venv so ruff/mypy/pytest are available.
+    # Existence is not activation, and the gap between them is #539 all over
+    # again: everything below the guard above can still fall through to the
+    # outer PATH. Three distinct ways that happens, so three checks.
+
+    # 1. Present but unreadable (bad mode bits). Under POSIX sh the failed `.`
+    #    would abort with only the shell's own error; everywhere else it is
+    #    non-fatal and falls through. Catch it here so every interpreter gets
+    #    the same actionable message.
+    if [ ! -r .venv/bin/activate ]; then
+        echo "❌ backend/.venv exists but backend/.venv/bin/activate is not readable."
+        echo "   The venv is present but unusable."
+        echo "   Re-create it: 'cd backend && rm -rf .venv && uv sync --extra dev'."
+        exit 1
+    fi
+
+    # 2. Readable but not sourceable (corrupt/half-written activate). Handle the
+    #    source's own status rather than letting the interpreter decide whether
+    #    that is fatal.
     # shellcheck disable=SC1091
-    . .venv/bin/activate
-    
+    if ! . .venv/bin/activate; then
+        echo "❌ backend/.venv exists but its activate script could not be sourced."
+        echo "   The venv is present but corrupt."
+        echo "   Re-create it: 'cd backend && rm -rf .venv && uv sync --extra dev'."
+        exit 1
+    fi
+
+    # 3. Sourced cleanly but activated nothing. An activate truncated by an
+    #    interrupted `uv sync` is still valid shell that sets no PATH, so every
+    #    shell sources it happily and returns 0 — a status check alone cannot
+    #    see this. Verify the *effect* instead: the tools about to run must come
+    #    from the venv, not from whatever sits on the outer PATH.
+    venv_bin_dir=$(cd .venv/bin && pwd -P)
+    for required_tool in ruff mypy pytest; do
+        resolved_tool=$(command -v "${required_tool}" 2>/dev/null)
+        resolved_tool_dir=""
+        if [ -n "${resolved_tool}" ]; then
+            resolved_tool_dir=$(cd "$(dirname "${resolved_tool}")" && pwd -P)
+        fi
+        if [ "${resolved_tool_dir}" != "${venv_bin_dir}" ]; then
+            echo "❌ backend/.venv activated but '${required_tool}' does not resolve inside it."
+            echo "   Found:    ${resolved_tool:-<not on PATH>}"
+            echo "   Expected: ${venv_bin_dir}/${required_tool}"
+            echo "   Checks would run against the wrong environment."
+            echo "   Re-create it: 'cd backend && rm -rf .venv && uv sync --extra dev'."
+            exit 1
+        fi
+    done
+
+
     echo ">> Running ruff check..."
     if ! ruff check .; then
         echo "❌ ruff check failed! Please fix linting errors."

@@ -208,6 +208,39 @@ export PATH
 ACTIVATE
 }
 
+# The three shapes of a venv that EXISTS but cannot be used. Each one passes the
+# `[ -f .venv/bin/activate ]` existence guard, so each is a distinct chance to
+# fall through to the outer PATH and re-run #539 one step further along. All
+# three deliberately carry working tool stubs inside .venv/bin: if the hook
+# wrongly proceeds, those let it sail through to `exit 0`, so a passing case
+# proves the guard fired rather than that the fixture was broken anyway.
+
+# Bad mode bits — readable by `[ -f ]`, not by `.`.
+make_unreadable_venv() {
+  local backend_dir="$1"
+  write_passing_tool_stubs "${backend_dir}/.venv/bin"
+  printf 'VIRTUAL_ENV=unused\n' > "${backend_dir}/.venv/bin/activate"
+  chmod 000 "${backend_dir}/.venv/bin/activate"
+}
+
+# Corrupt/half-written activate — sourcing it fails outright.
+make_unsourceable_venv() {
+  local backend_dir="$1"
+  write_passing_tool_stubs "${backend_dir}/.venv/bin"
+  # An unterminated `if` — a parse error in every shell, and root-proof, unlike
+  # relying on mode bits.
+  printf 'if true\n' > "${backend_dir}/.venv/bin/activate"
+}
+
+# Truncated activate — the nastiest shape, and the reason a source-status check
+# is not sufficient on its own: this is valid shell, so every interpreter
+# sources it happily and returns 0 while activating nothing at all.
+make_inert_venv() {
+  local backend_dir="$1"
+  write_passing_tool_stubs "${backend_dir}/.venv/bin"
+  printf '# truncated by an interrupted uv sync\n' > "${backend_dir}/.venv/bin/activate"
+}
+
 # ruff/mypy/pytest installed system-wide, outside any venv. This is what makes
 # #539's silent success reachable: with no venv the hook would fall through to
 # these, "pass" against the wrong environment, and reach `exit 0`.
@@ -244,11 +277,24 @@ run_backend_hook() {
   RC=$?
 }
 
-# The whole contract for a missing backend venv: non-zero exit, a message that
-# names both the missing prerequisite and the command that creates it, and no
-# partial execution of the checks it couldn't set up for.
+# The whole contract for a backend venv the hook cannot use — whether it is
+# missing outright or present-but-unusable: non-zero exit, a message that names
+# both the prerequisite and the command that creates it, and no partial
+# execution of the checks it couldn't set up for.
+#
+# The second argument is the phrase unique to the guard that SHOULD have fired.
+# Without it the guards are indistinguishable from each other: every one of them
+# exits non-zero and names both backend/.venv and the remedy, so deleting the
+# existence check entirely would still leave the suite green — the readability
+# check catches a missing file too, just while reporting that it "exists".
+# Pinning the phrase is what keeps each case a test of one specific guard.
 assert_backend_guard_fired() {
-  local label="$1"
+  local label="$1" expected_phrase="$2"
+  if printf '%s' "${OUT}" | grep -qF "${expected_phrase}"; then
+    ok "${label}: the expected guard fired (\"${expected_phrase}\")"
+  else
+    bad "${label}: expected guard phrase \"${expected_phrase}\" absent — a different guard fired: ${OUT}"
+  fi
   if [ "${RC}" -ne 0 ]; then
     ok "${label}: hook exits non-zero (${RC})"
   else
@@ -369,13 +415,13 @@ for backend_shell in ${BACKEND_SHELLS}; do
   new_backend_repo
   stage_backend_change "${BACKEND_REPO}"
   run_backend_hook "${BACKEND_REPO}" "${backend_shell}"
-  assert_backend_guard_fired "${backend_shell}"
+  assert_backend_guard_fired "${backend_shell}" 'No backend venv found'
 
   start_case "no backend/.venv but ruff/mypy/pytest on the outer PATH (${backend_shell}): hook must not 'pass' against the wrong environment"
   new_backend_repo
   stage_backend_change "${BACKEND_REPO}"
   run_backend_hook "${BACKEND_REPO}" "${backend_shell}" "${OUTER_TOOLS}"
-  assert_backend_guard_fired "${backend_shell}, system-wide tools"
+  assert_backend_guard_fired "${backend_shell}, system-wide tools" 'No backend venv found'
 
   start_case "real linked worktree with no backend/.venv (${backend_shell}): hook fails loudly"
   new_backend_repo
@@ -388,7 +434,40 @@ for backend_shell in ${BACKEND_SHELLS}; do
     bad "${backend_shell}: fixture is wrong — the linked worktree carries a backend/.venv"
   fi
   run_backend_hook "${backend_wt}" "${backend_shell}" "${OUTER_TOOLS}"
-  assert_backend_guard_fired "${backend_shell}, linked worktree"
+  assert_backend_guard_fired "${backend_shell}, linked worktree" 'No backend venv found'
+
+  # A venv that exists but cannot be used has to fail exactly as loudly as a
+  # missing one — same contract, so the same assertions. Each runs with the
+  # outer tools on PATH, because that is the configuration where falling
+  # through actually reaches `exit 0` instead of dying on a missing binary.
+
+  start_case "backend/.venv present but activate unreadable (${backend_shell}): hook must not fall through"
+  new_backend_repo
+  # Stage first: `git add -A` cannot read a mode-000 file, and a failed stage
+  # would leave nothing under backend/ for the hook to react to — the case
+  # would then "pass" by never running the backend branch at all.
+  stage_backend_change "${BACKEND_REPO}"
+  make_unreadable_venv "${BACKEND_REPO}/backend"
+  if [ -r "${BACKEND_REPO}/backend/.venv/bin/activate" ]; then
+    skip "${backend_shell}: running as root — mode bits don't bite, unreadable case not exercisable"
+  else
+    run_backend_hook "${BACKEND_REPO}" "${backend_shell}" "${OUTER_TOOLS}"
+    assert_backend_guard_fired "${backend_shell}, unreadable activate" 'is not readable'
+  fi
+
+  start_case "backend/.venv present but activate unsourceable (${backend_shell}): hook must not fall through"
+  new_backend_repo
+  make_unsourceable_venv "${BACKEND_REPO}/backend"
+  stage_backend_change "${BACKEND_REPO}"
+  run_backend_hook "${BACKEND_REPO}" "${backend_shell}" "${OUTER_TOOLS}"
+  assert_backend_guard_fired "${backend_shell}, unsourceable activate" 'could not be sourced'
+
+  start_case "backend/.venv present but activate inert (${backend_shell}): sources cleanly, activates nothing"
+  new_backend_repo
+  make_inert_venv "${BACKEND_REPO}/backend"
+  stage_backend_change "${BACKEND_REPO}"
+  run_backend_hook "${BACKEND_REPO}" "${backend_shell}" "${OUTER_TOOLS}"
+  assert_backend_guard_fired "${backend_shell}, inert activate" 'does not resolve inside it'
 
   start_case "backend/.venv present (${backend_shell}): guard doesn't false-positive, checks run"
   new_backend_repo
