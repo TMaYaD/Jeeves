@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -5,6 +6,88 @@ import 'api_service.dart';
 
 const _kAccessTokenKey = 'jwt_token';
 const _kRefreshTokenKey = 'refresh_token';
+
+// ---------------------------------------------------------------------------
+// Silent-refresh outcomes
+// ---------------------------------------------------------------------------
+
+/// Why a silent refresh ended the way it did.
+///
+/// Four cases rather than a nullable token, because the caller's decision turns
+/// on *which* failure it was: only [SessionRefreshRejected] and
+/// [SessionRefreshTokenAbsent] are authoritative, and only they may cost the
+/// device its stored credentials (ADR-0041). Collapsing a dead socket into the
+/// same answer as a server saying "no" is what #606 was — an offline relaunch
+/// that destroyed an enrolled device's enrolment and silently dropped the whole
+/// session's ops.
+sealed class SessionRefreshOutcome {
+  const SessionRefreshOutcome();
+}
+
+/// The server issued a new access token, and both keys have been rotated in
+/// storage.
+final class SessionRefreshed extends SessionRefreshOutcome {
+  const SessionRefreshed(this.accessToken);
+
+  final String accessToken;
+}
+
+/// The Jeeves backend answered 401: the refresh token is revoked, expired,
+/// member-scoped or unknown (`backend/app/auth/routes.py`).
+///
+/// A 401 alone is *not* enough to get here — see [isCorroboratedRejection].
+final class SessionRefreshRejected extends SessionRefreshOutcome {
+  const SessionRefreshRejected();
+}
+
+/// Anything else — no connection, a timeout, a 5xx, an intercepting proxy, a
+/// captive portal, a malformed body, **or an uncorroborated 401**.
+///
+/// Nothing has been said about the credential's validity, so nothing may be
+/// destroyed on the strength of it.
+final class SessionRefreshInconclusive extends SessionRefreshOutcome {
+  const SessionRefreshInconclusive();
+}
+
+/// Nothing was stored to refresh: authoritative absence, and no request made.
+final class SessionRefreshTokenAbsent extends SessionRefreshOutcome {
+  const SessionRefreshTokenAbsent();
+}
+
+/// A 401 from `/session/refresh` this client is willing to act on.
+///
+/// The status code alone is *any* box on the path — a captive portal, a hotel
+/// gateway, an authenticating proxy — and those answer precisely in the offline
+/// conditions where destroying an enrolment is most expensive. So the 401 has to
+/// be corroborated as the Jeeves backend's own before it is believed; the
+/// backend pairs every rejection with both signals below
+/// (`backend/app/auth/routes.py`, pinned by `backend/tests/test_sessions.py`).
+///
+/// **Body-primary, header-secondary, either is enough.** `backend/app/main.py`
+/// configures `CORSMiddleware` with no `expose_headers`, and Starlette's default
+/// is to expose none, so on the Flutter web build the browser hides
+/// `WWW-Authenticate` from Dio entirely. A header-primary rule would therefore
+/// classify every genuine 401 as [SessionRefreshInconclusive] on web alone —
+/// invisibly to `app/test/`. The JSON body is CORS-safe and is the primary for
+/// that reason; the header is the second door for an absent or unparseable body.
+///
+/// Matched on `detail`'s **shape**, never its text: a copy edit on the backend
+/// must not be able to flip every client to never-signing-out.
+///
+/// Visible for test: the classification is the whole safety argument, so it is
+/// held to the contract directly as well as through [AuthService.refreshSession].
+bool isCorroboratedRejection(Response<dynamic>? response) {
+  if (response == null || response.statusCode != 401) return false;
+
+  final data = response.data;
+  if (data is Map) {
+    final detail = data['detail'];
+    if (detail is String && detail.isNotEmpty) return true;
+  }
+
+  final challenge = response.headers.value('www-authenticate');
+  return challenge != null && challenge.toLowerCase().contains('bearer');
+}
 
 /// Minimal storage interface so [AuthService] can be tested without the
 /// native secure-storage platform channel.
@@ -38,7 +121,15 @@ class AuthService {
             const _FlutterSecureStorageAdapter(FlutterSecureStorage()) {
     // Wire up the 401 refresh path after both objects are constructed, avoiding
     // a circular provider dependency.
-    _api.setOnUnauthorized(refreshSession);
+    //
+    // Adapted here rather than kept as a second near-homonymous method: the
+    // interceptor only needs "a token to retry with, or nothing", and a null
+    // means "propagate the original error" (`api_service.dart`). Which *kind* of
+    // failure it was matters only to session restore.
+    _api.setOnUnauthorized(() async => switch (await refreshSession()) {
+          SessionRefreshed(:final accessToken) => accessToken,
+          _ => null,
+        });
   }
 
   final ApiService _api;
@@ -68,22 +159,37 @@ class AuthService {
 
   /// Attempt a silent token refresh using the stored refresh token.
   ///
-  /// Returns the new access token on success, or null if the refresh token is
-  /// missing, expired, or the server rejects it.
-  Future<String?> refreshSession() async {
+  /// Says *which* of the four things happened rather than "a token or nothing":
+  /// the refresh token is opaque (`backend/app/auth/tokens.py` stores only its
+  /// SHA-256 hash), so a client cannot determine locally whether it would be
+  /// accepted, and offline the only honest answer is "I don't know". Coding that
+  /// as "no" is what #606 was.
+  ///
+  /// A 200 whose body lacks either token is [SessionRefreshInconclusive] too — a
+  /// server that answered 200 with garbage has revoked nothing.
+  Future<SessionRefreshOutcome> refreshSession() async {
     final refreshToken = await getRefreshToken();
-    if (refreshToken == null) return null;
+    if (refreshToken == null) return const SessionRefreshTokenAbsent();
     try {
       final response = await _api.post('/session/refresh', {
         'refresh_token': refreshToken,
       });
       final newAccess = response['access_token'] as String?;
       final newRefresh = response['refresh_token'] as String?;
-      if (newAccess == null || newRefresh == null) return null;
+      if (newAccess == null || newRefresh == null) {
+        return const SessionRefreshInconclusive();
+      }
       await saveTokens(newAccess, newRefresh);
-      return newAccess;
-    } catch (_) {
-      return null;
+      return SessionRefreshed(newAccess);
+    } on DioException catch (error) {
+      return isCorroboratedRejection(error.response)
+          ? const SessionRefreshRejected()
+          : const SessionRefreshInconclusive();
+    } on Object {
+      // A `TypeError` off an empty body, a cast failure on a wrong-typed field,
+      // anything a future Dio adds. None of it is the server revoking a
+      // credential, so none of it may cost one.
+      return const SessionRefreshInconclusive();
     }
   }
 

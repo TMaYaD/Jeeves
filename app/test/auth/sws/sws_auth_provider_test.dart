@@ -5,9 +5,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/auth/auth_mode.dart';
 import 'package:jeeves/auth/auth_provider_interface.dart';
 import 'package:jeeves/auth/sws/sws_auth_provider.dart';
+import 'package:jeeves/auth/session_restore.dart';
 import 'package:jeeves/auth/sws/wallet_signer.dart';
 import 'package:jeeves/services/api_service.dart';
 import 'package:jeeves/services/auth_service.dart';
+
+import '../session_restore_contract.dart';
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -172,15 +175,14 @@ void main() {
   });
 
   group('SwsAuthProvider — restore', () {
-    test('returns null when no token stored', () async {
+    test('nothing stored is an absent session', () async {
       final (:storage, :api, :provider, :container) = _makeFixture();
       addTearDown(container.dispose);
 
-      final result = await provider.restore();
-      expect(result, isNull);
+      expect(await provider.restore(), isA<SessionAbsent>());
     });
 
-    test('returns AuthResult when valid token stored', () async {
+    test('restores from a stored unexpired access token', () async {
       final (:storage, :api, :provider, :container) = _makeFixture();
       addTearDown(container.dispose);
 
@@ -188,10 +190,16 @@ void main() {
       await storage.write('jwt_token', token);
       await storage.write('refresh_token', 'rr');
 
-      final result = await provider.restore();
-
-      expect(result, isNotNull);
-      expect(result!.userId, 'solana-user-2');
+      expect(
+        await provider.restore(),
+        isA<SessionRestored>()
+            .having((o) => o.session.userId, 'userId', 'solana-user-2'),
+      );
     });
   });
+
+  // The same contract the password provider answers. SWS shares the JWT +
+  // refresh-token mechanism, so it must share the #606 fix — and used to hold its
+  // own copy of the bug.
+  runSessionRestoreContract('SwsAuthProvider', SwsAuthProvider.new);
 }

@@ -447,7 +447,7 @@ The app supports multiple authentication backends selected at compile time.
 - `buildLoginWidget(context)` — returns the sign-in widget for that backend.
 - `signIn(params)` — performs sign-in; returns `AuthResult`.
 - `signOut(refreshToken)` — revokes the server session.
-- `restore()` — silently restores a session from secure storage; returns `AuthResult?`.
+- `restore()` — silently restores a session from secure storage; returns `SessionRestoreOutcome`.
 
 ### AuthResult
 
@@ -461,7 +461,37 @@ class AuthResult {
 }
 ```
 
-`AuthNotifier` in `providers/auth_provider.dart` only deals with `AuthResult` — it never inspects JWT bytes itself.
+`AuthNotifier` in `providers/auth_provider.dart` only deals with `AuthResult` and `SessionRestoreOutcome` — it never inspects JWT bytes itself.
+
+### Session restore: three answers, and only one clears credentials
+
+`restore()` returns a `SessionRestoreOutcome` (`auth/session_restore.dart`), not a nullable `AuthResult`, because "there is no session" and "I could not find out" must lead to different decisions:
+
+| Outcome | Means |
+|---|---|
+| `SessionRestored` | A usable access token — stored and unexpired, or silently refreshed. |
+| `SessionUnverified` | Credentials are on the device and were **not** authoritatively rejected. Carries the account id recovered from the stale token and the token itself. |
+| `SessionAbsent` | Nothing stored, or the server authoritatively rejected what was. **The only outcome that clears credentials.** |
+
+Both JWT-bearing providers (`PasswordAuthProvider`, `SwsAuthProvider`) delegate to the one `restoreJwtSession(AuthService)` rather than keeping a copy each, and `test/auth/session_restore_contract.dart` runs the same cases against both.
+
+The verdict comes from `AuthService.refreshSession()`, which returns a sealed `SessionRefreshOutcome` — `SessionRefreshed`, `SessionRefreshRejected`, `SessionRefreshInconclusive`, `SessionRefreshTokenAbsent`. **Only a 401 corroborated as the Jeeves backend's own is `Rejected`**: corroboration is a JSON object body with a non-empty string `detail` (primary, because it is CORS-safe — the backend's `CORSMiddleware` exposes no headers, so the web build never sees them), falling back to a `WWW-Authenticate` header containing `Bearer`. Either is sufficient, and `detail` is matched on shape rather than text. A bare 401 from a captive portal, a 5xx, a timeout, a dead socket and a 200 full of garbage are all `Inconclusive`. See ADR-0041 for why the rule is stated as an inversion, and `backend/tests/test_sessions.py` for the producing side of that contract.
+
+`AuthNotifier.build()` is an exhaustive switch over the three outcomes, and `clearTokens()` is reachable from exactly one arm:
+
+| Situation | Credentials | `currentUserIdProvider` | `SessionGate` | Capture seam |
+|---|---|---|---|---|
+| Access token valid | retained | account | `ready` / `needsEnrolment` | bound |
+| Expired token, refresh **401 + corroboration** | **cleared** | `'local'` | `signedOut` | silent |
+| Expired token, **bare 401** (captive portal / proxy) | **retained** | account | `ready` | **bound** |
+| Expired token, server unreachable / 5xx / garbage | **retained** | account | `ready` / `needsEnrolment` | **bound** |
+| Inconclusive, and no account id recoverable from the stored token | cleared | `'local'` | `signedOut` | silent |
+| No credentials stored | cleared (no-op) | `'local'` | `signedOut` | silent |
+| User taps **Sign out**, offline | **cleared** | `'local'` | `signedOut` | silent |
+
+The stakes are two-sided and both are tested. Clearing credentials resets the user to `'local'`, which makes `syncStackProvider` refuse and `syncLifecycleProvider` settle the capture seam silent — so on a device whose initial-upload marker is set, an over-eager clear drops the whole session's writes with nothing left to re-carry them. Retaining them too readily would leave a genuinely revoked device signed in. `test/sync/offline_relaunch_session_test.dart` holds both ends end-to-end; `test/providers/auth_notifier_restore_test.dart` holds the branch table at the session layer.
+
+`SessionUnverified` returns the **expired** access token rather than null, so `authTokenProvider`'s value matches the `Authorization` header `AuthService.getToken()` has already set. Nothing reads that value for an authorisation decision, and keeping the two consistent means the first request once the network returns 401s into `_AuthRetryInterceptor` and the session self-heals.
 
 ### Compile-time mode selection
 
