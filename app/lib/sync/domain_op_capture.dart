@@ -120,9 +120,9 @@ abstract interface class DomainOpCapture {
 /// **Not the production binding** — production wires
 /// [WorkspaceRoutingOpCapture] into `GtdDatabase` via `domainOpCaptureProvider`
 /// (see `providers/database_provider.dart`). This is what `GtdDatabase`'s
-/// `opCapture` parameter falls back to when nothing is passed
-/// (`database/gtd_database.dart`), which is every test that is not about
-/// capture, and any other caller that means "never author."
+/// `opCapture` parameter falls back to for any direct `GtdDatabase(...)`
+/// caller that omits it (`database/gtd_database.dart`), capture-related
+/// tests included.
 class NoopDomainOpCapture implements DomainOpCapture {
   const NoopDomainOpCapture();
 
