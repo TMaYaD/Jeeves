@@ -95,25 +95,6 @@ const Set<int> _slotTakenResultCodes = {
 /// Whether an arriving control op takes its position, or loses a fork.
 enum _ControlPosition { accept, quarantineThis }
 
-/// What happened when [SyncClient._logReceived] tried to append an envelope.
-enum _LogOutcome {
-  /// A fresh row: the op is newly logged and the caller applies it.
-  logged,
-
-  /// This device's *own* op is already at this transport position with the very
-  /// same envelope bytes — an apply a crash interrupted, or one that finished
-  /// but whose pull cursor never advanced, re-served on the next pull. Not an
-  /// accusation: the caller resumes the apply if it never completed, or skips a
-  /// settled row. Told apart from [slotCollision] by the bytes, because "my own
-  /// row again" and "the server put two ops in one slot" are different events.
-  alreadyLogged,
-
-  /// A *different* envelope already holds this slot: a server spending one
-  /// transport `seq`, or one author-chain position, on two chain-valid ops. The
-  /// alarm is raised inside [SyncClient._logReceived] and the op is skipped.
-  slotCollision,
-}
-
 /// One logged op that writes to a particular entity — what a compaction pass needs
 /// to know about a candidate target without re-decoding it.
 ///
@@ -1307,49 +1288,55 @@ class SyncClient {
         // before logging lands authority effects with no `op_log` row behind them,
         // so a server spending one transport `seq` on two chain-valid control ops
         // gets the second one's authority with nothing for a later content op to
-        // chain to. A slot taken by a *different* envelope ends the op here,
-        // without applying anything; one taken by this device's own bytes is a
-        // re-serve to resume or skip, not an accusation (#618).
+        // chain to. A taken slot ends the op here, without applying anything.
+        // A non-nullable capture: `header` is a nullable field, so its promotion
+        // at the branch guard above does not carry into the transaction closure.
+        final controlHeader = header;
         final verified = await _verifyControlOp(pulled, parts.body, header);
-        final logged = await _logReceived(pulled, header);
-        if (logged == _LogOutcome.slotCollision) return const {};
-        if (logged == _LogOutcome.alreadyLogged &&
-            !await _controlOpNeedsApply(pulled.seq)) {
-          // Our own row from an apply that finished but whose cursor never
-          // advanced, or from a refusal already recorded: evidence, with nothing
-          // left to (re)apply. Skipping here — rather than accusing — is what
-          // keeps a re-served op from advancing the control chain head twice, and
-          // keeps recovery from raising an `author_chain_slot_collision` against
-          // this device's own honest retry (#618).
-          return const {};
-        }
-        // Fresh, or logged-but-unapplied from an apply a crash interrupted: the
-        // authority effects and the applied stamp land in **one** transaction, so
-        // a second crash leaves either all of a control op's effects or none —
-        // never a raised epoch floor the applied-control log does not yet name,
-        // and never an applied-control record with no `op_log` row behind it
-        // (#618). The `op_log` row is committed *before* the transaction so a
-        // refusal still leaves chain evidence, and a re-serve can resume.
-        try {
-          // `header!` because the closure loses the non-null promotion the linear
-          // flow above already established — it is the same value, not a new check.
-          await _db.transaction(() async {
-            await _applyControlOp(pulled, header!, verified);
-            // A control op reduces to nothing, so it contributes no projection
-            // work; it is logged because later content ops from the same author
-            // chain to it. `applied_at` is stamped inside the same transaction as
-            // the effects — after verification and application both succeeded — so
-            // a crash mid-apply rolls the stamp back with them rather than leaving
-            // a row claiming an apply that never finished.
-            await _stampApplied(pulled.seq);
-          });
-        } on SyncRejection catch (rejection) {
-          // Logged-but-refused, the same shape the content path uses: the envelope
-          // stays as chain evidence, the transaction rolled back any authority
-          // effect, and the row records which guard fired.
-          await _stampRefused(pulled.seq, rejection.reason);
-          await _refuse(pulled, rejection, header);
-        }
+        // Log, apply and stamp as **one** transaction, so a crash mid-apply leaves
+        // either all of it or none — never a raised epoch floor with no
+        // applied-control record, nor an `op_log` row claiming an apply that never
+        // completed (#618). `_db` is a [SyncDatabase], so `transaction()` is the
+        // ordinary drift transaction the reducer already nests as a savepoint;
+        // `_verifyControlOp` above has no side effects and stays outside it.
+        SyncRejection? refused;
+        RegistrationCertificate? learned;
+        final logged = await _db.transaction(() async {
+          // A taken slot ends the op here. On an own-reserve re-serve [_logReceived]
+          // wrote nothing and returns false; on a genuine collision it wrote the
+          // alarm and returns false. Returning normally (never throwing) commits
+          // either way — the alarm, when there is one, must persist.
+          if (!await _logReceived(pulled, controlHeader)) return false;
+          try {
+            learned = await _applyControlOp(pulled, controlHeader, verified);
+          } on SyncRejection catch (rejection) {
+            // Logged-but-refused (#551), the same shape the content path uses: the
+            // envelope stays as chain evidence, no authority effect landed, and the
+            // row records which guard fired. The stamp commits *with* the log row;
+            // the rejection is rethrown *outside* the transaction (below) so the
+            // outer catch still quarantines and accuses.
+            await _stampRefused(pulled.seq, rejection.reason);
+            refused = rejection;
+            return true;
+          }
+          // `applied_at` is stamped only now — after verification and application
+          // both succeeded — so a refused control op is logged-but-unapplied
+          // evidence rather than a row claiming an apply that never happened.
+          await _stampApplied(pulled.seq);
+          return true;
+        });
+        // A genuine storage fault inside the body rolls the whole unit back and
+        // propagates out here (caught by the outer `on SqliteException`); only a
+        // refusal or a taken slot returns normally.
+        if (refused != null) throw refused!;
+        if (!logged) return const {};
+        // The op taught this device a chained key. Remembered **after** the commit
+        // and **only** on the committed, non-refused path, so a `controlChainFork`
+        // throw (which never sets `learned`) never remembers one, and no in-memory
+        // key outlives a durable record that rolled back.
+        if (learned != null) directory.rememberChained(learned!);
+        // A control op reduces to nothing, so it contributes no projection work; it
+        // is logged because later content ops from the same author chain to it.
         return const {};
       }
 
@@ -1384,9 +1371,7 @@ class SyncClient {
         return const {};
       }
 
-      if (await _logReceived(pulled, header) != _LogOutcome.logged) {
-        return const {};
-      }
+      if (!await _logReceived(pulled, header)) return const {};
 
       // The authorization stage, between the chain verdict and the reducer
       // guards. Evaluated at the op's *own* server seq, never against current
@@ -1514,22 +1499,37 @@ class SyncClient {
     await _checkOwnWrites(header, pulled.envelope);
     if (verdict.outcome != ChainOutcome.accept) return const {};
 
-    if (await _logReceived(pulled, header) != _LogOutcome.logged) {
-      return const {};
-    }
-    final authorization = (await grantsView()).verdictFor(
-      authorMemberId: header.authorMemberId,
-      opClass: header.opClass,
-      seq: pulled.seq,
-    );
-    if (authorization != null) {
-      await _stampRefused(pulled.seq, authorization.reason);
-      await _refuse(pulled, authorization, header);
+    // Log, then either refuse-and-stamp or apply-and-stamp, as **one**
+    // transaction: a crash between the attestation inserts and the stamp leaves
+    // the evidence and the stamp all-or-nothing, never an orphan `op_log` row
+    // (#618). The release scan re-enters [_receive] (which opens its own
+    // transaction), so it stays **outside** this unit — below.
+    SyncRejection? authorizationRefusal;
+    final logged = await _db.transaction(() async {
+      if (!await _logReceived(pulled, header)) return false;
+      final authorization = (await grantsView()).verdictFor(
+        authorMemberId: header.authorMemberId,
+        opClass: header.opClass,
+        seq: pulled.seq,
+      );
+      if (authorization != null) {
+        await _stampRefused(pulled.seq, authorization.reason);
+        authorizationRefusal = authorization;
+        return true;
+      }
+      await _applyPrune(pulled.seq, prune);
+      await _stampApplied(pulled.seq);
+      return true;
+    });
+    if (!logged) return const {};
+    if (authorizationRefusal != null) {
+      // Quarantined **outside** the unit, mirroring the control path (#618): a
+      // storage fault raised by `_refuse`'s own insert must not roll back the
+      // log-and-stamp row this transaction just committed.
+      await _refuse(pulled, authorizationRefusal!, header);
+      // The chain head advanced, so a quarantined successor may now be valid.
       return _releaseChainSuccessors(header.authorMemberId);
     }
-
-    await _applyPrune(pulled.seq, prune);
-    await _stampApplied(pulled.seq);
 
     // The scan runs for **every author this prune attests**, not just its own: the
     // floor it just raised is what makes those authors' quarantined survivors
@@ -2087,7 +2087,11 @@ class SyncClient {
   /// `applied_control_log` row — must never exist without a row behind them, or a
   /// server spending one transport `seq` on two chain-valid control ops lands the
   /// second one's authority with nothing for a later content op to chain to.
-  Future<void> _applyControlOp(
+  /// Returns the [RegistrationCertificate] this op teaches the directory, or null.
+  /// The caller applies it to [directory] **after** the receive transaction
+  /// commits (see [_receive]'s control branch), so a rolled-back durable record
+  /// never leaves a live chained key behind it.
+  Future<RegistrationCertificate?> _applyControlOp(
     PulledOp pulled,
     OpHeader header,
     _VerifiedControlOp verified,
@@ -2108,9 +2112,10 @@ class SyncClient {
       );
     }
 
-    // Verified *and* positioned: now the op may teach this device something.
+    // Verified *and* positioned: the op may now teach this device a chained key,
+    // but the caller remembers it post-commit (see [_receive]) rather than here,
+    // so no in-memory key outlives a durable record that rolled back.
     final learned = verified.learned;
-    if (learned != null) directory.rememberChained(learned);
     if (payload.controlType == controlTypeWorkspaceGenesis) {
       // Genesis fixes the epoch floor at 0. Recorded rather than assumed, so a
       // Workspace's floor exists from the moment the Workspace does.
@@ -2133,6 +2138,7 @@ class SyncClient {
       _epochKeyRefreshRequired = true;
     }
     await _appendAppliedControlOp(pulled, payload, header, verified.payloadBytes);
+    return learned;
   }
 
   /// The registering pair's binding steps: the certificate must be *about* this
@@ -2835,16 +2841,14 @@ class SyncClient {
   /// for the transport position, the `op_log_author_chain` index for the chain
   /// position.
   ///
-  /// Returns [_LogOutcome.slotCollision] when a *different* envelope already
-  /// holds the slot and the op must be skipped: it is an integrity event to
+  /// Returns false when the op could not be logged and must be skipped. A taken
+  /// slot is the only failure that ends there: it is an integrity event to
   /// surface and skip, because throwing would abort the rest of the page and let
-  /// one poisoned position stall every op behind it. A taken slot holding this
-  /// device's *own* bytes is [_LogOutcome.alreadyLogged] instead — an honest
-  /// retry, not an accusation. Every **other** database failure propagates and
-  /// aborts the pull with the cursor unmoved — a transient `SQLITE_BUSY` is an op
-  /// the next sync retries, not one permanently skipped under a slot-collision
-  /// label it never earned.
-  Future<_LogOutcome> _logReceived(
+  /// one poisoned position stall every op behind it. Every **other** database
+  /// failure propagates and aborts the pull with the cursor unmoved — a
+  /// transient `SQLITE_BUSY` is an op the next sync retries, not one permanently
+  /// skipped under a slot-collision label it never earned.
+  Future<bool> _logReceived(
     PulledOp pulled,
     OpHeader header, {
     DateTime? appliedAt,
@@ -2862,48 +2866,35 @@ class SyncClient {
               appliedAt: Value(appliedAt),
             ),
           );
-      return _LogOutcome.logged;
+      return true;
     } on SqliteException catch (error) {
       if (!_slotTakenResultCodes.contains(error.extendedResultCode)) rethrow;
-      // The slot is taken — but whether that is an accusation turns on *what*
-      // holds it. A row already at this transport position with the very same
-      // envelope bytes is this device's own op re-served after an interrupted
-      // apply, or after one that finished but whose cursor never advanced;
-      // resuming or skipping it is a different event from a server spending one
-      // position on two *different* chain-valid ops (#618). The chain-slot unique
-      // index can also fire at a *different* seq — a genuine second continuation
-      // of the author's chain — and that row is not the one this seq holds, so
-      // the lookup misses and it earns the accusation below.
+      // Our own already-committed reserve, re-served because the cursor save
+      // ([pull]'s [_saveCursor]) never landed before a crash: the row at this
+      // transport seq is byte-identical to what we are re-serving. Skip silently —
+      // it is already logged and, under the receive-path transaction wrap, already
+      // fully applied. No alarm, and the caller returns `{}` so nothing re-applies;
+      // the cursor then advances on the next pull and self-heals. The same
+      // `(workspaceId, seq)` byte-compare [_refuseStaleServe] uses.
       final existing = await (_db.select(_db.opLog)
             ..where((row) =>
                 row.workspaceId.equals(workspaceId) & row.seq.equals(pulled.seq)))
           .getSingleOrNull();
       if (existing != null && sameBytes(existing.envelope, pulled.envelope)) {
-        return _LogOutcome.alreadyLogged;
+        return false;
       }
+      // Divergent bytes at one transport seq (a genuine double-serve), or a real
+      // author-chain slot collision on the `(authorMemberId, authorSeq)` unique
+      // index with no byte-identical row at `pulled.seq`: the accusation stands,
+      // exactly as before.
       await _raiseAlarm(
         IntegrityAlarmKind.authorChainSlotCollision,
         authorMemberId: header.authorMemberId,
         detail: 'author_seq ${header.authorSeq} could not be logged at seq '
             '${pulled.seq}: $error',
       );
-      return _LogOutcome.slotCollision;
+      return false;
     }
-  }
-
-  /// Whether a control op already in `op_log` still needs its apply run.
-  ///
-  /// True only for a row this device logged but neither applied nor refused — an
-  /// apply a crash interrupted between [_logReceived] and the applied-control
-  /// append. A row already stamped either way is settled, so re-serving it is a
-  /// no-op: the [_stampApplied] path completed, or [_stampRefused] recorded a
-  /// guard, and re-entering [_applyControlOp] would advance the control chain
-  /// head a second time (#618).
-  Future<bool> _controlOpNeedsApply(int seq) async {
-    final row = await (_db.select(_db.opLog)
-          ..where((r) => r.workspaceId.equals(workspaceId) & r.seq.equals(seq)))
-        .getSingleOrNull();
-    return row != null && row.appliedAt == null && row.refusedReason == null;
   }
 
   Future<void> _stampApplied(int seq) async {
