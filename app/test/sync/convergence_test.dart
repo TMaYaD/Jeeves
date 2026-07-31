@@ -25,6 +25,7 @@ import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/root_authority.dart';
 import 'package:jeeves/sync/sync_transport.dart';
+import 'package:uuid/uuid.dart';
 
 import 'harness/author_fixture.dart';
 import 'harness/reduced_state.dart';
@@ -38,6 +39,11 @@ import 'vectors.dart';
 const String _specUserId = 'spec-user-1';
 
 const String _harnessCollection = 'harness_docs';
+
+/// A canonical UUID for an overlapping-writer fixture: the payload codec refuses
+/// anything else at the author's own `capture()` call (#573).
+String _overlapId(String label) =>
+    const Uuid().v5(jeevesWorkspaceNamespace, 'overlap/$label');
 
 Uint8List _fromHex(String hex) {
   final bytes = Uint8List(hex.length ~/ 2);
@@ -294,6 +300,57 @@ void main() {
           .length,
       1,
     );
+  });
+
+  // --- Attribution under overlapping writers (#562) --------------------------
+
+  test('a rolled-back write never reaches a peer under an overlapping '
+      "writer's commit", () async {
+    // `GtdDatabase.capturing` opens its scope as its first *synchronous*
+    // statement, while its body cannot run until drift's `transaction` has
+    // awaited `ensureOpen`. So two un-awaited `capturing` calls always both open
+    // before either body runs — the shape the production UI issues, since
+    // `clarify_card.dart` fires un-awaited top-level domain writes and two quick
+    // taps overlap. Filing a write into "the scope begun most recently" puts the
+    // rolled-back write in the committing scope's buffer, which then signs it:
+    // a peer ends up holding an entity the authoring device never kept.
+    final a = workspace.a;
+    final rolledBackId = _overlapId('rolled-back');
+    final committedId = _overlapId('committed');
+
+    final rolledBack = a.domain.capturing(() async {
+      await a.domain.todoDao.insertOutcome(
+        id: rolledBackId,
+        title: 'never kept',
+        userId: _specUserId,
+        now: a.clock.asDateTime,
+      );
+      throw StateError('rolled back');
+    });
+    final committed = a.domain.capturing(() => a.domain.todoDao.insertOutcome(
+          id: committedId,
+          title: 'kept',
+          userId: _specUserId,
+          now: a.clock.asDateTime,
+        ));
+    await expectLater(rolledBack, throwsStateError);
+    await committed;
+
+    // The author's own store first: a phantom op is reduced and projected on the
+    // authoring device too, so a misattributed write resurrects the very row the
+    // rollback removed — before any peer is involved.
+    expect(await a.domain.todoDao.getTodo(rolledBackId), isNull,
+        reason: 'the author itself kept no row');
+
+    await workspace.syncAll();
+
+    expect(await workspace.b.domain.todoDao.getTodo(committedId), isNotNull,
+        reason: 'the committed write converged');
+    expect(await workspace.b.domain.todoDao.getTodo(rolledBackId), isNull,
+        reason: 'the peer must not hold a row the author rolled back');
+    expect(await canonicalReducedState(workspace.b.database),
+        isNot(contains(rolledBackId)),
+        reason: 'no op for the rolled-back entity exists anywhere');
   });
 
   // --- AC 5 -----------------------------------------------------------------

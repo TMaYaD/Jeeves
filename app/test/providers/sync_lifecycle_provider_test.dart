@@ -77,17 +77,21 @@ void main() {
     preferencesClient = clientFor(userPreferencesWorkspaceId(_userId));
   });
 
+  /// The shape `GtdDatabase.capturing` produces: the effect is described *inside*
+  /// the scope's zone, which is what attributes it to that scope.
   Future<void> emitOutcome(WorkspaceRoutingOpCapture capture) async {
     final scope = capture.beginScope();
-    capture.write(
-      collection: todosCollection,
-      entityId: _outcomeId,
-      fields: {
-        'title': 'Write the thing',
-        'created_at': '2026-02-01T09:00:00.000Z',
-        'user_id': _userId,
-      },
-    );
+    await capture.runInScope(scope, () async {
+      capture.write(
+        collection: todosCollection,
+        entityId: _outcomeId,
+        fields: {
+          'title': 'Write the thing',
+          'created_at': '2026-02-01T09:00:00.000Z',
+          'user_id': _userId,
+        },
+      );
+    });
     await capture.commitScope(scope);
   }
 

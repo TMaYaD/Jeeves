@@ -22,10 +22,19 @@
 /// DAO-internal bare `transaction` would dispatch past the override) — moot in
 /// practice, since no DAO spells `transaction`.
 ///
-/// **Scopes are token-bound.** Two `capturing` calls can overlap, so neither
-/// "the innermost scope" nor a shared buffer of marks identifies a scope; see
-/// [CaptureScope].
+/// **A scope is named by its token and found by its zone.** Two `capturing`
+/// calls overlap routinely: `capturing` opens its scope as its first synchronous
+/// statement, while a drift body cannot run until `transaction` has awaited
+/// `ensureOpen`, so two un-awaited calls always both open before either body
+/// runs. Neither "the innermost scope" nor "the scope begun most recently"
+/// therefore names the scope a write belongs to. The token names one exact scope
+/// for closing it, and the zone `capturing` runs its body in carries that same
+/// token — so a described effect is filed into the scope of the execution
+/// context that described it, at any nesting depth and across every `await`
+/// (see [CaptureScope] and [DomainOpCapture.runInScope]).
 library;
+
+import 'dart:async';
 
 import 'collection_codecs.dart' show userPreferencesCollection;
 import 'sync_client.dart';
@@ -56,11 +65,18 @@ class CapturedOp {
 /// rolled-back writes in the buffer, and the other scope's commit signed them.
 /// A token names one exact scope, so a rollback can only ever discard the writes
 /// recorded in that scope.
+///
+/// A token alone cannot say which of two overlapping scopes a *write* belongs
+/// to, nor which scope a nested one nests inside. Both of those are answered by
+/// the zone the token rides in, so overlapping scopes are strangers rather than
+/// relatives; see [DomainOpCapture.runInScope].
 class CaptureScope {
   CaptureScope._(this._parent);
 
-  /// The scope that was open when this one began, if any. Recorded at begin, so
-  /// a later out-of-order close cannot re-parent anybody.
+  /// The scope this one's execution context was inside when it began, if any —
+  /// its real enclosing scope, because the ambient scope is the zone's and a
+  /// stranger's scope is never ambient here. Recorded at begin, so a later
+  /// out-of-order close cannot re-parent anybody.
   final CaptureScope? _parent;
 
   /// This scope's own buffer. Ops merge into the parent's on commit, so the
@@ -69,12 +85,17 @@ class CaptureScope {
 
   bool _isOpen = true;
 
-  /// The innermost still-open scope this one's ops belong to on commit, or null
-  /// when this scope is the outermost live one and must therefore flush.
+  /// The innermost still-open ancestor this one's ops belong to on commit, or
+  /// null when no ancestor is still open and this scope must therefore flush.
   ///
-  /// A closed ancestor means the two scopes overlapped rather than nested — real
-  /// nesting is always LIFO, because a nested `capturing` is awaited inside its
-  /// parent's body — so the ops belong to nobody but this scope.
+  /// Every ancestor here is a genuine one: [_parent] is the scope of the
+  /// execution context this scope began in, so an *overlapping* scope is not an
+  /// ancestor at all and its commit can never be handed these ops. Real nesting
+  /// is LIFO — a nested `capturing` is awaited inside its parent's body — so
+  /// walking past a closed ancestor is a safety net rather than a case
+  /// `GtdDatabase.capturing` produces: a caller driving [beginScope] by hand can
+  /// close an outer scope early, and these ops must then flush on their own
+  /// rather than merge into a buffer nobody will emit.
   CaptureScope? get _flushTarget {
     for (var scope = _parent; scope != null; scope = scope._parent) {
       if (scope._isOpen) return scope;
@@ -103,7 +124,28 @@ abstract interface class DomainOpCapture {
 
   /// Open a capture scope, returning the token that closes it. Scopes nest;
   /// only the outermost flushes.
+  ///
+  /// The new scope's parent is the scope ambient at this call — so call it
+  /// *outside* the [runInScope] that makes it ambient, which is what makes a
+  /// nested `capturing` a child of its enclosing one and two overlapping
+  /// top-level calls strangers.
   CaptureScope beginScope();
+
+  /// Run [body] with [scope] as the ambient capture scope: the scope [write] and
+  /// [tombstone] file into, and the scope a [beginScope] made inside [body]
+  /// parents to.
+  ///
+  /// Ambient rather than a parameter on the write verbs because attribution has
+  /// to reach write sites that do not exist yet: threading a handle would need a
+  /// forgettable optional parameter on `capturing` and on every public DAO
+  /// method, and a forgotten one is silently the misattribution this exists to
+  /// prevent (ADR-0042).
+  ///
+  /// A `null` [scope] **masks**: nothing is ambient inside [body], so a
+  /// described effect throws instead of being filed into the enclosing scope.
+  /// That is how `GtdDatabase.uncapturedTransaction` and schema migrations make
+  /// "authors nothing" enforced rather than incidental.
+  Future<T> runInScope<T>(CaptureScope? scope, Future<T> Function() body);
 
   /// Close [scope], emitting its coalesced ops when it was the outermost and
   /// merging them into its parent otherwise. Awaited inside the same
@@ -145,6 +187,12 @@ class NoopDomainOpCapture implements DomainOpCapture {
   @override
   void rollbackScope(CaptureScope scope) {}
 
+  /// Reads no zone and needs none: nothing is recorded, so there is no
+  /// attribution to get right. The body runs in the caller's own zone.
+  @override
+  Future<T> runInScope<T>(CaptureScope? scope, Future<T> Function() body) =>
+      body();
+
   /// One shared token: the no-op keeps no state, so there is nothing for a
   /// per-call token to identify, and every DAO write path opens a scope.
   static final CaptureScope _scope = CaptureScope._(null);
@@ -159,15 +207,18 @@ class NoopDomainOpCapture implements DomainOpCapture {
 /// honestly represent (a tombstone and a field write sharing one clock would
 /// leave the field hidden).
 abstract class BufferedDomainOpCapture implements DomainOpCapture {
-  /// Open scopes, innermost last — writes land in the innermost.
-  ///
-  /// [write] and [tombstone] carry no token, so attribution is by *ambient*
-  /// scope, and the ambient scope of two overlapping ones can only be the one
-  /// begun most recently. What tokens buy is that closing a scope can never
-  /// touch another's writes; they cannot tell which of two overlapping scopes a
-  /// tokenless write belonged to. Ambiguity there needs a scope handle on the
-  /// write verbs, which would mean every DAO threading one through.
-  final List<CaptureScope> _open = <CaptureScope>[];
+  /// Where the live scope rides. **Per instance**, so two seam instances can
+  /// never read each other's scope even when one's zone nests inside the other's.
+  final Object _scopeZoneKey = Object();
+
+  /// The scope of the execution context this call is in, or null when none is —
+  /// which includes a [runInScope] that deliberately masked one.
+  CaptureScope? get _ambientScope =>
+      Zone.current[_scopeZoneKey] as CaptureScope?;
+
+  @override
+  Future<T> runInScope<T>(CaptureScope? scope, Future<T> Function() body) =>
+      runZoned(body, zoneValues: {_scopeZoneKey: scope});
 
   /// Emit one coalesced op. Called in recorded order, after commit.
   Future<void> emit(CapturedOp op);
@@ -192,14 +243,30 @@ abstract class BufferedDomainOpCapture implements DomainOpCapture {
     return fresh;
   }
 
+  /// The buffer this effect belongs in: the ambient scope's, never "the scope
+  /// begun most recently".
+  ///
+  /// Absent or already closed ⇒ **throw**. Fail closed, because the alternative
+  /// is the failure this seam exists to prevent: a dropped op leaves a committed
+  /// local row that nothing will ever author, invisible and unrecoverable, while
+  /// a throw is loud and local to the call site that caused it.
   CapturedOp _slotFor(String collection, String entityId) {
-    if (_open.isEmpty) {
+    final scope = _ambientScope;
+    if (scope == null) {
       throw StateError(
         'Domain effect described outside a capture scope: $collection/$entityId. '
         'Wrap the DAO write path in GtdDatabase.capturing.',
       );
     }
-    return _slotIn(_open.last, collection, entityId);
+    if (!scope._isOpen) {
+      throw StateError(
+        'Domain effect described in a closed capture scope: '
+        '$collection/$entityId. The scope this execution context belongs to has '
+        'already committed or rolled back, so the effect would never be '
+        'authored; describe it inside the scope that owns the write.',
+      );
+    }
+    return _slotIn(scope, collection, entityId);
   }
 
   @override
@@ -221,11 +288,7 @@ abstract class BufferedDomainOpCapture implements DomainOpCapture {
   }
 
   @override
-  CaptureScope beginScope() {
-    final scope = CaptureScope._(_open.isEmpty ? null : _open.last);
-    _open.add(scope);
-    return scope;
-  }
+  CaptureScope beginScope() => CaptureScope._(_ambientScope);
 
   @override
   Future<void> commitScope(CaptureScope scope) async {
@@ -263,7 +326,6 @@ abstract class BufferedDomainOpCapture implements DomainOpCapture {
       throw StateError('Capture scope closed twice.');
     }
     scope._isOpen = false;
-    _open.remove(scope);
   }
 }
 

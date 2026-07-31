@@ -66,6 +66,18 @@ class GtdDatabase extends _$GtdDatabase {
   /// [DomainOpCapture.beginScope] returns, not by stack position, so two
   /// overlapping un-awaited calls cannot close each other's scope.
   ///
+  /// **The scope rides the zone the body runs in** — every effect described
+  /// anywhere inside [body], at any nesting depth and across every `await`, is
+  /// filed into *this* scope, and a nested `capturing` is this scope's child
+  /// (ADR-0042). That is not a nicety: this method opens its scope as its first
+  /// synchronous statement while [body] waits behind drift's `ensureOpen`, so two
+  /// un-awaited calls always both open before either body runs, and "the scope
+  /// begun most recently" would attribute the first caller's writes to the
+  /// second — signing a rolled-back write, or discarding a committed one's op
+  /// when the second rolls back. [DomainOpCapture.beginScope] is called before
+  /// the zone is entered, so the parent it records is the *enclosing* scope
+  /// rather than an overlapping stranger.
+  ///
   /// Every domain write — a single DAO method or a multi-DAO service
   /// composition — runs its whole body (transaction, writes and post-commit
   /// view notifies) through this. Composing writes with a bare [transaction]
@@ -74,7 +86,10 @@ class GtdDatabase extends _$GtdDatabase {
     final scope = opCapture.beginScope();
     T result;
     try {
-      result = await _capturedTransaction(body);
+      result = await opCapture.runInScope(
+        scope,
+        () => _capturedTransaction(body),
+      );
     } catch (_) {
       opCapture.rollbackScope(scope);
       rethrow;
@@ -90,8 +105,12 @@ class GtdDatabase extends _$GtdDatabase {
   /// real [transaction] but marks the capturing zone, so nested DAO writes it
   /// makes (the projector's own `customStatement`s never describe effects, but
   /// the marker keeps the [transaction] guard satisfied) do not trip the guard.
+  ///
+  /// It also **masks** any enclosing capture scope, so "authors nothing" is
+  /// enforced rather than incidental: nested inside a [capturing] body, a
+  /// described effect throws instead of being filed into that body's scope.
   Future<T> uncapturedTransaction<T>(Future<T> Function() action) =>
-      _capturedTransaction(action);
+      opCapture.runInScope(null, () => _capturedTransaction(action));
 
   /// Runs [action] inside a real drift [transaction], having first marked the
   /// current zone as a capturing zone so the [transaction] override lets the
@@ -114,10 +133,13 @@ class GtdDatabase extends _$GtdDatabase {
   /// satisfied while it does. Migrations are the same op-free category as
   /// [uncapturedTransaction] — they run during `onCreate`/`onUpgrade`, before
   /// any DAO write path is live, so nothing describes an effect and nothing is
-  /// ever signed or queued.
-  Future<T> _duringMigration<T>(Future<T> Function() body) => runZoned(
-        body,
-        zoneValues: {_capturingZoneKey: true},
+  /// ever signed or queued. The capture scope is masked for the same reason
+  /// [uncapturedTransaction] masks it — nothing a migration does may be filed
+  /// into a scope.
+  Future<T> _duringMigration<T>(Future<T> Function() body) =>
+      opCapture.runInScope(
+        null,
+        () => runZoned(body, zoneValues: {_capturingZoneKey: true}),
       );
 
   /// Marks a zone opened by [capturing] / [uncapturedTransaction] / a schema
