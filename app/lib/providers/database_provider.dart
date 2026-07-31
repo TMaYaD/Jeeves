@@ -70,17 +70,38 @@ final Provider<GtdDatabase> databaseProvider = Provider<GtdDatabase>((ref) {
 /// never runs. It resolves to the number of entities projected: 0 on every launch
 /// after the first, and on a device that has never synced.
 ///
+/// It also resolves to 0 on a launch that neither owes a replay nor upgraded the
+/// schema.
+///
 /// **Ordering.** It runs as early as the app can run anything, but it does not
 /// hold the first frame: the projector fires the ADR-0010 view notifies for every
 /// collection it touched, so a watcher that attached before the replay finished
 /// still refreshes when it does. Blocking startup on a walk of the whole store to
 /// gain a guarantee the notifies already provide would be the worse trade.
 ///
-/// **Only until it has completed once.** A store that already holds the
-/// projection does not want the walk again — but the gate is the marker a
-/// *finished* replay writes, not the store's existence, so a replay that threw is
-/// retried on the next launch rather than skipped for ever with the log's reduced
-/// state stranded (`database/domain_store_io.dart`).
+/// **Two gates, either of which opens the walk.**
+///
+/// The first is the marker a *finished* replay writes, not the store's existence,
+/// so a replay that threw is retried on the next launch rather than skipped for
+/// ever with the log's reduced state stranded (`database/domain_store_io.dart`).
+///
+/// The second is **a schema upgrade**, and it is a repair (#605). Before `tags`
+/// lost its `UNIQUE (name, type)`, a peer's duplicate Tag made the projector raise
+/// *after* every op in the batch was durable and the cursor had advanced — so the
+/// ops sit in the log for ever, the server never re-serves those seqs, and the read
+/// model keeps a **permanent hole** covering every Outcome, Action, Capture and
+/// TimeLog that shared the batch. Nothing routine fills it: the next pull's
+/// `affected` set no longer names those entities. The v2→v3 upgrade therefore
+/// triggers exactly one full re-projection, which is idempotent on reduced state,
+/// and existing users' holes close with it.
+///
+/// **Forcing the open is load-bearing.** [databaseProvider] wraps the executor in
+/// `DatabaseConnection.delayed`, so the migration runs on the first *query*, not at
+/// construction: any "did we upgrade?" read taken straight after
+/// `ref.read(databaseProvider)` reports the pre-migration state and the gate would
+/// be silently inert. Hence the throwaway `SELECT 1` before awaiting
+/// [GtdDatabase.opened] — a future fed by `beforeOpen`, which drift runs on every
+/// open, so a launch that migrates nothing resolves it rather than hanging here.
 ///
 /// **A failure is logged, not swallowed.** It propagates into this provider's
 /// error state as well, but nothing reads that state — the console line is what a
@@ -90,11 +111,15 @@ final FutureProvider<int> domainStoreRebuildProvider =
     FutureProvider<int>((ref) async {
   ref.keepAlive();
   final opening = await ref.read(domainStoreProvider.future);
-  if (!opening.needsRebuild) return 0;
+  final domain = ref.read(databaseProvider);
+  // Resolve the delayed connection and run the migration, then read its verdict.
+  await domain.customSelect('SELECT 1').getSingle();
+  final details = await domain.opened;
+  if (!opening.needsRebuild && !details.hadUpgrade) return 0;
   try {
     final projected = await rebuildDomainFromOpLog(
       sync: await ref.read(syncDatabaseProvider.future),
-      domain: ref.read(databaseProvider),
+      domain: domain,
     );
     opening.markRebuilt();
     return projected;

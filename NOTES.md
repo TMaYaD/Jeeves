@@ -76,3 +76,6 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 ## 2026-07-31 (issue #580 — refusal-code alignment)
 - Instinct: `raise ControlPayloadError("cert_root_pk_mismatch")` sets the refusal code. Here: the first argument is the exception *message* and `.reason` is a **class attribute** defaulting to `malformed_control_payload`, so a bare raise silently reports the wrong code — and nothing catches it until a vector pins the class. Subclass it (`test_envelope_vectors.py` keeps the test-local typed errors #564 introduced for exactly this).
+
+## 2026-08-01 (issue #605 — convergence-test staging that self-heals)
+- Instinct: to prove a junction can be stranded on a folded-away Tag, stage the three-device `X < Y < Z` fold and assert the survivor. Here: that scenario converges **without** the dangling-junction pass, so the test passes green while covering nothing — a repointed junction carries a derived id (`todoTagIdFor(outcome, tag)`), so a peer passing through the same intermediate `{Y, Z}` state authors and later tombstones the *same* entity. Strand it with an assignment no other device could have authored: have the device tag a **new** Outcome, while offline, with the tag it believes is live. And verify any convergence pass by disabling it and watching the test go red, not by reading the staging.

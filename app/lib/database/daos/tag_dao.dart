@@ -8,6 +8,10 @@ import 'package:uuid/enums.dart' show Namespace;
 import '../../sync/collection_codecs.dart';
 import '../../utils/tag_colors.dart';
 import '../gtd_database.dart';
+// `capture_tags` is the second junction that references `tags.id`, so the fold
+// and the rehome pass both need its derived id. Owned by `capture_dao.dart`
+// alongside the table's other write paths.
+import 'capture_dao.dart' show captureTagIdFor;
 
 part 'tag_dao.g.dart';
 
@@ -32,7 +36,7 @@ class TagWithCount {
   final int count;
 }
 
-@DriftAccessor(tables: [Tags, TodoTags, Todos])
+@DriftAccessor(tables: [Tags, TodoTags, Todos, CaptureTags])
 class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   TagDao(super.db);
 
@@ -49,10 +53,10 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Return an existing tag's id for the `(name, type)` pair, or create one.
   ///
-  /// All tag-creation paths must funnel through here so duplicate `(name, type)`
-  /// rows never land in `tags`. `findPersonTagByName` (and its callers) assume
-  /// at most one row per `(name, 'person')`; multiple rows would crash that
-  /// query with `Bad state: Too many elements`.
+  /// **The local half of the `(name, type)` invariant.** All tag-creation paths
+  /// funnel through here, so no single device can mint a duplicate pair; the
+  /// cross-device half is `DomainReconciler`'s fold, because two devices doing
+  /// this offline still fork into two entities (`sync/ids.dart`).
   ///
   /// Assigns a derived color automatically when creating. Under the
   /// single-user-per-local-DB invariant [userId] matches any pre-existing row's
@@ -61,9 +65,11 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Runs inside a transaction so the SELECT and INSERT are serialised against
   /// the database connection — without this, two concurrent calls awaiting the
   /// SELECT could interleave and each mint a fresh row for the same
-  /// `(name, type)`. The SELECT is `limit(1)` so legacy duplicates that may
-  /// still be on disk before the startup `dedupeTags` pass completes do not
-  /// crash `getSingleOrNull`.
+  /// `(name, type)`. `orderBy(id).limit(1)` rather than `getSingleOrNull` on the
+  /// bare predicate: a peer's duplicate is a legitimate transient state on disk,
+  /// and returning `MIN(id)` is both crash-free and the same choice
+  /// [foldDuplicateTags] makes, so a lookup taken before the fold runs agrees
+  /// with the survivor it will pick.
   Future<String> findOrCreateTag(String name, String type, String userId) {
     final trimmed = name.trim();
     return attachedDatabase.capturing(() async {
@@ -94,11 +100,11 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Look up an existing person-typed tag by [name].
   ///
-  /// Uses `orderBy(id).limit(1)` so legacy `(name, 'person')` duplicates that
-  /// may still be on disk before [dedupeTags] completes do not crash
-  /// `getSingleOrNull` with `Bad state: Too many elements`. The result is
-  /// deterministic across calls — matching the canonicalisation rule used by
-  /// [findOrCreateTag] and [dedupeTags] (MIN(id) as the stable choice).
+  /// Uses `orderBy(id).limit(1)` so a peer's `(name, 'person')` duplicate sitting
+  /// on disk between arrival and the fold does not crash `getSingleOrNull` with
+  /// `Bad state: Too many elements`. The result is deterministic across calls and
+  /// across devices — `MIN(id)`, the same choice [findOrCreateTag] and
+  /// [foldDuplicateTags] make.
   Future<Tag?> findPersonTagByName(String name) {
     return (select(tags)
           ..where((t) => t.name.equals(name) & t.type.equals('person'))
@@ -229,12 +235,31 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     );
   }
 
+  void _captureCaptureTag(String captureId, String tagId, String userId) {
+    attachedDatabase.opCapture.write(
+      collection: captureTagsCollection,
+      entityId: captureTagIdFor(captureId, tagId),
+      fields: {
+        'capture_id': captureId,
+        'tag_id': tagId,
+        'user_id': userId,
+      },
+    );
+  }
+
+  void _tombstoneCaptureTag(String captureId, String tagId) {
+    attachedDatabase.opCapture.tombstone(
+      collection: captureTagsCollection,
+      entityId: captureTagIdFor(captureId, tagId),
+    );
+  }
+
   /// Rename a tag in-place, preserving all other fields.
   ///
   /// If another tag already owns the target `(name, type)` pair, this folds
-  /// the source into it via [merge] instead of writing a colliding row — an
-  /// id-addressed rename to an occupied name would otherwise recreate exactly
-  /// the duplicate state [findOrCreateTag] and [dedupeTags] exist to prevent.
+  /// the source into it via [merge] instead of writing a colliding row: a rename
+  /// onto an occupied name is the user asking for one Tag, so it merges rather
+  /// than leaving a duplicate for [foldDuplicateTags] to discover later.
   /// Silently returns when [tagId] is unknown or the name is unchanged.
   Future<void> rename(String tagId, String newName) {
     final trimmed = newName.trim();
@@ -283,11 +308,17 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     });
   }
 
-  /// Merge [sourceTagId] into [targetTagId].
+  /// Merge [sourceTagId] into [targetTagId] — the *user's* deliberate fold, as
+  /// opposed to [foldDuplicateTags]' automatic one.
   ///
   /// Re-assigns all `todo_tags` rows that reference [sourceTagId] to
   /// [targetTagId] (idempotent via [assignTag]), then deletes the source tag
   /// and its junction rows atomically.
+  ///
+  /// **It repoints only `todo_tags`, so it orphans the source tag's
+  /// `capture_tags` rows** — with FK enforcement off (#637) that is a silently
+  /// invisible tag hint rather than an error. [repointTagReferences] is the shared
+  /// helper that covers both junctions; switching this method onto it is #645.
   ///
   /// Throws [ArgumentError] if [sourceTagId] equals [targetTagId] — a
   /// self-merge would silently delete the tag and strip every association.
@@ -359,76 +390,130 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     return {for (final r in rows) r.read<String>('tag_id')};
   }
 
-  /// Collapse duplicate `(name, type)` tag rows into a single canonical row.
+  /// Collapse every duplicate `(name, type)` group onto one surviving Tag.
   ///
-  /// Runs through the DAO rather than raw SQL so every write is captured as an
-  /// op: a dedupe that only fixed the local store would be undone by the next
-  /// pull, which still carries the peer's duplicate.
+  /// The fold pass of `DomainReconciler`. `(name, type)` is the user-facing
+  /// identity of a Tag but not its op-log one: ids are client-random by protocol
+  /// policy (`sync/ids.dart`), so two devices each creating "Alice"/`person`
+  /// offline fork into two entities and both land in `tags` — which carries no
+  /// uniqueness constraint precisely so the projection can represent them
+  /// (ADR-0043).
   ///
-  /// Canonicalisation rule for each `(name, type)` group with > 1 row:
-  /// the row with the most `todo_tags` references wins, with `MIN(id)` as the
-  /// deterministic tiebreaker. References on losing rows are repointed to the
-  /// canonical id; colliding junction rows collapse under the
-  /// `(todo_id, tag_id)` PK via `INSERT OR REPLACE` plus an explicit delete of
-  /// the old junction id.
+  /// **The survivor is `MIN(id)` over the group and nothing else.** Not the most
+  /// referenced row: reference counts are per-device, so two devices folding
+  /// concurrently would pick different survivors, each repoint onto its own and
+  /// tombstone the other's — both tombstones land, **both Tags die**, and every
+  /// assignment dangles. Lexicographic `MIN(id)` over entity ids is commutative,
+  /// associative and idempotent, so every device reaches the same verdict from any
+  /// subset it can see.
   ///
-  /// Idempotent: a no-op when there are no duplicates, so it is safe to run on
-  /// every startup without a version gate.
-  Future<void> dedupeTags() {
+  /// **Runs through the DAO so the decision travels as ops.** A fold that only
+  /// fixed the local store would be undone by the next pull, which still carries
+  /// the peer's duplicate. References on the losers are repointed by
+  /// [repointTagReferences]; the loser itself is tombstoned, never merely deleted.
+  ///
+  /// Idempotent: with no duplicate group it authors nothing and writes nothing.
+  Future<void> foldDuplicateTags() {
     return attachedDatabase.capturing(() async {
       final groups = await customSelect(
-        'SELECT name, type FROM tags GROUP BY name, type HAVING COUNT(*) > 1',
+        'SELECT name, type, MIN(id) AS keep_id FROM tags '
+        'GROUP BY name, type HAVING COUNT(*) > 1',
         readsFrom: {tags},
       ).get();
       if (groups.isEmpty) return;
 
       for (final group in groups) {
-        final name = group.read<String>('name');
-        final type = group.read<String>('type');
+        final keepId = group.read<String>('keep_id');
+        final losers = await (select(tags)
+              ..where((t) =>
+                  t.name.equals(group.read<String>('name')) &
+                  t.type.equals(group.read<String>('type')) &
+                  t.id.equals(keepId).not()))
+            .get();
 
-        final candidates = await customSelect(
-          'SELECT t.id AS id, '
-          '(SELECT COUNT(*) FROM todo_tags WHERE tag_id = t.id) AS ref_count '
-          'FROM tags t WHERE t.name = ? AND t.type = ? '
-          'ORDER BY ref_count DESC, t.id ASC',
-          variables: [Variable(name), Variable(type)],
-          readsFrom: {tags, todoTags},
-        ).get();
-        if (candidates.length < 2) continue;
-
-        final keepId = candidates.first.read<String>('id');
-        final dupIds = candidates
-            .skip(1)
-            .map((r) => r.read<String>('id'))
-            .toList();
-
-        for (final dupId in dupIds) {
-          final junctionRows = await (select(todoTags)
-                ..where((tt) => tt.tagId.equals(dupId)))
-              .get();
-          for (final row in junctionRows) {
-            final newJunctionId = todoTagIdFor(row.todoId, keepId);
-            await into(todoTags).insert(
-              TodoTagsCompanion(
-                id: Value(newJunctionId),
-                todoId: Value(row.todoId),
-                tagId: Value(keepId),
-                userId: Value(row.userId),
-              ),
-              mode: InsertMode.insertOrReplace,
-            );
-            _captureTodoTag(row.todoId, keepId, row.userId);
-            if (row.id != newJunctionId) {
-              await (delete(todoTags)..where((tt) => tt.id.equals(row.id))).go();
-            }
-            _tombstoneTodoTag(row.todoId, dupId);
-          }
-          await (delete(tags)..where((t) => t.id.equals(dupId))).go();
+        for (final loser in losers) {
+          await _repointTagReferences(from: loser.id, to: keepId);
+          await (delete(tags)..where((t) => t.id.equals(loser.id))).go();
+          // Cascade set, enumerated at capture time: the log has no FK cascade,
+          // and a tombstone rather than row absence is what stops a replayed or
+          // reordered create from resurrecting the loser.
           attachedDatabase.opCapture
-              .tombstone(collection: tagsCollection, entityId: dupId);
+              .tombstone(collection: tagsCollection, entityId: loser.id);
         }
       }
+      attachedDatabase.notifyTagsViewWrite();
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+      attachedDatabase.notifyCapturesViewWrite();
     });
+  }
+
+  /// Move every reference to [from] onto [to], as its own capturing scope.
+  ///
+  /// The repair half of both `DomainReconciler` passes: the fold calls the private
+  /// form inside its own scope, and the rehome pass — which repoints a junction
+  /// whose `tag_id` has no row in `tags` at all — calls this one.
+  Future<void> repointTagReferences({
+    required String from,
+    required String to,
+  }) =>
+      attachedDatabase.capturing(() async {
+        await _repointTagReferences(from: from, to: to);
+        attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+        attachedDatabase.notifyCapturesViewWrite();
+      });
+
+  /// Repoint **both** junction tables that reference `tags.id`.
+  ///
+  /// `todo_tags` and `capture_tags` — both, because FK enforcement is off (#637)
+  /// so an orphaned junction row is not an error but a silently invisible Tag
+  /// assignment or tag hint. Each junction's identity is its pair, so the row
+  /// moves by inserting the derived id for `(parent, to)` and deleting the old
+  /// one; a `(parent, to)` row that already existed collapses under the primary
+  /// key via `INSERT OR REPLACE`. `[TagDao.merge]` still repoints only
+  /// `todo_tags`; switching it onto this helper is #645.
+  Future<void> _repointTagReferences({
+    required String from,
+    required String to,
+  }) async {
+    final todoJunctions =
+        await (select(todoTags)..where((tt) => tt.tagId.equals(from))).get();
+    for (final row in todoJunctions) {
+      final movedId = todoTagIdFor(row.todoId, to);
+      await into(todoTags).insert(
+        TodoTagsCompanion(
+          id: Value(movedId),
+          todoId: Value(row.todoId),
+          tagId: Value(to),
+          userId: Value(row.userId),
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+      _captureTodoTag(row.todoId, to, row.userId);
+      if (row.id != movedId) {
+        await (delete(todoTags)..where((tt) => tt.id.equals(row.id))).go();
+      }
+      _tombstoneTodoTag(row.todoId, from);
+    }
+
+    final captureJunctions =
+        await (select(captureTags)..where((ct) => ct.tagId.equals(from))).get();
+    for (final row in captureJunctions) {
+      final movedId = captureTagIdFor(row.captureId, to);
+      await into(captureTags).insert(
+        CaptureTagsCompanion(
+          id: Value(movedId),
+          captureId: Value(row.captureId),
+          tagId: Value(to),
+          userId: Value(row.userId),
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+      _captureCaptureTag(row.captureId, to, row.userId);
+      if (row.id != movedId) {
+        await (delete(captureTags)..where((ct) => ct.id.equals(row.id))).go();
+      }
+      _tombstoneCaptureTag(row.captureId, from);
+    }
   }
 
   /// Remove any existing project tag from [todoId], then assign [newProjectTagId].

@@ -15,12 +15,19 @@
 /// already handles create-vs-merge, the widened delete cascade and derived-id
 /// realignment. A second run would produce the same rows.
 ///
+/// It is also one of the two [DomainReconciler] sites, for the same reason it is a
+/// projection site: a log that holds two same-`(name, type)` Tag entities projects
+/// into two rows, and a device must not come out of a rebuild showing the user two
+/// "Alice" entries. The reconcile runs on the tail, after the projection has
+/// committed, because its passes author ops.
+///
 /// A device that never enrolled has no log and gets an empty store; that is the
 /// sanctioned path (fresh sign-up → enrolment → re-import), not a failure.
 library;
 
 import '../database/gtd_database.dart';
 import 'domain_projector.dart';
+import 'domain_reconciler.dart';
 import 'reducer.dart';
 import 'sync_database.dart';
 
@@ -35,9 +42,15 @@ Future<int> rebuildDomainFromOpLog({
 }) async {
   final entities = await reducedEntities(sync);
   if (entities.isEmpty) return 0;
-  await DomainProjector(
-    registry: CollectionRegistry(sync),
+  // One registry for both: the reconciler's rehome pass reads the same reduced
+  // state the projector does, and a second registry would be a second binding to
+  // the same store for no gain.
+  final registry = CollectionRegistry(sync);
+  final touched = await DomainProjector(
+    registry: registry,
     domain: domain,
   ).project(entities);
+  await DomainReconciler(registry: registry, domain: domain)
+      .reconcile(touched);
   return entities.length;
 }

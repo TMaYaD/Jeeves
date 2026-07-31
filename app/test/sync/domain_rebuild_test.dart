@@ -14,7 +14,7 @@
 @TestOn('!browser')
 library;
 
-import 'package:drift/drift.dart' show driftRuntimeOptions;
+import 'package:drift/drift.dart' show Value, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
@@ -144,5 +144,58 @@ void main() {
     // Idempotence is what makes it safe to run on every fresh open without a
     // "have I done this" flag, and what makes a crash mid-rebuild recoverable.
     expect(afterTwice, afterOnce);
+  });
+
+  test('a duplicate (name, type) pair in reduced state rebuilds and folds',
+      () async {
+    // The replay tail is the second of the two routes a peer's Tag reaches the
+    // domain store by, and the one that repairs a device rebuilt from its own log.
+    // The rebuild must both *represent* the duplicate — the projection of reduced
+    // state cannot refuse what reduced state holds — and then fold it, so the
+    // device does not come out of the rebuild showing two "Alice" rows.
+    final device = await SimDevice.create(
+      label: 'A',
+      userId: _userId,
+      server: server,
+      clock: clock,
+    );
+    addTearDown(device.close);
+
+    // Two Tag entities for one pair, exactly as two devices produce them: random
+    // ids by protocol policy, so `findOrCreateTag` on each device forks.
+    const small = 'aaaaaaaa-0000-4000-8000-000000000001';
+    const large = 'bbbbbbbb-0000-4000-8000-000000000002';
+    const outcomeId = '7d61520f-9eaf-4023-b134-5e6f70819203';
+    await device.domain.todoDao.insertOutcome(
+      id: outcomeId,
+      title: 'Ring Alice back',
+      userId: _userId,
+      now: device.clock.asDateTime,
+    );
+    for (final id in [large, small]) {
+      await device.domain.tagDao.upsertTag(TagsCompanion(
+        id: Value(id),
+        name: const Value('Alice'),
+        type: const Value('person'),
+        userId: const Value(_userId),
+      ));
+    }
+    await device.domain.tagDao.assignTag(outcomeId, large, _userId);
+
+    final rebuilt = freshDomainStore();
+    await rebuildDomainFromOpLog(sync: device.database, domain: rebuilt);
+
+    final tags = await rebuilt.select(rebuilt.tags).get();
+    expect(tags.map((row) => row.id), [small],
+        reason: 'the replay tail reconciles, folding onto MIN(id)');
+    final junctions = await rebuilt.select(rebuilt.todoTags).get();
+    expect(junctions.map((row) => row.tagId), [small],
+        reason: 'the assignment followed the fold');
+
+    // Still idempotent with the reconciler in the loop: the second rebuild finds
+    // no duplicate group and no dangling junction, so it changes nothing.
+    await rebuildDomainFromOpLog(sync: device.database, domain: rebuilt);
+    expect(await rebuilt.select(rebuilt.tags).get(), tags);
+    expect(await rebuilt.select(rebuilt.todoTags).get(), junctions);
   });
 }

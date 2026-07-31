@@ -240,21 +240,27 @@ class Tags extends Table {
 
   TextColumn get userId => text()();
 
+  /// The op-log identity. Client-random UUIDv4 by protocol policy
+  /// (`sync/ids.dart`) — a Tag id is *not* derived from `(name, type)`.
   @override
   Set<Column<Object>> get primaryKey => {id};
 
-  /// Test-only tripwire against duplicate `(name, type)` rows.
+  /// **No `(name, type)` uniqueness constraint, deliberately** (ADR-0043).
   ///
-  /// Drift emits `UNIQUE (name, type)` in the `CREATE TABLE`, so any regression
-  /// that mints a second row with the same `(name, type)` fails loudly. The
-  /// constraint is local, and convergence is not: two devices can each create
-  /// "Home" offline and reduce to two rows, so `TagDao.findOrCreateTag` and the
-  /// one-time `dedupeTags` startup pass remain the application-layer half of the
-  /// invariant.
-  @override
-  List<Set<Column<Object>>> get uniqueKeys => [
-        {name, type},
-      ];
+  /// `(name, type)` is the *user-facing* identity of a Tag, but not its op-log
+  /// one, and it is an **eventual** invariant rather than a schema one: two
+  /// devices each creating "Alice"/`person` offline fork into two entities by
+  /// design, and reduced state can hold both. This table is a projection of
+  /// reduced state, so it has to be able to represent what reduced state holds —
+  /// a constraint here made `DomainProjector`'s id-addressed insert raise
+  /// `SqliteException(2067)` and roll back the whole pull batch (#605).
+  ///
+  /// The invariant is enforced instead by [TagDao.findOrCreateTag] locally, and
+  /// converged across devices by `DomainReconciler`, whose fold pass collapses
+  /// each duplicate group onto `MIN(id)` by authoring real ops. Note the contrast
+  /// with [UserPreferences], whose `UNIQUE (user_id, key)` stays: its entity id
+  /// *is* derived from `(workspace, key)`, so two devices writing one preference
+  /// are two writes to one entity and can never fork.
 }
 
 // ---------------------------------------------------------------------------

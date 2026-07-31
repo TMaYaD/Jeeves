@@ -62,6 +62,7 @@ import 'package:uuid/uuid.dart';
 import 'chain_verifier.dart';
 import 'control_payload.dart';
 import 'domain_projector.dart';
+import 'domain_reconciler.dart';
 import 'envelope.dart';
 import 'grants_view.dart';
 import 'hlc.dart';
@@ -214,6 +215,16 @@ class SyncClient {
   /// either store a reference to the other. Null leaves reduction headless,
   /// which is what the collection-generic reducer tests want.
   DomainProjector? projector;
+
+  /// Takes the convergence decisions the projector must not — the Tag fold and
+  /// the dangling-junction rehome (see [DomainReconciler]).
+  ///
+  /// Driven from the **pull tail only**, never from [capture] or
+  /// [captureCompaction]: its passes author ops, which re-enter [capture] and
+  /// therefore projection, so a reconcile on the author path recurses. Null for
+  /// the same reason [projector] is — a headless reducer has no read model to
+  /// reconcile.
+  DomainReconciler? reconciler;
 
   SyncTransport? _transport;
 
@@ -379,6 +390,11 @@ class SyncClient {
     // The authoring device projects its own op too: that is what applies the
     // widened cascade and the `focus_session_tasks.id` realignment locally,
     // rather than leaving the author as the one device whose rows differ.
+    //
+    // **No reconcile here**, deliberately: a local write went through
+    // `TagDao.findOrCreateTag`, which cannot mint a duplicate `(name, type)`, so
+    // there is nothing to fold — and this is the recursion site, since the fold's
+    // own ops emit back through this very method (see [DomainReconciler.reconcile]).
     await projector?.project(affected);
     return opId;
   }
@@ -463,6 +479,9 @@ class SyncClient {
       payload: wireBytes,
       keyEpoch: await epochFloor(),
     );
+    // No reconcile: the self-apply above is a *provable* no-op — this method
+    // refuses the snapshot otherwise — so it changes no domain row and can create
+    // no duplicate to fold.
     await projector?.project(affected);
     return opId;
   }
@@ -1109,7 +1128,13 @@ class SyncClient {
     // Projection is the tail of the receive order, one pass per batch: an
     // entity touched by three ops in one pull is projected once, from the
     // reduced state all three produced.
-    await projector?.project(affected);
+    final touched = await projector?.project(affected);
+    // And the convergence passes run on what it changed. This is the route by
+    // which a peer's Tag entity first reaches the domain store, so it is where a
+    // duplicate `(name, type)` group is folded and a junction stranded on a
+    // tombstoned tag is rehomed. Outside any transaction, before the completion
+    // stamp, and never on the author path — see [DomainReconciler.reconcile].
+    if (touched != null) await reconciler?.reconcile(touched);
     await _stampPullCompleted();
   }
 

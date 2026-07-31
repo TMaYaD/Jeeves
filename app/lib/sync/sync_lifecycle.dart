@@ -217,7 +217,12 @@ class SyncLifecycle {
   final Completer<void> _firstSyncSettled = Completer<void>();
 
   /// Completes the first time step 4 succeeds — the spine's "the initial pull is
-  /// in" signal, and what `postSyncHooksProvider` arms its one-shot fixup on.
+  /// in" signal.
+  ///
+  /// No consumer today. Convergence fixups that used to be armed on it are the
+  /// `DomainReconciler`'s passes, which hang off *every* pull's tail rather than
+  /// off the first one, so they cover a duplicate that arrives on day ten as well
+  /// as one that was waiting at sign-in.
   Future<void> get firstSyncSettled => _firstSyncSettled.future;
 
   /// Run the sequence. Safe to call repeatedly: every step is idempotent, and

@@ -186,10 +186,29 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
+
+  /// Completes with the [OpeningDetails] of this store's one open.
+  ///
+  /// **The migration runs on the first query, not at construction.** Production
+  /// wraps the executor in `DatabaseConnection.delayed` (`database_provider.dart`),
+  /// so anything read off this object immediately after building it reports the
+  /// pre-migration state. A caller that has to act on "did this launch upgrade the
+  /// schema?" therefore issues a query to force the open and awaits this.
+  ///
+  /// Fed from [MigrationStrategy.beforeOpen], which drift runs on **every** open,
+  /// so the future always completes. Feeding it from `onUpgrade` instead would
+  /// leave it unresolved for ever on a launch that migrates nothing, and hang the
+  /// caller.
+  Future<OpeningDetails> get opened => _opened.future;
+
+  final Completer<OpeningDetails> _opened = Completer<OpeningDetails>();
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
+        beforeOpen: (details) async {
+          if (!_opened.isCompleted) _opened.complete(details);
+        },
         // Every migration entry point runs inside [_duringMigration]: drift's
         // recreate steps open a `transaction` on this db object, which the
         // [transaction] guard would otherwise refuse (a migration is outside
@@ -211,6 +230,25 @@ class GtdDatabase extends _$GtdDatabase {
           // swap.
           if (from < 2) {
             await m.alterTable(TableMigration(todos));
+          }
+          // v3 (issue #605): drop `UNIQUE (name, type)` from `tags`. Tag ids are
+          // client-random, so two devices each creating "Alice"/`person` offline
+          // reduce to two entities — and this table is a projection of reduced
+          // state, which therefore has to be able to hold two rows. The constraint
+          // made [DomainProjector]'s id-addressed insert raise instead, rolling
+          // back every entity in the pull batch. `(name, type)` is now an eventual
+          // invariant `DomainReconciler` folds towards (ADR-0043).
+          //
+          // A recreate for the same reason as v2 — the constraint is a table
+          // constraint, so there is no `ALTER TABLE` that removes it. `alterTable`
+          // copies every column into a table built from the current declaration,
+          // re-creates the explicit indices, and skips the `sqlite_autoindex` the
+          // dropped constraint owned; it runs inside drift's own transaction, so an
+          // interruption rolls the whole swap back. No row and no column is lost —
+          // including the `capture_tags` rows already orphaned by `merge` (#645),
+          // which survive as the dangling references they were.
+          if (from < 3) {
+            await m.alterTable(TableMigration(tags));
           }
         }),
       );
