@@ -1677,17 +1677,25 @@ class SyncClient {
     return max(head?.authorSeq ?? 0, floor?.seq ?? 0);
   }
 
-  /// The end of the contiguous run of attested positions starting just above the
-  /// derived head, or null when nothing is bridged.
+  /// One author's attested positions and the verified chain floor they bridge, in
+  /// a single `pruned_attestations` fetch.
   ///
-  /// Contiguity is the whole safety argument: the floor never skips a position, so
-  /// every step above the real head is individually attested and hash-linked. The
-  /// walk needs no `op_log` lookups because the derived head *is* the highest logged
-  /// position, so nothing above it is in the log by definition.
+  /// `attested` maps each attested `author_seq` to its envelope hash, **stored
+  /// rows first**: they have already been cross-checked against this device's own
+  /// evidence, so a provisional prune's target only fills a position no stored row
+  /// covers (`putIfAbsent`). `floor` is the end of the contiguous run of attested
+  /// positions starting just above the derived head, or null when nothing bridges.
   ///
-  /// Returns null the moment there are no attestations at all for the author, which
-  /// keeps a Workspace that has never been compacted at exactly the cost it had.
-  Future<VerifiedChainFloor?> _bridgedChainFloor(
+  /// Contiguity is the whole safety argument for the floor: it never skips a
+  /// position, so every step above the real head is individually attested and
+  /// hash-linked. The walk needs no `op_log` lookups because the derived head *is*
+  /// the highest logged position, so nothing above it is in the log by definition.
+  ///
+  /// Both a verdict's floor and its stored-attestation-at-a-position answer come
+  /// out of the one map, so `_chainVerdictFor` reads the table once per op rather
+  /// than twice (#621).
+  Future<({VerifiedChainFloor? floor, Map<int, Uint8List> attested})>
+      _attestedPositions(
     String authorMemberId, {
     required AuthorChainHead? head,
   }) async {
@@ -1701,7 +1709,7 @@ class SyncClient {
       // own evidence, and a provisional one has not.
       attested.putIfAbsent(target.authorSeq, () => target.envelopeHash);
     }
-    if (attested.isEmpty) return null;
+    if (attested.isEmpty) return (floor: null, attested: attested);
 
     var seq = head?.authorSeq ?? 0;
     Uint8List? hash;
@@ -1709,38 +1717,31 @@ class SyncClient {
       seq += 1;
       hash = attested[seq];
     }
-    if (hash == null) return null;
-    return (seq: seq, envelopeHash: hash);
+    return (
+      floor: hash == null ? null : (seq: seq, envelopeHash: hash),
+      attested: attested,
+    );
   }
 
-  /// What a prune attested at one position, when this device holds no op there.
-  Future<PrunedPositionAttestation?> _attestationAt(
-    String authorMemberId,
-    int authorSeq,
-  ) async {
-    final row = await (_db.select(_db.prunedAttestations)
-          ..where((r) =>
-              r.workspaceId.equals(workspaceId) &
-              r.authorMemberId.equals(authorMemberId) &
-              r.authorSeq.equals(authorSeq)))
-        .getSingleOrNull();
-    if (row != null) {
-      return (authorSeq: row.authorSeq, envelopeHash: row.envelopeHash);
-    }
-    for (final target in _provisionalPrune?.targetsOf(authorMemberId) ??
-        const <PruneTarget>[]) {
-      if (target.authorSeq == authorSeq) {
-        return (authorSeq: authorSeq, envelopeHash: target.envelopeHash);
-      }
-    }
-    return null;
-  }
+  /// The verified chain floor for one author — the floor half of
+  /// [_attestedPositions], kept as a named entry point for [effectiveChainHeadSeq]
+  /// (and so the hot release-scan path reads only the floor it needs).
+  Future<VerifiedChainFloor?> _bridgedChainFloor(
+    String authorMemberId, {
+    required AuthorChainHead? head,
+  }) async =>
+      (await _attestedPositions(authorMemberId, head: head)).floor;
 
   // --- Per-author chain enforcement -------------------------------------------
 
   /// The chain rules, against what this device's log already holds.
   Future<ChainVerdict> _chainVerdictFor(OpHeader header, Uint8List envelope) async {
     final head = await _chainHead(header.authorMemberId);
+    // One `pruned_attestations` fetch answers both the floor and the
+    // stored-attestation lookups (#621). The map is built stored-rows-first, so
+    // reading `attested[authorSeq]` preserves the stored-over-provisional
+    // precedence the two separate queries had.
+    final positions = await _attestedPositions(header.authorMemberId, head: head);
     return chainVerdict(
       header: header,
       envelope: envelope,
@@ -1753,9 +1754,13 @@ class SyncClient {
       // The seam #551 left dormant, now live: a verified prune is the only thing
       // that can supply a floor, and the floor wins above the derived head so a
       // mid-chain hole is bridgeable rather than a permanent gap.
-      verifiedFloor: await _bridgedChainFloor(header.authorMemberId, head: head),
-      storedAttestation:
-          await _attestationAt(header.authorMemberId, header.authorSeq),
+      verifiedFloor: positions.floor,
+      storedAttestation: positions.attested.containsKey(header.authorSeq)
+          ? (
+              authorSeq: header.authorSeq,
+              envelopeHash: positions.attested[header.authorSeq]!,
+            )
+          : null,
     );
   }
 
