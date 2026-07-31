@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/auth/auth_mode.dart';
 import 'package:jeeves/auth/auth_provider_interface.dart';
 import 'package:jeeves/auth/sws/sws_auth_provider.dart';
-import 'package:jeeves/auth/session_restore.dart';
 import 'package:jeeves/auth/sws/wallet_signer.dart';
 import 'package:jeeves/services/api_service.dart';
 import 'package:jeeves/services/auth_service.dart';
@@ -174,32 +173,11 @@ void main() {
     });
   });
 
-  group('SwsAuthProvider — restore', () {
-    test('nothing stored is an absent session', () async {
-      final (:storage, :api, :provider, :container) = _makeFixture();
-      addTearDown(container.dispose);
-
-      expect(await provider.restore(), isA<SessionAbsent>());
-    });
-
-    test('restores from a stored unexpired access token', () async {
-      final (:storage, :api, :provider, :container) = _makeFixture();
-      addTearDown(container.dispose);
-
-      final token = _makeJwt('solana-user-2');
-      await storage.write('jwt_token', token);
-      await storage.write('refresh_token', 'rr');
-
-      expect(
-        await provider.restore(),
-        isA<SessionRestored>()
-            .having((o) => o.session.userId, 'userId', 'solana-user-2'),
-      );
-    });
-  });
-
-  // The same contract the password provider answers. SWS shares the JWT +
-  // refresh-token mechanism, so it must share the #606 fix — and used to hold its
-  // own copy of the bug.
+  // Every restore case this provider owes, including the two it used to assert
+  // locally (nothing-stored, and a stored unexpired token) — the contract pins
+  // both, with strictly stronger assertions. SWS shares the JWT + refresh-token
+  // mechanism, so it must share the #606 fix, and used to hold its own copy of
+  // the bug. Local restore tests belong here only for SWS-specific behaviour the
+  // contract cannot express.
   runSessionRestoreContract('SwsAuthProvider', SwsAuthProvider.new);
 }

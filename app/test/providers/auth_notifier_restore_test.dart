@@ -8,13 +8,14 @@
 /// `test/sync/offline_relaunch_session_test.dart` is where the spine's half is
 /// proven; this file is where the branch table lives.
 ///
-/// The table (ADR-0041): the **only** two arms that clear credentials are a
-/// corroborated 401 and nothing-stored-to-refresh. Everything else — a dead
-/// socket, a 5xx, a bare 401 from a captive portal, a 200 full of garbage — keeps
-/// the device signed in on credentials of unknown validity, because clearing them
-/// destroys an enrolled device's enrolment and drops the whole session's ops
-/// (#606). An explicit sign-out still clears, offline or not; that row is the
-/// guard against over-correcting.
+/// The table (ADR-0041): the arms that clear credentials are a corroborated 401,
+/// nothing-stored-to-refresh, and an inconclusive answer that leaves no account id
+/// to stay signed in *as* — the torn-secure-store residual of #639, pinned below.
+/// Everything else — a dead socket, a 5xx, a bare 401 from a captive portal, a 200
+/// full of garbage — keeps the device signed in on credentials of unknown validity,
+/// because clearing them destroys an enrolled device's enrolment and drops the
+/// whole session's ops (#606). An explicit sign-out still clears, offline or not;
+/// that row is the guard against over-correcting.
 @TestOn('!browser')
 library;
 
@@ -108,14 +109,17 @@ ResponseBody? _serverError() => ResponseBody.fromString(
 ResponseBody? _tokenlessSuccess() => ResponseBody.fromString(
     '{"token_type": "bearer"}', 200, headers: _jsonHeaders);
 
-ResponseBody? _refreshedSuccess() => ResponseBody.fromString(
-      jsonEncode({
-        'access_token': _jwt(_userId, secondsFromNow: 3600),
-        'refresh_token': 'rotated-refresh-token',
-      }),
-      200,
-      headers: _jsonHeaders,
-    );
+/// A successful rotation that hands back [accessToken], so the test can name the
+/// exact token it expects the notifier to have adopted.
+ResponseBody? Function() _refreshedSuccessWith(String accessToken) =>
+    () => ResponseBody.fromString(
+          jsonEncode({
+            'access_token': accessToken,
+            'refresh_token': 'rotated-refresh-token',
+          }),
+          200,
+          headers: _jsonHeaders,
+        );
 
 // ---------------------------------------------------------------------------
 // JWTs
@@ -300,14 +304,19 @@ void main() {
 
     test('an expired token that refreshes successfully rotates and stays in',
         () async {
+      final rotatedAccessToken = _jwt(_userId, secondsFromNow: 3600);
+      final staleStoredToken = _jwt(_userId, secondsFromNow: -1);
       final (:storage, :adapter, :container) = _fixture(
-        accessToken: _jwt(_userId, secondsFromNow: -1),
+        accessToken: staleStoredToken,
         refreshToken: 'stored-refresh-token',
-        refreshAnswer: _refreshedSuccess,
+        refreshAnswer: _refreshedSuccessWith(rotatedAccessToken),
       );
       addTearDown(container.dispose);
 
-      expect(await container.read(authTokenProvider.future), isNotNull);
+      // Pinned exactly, not merely non-null: the stale stored token is non-null
+      // too, so `isNotNull` would pass whether or not the rotation was adopted.
+      expect(await container.read(authTokenProvider.future), rotatedAccessToken);
+      expect(storage.entries['jwt_token'], rotatedAccessToken);
       expect(storage.entries['refresh_token'], 'rotated-refresh-token');
       expect(container.read(currentUserIdProvider), _userId);
       expect(sessionGateNotifier.value, SessionGate.ready);

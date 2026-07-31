@@ -169,6 +169,31 @@ void main() {
       expect(await sut.refreshSession(), isA<SessionRefreshInconclusive>());
     });
 
+    test('a 401 whose detail is not a string corroborates nothing', () async {
+      // The corroboration rule needs a non-empty *string*. A framework error page
+      // or an intercepting proxy can nest an object or a list here, and neither is
+      // the backend's own shape — so neither may cost the device its enrolment.
+      final sut = await serviceOver(_ScriptedAdapter.answering(
+        ResponseBody.fromString(
+          '{"detail": {"msg": "unauthorized"}}',
+          401,
+          headers: _jsonHeaders,
+        ),
+      ));
+      expect(await sut.refreshSession(), isA<SessionRefreshInconclusive>());
+    });
+
+    test('a 401 whose detail is a list corroborates nothing', () async {
+      final sut = await serviceOver(_ScriptedAdapter.answering(
+        ResponseBody.fromString(
+          '{"detail": ["unauthorized"]}',
+          401,
+          headers: _jsonHeaders,
+        ),
+      ));
+      expect(await sut.refreshSession(), isA<SessionRefreshInconclusive>());
+    });
+
     test('any non-empty detail string corroborates — the text is not matched',
         () async {
       // Deliberate: a copy edit on the backend must not be able to flip every

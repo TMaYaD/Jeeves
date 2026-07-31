@@ -198,6 +198,26 @@ void runSessionRestoreContract(
       expect(storage.entries['refresh_token'], 'r');
     });
 
+    test('a 200 without tokens is UNVERIFIED, and keeps both keys', () async {
+      // A malformed success is exactly the shape the inversion exists to catch:
+      // promoting it to ABSENT would clear an enrolled device's credentials on
+      // nothing more authoritative than a broken response body.
+      final expired = contractJwt(contractUserId, secondsFromNow: -1);
+      final (:storage, :provider, :container) = fixture(
+        accessToken: expired,
+        refreshToken: 'r',
+        refreshAnswer: () => ResponseBody.fromString(
+          jsonEncode(<String, Object?>{}),
+          200,
+          headers: _jsonHeaders,
+        ),
+      );
+
+      expect(await provider.restore(), isA<SessionUnverified>());
+      expect(storage.entries['jwt_token'], expired);
+      expect(storage.entries['refresh_token'], 'r');
+    });
+
     test('a corroborated 401 is ABSENT', () async {
       final (:storage, :provider, :container) = fixture(
         accessToken: contractJwt(contractUserId, secondsFromNow: -1),
