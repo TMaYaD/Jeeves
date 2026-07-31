@@ -38,8 +38,12 @@ method. Zero call-site churn is the decisive property, not a bonus: write sites
 are still being added, and a fix that enumerated today's callers would be wrong
 the moment they land. The cost accepted in exchange is that attribution is
 implicit, and so invisible at the call site; what makes it safe is that every
-write verb is a synchronous statement inside a DAO body, and nothing in the write
-paths escapes its zone via `unawaited`, a timer, a microtask or an isolate.
+write verb is a synchronous statement inside a DAO body, so no described effect
+outlives the `capturing` body that owns it. One that did would still not be
+misfiled: an `unawaited` future, a timer or a microtask *inherits* the zone, so it
+finds its own scope and finds it closed, while an isolate is the one real zone
+boundary and finds no ambient scope at all. Either way the refusal above is what
+it gets.
 
 **A standing constraint, because this defect is one hop from a confidentiality
 breach.** `WorkspaceRoutingOpCapture` picks its destination client purely from
