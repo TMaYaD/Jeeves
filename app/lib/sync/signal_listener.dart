@@ -8,6 +8,7 @@
 library;
 
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:math';
 
 import 'signal_socket.dart';
@@ -49,17 +50,25 @@ class SignalListener {
     Duration initialBackoff = signalInitialBackoff,
     Duration maxBackoff = signalMaxBackoff,
     Future<void> Function(Duration)? delay,
+    Future<void> Function()? onSyncComplete,
     Random? random,
   })  : _client = client,
         _transport = transport,
         _initialBackoff = initialBackoff,
         _maxBackoff = maxBackoff,
         _delay = delay ?? Future<void>.delayed,
+        _onSyncComplete = onSyncComplete,
         _random = random ?? Random(),
         _backoffCeiling = initialBackoff;
 
   final SyncClient _client;
   final SyncTransport _transport;
+
+  /// Run after every completed pull, and swallowed if it throws. The pull tail is
+  /// where a stranded key rotation heals itself (#617): a resume that fails
+  /// transiently must not register as a *pull* failure on [syncFailures], so it is
+  /// guarded here rather than folded into the sync it follows.
+  final Future<void> Function()? _onSyncComplete;
   final Duration _initialBackoff;
   final Duration _maxBackoff;
   final Future<void> Function(Duration) _delay;
@@ -254,5 +263,25 @@ class SignalListener {
   Future<void> _runSync() async {
     _syncRunCount++;
     await _client.pull();
+    final onSyncComplete = _onSyncComplete;
+    if (onSyncComplete != null) {
+      try {
+        await onSyncComplete();
+      } on Object catch (error, stackTrace) {
+        // The pull itself succeeded; a post-pull hook that failed is its own
+        // concern and retries on the next pull. Letting it throw here would mark a
+        // healthy sync as failed and fight the reconnect ladder — so it stays off
+        // `syncFailures`. Logged, though: a hook that keeps failing (a stranded key
+        // rotation the server persistently refuses to re-publish) is otherwise
+        // invisible, and durable-but-silent is a hard state to diagnose.
+        developer.log(
+          'post-sync hook failed; not a pull failure, retries on the next pull',
+          name: 'jeeves.sync.signal_listener',
+          level: 900, // WARNING
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
   }
 }

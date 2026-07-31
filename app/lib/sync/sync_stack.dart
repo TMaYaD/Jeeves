@@ -33,6 +33,7 @@ import 'ids.dart';
 import 'member_identity.dart';
 import 'merge_strategy.dart';
 import 'passphrase_policy.dart';
+import 'pending_rotation_store.dart';
 import 'recovery_escrow.dart';
 import 'reducer.dart';
 import 'sync_client.dart';
@@ -76,6 +77,7 @@ class SyncStack {
     required int Function() nowMs,
     GtdDatabase? domain,
     WorkspaceKeyStore? workspaceKeys,
+    PendingRotationStore? pendingRotations,
     MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
     PassphrasePolicy passphrasePolicy = const PassphrasePolicy(),
     Argon2idParameters kdfParameters = Argon2idParameters.floor,
@@ -108,6 +110,13 @@ class SyncStack {
     // process. It is *not* the sync database: an epoch key in the store that holds
     // the ciphertext would make the encryption decorative (review F22).
     final epochKeys = workspaceKeys ?? SecureStorageWorkspaceKeyStore();
+
+    // The pending-rotation records live on the same keychain tier as the epoch keys,
+    // one store shared across the stack, keyed by Workspace inside — the same
+    // injection pattern `epochKeys` follows, and never the sync database (a pending
+    // record carries `workspaceKey` in the clear).
+    final pendingRotationStore =
+        pendingRotations ?? SecureStoragePendingRotationStore();
 
     final defaultClient = SyncClient(
       workspaceId: defaultWorkspaceId(userId),
@@ -173,6 +182,7 @@ class SyncStack {
         client: defaultClient,
         userTransport: userTransport,
         keyStore: keyStore,
+        pendingRotations: pendingRotationStore,
         workspaceClientFactory: workspaceClientFactory,
         nowMs: nowMs,
         passphrasePolicy: passphrasePolicy,

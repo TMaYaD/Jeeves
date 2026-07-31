@@ -31,6 +31,7 @@ import 'package:jeeves/sync/key_wraps.dart';
 import 'package:jeeves/sync/member_identity.dart';
 import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/passphrase_policy.dart';
+import 'package:jeeves/sync/pending_rotation_store.dart';
 import 'package:jeeves/sync/preferences_store.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/reducer.dart';
@@ -402,6 +403,7 @@ class SimDevice {
     required this.projector,
     required this.keyStore,
     required this.workspaceKeys,
+    required this.pendingRotations,
     required this.enrolment,
     required this.kdfParameters,
     required this.passphrasePolicy,
@@ -502,6 +504,7 @@ class SimDevice {
     // One store per device — N devices means N stores that cannot see each other,
     // which is what makes "this device could not read that epoch" a real claim.
     final workspaceKeys = InMemoryWorkspaceKeyStore();
+    final pendingRotations = InMemoryPendingRotationStore();
     final client = SyncClient(
       workspaceId: defaultWorkspaceId(userId),
       userId: userId,
@@ -571,6 +574,7 @@ class SimDevice {
       client: client,
       userTransport: link,
       keyStore: keyStore,
+      pendingRotations: pendingRotations,
       workspaceClientFactory: workspaceClientFactory,
       nowMs: () => clock.nowMs,
       passphrasePolicy: passphrasePolicy,
@@ -602,6 +606,7 @@ class SimDevice {
       projector: projector,
       keyStore: keyStore,
       workspaceKeys: workspaceKeys,
+      pendingRotations: pendingRotations,
       enrolment: enrolment,
       kdfParameters: kdf,
       passphrasePolicy: passphrasePolicy,
@@ -635,6 +640,10 @@ class SimDevice {
   /// This device's `epoch -> K_{w,epoch}` map, per Workspace. A test asserts on it to
   /// say what this device can and cannot read.
   final WorkspaceKeyStore workspaceKeys;
+
+  /// This device's pending-rotation records, per Workspace. Held so a second
+  /// [enrolmentAgainst] service shares the one store the ceremony wrote through.
+  final PendingRotationStore pendingRotations;
 
   final EnrolmentService enrolment;
 
@@ -676,6 +685,7 @@ class SimDevice {
         client: client,
         userTransport: transport,
         keyStore: keyStore,
+        pendingRotations: pendingRotations,
         workspaceClientFactory: workspaceClientFactory,
         nowMs: () => clock.nowMs,
         passphrasePolicy: passphrasePolicy,
