@@ -203,31 +203,17 @@ class SecureStoragePendingRotationStore extends PendingRotationStore {
   Future<PendingRotationsByEpoch> readRaw(String workspaceId) async {
     final raw = await _storage.read(key: _key(workspaceId));
     if (raw == null) return {};
-    // A corrupt record is unpublishable, and if it threw on every read it would
-    // also be unremovable — wedging `resumePendingRotations` and every later
-    // ceremony that resumes first, for good. So corruption self-discards here per
-    // record: a set that never round-trips materialised nothing, and nothing is
-    // stranded by dropping it. `clearRaw` (not `clear`) because this always runs
-    // inside a `_serialised` body (`read`/`put`/`remove`), where the serialised
-    // `clear` would deadlock — and being on that chain is what makes the delete safe.
-    final Map<String, Object?> decoded;
-    try {
-      decoded = jsonDecode(raw) as Map<String, Object?>;
-    } on Object {
+    // Corruption tolerance lives in the pure [decodePendingRotationsRecord] so it can
+    // be pinned without the keychain. A corrupt record is unpublishable, and if it
+    // threw on every read it would also be unremovable — wedging
+    // `resumePendingRotations` and every later ceremony that resumes first, for good.
+    final (sets, wasWhollyCorrupt) = decodePendingRotationsRecord(raw);
+    if (wasWhollyCorrupt) {
+      // Nothing round-tripped, so nothing was materialised to strand — drop it.
+      // `clearRaw` (not `clear`) because this always runs inside a `_serialised` body
+      // (`read`/`put`/`remove`), where the serialised `clear` would deadlock — and
+      // being on that chain is what makes the delete safe against a concurrent write.
       await clearRaw(workspaceId);
-      return {};
-    }
-    final sets = <int, EpochKeySet>{};
-    for (final entry in decoded.entries) {
-      try {
-        sets[int.parse(entry.key)] =
-            _decodeEpochKeySet(entry.value! as Map<String, Object?>);
-      } on Object {
-        // One bad epoch is skipped, not fatal: the other Workspaces' — and this
-        // Workspace's other epochs' — resumes must not be stranded by it. Left on
-        // disk (inert, always skipped) rather than rewriting from a read.
-        continue;
-      }
     }
     return sets;
   }
@@ -260,6 +246,35 @@ Map<String, Object?> encodePendingEpochKeySet(EpochKeySet set) =>
 /// The inverse of [encodePendingEpochKeySet].
 EpochKeySet decodePendingEpochKeySet(Map<String, Object?> json) =>
     _decodeEpochKeySet(json);
+
+/// Decode a whole stored pending-rotations record, tolerant of corruption.
+///
+/// The corruption policy of [SecureStoragePendingRotationStore.readRaw], as a pure
+/// function so it can be pinned without the keychain. Returns the decoded good
+/// entries and whether the record was *wholly* undecodable:
+/// - a top-level parse failure yields `({}, true)` — the caller self-discards it,
+///   because a record that never round-trips materialised nothing to strand;
+/// - a single bad epoch is skipped (the other epochs, and the other Workspaces'
+///   records, must not be wedged by it) and the record is *not* flagged corrupt —
+///   the good entries stand and the bad one stays inert on disk.
+(PendingRotationsByEpoch, bool) decodePendingRotationsRecord(String raw) {
+  final Map<String, Object?> decoded;
+  try {
+    decoded = jsonDecode(raw) as Map<String, Object?>;
+  } on Object {
+    return (const {}, true);
+  }
+  final sets = <int, EpochKeySet>{};
+  for (final entry in decoded.entries) {
+    try {
+      sets[int.parse(entry.key)] =
+          _decodeEpochKeySet(entry.value! as Map<String, Object?>);
+    } on Object {
+      continue;
+    }
+  }
+  return (sets, false);
+}
 
 Map<String, Object?> _encodeEpochKeySet(EpochKeySet set) => {
       'epoch': set.epoch,

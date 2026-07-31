@@ -20,8 +20,8 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart'
     show authorKeyIdBytes, opClassContent, suiteAeadV1, workspaceKeyBytes;
@@ -423,61 +423,66 @@ void main() {
         reason: 'a record for an already-held epoch is dropped, never re-published');
   });
 
-  test('a corrupt pending record is discarded per entry, never wedging the '
-      'good records beside it', () async {
-    TestWidgetsFlutterBinding.ensureInitialized();
-    final storage = _FakeSecureStorage()..install();
-
-    const ws = 'rotation-resume-corrupt-ws';
-    const storeKey = 'jeeves/sync/pending_rotations/$ws';
-    final store = SecureStoragePendingRotationStore();
+  test('the record codec discards a corrupt entry per record, and flags a wholly '
+      'undecodable record for self-discard', () {
+    // The corruption tolerance is the pure [decodePendingRotationsRecord] — the exact
+    // logic `SecureStoragePendingRotationStore.readRaw` runs on the keychain bytes,
+    // tested directly on those bytes rather than through a mocked platform channel.
 
     // One decodable epoch and one that cannot decode (a truncated value), side by
-    // side in the same Workspace record.
-    storage.backing[storeKey] = jsonEncode({
+    // side in the same record.
+    final mixed = jsonEncode({
       '3': encodePendingEpochKeySet(_placeholderSet(3)),
       '5': {'epoch': 5, 'workspace_key': 'not valid base64 %%%'},
     });
-
-    final read = await store.read(ws);
-    expect(read.keys.toList(), [3],
+    final (goodSets, mixedWasCorrupt) = decodePendingRotationsRecord(mixed);
+    expect(goodSets.keys.toList(), [3],
         reason: 'the good epoch survives; the corrupt one is skipped, not thrown');
-    expect(read[3]!.epoch, 3);
+    expect(goodSets[3]!.epoch, 3);
+    expect(mixedWasCorrupt, isFalse,
+        reason: 'a per-entry skip does not condemn the whole record');
 
-    // A wholly undecodable record self-discards rather than throwing on every read
-    // — otherwise it would wedge `resumePendingRotations` and every later ceremony.
-    storage.backing[storeKey] = 'not json at all';
-    expect(await store.read(ws), isEmpty);
-    expect(storage.backing.containsKey(storeKey), isFalse,
-        reason: 'an unparseable record is cleared, not re-read for ever');
+    // A wholly undecodable record is flagged so `readRaw` self-discards it — otherwise
+    // it would wedge `resumePendingRotations` and every later ceremony for good.
+    final (garbageSets, garbageWasCorrupt) =
+        decodePendingRotationsRecord('not json at all');
+    expect(garbageSets, isEmpty);
+    expect(garbageWasCorrupt, isTrue,
+        reason: 'an unparseable record must be cleared, not re-read for ever');
   });
 
-  test('a direct read self-heal cannot clobber a concurrent put — read is on the '
-      'same mutation chain as put', () async {
-    TestWidgetsFlutterBinding.ensureInitialized();
-    final storage = _FakeSecureStorage()..install();
-
+  test('a read self-heal cannot clobber a concurrent put — read and put share the '
+      'mutation chain', () async {
+    // Exercised at the app-owned store seam: `_GatedSelfHealingStore` implements the
+    // abstract `PendingRotationStore` (the class that owns `read`/`put`/`_serialised`)
+    // with an in-memory backing and a gate on its `clearRaw`. No system component is
+    // mocked — the serialization under test is storage-independent app logic.
+    final store = _GatedSelfHealingStore();
     const ws = 'rotation-resume-race-ws';
-    const storeKey = 'jeeves/sync/pending_rotations/$ws';
-    final store = SecureStoragePendingRotationStore();
 
     // A wholly corrupt record: a direct `read` — the shape `resumePendingRotations`
-    // issues — will self-heal it by deleting the key (`clearRaw`).
-    storage.backing[storeKey] = 'not json at all';
+    // issues — self-heals it by deleting the record (`clearRaw`), exactly as
+    // `SecureStoragePendingRotationStore.readRaw` does on undecodable bytes.
+    store.markCorrupt(ws);
 
-    // Hold the self-heal delete at an explicit gate, wait for a signal that it has
-    // actually reached that gate (no event-loop-yield guessing), then queue a `put`
-    // while the delete is parked. `store.put` registers on the mutation chain
-    // synchronously before it returns, so by the time it returns the put is queued
-    // behind the parked read. If `read` were off the chain the put's write would land
-    // inside the delete's window and the resumed delete would wipe it; because `read`
-    // shares the chain, the put simply waits for the whole read (self-heal included).
+    // Hold that self-heal delete at an explicit gate; wait for the signal that it has
+    // reached the gate, then queue a `put` while it is parked. `store.put` registers
+    // on the mutation chain synchronously before it returns, so it is queued behind
+    // the parked read. If `read` were off the chain the put's write would land inside
+    // the delete's window and the resumed delete would wipe it; because `read` shares
+    // the chain, the put waits for the whole read (self-heal included).
     final gate = Completer<void>();
-    storage.deleteGate = gate; // the handler disarms the field, so hold our own ref
+    store.clearGate = gate;
     final readFuture = store.read(ws);
-    await storage.deleteAtGate.future; // the self-heal delete is now parked
-    final putFuture = store.put(ws, _placeholderSet(9)); // synchronously queued behind it
-    gate.complete(); // release the delete; the queued put runs strictly after
+    await store.clearAtGate.future; // the self-heal delete is now parked, before its remove
+    final putFuture = store.put(ws, _placeholderSet(9));
+    // Drain the microtask queue while the self-heal is still parked. Off the chain the
+    // put runs to completion here (its write lands); on the chain it is queued behind
+    // the parked read and makes no progress. `pumpEventQueue` settles either outcome
+    // deterministically — robust to how many async hops the put takes, unlike a fixed
+    // count of zero-duration yields.
+    await pumpEventQueue();
+    gate.complete(); // only now release the self-heal's remove
 
     await Future.wait([readFuture, putFuture]);
 
@@ -584,56 +589,51 @@ EpochKeySet _placeholderSet(int epoch) => EpochKeySet(
       digest: _filled(keyWrapDigestBytes, 0),
     );
 
-/// A map-backed [FlutterSecureStorage] over the store's real JSON codec — only the
-/// keychain replaced, so the store under test is production but for its I/O. The
-/// pending-rotation store key is `jeeves/sync/pending_rotations/<workspaceId>`.
-class _FakeSecureStorage {
-  final Map<String, String> backing = {};
+/// An app-owned [PendingRotationStore] for exercising the base class's
+/// `read`/`put`/`_serialised` mutation chain under a controllable interleaving —
+/// with no system component in the picture.
+///
+/// In-memory backing, like [InMemoryPendingRotationStore], plus two knobs the
+/// production stores do not need:
+/// - [markCorrupt] makes [readRaw] self-heal (call `clearRaw`) for a Workspace, the
+///   way [SecureStoragePendingRotationStore.readRaw] does on undecodable bytes;
+/// - [clearGate] parks the next `clearRaw` mid-flight, so a test can hold a self-heal
+///   open while a concurrent `put` is queued, and [clearAtGate] signals the instant
+///   that park is reached — no event-loop-yield guessing.
+class _GatedSelfHealingStore extends PendingRotationStore {
+  final Map<String, PendingRotationsByEpoch> _sets = {};
+  final Set<String> _corruptWorkspaces = {};
 
-  /// Armed by a test: the *next* `delete` (a `clearRaw` self-heal) parks on this
-  /// until it completes, then disarms. The hook a race test uses to hold a self-heal
-  /// mid-flight while a concurrent `put` tries to interleave.
-  Completer<void>? deleteGate;
+  Completer<void>? clearGate;
+  final Completer<void> clearAtGate = Completer<void>();
 
-  /// Completed the instant a gated `delete` enters its wait — the explicit signal a
-  /// race test awaits to know the self-heal has reached its storage delete and is
-  /// parked, rather than guessing with event-loop yields.
-  final Completer<void> deleteAtGate = Completer<void>();
+  void markCorrupt(String workspaceId) => _corruptWorkspaces.add(workspaceId);
 
-  void install() {
-    const channel =
-        MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      final args = (call.arguments as Map).cast<String, Object?>();
-      final key = args['key'] as String?;
-      switch (call.method) {
-        case 'read':
-          return backing[key];
-        case 'write':
-          backing[key!] = args['value']! as String;
-          return null;
-        case 'delete':
-          final gate = deleteGate;
-          if (gate != null) {
-            deleteGate = null;
-            if (!deleteAtGate.isCompleted) deleteAtGate.complete();
-            await gate.future;
-          }
-          backing.remove(key);
-          return null;
-        case 'containsKey':
-          return backing.containsKey(key);
-        case 'readAll':
-          return Map<String, String>.from(backing);
-        case 'deleteAll':
-          backing.clear();
-          return null;
-        default:
-          return null;
-      }
-    });
-    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+  @override
+  Future<PendingRotationsByEpoch> readRaw(String workspaceId) async {
+    if (_corruptWorkspaces.contains(workspaceId)) {
+      // Mirror the production self-heal: a wholly-corrupt record discards itself via
+      // `clearRaw`, then reads as empty.
+      await clearRaw(workspaceId);
+      return {};
+    }
+    return {...?_sets[workspaceId]};
+  }
+
+  @override
+  Future<void> write(String workspaceId, PendingRotationsByEpoch setsByEpoch) async {
+    _sets[workspaceId] = {...setsByEpoch};
+  }
+
+  @override
+  Future<void> clearRaw(String workspaceId) async {
+    _corruptWorkspaces.remove(workspaceId);
+    final gate = clearGate;
+    if (gate != null) {
+      clearGate = null;
+      if (!clearAtGate.isCompleted) clearAtGate.complete();
+      await gate.future;
+    }
+    _sets.remove(workspaceId);
   }
 }
