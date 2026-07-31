@@ -20,6 +20,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/sync/domain_reconciler.dart';
 import 'package:jeeves/sync/ids.dart' show jeevesWorkspaceNamespace;
 import 'package:uuid/uuid.dart';
 
@@ -451,4 +452,95 @@ void main() {
       await expectReducedStateAgrees([a, b, c]);
     });
   });
+
+  group('a convergence pass that throws', () {
+    test('leaves the pull completed, and is retried on the next one', () async {
+      // The regression this guards is the one #605 exists to repair, with the
+      // reconciler as the new thrower: ops durable and the cursor advanced, the
+      // projection committed, and `_stampPullCompleted` skipped — so the server
+      // never re-serves that batch and the device's freshness never moves again.
+      // Putting a throwing pass in front of the stamp would rebuild it exactly.
+      final workspace = await SimWorkspace.create();
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final b = workspace.b;
+      await workspace.syncAll();
+
+      // Stage the duplicate, and leave it unpublished on B so the pull under test
+      // is the one that first makes the group foldable on B.
+      b.goOffline();
+      final tagA =
+          await a.domain.tagDao.findOrCreateTag('Alice', 'person', _userId);
+      final tagB =
+          await b.domain.tagDao.findOrCreateTag('Alice', 'person', _userId);
+      expect(tagA, isNot(tagB));
+      await a.sync();
+      b.goOnline();
+
+      final faulty = _FaultyReconciler(registry: b.registry, domain: b.domain);
+      b.client.reconciler = faulty;
+
+      workspace.clock.advance(60000);
+      final failedRepair = await b.sync();
+
+      expect(faulty.forcedOnEachCall, [false],
+          reason: 'the batch carried a Tag, so the ordinary gate let it through');
+      expect(
+        (await personTags(b)).map((row) => row['id']).toSet(),
+        {tagA, tagB},
+        reason: 'the pass really did fail — otherwise the retry proves nothing',
+      );
+      expect(failedRepair.lastSyncedAt, isNotNull,
+          reason: 'a failed repair must not skip the completion stamp: the ops '
+              'and the projection are already committed and correct, and the '
+              'cursor has already moved past this batch');
+
+      // The next pull carries **nothing** — A has authored nothing since. The
+      // collections gate alone would therefore skip the passes and leave the
+      // duplicate on screen until unrelated tag traffic happened along; the
+      // re-arm is what runs them anyway.
+      faulty.armed = false;
+      workspace.clock.advance(60000);
+      final repaired = await b.sync();
+
+      expect(faulty.forcedOnEachCall, [false, true],
+          reason: 'the retry is forced past the batch-derived gate');
+      expect(repaired.lastSyncedAt, isNotNull);
+      expect(repaired.lastSyncedAt!.isAfter(failedRepair.lastSyncedAt!), isTrue,
+          reason: 'both pulls completed');
+
+      final alice = await personTags(b);
+      expect(alice, hasLength(1), reason: 'the retry converged');
+      expect(alice.single['id'],
+          [tagA, tagB].reduce((x, y) => x.compareTo(y) <= 0 ? x : y));
+
+      // And a third quiet pull disarms the re-arm rather than forcing for ever.
+      workspace.clock.advance(60000);
+      await b.sync();
+      expect(faulty.forcedOnEachCall, [false, true, false]);
+    });
+  });
+}
+
+/// The real reconciler, with a fault the pull tail has to survive.
+///
+/// Injected at the seam `SyncClient.pull` actually calls, so what is under test
+/// is the client's containment rather than a restatement of it. Disarmed it
+/// delegates to the real passes, which is what makes the retry a retry that
+/// genuinely converges instead of one that merely happened.
+class _FaultyReconciler extends DomainReconciler {
+  _FaultyReconciler({required super.registry, required super.domain});
+
+  bool armed = true;
+
+  /// The `force` argument of every call, in order — the record of *why* each run
+  /// happened: `false` is the ordinary batch-derived gate, `true` a re-arm.
+  final List<bool> forcedOnEachCall = [];
+
+  @override
+  Future<void> reconcile(Set<String> collections, {bool force = false}) async {
+    forcedOnEachCall.add(force);
+    if (armed) throw StateError('a convergence pass blew up');
+    return super.reconcile(collections, force: force);
+  }
 }

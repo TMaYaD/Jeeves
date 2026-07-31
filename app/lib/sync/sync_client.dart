@@ -1132,10 +1132,47 @@ class SyncClient {
     // And the convergence passes run on what it changed. This is the route by
     // which a peer's Tag entity first reaches the domain store, so it is where a
     // duplicate `(name, type)` group is folded and a junction stranded on a
-    // tombstoned tag is rehomed. Outside any transaction, before the completion
-    // stamp, and never on the author path — see [DomainReconciler.reconcile].
-    if (touched != null) await reconciler?.reconcile(touched);
+    // tombstoned tag is rehomed. Outside any transaction, and never on the author
+    // path — see [DomainReconciler.reconcile].
+    if (touched != null) await _reconcileProjected(touched);
     await _stampPullCompleted();
+  }
+
+  /// Run the convergence passes over what this batch projected, and **contain any
+  /// failure to the passes themselves**.
+  ///
+  /// By the time this runs the batch is finished: every op is durable, the cursor
+  /// has advanced, and the projection has committed. The reconcile is a *repair*
+  /// layered on top of that, not a step of applying the batch — so a fold or
+  /// rehome that throws must not take [_stampPullCompleted] down with it. Letting
+  /// it propagate would be #605's own defect reintroduced with a new thrower:
+  /// ops durable, cursor advanced past the batch, completion never stamped, and
+  /// the server never asked for those seqs again.
+  ///
+  /// So the failure is swallowed and re-armed. Retrying is safe because both
+  /// passes are idempotent and both detect from **durable** state — a duplicate
+  /// `(name, type)` group and a junction whose `tag_id` has no row — rather than
+  /// from the batch. Re-running them finds the same work, and finds nothing once
+  /// it is done.
+  ///
+  /// [_reconcileRetryRequired] exists because the *gate* is batch-derived even
+  /// though the work is not: a later pull carrying no tag op would skip the passes
+  /// and leave the repair waiting on unrelated traffic. The flag forces one run.
+  ///
+  /// It is in-memory only, and that is the honest bound rather than an oversight:
+  /// losing it to a restart delays the repair to the next tag-touching pull or the
+  /// next `rebuildDomainFromOpLog`, both of which re-detect from scratch. Unlike
+  /// the hole #605 names, nothing here becomes unreachable — the evidence is the
+  /// duplicate row itself, and it does not go away.
+  Future<void> _reconcileProjected(Set<String> touched) async {
+    final pending = reconciler;
+    if (pending == null) return;
+    try {
+      await pending.reconcile(touched, force: _reconcileRetryRequired);
+      _reconcileRetryRequired = false;
+    } catch (_) {
+      _reconcileRetryRequired = true;
+    }
   }
 
   /// Clear derived state and replay the retained log, recomputing **only** the
@@ -2879,6 +2916,14 @@ class SyncClient {
   /// restart-safe fallback across process death; this flag saves the read on the
   /// pull that raised it. Cleared once the re-arm scan has run.
   bool _chainSuccessorReplayRetryRequired = false;
+
+  /// Set when a convergence pass threw, so the next pull runs them whatever it
+  /// touched.
+  ///
+  /// The repair the flag re-arms is the only thing lost when it is — see
+  /// [_reconcileProjected] for why that is a delay rather than a hole, and why the
+  /// failure is swallowed at all.
+  bool _reconcileRetryRequired = false;
 
   /// Fetch this Member's KeyWraps and learn every epoch key they carry.
   ///

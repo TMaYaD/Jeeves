@@ -75,8 +75,15 @@ class DomainReconciler {
   /// Both "yes" sites are outside any transaction, so the passes' own
   /// `GtdDatabase.capturing` scopes open cleanly and the projector's "authors
   /// nothing" invariant is untouched: the projector materialises, this decides.
-  Future<void> reconcile(Set<String> collections) async {
-    if (!collections.contains(tagsCollection) &&
+  ///
+  /// [force] runs the passes whatever [collections] says. The gate answers "could
+  /// *this batch* have created work?", which is the wrong question after an
+  /// attempt that threw: the work is already outstanding, and the batch that
+  /// created it has long since gone by. Its one caller is the pull tail's retry
+  /// (`SyncClient._reconcileProjected`).
+  Future<void> reconcile(Set<String> collections, {bool force = false}) async {
+    if (!force &&
+        !collections.contains(tagsCollection) &&
         !collections.contains(todoTagsCollection) &&
         !collections.contains(captureTagsCollection)) {
       return;
