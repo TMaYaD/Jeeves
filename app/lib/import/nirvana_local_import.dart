@@ -1,9 +1,30 @@
 /// On-device Nirvana import: converts parsed items and writes them to the
 /// local Drift database via [TagDao], [TodoDao] and [CaptureDao].
 ///
-/// The import is fully transactional at the local-DB level — a mid-file
-/// failure leaves the database unchanged.  Writes are batched for large
-/// exports to avoid holding an excessively large transaction frame in memory.
+/// **Every write goes through a DAO**, so every imported entity describes itself
+/// on the op-log seam and therefore syncs (issue #610). Raw `into(...)`/`update`
+/// statements here would commit rows that author nothing — an import a peer
+/// could never see.
+///
+/// **A batch is the transaction and the capturing scope.**
+/// [nirvanaImportTaskBatchSize] tasks commit their rows and author their ops
+/// together, then the next batch opens a fresh scope; the project-tag prologue
+/// is a scope of its own. The import is
+/// *not* all-or-nothing across the file, deliberately: `GtdDatabase.capturing`
+/// emits only after its transaction commits, and until each op is signed and
+/// queued it lives only in memory, so one whole-file scope would leave a
+/// multi-thousand-op import minutes of post-commit exposure in which a kill
+/// loses every op while keeping every row — unrecoverably, since the
+/// initial-upload marker would already be set. Per-batch scopes make an
+/// interruption a *partial* import instead: item ids are deterministic
+/// ([_deterministicTodoId], `todoTagIdFor`), so re-running the same export
+/// converges on the same entities and completes what was left. Nothing surfaces
+/// that state to the user yet (issue #642).
+///
+/// A consequence worth stating: the prologue commits project tags before any
+/// task batch, so an interruption between them leaves Tags with no Tasks. That
+/// is harmless — an empty Tag converges on peers like any other entity — and it
+/// resolves on the re-run.
 ///
 /// This module has no dependency on [ApiService] and requires no network
 /// access, so it works for unauthenticated offline users.
@@ -15,13 +36,19 @@ import 'package:drift/drift.dart';
 import '../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
-import '../database/daos/tag_dao.dart' show todoTagIdFor;
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show Intent;
 import 'nirvana_item.dart';
 import 'nirvana_parser.dart';
 
-const _batchSize = 200;
+/// Tasks per capturing scope — and therefore per transaction, and per burst of
+/// authored ops.
+///
+/// Public because it is an observable property of the import rather than an
+/// internal tuning knob: it is the granularity at which an interrupted import
+/// stops, so the interruption/resume tests assert against it instead of
+/// hard-coding a second copy of the number.
+const nirvanaImportTaskBatchSize = 200;
 
 class ImportResult {
   const ImportResult({
@@ -87,24 +114,28 @@ Future<ImportResult> importNirvanaLocally({
     }
   }
 
-  // All writes inside a single capturing scope for atomicity: the scope is the
-  // transaction (GtdDatabase.capturing), so a mid-file failure rolls the rows
-  // back and authors no ops, and a clean import emits one coalesced op per
-  // entity after commit.
   int importedCount = 0;
   int projectTagsCreated = 0;
 
+  // In-memory caches for tag ids — avoids redundant SELECTs when the same tag
+  // appears on many tasks. They live **outside** the scopes so they survive
+  // across batch boundaries; the tags themselves were committed by an earlier
+  // scope, so a later batch's junction rows always reference live rows.
+  final projectTagIds = <String, String>{};
+  final contextTagIds = <String, String>{};
+  final personTagIds = <String, String>{};
+
+  // --- Scope 1: project tags ---
   await db.capturing(() async {
-    // --- Upsert project tags ---
     final existingTagRows = await (db.select(db.tags)
           ..where((t) => t.type.equals('project')))
         .get();
     final existingProjectNames = {for (final t in existingTagRows) t.name};
 
     // Map project name → tag id (pre-existing OR newly inserted).
-    final projectTagIds = <String, String>{
+    projectTagIds.addAll({
       for (final t in existingTagRows) t.name: t.id,
-    };
+    });
 
     for (final projectName in allProjectNames) {
       if (!existingProjectNames.contains(projectName)) {
@@ -117,23 +148,20 @@ Future<ImportResult> importNirvanaLocally({
         projectTagsCreated++;
       }
     }
+  });
 
-    // --- Insert tasks in batches ---
-    final tasks = items.where((i) => i.type == 'task').toList();
+  // --- Scopes 2..N: one task batch each ---
+  final tasks = items.where((i) => i.type == 'task').toList();
 
-    // In-memory caches for tag ids — avoids redundant SELECTs when
-    // the same tag appears on many tasks.
-    final contextTagIds = <String, String>{};
-    final personTagIds = <String, String>{};
+  for (var batchStart = 0;
+      batchStart < tasks.length;
+      batchStart += nirvanaImportTaskBatchSize) {
+    final batch = tasks.skip(batchStart).take(nirvanaImportTaskBatchSize);
 
-    for (var batchStart = 0;
-        batchStart < tasks.length;
-        batchStart += _batchSize) {
-      final batch = tasks.skip(batchStart).take(_batchSize);
-
+    await db.capturing(() async {
       for (final item in batch) {
         final todoId = _deterministicTodoId(item);
-        final now = DateTime.now();
+        final now = _importInstant();
 
         // Unclarified Nirvana rows (Inbox and any unrecognised state) become
         // Captures, not `clarified = false` todos (issue #184, ADR-0006). Their
@@ -184,9 +212,8 @@ Future<ImportResult> importNirvanaLocally({
 
         // Preserve lastClarifiedAt when unchanged; stamp now on any mutation
         // (both additions and removals count as clarification events).
-        final DateTime? computedLastClarifiedAt = personTagsChanged
-            ? now.toUtc()
-            : existingRow?.lastClarifiedAt;
+        final DateTime? computedLastClarifiedAt =
+            personTagsChanged ? now : existingRow?.lastClarifiedAt;
 
         // The columns the export owns, written on both the insert and the
         // update path. Everything absent here is deliberately left to the
@@ -208,47 +235,39 @@ Future<ImportResult> importNirvanaLocally({
           updatedAt: Value(now),
         );
 
-        // Update in place rather than INSERT OR REPLACE (issue #641). REPLACE
-        // is delete-then-insert in SQLite, so every column the companion omits
-        // is re-defaulted: `intent` back to 'next', and `priority`,
-        // `location_id` and `last_next_action_completion_at` back to NULL —
-        // silently undoing the user's own later edits on every re-import. It
-        // also re-stamped `created_at`, and would fire the declared
-        // ON DELETE CASCADE onto the Outcome's Actions and capture_outcomes
-        // provenance wherever foreign-key enforcement is on. An update touches
-        // only the columns the export actually carries.
-        if (existingRow == null) {
-          await db.into(db.todos).insert(
-                exportOwnedColumns.copyWith(
-                  id: Value(todoId),
-                  // The next/waiting bucket state, stated outright rather than
-                  // leaned on the column default — the maybe/trash buckets are
-                  // applied through TodoDao below.
-                  intent: Value(Intent.next.value),
-                  createdAt: Value(now),
-                ),
-              );
-        } else {
-          await (db.update(db.todos)..where((t) => t.id.equals(todoId)))
-              .write(exportOwnedColumns);
-        }
+        // [TodoDao.upsertOutcome] inserts or updates in place — never
+        // INSERT OR REPLACE (issue #641) — and describes the write on the
+        // op-log seam, which is what makes an imported Outcome reach the user's
+        // other devices (issue #610). `createColumns` carries the two birth
+        // facts a re-import must not restate.
+        await db.todoDao.upsertOutcome(
+          id: todoId,
+          createColumns: exportOwnedColumns.copyWith(
+            // The next/waiting bucket state, stated outright rather than leaned
+            // on the column default — the maybe/trash buckets are applied
+            // through TodoDao below.
+            intent: Value(Intent.next.value),
+            createdAt: Value(now),
+          ),
+          updateColumns: exportOwnedColumns,
+        );
 
         if (personTagsChanged) {
-          await _deletePersonTagLinksForTodo(db, todoId);
+          // Through the DAO so a *removal* leaves a tombstone rather than mere
+          // row absence: row absence is what lets a replayed assignment
+          // silently re-attach the delegate on a peer.
+          final targetPersonTagIds = <String>{};
           if (effectiveWaitingFor != null) {
             final personTagId = personTagIds[effectiveWaitingFor] ??
                 await db.tagDao.createPersonTag(effectiveWaitingFor, userId);
             personTagIds[effectiveWaitingFor] = personTagId;
-            await db.into(db.todoTags).insert(
-                  TodoTagsCompanion(
-                    id: Value(todoTagIdFor(todoId, personTagId)),
-                    todoId: Value(todoId),
-                    tagId: Value(personTagId),
-                    userId: Value(userId),
-                  ),
-                  mode: InsertMode.insertOrReplace,
-                );
+            targetPersonTagIds.add(personTagId);
           }
+          // [TodoDao.setPersonTagsForTodo], not [setPersonTagsAndStamp]: the
+          // conditional `last_clarified_at` above is the import's own rule, and
+          // the stamping variant would override it unconditionally.
+          await db.todoDao
+              .setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
         }
         if (item.intent == 'maybe') {
           await db.todoDao.deferTaskToMaybe(todoId, now: now);
@@ -266,15 +285,7 @@ Future<ImportResult> importNirvanaLocally({
         }
 
         if (projectTagId != null) {
-          await db.into(db.todoTags).insert(
-                TodoTagsCompanion(
-                  id: Value(todoTagIdFor(todoId, projectTagId)),
-                  todoId: Value(todoId),
-                  tagId: Value(projectTagId),
-                  userId: Value(userId),
-                ),
-                mode: InsertMode.insertOrReplace,
-              );
+          await db.tagDao.assignTag(todoId, projectTagId, userId);
         }
 
         // Upsert generic (context) tags.
@@ -282,21 +293,13 @@ Future<ImportResult> importNirvanaLocally({
           final tagId = contextTagIds[tagName] ??
               await db.tagDao.findOrCreateTag(tagName, 'context', userId);
           contextTagIds[tagName] = tagId;
-          await db.into(db.todoTags).insert(
-                TodoTagsCompanion(
-                  id: Value(todoTagIdFor(todoId, tagId)),
-                  todoId: Value(todoId),
-                  tagId: Value(tagId),
-                  userId: Value(userId),
-                ),
-                mode: InsertMode.insertOrReplace,
-              );
+          await db.tagDao.assignTag(todoId, tagId, userId);
         }
 
         importedCount++;
       }
-    }
-  });
+    });
+  }
 
   return ImportResult(
     importedCount: importedCount,
@@ -329,39 +332,24 @@ Future<void> _importInboxCapture(
 
   // Preserve clarification across a re-import: if this Capture was already
   // imported and the user has since clarified it (clarified_at stamped, and
-  // possibly capture_outcomes carved out), a fresh import must not reset it
-  // to the Inbox. Update in place rather than INSERT OR REPLACE: REPLACE is
-  // delete-then-insert in SQLite, which would fire the ON DELETE CASCADE on
-  // capture_outcomes / capture_tags wherever foreign_keys enforcement is on
-  // and silently drop the user's provenance links. Updating leaves
-  // created_at, clarified_at, and the child rows untouched; a brand-new
-  // Capture keeps the NULL clarified_at default (unclarified — in the Inbox).
-  final existing = await db.captureDao.getCapture(captureId);
-
-  if (existing == null) {
-    await db.into(db.captures).insert(
-          CapturesCompanion(
-            id: Value(captureId),
-            title: Value(item.name),
-            notes: Value(item.notes),
-            captureSource: const Value('nirvana_import'),
-            userId: Value(userId),
-            createdAt: Value(now),
-            updatedAt: Value(now),
-          ),
-        );
-  } else {
-    await (db.update(db.captures)..where((c) => c.id.equals(captureId))).write(
-      CapturesCompanion(
-        title: Value(item.name),
-        notes: Value(item.notes),
-        captureSource: const Value('nirvana_import'),
-        userId: Value(userId),
-        updatedAt: Value(now),
-      ),
-    );
-  }
-  db.notifyCapturesViewWrite();
+  // possibly capture_outcomes carved out), a fresh import must not reset it to
+  // the Inbox. [CaptureDao.upsertCapture] updates in place rather than
+  // INSERT OR REPLACE, and describes the write on the op-log seam so the
+  // imported Capture reaches the user's other devices (issue #610). Neither
+  // companion names `clarified_at`, so a brand-new Capture keeps the NULL
+  // default (unclarified — in the Inbox) and a clarified one keeps its stamp.
+  final exportOwnedColumns = CapturesCompanion(
+    title: Value(item.name),
+    notes: Value(item.notes),
+    captureSource: const Value('nirvana_import'),
+    userId: Value(userId),
+    updatedAt: Value(now),
+  );
+  await db.captureDao.upsertCapture(
+    id: captureId,
+    createColumns: exportOwnedColumns.copyWith(createdAt: Value(now)),
+    updateColumns: exportOwnedColumns,
+  );
 
   // Project tag hint.
   String? projectTagId;
@@ -398,6 +386,22 @@ Future<void> _importInboxCapture(
 String _deterministicTodoId(NirvanaItem item) =>
     uuid.v5(Namespace.url.value, 'jeeves://nirvana_import/${item.id}');
 
+/// The import's own clock, minted at the grain the op log carries: UTC, floored
+/// to whole milliseconds.
+///
+/// A bare `DateTime.now()` is local-time and microsecond-grained, and
+/// `encodeInstant` normalises both away on the wire. That was invisible while
+/// the import authored nothing, but now that it does, a peer's projector would
+/// write back `2026-07-31T17:01:13.709Z` where this store holds
+/// `2026-07-31T22:31:13.709570 +05:30` — the same instant under two spellings,
+/// which the text `ORDER BY created_at` in the GTD list reads as two different
+/// orderings. Minting the value at the wire's grain makes the row a peer
+/// projects byte-identical to the row the importer kept.
+DateTime _importInstant() => DateTime.fromMillisecondsSinceEpoch(
+      DateTime.now().millisecondsSinceEpoch,
+      isUtc: true,
+    );
+
 /// Returns the set of person-tag names currently linked to [todoId].
 Future<Set<String>> _existingPersonTagNamesForTodo(
     GtdDatabase db, String todoId) async {
@@ -409,21 +413,4 @@ Future<Set<String>> _existingPersonTagNamesForTodo(
             db.tags.type.equals('person')))
       .get();
   return {for (final r in rows) r.readTable(db.tags).name};
-}
-
-/// Deletes all person-typed tag links for [todoId], leaving project/context
-/// links untouched.
-Future<void> _deletePersonTagLinksForTodo(
-    GtdDatabase db, String todoId) async {
-  final rows = await (db.select(db.todoTags).join([
-    innerJoin(db.tags, db.tags.id.equalsExp(db.todoTags.tagId)),
-  ])
-        ..where(
-            db.todoTags.todoId.equals(todoId) &
-            db.tags.type.equals('person')))
-      .get();
-  final ids = rows.map((r) => r.readTable(db.todoTags).id).toList();
-  if (ids.isNotEmpty) {
-    await (db.delete(db.todoTags)..where((tt) => tt.id.isIn(ids))).go();
-  }
 }

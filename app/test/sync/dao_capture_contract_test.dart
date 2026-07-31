@@ -227,6 +227,60 @@ void main() {
       expect(danglingAfter, hasLength(1),
           reason: 'the surviving junction is left untouched');
     });
+
+    test('upsertOutcome asserts the whole row when it creates one', () async {
+      await db.todoDao.upsertOutcome(
+        id: 'imported-1',
+        createColumns: TodosCompanion(
+          title: const Value('Ship the thing'),
+          userId: const Value(_userId),
+          createdAt: Value(_ts),
+          updatedAt: Value(_ts),
+          intent: const Value('next'),
+          captureSource: const Value('nirvana_import'),
+        ),
+        updateColumns: const TodosCompanion(title: Value('Ship the thing')),
+      );
+      final op = only(todosCollection);
+      expect(op.entityId, 'imported-1');
+      expect(op.tombstone, isFalse);
+      expect(op.fields['intent'], 'next');
+      expect(op.fields['capture_source'], 'nirvana_import');
+      expect(op.fields['created_at'], '2026-07-28T09:00:00.000Z');
+      // Exactly the synced columns — no more, no less — so a peer can build the
+      // row and nothing off-contract slips onto the wire.
+      expect(op.fields.keys.toSet(),
+          collectionCodecs[todosCollection]!.columns.keys.toSet());
+    });
+
+    test('upsertOutcome asserts only the present fields when it updates',
+        () async {
+      final id = await seedOutcome();
+      await db.todoDao.upsertOutcome(
+        id: id,
+        // Deliberately different from `updateColumns`: an existing row must be
+        // driven by the update companion alone, or a re-import would restate the
+        // birth facts and clobber the user's own later edits (issue #641).
+        createColumns: TodosCompanion(
+          title: const Value('should not be used'),
+          userId: const Value(_userId),
+          createdAt: Value(_ts),
+          intent: const Value('maybe'),
+        ),
+        updateColumns: TodosCompanion(
+          title: const Value('Ship it, refreshed'),
+          updatedAt: Value(_ts),
+        ),
+      );
+      final op = only(todosCollection);
+      expect(op.fields.keys.toSet(), {'title', 'updated_at'});
+      expect(op.fields['title'], 'Ship it, refreshed');
+      // The row followed the same companion: no `intent` re-default.
+      final row =
+          await (db.select(db.todos)..where((t) => t.id.equals(id))).getSingle();
+      expect(row.intent, 'next');
+      expect(row.title, 'Ship it, refreshed');
+    });
   });
 
   group('action_dao', () {
@@ -428,6 +482,58 @@ void main() {
       await db.captureDao.removeTagHint('c1', tag);
       await db.captureDao.unlinkOutcome('c1', outcome);
       expect(capture.recorded, isEmpty);
+    });
+
+    test('upsertCapture asserts the whole row when it creates one', () async {
+      await db.captureDao.upsertCapture(
+        id: 'imported-1',
+        createColumns: CapturesCompanion(
+          title: const Value('Random thought'),
+          userId: const Value(_userId),
+          captureSource: const Value('nirvana_import'),
+          createdAt: Value(_ts),
+          updatedAt: Value(_ts),
+        ),
+        updateColumns: const CapturesCompanion(title: Value('Random thought')),
+      );
+      final op = only(capturesCollection);
+      expect(op.entityId, 'imported-1');
+      expect(op.tombstone, isFalse);
+      expect(op.fields['capture_source'], 'nirvana_import');
+      // A brand-new Capture lands in the Inbox, and says so on the wire.
+      expect(op.fields['clarified_at'], isNull);
+      expect(op.fields.keys.toSet(),
+          collectionCodecs[capturesCollection]!.columns.keys.toSet());
+    });
+
+    test('upsertCapture updates without disturbing a clarified Capture',
+        () async {
+      await seedCapture();
+      await db.captureDao.stampClarified('c1', at: _ts);
+      capture.clear();
+
+      await db.captureDao.upsertCapture(
+        id: 'c1',
+        createColumns: CapturesCompanion(
+          title: const Value('should not be used'),
+          userId: const Value(_userId),
+          createdAt: Value(_ts),
+        ),
+        updateColumns: CapturesCompanion(
+          title: const Value('a thought, reworded'),
+          updatedAt: Value(_ts),
+        ),
+      );
+
+      final op = only(capturesCollection);
+      expect(op.fields.keys.toSet(), {'title', 'updated_at'});
+      // The clarify act is the user's, not the source's: a re-run must not push a
+      // clarified Capture back to the Inbox, on the row or on the log.
+      expect(op.fields.containsKey('clarified_at'), isFalse);
+      final row = await db.captureDao.getCapture('c1');
+      expect(row!.clarifiedAt, _ts);
+      expect(row.createdAt, _ts);
+      expect(row.title, 'a thought, reworded');
     });
   });
 

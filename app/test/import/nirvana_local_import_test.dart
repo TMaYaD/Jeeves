@@ -2,17 +2,27 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show InvalidDataException, Value;
+import 'package:drift/drift.dart'
+    show ApplyInterceptor, InvalidDataException, Value, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/database/daos/capture_dao.dart' show captureTagIdFor;
+import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/import/nirvana_local_import.dart';
 import 'package:jeeves/import/nirvana_parser.dart' show ParseError;
 import 'package:jeeves/sync/collection_codecs.dart'
-    show tagsCollection, todosCollection;
+    show
+        captureTagsCollection,
+        capturesCollection,
+        collectionCodecs,
+        tagsCollection,
+        todoTagsCollection,
+        todosCollection;
 import 'package:jeeves/sync/domain_op_capture.dart'
     show RecordingDomainOpCapture;
 
+import '../sync/harness/fault_injecting_store.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -653,11 +663,17 @@ void main() {
     });
   });
 
-  // T5 — the import is one capturing scope: the whole file is one transaction,
-  // emission is post-commit, and a mid-apply failure rolls the rows back and
-  // authors no ops. Pre-fix the import's bare `transaction` let each DAO call's
-  // op emit mid-transaction, so a failing import left signed tag ops behind.
-  group('importNirvanaLocally — capture atomicity', () {
+  // Issue #610 — every imported entity describes itself on the op-log seam, so
+  // an import reaches the user's other devices. Pre-fix the `todos`,
+  // `todo_tags` and `captures` writes were raw drift statements inside the
+  // capturing scope: rows committed, nothing was authored.
+  //
+  // A batch is the scope, and therefore the transaction: rollback is
+  // batch-scoped, not file-scoped. That is deliberate — see the module doc for
+  // why one whole-file scope was a data-loss window rather than a guarantee —
+  // and the price is a reachable partial import, which a re-run completes
+  // because every id is deterministic.
+  group('importNirvanaLocally — every imported entity authors an op', () {
     late RecordingDomainOpCapture capture;
     late GtdDatabase db;
 
@@ -667,12 +683,16 @@ void main() {
     });
     tearDown(() => db.close());
 
-    test('a clean import authors the project tag op it describes today',
-        () async {
+    test('a clean import authors exactly one op per imported entity', () async {
+      // One of each entity kind the import writes: a project (→ project Tag),
+      // a clarified child carrying a context tag and a `waitingfor` delegate,
+      // and an Inbox row (state 0 → Capture with a tag hint).
       const json = '['
           '{"cancelled":0,"deleted":0,"name":"Proj","type":1,"id":"p1"},'
           '{"cancelled":0,"deleted":0,"name":"Child","type":0,"state":1,'
-          '"id":"c1","parentid":"p1"}'
+          '"id":"c1","parentid":"p1","tags":",computer,","waitingfor":"Alice"},'
+          '{"cancelled":0,"deleted":0,"name":"Thought","type":0,"state":0,'
+          '"id":"i1","tags":",errand,"}'
           ']';
       await importNirvanaLocally(
         bytes: _bytes(json),
@@ -681,18 +701,98 @@ void main() {
         userId: _userId,
         db: db,
       );
-      // The project tag goes through TagDao, so it authors a coalesced `tags`
-      // op; the raw todo/todo_tags writes describe none (the #610 gap, out of
-      // scope here). The second expectation pins that gap so #641's switch
-      // from INSERT OR REPLACE to update-in-place stays op-neutral.
-      expect(capture.forCollection(tagsCollection), hasLength(1));
-      expect(capture.forCollection(todosCollection), isEmpty);
+
+      final childId = (await db.select(db.todos).getSingle()).id;
+      final captureId = (await db.select(db.captures).getSingle()).id;
+      final tagIdByName = {
+        for (final tag in await db.select(db.tags).get()) tag.name: tag.id,
+      };
+      expect(tagIdByName.keys,
+          unorderedEquals(['Proj', 'computer', 'Alice', 'errand']));
+
+      // Asserted as the exact key set, not as non-emptiness: this is what pins
+      // coalescing to one op per entity, so a peer applies one create rather
+      // than a stream of partial re-assertions.
+      expect(
+        capture.keys.toSet(),
+        {
+          '$todosCollection/$childId',
+          '$capturesCollection/$captureId',
+          for (final name in ['Proj', 'computer', 'Alice', 'errand'])
+            '$tagsCollection/${tagIdByName[name]}',
+          for (final name in ['Proj', 'computer', 'Alice'])
+            '$todoTagsCollection/${todoTagIdFor(childId, tagIdByName[name]!)}',
+          '$captureTagsCollection/'
+              '${captureTagIdFor(captureId, tagIdByName['errand']!)}',
+        },
+      );
+      expect(capture.keys, hasLength(capture.keys.toSet().length),
+          reason: 'an entity was authored more than once in one import');
     });
 
-    test('a mid-apply failure rolls back every row and authors no op', () async {
+    test('the create op asserts the whole row, including an explicit intent',
+        () async {
+      const json = '[{"cancelled":0,"deleted":0,"name":"Child","type":0,'
+          '"state":1,"id":"c1"}]';
+      await importNirvanaLocally(
+        bytes: _bytes(json),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+      final op = capture.forCollection(todosCollection).single;
+      expect(op.tombstone, isFalse);
+      expect(op.fields['intent'], 'next',
+          reason: 'the next/waiting bucket must be stated, not left implicit');
+      expect(op.fields['capture_source'], 'nirvana_import');
+      // Exactly the synced columns, so a peer can build the row from this op
+      // alone and nothing off-contract slips onto the wire.
+      expect(op.fields.keys.toSet(),
+          collectionCodecs[todosCollection]!.columns.keys.toSet());
+    });
+
+    test('a re-import that clears WAITINGFOR authors a junction tombstone',
+        () async {
+      const withDelegate = '[{"cancelled":0,"deleted":0,"name":"W","type":0,'
+          '"state":2,"id":"w1","waitingfor":"Alice"}]';
+      const withoutDelegate = '[{"cancelled":0,"deleted":0,"name":"W","type":0,'
+          '"state":2,"id":"w1"}]';
+
+      await importNirvanaLocally(
+        bytes: _bytes(withDelegate),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+      final todoId = (await db.select(db.todos).getSingle()).id;
+      final aliceId = (await db.select(db.tags).getSingle()).id;
+      capture.clear();
+
+      await importNirvanaLocally(
+        bytes: _bytes(withoutDelegate),
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: db,
+      );
+
+      // A removal is a tombstone, never row absence: absence is what would let
+      // a replayed assignment silently re-attach the delegate on a peer.
+      final removal = capture
+          .forCollection(todoTagsCollection)
+          .singleWhere((op) => op.entityId == todoTagIdFor(todoId, aliceId));
+      expect(removal.tombstone, isTrue);
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    test('a single-batch failure rolls that batch back and authors no op',
+        () async {
       // A second task whose title exceeds the 500-char column limit fails
-      // drift's insert-time validation — mid-transaction, after the project tag
-      // and the first child have already been written.
+      // drift's insert-time validation — mid-batch, after the project tag and
+      // the first child have already been written. Three items is one batch, so
+      // all-or-nothing still holds across this whole file.
       final longName = 'x' * 501;
       final json = '['
           '{"cancelled":0,"deleted":0,"name":"Proj","type":1,"id":"p1"},'
@@ -713,12 +813,179 @@ void main() {
         throwsA(isA<InvalidDataException>()),
       );
 
-      expect(capture.recorded, isEmpty,
-          reason: 'a failed import must leave no signed op behind');
-      expect(await db.select(db.tags).get(), isEmpty,
-          reason: 'the project tag write rolls back with the transaction');
+      // The project tag is a scope of its own and commits ahead of the batch, so
+      // it and its op survive — the documented, accepted tags-without-tasks
+      // state. The failing batch leaves neither rows nor ops.
+      expect(capture.forCollection(tagsCollection), hasLength(1));
+      expect(capture.forCollection(todosCollection), isEmpty,
+          reason: 'a rolled-back batch must leave no signed Outcome op behind');
+      expect(capture.forCollection(todoTagsCollection), isEmpty);
       expect(await db.select(db.todos).get(), isEmpty);
       expect(await db.select(db.todoTags).get(), isEmpty);
+      expect(await db.select(db.tags).get(), hasLength(1));
+    });
+  });
+
+  // Issue #610, the property that replaced whole-file atomicity: an interrupted
+  // import is a *partial* import, and re-running the same export completes it.
+  group('importNirvanaLocally — interruption and resume', () {
+    /// [taskCount] tasks under one project, ids `t0..t{n-1}` so a re-run lands
+    /// on the same deterministic rows. More than [nirvanaImportTaskBatchSize] of
+    /// them, so the import spans several capturing scopes.
+    String exportOf(int taskCount) => '['
+        '{"cancelled":0,"deleted":0,"name":"Proj","type":1,"id":"p1"},'
+        '${[
+              for (var i = 0; i < taskCount; i++)
+                '{"cancelled":0,"deleted":0,"name":"Task $i","type":0,'
+                    '"state":1,"id":"t$i","parentid":"p1"}'
+            ].join(',')}'
+        ']';
+
+    /// The Outcome ids a store holds. Deterministic (derived from the Nirvana
+    /// item id), which is exactly what makes a resumed import comparable to a
+    /// clean one — unlike a Tag id, which is minted fresh per store.
+    Future<Set<String>> outcomeIds(GtdDatabase db) async =>
+        {for (final row in await db.select(db.todos).get()) row.id};
+
+    const taskCount = 250;
+
+    test('a fault in the second batch keeps the first batch\'s rows and ops',
+        () async {
+      final faults = FaultInjectingInterceptor();
+      final capture = RecordingDomainOpCapture();
+      final db = GtdDatabase(
+        NativeDatabase.memory().interceptWith(faults),
+        opCapture: capture,
+      );
+      addTearDown(db.close);
+
+      // The 210th Outcome insert is item index 209 — inside batch 2, which runs
+      // 200..249. A storage fault rather than a bad row: this models the process
+      // dying mid-import, which is the case whole-file atomicity handled worst.
+      faults.failNthInsertInto('todos', 210);
+
+      await expectLater(
+        importNirvanaLocally(
+          bytes: _bytes(exportOf(taskCount)),
+          filename: 'test.json',
+          format: 'json',
+          userId: _userId,
+          db: db,
+        ),
+        throwsA(isA<SqliteException>()),
+      );
+      expect(faults.firedCount, 1, reason: 'the fault was never reached');
+
+      // Batch 1 committed and authored: 200 Outcomes, 200 project junctions.
+      expect(await db.select(db.todos).get(),
+          hasLength(nirvanaImportTaskBatchSize));
+      expect(capture.forCollection(todosCollection),
+          hasLength(nirvanaImportTaskBatchSize));
+      expect(capture.forCollection(todoTagsCollection),
+          hasLength(nirvanaImportTaskBatchSize));
+
+      // Batch 2 left neither rows nor ops — the two must agree, because a
+      // committed row with no op is exactly the invisible-data bug #610 fixes.
+      final authoredIds = {
+        for (final op in capture.forCollection(todosCollection)) op.entityId,
+      };
+      final rowIds = {for (final row in await db.select(db.todos).get()) row.id};
+      expect(authoredIds, rowIds,
+          reason: 'a committed Outcome row has no op, or vice versa');
+    });
+
+    test('re-running the same export completes the interrupted import',
+        () async {
+      final faults = FaultInjectingInterceptor();
+      final capture = RecordingDomainOpCapture();
+      final db = GtdDatabase(
+        NativeDatabase.memory().interceptWith(faults),
+        opCapture: capture,
+      );
+      addTearDown(db.close);
+      final bytes = _bytes(exportOf(taskCount));
+
+      Future<void> runImport() => importNirvanaLocally(
+            bytes: bytes,
+            filename: 'test.json',
+            format: 'json',
+            userId: _userId,
+            db: db,
+          );
+
+      faults.failNthInsertInto('todos', 210);
+      await expectLater(runImport(), throwsA(isA<SqliteException>()));
+      final survivors = {
+        for (final row in await db.select(db.todos).get()) row.id: row.createdAt,
+      };
+      expect(survivors, hasLength(nirvanaImportTaskBatchSize),
+          reason: 'the interruption left no partial import to resume');
+
+      // The injector disarms itself, so the re-run is the same export against a
+      // store that is now healthy — a resumed import, not a repaired file.
+      capture.clear();
+      await runImport();
+
+      // What makes this a *resume*: the re-run landed on the surviving rows
+      // rather than re-creating them. Their birth timestamps are untouched, and
+      // on the log they are field updates — a create would re-assert the whole
+      // codec column set under a fresh clock.
+      final wholeRow = collectionCodecs[todosCollection]!.columns.keys.toSet();
+      final opByEntity = {
+        for (final op in capture.forCollection(todosCollection))
+          op.entityId: op,
+      };
+      for (final entry in survivors.entries) {
+        final row = await (db.select(db.todos)
+              ..where((t) => t.id.equals(entry.key)))
+            .getSingle();
+        expect(row.createdAt, entry.value,
+            reason: 'a surviving Outcome was re-created, not resumed');
+        expect(opByEntity[entry.key]!.fields.keys.toSet(), isNot(wholeRow),
+            reason: 'a surviving Outcome was re-asserted whole');
+      }
+      // Everything the interruption dropped came back as a create.
+      final resumedIds =
+          opByEntity.keys.toSet().difference(survivors.keys.toSet());
+      expect(resumedIds, hasLength(taskCount - nirvanaImportTaskBatchSize));
+      for (final id in resumedIds) {
+        expect(opByEntity[id]!.fields.keys.toSet(), wholeRow,
+            reason: 'a resumed Outcome was not asserted whole for a peer');
+      }
+
+      // What a clean import of the same export would have produced, in a store
+      // that never saw the interruption. Two live databases in one test is the
+      // point of the comparison, not a leak.
+      driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+      final pristine = GtdDatabase(NativeDatabase.memory());
+      addTearDown(pristine.close);
+      await importNirvanaLocally(
+        bytes: bytes,
+        filename: 'test.json',
+        format: 'json',
+        userId: _userId,
+        db: pristine,
+      );
+
+      expect(await outcomeIds(db), await outcomeIds(pristine),
+          reason: 'the resumed store holds a different Outcome set');
+      expect(await db.select(db.todos).get(), hasLength(taskCount),
+          reason: 'the re-run did not complete the import');
+      expect(await db.select(db.tags).get(), hasLength(1),
+          reason: 'the re-run duplicated the project tag');
+      final pristineJunctionCount =
+          (await pristine.select(pristine.todoTags).get()).length;
+      expect(await db.select(db.todoTags).get(),
+          hasLength(pristineJunctionCount),
+          reason: 'the re-run duplicated a project junction');
+
+      // Every row the re-run left behind is described on the log: batch 1's
+      // entities as updates, the rest as creates.
+      final authoredIds = {
+        for (final op in capture.forCollection(todosCollection)) op.entityId,
+      };
+      expect(authoredIds, await outcomeIds(db),
+          reason: 'the re-run left an Outcome row undescribed');
     });
   });
 }

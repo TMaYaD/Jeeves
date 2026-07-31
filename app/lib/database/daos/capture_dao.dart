@@ -158,16 +158,99 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
       attachedDatabase.opCapture.write(
         collection: capturesCollection,
         entityId: row.id,
-        fields: {
-          'title': row.title,
-          'notes': row.notes,
-          'capture_source': row.captureSource,
-          'created_at': encodeInstant(row.createdAt),
-          'clarified_at': encodeInstant(row.clarifiedAt),
-          'updated_at': encodeInstant(row.updatedAt),
-          'user_id': row.userId,
-        },
+        fields: _wholeCaptureRowFields(row),
       );
+    });
+  }
+
+  /// The whole synced row, as the op-log fields a create asserts. Exactly
+  /// `collectionCodecs[capturesCollection].columns` — the contract test pins the
+  /// two sets equal, so a new synced column has one place to be added.
+  static Map<String, Object?> _wholeCaptureRowFields(Capture row) => {
+        'title': row.title,
+        'notes': row.notes,
+        'capture_source': row.captureSource,
+        'created_at': encodeInstant(row.createdAt),
+        'clarified_at': encodeInstant(row.clarifiedAt),
+        'updated_at': encodeInstant(row.updatedAt),
+        'user_id': row.userId,
+      };
+
+  /// The op-log fields a partial [companion] describes: only the columns it
+  /// actually carries, so an update never re-asserts a column it left alone.
+  static Map<String, Object?> _presentCaptureFields(
+          CapturesCompanion companion) =>
+      {
+        if (companion.title.present) 'title': companion.title.value,
+        if (companion.notes.present) 'notes': companion.notes.value,
+        if (companion.captureSource.present)
+          'capture_source': companion.captureSource.value,
+        if (companion.createdAt.present)
+          'created_at': encodeInstant(companion.createdAt.value),
+        if (companion.clarifiedAt.present)
+          'clarified_at': encodeInstant(companion.clarifiedAt.value),
+        if (companion.updatedAt.present)
+          'updated_at': encodeInstant(companion.updatedAt.value),
+        if (companion.userId.present) 'user_id': companion.userId.value,
+      };
+
+  /// Insert the Capture [id] from [createColumns], or — when it already exists —
+  /// update it with exactly the columns [updateColumns] carries.
+  ///
+  /// The re-runnable write an id-addressed source of record needs (the Nirvana
+  /// import): a re-run lands on the same deterministic id, refreshes what the
+  /// export owns, and leaves the rest as the user has since made it. So
+  /// [createColumns] carries `created_at` and [updateColumns] does not.
+  ///
+  /// A distinct method from [updateFields] rather than a widened one:
+  /// [updateFields] is the clarify card's text edit, which hard-codes its own
+  /// timestamp and deliberately never touches `capture_source` — a contract this
+  /// must not disturb. Neither companion here should carry `clarified_at`
+  /// either: a Capture the user has since clarified must not be pushed back to
+  /// the Inbox by a re-run.
+  ///
+  /// An UPDATE, never `INSERT OR REPLACE`: REPLACE is delete-then-insert, which
+  /// would re-stamp `created_at`, reset `clarified_at`, and fire the declared
+  /// ON DELETE CASCADE onto `capture_outcomes` / `capture_tags` wherever
+  /// foreign-key enforcement is on (latent today — issue #637).
+  ///
+  /// On the log: a create asserts the whole codec column set so a peer that has
+  /// never seen the Capture can build it; an update asserts only the fields it
+  /// changed, so it cannot clobber a peer's concurrent edit to a column this
+  /// write never touched.
+  Future<void> upsertCapture({
+    required String id,
+    required CapturesCompanion createColumns,
+    required CapturesCompanion updateColumns,
+  }) async {
+    await attachedDatabase.capturing(() async {
+      final existing = await (select(captures)..where((c) => c.id.equals(id)))
+          .getSingleOrNull();
+      if (existing == null) {
+        await into(captures).insert(createColumns.copyWith(id: Value(id)));
+        // Read back rather than trust the companion: `created_at` can come from
+        // a client default, and the create assertion must carry the value the
+        // row actually holds.
+        final created = await (select(captures)..where((c) => c.id.equals(id)))
+            .getSingle();
+        attachedDatabase.opCapture.write(
+          collection: capturesCollection,
+          entityId: id,
+          fields: _wholeCaptureRowFields(created),
+        );
+      } else {
+        await (update(captures)..where((c) => c.id.equals(id)))
+            .write(updateColumns);
+        final fields = _presentCaptureFields(updateColumns);
+        if (fields.isNotEmpty) {
+          attachedDatabase.opCapture.write(
+            collection: capturesCollection,
+            entityId: id,
+            fields: fields,
+          );
+        }
+      }
+      attachedDatabase.notifyCapturesViewWrite();
     });
   }
 
