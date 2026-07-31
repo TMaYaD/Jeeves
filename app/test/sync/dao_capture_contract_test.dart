@@ -11,6 +11,8 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1015,7 +1017,15 @@ class _CommitLabellingCapture extends BufferedDomainOpCapture {
   /// `collection/entityId@label` per emitted op, in emission order.
   final List<String> emittedUnder = <String>[];
 
-  String? _committing;
+  /// Where the label of the commit currently flushing rides. Per seam instance
+  /// and per commit, for the same reason the live scope itself rides a zone
+  /// rather than a field: a shared field would let one commit's `emit` read a
+  /// later commit's label, so the oracle could report a false pass or a false
+  /// failure on the very interleaving it exists to detect.
+  final Object _committingKey = Object();
+
+  String get _committing =>
+      Zone.current[_committingKey] as String? ?? 'no commit';
 
   @override
   CaptureScope beginScope() {
@@ -1030,12 +1040,10 @@ class _CommitLabellingCapture extends BufferedDomainOpCapture {
   @override
   Future<void> commitScope(CaptureScope scope) async {
     _live.remove(scope);
-    _committing = _labels[scope];
-    try {
-      await super.commitScope(scope);
-    } finally {
-      _committing = null;
-    }
+    await runZoned(
+      () => super.commitScope(scope),
+      zoneValues: {_committingKey: _labels[scope]},
+    );
   }
 
   @override
@@ -1045,6 +1053,6 @@ class _CommitLabellingCapture extends BufferedDomainOpCapture {
   }
 
   @override
-  Future<void> emit(CapturedOp op) async => emittedUnder
-      .add('${op.collection}/${op.entityId}@${_committing ?? 'no commit'}');
+  Future<void> emit(CapturedOp op) async =>
+      emittedUnder.add('${op.collection}/${op.entityId}@$_committing');
 }
