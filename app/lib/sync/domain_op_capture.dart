@@ -115,7 +115,14 @@ abstract interface class DomainOpCapture {
   void rollbackScope(CaptureScope scope);
 }
 
-/// The production binding: records nothing, emits nothing.
+/// The constructor default: records nothing, emits nothing.
+///
+/// **Not the production binding** — production wires
+/// [WorkspaceRoutingOpCapture] into `GtdDatabase` via `domainOpCaptureProvider`
+/// (see `providers/database_provider.dart`). This is what `GtdDatabase`'s
+/// `opCapture` parameter falls back to when nothing is passed
+/// (`database/gtd_database.dart`), which is every test that is not about
+/// capture, and any other caller that means "never author."
 class NoopDomainOpCapture implements DomainOpCapture {
   const NoopDomainOpCapture();
 
