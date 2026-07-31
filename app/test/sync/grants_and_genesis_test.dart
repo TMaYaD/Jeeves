@@ -627,12 +627,19 @@ void main() {
       // holding `K_{w,toEpoch}`. Authoring at a keyed epoch *without* the key is
       // refused rather than downgraded to plaintext, so a bare raise is a state
       // production cannot reach.
+      //
+      // The floor is raised on *both* peers, not just the author: in production the
+      // one `rotate` that establishes epoch 7 raises every peer's floor as it
+      // applies, and since #619 a receiver refuses content at an epoch its own
+      // control log has not reached. A bare API raise on the author alone would
+      // leave B below the ceiling and its convergence assertion would be checking a
+      // state a rotate could never produce.
       final epochKey =
           Uint8List.fromList(List<int>.generate(workspaceKeyBytes, (index) => index + 7));
       for (final device in [workspace.a, workspace.b]) {
         await device.workspaceKeys.remember(workspace.workspaceId, 7, epochKey);
+        await device.client.raiseEpochFloor(7);
       }
-      await workspace.a.client.raiseEpochFloor(7);
       await workspace.a.client.capture(
         collection: _harnessCollection,
         entityId: _docId(workspace),
