@@ -63,6 +63,12 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 
   If the shared cache is ever corrupted by some other means (e.g. running `flutter --version` by hand from inside `app/`), confirm the diagnosis by reading `frameworkRevision` in `bin/cache/flutter.version.json`: if it matches a *Jeeves* commit rather than a Flutter one, the SDK computed its version from this repo. Repair by running `flutter --version` from inside the SDK's own directory (e.g. `(cd ~/fvm/versions/<version> && bin/flutter --version)`), not from `app/`.
 
+- **Pre-commit hook and a worktree without `backend/.venv`**: `backend/.venv` is gitignored and only ever materialized by `uv sync`, so a freshly created linked worktree has none — run `cd backend && uv sync --extra dev` before your first commit that touches `backend/`. The hook checks for `backend/.venv/bin/activate` and fails with that command named, rather than sourcing it blind.
+
+  The guard matters because the unguarded source was **interpreter-dependent, not fail-safe**. A failed `. .venv/bin/activate` terminates a non-interactive script under bash and dash (`.` is a special builtin), so the hook aborted — noisily, with a raw line-number error, but it aborted. Under **zsh the same failure is non-fatal**: execution falls through to the unactivated `ruff`/`mypy`/`pytest` calls, and on a machine where those resolve on the outer `PATH` they "pass" against the wrong environment and the hook reaches `exit 0`. That is a `git commit` that prints `✅ All pre-commit checks passed!`, exits 0, and commits nothing — the checks never ran against the venv, and the operator has no signal that anything went wrong (#539, same false-green genre as #537). Which interpreter runs the hook is not something the script controls, so the prerequisite is asserted explicitly instead of being left to shell semantics.
+
+  `.githooks/tests/test-pre-commit-hook.sh` covers this, and deliberately runs every backend case under **both `sh` and `zsh`** — a suite that exercised only `sh` would have gone green while the silent-success path was still live.
+
 ### Backend (FastAPI)
 
 - **Framework**: `pytest` running with `pytest-asyncio` for asynchronous tests.
