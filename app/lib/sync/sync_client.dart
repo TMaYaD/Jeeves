@@ -1069,6 +1069,20 @@ class SyncClient {
         _rebuildRequired = true;
       }
     }
+    // A rotate raised the floor this pull, so ops quarantined at an epoch that is
+    // now established can be released. Placed **after** the key-refresh block above
+    // so that when a rotate and its wrap both landed this pull, the key is already
+    // remembered before the future-epoch op is re-received. Gated so a pull that
+    // applied no floor-raising rotate *and* holds nothing quarantined skips the scan
+    // entirely — the re-examination churn AC-4 forbids. The state-based half
+    // ([_hasOpsAwaitingEpoch], mirroring [_hasOpsAwaitingEpochKeys]) is the
+    // restart-safe fallback: a device torn down after a rotate durably raised the
+    // floor but before this scan ran would otherwise lose the transient flag and
+    // strand the quarantined op until some unrelated later rotation re-armed it.
+    if (_epochFloorRaised || await _hasOpsAwaitingEpoch()) {
+      affected.addAll(await _releaseOpsAwaitingEpoch());
+      _epochFloorRaised = false;
+    }
     if (_rebuildRequired) {
       // A control fork resolved during this pull, so the authorization verdicts
       // the content ops applied under are no longer the right ones.
@@ -2134,8 +2148,14 @@ class SyncClient {
       // reach: `to_epoch == from_epoch + 1` is a decode invariant and the control
       // chain fixes the order the steps apply in. A second check here would be a
       // second place for the two to disagree.
-      await raiseEpochFloor(payload.rotateStatement().toEpoch);
+      final priorFloor = await epochFloor();
+      final raisedFloor = await raiseEpochFloor(payload.rotateStatement().toEpoch);
       _epochKeyRefreshRequired = true;
+      // Arm the future-epoch release only when the floor genuinely rose.
+      // `raiseEpochFloor` returns the clamped maximum, so an older rotate re-served
+      // returns the unchanged floor and must not arm a scan with nothing to release
+      // — that would be the re-examination churn the flag exists to prevent.
+      if (raisedFloor > priorFloor) _epochFloorRaised = true;
     }
     await _appendAppliedControlOp(pulled, payload, header, verified.payloadBytes);
     return learned;
@@ -2634,6 +2654,24 @@ class SyncClient {
     Uint8List headerBytes,
     Uint8List body,
   ) async {
+    // The epoch floor doubles as the applied-epoch **ceiling** on receive. The
+    // floor is raised only by an applied genesis (to 0) or a verified `rotate`, so
+    // `epochFloor()` is precisely the highest epoch this device's own control log
+    // has established. Content above it is content from outside the rotation
+    // boundary — an epoch no `rotate` this device applied created — so it is refused
+    // on the server's word alone, the client mirror of the server's
+    // `key_epoch_unknown` ceiling (#590). Checked **before** the `keyFor` lookup
+    // because the verdict is about the epoch, not the key: `refreshEpochKeys` fetches
+    // every epoch the server holds, so the wrap can arrive before its `rotate`. The
+    // healer is the floor rising, not the key — see [_releaseOpsAwaitingEpoch].
+    final floor = await epochFloor();
+    if (header.keyEpoch > floor) {
+      throw SyncRejection(
+        SyncRejectionReason.keyEpochUnknown,
+        'content at epoch ${header.keyEpoch} exceeds the applied epoch floor of '
+        '$floor, which no rotate this device has applied has established',
+      );
+    }
     final workspaceKey = await workspaceKeys.keyFor(workspaceId, header.keyEpoch);
     if (header.suite == suiteAeadV1) {
       if (workspaceKey == null) {
@@ -2670,6 +2708,17 @@ class SyncClient {
   /// reason: a rotate and the first op at the new epoch usually arrive in one page,
   /// and re-fetching per op would spend a round-trip per op.
   bool _epochKeyRefreshRequired = false;
+
+  /// Set when this pull applied a `rotate` that actually **raised** the epoch floor.
+  ///
+  /// The trigger for [_releaseOpsAwaitingEpoch], the floor-keyed healer for
+  /// [SyncRejectionReason.keyEpochUnknown]. Gating the release scan on this flag is
+  /// what keeps a quarantined future-epoch op from being re-examined on every pull
+  /// while its epoch is still unreached (no release churn): a pull that applied no
+  /// floor-raising rotate leaves nothing to release, so the scan is skipped. Armed
+  /// only when the floor genuinely rose — a re-served older rotate clamps to a no-op
+  /// and must not arm it — and cleared once the scan has run.
+  bool _epochFloorRaised = false;
 
   /// Fetch this Member's KeyWraps and learn every epoch key they carry.
   ///
@@ -2758,6 +2807,57 @@ class SyncClient {
     return affected;
   }
 
+  /// Re-receive the ops quarantined at an epoch the floor has since reached.
+  ///
+  /// The healing half of [SyncRejectionReason.keyEpochUnknown], and deliberately
+  /// **not** [_releaseOpsAwaitingEpochKeys]. That scan gates release on holding the
+  /// key — already true for a future-epoch op, since `refreshEpochKeys` fetches
+  /// every epoch the server holds — so filing a future-epoch op under
+  /// [SyncRejectionReason.missingEpochKey] would release, re-refuse and
+  /// re-quarantine it on every pull. What heals a future-epoch refusal is the
+  /// **floor rising** to reach the op's epoch, a different predicate.
+  ///
+  /// Only runs when a `rotate` raised the floor this pull ([_epochFloorRaised]), so
+  /// a quarantined op whose epoch is still unreached is not re-examined on pulls
+  /// where nothing changed. Even when it does run, an op still above the (now higher
+  /// but not yet high enough) floor is skipped rather than re-received, so a rotate
+  /// that raised the floor part-way toward the op's epoch never churns it.
+  ///
+  /// The `_receive`-then-`_markReleased` ordering, and the `SqliteException` rethrow
+  /// it depends on, are [_releaseOpsAwaitingEpochKeys]'s for the same reason: a
+  /// storage fault must not drop the row out of the scan with the cursor already
+  /// past the op.
+  Future<Set<AffectedEntity>> _releaseOpsAwaitingEpoch() async {
+    // Read once: the floor cannot change during this scan. The rows are filtered
+    // to `keyEpochUnknown` (content/compaction-only), so no nested rotate can
+    // raise it mid-loop, and `_receive` on those rows never moves it either.
+    final floor = await epochFloor();
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.reason.equals(SyncRejectionReason.keyEpochUnknown.code))
+          ..orderBy([(row) => OrderingTerm(expression: row.id)]))
+        .get();
+    final affected = <AffectedEntity>{};
+    for (final row in rows) {
+      final seq = row.seq;
+      if (seq == null) continue;
+      final OpHeader header;
+      try {
+        header = OpHeader.parse(splitEnvelope(row.envelope).header);
+      } on SyncRejection {
+        continue;
+      }
+      // Still above the floor: the rotate that raised it did not reach this op's
+      // epoch. Leave it quarantined rather than re-receive it into a fresh refusal.
+      if (header.keyEpoch > floor) continue;
+      affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
+      await _markReleased(row.id);
+    }
+    return affected;
+  }
+
   /// Whether anything is still waiting on a key — the state-based half of the
   /// refresh trigger.
   ///
@@ -2770,6 +2870,31 @@ class SyncClient {
               row.workspaceId.equals(workspaceId) &
               row.releasedAt.isNull() &
               row.reason.equals(SyncRejectionReason.missingEpochKey.code))
+          ..limit(1))
+        .get();
+    return rows.isNotEmpty;
+  }
+
+  /// Whether anything is still waiting on the floor rising — the state-based half
+  /// of the future-epoch release trigger, and the counterpart to
+  /// [_hasOpsAwaitingEpochKeys].
+  ///
+  /// It exists for the same reason that one does: the transient [_epochFloorRaised]
+  /// flag is set inside `_applyControlOp` and consumed at the end of the *same*
+  /// `pull()`, so a device torn down after a rotate has durably raised the floor but
+  /// before the release scan ran would lose the trigger. Nothing else calls
+  /// [_releaseOpsAwaitingEpoch], so the quarantined future-epoch op would sit stuck
+  /// until an unrelated later rotation happened to re-arm the flag — or for ever if
+  /// the Workspace never rotated again. Reading the quarantine on every pull while a
+  /// row is pending costs only a bounded `LIMIT 1`, and the per-row floor check in
+  /// [_releaseOpsAwaitingEpoch] already leaves still-too-high rows quarantined
+  /// without re-receiving them, so this reintroduces none of the churn AC-4 forbids.
+  Future<bool> _hasOpsAwaitingEpoch() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.reason.equals(SyncRejectionReason.keyEpochUnknown.code))
           ..limit(1))
         .get();
     return rows.isNotEmpty;

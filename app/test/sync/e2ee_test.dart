@@ -533,6 +533,311 @@ void main() {
     });
   });
 
+  group('the epoch floor is the receive ceiling', () {
+    // The client mirror of the server's `key_epoch_unknown` ceiling (#590): the
+    // floor doubles as the applied-epoch ceiling on receive, so content at an epoch
+    // no `rotate` this device applied has established is refused on the server's word
+    // alone — before any key lookup or decryption — rather than admitted because the
+    // wrap happened to arrive first.
+
+    /// The seq of the gtd Workspace's rotate op, the single new control op a
+    /// key rotation appends to that Workspace's log.
+    int rotateSeqOf(FakeSyncServer server, String workspaceId, Set<int> before) =>
+        server.storedOps
+            .firstWhere((op) =>
+                op.workspaceId == workspaceId &&
+                !before.contains(op.seq) &&
+                op.header?.opClass == opClassControl)
+            .seq;
+
+    Set<int> seqsOf(FakeSyncServer server, String workspaceId) => {
+          for (final op in server.storedOps)
+            if (op.workspaceId == workspaceId) op.seq,
+        };
+
+    test('future-epoch content is refused before decrypt and heals once its '
+        'rotate applies', () async {
+      final workspace = await SimWorkspace.create(deviceCount: 2);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final b = workspace.b;
+
+      await a.enrolment.turnOnEncryption(passphrase: workspace.passphrase);
+      await workspace.syncAll();
+      expect(await b.client.epochFloor(), 1);
+
+      // Below-floor history both devices already hold: the ceiling must leave it
+      // untouched (AC-5, the at-or-below-floor half).
+      await a.client.capture(
+        collection: _collection,
+        entityId: _entityId('below-floor'),
+        fields: {'title': 'authored at epoch 1'},
+      );
+      await workspace.syncAll();
+      expect(await canonicalReducedState(b.database), contains(_entityId('below-floor')));
+
+      // A rotates to epoch 2 (both survive) and captures content at the new epoch.
+      final beforeRotate = seqsOf(workspace.server, workspace.workspaceId);
+      await a.enrolment.rotateWorkspaceKeys(passphrase: workspace.passphrase);
+      final rotateSeq =
+          rotateSeqOf(workspace.server, workspace.workspaceId, beforeRotate);
+      expect(await a.client.epochFloor(), 2);
+      await a.client.capture(
+        collection: _collection,
+        entityId: _entityId('future-epoch'),
+        fields: {'title': 'authored at epoch 2'},
+      );
+      await a.sync();
+      final contentSeq = _contentOps(workspace.server, workspace.workspaceId)
+          .firstWhere((op) => op.header!.keyEpoch == 2)
+          .seq;
+
+      // Deliver the content op *before* its rotate in the same pull. A reorder is
+      // judged against the page's `since`, not the moving cursor, so both are
+      // processed: the content op is refused at the ceiling, then the rotate raises
+      // the floor and the pull-tail release scan re-receives the now-established op.
+      workspace.server.serveOrder = [contentSeq, rotateSeq];
+      final health = await b.sync();
+
+      expect(await b.client.epochFloor(), 2, reason: 'the rotate applied this pull');
+      expect(health.alarmKinds, isEmpty,
+          reason: 'an epoch not yet reached is a delivery-order fact, not misconduct '
+              '(AC-2) — no integrity alarm');
+      final refused = (await b.client.quarantined())
+          .where((row) => row.reason == SyncRejectionReason.keyEpochUnknown.code)
+          .toList();
+      expect(refused, hasLength(1),
+          reason: 'the content op was refused at the ceiling before any decrypt (AC-1)');
+      expect(refused.single.releasedAt, isNotNull,
+          reason: 'and released once the floor reached its epoch (AC-3)');
+      expect(await b.client.quarantined(includeReleased: false), isEmpty);
+
+      final reduced = await canonicalReducedState(b.database);
+      expect(reduced, contains(_entityId('future-epoch')),
+          reason: 'released, re-received and applied — verify the effect, not just '
+              'the release (AC-3)');
+      expect(reduced, contains(_entityId('below-floor')),
+          reason: 'at-or-below-floor content is untouched by the ceiling (AC-5)');
+      expect(reduced, await canonicalReducedState(a.database),
+          reason: 'byte-identical convergence after out-of-order delivery');
+    });
+
+    test('a quarantined future-epoch op is not re-received while its epoch stays '
+        'unreached', () async {
+      // The anti-churn guarantee (AC-4). A future-epoch op is healed by the floor
+      // rising, never by holding the key, so it must not be released, re-refused
+      // and re-quarantined on pulls where no rotate applied. Reproduced with a
+      // hostile server (`injectUnchecked`): serving content at an epoch it has not
+      // rotated to is exactly what the client must refuse on its own, since the
+      // server's own ceiling is the only thing stopping it today.
+      final workspace = await SimWorkspace.create(deviceCount: 1);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      await a.enrolment.turnOnEncryption(passphrase: workspace.passphrase);
+      await a.sync();
+      expect(await a.client.epochFloor(), 1);
+
+      final ahead = await AuthorFixture.create();
+      await workspace.enrolFixture(ahead);
+      // A content op claiming epoch 2, which no rotate this device applied has
+      // established. The ceiling fires before the suite is even considered.
+      final futureOp = await ahead.nextEnvelope(
+        workspace.workspaceId,
+        keyEpoch: 2,
+        payloadJson:
+            '{"collection":"$_collection","entity_id":"${_entityId('unreached')}"}',
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, futureOp);
+
+      final first = await a.sync();
+      expect(first.alarmKinds, isEmpty, reason: 'quarantined without alarm (AC-2)');
+      final quarantinedFirst = await a.client.quarantined();
+      expect(quarantinedFirst, hasLength(1));
+      expect(quarantinedFirst.single.reason,
+          SyncRejectionReason.keyEpochUnknown.code);
+      expect(quarantinedFirst.single.releasedAt, isNull);
+      expect(await canonicalReducedState(a.database),
+          isNot(contains(_entityId('unreached'))));
+
+      // An intervening pull with no rotate applied. The row is left exactly as it
+      // was: the state-based fallback does run the release scan (a keyEpochUnknown
+      // row is pending), but the per-row floor check skips an op still above the
+      // floor without re-receiving it — no release, no reinsert.
+      workspace.clock.advance(60000);
+      final row = quarantinedFirst.single;
+      await a.sync();
+      final quarantinedAgain = await a.client.quarantined();
+      expect(quarantinedAgain, hasLength(1),
+          reason: 'no churn: not released and re-quarantined under a fresh row');
+      expect(quarantinedAgain.single.id, row.id, reason: 'the same quarantine row');
+      expect(quarantinedAgain.single.releasedAt, isNull);
+      expect(quarantinedAgain.single.detectedAt, row.detectedAt,
+          reason: 'never re-received while its epoch is still unreached (AC-4)');
+      expect(await a.client.epochFloor(), 1, reason: 'the floor never moved');
+    });
+
+    test('a future-epoch op quarantined before a crash still heals from the '
+        'state query alone, with the transient flag never set (AC-3)', () async {
+      // The restart-safe half of the release trigger. `_epochFloorRaised` is a
+      // transient in-memory flag: applying a rotate that raises the floor sets it,
+      // and the same pull consumes it at the tail. If the process dies after the
+      // rotate has durably raised the floor but before that release scan runs — or
+      // `pull()` throws before reaching it — the flag is lost, and nothing else
+      // calls the floor-keyed release. Without a state-based fallback the
+      // quarantined op stays stuck until some unrelated later rotation happens to
+      // re-arm the flag, breaking AC-3 for a Workspace whose rotation history has
+      // stopped. `_hasOpsAwaitingEpoch()` closes that gap the way its sibling
+      // `_hasOpsAwaitingEpochKeys()` does for the key trigger.
+      //
+      // Staged so the release can *only* fire from the state query: B holds a
+      // quarantined future-epoch op and stands at the floor that establishes it,
+      // yet — never having applied the rotate itself — its `_epochFloorRaised` is
+      // still `false`, exactly a fresh post-crash client's default. So the pull
+      // that heals it is non-vacuous: strip the `|| await _hasOpsAwaitingEpoch()`
+      // half and the gate is `if (false)`, the scan never runs, the op stays stuck.
+      // Three devices so the future-epoch content and its establishing rotate come
+      // from *different* authors: A rotates, C authors the content. B can then hold
+      // C's content quarantined without A's rotate, because C's op chains behind C's
+      // own history, not behind A's — the release's chain check has no gap to trip
+      // on. (Content and rotate from one author are inseparable: the content chains
+      // behind the rotate, so B cannot apply it until it has the rotate, and applying
+      // the rotate raises the floor and heals the op in the same pull.)
+      final workspace = await SimWorkspace.create(deviceCount: 3);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final b = workspace.b;
+      final c = workspace.devices[2];
+
+      await a.enrolment.turnOnEncryption(passphrase: workspace.passphrase);
+      await workspace.syncAll();
+      expect(await b.client.epochFloor(), 1);
+
+      // A rotates to epoch 2.
+      final beforeRotate = seqsOf(workspace.server, workspace.workspaceId);
+      await a.enrolment.rotateWorkspaceKeys(passphrase: workspace.passphrase);
+      final rotateSeq =
+          rotateSeqOf(workspace.server, workspace.workspaceId, beforeRotate);
+      await a.sync();
+
+      // C applies the rotate — reaching floor 2 and learning the epoch-2 key — and
+      // captures content there, in its own author chain.
+      await c.sync();
+      expect(await c.client.epochFloor(), 2);
+      await c.client.capture(
+        collection: _collection,
+        entityId: _entityId('future-epoch'),
+        fields: {'title': 'authored at epoch 2'},
+      );
+      await c.sync();
+      final contentOp = _contentOps(workspace.server, workspace.workspaceId)
+          .firstWhere((op) => op.header!.keyEpoch == 2);
+
+      // B learns the epoch-2 key off its wrap — the release must be able to decrypt
+      // — but this does not touch its floor: the key can arrive before its rotate.
+      await b.client.refreshEpochKeys();
+
+      // Deliver C's content op to B while it still stands at floor 1, and *without*
+      // A's establishing rotate, so it genuinely quarantines. Dropping the rotate
+      // and re-serving the content alone is the reorder a hostile or lagging server
+      // can produce; the ceiling refuses it on B's own applied floor.
+      workspace.server.rollbackToSeq(rotateSeq - 1);
+      workspace.server.injectUnchecked(workspace.workspaceId, contentOp.envelope);
+      final firstHealth = await b.sync();
+      expect(firstHealth.alarmKinds, isEmpty, reason: 'quarantined without alarm (AC-2)');
+      final quarantinedBefore = (await b.client.quarantined())
+          .where((row) => row.reason == SyncRejectionReason.keyEpochUnknown.code)
+          .toList();
+      expect(quarantinedBefore, hasLength(1));
+      expect(quarantinedBefore.single.releasedAt, isNull);
+      expect(await b.client.epochFloor(), 1, reason: 'the rotate never reached B');
+      expect(await canonicalReducedState(b.database),
+          isNot(contains(_entityId('future-epoch'))));
+
+      // The crash residue. The rotate's floor-write committed — `raiseEpochFloor`
+      // is the rotate's own production raiser — but the process died before the
+      // release ran, so the trigger never fired: floor at 2, the op still
+      // quarantined and unreleased, and `_epochFloorRaised` never set on this
+      // client because it applied no rotate.
+      await b.client.raiseEpochFloor(2);
+      expect(await b.client.epochFloor(), 2);
+      expect(quarantinedBefore.single.releasedAt, isNull,
+          reason: 'still stuck: the transient flag that would have released it is gone');
+
+      // The recovery pull. The server holds nothing above B's cursor to re-serve,
+      // and the flag is `false`, so the only thing that can release the op is the
+      // state-based `_hasOpsAwaitingEpoch()` fallback.
+      await b.client.pull();
+
+      expect(await b.client.epochFloor(), 2);
+      final quarantinedAfter = (await b.client.quarantined())
+          .where((row) => row.reason == SyncRejectionReason.keyEpochUnknown.code)
+          .toList();
+      expect(quarantinedAfter, hasLength(1));
+      expect(quarantinedAfter.single.releasedAt, isNotNull,
+          reason: 'the state query released it on the recovery pull (AC-3)');
+      expect(await b.client.quarantined(includeReleased: false), isEmpty);
+      expect(await canonicalReducedState(b.database),
+          contains(_entityId('future-epoch')),
+          reason: 'released, re-received and applied from the quarantine (AC-3)');
+    });
+
+    test('below-floor slack is admitted at a raised floor, only above is refused',
+        () async {
+      // The legitimate slack the ceiling must not touch: a device offline across a
+      // rotation drains an outbox op at epoch `floor-1`, and a device that has moved
+      // to the new floor still applies it. Only content *above* the floor is refused.
+      final workspace = await SimWorkspace.create(deviceCount: 2);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final b = workspace.b;
+      await a.enrolment.turnOnEncryption(passphrase: workspace.passphrase);
+      await workspace.syncAll();
+
+      // B authors at epoch 1 while it still stands there — signed at capture time,
+      // so this op carries key_epoch 1 whatever B's floor becomes before it flushes.
+      await b.client.capture(
+        collection: _collection,
+        entityId: _entityId('slack'),
+        fields: {'title': 'drained from the outbox at epoch 1'},
+      );
+
+      // A moves the floor to epoch 2 and captures there.
+      await a.enrolment.rotateWorkspaceKeys(passphrase: workspace.passphrase);
+      expect(await a.client.epochFloor(), 2);
+      await a.client.capture(
+        collection: _collection,
+        entityId: _entityId('current'),
+        fields: {'title': 'authored at epoch 2'},
+      );
+      await a.sync();
+
+      // B flushes its epoch-1 op (the server admits `current - 1` as slack), then A
+      // receives it while standing at floor 2: `key_epoch 1` is at `floor - 1`, so
+      // the ceiling admits it and A's retained epoch-1 key decrypts it.
+      await b.sync();
+      final health = await a.sync();
+
+      expect(health.alarmKinds, isEmpty);
+      expect(await a.client.quarantined(includeReleased: false), isEmpty,
+          reason: 'nothing at or below the floor was refused');
+      final reduced = await canonicalReducedState(a.database);
+      expect(reduced, contains(_entityId('slack')),
+          reason: 'floor-1 content is admitted and applied (AC-5)');
+      expect(reduced, contains(_entityId('current')),
+          reason: 'floor content is admitted and applied (AC-5)');
+    });
+
+    test('the rejection reason mirrors the server and raises no alarm', () {
+      // Server parity (#590, routes.py:1413) and the no-alarm contract, pinned so a
+      // rename on either side or an accidental `alarmForRejection` entry is caught.
+      expect(SyncRejectionReason.keyEpochUnknown.code, 'key_epoch_unknown');
+      expect(SyncRejectionReason.byCode('key_epoch_unknown'),
+          SyncRejectionReason.keyEpochUnknown);
+      expect(alarmForRejection(SyncRejectionReason.keyEpochUnknown), isNull,
+          reason: 'a future epoch is a delivery-order fact, not misconduct (AC-2)');
+    });
+  });
+
   group('a Workspace keyed at genesis', () {
     test('is encrypted from its first content op, at epoch 0', () async {
       final server = FakeSyncServer();

@@ -286,6 +286,30 @@ enum SyncRejectionReason {
   /// the wrap and a gap for one that does not, so it carries no golden vector.
   missingEpochKey('missing_epoch_key'),
 
+  /// A content op at a `key_epoch` no `rotate` this device applied has established.
+  ///
+  /// The client mirror of the server's `key_epoch_unknown` ceiling (#590): the
+  /// epoch floor doubles as the applied-epoch ceiling on receive, so content whose
+  /// `key_epoch` exceeds `epochFloor()` is content from outside the rotation
+  /// boundary this device's own control log has reached. Refused *before* any key
+  /// lookup — the verdict is about the epoch, not about whether the wrap happens to
+  /// be held (`refreshEpochKeys` fetches every epoch the server holds, so the key
+  /// can arrive before the `rotate` that establishes its epoch).
+  ///
+  /// Quarantined fail-closed, and *not* an alarm: an epoch this device has not
+  /// reached yet is a delivery-order fact, not misconduct — the same reading
+  /// [missingEpochKey] gets. Distinct from [missingEpochKey] (device holds no key
+  /// at all) and from [keyEpochStale]/`key_epoch_below_floor` (the authoring-side
+  /// floor): this one is "the key may be held, but no applied `rotate` has
+  /// established the epoch." Its healer is the **floor rising**, not the key
+  /// arriving, so it carries its own floor-keyed release scan rather than
+  /// [missingEpochKey]'s key-gated one.
+  ///
+  /// Client-only and stateful: the same envelope is future-epoch for one device
+  /// and applicable for another that has applied the `rotate`, so it carries no
+  /// golden vector.
+  keyEpochUnknown('key_epoch_unknown'),
+
   /// A *content* op at suite 0x00 whose `key_epoch` this device holds a key for.
   ///
   /// The read-boundary half of "the upgrade is one-way": once an epoch is keyed,
