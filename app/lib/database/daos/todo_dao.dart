@@ -1347,25 +1347,14 @@ AND (
         lastClarifiedAt: Value(ts),
       ));
       // Creation asserts the whole row so a peer that has never seen this
-      // Outcome can build it.
-      _captureTodo(id, {
-        'title': title,
-        'notes': notes,
-        'priority': null,
-        'due_date': encodeInstant(dueDate),
-        'created_at': encodeInstant(ts),
-        'updated_at': encodeInstant(ts),
-        'done_at': null,
-        'clarified': true,
-        'intent': 'next',
-        'time_estimate': timeEstimate,
-        'energy_level': energyLevel,
-        'capture_source': captureSource,
-        'location_id': null,
-        'user_id': userId,
-        'last_clarified_at': encodeInstant(ts),
-        'last_next_action_completion_at': null,
-      });
+      // Outcome can build it. Read the row back rather than re-deriving the
+      // assertion from the arguments: `intent` is a client default this
+      // companion never carries, and re-listing the columns here would be a
+      // second place every new synced column has to be added — one that could
+      // drift from what the row actually holds.
+      final created =
+          await (select(todos)..where((t) => t.id.equals(id))).getSingle();
+      _captureTodo(id, _wholeTodoRowFields(created));
       attachedDatabase.notifyTodosViewWrite();
     });
   }
