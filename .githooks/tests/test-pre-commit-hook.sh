@@ -255,8 +255,15 @@ write_passing_tool_stubs "${OUTER_TOOLS}"
 # unactivated tools which reaches `exit 0`. Note `sh` and `bash` are genuinely
 # different runs even where /bin/sh *is* bash, since POSIX mode is what makes
 # the failed source fatal.
+#
+# `dash` is listed explicitly and is not redundant with `sh`. On Linux /bin/sh
+# IS dash, but on macOS it is bash in POSIX mode, and the two disagree about
+# what is fatal: bash-as-sh aborts on a failed special builtin but recovers from
+# a parse error in a sourced file, while dash dies on both. Without an explicit
+# dash row a developer's local run cannot see the dash-only failures at all, and
+# the suite goes green on a hook that dies silently in CI.
 BACKEND_SHELLS="sh"
-for optional_shell in bash zsh; do
+for optional_shell in dash bash zsh; do
   if command -v "${optional_shell}" >/dev/null 2>&1; then
     BACKEND_SHELLS="${BACKEND_SHELLS} ${optional_shell}"
   else

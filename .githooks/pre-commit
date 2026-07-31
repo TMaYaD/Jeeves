@@ -43,16 +43,25 @@ if git diff --cached --name-only | grep -q "^backend/"; then
         exit 1
     fi
 
-    # 2. Readable but not sourceable (corrupt/half-written activate). Handle the
-    #    source's own status rather than letting the interpreter decide whether
-    #    that is fatal.
+    # 2. Readable but not sourceable (corrupt/half-written activate). Probe in a
+    #    SUBSHELL rather than sourcing directly: in dash — /bin/sh on most
+    #    Linux, so the interpreter git actually uses there — a parse error in a
+    #    sourced file is fatal, and would kill the hook before it could report
+    #    anything. A subshell contains that death and turns it into a status we
+    #    can act on, in every interpreter. (Don't expect this to reproduce on
+    #    macOS: /bin/sh there is bash in POSIX mode, which is fatal for a failed
+    #    special builtin but NOT for a parse error.)
     # shellcheck disable=SC1091
-    if ! . .venv/bin/activate; then
+    if ! ( . .venv/bin/activate ) >/dev/null 2>&1; then
         echo "❌ backend/.venv exists but its activate script could not be sourced."
         echo "   The venv is present but corrupt."
         echo "   Re-create it: 'cd backend && rm -rf .venv && uv sync --extra dev'."
         exit 1
     fi
+
+    # Sourcing is known-good now, so do it for real in this shell.
+    # shellcheck disable=SC1091
+    . .venv/bin/activate
 
     # 3. Sourced cleanly but activated nothing. An activate truncated by an
     #    interrupted `uv sync` is still valid shell that sets no PATH, so every
