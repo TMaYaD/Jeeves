@@ -292,6 +292,14 @@ A **release** phone cannot be checked this way at all (`run-as: package not debu
 so it gets behavioural verification only: sign up → land in enrolment → found → the drawer
 indicator goes green → run the Nirvana import and watch the server's op count rise.
 
+The op count now covers **every** imported entity — Outcomes, Captures, Tags and both
+junction tables — not just the Tags, so the expected rise is roughly three ops per imported
+task rather than one per distinct tag. It rises in **steps, once per batch** of
+`nirvanaImportTaskBatchSize` tasks (`app/lib/import/nirvana_local_import.dart`), because a
+batch is the transaction and the op-authoring unit; a single burst at the end would mean the
+batching is not doing its job. A count that stops rising mid-import is a *partial* import, and
+re-running the same export completes it — the ids are deterministic, so nothing duplicates.
+
 ## Manual testing on the Android emulator (for agents)
 
 For flows that are impractical to cover with `flutter_test` / integration tests — in particular the Sign-In With Solana round-trip, which requires a real MWA-compatible wallet — drive the running emulator via `adb`. This section captures the stable coordinates and navigation paths so successive sessions don't have to re-discover them.
