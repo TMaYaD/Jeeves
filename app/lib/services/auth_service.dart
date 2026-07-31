@@ -35,7 +35,7 @@ final class SessionRefreshed extends SessionRefreshOutcome {
 /// The Jeeves backend answered 401: the refresh token is revoked, expired,
 /// member-scoped or unknown (`backend/app/auth/routes.py`).
 ///
-/// A 401 alone is *not* enough to get here — see [isCorroboratedRejection].
+/// A 401 alone is *not* enough to get here — see [_isCorroboratedRejection].
 final class SessionRefreshRejected extends SessionRefreshOutcome {
   const SessionRefreshRejected();
 }
@@ -74,9 +74,11 @@ final class SessionRefreshTokenAbsent extends SessionRefreshOutcome {
 /// Matched on `detail`'s **shape**, never its text: a copy edit on the backend
 /// must not be able to flip every client to never-signing-out.
 ///
-/// Visible for test: the classification is the whole safety argument, so it is
-/// held to the contract directly as well as through [AuthService.refreshSession].
-bool isCorroboratedRejection(Response<dynamic>? response) {
+/// Exercised through [AuthService.refreshSession] over a scripted
+/// `HttpClientAdapter`, so the response it judges is one Dio itself built — a
+/// hand-made `Response` would not catch a change in how Dio surfaces a body or
+/// lowercases a header name.
+bool _isCorroboratedRejection(Response<dynamic>? response) {
   if (response == null || response.statusCode != 401) return false;
 
   final data = response.data;
@@ -182,7 +184,7 @@ class AuthService {
       await saveTokens(newAccess, newRefresh);
       return SessionRefreshed(newAccess);
     } on DioException catch (error) {
-      return isCorroboratedRejection(error.response)
+      return _isCorroboratedRejection(error.response)
           ? const SessionRefreshRejected()
           : const SessionRefreshInconclusive();
     } on Object {
