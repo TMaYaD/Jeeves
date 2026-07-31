@@ -8,6 +8,7 @@ import '../../services/api_service.dart';
 import '../../services/auth_service.dart';
 import '../auth_provider_interface.dart';
 import '../jwt_utils.dart';
+import '../session_restore.dart';
 import 'sws_login_widget.dart';
 import 'wallet_signer.dart';
 
@@ -129,36 +130,9 @@ class SwsAuthProvider implements AuthProvider {
   @override
   Future<void> signOut(String refreshToken) => _authService.logout();
 
+  /// SWS users use the same JWT + refresh token mechanism as password users, so
+  /// they share the one implementation — including its #606 fix.
   @override
-  Future<AuthResult?> restore() async {
-    // SWS users use the same JWT + refresh token mechanism as password users.
-    final stored = await _authService.getToken();
-    if (stored != null) {
-      final userId = extractUserIdFromJwt(stored);
-      if (userId != null) {
-        final refresh = await _authService.getRefreshToken() ?? '';
-        return AuthResult(
-          accessToken: stored,
-          refreshToken: refresh,
-          userId: userId,
-        );
-      }
-    }
-
-    final refreshed = await _authService.refreshSession();
-    if (refreshed != null) {
-      final userId = extractUserIdFromJwt(refreshed);
-      if (userId != null) {
-        final refresh = await _authService.getRefreshToken() ?? '';
-        return AuthResult(
-          accessToken: refreshed,
-          refreshToken: refresh,
-          userId: userId,
-        );
-      }
-    }
-
-    return null;
-  }
+  Future<SessionRestoreOutcome> restore() => restoreJwtSession(_authService);
 }
 

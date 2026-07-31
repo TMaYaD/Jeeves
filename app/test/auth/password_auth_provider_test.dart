@@ -5,8 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/auth/auth_mode.dart';
 import 'package:jeeves/auth/auth_provider_interface.dart';
 import 'package:jeeves/auth/password/password_auth_provider.dart';
+import 'package:jeeves/auth/session_restore.dart';
 import 'package:jeeves/services/api_service.dart';
 import 'package:jeeves/services/auth_service.dart';
+
+import 'session_restore_contract.dart';
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -136,7 +139,7 @@ void main() {
   });
 
   group('PasswordAuthProvider — restore', () {
-    test('returns AuthResult when valid access token is stored', () async {
+    test('restores from a stored unexpired access token', () async {
       final (:storage, :api, :provider, :container) = _makeFixture();
       addTearDown(container.dispose);
 
@@ -144,30 +147,29 @@ void main() {
       await storage.write('jwt_token', token);
       await storage.write('refresh_token', 'r42');
 
-      final result = await provider.restore();
-
-      expect(result, isNotNull);
-      expect(result!.userId, 'user-42');
-      expect(result.accessToken, token);
+      expect(
+        await provider.restore(),
+        isA<SessionRestored>()
+            .having((o) => o.session.userId, 'userId', 'user-42')
+            .having((o) => o.session.accessToken, 'accessToken', token),
+      );
     });
 
-    test('returns null when no token stored and refresh also fails', () async {
+    test('nothing stored is an absent session', () async {
       final (:storage, :api, :provider, :container) = _makeFixture();
       addTearDown(container.dispose);
 
-      final result = await provider.restore();
-      expect(result, isNull);
+      expect(await provider.restore(), isA<SessionAbsent>());
     });
 
-    test('returns null when access token expired and no refresh token',
+    test('an expired access token with no refresh token is an absent session',
         () async {
       final (:storage, :api, :provider, :container) = _makeFixture();
       addTearDown(container.dispose);
 
       await storage.write('jwt_token', _makeExpiredJwt('user-99'));
-      // No refresh token stored → refreshSession returns null.
-      final result = await provider.restore();
-      expect(result, isNull);
+      // Nothing to refresh with: authoritative absence, and no request issued.
+      expect(await provider.restore(), isA<SessionAbsent>());
     });
 
     test('silently refreshes when access token is expired', () async {
@@ -180,12 +182,19 @@ void main() {
       final newToken = _makeJwt('user-99');
       api.respondWith({'access_token': newToken, 'refresh_token': 'new-refresh'});
 
-      final result = await provider.restore();
-
-      expect(result, isNotNull);
-      expect(result!.userId, 'user-99');
+      expect(
+        await provider.restore(),
+        isA<SessionRestored>()
+            .having((o) => o.session.userId, 'userId', 'user-99')
+            .having((o) => o.session.accessToken, 'accessToken', newToken),
+      );
     });
   });
+
+  // The three-way verdict, over a real Dio so a transport failure and a
+  // corroborated 401 are told apart. Shared with the SWS provider, which must
+  // answer identically.
+  runSessionRestoreContract('PasswordAuthProvider', PasswordAuthProvider.new);
 
   group('PasswordAuthProvider — signOut', () {
     test('clears tokens from storage', () async {

@@ -9,6 +9,8 @@ import 'package:jeeves/auth/sws/wallet_signer.dart';
 import 'package:jeeves/services/api_service.dart';
 import 'package:jeeves/services/auth_service.dart';
 
+import '../session_restore_contract.dart';
+
 // ---------------------------------------------------------------------------
 // Fakes
 // ---------------------------------------------------------------------------
@@ -171,27 +173,11 @@ void main() {
     });
   });
 
-  group('SwsAuthProvider — restore', () {
-    test('returns null when no token stored', () async {
-      final (:storage, :api, :provider, :container) = _makeFixture();
-      addTearDown(container.dispose);
-
-      final result = await provider.restore();
-      expect(result, isNull);
-    });
-
-    test('returns AuthResult when valid token stored', () async {
-      final (:storage, :api, :provider, :container) = _makeFixture();
-      addTearDown(container.dispose);
-
-      final token = _makeJwt('solana-user-2');
-      await storage.write('jwt_token', token);
-      await storage.write('refresh_token', 'rr');
-
-      final result = await provider.restore();
-
-      expect(result, isNotNull);
-      expect(result!.userId, 'solana-user-2');
-    });
-  });
+  // Every restore case this provider owes, including the two it used to assert
+  // locally (nothing-stored, and a stored unexpired token) — the contract pins
+  // both, with strictly stronger assertions. SWS shares the JWT + refresh-token
+  // mechanism, so it must share the #606 fix, and used to hold its own copy of
+  // the bug. Local restore tests belong here only for SWS-specific behaviour the
+  // contract cannot express.
+  runSessionRestoreContract('SwsAuthProvider', SwsAuthProvider.new);
 }

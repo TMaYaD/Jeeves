@@ -1,9 +1,9 @@
-import 'dart:convert';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth_mode.dart';
+import '../auth/jwt_utils.dart';
 import '../auth/session_gate.dart';
+import '../auth/session_restore.dart';
 import '../services/auth_service.dart';
 import '../sync/enrolment_state.dart';
 import 'sync_stack_provider.dart';
@@ -44,24 +44,47 @@ class AuthNotifier extends AsyncNotifier<String?> {
   /// Delegates to the active [AuthProvider] so the restore logic is
   /// provider-specific (password vs SWS both use JWTs but differ in how
   /// the token was originally obtained).
+  ///
+  /// **[clearTokens] is reachable from exactly one arm, [SessionAbsent].** That
+  /// is the #606 fix stated as a shape rather than a condition: every failure
+  /// that is not the server saying "no" lands in [SessionUnverified] and costs
+  /// the device nothing. Destroying credentials here is not a sign-out prompt —
+  /// `currentUserIdProvider` is what the whole sync spine hangs off, so it also
+  /// refuses the stack, settles the capture seam silent, and (with the
+  /// initial-upload marker already set) drops every write of the session with no
+  /// path left to re-carry them.
   @override
   Future<String?> build() async {
     final provider = ref.watch(authImplProvider);
-    final result = await provider.restore();
 
-    if (result != null) {
-      ref.read(currentUserIdProvider.notifier).setUserId(result.userId);
-      sessionGateNotifier.value = await _enrolmentGate();
-      return result.accessToken;
+    switch (await provider.restore()) {
+      case SessionRestored(:final session):
+        ref.read(currentUserIdProvider.notifier).setUserId(session.userId);
+        sessionGateNotifier.value = await _enrolmentGate();
+        return session.accessToken;
+
+      case SessionUnverified(:final userId, :final expiredAccessToken):
+        // Signed in as the account the stored token names, on credentials of
+        // unknown validity. The id is set *before* the gate is asked, because
+        // `_enrolmentGate()` reads `syncStackProvider` and that provider refuses
+        // the `'local'` placeholder — the same ordering the restored arm relies
+        // on. The expired token is returned rather than null so this provider's
+        // value matches the `Authorization` header `getToken()` has already set,
+        // and the first request once the network returns self-heals through the
+        // retry interceptor.
+        ref.read(currentUserIdProvider.notifier).setUserId(userId);
+        sessionGateNotifier.value = await _enrolmentGate();
+        return expiredAccessToken;
+
+      case SessionAbsent():
+        // No session — stay in local-only mode.
+        try {
+          await ref.read(authServiceProvider).clearTokens();
+        } catch (_) {}
+        ref.read(currentUserIdProvider.notifier).reset();
+        sessionGateNotifier.value = SessionGate.signedOut;
+        return null;
     }
-
-    // No valid session — stay in local-only mode.
-    try {
-      await ref.read(authServiceProvider).clearTokens();
-    } catch (_) {}
-    ref.read(currentUserIdProvider.notifier).reset();
-    sessionGateNotifier.value = SessionGate.signedOut;
-    return null;
   }
 
   /// Sign in.
@@ -98,7 +121,7 @@ class AuthNotifier extends AsyncNotifier<String?> {
       final service = ref.read(authServiceProvider);
       final (:accessToken, refreshToken: _) =
           await service.register(email, password);
-      final userId = _extractUserId(accessToken);
+      final userId = extractUserIdFromJwt(accessToken);
       if (userId == null) {
         await service.clearTokens();
         throw StateError('Server returned a token without a valid user ID.');
@@ -151,31 +174,5 @@ class AuthNotifier extends AsyncNotifier<String?> {
     } catch (_) {
       return SessionGate.ready;
     }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// JWT helpers
-// ---------------------------------------------------------------------------
-
-String? _extractUserId(String token) {
-  final parts = token.split('.');
-  if (parts.length != 3) return null;
-  try {
-    final payload = parts[1];
-    final padded = payload.padRight(
-      payload.length + (4 - payload.length % 4) % 4,
-      '=',
-    );
-    final decoded = utf8.decode(base64Url.decode(padded));
-    final json = jsonDecode(decoded) as Map<String, dynamic>;
-    final exp = json['exp'];
-    final expSeconds =
-        exp is int ? exp : (exp is String ? int.tryParse(exp) : null);
-    final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    if (expSeconds != null && expSeconds <= nowSeconds) return null;
-    return json['sub'] as String?;
-  } catch (_) {
-    return null;
   }
 }

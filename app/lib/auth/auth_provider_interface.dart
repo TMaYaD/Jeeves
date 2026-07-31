@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import 'session_restore.dart';
+
 /// Common interface that every authentication backend must implement.
 ///
 /// Concrete implementations are selected at compile time via
@@ -24,9 +26,13 @@ abstract interface class AuthProvider {
 
   /// Attempt to restore an existing session from secure storage.
   ///
-  /// Returns an [AuthResult] if a valid (or silently-refreshed) session
-  /// exists, or `null` if the user must sign in again.
-  Future<AuthResult?> restore();
+  /// Three answers, not two: a session, no session, or *credentials that could
+  /// not be verified* — the server was unreachable, or answered something that is
+  /// not a corroborated 401. Only [SessionAbsent] means the user must sign in
+  /// again; [SessionUnverified] keeps the device signed in and authoring, because
+  /// clearing credentials on an inconclusive answer destroys an enrolled device's
+  /// enrolment and drops the whole session's ops (ADR-0041).
+  Future<SessionRestoreOutcome> restore();
 }
 
 /// Canonical authentication result returned by every [AuthProvider].

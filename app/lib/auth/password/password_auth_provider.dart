@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/auth_service.dart';
 import '../auth_provider_interface.dart';
 import '../jwt_utils.dart';
+import '../session_restore.dart';
 import 'password_login_widget.dart';
 
 /// [AuthProvider] implementation for the classic email + password flow.
@@ -41,35 +42,6 @@ class PasswordAuthProvider implements AuthProvider {
   Future<void> signOut(String refreshToken) => _service.logout();
 
   @override
-  Future<AuthResult?> restore() async {
-    final stored = await _service.getToken();
-    if (stored != null) {
-      final userId = extractUserIdFromJwt(stored);
-      if (userId != null) {
-        final refresh = await _service.getRefreshToken() ?? '';
-        return AuthResult(
-          accessToken: stored,
-          refreshToken: refresh,
-          userId: userId,
-        );
-      }
-    }
-
-    // Access token missing or expired — try silent refresh.
-    final refreshed = await _service.refreshSession();
-    if (refreshed != null) {
-      final userId = extractUserIdFromJwt(refreshed);
-      if (userId != null) {
-        final refresh = await _service.getRefreshToken() ?? '';
-        return AuthResult(
-          accessToken: refreshed,
-          refreshToken: refresh,
-          userId: userId,
-        );
-      }
-    }
-
-    return null;
-  }
+  Future<SessionRestoreOutcome> restore() => restoreJwtSession(_service);
 }
 

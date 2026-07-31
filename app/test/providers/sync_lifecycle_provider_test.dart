@@ -11,6 +11,13 @@
 /// by behaviour: an op emitted while undecided is *held* and drains on a later
 /// bind; one emitted while silent is dropped. A real `SyncClient` pair is the
 /// witness — a queued envelope is the whole claim.
+///
+/// The third case is the one #606 added: restore can also answer **unverified** —
+/// credentials are on the device and the server could not be reached to confirm
+/// them. That is not the local branch. The user id is real, so the provider must
+/// build a lifecycle and let it bind, exactly as it does for a verified session;
+/// an offline relaunch that fell into the local branch would settle the seam
+/// silent and drop the whole session's writes (ADR-0041).
 @TestOn('!browser')
 library;
 
@@ -21,18 +28,28 @@ import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/sync_lifecycle_provider.dart';
+import 'package:jeeves/providers/sync_stack_provider.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
+import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/member_identity.dart';
+import 'package:jeeves/sync/pending_rotation_store.dart';
 import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
+import 'package:jeeves/sync/sync_lifecycle.dart';
+import 'package:jeeves/sync/sync_stack.dart';
+import 'package:jeeves/sync/workspace_key_store.dart';
 
+import '../sync/harness/fake_sync_server.dart';
+import '../sync/harness/sim_device.dart'
+    show DeviceLink, harnessKdfParameters;
 import '../test_helpers.dart';
 
 const String _userId = 'provider-user';
@@ -49,6 +66,22 @@ class _PendingAuth extends AuthNotifier {
 class _AnsweredSignedOutAuth extends AuthNotifier {
   @override
   Future<String?> build() async => null;
+}
+
+/// Session restore that answered **unverified**: credentials on the device, the
+/// server unreachable. The production `SessionUnverified` arm's two effects — set
+/// the real user id, return the stale access token rather than null — with the
+/// enrolment gate left out, which this file has no stack to answer anyway.
+class _AnsweredUnverifiedAuth extends AuthNotifier {
+  @override
+  Future<String?> build() async {
+    // Suspended first, as the production arm is: it writes the user id only after
+    // `restore()` has answered, and a write before the first await trips
+    // Riverpod's "no modifying other providers while building" assert.
+    await Future<void>.delayed(Duration.zero);
+    ref.read(currentUserIdProvider.notifier).setUserId(_userId);
+    return 'stale-but-retained-access-token';
+  }
 }
 
 void main() {
@@ -138,5 +171,60 @@ void main() {
         gtdClient: gtdClient, preferencesClient: preferencesClient);
     expect(await outboxCount(), 0,
         reason: 'a write after the silent decision authors nothing');
+  });
+
+  test('restore answered unverified builds a lifecycle and the seam ends bound',
+      () async {
+    // An enrolled device, relaunched offline, whose silent refresh could not
+    // reach the server. The provider must take the *account* branch: a lifecycle
+    // is built, it binds from the local reads alone, and the offline write lands
+    // in the durable outbox. Fall into the local branch instead and the seam is
+    // settled silent — which is #606.
+    final capture = WorkspaceRoutingOpCapture();
+    final link = DeviceLink(FakeSyncServer().connectAsUser(_userId));
+    link.online = false;
+    final domain = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    addTearDown(domain.close);
+
+    final stack = await SyncStack.assemble(
+      userId: _userId,
+      database: database,
+      keyStore: InMemoryDeviceKeyStore(),
+      userTransport: link,
+      domain: domain,
+      nowMs: () => _nowMs,
+      workspaceKeys: InMemoryWorkspaceKeyStore(),
+      pendingRotations: InMemoryPendingRotationStore(),
+      kdfParameters: harnessKdfParameters,
+      kdfFloor: harnessKdfParameters,
+    );
+    // Enrolled before the relaunch, so the lifecycle's own step 1 says "bind"
+    // rather than "author nothing". Offline, so nothing after the bind succeeds.
+    link.online = true;
+    await stack.enrolment.enrolFirstDevice();
+    link.online = false;
+
+    final container = ProviderContainer(overrides: [
+      domainOpCaptureProvider.overrideWithValue(capture),
+      databaseProvider.overrideWithValue(domain),
+      syncStackProvider.overrideWith((ref) async => stack),
+      authTokenProvider.overrideWith(_AnsweredUnverifiedAuth.new),
+    ]);
+    addTearDown(container.dispose);
+
+    expect(await container.read(authTokenProvider.future), isNotNull);
+    final lifecycle = await container.read(syncLifecycleProvider.future);
+    expect(lifecycle, isNotNull,
+        reason: 'an unverified session fell into the local-only branch');
+    // Join the provider's own un-awaited activation rather than starting a second.
+    expect(await lifecycle!.activate(), SyncActivation.syncFailed);
+    expect(capture.isBound, isTrue,
+        reason: 'the seam was settled silent for a device that is signed in');
+
+    // A delta: the enrolment ceremony's own control ops are in the same outbox.
+    final authoredBeforeWrite = await outboxCount();
+    await emitOutcome(capture);
+    expect(await outboxCount(), authoredBeforeWrite + 1,
+        reason: 'the offline write authored nothing into the outbox');
   });
 }
