@@ -210,10 +210,21 @@ ACTIVATE
 
 # The three shapes of a venv that EXISTS but cannot be used. Each one passes the
 # `[ -f .venv/bin/activate ]` existence guard, so each is a distinct chance to
-# fall through to the outer PATH and re-run #539 one step further along. All
-# three deliberately carry working tool stubs inside .venv/bin: if the hook
-# wrongly proceeds, those let it sail through to `exit 0`, so a passing case
-# proves the guard fired rather than that the fixture was broken anyway.
+# fall through to the outer PATH and re-run #539 one step further along.
+#
+# What makes that fall-through *detectable* is OUTER_TOOLS, which
+# `run_backend_hook` puts on PATH for these cases — NOT the stubs inside
+# .venv/bin. A failed or inert activation never adds .venv/bin to PATH, so those
+# stubs are unreachable by definition; the outer ones are the only tools a
+# fell-through hook can find, and they are what let it reach `exit 0` instead of
+# dying on a missing binary. Drop the OUTER_TOOLS argument from these call sites
+# and the cases still go green against a hook with no guard at all. Measured, on
+# an inert venv with the guards reverted: rc=0 with the outer stubs, rc=1
+# without.
+#
+# The fixtures do still populate .venv/bin, but for duller reasons: it creates
+# the directory the activate file lives in, and makes each fixture a realistic
+# "tools installed, activation broken" venv rather than an empty shell.
 
 # Bad mode bits — readable by `[ -f ]`, not by `.`.
 make_unreadable_venv() {
