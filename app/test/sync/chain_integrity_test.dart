@@ -230,6 +230,77 @@ void main() {
     expect(standing.single.authorSeq, firstPeerContentAuthorSeq + 3);
   });
 
+  test('a storage fault replaying a chain successor keeps it replayable, and '
+      'the scan terminates rather than spinning', () async {
+    // #620: `_releaseChainSuccessors` re-receives a released successor, and
+    // `_receive` rethrows a storage fault rather than quarantining it. If the row
+    // were released *before* that failing re-receive, it would drop out of the
+    // scan (which reads `released_at IS NULL`) while the cursor is already long
+    // past it — the envelope would exist nowhere and the write would be lost.
+    final first = await _op(workspace, peer, 'one');
+    final second = await _op(workspace, peer, 'two');
+    final appended =
+        await peerSession.postOps(workspace.workspaceId, [first, second]);
+    workspace.server.serveOrder = [appended[1].seq, appended[0].seq];
+
+    // Abort every attempt to log the replayed successor. The reorder delivers
+    // `second` first (quarantined as a gap), then `first`, whose apply triggers
+    // the replay of `second` — and it is that replay's `op_log` insert this
+    // trigger fails, exactly as a transient `SQLITE_BUSY`/`SQLITE_IOERR` would.
+    // Scoped to the successor's `author_seq` so the predecessor still logs.
+    await a.database.customStatement(
+      'CREATE TRIGGER chain_successor_replay_fails BEFORE INSERT ON op_log '
+      'WHEN NEW.author_seq = ${firstPeerContentAuthorSeq + 1} '
+      "BEGIN SELECT RAISE(ABORT, 'op_log is unwritable'); END",
+    );
+
+    // The scan returns rather than spinning, and keeps doing so across repeated
+    // passes with the fault standing (AC 3): a spin would hang here, never
+    // completing either sync.
+    await a.sync();
+    await a.sync();
+
+    // The predecessor applied; the successor is held unreleased, not lost (AC 1).
+    expect(await _doc(a, workspace), {'step': 'one'});
+    final held = await a.client.quarantined(includeReleased: false);
+    expect(held.single.authorSeq, firstPeerContentAuthorSeq + 1);
+    expect(held.single.releasedAt, isNull);
+    expect(
+      (await a.alarmsByKind())
+          .containsKey(IntegrityAlarmKind.authorStreamReordered.code),
+      isFalse,
+      reason: 'nothing has healed yet, so no reorder is claimed',
+    );
+
+    // Storage recovers. Pin the replay source to the durable quarantine rather
+    // than a server re-serve: the successor's seq is already below the pull cursor
+    // (it was pulled in the first sync, and the cursor tracks the highest seq
+    // *pulled*, not applied), and now the server withholds it outright as well. So
+    // nothing new arrives to re-trigger the reactive heal — the only thing that can
+    // re-admit the held successor is the pull-tail state query reading the
+    // quarantine, which is exactly the restart-safe path under test (AC 1).
+    workspace.server.omitSeqs.add(appended[1].seq);
+    await a.database.customStatement('DROP TRIGGER chain_successor_replay_fails');
+    await a.sync();
+
+    expect(await _doc(a, workspace), {'step': 'two'});
+    final released = await a.client.quarantined();
+    expect(released.single.authorSeq, firstPeerContentAuthorSeq + 1);
+    expect(released.single.releasedAt, isNotNull);
+    expect(await a.client.quarantined(includeReleased: false), isEmpty);
+    final alarms = await a.alarmsByKind();
+    expect(
+      alarms[IntegrityAlarmKind.authorStreamReordered.code]!.resolvedAt,
+      isNull,
+      reason: 'the successor did become chain-valid once its predecessor arrived',
+    );
+    expect(
+      alarms[IntegrityAlarmKind.authorChainGap.code]!.resolvedAt,
+      isNotNull,
+      reason: 'nothing is missing any more',
+    );
+  });
+
   test('an incompatible predecessor is a fork, not a heal', () async {
     // The head is at 2, and two different ops claim position 3: the one the
     // withheld successor was chained to, and the one that actually arrives.

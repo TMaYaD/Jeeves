@@ -1083,6 +1083,19 @@ class SyncClient {
       affected.addAll(await _releaseOpsAwaitingEpoch());
       _epochFloorRaised = false;
     }
+    // The chain-successor heal is otherwise reactive: [_receive] runs it inline
+    // when an op advances an author's head. A storage fault while replaying a
+    // released successor ([_releaseChainSuccessors]) leaves the row unreleased but
+    // does not advance the head, and the replayed op is long past the cursor, so
+    // nothing reactive re-triggers it — the write would sit owed until an
+    // unrelated op from the same author happened to arrive. Re-run the heal from
+    // the durable quarantine for every author still holding an unreleased gap row,
+    // the restart-safe fallback its epoch-scan siblings above already have. For a
+    // genuine drop the head sits below the gap, so the scan finds no claimant at
+    // head + 1 and returns without releasing or accusing anything.
+    for (final author in await _authorsWithUnreleasedGap()) {
+      affected.addAll(await _releaseChainSuccessors(author));
+    }
     if (_rebuildRequired) {
       // A control fork resolved during this pull, so the authorization verdicts
       // the content ops applied under are no longer the right ones.
@@ -1922,18 +1935,37 @@ class SyncClient {
         // Nothing at head + 1 chains to the head: a lone refusing claimant ends
         // the scan exactly as it always did.
         if (winner == null) break;
-        // Released *before* re-entry: the loop is driven by the unreleased rows,
-        // and a re-entry that refuses for some later reason must not leave this
-        // claimant to be picked up forever. Losers keep no `released_at` and are
-        // re-alarmed at most once per iteration — if the winner's re-receive
-        // refuses, the head does not advance and the next iteration sees them
-        // again — and the loop still terminates because the unreleased set at the
-        // contested position strictly shrinks on every pass.
+        // Re-received *before* it is released, the inverse of the pre-#620 order.
+        // `_receive` rethrows [SqliteException] rather than quarantining it — a
+        // storage failure is about our own database, not the envelope — and the
+        // cursor is long past this replayed op, so a row released *before* a
+        // re-receive that then failed on storage would drop out of the only scan
+        // that could still find it (`released_at IS NULL`), and the write would be
+        // lost outright. Releasing only after the re-receive returns keeps the row
+        // a claimant, and the pull tail's state-query heal replays it on a later
+        // pull.
+        //
+        // The termination argument the early release used to carry is unchanged
+        // for every non-storage outcome: a re-receive that *refuses* still returns
+        // normally, having quarantined a fresh row under its own reason, so the
+        // release below runs and the claimant leaves the gap set exactly as
+        // before — the unreleased set at the contested position still strictly
+        // shrinks on every pass, and losers keep no `released_at` and are
+        // re-alarmed at most once per iteration.
+        try {
+          affected.addAll(
+            await _receive(PulledOp(seq: winner.seq!, envelope: winner.envelope)),
+          );
+        } on SqliteException {
+          // The one outcome that does not release. Leaving the row unreleased is
+          // what keeps the write replayable; stopping the scan here — rather than
+          // re-querying, seeing the same unreleased winner and re-picking it — is
+          // what keeps a repeated storage fault from spinning the loop for ever.
+          // The pull tail re-runs this scan once storage recovers (#620).
+          break;
+        }
         await _markReleased(winner.id);
         releasedAny = true;
-        affected.addAll(
-          await _receive(PulledOp(seq: winner.seq!, envelope: winner.envelope)),
-        );
       }
       if (releasedAny) {
         if (!attestationBridged) {
@@ -1987,6 +2019,33 @@ class SyncClient {
           ..limit(1))
         .get();
     return rows.isNotEmpty;
+  }
+
+  /// Every distinct author holding at least one unreleased `author_chain_gap`
+  /// row, the state query behind the pull-tail chain-successor heal.
+  ///
+  /// The restart-safe sibling of [_hasOpsAwaitingEpochKeys] and
+  /// [_hasOpsAwaitingEpoch]: it re-arms [_releaseChainSuccessors] from durable
+  /// quarantine state rather than from the reactive head-advance trigger, so a
+  /// successor left unreleased by a storage fault (or a crash) is replayed on a
+  /// later pull instead of stranded. Gap rows always carry an author — the chain
+  /// verdict named one before quarantining — so the non-null filter drops none.
+  ///
+  /// Projects the author column with `DISTINCT` rather than loading whole rows:
+  /// the heal only needs the set of authors, and reading each gap row in full
+  /// would pull its envelope BLOB off disk once per row for nothing.
+  Future<Set<String>> _authorsWithUnreleasedGap() async {
+    final authorColumn = _db.quarantinedOps.authorMemberId;
+    final authors = await (_db.selectOnly(_db.quarantinedOps, distinct: true)
+          ..addColumns([authorColumn])
+          ..where(_db.quarantinedOps.workspaceId.equals(workspaceId) &
+              _db.quarantinedOps.releasedAt.isNull() &
+              _db.quarantinedOps.reason
+                  .equals(SyncRejectionReason.authorChainGap.code) &
+              authorColumn.isNotNull()))
+        .map((row) => row.read(authorColumn))
+        .get();
+    return authors.whereType<String>().toSet();
   }
 
   Future<void> _markReleased(int quarantineRowId) async {
@@ -2769,11 +2828,11 @@ class SyncClient {
   /// Re-receive the ops quarantined for a key that has since arrived.
   ///
   /// The healing half of [SyncRejectionReason.missingEpochKey]. Released *after*
-  /// [_receive] returns, which is the opposite of the chain-successor scan and for
-  /// a reason that scan does not share: this one walks a list fetched once, so
-  /// nothing about termination depends on the row leaving the unreleased set
-  /// early, while `_releaseChainSuccessors` re-queries the unreleased rows every
-  /// iteration and would loop for ever without it.
+  /// [_receive] returns — the same ordering [_releaseChainSuccessors] now uses
+  /// (#620), though this one reaches it more simply: it walks a list fetched once,
+  /// so nothing about termination depends on the row leaving the unreleased set,
+  /// whereas the chain scan re-queries every iteration and must additionally stop
+  /// on a storage throw rather than re-pick the row it could not release.
   ///
   /// The ordering matters because [_receive] rethrows [SqliteException] rather
   /// than quarantining it — a storage failure is about *our* database, not the
