@@ -34,6 +34,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:meta/meta.dart';
 
 import 'envelope.dart' show authorKeyIdBytes, workspaceKeyBytes;
 import 'key_ceremony.dart';
@@ -76,16 +77,31 @@ abstract class PendingRotationStore {
   /// [read] off the mutation chain — the storage read itself, including the
   /// per-record corruption self-heal. Only ever called from inside a [_serialised]
   /// body ([read], [put], [remove]); never reach for it from outside one.
+  ///
+  /// `@protected` so an external caller cannot reach past [read] and its
+  /// serialisation; subclasses still override it and the base's own [read] still
+  /// calls it.
+  @protected
   Future<PendingRotationsByEpoch> readRaw(String workspaceId);
 
   /// Replace the whole map. Callers that add one epoch go through [put]; callers
   /// that drop one go through [remove].
+  ///
+  /// `@protected` so a bare `write` cannot bypass [put]'s [ConflictingPendingRotation]
+  /// guard or [remove]'s read-modify-write; subclasses still override it, and the
+  /// serialised mutators still call it.
+  @protected
   Future<void> write(String workspaceId, PendingRotationsByEpoch setsByEpoch);
 
   /// Forget every pending rotation for this Workspace, straight to storage and
   /// off the mutation chain. Callers go through [clear], which runs this on the
   /// same per-Workspace chain [put] and [remove] use; [readRaw] calls it directly on
   /// the corruption path, where it is already inside a chained body.
+  ///
+  /// `@protected` so an external caller cannot delete a record off the chain and
+  /// land its removal inside another mutation's read-modify-write window;
+  /// subclasses still override it, and [clear]/[readRaw] still call it.
+  @protected
   Future<void> clearRaw(String workspaceId);
 
   /// The tail of the last mutation per Workspace, so read-modify-writes chain.
@@ -254,9 +270,13 @@ EpochKeySet decodePendingEpochKeySet(Map<String, Object?> json) =>
 /// entries and whether the record was *wholly* undecodable:
 /// - a top-level parse failure yields `({}, true)` — the caller self-discards it,
 ///   because a record that never round-trips materialised nothing to strand;
-/// - a single bad epoch is skipped (the other epochs, and the other Workspaces'
-///   records, must not be wedged by it) and the record is *not* flagged corrupt —
-///   the good entries stand and the bad one stays inert on disk.
+/// - a bad epoch *beside a good one* is skipped (the other epochs, and the other
+///   Workspaces' records, must not be wedged by it) and the record is *not* flagged
+///   corrupt — the good entries stand and the bad one stays inert on disk;
+/// - a non-empty record whose entries *all* fail to decode yields `({}, true)` too:
+///   nothing round-tripped, so — like a top-level failure — the caller self-discards
+///   it rather than leave dead bytes on disk for ever. An empty record (`{}`, the
+///   steady state once the last epoch is removed) is not corruption and stays.
 (PendingRotationsByEpoch, bool) decodePendingRotationsRecord(String raw) {
   final Map<String, Object?> decoded;
   try {
@@ -273,7 +293,10 @@ EpochKeySet decodePendingEpochKeySet(Map<String, Object?> json) =>
       continue;
     }
   }
-  return (sets, false);
+  // Present entries that all failed to decode round-tripped nothing, so they are as
+  // safe to discard as an unparseable blob; an empty record is the steady state, not
+  // corruption, so it is left alone.
+  return (sets, decoded.isNotEmpty && sets.isEmpty);
 }
 
 Map<String, Object?> _encodeEpochKeySet(EpochKeySet set) => {

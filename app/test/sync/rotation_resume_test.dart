@@ -15,6 +15,11 @@
 /// `putKeyWraps` fails (or commits-then-fails) on demand, exactly as a real server
 /// or a dropped connection would. `relaunch()` is a real process death, and the
 /// pending-rotation store outlives it the way the platform keychain would.
+///
+/// The closing group covers #624: the per-User ceremony lock that serialises
+/// concurrent rotation entry points. The same decorator seam parks a ceremony
+/// mid-`putKeyWraps` — lock held, no progress — so a test can prove a resume
+/// declines rather than blocking behind it.
 @TestOn('!browser')
 library;
 
@@ -68,6 +73,17 @@ class _RotationFaults {
   /// for the resume-before-pull ordering, not the route this scenario takes.
   final Map<String, int> commitThenThrow = {};
 
+  /// When set, the next `putKeyWraps` completes [putKeyWrapsReachedPark] and then
+  /// awaits this gate before doing anything else, so a test can hold a ceremony
+  /// parked mid-publish — lock held, no progress — while it drives an overlapping
+  /// resume and proves the resume does not block behind it (#624 AC-5).
+  Completer<void>? parkNextPutKeyWraps;
+
+  /// Completed the instant a parked `putKeyWraps` reaches its gate, so a test waits
+  /// on a signal rather than guessing how many event-loop turns the ceremony takes
+  /// to get there.
+  Completer<void>? putKeyWrapsReachedPark;
+
   int putKeyWrapsCallCount = 0;
 }
 
@@ -87,6 +103,12 @@ class _ScriptedKeyWrapsTransport implements SyncTransport {
     Uint8List? keyWrapDigest,
   }) async {
     _faults.putKeyWrapsCallCount++;
+    final park = _faults.parkNextPutKeyWraps;
+    if (park != null) {
+      _faults.parkNextPutKeyWraps = null;
+      _faults.putKeyWrapsReachedPark?.complete();
+      await park.future;
+    }
     final commitThenThrow = _faults.commitThenThrow[workspaceId] ?? 0;
     if (commitThenThrow > 0) {
       _faults.commitThenThrow[workspaceId] = commitThenThrow - 1;
@@ -423,6 +445,152 @@ void main() {
         reason: 'a record for an already-held epoch is dropped, never re-published');
   });
 
+  // --- #624: serialising concurrent ceremonies -------------------------------
+
+  test('two overlapping rotateWorkspaceKeys for one User serialise: the second '
+      'observes the first\'s raised floor and does not raise '
+      'ConflictingPendingRotation (AC-1)', () async {
+    final (a, _) = await phone(label: 'A');
+    final passphrase = (await a.enrolAsFirstDevice()).passphrase;
+
+    // Both futures start before either is awaited, so without the per-User ceremony
+    // lock they interleave: both read epoch floor 0, both `prepare` a *distinct* set
+    // for toEpoch 1 (they share one `_random`, so the draws differ), and the later
+    // `put` raises ConflictingPendingRotation. The lock makes them run one-after-the-
+    // other instead — 0->1, then 1->2.
+    final results = await Future.wait([
+      a.stack.enrolment.rotateWorkspaceKeys(passphrase: passphrase),
+      a.stack.enrolment.rotateWorkspaceKeys(passphrase: passphrase),
+    ]);
+
+    expect(results[0][defaultWs()], 1);
+    expect(results[0][prefsWs()], 1);
+    expect(results[1][defaultWs()], 2,
+        reason: 'the second ceremony rotated off the first\'s raised floor');
+    expect(results[1][prefsWs()], 2);
+
+    expect(await a.stack.defaultClient.epochFloor(), 2);
+    expect(await a.workspaceKeys.keyFor(defaultWs(), 2), isNotNull);
+    expect(await a.workspaceKeys.keyFor(prefsWs(), 2), isNotNull);
+    expect(await a.pendingRotations.read(defaultWs()), isEmpty);
+    expect(await a.pendingRotations.read(prefsWs()), isEmpty);
+  });
+
+  test('a resumePendingRotations overlapping a rotateWorkspaceKeys serialises '
+      'rather than racing the prepared-set put: the ceremony queues behind the '
+      'in-flight resume, and the stranded epoch is published once (AC-2)', () async {
+    final (a, faults) = await phone(label: 'A');
+    final passphrase = (await a.enrolAsFirstDevice()).passphrase;
+
+    // Strand the default Workspace at epoch 1, then clear the fault so both an
+    // external resume and a fresh ceremony can publish.
+    faults.failBeforeCommit[defaultWs()] = 1;
+    await expectLater(
+      a.stack.enrolment.turnOnEncryption(passphrase: passphrase),
+      throwsA(isA<SyncTransportException>()),
+    );
+    expect(await a.pendingRotations.read(defaultWs()), contains(1));
+    faults.failBeforeCommit.clear();
+    final putsBeforeOverlap = faults.putKeyWrapsCallCount;
+
+    // The external resume is started first, so it takes the lock; the ceremony's
+    // blocking acquire then *queues behind it* rather than racing its store writes.
+    // The resume re-publishes stranded epoch 1; the ceremony, running next, finds
+    // nothing to resume and rotates both Workspaces off the raised floor.
+    final resumeFuture = a.stack.enrolment.resumePendingRotations();
+    final ceremonyFuture =
+        a.stack.enrolment.rotateWorkspaceKeys(passphrase: passphrase);
+    await Future.wait([resumeFuture, ceremonyFuture]);
+    final epochs = await ceremonyFuture;
+
+    expect(epochs[defaultWs()], 2);
+    expect(epochs[prefsWs()], 1);
+    expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNotNull,
+        reason: 'the resume published the stranded epoch 1');
+    expect(await a.workspaceKeys.keyFor(defaultWs(), 2), isNotNull);
+    expect(await a.workspaceKeys.keyFor(prefsWs(), 1), isNotNull);
+    expect(await a.pendingRotations.read(defaultWs()), isEmpty);
+    expect(await a.pendingRotations.read(prefsWs()), isEmpty);
+
+    // Three PUTs across the overlap — the resume's re-publish of epoch 1, plus the
+    // ceremony's default 1->2 and prefs 0->1 — never a fourth. A resume racing the
+    // ceremony would have re-published epoch 1 a second time alongside it.
+    expect(faults.putKeyWrapsCallCount - putsBeforeOverlap, 3,
+        reason: 'the resume and the ceremony serialised: epoch 1 was published '
+            'exactly once, not raced');
+  });
+
+  test('rotateWorkspaceKeys finishes a strand through its own internal '
+      'resumePendingRotations without deadlocking on the ceremony lock it already '
+      'holds, and without silently skipping the resume (AC-3)', () async {
+    final (a, faults) = await phone(label: 'A');
+    final passphrase = (await a.enrolAsFirstDevice()).passphrase;
+
+    // Strand the default Workspace at epoch 1 (turnOnEncryption rotates it first).
+    faults.failBeforeCommit[defaultWs()] = 1;
+    await expectLater(
+      a.stack.enrolment.turnOnEncryption(passphrase: passphrase),
+      throwsA(isA<SyncTransportException>()),
+    );
+    expect(await a.pendingRotations.read(defaultWs()), contains(1));
+    expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNull);
+    faults.failBeforeCommit.clear();
+
+    // The next ceremony calls resumePendingRotations *while holding the lock*. A
+    // blocking self-acquire would deadlock and hang this await; a decline-if-
+    // contended self-acquire would return without resuming and leave epoch 1
+    // orphaned. The wrapper+core split takes the unlocked core, so the internal
+    // resume actually runs and finishes epoch 1 before the fresh rotation.
+    final epochs = await a.stack.enrolment.rotateWorkspaceKeys(passphrase: passphrase);
+
+    expect(await a.pendingRotations.read(defaultWs()), isEmpty,
+        reason: 'the internal resume ran and finished stranded epoch 1');
+    expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNotNull);
+    expect(epochs[defaultWs()], 2,
+        reason: 'then the fresh rotation took the default Workspace 1->2');
+    expect(epochs[prefsWs()], 1);
+  });
+
+  test('a resume declines while a ceremony holds the lock, so a pull-tail or launch '
+      'resume never blocks the pull loop or activation behind an in-flight ceremony '
+      '(AC-5)', () async {
+    final (a, faults) = await phone(label: 'A');
+    final passphrase = (await a.enrolAsFirstDevice()).passphrase;
+
+    // Park the ceremony's first publish: it holds the lock but makes no progress
+    // until released. turnOnEncryption rotates the default Workspace first, so the
+    // park catches it mid-publish with its pending record already written.
+    final gate = Completer<void>();
+    final reachedPark = Completer<void>();
+    faults.parkNextPutKeyWraps = gate;
+    faults.putKeyWrapsReachedPark = reachedPark;
+
+    var ceremonyDone = false;
+    final ceremony = a.stack.enrolment
+        .turnOnEncryption(passphrase: passphrase)
+        .whenComplete(() => ceremonyDone = true);
+    await reachedPark.future; // the ceremony now holds the lock, parked mid-publish
+
+    // The overlapping resume must return without waiting for the ceremony. If it
+    // blocked on the lock this await would hang until the (still-closed) gate opened,
+    // and the test would time out. Completing here — with the ceremony still parked —
+    // is the proof it declined rather than serialising behind the ceremony.
+    await a.stack.enrolment.resumePendingRotations();
+    expect(ceremonyDone, isFalse,
+        reason: 'the resume returned while the ceremony still held the lock');
+
+    gate.complete();
+    final epochs = await ceremony;
+
+    expect(ceremonyDone, isTrue);
+    expect(epochs[defaultWs()], 1);
+    expect(epochs[prefsWs()], 1);
+    expect(await a.workspaceKeys.keyFor(defaultWs(), 1), isNotNull);
+    expect(await a.workspaceKeys.keyFor(prefsWs(), 1), isNotNull);
+    expect(await a.pendingRotations.read(defaultWs()), isEmpty);
+    expect(await a.pendingRotations.read(prefsWs()), isEmpty);
+  });
+
   test('the record codec discards a corrupt entry per record, and flags a wholly '
       'undecodable record for self-discard', () {
     // The corruption tolerance is the pure [decodePendingRotationsRecord] — the exact
@@ -449,6 +617,25 @@ void main() {
     expect(garbageSets, isEmpty);
     expect(garbageWasCorrupt, isTrue,
         reason: 'an unparseable record must be cleared, not re-read for ever');
+
+    // A record that parses but whose entries *all* fail to decode round-tripped
+    // nothing, so it is as safe to discard as an unparseable blob — flagged corrupt
+    // for self-discard, not left as dead bytes on disk for ever.
+    final allBad = jsonEncode({
+      '5': {'epoch': 5, 'workspace_key': 'not valid base64 %%%'},
+      '7': {'epoch': 7, 'digest': 'also nonsense'},
+    });
+    final (allBadSets, allBadWasCorrupt) = decodePendingRotationsRecord(allBad);
+    expect(allBadSets, isEmpty);
+    expect(allBadWasCorrupt, isTrue,
+        reason: 'every entry failing is as good as a top-level failure');
+
+    // An empty record is the steady state once the last epoch is removed — not
+    // corruption, so it is left alone rather than churned through a self-discard.
+    final (emptySets, emptyWasCorrupt) = decodePendingRotationsRecord('{}');
+    expect(emptySets, isEmpty);
+    expect(emptyWasCorrupt, isFalse,
+        reason: 'an empty record is the ordinary no-pending-rotations state');
   });
 
   test('a read self-heal cannot clobber a concurrent put — read and put share the '

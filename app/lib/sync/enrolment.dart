@@ -48,6 +48,7 @@
 /// Device takes the passphrase, because only Root can revoke an owner Grant.
 library;
 
+import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -484,6 +485,56 @@ class EnrolmentService {
 
   // --- Key rotation ------------------------------------------------------------
 
+  /// Serialises this User's rotation ceremonies through completion (#624).
+  ///
+  /// One [EnrolmentService] is one User's, so this instance field *is* the per-User
+  /// ceremony lock. Per-User rather than per-Workspace on purpose: a single
+  /// [rotateWorkspaceKeys] spans **both** of a User's Workspaces, so a per-Workspace
+  /// lock would leave one ceremony holding two locks and two ceremonies free to
+  /// interleave their `prepare`/`put` on whichever Workspace neither holds yet — the
+  /// exact `(workspaceId, toEpoch)` collision the [ConflictingPendingRotation] guard
+  /// exists to catch, which this serialises away before it can happen.
+  ///
+  /// [_ceremonyTail] is the queue's tail future; [_ceremoniesActive] counts the
+  /// ceremonies sitting on it (running or waiting). The count is what lets the
+  /// best-effort resumes *decline* the instant any ceremony is present rather than
+  /// enqueue behind one — see [_runResumeIfUncontended].
+  Future<void> _ceremonyTail = Future<void>.value();
+  int _ceremoniesActive = 0;
+
+  /// Queue behind the current holder, then run [body] holding the lock.
+  ///
+  /// The **blocking** acquire the passphrase-gated entry points take, so two
+  /// overlapping ceremonies for one User run one-after-the-other and the second
+  /// observes the first's raised epoch floor rather than preparing a colliding set
+  /// for the same `toEpoch` (AC-1). A [body] that throws still releases the lock and
+  /// does not poison the queue: [release] always completes without error, so the
+  /// next ceremony chains off a clean future while the caller still sees the throw.
+  Future<T> _runCeremonyExclusive<T>(Future<T> Function() body) {
+    _ceremoniesActive++;
+    final previous = _ceremonyTail;
+    final release = Completer<void>();
+    _ceremonyTail = release.future;
+    return previous.then((_) => body()).whenComplete(() {
+      _ceremoniesActive--;
+      release.complete();
+    });
+  }
+
+  /// Run [body] only if no ceremony holds or is queued on the lock; otherwise
+  /// **decline** — return without running.
+  ///
+  /// The try-acquire the best-effort resumes take. A pull-tail or launch resume must
+  /// never block the pull loop or the activation behind an in-flight ceremony (AC-5),
+  /// and declining also keeps it from racing a ceremony's prepared-set `put` (AC-2).
+  /// Nothing is lost by declining: a ceremony resumes every stranded record before it
+  /// prepares (see [_rotateWorkspaceKeysCore]), and the next pull re-fires a declined
+  /// resume once the ceremony has released.
+  Future<void> _runResumeIfUncontended(Future<void> Function() body) {
+    if (_ceremoniesActive > 0) return Future<void>.value();
+    return _runCeremonyExclusive(body);
+  }
+
   /// Turn encryption **on** for every Workspace of this User.
   ///
   /// Turn-on *is* a rotation, and that is the point rather than a shortcut: the owner
@@ -538,13 +589,34 @@ class EnrolmentService {
   Future<Map<String, int>> rotateWorkspaceKeys({
     required String passphrase,
     String? revokeMemberId,
+  }) =>
+      // The blocking acquire: a second ceremony for this User queues here and runs
+      // once the first has completed, so it reads the raised floor rather than
+      // colliding with the first's prepared set for the same `toEpoch` (AC-1).
+      _runCeremonyExclusive(() => _rotateWorkspaceKeysCore(
+            passphrase: passphrase,
+            revokeMemberId: revokeMemberId,
+          ));
+
+  /// The unlocked body of [rotateWorkspaceKeys], run already holding the ceremony
+  /// lock.
+  ///
+  /// It resumes through [_resumePendingRotationsCore] — the **unlocked** resume —
+  /// rather than the public [resumePendingRotations], which would try to re-acquire
+  /// the lock this call already holds. With the try-acquire's decline-if-contended
+  /// rule the re-entrant call would not deadlock, but it *would* decline and quietly
+  /// skip the very resume this ceremony depends on running first; taking the core
+  /// directly is what makes the internal resume actually run (AC-3).
+  Future<Map<String, int>> _rotateWorkspaceKeysCore({
+    required String passphrase,
+    String? revokeMemberId,
   }) async {
     // Finish any rotation this User left stranded before starting a new one. This
-    // also delivers AC-5: `_rotateOne` writes its own record before its own flush,
-    // so a throw on the second Workspace leaves the first with no record (deleted on
-    // its success) and the second with a live one — the next ceremony resumes only
-    // the second and does not re-rotate the first.
-    await resumePendingRotations();
+    // also delivers #617 AC-5: `_rotateOne` writes its own record before its own
+    // flush, so a throw on the second Workspace leaves the first with no record
+    // (deleted on its success) and the second with a live one — the next ceremony
+    // resumes only the second and does not re-rotate the first.
+    await _resumePendingRotationsCore();
     final (_, root, secrets) = await _recoverRoot(passphrase);
     try {
       final epochs = <String, int>{};
@@ -685,7 +757,21 @@ class EnrolmentService {
   /// Best-effort by contract: a transient/offline failure leaves the record for the
   /// next trigger, and the only records it *deletes* are the ones it has provably
   /// finished (key now held) or that never materialised a rotate to finish.
-  Future<void> resumePendingRotations({String? workspaceId}) async {
+  ///
+  /// **Declines while a ceremony holds the lock (#624).** This is the public entry
+  /// point the pull tail and launch call, and it takes the try-acquire: if a
+  /// [rotateWorkspaceKeys] is in flight it returns at once without running, rather
+  /// than serialising the pull loop or the activation behind the ceremony (AC-5) or
+  /// racing its prepared-set `put` (AC-2). A declined pass loses nothing — the
+  /// ceremony resumes every stranded record before it prepares, and the next pull
+  /// re-fires this once the ceremony has released.
+  Future<void> resumePendingRotations({String? workspaceId}) =>
+      _runResumeIfUncontended(
+          () => _resumePendingRotationsCore(workspaceId: workspaceId));
+
+  /// The unlocked body of [resumePendingRotations]. Called directly — off the lock —
+  /// only by [_rotateWorkspaceKeysCore], which already holds it (AC-3).
+  Future<void> _resumePendingRotationsCore({String? workspaceId}) async {
     final targets = workspaceId == null ? _workspaces : [workspaceId];
     // Per-record best-effort: a transient failure on one record must not abandon
     // the epochs behind it or the other Workspaces — they are independent. Hold the
