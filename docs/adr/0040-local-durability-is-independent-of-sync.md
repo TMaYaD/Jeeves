@@ -35,9 +35,11 @@ log (`app/lib/sync/sync_client.dart:1153-1159`), never a download.
 
 **Sync is a replication mechanism, not a correctness dependency.** A Device that
 has never enrolled, or has been offline for arbitrarily long, keeps every row it
-ever wrote and keeps working — that guarantee does not degrade with time since
-the last successful pull, and no feature may condition correctness on having
-synced.
+ever wrote and keeps working — the guarantee is against sync being unavailable,
+it does not degrade with time since the last successful pull, and no feature may
+condition correctness on having synced. It is not a promise the app always opens:
+an incompatible migration still wedges the affected store (see Trade-off), and
+what holds in that case is the retention half.
 
 **A client schema change must carry its own data forward locally.** It may not
 rely on a server-side backfill, a re-download, or an Initial Upload having
@@ -54,9 +56,11 @@ local replay, not a fetch. `jeeves_sync.sqlite` is never a candidate: it holds
 evidence and unflushed authorship, and both are irreplaceable by definition. The
 "delete and recreate this sync store" recovery the refusing migrations currently
 name is therefore wrong as stated and has to become a path that preserves the
-bytes. (Note also that "reseed" is retired vocabulary — it named a cutover
-verification surface that no longer exists — so the ruled-out operation is
-described here as what it is rather than under that name.)
+bytes — #636 tracks that replacement, and until it lands the destructive
+instruction is still what those migrations tell the user. (Note also that
+"reseed" is retired vocabulary — it named a cutover verification surface that no
+longer exists — so the ruled-out operation is described here as what it is rather
+than under that name.)
 
 **No schema change on either side may assume a bounded client-version spread.**
 Backend migrations stay additive and non-destructive; client schema steps must be
@@ -66,7 +70,8 @@ branches. A client change must never require a particular backend deploy to have
 landed first — that is ADR-0039's rule restated for schema, and the two decisions
 are the same claim seen from two ends.
 
-**A change that cannot preserve the data refuses, and leaves the store readable.**
+**A change that cannot preserve the data refuses, and leaves the bytes intact for
+a compatible client or recovery tool.**
 Refusing is the correct instinct and is already in the code; what refusal may not
 do is hand the user a destructive instruction as its only way out. ADR-0035's
 exception stands as a one-time, user-invoked event and is explicitly not a
