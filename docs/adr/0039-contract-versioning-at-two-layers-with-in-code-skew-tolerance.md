@@ -71,12 +71,11 @@ surface, not an implementation detail (ADR-0032), so a code a reader does not
 recognise is surfaced verbatim in the Quarantine row rather than folded into
 another code's meaning, and a deterministic refusal is terminalised rather than
 retried as though it were transient. Retirement runs additive-first: the new
-shape ships, older readers refuse-and-keep it, and the old shape is removed only
-when no reader in the field can still produce it. Because skew is permanent and
-minimum-version gating is out of scope, that condition is not one the fleet
-reaches on its own: support for an old shape is indefinite by default, and
-retiring one is a deliberate decision to break the Devices that still produce
-it.
+shape ships, older readers refuse-and-keep it, and support for the old shape is
+indefinite by default. Because skew is permanent and minimum-version gating is
+out of scope, the fleet never stops producing an old shape on its own, so
+removing one is an explicit decision to break the Devices that still do — never
+a milestone the fleet reaches.
 
 ## Trade-off
 
