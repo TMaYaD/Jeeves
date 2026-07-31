@@ -63,6 +63,7 @@ import 'passphrase_policy.dart';
 import 'pending_rotation_store.dart';
 import 'recovery_escrow.dart';
 import 'root_authority.dart';
+import 'rotation_resume_refusal.dart';
 import 'sync_client.dart';
 import 'sync_transport.dart';
 
@@ -766,7 +767,9 @@ class EnrolmentService {
   ///
   /// Best-effort by contract: a transient/offline failure leaves the record for the
   /// next trigger, and the only records it *deletes* are the ones it has provably
-  /// finished (key now held) or that never materialised a rotate to finish.
+  /// finished (key now held) or that never materialised a rotate to finish. A
+  /// refusal no retry can change is neither deleted nor retried — it is marked
+  /// terminal and alarmed (#627, [_resumePendingRotationsCore]).
   Future<void> resumePendingRotations({String? workspaceId}) =>
       // Try-acquire, and skip if any ceremony is in flight — the resume triggers
       // never block (AC-5): the launch resume is awaited inside activation and the
@@ -779,9 +782,49 @@ class EnrolmentService {
       _tryRunCeremonyExclusive(
           () => _resumePendingRotationsCore(workspaceId: workspaceId));
 
+  /// Attempts an unclassified refusal has already spent, per `(workspace, epoch)`
+  /// for the publish surface and per `(workspace)` for the flush surface.
+  ///
+  /// **In memory, so per process.** That is the point: a code this build cannot name
+  /// must never produce a durable terminal record, so a relaunch re-attempts under a
+  /// fresh budget and a transient-but-unclassified code self-heals. The cost is that
+  /// a frequently-killed app may never exhaust a budget — stated in
+  /// [maxUnclassifiedResumeRefusalAttempts], and the fail-safe direction.
+  final Map<String, int> _unclassifiedRefusalAttempts = {};
+
+  /// Budgets already spent, so a spent one is not re-alarmed on every later pass.
+  /// A publish key here also stops the PUT being re-issued for the rest of the
+  /// process; a flush key only stops the re-alarm, because the outbox drain is
+  /// ordinary sync work and not this resume's to abandon.
+  final Set<String> _exhaustedRefusalBudgets = {};
+
   /// The resume proper, run under the ceremony lock — either its own try-acquire, or
   /// directly by a ceremony that already holds the lock (the internal drain). Never
   /// takes the lock itself, so the ceremony's internal call cannot re-enter it.
+  ///
+  /// Per Workspace, in this order, and the order is load-bearing:
+  ///
+  /// 1. read the **resumable** records — a terminal one is retained but not re-PUT;
+  /// 2. discard the records whose epoch this device already holds a key for,
+  ///    *before* any flush, so a pass whose every record is stale still performs no
+  ///    flush;
+  /// 3. **one flush for the whole Workspace**, hoisted out of the per-epoch loop.
+  ///    `flushOutbox` is one call per Workspace, so a refusal is not attributable to
+  ///    whichever epoch a loop happened to be on — and attributing it would let a
+  ///    stale rotate for `N+2` terminalise the sound record for `N+1`. It raises
+  ///    `own_write_refused_permanently` and never terminalises anything;
+  /// 4. per epoch, publish, and dispatch any refusal through
+  ///    [dispositionForResumeRefusal].
+  ///
+  /// A failed flush does **not** skip the publishes: per-epoch independence is the
+  /// behaviour that was there before the hoist. One guard is required, and it is a
+  /// real trap — with the flush unsuccessful, `rotate_not_materialised` is downgraded
+  /// from `discard` to `retry`. Discarding is only safe once a flush has drained
+  /// whatever this device authored; doing it after a failed flush would delete the
+  /// wrap set for an epoch whose rotate is still sitting in the outbox, which is the
+  /// exact orphaning `PendingRotationStore` exists to prevent. Every other verdict is
+  /// unaffected: an unflushed rotate of ours cannot materialise an epoch the server
+  /// already holds a different digest for.
   Future<void> _resumePendingRotationsCore({String? workspaceId}) async {
     final targets = workspaceId == null ? _workspaces : [workspaceId];
     // Per-record best-effort: a transient failure on one record must not abandon
@@ -791,58 +834,265 @@ class EnrolmentService {
     // it; a fresh ceremony propagates it).
     Object? firstFailure;
     StackTrace? firstStackTrace;
+    // Carry the *caught* stack trace — where `flushOutbox`/`publish` actually
+    // failed — not the rethrow site below, so the rethrow points at the cause.
+    void hold(Object error, StackTrace stackTrace) {
+      firstFailure ??= error;
+      firstStackTrace ??= stackTrace;
+    }
+
     for (final workspace in targets) {
-      final pending = await pendingRotations.read(workspace);
-      if (pending.isEmpty) continue;
+      final Map<int, EpochKeySet> resumable;
+      try {
+        resumable = await pendingRotations.readResumable(workspace);
+      } on Object catch (error, stackTrace) {
+        // A keychain read that throws must not abandon the other Workspace.
+        hold(error, stackTrace);
+        continue;
+      }
+      if (resumable.isEmpty) continue;
       final scoped = await _scoped(workspace);
       // No member credential (a pre-enrolment or mid-attach caller): leave every
       // record and let a trigger that holds one finish it.
       if (!scoped.isEnrolled) continue;
-      // Lowest epoch first. Independent of each other, but deterministic order keeps
-      // a failure reproducible.
-      for (final epoch in pending.keys.toList()..sort()) {
-        final set = pending[epoch]!;
-        // Already complete: the original ceremony's `publish` remembered the key
-        // before it could delete the record (a crash in that one-line gap). Stale,
-        // not a retry — discard it (AC-7).
-        if (await scoped.workspaceKeys.keyFor(workspace, epoch) != null) {
-          await pendingRotations.remove(workspace, epoch);
-          continue;
-        }
+
+      // Step 2 — lowest epoch first. Independent of each other, but deterministic
+      // order keeps a failure reproducible.
+      final publishable = <int, EpochKeySet>{};
+      for (final epoch in resumable.keys.toList()..sort()) {
         try {
-          // Drain a rotate that was authored but never flushed (a crash between the
-          // `captureControl` and the flush). Op-id-namespaced, so a no-op when the
-          // outbox is empty.
-          await scoped.flushOutbox();
-          // Byte-identical re-PUT returns 200 (server-side idempotency, #590), then
-          // `publish` remembers the key and this device finally holds K_{w,epoch}.
-          await WorkspaceKeyCeremony(client: scoped).publish(set);
-          await pendingRotations.remove(workspace, epoch);
-        } on SyncTransportException catch (error, stackTrace) {
-          if (error.code == rotateNotMaterialisedCode) {
-            // The rotate was never authored (a premature record per `_rotateOne`'s
-            // persist-before-author ordering — safe because the `WorkspaceEpoch` row
-            // is created atomically with the rotate). Discard it: the owner can
-            // re-run the whole ceremony fresh with new entropy, nothing stranded.
+          // Already complete: the original ceremony's `publish` remembered the key
+          // before it could delete the record (a crash in that one-line gap). Stale,
+          // not a retry — discard it (AC-7).
+          if (await scoped.workspaceKeys.keyFor(workspace, epoch) != null) {
             await pendingRotations.remove(workspace, epoch);
             continue;
           }
-          // Offline or transient: leave the record for the next trigger and keep
-          // going — the remaining epochs and Workspaces are independent. The first
-          // such failure is rethrown after the pass so the caller still learns.
-          // A server refusal that should not happen for a byte-identical replay
-          // lands here too, and surfaces the same way (the pull seam swallows it).
-          // Carry the caught `stackTrace` — where `flushOutbox`/`publish` actually
-          // failed — not the throw site below, so the rethrow points at the cause.
-          firstFailure ??= error;
-          firstStackTrace ??= stackTrace;
+        } on Object catch (error, stackTrace) {
+          hold(error, stackTrace);
+          continue;
+        }
+        publishable[epoch] = resumable[epoch]!;
+      }
+      // Step 3 — nothing left to publish, so nothing to flush for either.
+      if (publishable.isEmpty) continue;
+
+      final flushSucceeded = await _flushBeforeResume(scoped, workspace, hold);
+
+      // Step 4 — `publishable` preserves the sorted insertion order.
+      for (final epoch in publishable.keys) {
+        if (_exhaustedRefusalBudgets.contains(_refusalBudgetKey(workspace, epoch))) {
+          continue;
+        }
+        try {
+          // Byte-identical re-PUT returns 200 (server-side idempotency, #590), then
+          // `publish` remembers the key and this device finally holds K_{w,epoch}.
+          await WorkspaceKeyCeremony(client: scoped).publish(publishable[epoch]!);
+          await pendingRotations.remove(workspace, epoch);
+        } on SyncTransportException catch (error, stackTrace) {
+          try {
+            final held = await _disposePublishRefusal(
+              scoped,
+              workspace: workspace,
+              epoch: epoch,
+              refusal: error,
+              flushSucceeded: flushSucceeded,
+            );
+            if (held) hold(error, stackTrace);
+          } on Object catch (localError, localStackTrace) {
+            // A keychain write, a `remove`, or an **alarm write** that threw. Hold
+            // and continue: the record stays where it is, and the next pass retries
+            // both the mark and the alarm. Before the hoist a throw here abandoned
+            // every remaining epoch and the other Workspace (AC-5).
+            hold(localError, localStackTrace);
+          }
+        } on Object catch (error, stackTrace) {
+          hold(error, stackTrace);
         }
       }
     }
-    if (firstFailure != null) {
-      Error.throwWithStackTrace(firstFailure, firstStackTrace ?? StackTrace.current);
+    // Read into a local: `firstFailure` is written through the [hold] closure, so
+    // the analyzer cannot promote the field itself to non-null.
+    final failure = firstFailure;
+    if (failure != null) {
+      Error.throwWithStackTrace(failure, firstStackTrace ?? StackTrace.current);
     }
   }
+
+  /// Drain a rotate that was authored but never flushed (a crash between the
+  /// `captureControl` and the flush), once for the whole Workspace.
+  ///
+  /// Op-id-namespaced, so a no-op when the outbox is empty. Returns whether the
+  /// flush got through, which the `discard` downgrade in
+  /// [_resumePendingRotationsCore] turns on.
+  ///
+  /// A permanent refusal here raises `own_write_refused_permanently` and stops
+  /// there: the queue behind an unpostable op is #647's to drain, and this pass has
+  /// no record it may honestly blame.
+  Future<bool> _flushBeforeResume(
+    SyncClient scoped,
+    String workspace,
+    void Function(Object, StackTrace) hold,
+  ) async {
+    try {
+      await scoped.flushOutbox();
+      return true;
+    } on SyncTransportException catch (error, stackTrace) {
+      try {
+        final disposition = dispositionForResumeRefusal(
+          error,
+          surface: RotationResumeSurface.flush,
+        );
+        switch (disposition) {
+          case RotationResumeDisposition.permanent:
+            await scoped.raiseOwnWriteRefusedPermanentlyAlarm(
+              detail: _ownWriteRefusedDetail(workspace, error, budgetExhausted: false),
+            );
+          case RotationResumeDisposition.retryBounded:
+            final key = _refusalBudgetKey(workspace, null);
+            if (_spendRefusalBudget(key)) {
+              await scoped.raiseOwnWriteRefusedPermanentlyAlarm(
+                detail:
+                    _ownWriteRefusedDetail(workspace, error, budgetExhausted: true),
+              );
+            }
+          // A flush is ordinary sync work: `discard` has no meaning on this surface
+          // (the classifier never returns it here) and a transient refusal is simply
+          // the next pull's business.
+          case RotationResumeDisposition.discard:
+          case RotationResumeDisposition.retry:
+            break;
+        }
+      } on Object catch (alarmError, alarmStackTrace) {
+        hold(alarmError, alarmStackTrace);
+      }
+      hold(error, stackTrace);
+      return false;
+    } on Object catch (error, stackTrace) {
+      hold(error, stackTrace);
+      return false;
+    }
+  }
+
+  /// Act on one refused resume PUT. Returns whether the refusal should still be
+  /// held for the post-pass rethrow (a `discard` should not — it is a success).
+  ///
+  /// **Alarm first, mark second.** If `markTerminal` then fails the alarm still
+  /// stands and the next pass retries the mark, whereas marking first and failing
+  /// the alarm write would leave a *silent* terminal record. The two writes are in
+  /// independent stores (drift `integrity_alarms` and the keychain) so there is no
+  /// transaction to share, and the reverse failure is benign because the alarm
+  /// upserts. Accepted degradation: a persistently-failing mark re-raises on every
+  /// pull, which un-resolves an alarm a user had dismissed (#575). That is the
+  /// correct precedence — a record still churning is a condition that still stands —
+  /// but it is a real cost, not a rounding error.
+  Future<bool> _disposePublishRefusal(
+    SyncClient scoped, {
+    required String workspace,
+    required int epoch,
+    required SyncTransportException refusal,
+    required bool flushSucceeded,
+  }) async {
+    final disposition = dispositionForResumeRefusal(
+      refusal,
+      surface: RotationResumeSurface.publish,
+    );
+    switch (disposition) {
+      case RotationResumeDisposition.discard:
+        if (!flushSucceeded) {
+          // Downgraded to `retry`: see [_resumePendingRotationsCore]. Deleting now
+          // would destroy a wrap set whose rotate is still in the outbox.
+          return true;
+        }
+        // The rotate was never authored (a premature record per `_rotateOne`'s
+        // persist-before-author ordering — safe because the `WorkspaceEpoch` row is
+        // created atomically with the rotate). Discard it: the owner can re-run the
+        // whole ceremony fresh with new entropy, nothing stranded.
+        await pendingRotations.remove(workspace, epoch);
+        return false;
+      case RotationResumeDisposition.retry:
+        // Offline, or a server that never got as far as judging the set. Leave the
+        // record for the next trigger, spend no budget.
+        return true;
+      case RotationResumeDisposition.retryBounded:
+        if (_spendRefusalBudget(_refusalBudgetKey(workspace, epoch))) {
+          // Alarm and stop re-attempting for this process. Nothing is persisted, so
+          // a relaunch re-attempts under a fresh budget.
+          await scoped.raiseEpochKeySetUnpublishableAlarm(
+            detail: _unpublishableDetail(
+              workspace: workspace,
+              epoch: epoch,
+              refusal: refusal,
+              budgetExhausted: true,
+            ),
+          );
+        }
+        return true;
+      case RotationResumeDisposition.permanent:
+        await scoped.raiseEpochKeySetUnpublishableAlarm(
+          detail: _unpublishableDetail(
+            workspace: workspace,
+            epoch: epoch,
+            refusal: refusal,
+            budgetExhausted: false,
+          ),
+        );
+        await pendingRotations.markTerminal(
+          workspace,
+          epoch,
+          refusalCode: refusal.code!,
+          markedAtUtc:
+              DateTime.fromMillisecondsSinceEpoch(_nowMs(), isUtc: true),
+        );
+        return true;
+    }
+  }
+
+  /// `(workspace, epoch)` for the publish surface, `(workspace)` for the flush one.
+  String _refusalBudgetKey(String workspace, int? epoch) =>
+      epoch == null ? 'flush/$workspace' : 'publish/$workspace/$epoch';
+
+  /// Spend one attempt. True exactly once — on the attempt that exhausts the
+  /// budget — so the alarm is raised at exhaustion and not re-raised for ever after
+  /// it for a code that was never classified in the first place.
+  bool _spendRefusalBudget(String key) {
+    if (_exhaustedRefusalBudgets.contains(key)) return false;
+    final spent = (_unclassifiedRefusalAttempts[key] ?? 0) + 1;
+    _unclassifiedRefusalAttempts[key] = spent;
+    if (spent < maxUnclassifiedResumeRefusalAttempts) return false;
+    _exhaustedRefusalBudgets.add(key);
+    return true;
+  }
+
+  /// Displayable on its own, for #584: nothing here needs this call site to read.
+  String _unpublishableDetail({
+    required String workspace,
+    required int epoch,
+    required SyncTransportException refusal,
+    required bool budgetExhausted,
+  }) =>
+      'Workspace $workspace epoch $epoch: the prepared KeyWrap set cannot be '
+      'published. The server refused the upload with '
+      '${refusal.code ?? '(no structured code)'} '
+      '(HTTP ${refusal.statusCode ?? 'unreachable'})'
+      '${budgetExhausted ? ', repeatedly and under a code this build does not '
+          'classify, so re-attempts have stopped for this run of the app' : ', '
+          'under a code no retry can change'}. The prepared bytes are retained on '
+      'this device and nothing was deleted.';
+
+  /// Same contract as [_unpublishableDetail]: epoch-agnostic, because a flush is one
+  /// call per Workspace and blames no single record.
+  String _ownWriteRefusedDetail(
+    String workspace,
+    SyncTransportException refusal, {
+    required bool budgetExhausted,
+  }) =>
+      'Workspace $workspace: an op this device authored was refused with '
+      '${refusal.code ?? '(no structured code)'} '
+      '(HTTP ${refusal.statusCode ?? 'unreachable'})'
+      '${budgetExhausted ? ', repeatedly and under a code this build does not '
+          'classify' : ' and no retry can change that answer'}, so everything '
+      'queued behind it cannot leave this device.';
 
   /// Whether any of this User's Workspaces has stood at its epoch too long.
   ///

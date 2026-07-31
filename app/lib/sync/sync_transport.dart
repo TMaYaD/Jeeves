@@ -171,6 +171,27 @@ const String rotateNotMaterialisedCode = 'rotate_not_materialised';
 /// digest the log committed to.
 const String keyWrapDigestMismatchCode = 'keywrap_digest_mismatch';
 
+/// The loser of a rotation race: a `rotate` whose signed `from_epoch` is not where
+/// the Workspace actually stands.
+///
+/// Deterministic and unre-formable — the epoch is inside the signed statement — so
+/// re-posting the queued op gets the same 409 for ever. The server's advice is to
+/// re-pull and rotate again, which needs the queued rotate dropped first (#647);
+/// until then the condition is *named* rather than silent
+/// (`rotation_resume_refusal.dart`).
+const String rotateEpochConflictCode = 'rotate_epoch_conflict';
+
+/// The outermost gate on every Workspace route: a User reaches the two Workspaces
+/// its id derives and nothing else. A 403 that no retry widens.
+const String workspaceNotDerivableCode = 'workspace_not_derivable';
+
+/// The server's 403 for a Member whose every Grant is revoked.
+///
+/// Named `…RefusalCode` because `IntegrityAlarmKind.noLiveGrant` shares the string
+/// and means something different: that alarm is a *client-derived* authorization
+/// verdict against an op's own seq, never a server answer.
+const String noLiveGrantRefusalCode = 'no_live_grant';
+
 /// A `workspace_genesis` posted into a Workspace that already has one.
 ///
 /// A 409 that is **not** an accusation and not a wedge: genesis authorship is

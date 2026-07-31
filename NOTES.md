@@ -76,3 +76,8 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 ## 2026-07-31 (issue #580 — refusal-code alignment)
 - Instinct: `raise ControlPayloadError("cert_root_pk_mismatch")` sets the refusal code. Here: the first argument is the exception *message* and `.reason` is a **class attribute** defaulting to `malformed_control_payload`, so a bare raise silently reports the wrong code — and nothing catches it until a vector pins the class. Subclass it (`test_envelope_vectors.py` keeps the test-local typed errors #564 introduced for exactly this).
+
+## 2026-07-31 (issue #627 — the rotation resume's two surfaces)
+- Instinct: `flushOutbox` and `publish` fail the same way, so one `try` around both is fine. Here: the flush is one call per *Workspace* and the publish one per *epoch*, so a shared handler attributes a flush refusal to whichever epoch the loop is on — harmless while both arms only hold-and-continue, and a data-destruction path the moment either arm deletes or terminalises a record.
+- Instinct: `rotate_not_materialised` means nothing materialised, so the record is safe to delete. Here: only after a flush that **succeeded** — otherwise the rotate that would materialise it is still sitting in the outbox, and the delete destroys the one set that satisfies the digest it will commit to. Downgrade the discard to a retry when the flush failed.
+- Instinct: a test drives N pulls by calling `SignalListener.start()` N times. Here: `start()` runs one sync *and* subscribes, and the subscribe ack **is** a poke, so a second sync queues behind the first — every count doubles. Drive counting tests over a quiet signal socket (`_QuietSignalTransport` in `rotation_resume_test.dart`).

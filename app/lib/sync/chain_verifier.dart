@@ -19,6 +19,12 @@
 /// detected when the server rejects *our* POST. Collapsing the two would lose
 /// one of those two facts.
 ///
+/// The vocabulary reaches once further still. `epoch_key_set_unpublishable`
+/// accuses **nobody**: it is a standing *local* condition that will never heal
+/// itself — this device holds a prepared KeyWrap set for an epoch it can provably
+/// never publish — and the server behaved correctly in refusing it. A reader who
+/// assumes every row names a culprit would misread it.
+///
 /// [chainVerdict] is pure over what the caller already read, so the whole D5
 /// matrix is unit-testable with no database and no clock. The I/O — deriving the
 /// head, the release scan's fixpoint loop, raising alarms — lives in
@@ -66,6 +72,26 @@ enum IntegrityAlarmKind {
   /// An envelope this device authored came back with different bytes than the
   /// outbox row it was signed into.
   ownWritesDivergence('own_writes_divergence'),
+
+  /// An op this device authored that the server will never accept: our own POST
+  /// was refused under a code no retry can change, so the queue behind it cannot
+  /// drain (#647 owns the drain; this only names the condition).
+  ///
+  /// The third of the own-writes family, and detected the same way the first two
+  /// are — the server rejecting *our* POST — so it carries `authorMemberId` the
+  /// way [ownWritesRollback] does. **Workspace-scoped and epoch-agnostic**: the
+  /// flush is one call per Workspace, so a refusal is not attributable to any one
+  /// pending rotation and must never terminalise one.
+  ownWriteRefusedPermanently('own_write_refused_permanently'),
+
+  /// A prepared EpochKeySet this device holds for an epoch it can provably never
+  /// publish: the resume PUT was refused under a code no retry can change.
+  ///
+  /// Accuses nobody — see the library header. The prepared bytes are **retained**
+  /// on this device (ADR-0040) and the record is simply no longer resumed, so this
+  /// stands until a recovery path or a dismissal (#575) clears it. There is no
+  /// heal, so nothing resolves it.
+  epochKeySetUnpublishable('epoch_key_set_unpublishable'),
 
   /// A second envelope under the same `(author, op_id)` with different bytes:
   /// dedupe by op id must not be able to mask a substitution (review F13).
