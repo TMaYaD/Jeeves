@@ -137,15 +137,35 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
   /// [logAlias].
   ///
   /// The single spelling of the arithmetic every time-spent derivation below
-  /// shares: an open row (`ended_at IS NULL`) is valued at the current UTC time,
-  /// and the ceiling uses the `+ 0.9999` trick because SQLite has no `CEIL()`.
+  /// shares: an open row (`ended_at IS NULL`) is valued at the current UTC time.
   /// Ceiling is applied **per stint**, not to the sum, so three 30-second stints
   /// read as three minutes — which is what makes two derivations at different
   /// grains comparable only when they share this expression verbatim.
+  ///
+  /// SQLite has no `CEIL()`, so the ceiling is spelled as integer division:
+  /// `ceil(a / b) == (a + b - 1) / b` for a non-negative integer `a`, because
+  /// SQLite's `/` on two integers truncates toward zero. The operand is an
+  /// **exact integer millisecond count**, which is the whole point of this
+  /// spelling (issue #615): the arithmetic must not run in floating point.
+  /// `unixepoch(…, 'subsec')` yields seconds-since-epoch of magnitude ~1.7e9,
+  /// so `ROUND(… * 1000)` lands on an exact millisecond; `julianday()` — the
+  /// obvious alternative — returns days-since-4714-BC of magnitude ~2.46e6,
+  /// whose double-precision grain is ~47µs of error **in either direction**.
+  /// A whole-minute stint therefore reads as `1.00000061` minutes about half
+  /// the time under `julianday()`, so *any* true ceiling over that float
+  /// inflates ordinary stints by a full minute. The `+ 0.9999` epsilon this
+  /// replaced masked that noise, at the cost of swallowing every genuine
+  /// remainder under 6ms.
+  ///
+  /// `MAX(0, …)` clamps a clock-skewed row (`ended_at`, or `now` for an open
+  /// row, before `started_at`) to zero elapsed. Skew is not merely mis-rounded
+  /// without it: a negative summand would *reduce* an Outcome's total, so a
+  /// skewed stint could cancel out a real one.
   static String _stintMinutesCeilSql(String logAlias) => 'CAST('
-      '  ((julianday(COALESCE($logAlias.ended_at, datetime(\'now\')))'
-      '    - julianday($logAlias.started_at))'
-      '   * 86400 / 60 + 0.9999)'
+      '  (MAX(0, CAST(ROUND('
+      '     (unixepoch(COALESCE($logAlias.ended_at, \'now\'), \'subsec\')'
+      '      - unixepoch($logAlias.started_at, \'subsec\')) * 1000'
+      '   ) AS INTEGER)) + 59999) / 60000 '
       'AS INTEGER)';
 
   /// Correlated SQL subquery: ceiling-rounded total minutes across all

@@ -30,6 +30,109 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
     );
   }
 
+  /// The whole synced row, as the op-log fields a create asserts. Read off the
+  /// stored [row] rather than the caller's companion, so client defaults
+  /// (`id`, `intent`, `clarified`) are carried at the value SQLite settled on.
+  ///
+  /// Exactly `collectionCodecs[todosCollection].columns` — the contract test
+  /// pins the two sets equal, so a new synced column has one place to be added.
+  static Map<String, Object?> _wholeTodoRowFields(Todo row) => {
+        'title': row.title,
+        'notes': row.notes,
+        'priority': row.priority,
+        'due_date': encodeInstant(row.dueDate),
+        'created_at': encodeInstant(row.createdAt),
+        'updated_at': encodeInstant(row.updatedAt),
+        'done_at': row.doneAt,
+        'clarified': row.clarified,
+        'intent': row.intent,
+        'time_estimate': row.timeEstimate,
+        'energy_level': row.energyLevel,
+        'capture_source': row.captureSource,
+        'location_id': row.locationId,
+        'user_id': row.userId,
+        'last_clarified_at': encodeInstant(row.lastClarifiedAt),
+        'last_next_action_completion_at':
+            encodeInstant(row.lastNextActionCompletionAt),
+      };
+
+  /// The op-log fields a partial [companion] describes: only the columns it
+  /// actually carries, so an update never re-asserts a column it left alone.
+  static Map<String, Object?> _presentTodoFields(TodosCompanion companion) => {
+        if (companion.title.present) 'title': companion.title.value,
+        if (companion.notes.present) 'notes': companion.notes.value,
+        if (companion.priority.present) 'priority': companion.priority.value,
+        if (companion.dueDate.present)
+          'due_date': encodeInstant(companion.dueDate.value),
+        if (companion.createdAt.present)
+          'created_at': encodeInstant(companion.createdAt.value),
+        if (companion.updatedAt.present)
+          'updated_at': encodeInstant(companion.updatedAt.value),
+        if (companion.doneAt.present) 'done_at': companion.doneAt.value,
+        if (companion.clarified.present) 'clarified': companion.clarified.value,
+        if (companion.intent.present) 'intent': companion.intent.value,
+        if (companion.timeEstimate.present)
+          'time_estimate': companion.timeEstimate.value,
+        if (companion.energyLevel.present)
+          'energy_level': companion.energyLevel.value,
+        if (companion.captureSource.present)
+          'capture_source': companion.captureSource.value,
+        if (companion.locationId.present)
+          'location_id': companion.locationId.value,
+        if (companion.userId.present) 'user_id': companion.userId.value,
+        if (companion.lastClarifiedAt.present)
+          'last_clarified_at': encodeInstant(companion.lastClarifiedAt.value),
+        if (companion.lastNextActionCompletionAt.present)
+          'last_next_action_completion_at':
+              encodeInstant(companion.lastNextActionCompletionAt.value),
+      };
+
+  /// Insert the Outcome [id] from [createColumns], or — when it already exists —
+  /// update it with exactly the columns [updateColumns] carries.
+  ///
+  /// The re-runnable write an id-addressed source of record needs: a Nirvana
+  /// re-import lands on the same deterministic id and must refresh what the
+  /// export owns while leaving everything else as the user has since made it.
+  /// So [createColumns] carries the birth facts (`created_at`, the initial
+  /// `intent` bucket) and [updateColumns] deliberately does not — a caller
+  /// typically builds the former as the latter plus those.
+  ///
+  /// An UPDATE, never `INSERT OR REPLACE`: REPLACE is delete-then-insert in
+  /// SQLite, so it re-defaults every column the companion omits (issue #641) and
+  /// fires the declared ON DELETE CASCADE onto the Outcome's Actions and
+  /// `capture_outcomes` provenance wherever foreign-key enforcement is on
+  /// (latent today — issue #637).
+  ///
+  /// On the log, the create/update split is the same one [insertOutcome] and
+  /// [updateFields] observe: a create asserts the whole codec column set so a
+  /// peer that has never seen the Outcome can build it, while an update asserts
+  /// only the fields it changed — a whole-row re-assertion under a fresh clock
+  /// would clobber a peer's concurrent edit to a column this write never touched.
+  Future<void> upsertOutcome({
+    required String id,
+    required TodosCompanion createColumns,
+    required TodosCompanion updateColumns,
+  }) async {
+    await attachedDatabase.capturing(() async {
+      final existing =
+          await (select(todos)..where((t) => t.id.equals(id))).getSingleOrNull();
+      if (existing == null) {
+        await into(todos).insert(createColumns.copyWith(id: Value(id)));
+        // Read back rather than trust the companion: `clarified` and `intent`
+        // can come from client defaults, and the create assertion must carry
+        // the value the row actually holds.
+        final created =
+            await (select(todos)..where((t) => t.id.equals(id))).getSingle();
+        _captureTodo(id, _wholeTodoRowFields(created));
+      } else {
+        await (update(todos)..where((t) => t.id.equals(id)))
+            .write(updateColumns);
+        _captureTodo(id, _presentTodoFields(updateColumns));
+      }
+      attachedDatabase.notifyTodosViewWrite();
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Shared Todo read projection (ADR-0001 story 7 — Action-grain metadata)
   // ---------------------------------------------------------------------------
@@ -1244,25 +1347,14 @@ AND (
         lastClarifiedAt: Value(ts),
       ));
       // Creation asserts the whole row so a peer that has never seen this
-      // Outcome can build it.
-      _captureTodo(id, {
-        'title': title,
-        'notes': notes,
-        'priority': null,
-        'due_date': encodeInstant(dueDate),
-        'created_at': encodeInstant(ts),
-        'updated_at': encodeInstant(ts),
-        'done_at': null,
-        'clarified': true,
-        'intent': 'next',
-        'time_estimate': timeEstimate,
-        'energy_level': energyLevel,
-        'capture_source': captureSource,
-        'location_id': null,
-        'user_id': userId,
-        'last_clarified_at': encodeInstant(ts),
-        'last_next_action_completion_at': null,
-      });
+      // Outcome can build it. Read the row back rather than re-deriving the
+      // assertion from the arguments: `intent` is a client default this
+      // companion never carries, and re-listing the columns here would be a
+      // second place every new synced column has to be added — one that could
+      // drift from what the row actually holds.
+      final created =
+          await (select(todos)..where((t) => t.id.equals(id))).getSingle();
+      _captureTodo(id, _wholeTodoRowFields(created));
       attachedDatabase.notifyTodosViewWrite();
     });
   }

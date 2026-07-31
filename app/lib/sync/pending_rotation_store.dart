@@ -16,6 +16,14 @@
 /// until `publish` succeeds; [EnrolmentService.resumePendingRotations] re-publishes
 /// it and then deletes the record.
 ///
+/// **A record the resume proves unpublishable is marked terminal, not deleted**
+/// (#627, ADR-0040). A PUT refused under a code no retry can change — the epoch's
+/// committed digest belongs to somebody else, say — would otherwise be re-issued on
+/// every pull for ever. The mark stops it being resumed ([PendingRotationStore.readResumable])
+/// while [PendingRotationStore.read] still hands it back and nothing anywhere
+/// deletes it: clearing a stuck state by destroying its bytes is the same error
+/// this store exists to prevent, at a smaller scale.
+///
 /// **Same secure-storage tier as the epoch keys, never the sync database.** A
 /// pending record carries `workspaceKey` in the clear — it is the same sensitivity
 /// as the epoch key it will become — and the sync database's at-rest posture is
@@ -39,8 +47,44 @@ import 'envelope.dart' show authorKeyIdBytes, workspaceKeyBytes;
 import 'key_ceremony.dart';
 import 'key_wraps.dart';
 
-/// The `toEpoch -> set` map, as stored.
-typedef PendingRotationsByEpoch = Map<int, EpochKeySet>;
+/// Why one pending record can never be published, and when that was decided.
+///
+/// Stamped only for a **table-classified** permanent refusal
+/// (`rotation_resume_refusal.dart`), never for one this build could not name — so
+/// there is no `wasDeterministic` flag: under that rule the field would be a
+/// constant, and a field that cannot vary is a lie waiting for a future writer.
+/// [refusalCode] verbatim is the diagnostic instead.
+class PendingRotationTerminalMark {
+  const PendingRotationTerminalMark({
+    required this.refusalCode,
+    required this.markedAtUtc,
+  });
+
+  /// The server's structured `detail.code`, exactly as it arrived.
+  final String refusalCode;
+
+  final DateTime markedAtUtc;
+}
+
+/// One pending rotation: the prepared set, plus a terminal mark once the resume
+/// has proved the set can never publish.
+///
+/// A marked record is **retained, never deleted** (ADR-0040): clearing a stuck
+/// state by destroying its bytes is the same error the store exists to prevent, at
+/// a smaller scale. It is simply no longer resumed — see [PendingRotationStore.readResumable].
+class PendingRotation {
+  const PendingRotation({required this.set, this.terminal});
+
+  final EpochKeySet set;
+
+  /// Null while the record is still worth re-publishing.
+  final PendingRotationTerminalMark? terminal;
+
+  bool get isResumable => terminal == null;
+}
+
+/// The `toEpoch -> record` map, as stored.
+typedef PendingRotationsByEpoch = Map<int, PendingRotation>;
 
 /// Raised by [PendingRotationStore.put] when a *different* set is already pending for
 /// the same `(workspaceId, epoch)` — the fail-closed guard against two concurrent
@@ -64,6 +108,12 @@ abstract class PendingRotationStore {
   /// per-Workspace mutation chain [put] and [remove] run on. Empty when none is in
   /// flight, which is the ordinary steady state.
   ///
+  /// **Honest, and deliberately unfiltered: terminal records come back too.** The
+  /// resume loop calls [readResumable] instead. A general-purpose `read` that
+  /// silently hid retained rows would make a retained record indistinguishable from
+  /// a deleted one at the very API a future recovery tool reaches for, which is
+  /// precisely the confusion retaining them exists to avoid.
+  ///
   /// Chained because a corrupt record makes [readRaw] *write* (its `clearRaw`
   /// self-heal): an external `read` — `resumePendingRotations` calls this one
   /// directly — must not let that deferred delete land after a concurrent `put`'s
@@ -72,6 +122,24 @@ abstract class PendingRotationStore {
   /// this one.
   Future<PendingRotationsByEpoch> read(String workspaceId) =>
       _serialised(workspaceId, () => readRaw(workspaceId));
+
+  /// The records still worth re-publishing, as bare sets — **what the resume loop
+  /// reads.**
+  ///
+  /// A terminal record is retained by [read] and omitted here, which is the whole
+  /// mechanism that stops the churn #627 is about: the refusal is not re-issued,
+  /// and the bytes a future recovery may need are still on the device.
+  ///
+  /// On the same mutation chain [read] is on, for the same reason: [readRaw] may
+  /// *write* (its `clearRaw` self-heal).
+  Future<Map<int, EpochKeySet>> readResumable(String workspaceId) =>
+      _serialised(workspaceId, () async {
+        final held = await readRaw(workspaceId);
+        return {
+          for (final entry in held.entries)
+            if (entry.value.isResumable) entry.key: entry.value.set,
+        };
+      });
 
   /// [read] off the mutation chain — the storage read itself, including the
   /// per-record corruption self-heal. Only ever called from inside a [_serialised]
@@ -114,10 +182,15 @@ abstract class PendingRotationStore {
   /// key set and the materialised epoch would be permanently unreadable (the exact
   /// orphaning this store exists to prevent). Failing closed here turns that silent
   /// clobber into a loud error before the second ceremony authors anything.
+  /// A byte-identical re-put at a **terminal** epoch is still the idempotent no-op,
+  /// and it does **not** clear the mark: silently reactivating the record would
+  /// restart exactly the churn the mark exists to stop. A *different* set at a
+  /// terminal epoch still fails closed, because the guard below reads [readRaw],
+  /// which sees terminal rows.
   Future<void> put(String workspaceId, EpochKeySet set) =>
       _serialised(workspaceId, () async {
         final held = await readRaw(workspaceId);
-        final existing = held[set.epoch];
+        final existing = held[set.epoch]?.set;
         if (existing != null && !_sameEpochKeySet(existing, set)) {
           // Defense-in-depth, NOT dead code: since #624 serialized ceremonies
           // per-User through `EnrolmentService._runCeremonyExclusive`, two ceremonies
@@ -129,7 +202,42 @@ abstract class PendingRotationStore {
           // into a loud error. Do not remove it because the honest path went quiet.
           throw ConflictingPendingRotation(workspaceId, set.epoch);
         }
-        await write(workspaceId, {...held, set.epoch: set});
+        // Byte-identical and already held: nothing to write, and rewriting the
+        // entry from the bare `set` would drop a terminal mark it may carry.
+        if (existing != null) return;
+        await write(workspaceId, {...held, set.epoch: PendingRotation(set: set)});
+      });
+
+  /// Mark one epoch's record as one this device can provably never publish.
+  ///
+  /// **Never deletes** (ADR-0040), and never `clearRaw`/[remove]: the prepared
+  /// bytes are the only object that satisfies the epoch the log committed to, so
+  /// they are retained for a future recovery path even though this device has given
+  /// up re-publishing them.
+  ///
+  /// A no-op when the epoch is absent, and idempotent — the **first** stamp is
+  /// kept, because that is when the condition was first proved and a later pass
+  /// re-proving it says nothing new.
+  Future<void> markTerminal(
+    String workspaceId,
+    int epoch, {
+    required String refusalCode,
+    required DateTime markedAtUtc,
+  }) =>
+      _serialised(workspaceId, () async {
+        final held = await readRaw(workspaceId);
+        final record = held[epoch];
+        if (record == null || record.terminal != null) return;
+        await write(workspaceId, {
+          ...held,
+          epoch: PendingRotation(
+            set: record.set,
+            terminal: PendingRotationTerminalMark(
+              refusalCode: refusalCode,
+              markedAtUtc: markedAtUtc.toUtc(),
+            ),
+          ),
+        });
       });
 
   /// Byte-identity of two prepared sets, compared through the on-disk codec so the
@@ -232,7 +340,7 @@ class SecureStoragePendingRotationStore extends PendingRotationStore {
         key: _key(workspaceId),
         value: jsonEncode({
           for (final entry in setsByEpoch.entries)
-            '${entry.key}': _encodeEpochKeySet(entry.value),
+            '${entry.key}': _encodePendingRotation(entry.value),
         }),
       );
 
@@ -255,6 +363,14 @@ Map<String, Object?> encodePendingEpochKeySet(EpochKeySet set) =>
 EpochKeySet decodePendingEpochKeySet(Map<String, Object?> json) =>
     _decodeEpochKeySet(json);
 
+/// The on-disk shape of one whole record entry — the set's own fields, plus
+/// `terminal` when one is stamped.
+///
+/// Public for the same reason [encodePendingEpochKeySet] is: the golden round-trip
+/// test pins the codec without reaching through a store.
+Map<String, Object?> encodePendingRotation(PendingRotation record) =>
+    _encodePendingRotation(record);
+
 /// Decode a whole stored pending-rotations record, tolerant of corruption.
 ///
 /// The corruption policy of [SecureStoragePendingRotationStore.readRaw], as a pure
@@ -264,7 +380,16 @@ EpochKeySet decodePendingEpochKeySet(Map<String, Object?> json) =>
 ///   because a record that never round-trips materialised nothing to strand;
 /// - a single bad epoch is skipped (the other epochs, and the other Workspaces'
 ///   records, must not be wedged by it) and the record is *not* flagged corrupt —
-///   the good entries stand and the bad one stays inert on disk.
+///   the good entries stand and the bad one stays inert on disk. A malformed
+///   `terminal` object takes that same per-entry skip: inert on disk and not
+///   resumed, which is the fail-safe direction.
+///
+/// An entry with **no** `terminal` field decodes as active, so every record written
+/// before terminal marks existed reads exactly as it did — no migration, no data
+/// loss. The reverse is the accepted additive-first degradation: an older build
+/// ignores `terminal` (`_decodeEpochKeySet` reads only the fields it names) and
+/// resumes churning. It is a local keychain record, so no wire contract and no
+/// golden vector is involved.
 (PendingRotationsByEpoch, bool) decodePendingRotationsRecord(String raw) {
   final Map<String, Object?> decoded;
   try {
@@ -272,17 +397,48 @@ EpochKeySet decodePendingEpochKeySet(Map<String, Object?> json) =>
   } on Object {
     return (const {}, true);
   }
-  final sets = <int, EpochKeySet>{};
+  final records = <int, PendingRotation>{};
   for (final entry in decoded.entries) {
     try {
-      sets[int.parse(entry.key)] =
-          _decodeEpochKeySet(entry.value! as Map<String, Object?>);
+      records[int.parse(entry.key)] =
+          _decodePendingRotation(entry.value! as Map<String, Object?>);
     } on Object {
       continue;
     }
   }
-  return (sets, false);
+  return (records, false);
 }
+
+/// `terminal` is an optional **sibling** of the set's own fields rather than a
+/// wrapper around them, so the record shape is additive: an older build's decode
+/// reads the fields it names and ignores this one.
+Map<String, Object?> _encodePendingRotation(PendingRotation record) {
+  final mark = record.terminal;
+  return {
+    ..._encodeEpochKeySet(record.set),
+    if (mark != null)
+      'terminal': {
+        'refusal_code': mark.refusalCode,
+        'marked_at_utc': mark.markedAtUtc.toUtc().toIso8601String(),
+      },
+  };
+}
+
+PendingRotation _decodePendingRotation(Map<String, Object?> json) {
+  final terminal = json['terminal'];
+  return PendingRotation(
+    set: _decodeEpochKeySet(json),
+    terminal: terminal == null
+        ? null
+        : _decodeTerminalMark(terminal as Map<String, Object?>),
+  );
+}
+
+PendingRotationTerminalMark _decodeTerminalMark(Map<String, Object?> json) =>
+    PendingRotationTerminalMark(
+      refusalCode: json['refusal_code']! as String,
+      markedAtUtc: DateTime.parse(json['marked_at_utc']! as String).toUtc(),
+    );
 
 Map<String, Object?> _encodeEpochKeySet(EpochKeySet set) => {
       'epoch': set.epoch,

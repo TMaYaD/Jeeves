@@ -67,6 +67,7 @@ class StackPhone {
     required FakeSyncServer server,
     required FakeClock clock,
     UserTransport Function(DeviceLink)? userTransport,
+    PendingRotationStore Function(PendingRotationStore)? pendingRotationStore,
     bool fileBacked = false,
   }) async {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
@@ -87,7 +88,11 @@ class StackPhone {
     // is the platform keychain, which survives a process death, so [relaunch] must
     // hand the fresh stack the same instance — otherwise the record that the resume
     // must survive the crash to publish would vanish on the very crash under test.
-    final pendingRotations = InMemoryPendingRotationStore();
+    // Wrapped once and kept, exactly as [userTransport] is: the decorator *is* the
+    // injected fault, and a relaunch is a process death, not an unwrapping.
+    final pendingRotations =
+        pendingRotationStore?.call(InMemoryPendingRotationStore()) ??
+            InMemoryPendingRotationStore();
     final link = DeviceLink(server.connectAsUser(userId));
     // The capture seam exists before the store it writes through, and is bound to
     // nothing: this is the pre-enrolment state a real process starts in.
@@ -170,7 +175,11 @@ class StackPhone {
   /// The pending-rotation store, on the same keychain tier: it outlives [relaunch]
   /// too, which is what lets a rotation stranded before its process death be
   /// resumed after it.
-  final InMemoryPendingRotationStore pendingRotations;
+  ///
+  /// Typed as the abstract store rather than the in-memory one so a test can wrap it
+  /// in a decorator ([create]'s `pendingRotationStore`) and make a keychain write
+  /// fail during a resume pass — the AC-5 fault, injected into the production path.
+  final PendingRotationStore pendingRotations;
   final Directory? storeDirectory;
   final FakeClock clock;
 
