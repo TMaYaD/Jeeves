@@ -36,6 +36,7 @@ import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/prune_payload.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:sqlite3/common.dart' show SqliteException;
@@ -544,6 +545,109 @@ void main() {
       expect(onDisk.single.reason, SyncRejectionReason.authorChainGap.code);
       expect(await reopened.quarantined(includeReleased: false), hasLength(1),
           reason: 'the reopened client still surfaces the unreleased claimant');
+    });
+
+    test('a cross-author prune winner whose attested-author replay faults still '
+        'recovers the other author on the next pull, though only the prune '
+        'author is marked (#620)', () async {
+      final faults = FaultInjectingInterceptor();
+      final workspace = await SimWorkspace.create(
+        deviceCount: 1,
+        server: server,
+        aSyncStoreInterceptor: faults,
+      );
+      addTearDown(workspace.close);
+      final a = workspace.a;
+
+      // Two owner peers. `pruner` authors a prune that *also* attests `subject`'s
+      // withheld position, so releasing the prune as a scan winner re-enters
+      // `_receivePrune`, whose attested-author loop marks `subject` **inside** the
+      // enclosing #620 replay transaction — the exact nesting the review flags.
+      final pruner = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 11)),
+      );
+      final subject = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 151)),
+      );
+      final prunerSession = await _enrolPeer(workspace, pruner);
+      final subjectSession = await _enrolPeer(workspace, subject);
+
+      // `subject`'s chain: a predecessor withheld for good (the pruned op) and a
+      // successor chained onto it that gaps until the prune attests the hole.
+      final subjectPred = await _peerOp(workspace, subject, 'subject-pred');
+      final subjectSucc = await _peerOp(workspace, subject, 'subject-succ');
+      final subjectPosts = await subjectSession
+          .postOps(workspace.workspaceId, [subjectPred, subjectSucc]);
+      final subjectPredSeq = subjectPosts[0].seq;
+      final subjectSuccSeq = subjectPosts[1].seq;
+
+      // `pruner`'s chain: a head content op (author_seq 3) and, chained onto it, a
+      // prune (author_seq 4) whose one target attests `subject`'s withheld
+      // author_seq 3 with its genuine envelope hash — the hash `subject-succ`'s
+      // `prev_author_hash` already carries, so the attestation makes it valid.
+      final prunerHead = await _peerOp(workspace, pruner, 'pruner-head');
+      final prune = await pruner.nextEnvelope(
+        workspace.workspaceId,
+        opClass: opClassPrune,
+        payload: PrunePayload(
+          compactionOpId: const Uuid().v4(),
+          targets: [
+            PruneTarget(
+              seq: subjectPredSeq,
+              authorMemberId: subject.memberId,
+              authorSeq: 3,
+              envelopeHash: envelopeHash(subjectPred),
+            ),
+          ],
+        ).encode(),
+      );
+      final prunerPosts =
+          await prunerSession.postOps(workspace.workspaceId, [prunerHead]);
+      final prunerHeadSeq = prunerPosts[0].seq;
+      // The prune is injected rather than posted: the fake server's POST-path
+      // `_verifyPrune` demands a materialised compaction to back it, which is a
+      // server-door concern orthogonal to the client re-arm under test. The client
+      // still verifies the prune in full (signature, chain, attestation).
+      final pruneSeq = server.injectUnchecked(workspace.workspaceId, prune);
+
+      // Withhold `subject`'s predecessor (the pruned op), and serve the rest in one
+      // page as successor (gaps), prune (gaps), then pruner-head — whose arrival
+      // advances the pruner head and drives the release scan, prune winner and all.
+      server.omitSeqs.add(subjectPredSeq);
+      server.serveOrder = [subjectSuccSeq, pruneSeq, prunerHeadSeq];
+
+      // op_log inserts in the driving pull: pruner-head (1st), the prune replay
+      // (2nd), the subject-successor replay (3rd) — the write to interrupt.
+      faults.failNthInsertInto('op_log', 3);
+      await expectLater(a.client.pull(), throwsA(isA<SqliteException>()));
+      expect(faults.firedCount, 1,
+          reason: 'the attested-author replay was interrupted');
+
+      // The premise the review rests on holds: the rolled-back replay transaction
+      // took the subject's marker with it, so ONLY the prune author carries
+      // `release_started_at` — the subject is not independently enumerable.
+      final marked = await _reArmMarked(a);
+      expect(marked.map((row) => row.authorMemberId).toSet(), {pruner.memberId},
+          reason: 'only the prune winner is marked; the attested author is not');
+
+      // The rollback left both the prune winner and the attested author's
+      // successor unreleased claimants — the state the recovery pull must clear.
+      final stranded = await a.client.quarantined(includeReleased: false);
+      expect(stranded.map((row) => row.authorMemberId).toSet(),
+          {pruner.memberId, subject.memberId},
+          reason: 'the prune and the attested successor are both stranded');
+
+      // The conclusion the review draws — "the subject is never retried" — does not
+      // follow: the prune author IS marked, and re-driving its scan re-applies the
+      // prune, whose attested-author loop re-releases the subject. The server
+      // re-serves nothing (the cursor is already past every seq), so the re-arm is
+      // the only thing that can drive this.
+      faults.disarm();
+      await a.client.pull();
+      expect(await a.client.quarantined(includeReleased: false), isEmpty,
+          reason: 'the prune-author re-drive re-released the attested author');
+      expect(await _reArmMarked(a), isEmpty,
+          reason: 'a clean scan clears the marker');
     });
 
     test('a standing fork never carries the marker, so repeated pulls do not '
