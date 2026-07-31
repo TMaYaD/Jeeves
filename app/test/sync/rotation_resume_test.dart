@@ -364,7 +364,8 @@ void main() {
     }
   }
 
-  /// The one `epoch_key_set_unpublishable` row, or null.
+  /// The one alarm row of [kind], or null. `single` is the assertion: alarms
+  /// upsert by `(workspace, kind, author)`, so two rows of one kind is a defect.
   Future<IntegrityAlarmRow?> alarmOfKind(StackPhone a, IntegrityAlarmKind kind) async {
     final matching = [
       for (final alarm in await a.stack.defaultClient.integrityAlarms())
