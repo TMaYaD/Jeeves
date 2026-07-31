@@ -365,6 +365,20 @@ void main() {
       final seed = GtdDatabase(
         NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
       );
+      // Registered at construction rather than left to the explicit close below:
+      // every fixture assertion between here and there would otherwise leak this
+      // handle on the failing path. The explicit close stays where it is and is
+      // still load-bearing — `upgraded` opens over the same `raw`, so this one
+      // has to be gone first — which is why the teardown only covers the case
+      // where the test never reached it.
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
       await reinstateV2TagsTable(seed);
 
       final createdMs =
@@ -413,7 +427,7 @@ void main() {
           reason: 'the fixture is only a v2 store if the constraint is there');
 
       await seed.customStatement('PRAGMA user_version = 2');
-      await seed.close();
+      await closeSeed();
 
       final upgraded = GtdDatabase(
         NativeDatabase.opened(raw, closeUnderlyingOnClose: false),

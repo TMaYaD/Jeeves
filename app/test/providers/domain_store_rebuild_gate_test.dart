@@ -51,12 +51,27 @@ void main() {
   setUp(() async {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
     directory = Directory.systemTemp.createTempSync('jeeves_rebuild_gate_');
+    // One teardown per resource, registered the moment that resource exists.
+    // `device` is a `late` field filled by an async factory that runs a whole
+    // enrolment ceremony, so it can throw — and a single teardown reading both
+    // would then die on the unassigned `late` and never reach the directory,
+    // leaking a temp store per failed run and masking the real error with a
+    // `LateInitializationError`. Teardowns run last-registered-first, so the
+    // directory still goes after the device that lives in it.
+    addTearDown(() {
+      try {
+        directory.deleteSync(recursive: true);
+      } on FileSystemException {
+        // best-effort
+      }
+    });
     device = await SimDevice.create(
       label: 'A',
       userId: _userId,
       server: FakeSyncServer(),
       clock: FakeClock(simulationStartWallMs),
     );
+    addTearDown(device.close);
     // Real reduced state, produced by a real DAO write through the real reduce
     // path — the thing a re-projection has to be able to recover from.
     await device.domain.todoDao.insertOutcome(
@@ -65,15 +80,6 @@ void main() {
       userId: _userId,
       now: device.clock.asDateTime,
     );
-  });
-
-  tearDown(() async {
-    await device.close();
-    try {
-      directory.deleteSync(recursive: true);
-    } on FileSystemException {
-      // best-effort
-    }
   });
 
   /// Bring the on-disk store to a *completed-replay* state at [schemaVersion],

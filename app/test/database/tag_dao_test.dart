@@ -154,10 +154,21 @@ void main() {
         userId: const Value(_userId),
       ));
 
+      /// Every context tag as `id -> name`.
+      ///
+      /// The pair, not the id alone: "nobody was evicted" is only half the
+      /// claim — the write also has to have *landed*, and a no-op write would
+      /// satisfy a set-of-ids assertion perfectly.
+      Future<Map<String, String>> contextTagNames() async => {
+            for (final tag in await db.tagDao.watchByType('context').first)
+              tag.id: tag.name,
+          };
+
       expect(
-        (await db.tagDao.watchByType('context').first).map((tag) => tag.id).toSet(),
-        {'ctx-incumbent', 'ctx-usurper'},
-        reason: 'a fresh-id write must not evict the incumbent',
+        await contextTagNames(),
+        {'ctx-incumbent': 'phone', 'ctx-usurper': 'phone'},
+        reason: 'a fresh-id write must not evict the incumbent, and both rows '
+            'hold the duplicate pair',
       );
 
       await db.tagDao.upsertTag(TagsCompanion(
@@ -172,10 +183,25 @@ void main() {
       ));
 
       expect(
-        (await db.tagDao.watchByType('context').first).map((tag) => tag.id).toSet(),
-        {'ctx-incumbent', 'ctx-usurper', 'ctx-other'},
-        reason: 'renaming onto an occupied pair must not evict anyone either',
+        await contextTagNames(),
+        {
+          'ctx-incumbent': 'phone',
+          'ctx-usurper': 'phone',
+          'ctx-other': 'phone',
+        },
+        reason: 'renaming onto an occupied pair evicts nobody AND renames: '
+            'three rows now hold (phone, context)',
       );
+      // The partial companion carried no `type` or `user_id`, so the
+      // fill-from-stored-row branch had to supply them. A rename that dropped
+      // them would leave the row out of `watchByType('context')` entirely, so
+      // read them back rather than inferring it.
+      final renamed = await (db.select(db.tags)
+            ..where((tag) => tag.id.equals('ctx-other')))
+          .getSingle();
+      expect(renamed.name, 'phone');
+      expect(renamed.type, 'context');
+      expect(renamed.userId, _userId);
     });
 
     test('enforceSingleProject removes old project and assigns new one',
