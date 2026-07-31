@@ -71,7 +71,9 @@ Future<SessionRestoreOutcome> restoreJwtSession(AuthService service) async {
   if (stored != null) {
     final userId = extractUserIdFromJwt(stored);
     if (userId != null) {
-      return SessionRestored(await _result(service, stored, userId));
+      return SessionRestored(
+        await _sessionWithStoredRefreshToken(service, stored, userId),
+      );
     }
   }
 
@@ -82,7 +84,9 @@ Future<SessionRestoreOutcome> restoreJwtSession(AuthService service) async {
       // server, not a session — and unlike a network failure it is authoritative
       // about what this device now holds.
       if (userId == null) return const SessionAbsent();
-      return SessionRestored(await _result(service, accessToken, userId));
+      return SessionRestored(
+        await _sessionWithStoredRefreshToken(service, accessToken, userId),
+      );
 
     case SessionRefreshRejected():
     case SessionRefreshTokenAbsent():
@@ -96,7 +100,8 @@ Future<SessionRestoreOutcome> restoreJwtSession(AuthService service) async {
   }
 }
 
-Future<AuthResult> _result(
+/// The session for [accessToken], carrying whatever refresh token is in storage.
+Future<AuthResult> _sessionWithStoredRefreshToken(
   AuthService service,
   String accessToken,
   String userId,
