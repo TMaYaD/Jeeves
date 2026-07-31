@@ -1072,10 +1072,14 @@ class SyncClient {
     // A rotate raised the floor this pull, so ops quarantined at an epoch that is
     // now established can be released. Placed **after** the key-refresh block above
     // so that when a rotate and its wrap both landed this pull, the key is already
-    // remembered before the future-epoch op is re-received. Gated on the flag so a
-    // pull that applied no floor-raising rotate skips the scan entirely — the
-    // re-examination churn AC-4 forbids.
-    if (_epochFloorRaised) {
+    // remembered before the future-epoch op is re-received. Gated so a pull that
+    // applied no floor-raising rotate *and* holds nothing quarantined skips the scan
+    // entirely — the re-examination churn AC-4 forbids. The state-based half
+    // ([_hasOpsAwaitingEpoch], mirroring [_hasOpsAwaitingEpochKeys]) is the
+    // restart-safe fallback: a device torn down after a rotate durably raised the
+    // floor but before this scan ran would otherwise lose the transient flag and
+    // strand the quarantined op until some unrelated later rotation re-armed it.
+    if (_epochFloorRaised || await _hasOpsAwaitingEpoch()) {
       affected.addAll(await _releaseOpsAwaitingEpoch());
       _epochFloorRaised = false;
     }
@@ -2824,6 +2828,10 @@ class SyncClient {
   /// storage fault must not drop the row out of the scan with the cursor already
   /// past the op.
   Future<Set<AffectedEntity>> _releaseOpsAwaitingEpoch() async {
+    // Read once: the floor cannot change during this scan. The rows are filtered
+    // to `keyEpochUnknown` (content/compaction-only), so no nested rotate can
+    // raise it mid-loop, and `_receive` on those rows never moves it either.
+    final floor = await epochFloor();
     final rows = await (_db.select(_db.quarantinedOps)
           ..where((row) =>
               row.workspaceId.equals(workspaceId) &
@@ -2843,7 +2851,7 @@ class SyncClient {
       }
       // Still above the floor: the rotate that raised it did not reach this op's
       // epoch. Leave it quarantined rather than re-receive it into a fresh refusal.
-      if (header.keyEpoch > await epochFloor()) continue;
+      if (header.keyEpoch > floor) continue;
       affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
       await _markReleased(row.id);
     }
@@ -2862,6 +2870,31 @@ class SyncClient {
               row.workspaceId.equals(workspaceId) &
               row.releasedAt.isNull() &
               row.reason.equals(SyncRejectionReason.missingEpochKey.code))
+          ..limit(1))
+        .get();
+    return rows.isNotEmpty;
+  }
+
+  /// Whether anything is still waiting on the floor rising — the state-based half
+  /// of the future-epoch release trigger, and the counterpart to
+  /// [_hasOpsAwaitingEpochKeys].
+  ///
+  /// It exists for the same reason that one does: the transient [_epochFloorRaised]
+  /// flag is set inside `_applyControlOp` and consumed at the end of the *same*
+  /// `pull()`, so a device torn down after a rotate has durably raised the floor but
+  /// before the release scan ran would lose the trigger. Nothing else calls
+  /// [_releaseOpsAwaitingEpoch], so the quarantined future-epoch op would sit stuck
+  /// until an unrelated later rotation happened to re-arm the flag — or for ever if
+  /// the Workspace never rotated again. Reading the quarantine on every pull while a
+  /// row is pending costs only a bounded `LIMIT 1`, and the per-row floor check in
+  /// [_releaseOpsAwaitingEpoch] already leaves still-too-high rows quarantined
+  /// without re-receiving them, so this reintroduces none of the churn AC-4 forbids.
+  Future<bool> _hasOpsAwaitingEpoch() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.reason.equals(SyncRejectionReason.keyEpochUnknown.code))
           ..limit(1))
         .get();
     return rows.isNotEmpty;
